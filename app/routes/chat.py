@@ -220,9 +220,8 @@ def _analyze_chat_image(image_path: str, agent_name: str, user_text: str = "") -
         return None
 
     try:
-        with open(image_path, 'rb') as f:
-            image_bytes = f.read()
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        from app.core.vision_message import image_user_content
+        content = image_user_content("", image_path)
     except Exception as e:
         logger.error("Error loading chat image: %s", e)
         return None
@@ -249,16 +248,11 @@ def _analyze_chat_image(image_path: str, agent_name: str, user_text: str = "") -
         "no formatting, no markdown, no quotes. 2-4 sentences."
     )
 
-    ext = Path(image_path).suffix.lower().lstrip(".")
-    mime = {"png": "png", "jpg": "jpeg", "jpeg": "jpeg", "webp": "webp", "gif": "gif"}.get(ext, "png")
-    image_url = f"data:image/{mime};base64,{base64_image}"
+    content[0]["text"] = prompt_text
 
     messages = [
         {"role": "system", "content": f"You MUST answer in {analysis_lang}. This is mandatory."},
-        {"role": "user", "content": [
-            {"type": "text", "text": prompt_text},
-            {"type": "image_url", "image_url": {"url": image_url}},
-        ]},
+        {"role": "user", "content": content},
     ]
 
     try:

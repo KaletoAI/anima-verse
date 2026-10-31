@@ -111,6 +111,16 @@ SECTIONS = {
         "fields": {"groups": {"type": "json_str", "label": "Group overrides", "default": {},
                              "description": "Partial group physics overrides: spill, flatten, stretch and translate (0..1, default 0); flatten_floor (0..1, default squash minimum); spread (0..1, default 0.5, transverse compensation capped at 1.6)."}},
     },
+    "model_test": {
+        "label": "Model tests", "scope": "instance",
+        "fields": {
+            "max_turn_seconds": {
+                "type": "float", "label": "Maximum turn seconds", "default": 20,
+                "min": 0,
+                "description": "Projected non-RP seconds per thought turn a suitable model may need",
+            },
+        },
+    },
     "server": {
         "label": "Server",
         "icon": "⚙",

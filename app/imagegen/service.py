@@ -1734,9 +1734,8 @@ class ImageService:
             return None
 
         try:
-            with open(image_path, 'rb') as f:
-                image_bytes = f.read()
-            base64_image = base64.b64encode(image_bytes).decode('utf-8')
+            from app.core.vision_message import image_user_content
+            content = image_user_content("", image_path)
         except Exception as e:
             logger.error("Fehler beim Laden des Bildes fuer Analyse: %s", e)
             return None
@@ -1758,13 +1757,10 @@ class ImageService:
 
             llm = vcfg["instance"].create_llm(temperature=0.3, max_tokens=500)
 
-            image_url = f"data:image/png;base64,{base64_image}"
+            content[0]["text"] = prompt_text
             messages = [
                 {"role": "system", "content": f"You MUST answer in {lang_name}. This is mandatory."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt_text},
-                    {"type": "image_url", "image_url": {"url": image_url}}
-                ]},
+                {"role": "user", "content": content},
             ]
 
             from app.core.llm_queue import get_llm_queue, Priority

@@ -96,7 +96,14 @@ def selection_on_wire():
             "system": "system", "user": "ping", "expect": {}}
     original_client = openai.OpenAI
 
+    real_thread = model_suitability.threading.Thread
+
     class ImmediateThread:
+        def __new__(cls, *, target, args=(), **kwargs):
+            if target is not model_suitability._worker:
+                return real_thread(target=target, args=args, **kwargs)
+            return super().__new__(cls)
+
         def __init__(self, *, target, args, **kwargs):
             self.target = target
             self.args = args

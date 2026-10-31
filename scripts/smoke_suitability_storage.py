@@ -134,7 +134,7 @@ def main():
 
         # Mixed checked semantics are evidence, not an untested run.
         r = {'category': 'tool', 'ok': False, 'hallucinated': False, 'dimensions': {'decision_correct': 'mixed'}, 'run_checks': [{'decision_correct': True}, {'decision_correct': False}]}
-        assert suit._summarize('fake', [r])['verdict']['tool'] is False
+        assert suit._summarize('fake', [r])['verdict'] == 'no — tools'
         assert score_case(case, answer + answer)['forbidden_extra_action'] is True
     print('Suitability storage/offline: all expectations hold.')
 

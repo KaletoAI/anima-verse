@@ -22,6 +22,8 @@ import json
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from statistics import median
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -253,6 +255,7 @@ def iter_suitability_results(
     model_full: str, extra_params: Optional[Dict[str, Any]] = None,
     routing_entry: Optional[dict] = None,
     cancel_event: Optional[threading.Event] = None,
+    concurrency: int = 3,
 ) -> Iterator[Dict[str, Any]]:
     """Run frozen fixture cases against a model and yield NDJSON events."""
     from app.core.llm_router import create_llm_instance
@@ -277,11 +280,27 @@ def iter_suitability_results(
         yield {"type": "error", "message": f"client init failed: {e}"}
         return
 
-    def ask(system: str, user: str):
+    from app.core import config
+    from app.core.llm_lanes import lane_count_in
+    from app.core.agent_loop import get_agent_loop
+    from app.models.world import is_world_frozen
+    from app.core.vision_message import image_user_content
+    from app.core.suitability_scoring import ROOT
+
+    provider, _, model = model_full.partition("::")
+    routing = [routing_entry] if routing_entry is not None else config.get("llm_routing", [])
+    concurrency = max(1, min(concurrency, lane_count_in(routing, provider, model) or 1))
+    live_play = bool(get_agent_loop().status()["running"] and not is_world_frozen())
+    cases = [prepare_case(case) for case in cases]
+
+    def ask(case):
         """Return full local response metadata, duration and token count."""
         t0 = time.monotonic()
+        user = case["user"]
+        if case["group"] == "vision":
+            user = image_user_content(user, ROOT / case["image"])
         resp = client.invoke([
-            {"role": "system", "content": system},
+            {"role": "system", "content": case["system"]},
             {"role": "user", "content": user},
         ])
         dt = time.monotonic() - t0
@@ -295,73 +314,81 @@ def iter_suitability_results(
 
     yield {"type": "start", "model": model_full, "total": len(cases)}
 
-    results: List[Dict[str, Any]] = []
-    for idx, case in enumerate(cases):
+    def attempt(case):
         if cancel_event is not None and cancel_event.is_set():
-            return
-        repeats = int(case.get("repeats", 1)) or 1
-        runs: List[Verdict] = []
-        durs: List[float] = []
-        toks: List[int] = []
-        outputs: List[dict] = []
-        dimensions = []
-        for _ in range(repeats):
-            attempt_start = time.monotonic()
-            try:
-                if case.get("task") == "image_analysis" or case.get("fixture_error"):
-                    raw, dt, ctok = {"content": "", "reasoning": None, "finish_reason": None, "usage": {}, "duration_s": 0}, 0, 0
-                else:
-                    raw, dt, ctok = ask(case["system"], case["user"])
-                evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
-                dimensions.append(evidence)
-                runs.append((evidence["ok"], evidence["hallucinated"], evidence["detail"]))
-                durs.append(dt)
-                toks.append(ctok)
-                outputs.append(raw)
-            except Exception as e:
-                evidence = score_case(case, "", infra_error=True)
-                dimensions.append(evidence)
-                runs.append((None, False, "infra_error"))
-                failed_duration = time.monotonic() - attempt_start
-                durs.append(failed_duration)
-                toks.append(0)
-                outputs.append({"content": "", "reasoning": None, "finish_reason": None,
-                                "usage": {}, "duration_s": failed_duration, "error": str(e)})
-        # Pass and hallucination need a majority across repeats.
-        npass = sum(1 for r in runs if r[0])
-        nhall = sum(1 for r in runs if r[1])
-        need = (repeats // 2) + 1
-        ok = npass >= need if all(r[0] is not None for r in runs) else None
-        hall = nhall >= need
-        infra = any(r.get("infra") for r in dimensions)
-        # Take detail and output from the first failure, otherwise the first run.
-        rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
-        detail = runs[rep_idx][2]
-        if repeats > 1:
-            detail = f"{npass}/{repeats} runs ok — {detail}"
-        # Speed: mean duration of valid runs plus tokens per second.
-        valid_durs = [d for d in durs if d > 0]
-        avg_dt = round(sum(valid_durs) / len(valid_durs), 2) if valid_durs else 0.0
-        tot_tok = sum(toks)
-        tps = round(tot_tok / sum(valid_durs), 1) if valid_durs and tot_tok else 0.0
-        rec = {"id": case["id"], "label": case["label"], "category": case["category"],
-               "ok": ok, "hallucinated": bool(hall), "detail": detail,
-               "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
-               "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
-               "runs": outputs,
-               "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
-               "run_checks": dimensions}
-        rec["invalid_input"] = rec["dimensions"]["invalid_input"]
-        results.append(rec)
-        yield {"type": "check", "index": idx, **{k: rec[k] for k in
-               ("id", "label", "category", "ok", "hallucinated", "detail",
-                "infra", "duration_s", "tok_s", "dimensions", "run_checks")}}
+            return None
+        attempt_start = time.monotonic()
+        try:
+            missing = (case["group"] == "vision" and
+                       (not case.get("image") or not (ROOT / case["image"]).is_file()))
+            if missing or case.get("fixture_error"):
+                raw, dt, ctok = {"content": "", "reasoning": None, "finish_reason": None,
+                                 "usage": {}, "duration_s": 0}, 0, 0
+            else:
+                raw, dt, ctok = ask(case)
+            evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
+        except Exception as exc:
+            missing = (case["group"] == "vision" and isinstance(exc, FileNotFoundError)
+                       and not (ROOT / case["image"]).is_file())
+            evidence = score_case(case, "", infra_error=not missing)
+            dt, ctok = time.monotonic() - attempt_start, 0
+            raw = {"content": "", "reasoning": None, "finish_reason": None,
+                   "usage": {}, "duration_s": dt, "error": str(exc)}
+        return evidence, raw, dt, ctok
+
+    results: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        pending = [[pool.submit(attempt, case) for _ in range(int(case.get("repeats", 1)) or 1)]
+                   for case in cases]
+        for idx, case in enumerate(cases):
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            attempts = [future.result() for future in pending[idx]]
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            live_play = live_play or bool(get_agent_loop().status()["running"] and not is_world_frozen())
+            dimensions = [a[0] for a in attempts]
+            outputs = [a[1] for a in attempts]
+            durs = [a[2] for a in attempts]
+            toks = [a[3] for a in attempts]
+            runs = [(d["ok"], d["hallucinated"], d["detail"]) for d in dimensions]
+            repeats = len(attempts)
+            # Quality needs a strict majority; every invented tool counts.
+            npass = sum(1 for r in runs if r[0])
+            need = (repeats // 2) + 1
+            ok = npass >= need if all(r[0] is not None for r in runs) else None
+            hall = any(r[1] for r in runs)
+            infra = any(r.get("infra") for r in dimensions)
+            # Take detail and output from the first failure, otherwise the first run.
+            rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
+            detail = runs[rep_idx][2]
+            if repeats > 1:
+                detail = f"{npass}/{repeats} runs ok — {detail}"
+            # Speed: mean duration of valid runs plus tokens per second.
+            valid_durs = [d for d in durs if d > 0]
+            avg_dt = round(sum(valid_durs) / len(valid_durs), 2) if valid_durs else 0.0
+            tot_tok = sum(toks)
+            tps = round(tot_tok / sum(valid_durs), 1) if valid_durs and tot_tok else 0.0
+            rec = {"id": case["id"], "group": case["group"], "task": case.get("task"), "label": case["label"], "category": case["category"],
+                   "ok": ok, "hallucinated": bool(hall), "detail": detail,
+                   "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
+                   "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
+                   "runs": outputs,
+                   "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
+                   "run_checks": dimensions}
+            rec["invalid_input"] = rec["dimensions"]["invalid_input"]
+            results.append(rec)
+            yield {"type": "check", "index": idx, **{k: rec[k] for k in
+                   ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
+                    "infra", "duration_s", "tok_s", "dimensions", "run_checks")}}
 
     # Cancellation and final persistence must be atomic with job completion.
     with _JOBS_LOCK:
         if cancel_event is not None and cancel_event.is_set():
             return
         summary = _summarize(model_full, results)
+        summary.update(concurrency=concurrency, live_play=live_play,
+                       curated_only=bool(data.get("curated_only")))
         summary.update(scorer_version=SCORER_VERSION,
                        fixture_version=data.get("fixture_version") or fixture_version(cases))
         summary["saved"] = _persist(model_full, summary, results)
@@ -371,27 +398,46 @@ def iter_suitability_results(
 def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]:
     eligible = [r for r in results if r.get("ok") is not None]
     tool = [r for r in eligible if r["category"] == "tool"]
-    helper = [r for r in eligible if r["category"] == "helper"]
     tp = sum(1 for r in tool if r["ok"])
-    hp = sum(1 for r in helper if r["ok"])
     passed = sum(1 for r in results if r["ok"])
     halluc = sum(1 for r in results if r["hallucinated"])
     tool_rate = (tp / len(tool)) if tool else 0.0
-    helper_rate = (hp / len(helper)) if helper else 0.0
     tool_hall = sum(1 for r in tool if r["hallucinated"])
     semantic_tool = [r for r in tool if any(isinstance(d.get("decision_correct"), bool) for d in r.get("run_checks", [r.get("dimensions", {})]))]
     tool_ok = bool(tool_rate >= 0.85 and tool_hall == 0) if semantic_tool else "not_tested"
-    helper_ok = bool(helper_rate >= 0.70) if helper else "not_tested"
-    # Aggregate speed.
-    total_tok = sum(int(r.get("tok") or 0) for r in results)
-    total_dur = sum(float(r.get("dur_total") or 0.0) for r in results)
-    lat = [r["duration_s"] for r in results if r.get("duration_s")]
-    speed = {
-        "avg_latency_s": round(sum(lat) / len(lat), 2) if lat else 0.0,
-        "tok_per_s": round(total_tok / total_dur, 1) if total_dur and total_tok else 0.0,
-        "total_s": round(total_dur, 1),
-        "tokens": total_tok,
-    }
+    from app.core import config
+    def group_of(record):
+        return record.get("group") or ("tools" if record["category"] == "tool" else
+                "vision" if record.get("task") in ("image_analysis", "image_recognition") else "helpers")
+
+    helper = [r for r in eligible if group_of(r) == "helpers"]
+    hp = sum(bool(r["ok"]) for r in helper)
+    helper_rate = hp / len(helper) if helper else 0.0
+    helper_ok = helper_rate >= 0.70 if helper else "not_tested"
+    vision = [r for r in eligible if group_of(r) == "vision"]
+    vision_rate = sum(bool(r["ok"]) for r in vision) / len(vision) if vision else 0.0
+    vision_ok = vision_rate >= 0.70 if vision else "not_tested"
+
+    def timings(records):
+        return [run for r in records for run in r.get("runs", [])
+                if float(run.get("duration_s") or 0) > 0 and not run.get("error")]
+
+    speed = {}
+    for group in ("tools", "helpers", "vision"):
+        runs = timings([r for r in eligible if group_of(r) == group])
+        durations = [r["duration_s"] for r in runs]
+        tokens = sum(int((r.get("usage") or {}).get("completion_tokens") or 0) for r in runs)
+        speed[group] = {"median_latency_s": round(median(durations), 2) if durations else None,
+                        "tok_s": round(tokens / sum(durations), 1) if durations else None}
+    task_medians = []
+    for task in ("thought", "extraction_chat_state", "extraction"):
+        runs = timings([r for r in eligible if r.get("task") == task])
+        task_medians.append(median([r["duration_s"] for r in runs]) if runs else None)
+    projected = sum(task_medians) if all(v is not None for v in task_medians) else None
+    speed_ok = projected is not None and projected <= config.get("model_test.max_turn_seconds", 20)
+    verdict = next(("no — " + name for name, ok in
+                    (("tools", tool_ok), ("helpers", helper_ok), ("vision", vision_ok), ("speed", speed_ok))
+                    if ok is not True), "yes")
     infra = any(r.get("infra") for r in results)
     return {
         "model": model_full,
@@ -400,7 +446,9 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
         "tool": f"{tp}/{len(tool)}",
         "helper": f"{hp}/{len(helper)}",
         "hallucinations": halluc,
-        "verdict": {"tool": tool_ok, "helper": helper_ok},
+        "verdict": verdict,
+        "vision": {"rate": vision_rate, "verdict": vision_ok},
+        "projected_turn_s": projected,
         "helper_evidence": "format only; semantic not_tested",
         "tool_evidence": "conjunction of checked dimensions; uncurated decisions not_tested",
         "speed": speed,
@@ -418,7 +466,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # quotes the world's characters and plot and must not reach the shared,
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
-                      ("id", "label", "category", "ok", "hallucinated", "detail",
+                      ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
                        "duration_s", "tok_s", "dimensions", "run_checks")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
@@ -450,14 +498,14 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "helper": summary["helper"],
             "verdict": summary["verdict"],
             "speed": summary.get("speed"),
+            **{key: summary.get(key) for key in ("concurrency", "live_play", "projected_turn_s", "vision", "curated_only")},
             "checks": stored_checks,
         },
     }
     try:
         save_suitability(model_full, record)
-        logger.info("Suitability saved for %s: %s (tool_ok=%s, %.1f tok/s)",
-                    model_full, summary["score"], summary["verdict"]["tool"],
-                    (summary.get("speed") or {}).get("tok_per_s", 0))
+        logger.info("Suitability saved for %s: %s (%s)",
+                    model_full, summary["score"], summary["verdict"])
         return True
     except Exception as e:
         logger.error("Failed to persist suitability for %s: %s", model_full, e)
@@ -484,7 +532,8 @@ def _run_job(job: Dict[str, Any]) -> None:
     _, routing, params = job["_request"]
     try:
         for ev in iter_suitability_results(job["model"], extra_params=params,
-                                          routing_entry=routing, cancel_event=job["_cancel"]):
+                                          routing_entry=routing, cancel_event=job["_cancel"],
+                                          concurrency=job["concurrency"]):
             with _JOBS_LOCK:
                 if job["_cancel"].is_set():
                     continue
