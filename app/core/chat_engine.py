@@ -546,6 +546,13 @@ def build_chat_context(
     except Exception as _e:
         logger.debug("chat-context active_modifiers failed: %s", _e)
     _notes.extend(n for n in (moment_notes or []) if n)
+    if mode == "single":
+        # The chat LLM calls the tools itself: it gets the exact answer calls
+        # an rp_first character's tool decision gets (the hint is prose).
+        from app.core.streaming import open_questions_note
+        _questions = open_questions_note(character_name, {t.name: t for t in agent_tools}, indent="")
+        if _questions:
+            _notes.append(_questions.rstrip())
 
     # System prompt + scene state
     _prompt = _build_chat_prompt(character_name, lang_instruction, history_summary,

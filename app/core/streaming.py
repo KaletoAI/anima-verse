@@ -442,18 +442,52 @@ def tool_state_note(agent_name: str, tools: Dict[str, Any],
                     indent: str = "   ") -> str:
     """Which package-declared states are running right now ('' when no
     offered verb ends one) — for the tool-decision prompt. The lines come
-    from the flag-lifecycle executor, which knows no flag by name."""
+    from the flag-lifecycle executor, which knows no flag by name. The
+    open questions to the character follow (:func:`open_questions_note`)."""
+    note = ""
     try:
         from app.core.flag_lifecycle import decision_state_lines
         lines = decision_state_lines(agent_name, list(tools or {}))
     except Exception as exc:  # noqa: BLE001 — the prompt works without it
         logger.debug("tool state note failed for %s: %s", agent_name, exc)
+        lines = []
+    if lines:
+        body = "".join(f"{indent}{line}\n" for line in lines)
+        note = (f"{indent}CURRENT STATES (as the server has them right now — they decide "
+                f"which of these tools can still do anything):\n{body}")
+    return note + open_questions_note(agent_name, tools, indent)
+
+
+def open_questions_note(agent_name: str, tools: Dict[str, Any],
+                        indent: str = "   ") -> str:
+    """The questions someone put to ``agent_name`` that one of its offered
+    verbs answers — an invitation waiting for yes or no — with the exact
+    call for each answer; ``''`` when there is none.
+
+    The lines come from the provider ``tool_decision.open_questions``
+    (``fn(agent_name, tool_names) -> list[str]``): the package that owns the
+    verb owns the question and its wording (R1). A reader that calls tools
+    needs it — the rp_first tool decision, and the chat prompt of a ``single``
+    character: the invitation's hint in the roleplay prompt is prose only,
+    and "Kai suggests X" alone once made the tool LLM accept a different
+    action than the one asked."""
+    from app.core.hooks import get_provider
+    provider = get_provider("tool_decision.open_questions")
+    if provider is None:
+        return ""
+    try:
+        lines = [str(line) for line in provider(agent_name, list(tools or {})) or [] if line]
+    except Exception as exc:  # noqa: BLE001 — the prompt works without it
+        logger.debug("open questions note failed for %s: %s", agent_name, exc)
         return ""
     if not lines:
         return ""
-    body = "".join(f"{indent}{line}\n" for line in lines)
-    return (f"{indent}CURRENT STATES (as the server has them right now — they decide "
-            f"which of these tools can still do anything):\n{body}")
+    body = "".join(f"{indent}- {line}\n" for line in lines)
+    return (f"{indent}OPEN QUESTIONS to {agent_name} — someone is waiting for the answer. "
+            f"Decide each from what the character's reply says or does: agreement is the "
+            f"yes call with exactly the action asked, refusal the no call, a reply that "
+            f"leaves it open no call at all. Answering the question asked is not acting "
+            f"on the user's words:\n{body}")
 
 
 def tool_decision_guardrails(tools: Dict[str, Any],

@@ -121,11 +121,25 @@ class InteractSkill(PluginSkill):
             # with a counter-invitation would otherwise leave two open
             # questions and start nothing (the party has the same brake).
             open_ask = IE.find_pending_invite(partner, actor, key)
+            other_ask = None if open_ask else IE.find_pending_invite(partner, actor)
+            if other_ask and _is_refusal(data):
+                # "No" to the one waiting is a no to the question they asked,
+                # whatever action the answer happens to name.
+                open_ask = other_ask
+            elif other_ask:
+                # Answering an open question with a different action used to
+                # leave a counter-invitation and start nothing (an accepted
+                # invitation once came back as the wrong pose three times).
+                ask = other_ask["pose_key"]
+                return ToolRefusal(
+                    f"{partner} asked {actor} for \"{ask}\" and is waiting for the answer. "
+                    f"To agree: {{\"partner\": \"{partner}\", \"action\": \"{ask}\"}}; "
+                    f"to refuse, add \"answer\": \"no\". Propose something else only after answering.")
             if open_ask:
                 _record_answer(open_ask["invite_id"], not _is_refusal(data))
                 if _is_refusal(data):
                     IE.resolve_invite(open_ask["invite_id"], False)
-                    return (f"{actor} turns {partner} down — no {key}. "
+                    return (f"{actor} turns {partner} down — no {open_ask['pose_key']}. "
                             f"Say why in character.")
                 res = IE.resolve_invite(open_ask["invite_id"], True)
                 if res.get("status") == "started":

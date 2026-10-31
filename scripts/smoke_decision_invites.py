@@ -6,8 +6,9 @@ Usage:  ./.venv/bin/python scripts/smoke_decision_invites.py
 Section A — ``pair_invite`` (package ``interact``): an ORDINARY NPC invited
 to a pair activity. With the point active the decision model may settle the
 invitation at once (``resolve_invite``); with no confident answer, or the
-point inactive, the NPC gets a direct answer turn (``bump_respond`` with the
-hint that names ``InteractWith ... answer=no``).
+point inactive, the NPC gets a direct answer turn (``bump_respond`` with a
+prose hint; the exact yes/no call reaches the tool-calling reader through the
+``tool_decision.open_questions`` provider, smoke_interact_answer.py 6-8).
 
 Everything the hook reaches is stubbed at module level, so no LLM, no
 network, no decision endpoint, no world data: ``decision.is_active`` /
@@ -21,8 +22,9 @@ EXPECTATIONS, DERIVED BY HAND (Halvard invites Kira to "shaking hands").
 A0  importing the package's on_load module registers point "pair_invite"
     with origin "interact", min confidence 0.75, timeout 3.0.
 A1  point inactive -> decide is never called; Kira is bumped once and the
-    hint carries the pose label "shaking hands warmly", but action= keeps
-    the catalog key "shaking hands" and still carries "answer=no".
+    hint carries the pose label "shaking hands warmly" as prose — no tool
+    syntax: neither "answer=no" nor "action=" (the roleplay reply of an
+    rp_first character calls no tool).
 A2  active, answer accept (0.9), resolve -> "started":
     resolve_invite("i2", True) once; mark_taken("pair_invite", "i2"); no bump;
     NO narrator line from the hook (start_interaction writes its own).
@@ -187,12 +189,11 @@ check("A1 decide not called", _events("decide"), [])
 check("A1 no state built", _events("state"), [])
 bumps = _events("bump")
 check("A1 bumped once", [b[0] for b in bumps], [INVITEE])
-check("A1 hint carries answer=no", bool(bumps) and "answer=no" in bumps[0][1], True)
+check("A1 hint has no tool syntax", bool(bumps) and
+      not any(k in bumps[0][1] for k in ("answer=no", "action=", "InteractWith")), True)
 
 check("A1 hint uses label", bool(bumps) and
       "suggests shaking hands warmly to you." in bumps[0][1], True)
-check("A1 action keeps catalog key", bool(bumps) and
-      "action=shaking hands;" in bumps[0][1], True)
 
 print("A2 active, accept, started")
 invite("i2", active=True, decision_=answer("accept"), resolve={"status": "started"})

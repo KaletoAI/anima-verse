@@ -1134,7 +1134,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `decency_exempt` | `allow_exposed`, `require_decency` | Kleiderordnungs-Ausnahme — AllowExposed/RequireDecency, bewusst persistenter Zustand |
 | `human` | — | Spezies Mensch — Body-Slots, Kleidungs-Slot-Topologie, UI-Silhouette |
 | `instagram` | `instagram`, `instagram_comment`, `instagram_reply` | Posting-Verb, Reaktions-Verben, Social-Reaktionen, Pending-Posts-Block im Thought-Prompt |
-| `interact` | `interact` | Paar-Interaktion — zwei anwesende Charaktere spielen einen Paar-Clip an einem Anker (`on_load` registriert `pair_verb_name`) |
+| `interact` | `interact` | Paar-Interaktion — zwei anwesende Charaktere spielen einen Paar-Clip an einem Anker (`on_load` registriert `pair_verb_name` und `tool_decision.open_questions` — die offenen Einladungen mit genauem Ja/Nein-Aufruf für das Tool-LLM; der Rollenspiel-Hinweis an die Eingeladene ist reine Prosa) |
 | `knowledge` | `knowledge_extract`, `knowledge_search` | Wissens-Extraktion aus Dateien (LLM) und Suche über die extrahierten Memories |
 | `markdown_writer` | `markdown_writer` | Charaktere schreiben Markdown-Dateien (Tagebuch, Notizen) in ihr eigenes Verzeichnis |
 | `movement` | `setlocation`, `go_to_character`, `cancel_travel` | Strukturierte Bewegung — benannte Orte, getaktete Reisen, Ziel-Auflösung über Personen |

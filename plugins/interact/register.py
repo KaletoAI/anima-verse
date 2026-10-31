@@ -14,7 +14,10 @@ module is where that knowledge lives:
   ordinary NPC's accept/decline may be settled at once instead of waking it
   (docs/decision-models.md). Off by default — then nothing changes.
 * the ``shared_activity_*`` providers expose exact, consent-bound pair
-  continuations without another package importing this verb directly.
+  continuations without another package importing this verb directly;
+* the ``tool_decision.open_questions`` provider names every open invitation
+  to a character with the exact yes/no call — what a tool-calling reader
+  needs, while the invitee's own roleplay prompt only hears the question.
 """
 from app.core import decision, decision_points
 from app.core.hooks import register, register_provider
@@ -37,6 +40,23 @@ _OFFER_DESC_MAX = 160
 
 def pair_verb_name() -> str:
     return VERB_NAME
+
+
+def open_questions(agent_name: str, tool_names: list) -> list:
+    """One line per open pair invitation to ``agent_name`` (only while it
+    has the verb): who asks, the exact action, the yes and the no call."""
+    if VERB_NAME not in (tool_names or []):
+        return []
+    from app.core import interaction_engine as IE
+    lines = []
+    for invite in IE.pending_invites_for(agent_name):
+        call = f'{{"partner": "{invite["inviter"]}", "action": "{invite["pose_key"]}"}}'
+        lines.append(
+            f'{invite["inviter"]} invited {agent_name} to "{invite["pose_key"]}". '
+            f'Yes: {VERB_NAME} {call} — exactly this action, even if the reply '
+            f'describes it in other words. No: {VERB_NAME} '
+            f'{call[:-1]}, "answer": "no"}}.')
+    return lines
 
 
 def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
@@ -67,15 +87,15 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
         from app.core.pose_catalog import pose_label
         from app.models.character import get_character_language
         label = pose_label(pose_key, get_character_language(invitee))
+        # Prose only: the roleplay reply of an rp_first character calls no
+        # tool. The exact yes/no call reaches whoever does (tool decision,
+        # or a single-mode chat) through open_questions.
         get_agent_loop().bump_respond(
             invitee, speaker=inviter,
             content=f"{inviter} suggests {label} to you.",
             on_demand=True,
             hint=(f"{inviter} suggests {label} to you. Decide in "
-                  f"character whether you want to. To agree, call "
-                  f"{VERB_NAME} with partner={inviter}, action={pose_key}; "
-                  f"to refuse, call it with partner={inviter}, "
-                  f"action={pose_key}, answer=no."))
+                  f"character whether you want to, and make your answer clear."))
     except Exception as e:
         logger.debug("interaction invite bump failed: %s", e)
 
@@ -187,6 +207,7 @@ decision.register_point(
     origin="interact",
 )
 register_provider("pair_verb_name", pair_verb_name)
+register_provider("tool_decision.open_questions", open_questions)
 register_provider("shared_activity_options", shared_activity_options)
 register_provider("shared_activity_validate", shared_activity_validate)
 register_provider("shared_activity_request", shared_activity_request)
