@@ -130,7 +130,8 @@ def main():
         assert all(c['reviewed'] for c in reviewed_cli['cases'])
         (root / 'suitability_cases.json').unlink()
         curated_only = suit.load_cases(auto_build=False)
-        assert curated_only['curated_only'] and len(curated_only['cases']) == 14
+        curated_file = json.loads((Path(__file__).resolve().parents[1] / 'shared/config/suitability_curated_cases.json').read_text(encoding='utf-8'))
+        assert curated_only['curated_only'] and len(curated_only['cases']) == len(curated_file['cases'])
 
         # Mixed checked semantics are evidence, not an untested run.
         r = {'category': 'tool', 'ok': False, 'hallucinated': False, 'dimensions': {'decision_correct': 'mixed'}, 'run_checks': [{'decision_correct': True}, {'decision_correct': False}]}

@@ -121,7 +121,10 @@ def score_case(case, content, *, finish_reason=None, infra_error=False):
         rules = expect.get('tools', {})
         for name, body in actions:
             rule = rules.get(name)
-            if rule is not None:
+            if rule is not None and 'text_in' in rule:
+                # Some real verbs (movement) take a plain-text menu entry.
+                checks.append(body.strip() in sets.get(rule['text_in'], []))
+            elif rule is not None:
                 valid, obj = _json_value(body)
                 normalized = {**rule, 'in_sets': dict(rule.get('in_sets', {}))}
                 for key, set_name in rule.items():
@@ -158,6 +161,12 @@ def score_case(case, content, *, finish_reason=None, infra_error=False):
                 r['args_valid'] = valid and _fields_valid(obj, rule, sets)
         else:
             r['format_valid'] = _text_valid(text, expect) and not TAG.search(text)
+            if expect.get('plain_text'):
+                # Protocol checks only: JSON and fenced/tagged output are not prose.
+                valid_json, _ = _json_value(text)
+                r['format_valid'] = (r['format_valid'] and not valid_json
+                                     and not text.lstrip().startswith(('{', '['))
+                                     and '```' not in text and '<tool' not in text.lower())
     checked = [r[k] for k in ('format_valid', 'tool_available', 'args_valid', 'decision_correct') if isinstance(r[k], bool)]
     r['ok'] = bool(checked) and all(checked)
     r['detail'] = '; '.join(f'{key}={r[key]}' for key in DIMENSIONS)
