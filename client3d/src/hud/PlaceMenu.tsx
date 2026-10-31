@@ -39,7 +39,7 @@ export function PlaceMenu({ menu }: { menu: NonNullable<HudGameState['placeMenu'
       <div className="place-menu-title">{menu.offer.label}</div>
       {menu.offer.prop_actions !== undefined
         ? menu.offer.prop_actions.length
-          ? <PropActionOffers offers={menu.offer.prop_actions} onPick={(offer, partner) => {
+          ? <PropActionOffers offers={menu.offer.prop_actions} nameProps={false} onPick={(offer, partner) => {
             void gameActions.pickPropAction?.(offer.action_id, offer.target, offer.definition_revision, partner);
           }} />
           : <div role="note">{t('No furniture actions available.')}</div>

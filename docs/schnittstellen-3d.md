@@ -8093,7 +8093,9 @@ bytes remain test assets, not a claim of playable client media.
 their placement (a binding on one of its composed markers — an action without one is
 no offer, 2026-10-31), including blocked ones. Each row includes `action_id`, `definition_revision`, exact `target`
 (`location_id,room_id,placement_id,variant_uid`), `placement_id`, `variant_uid`,
-`label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
+`distance_m` (metres from the actor to the piece's nearest place, one decimal; `null`
+without an actor position — the player panel lists an action once and lets the player
+pick among the pieces offering it, nearest first), `label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
 (per-partner `{partner,enabled,reason}`) and declared `effects`. Checks cover every
 present person, awake/exact partners, effective requirements, exclusive claims,
 current revision/variant/bindings/capability, real collision route and measured

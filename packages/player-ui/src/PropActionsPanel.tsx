@@ -7,32 +7,67 @@ import { usePropActions } from './usePropActions'
 import { cancelPropAction, notifyPropActionChanged, requestPropAction, respondPropAction,
   type PropActionExecution, type PropActionOffer } from './propActions'
 
-/** Shared presentation for canvas menus and panels; verdicts are Core's, not UI rules. */
-export function PropActionOffers({ offers, partner, busy = false, onPick }: {
+interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
+
+const metres = (offer: PropActionOffer) => offer.distance_m == null ? '' : ` · ${offer.distance_m.toFixed(1)} m`
+
+/** Shared presentation for canvas menus and panels; verdicts are Core's, not UI rules.
+ *  One entry per action (and partner): an action several pieces offer becomes a
+ *  dropdown of those pieces, nearest first, each with its distance to the avatar. */
+export function PropActionOffers({ offers, partner, busy = false, nameProps = true, onPick }: {
   offers: PropActionOffer[]
   partner?: string
   busy?: boolean
+  /** Off where the menu already belongs to one piece (the canvas place menu). */
+  nameProps?: boolean
   onPick: (offer: PropActionOffer, partner?: string) => void
 }) {
   const { t } = useI18n()
+  const groups = new Map<string, OfferChoice[]>()
+  for (const offer of offers) {
+    if (partner && !offer.required_partner) continue
+    const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
+      : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
+        : partner ? [] : [{ enabled: false, reason: offer.reason, partner: undefined }]
+    for (const choice of choices) {
+      const key = JSON.stringify([offer.label, choice.partner ?? ''])
+      groups.set(key, [...groups.get(key) ?? [], { offer, partner: choice.partner, enabled: choice.enabled, reason: choice.reason }])
+    }
+  }
   return <div className="player-prop-offers" style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-    {offers.flatMap(offer => {
-      if (partner && !offer.required_partner) return []
-      const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
-        : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
-          : partner ? [] : [{ enabled: false, reason: offer.reason, partner: undefined }]
+    {[...groups].map(([key, entries]) => {
+      // Usable pieces first, then by distance (unknown distance last).
+      entries.sort((a, b) => Number(b.enabled) - Number(a.enabled)
+        || (a.offer.distance_m ?? Infinity) - (b.offer.distance_m ?? Infinity))
+      const first = entries[0]
+      const usable = entries.some(entry => entry.enabled)
+      const disabled = busy || !usable
+      const title = `${first.offer.label}${first.partner ? ` · ${first.partner}` : ''}`
       // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
       // the native client shows it too).
-      return choices.map(choice => <HoverHint key={JSON.stringify([offer.target, offer.action_id, choice.partner])}
-        text={!choice.enabled ? propActionReason(choice.reason, t) : undefined}>
-        <button type="button" className="player-chip" disabled={busy || !choice.enabled}
-          aria-disabled={busy || !choice.enabled ? true : undefined}
-          style={{ opacity: busy || !choice.enabled ? 0.5 : undefined,
-            pointerEvents: !choice.enabled ? 'none' : undefined }}
-          onClick={() => onPick(offer, choice.partner)}>
-          {offer.label}{choice.partner ? ` · ${choice.partner}` : ''}
+      const hint = !usable ? propActionReason(first.reason, t) : undefined
+      const style = { opacity: disabled ? 0.5 : undefined, pointerEvents: !usable ? 'none' as const : undefined }
+      if (entries.length === 1) return <HoverHint key={key} text={hint}>
+        <button type="button" className="player-chip" disabled={disabled}
+          aria-disabled={disabled ? true : undefined} style={style}
+          onClick={() => onPick(first.offer, first.partner)}>
+          {title}{nameProps ? <span style={{ opacity: 0.7 }}> · {first.offer.prop_label}{metres(first.offer)}</span> : null}
         </button>
-      </HoverHint>)
+      </HoverHint>
+      return <HoverHint key={key} text={hint}>
+        <select className="player-chip" value="" disabled={disabled} aria-label={title}
+          aria-disabled={disabled ? true : undefined} style={style}
+          onChange={event => {
+            const entry = entries[Number(event.target.value)]
+            if (entry?.enabled) onPick(entry.offer, entry.partner)
+          }}>
+          <option value="" disabled hidden>{title} ▾</option>
+          {entries.map((entry, i) => <option key={JSON.stringify([entry.offer.target, entry.offer.action_id])}
+            value={i} disabled={!entry.enabled}>
+            {entry.offer.prop_label}{metres(entry.offer)}{entry.enabled ? '' : ` — ${propActionReason(entry.reason, t)}`}
+          </option>)}
+        </select>
+      </HoverHint>
     })}
   </div>
 }

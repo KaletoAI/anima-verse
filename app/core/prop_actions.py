@@ -402,6 +402,16 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
     bound = {(marker.get("placement_id"), binding.get("action_id"))
              for marker in (recipe or {}).get("prop_markers", [])
              for binding in marker.get("action_bindings", [])}
+    # How far each piece is from the actor (metres, to its nearest place):
+    # the panel names the piece by it when one action stands on several.
+    # The actor's position is part of the cache key.
+    from app.models.character import get_character_pos
+    here = get_character_pos(actor)
+    distance = {}
+    for place in query.room_places(location_id, room_id) if here else []:
+        if place.get("placement_id") and place.get("slots"):
+            d = math.dist((here["x"], here["z"]), places.centre_of(place))
+            distance[place["placement_id"]] = min(d, distance.get(place["placement_id"], d))
     result = []
     for placement in (recipe or {}).get("placements", []):
         pid = placement.get("prop_id", "")
@@ -431,6 +441,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             result.append(dict(action_id=action["id"], definition_revision=revision,
                                placement_id=target["placement_id"], variant_uid=target["variant_uid"],
                                prop_label=localized(document, "name", lang) or pid,
+                               distance_m=(round(distance[target["placement_id"]], 1)
+                                           if target["placement_id"] in distance else None),
                                target=target, label=localized(action, "name", lang) or action["name"],
                                description=localized(action, "description", lang) or action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
@@ -466,7 +478,7 @@ def _requestable(actor: str) -> list:
             continue
         row = {k: v for k, v in offer.items()
                if k not in ("enabled", "reason", "available_targets", "placement_id", "variant_uid")
-               and v not in ("", [])}
+               and v not in ("", [], None)}
         if offer["required_partner"]:
             row["partners"] = partners
         rows.append(row)

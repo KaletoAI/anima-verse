@@ -21,7 +21,8 @@ c. Source with "sit back" (pose "sitting" -> group seat) and "doze"
    "sit back" (enabled, with the runtime revision) under its German name
    for lang "de" ("Zurücklehnen") and its English one for "en". "doze" binds
    no marker of the placement, so it is no offer at all — the offers are
-   exactly {rest, sit back}.
+   exactly {rest, sit back}. With the actor 3 m east / 4 m south of the
+   place's centre both offers carry distance_m 5.0.
 d. Export: the ZIP's sidecar.json equals the raw sidecar; no "pack-" in it.
 e. A request of "sit back" with the offer's revision starts (approaching).
    The package source is then removed: the offer disappears, and the
@@ -137,6 +138,16 @@ def main():
     # "doze" binds no marker of this placement -> no offer at all (it could
     # only be refused with incompatible_pose_marker).
     assert DOZE["id"] not in en and set(en) == {"rest", SIT["id"]}, sorted(en)
+    # The piece's distance to the actor: placed 3 m east and 4 m south of
+    # the place's centre, the offer says 5.0 m (and so does the pack action).
+    place = next(p for p in S.F.places.room_places(target["location_id"], target["room_id"])
+                 if p.get("placement_id") == target["placement_id"])
+    cx, cz = S.F.places.centre_of(place)
+    before = S.F.C.get_character_pos(name)
+    S.F.C.set_character_pos(name, cx + 3, cz + 4)
+    moved = offers(name)
+    assert moved["rest"]["distance_m"] == moved[SIT["id"]]["distance_m"] == 5.0, moved["rest"]
+    S.F.C.set_character_pos(name, before["x"], before["z"])
     print("PASS c: package actions bind at runtime, the author record stays raw")
 
     # d

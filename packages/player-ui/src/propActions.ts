@@ -26,6 +26,8 @@ export interface PropActionEffect {
 }
 export interface PropActionOffer {
   prop_label: string
+  /** Metres from the actor to the piece's nearest place; null without a position. */
+  distance_m: number | null
   action_id: string
   definition_revision: string
   placement_id: string
