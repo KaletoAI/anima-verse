@@ -130,6 +130,24 @@ def main():
             assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
             assert result["checks"][1]["invalid_input"] == "missing_input"
             print("[6] Vision sends one JPEG image; missing image sends nothing OK")
+            # A text-only model's server refuses the image with 400: the case
+            # fails as the model's answer and the result is still saved; a 503
+            # stays an outage that saves nothing (granite-switch-4.1-8b).
+            class StatusError(Exception):
+                def __init__(self, status, message):
+                    super().__init__(message)
+                    self.status_code = status
+            for status, infra in ((400, False), (503, True), (429, True)):
+                refuse = StatusError(status, f"Error code: {status} - At most 0 image(s) may be provided")
+                with patch.object(client, "invoke", side_effect=refuse):
+                    result = run([vision])
+                check = result["checks"][0]
+                assert check["infra"] is infra and result["infra"] is infra, (status, check)
+                assert check["ok"] is (None if infra else False), (status, check)
+            plain = Exception("Error code: 400 - {'error': {'message': 'At most 0 image(s)'}}")
+            with patch.object(client, "invoke", side_effect=plain):
+                assert run([vision])["checks"][0]["ok"] is False
+            print("[6b] A 4xx refusal fails the case and saves; 5xx/429 stay infra OK")
             from app.core.vision_message import image_user_content
             webp = Path(tmp) / "sample.webp"
             webp.write_bytes(b"webp payload")

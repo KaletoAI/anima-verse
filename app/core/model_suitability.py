@@ -255,6 +255,15 @@ def _v_json(out: str, expect: dict, allowed: List[str]) -> Verdict:
 # Runner
 # ---------------------------------------------------------------------------
 
+def _rejected_by_model(exc: BaseException) -> bool:
+    """A 4xx refusal of the request itself (not 408/409/429, which are load)."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        match = re.search(r"Error code: (\d{3})", str(exc))
+        status = int(match.group(1)) if match else None
+    return isinstance(status, int) and 400 <= status < 500 and status not in (408, 409, 429)
+
+
 def iter_suitability_results(
     model_full: str, extra_params: Optional[Dict[str, Any]] = None,
     routing_entry: Optional[dict] = None,
@@ -345,7 +354,12 @@ def iter_suitability_results(
         except Exception as exc:
             missing = (case["group"] == "vision" and isinstance(exc, FileNotFoundError)
                        and not (ROOT / case["image"]).is_file())
-            evidence = score_case(case, "", infra_error=not missing)
+            # A request the server refuses for this model (400 "at most 0
+            # images" from a text-only model) is the model's answer: the case
+            # fails. Only an outage (connection, timeout, 5xx, 429) is infra.
+            rejected = _rejected_by_model(exc)
+            evidence = (score_case(case, "") if rejected
+                        else score_case(case, "", infra_error=not missing))
             dt, ctok = time.monotonic() - attempt_start, 0
             raw = {"content": "", "reasoning": None, "finish_reason": None,
                    "usage": {}, "duration_s": dt, "error": str(exc)}
