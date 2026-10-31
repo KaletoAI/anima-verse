@@ -42,8 +42,8 @@ class PropActionSkill(PluginSkill):
         state = state_for(character_name)
         for run in state["current"] + state["outgoing"]:
             piece = piece_label(run["target"]) or "Furniture"
-            lines.append(f"running: {piece} | {run['label']} - to get up or leave it: "
-                         '{"stop": true}')
+            lines.append(f"running now: {piece} | {run['label']} - to get up or leave it, "
+                         'the whole input is {"stop": true}')
         for row in offers(character_name):
             pair = row["required_partner"]
             usable = (any(target["enabled"] for target in row["available_targets"])

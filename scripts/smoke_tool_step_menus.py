@@ -10,8 +10,11 @@ validator; only the execution boundary is stubbed. A running Bench/Rest
 adds the stop line FIRST. Free pair keys wave and greet are valid with Sam;
 a busy or absent Sam yields no keys. The thought prompt must contain both
 exact menu blocks. Twenty-five distinct offers/keys yield twenty lines,
-including the running line in the furniture cap. Pending questions are not
-menu entries. No pose keys or internal offer fields belong in the furniture menu.
+including the running line in the furniture cap. An open pair invitation and an
+open furniture invitation to Alex become InteractWith lines with their exact
+answer, BEFORE the free keys (and even with nobody free); without one, no
+answer shape is offered. A stop that also names furniture/action still stops.
+No pose keys or internal offer fields belong in the furniture menu.
 """
 import json
 import os
@@ -55,7 +58,8 @@ def main():
         template = Path("plugins/set_pose/templates/llm/skills/prop_action.md").read_text()
         meta = yaml.safe_load(template.split("---")[1])
         prop.name, prop.brief = meta["name"], meta["brief"]
-        pair.name, pair.brief = "InteractWith", "Propose a pair action with a present partner."
+        pair_meta = yaml.safe_load(Path("plugins/interact/templates/llm/skills/interact.md").read_text().split("---")[1])
+        pair.name, pair.brief = pair_meta["name"], pair_meta["brief"]
 
         def offer(piece, action, enabled=True, partners=None):
             return dict(prop_label=piece, label=action, enabled=enabled, reason="" if enabled else "blocked",
@@ -84,7 +88,7 @@ def main():
                     assert result["status"] != "refused", result
             print("[1] PASS: exact requestable furniture menu; real skill validation accepts every entry")
             state["current"] = [dict(actor="Alex", partner="", target={}, label="Rest")]
-            running = 'running: Bench | Rest - to get up or leave it: {"stop": true}'
+            running = 'running now: Bench | Rest - to get up or leave it, the whole input is {"stop": true}'
             assert prop.decision_menu("Alex") == [running, *expected]
             assert "get" in prop.brief and '{"stop":true}' in prop.brief
             assert "get" in meta["action_hint"] and '{"stop":true}' in meta["action_hint"]
@@ -98,7 +102,24 @@ def main():
             assert pair.decision_menu("Alex") == []
             sam["current_room"] = "lounge"
             C.save_character_profile("Sam", sam)
-            print("[3] PASS: only valid free pair keys; empty with nobody eligible")
+            assert not any("answer" in line for line in pair.decision_menu("Alex"))
+            invite = dict(invite_id="i1", inviter="Sam", invitee="Alex", pose_key="wave")
+            incoming = dict(actor="Sam", partner="Alex", label="Read", can_respond=True)
+            with patch.object(IE, "pending_invites_for", return_value=[invite]), \
+                 patch.dict(state, incoming=[incoming]):
+                answers = ['invitation from Sam: wave - to answer: {"partner": "Sam", "action": "wave", "answer": "yes|no"}',
+                           'furniture invitation from Sam: Read - to answer: {"partner": "Sam", "answer": "yes|no"}']
+                assert pair.decision_menu("Alex") == [*answers, "wave", "greet"], pair.decision_menu("Alex")
+                with patch.object(IE, "check_can_pair", return_value="busy"):
+                    assert pair.decision_menu("Alex") == answers
+            assert "answer" not in pair.brief.split(";")[1].split(".")[0]
+            # A stop that copies furniture/action from the running line still stops.
+            with patch.object(PA, "_stop_own", return_value=dict(status="stopped")) as stop:
+                result = json.loads(prop.execute(json.dumps(dict(agent_name="Alex", furniture="running now: Bench",
+                                                                 action="Rest", stop=True))))
+                assert result["status"] == "stopped" and stop.call_count == 1, result
+            assert json.loads(prop.execute(json.dumps(dict(agent_name="Alex", stop=True, other=1))))["status"] == "refused"
+            print("[3] PASS: only valid free pair keys; empty with nobody eligible; open invitations with their answer")
             manager = Mock(tool_names_with_flag=lambda flag: frozenset(), get_skill_by_name=lambda name: {prop.name: prop, pair.name: pair}.get(name))
             with ExitStack() as prompt_stack:
                 prompt_stack.enter_context(patch("app.core.dependencies.get_skill_manager", return_value=manager))

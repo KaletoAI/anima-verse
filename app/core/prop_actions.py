@@ -644,8 +644,10 @@ def execute(actor: str, payload: dict) -> dict:
     refused = dict(status="refused", execution_id="", reason="invalid_request")
     if not isinstance(payload, dict):
         return refused
-    # The LLM form (prompt_block): names, or a stop of the own actions.
-    if set(payload) == {"stop"} and payload["stop"] is True:
+    # The LLM form (prompt_block): names, or a stop of the own actions. A stop
+    # names nothing to choose between, so the furniture/action a model copies
+    # from the "running" line next to it does not turn it into a refusal.
+    if payload.get("stop") is True and set(payload) <= {"stop", "furniture", "action", "partner"}:
         return _stop_own(actor)
     if "furniture" in payload or "action" in payload:
         if set(payload) - {"furniture", "action", "partner"}:

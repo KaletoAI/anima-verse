@@ -16,6 +16,7 @@ same shape the party's invite/join uses, and never a keyword match on prose.
 The interaction ends through signals, including a participant walking away,
 being moved, falling asleep, or taking another pose.
 """
+import json
 from typing import Any, Dict
 
 from app.plugins.base import PluginSkill
@@ -87,15 +88,32 @@ class InteractSkill(PluginSkill):
             return False
 
     def decision_menu(self, character_name: str) -> list[str]:
-        """Free pair keys, only when a partner can receive a proposal now."""
-        from app.core.interaction_engine import partner_poses, check_can_pair
+        """Open invitations to this character with their exact answer, then
+        the free pair keys when a partner can receive a proposal now.
+
+        The answer shape is offered only while something is open: offered on
+        every turn, a small model "answered" a cup of tea with a handshake."""
+        from app.core.interaction_engine import (partner_poses, check_can_pair,
+                                                 pending_invites_for)
+        from app.core.prop_action_engine import state_for
         from app.models.character import list_available_characters
 
-        if not any(name != character_name and not check_can_pair(character_name, name)
-                   for name in list_available_characters()):
-            return []
-        # The second tuple member is an animation kind, not a display label.
-        return list(dict.fromkeys(key for key, _kind in partner_poses()))[:20]
+        lines = []
+        for invite in pending_invites_for(character_name):
+            inviter, key = invite["inviter"], invite["pose_key"]
+            lines.append(f"invitation from {inviter}: {key} - to answer: "
+                         + json.dumps({"partner": inviter, "action": key, "answer": "yes|no"},
+                                      ensure_ascii=False))
+        for run in state_for(character_name)["incoming"]:
+            if run.get("can_respond"):
+                lines.append(f"furniture invitation from {run['actor']}: {run['label']} - to answer: "
+                             + json.dumps({"partner": run["actor"], "answer": "yes|no"},
+                                          ensure_ascii=False))
+        if any(name != character_name and not check_can_pair(character_name, name)
+               for name in list_available_characters()):
+            # The second tuple member is an animation kind, not a display label.
+            lines += list(dict.fromkeys(key for key, _kind in partner_poses()))
+        return lines[:20]
 
     def as_tool(self, **kwargs) -> ToolSpec:
         try:
@@ -104,7 +122,7 @@ class InteractSkill(PluginSkill):
         except Exception:
             keys = ""
         extra = (f" Known free two-person actions: {keys}." if keys else "")
-        extra += (' Answer a furniture invitation with '
+        extra += (' Answer an open furniture invitation with '
                   '{"partner": "<who asked>", "answer": "yes" or "no"}.')
         return ToolSpec(name=self.name, description=f"{self.description}{extra}",
                         func=self.execute)
