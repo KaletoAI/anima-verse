@@ -219,7 +219,7 @@ function testBadge(caps) {
 
 function suitCurrent(result) {
     const match = /^suitability-(\d+)$/.exec(result && result.scorer_version || '');
-    return !!match && Number(match[1]) >= 3;
+    return !!match && Number(match[1]) >= 5;
 }
 
 function capToggle(modelName, field, value) {

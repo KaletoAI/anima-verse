@@ -56,7 +56,7 @@ BAD_VARIANTS = {
 }
 
 def main():
-    assert SCORER_VERSION == 'suitability-4'
+    assert SCORER_VERSION == 'suitability-5'
     cases = curated_cases()
     assert {c['id'] for c in cases} == set(ANSWERS)
     assert [sum(c['group'] == g for c in cases) for g in ('tools', 'helpers', 'vision')] == [11, 3, 2]
@@ -115,8 +115,13 @@ def main():
     alternate = ANSWERS['autonomous_speech'][0].replace('Der Tee ist fertig.', 'Hier steht eine warme Tasse.')
     assert score_case(speech, alternate)['ok'] is True
     assert score_case(speech, alternate.replace('Hier steht eine warme Tasse.', 'The tea is ready.'))['ok'] is False
+    # Helper answers in a code fence: the game takes the outermost {...} span.
+    for helper in (c for c in cases if c['group'] == 'helpers'):
+        good = ANSWERS[helper['id']][0]
+        assert score_case(helper, '```json\n' + good + '\n```')['ok'] is True, helper['id']
+        assert score_case(helper, '```json\n' + good[:-1] + '\n```')['ok'] is False, helper['id']
     assert score_case(outfit, 'NONE', infra_error=True)['ok'] is None
-    print('Suitability semantics: 16 good/bad pairs, 4 accepted variants, 7 failure variants and structural guards PASS.')
+    print('Suitability semantics: 16 good/bad pairs, 5 accepted variants, 7 failure variants and structural guards PASS.')
 
 if __name__ == '__main__':
     main()

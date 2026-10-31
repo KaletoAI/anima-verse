@@ -99,10 +99,11 @@ def get_all_suitability() -> Dict[str, Any]:
 
 
 def current_suitability(result: Dict[str, Any]) -> bool:
-    """Only structural scorer generation 3 or later is current."""
+    """Only scorer generation 5 or later is current (earlier ones scored
+    stricter than the game: own tool regex, exact names, bare JSON only)."""
     version = (result.get("tested_suitability") or result).get("scorer_version", "")
     prefix, _, number = str(version).rpartition("-")
-    return prefix == "suitability" and number.isdigit() and int(number) >= 3
+    return prefix == "suitability" and number.isdigit() and int(number) >= 5
 
 
 def delete_old_suitability() -> int:

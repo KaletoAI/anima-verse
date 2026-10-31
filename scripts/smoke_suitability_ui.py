@@ -20,14 +20,14 @@ with tempfile.TemporaryDirectory() as directory:
     from app.routes import admin_settings as routes
     target = Path(directory) / "caps.json"
     outputs = Path(directory) / "outputs.json"
-    old = {"tested_suitability": {"scorer_version": "suitability-2"}}
-    new = {"tested_suitability": {"scorer_version": "suitability-3"}}
+    old = {"tested_suitability": {"scorer_version": "suitability-4"}}
+    new = {"tested_suitability": {"scorer_version": "suitability-5"}}
     data = {"models": {"demo": {"vision": True}}, "suitability": {"old": old, "new": new},
             "suitability_history": {"old": [old], "new": [old, new]}}
     with patch.object(caps, "_caps_path", return_value=target), patch.object(caps, "_outputs_path", return_value=outputs):
         target.write_text(json.dumps(data))
-        outputs.write_text(json.dumps({"outputs": {"old": {}, "new": {"scorer_version": "suitability-3"}},
-                                       "history": {"new": [{"scorer_version": "suitability-2"}, {"scorer_version": "suitability-3"}]}}))
+        outputs.write_text(json.dumps({"outputs": {"old": {}, "new": {"scorer_version": "suitability-5"}},
+                                       "history": {"new": [{"scorer_version": "suitability-4"}, {"scorer_version": "suitability-5"}]}}))
         caps.invalidate_cache()
         assert set(caps.get_all_suitability()) == {"new"}
         # A fresh disk entry must survive even after the read cache was filled.
@@ -40,18 +40,18 @@ with tempfile.TemporaryDirectory() as directory:
         assert saved["suitability_history"] == {"new": [new]}
         raw = json.loads(outputs.read_text())
         assert set(raw["outputs"]) == {"new"}
-        assert raw["history"] == {"new": [{"scorer_version": "suitability-3"}]}
+        assert raw["history"] == {"new": [{"scorer_version": "suitability-5"}]}
         with patch("app.core.model_suitability.load_cases", return_value={"cases": []}):
-            caps.save_raw_outputs("new", {"scorer_version": "suitability-3", "cases": {}})
+            caps.save_raw_outputs("new", {"scorer_version": "suitability-5", "cases": {}})
             caps.save_suitability("new", new)
             record = caps.get_all_suitability()["new"]
             first_id = record["tested_suitability"]["diagnostic_run_id"]
             assert first_id == caps.get_suitability_outputs("new")["run_id"]
-            caps.save_raw_outputs("new", {"scorer_version": "suitability-3", "cases": {}})
+            caps.save_raw_outputs("new", {"scorer_version": "suitability-5", "cases": {}})
             assert first_id != caps.get_suitability_outputs("new")["run_id"]
             assert first_id == caps.get_suitability_outputs("new", first_id)["run_id"]
         caps.invalidate_cache()
-    summary = {"scorer_version": "suitability-3", "fixture_version": "original", "diagnostic_run_id": "first",
+    summary = {"scorer_version": "suitability-5", "fixture_version": "original", "diagnostic_run_id": "first",
                "checks": [{"id": "failure", "ok": False}]}
     fixture = {"fixture_version": "changed", "cases": [{"id": "failure", "system": "wrong prompt", "user": "wrong"}]}
     raw = {"run_id": "second", "cases": {"failure": [{"content": "wrong answer"}]},
@@ -76,12 +76,12 @@ const el = id => { if (!elements.has(id)) elements.set(id, {value:'', innerHTML:
 const ctx = {document:{getElementById:el}, setTimeout:()=>0, clearTimeout:()=>{}, console};
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync('static/admin/models.js','utf8').replace(/loadData\(\);\s*suitInit\(\);\s*$/, ''), ctx);
-ctx.suitRenderJob({status:'done', summary:{scorer_version:'suitability-3', verdict:'no - speed', tool:'9/10',helper:'8/10',vision:{rate:1},speed:{tools:{median_latency_s:2,tok_s:30}},projected_turn_s:25,live_play:true,checks:[]}});
+ctx.suitRenderJob({status:'done', summary:{scorer_version:'suitability-5', verdict:'no - speed', tool:'9/10',helper:'8/10',vision:{rate:1},speed:{tools:{median_latency_s:2,tok_s:30}},projected_turn_s:25,live_play:true,checks:[]}});
 assert(el('suitStatus').innerHTML.includes('no - speed'));
 assert(el('suitStatus').innerHTML.includes('measured under live play'));
-assert(ctx.testBadge({tested_score:'1/1',tested_verdict:'yes',tested_suitability:{scorer_version:'suitability-3'}}).includes('yes'));
-assert(ctx.testBadge({tested_score:'1/1',tested_suitability:{scorer_version:'suitability-2'}}).includes('none'));
-ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-3',verdict:'no - tools',checks:[{ok:false,group:'tools',task:'thought',prompt:{system:'<system>',user:'user text'},runs:[{content:'<answer>'}]}]}});
+assert(ctx.testBadge({tested_score:'1/1',tested_verdict:'yes',tested_suitability:{scorer_version:'suitability-5'}}).includes('yes'));
+assert(ctx.testBadge({tested_score:'1/1',tested_suitability:{scorer_version:'suitability-4'}}).includes('none'));
+ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',verdict:'no - tools',checks:[{ok:false,group:'tools',task:'thought',prompt:{system:'<system>',user:'user text'},runs:[{content:'<answer>'}]}]}});
 assert(el('suitProgress').innerHTML.includes('&lt;system&gt;'));
 assert(el('suitProgress').innerHTML.includes('&lt;answer&gt;'));
 assert(el('suitProgress').innerHTML.includes('<details>'));

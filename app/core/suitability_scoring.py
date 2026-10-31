@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.core.tool_formats import TOOL_FORMATS, find_tool_calls, get_format
 
-SCORER_VERSION = 'suitability-4'
+SCORER_VERSION = 'suitability-5'
 NOT_TESTED = 'not_tested'
 ROOT = Path(__file__).resolve().parents[2]
 # Regex parses protocol syntax only; free text is never matched against a golden.
@@ -232,6 +232,12 @@ def score_case(case, content, *, finish_reason=None, infra_error=False):
         wants_json = case.get('fmt') == 'json' or 'json_fields' in expect
         if wants_json:
             valid, obj = _json_value(text)
+            if not valid:
+                # The helper consumers (chat.py state extraction, memory
+                # extraction, npc_actions) all take the outermost {...} span,
+                # so a code fence or a stray line around it is accepted there.
+                span = re.search(r'\{[\s\S]*\}', text)
+                valid, obj = _json_value(span.group(0)) if span else (False, None)
             r['format_valid'] = valid
             if expect:
                 rule = {**expect, 'json_fields': expect.get('json_fields', expect.get('keys', []))}
