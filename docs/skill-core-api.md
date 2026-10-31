@@ -1406,3 +1406,32 @@ never a fabricated zero. Other stores still run. `describe_scope(scope)` lists
 registered keys and their `what` descriptions. The HTTP wipe returns that same
 result. Core never imports package implementations. Both scopes also reset
 derived beliefs/lessons/goals and `retrospect.last_at:<name>`.
+
+
+### Per-turn tool availability and short form
+
+`BaseSkill.brief` reads the `brief:` skill frontmatter: one English line,
+at most 200 characters, saying when to use the tool and showing its input
+shape. Without it the first description sentence is used; the plugin loader
+emits one startup warning listing missing declarations. Long descriptions
+remain unchanged for single-mode callers. Built-in skills use the same metadata.
+
+Declare `pose_setter: true` on a verb in `plugin.yaml` to set
+`BaseSkill.POSE_SETTER` (default false). The rp_first tool step hides those
+verbs because state extraction owns pose.
+
+`TurnFacts(character, mode, present, partner='')` is a frozen dataclass in
+`app.skills.base`; mode is `thought`, `respond` or `act`, and present is a
+tuple of exact character names. Override `available_now(facts)` in the package:
+return `None` to offer the tool, or a short English reason to hide it for
+this turn. Keep this a cheap state check. Incoming invitations must remain
+answerable even after their senders leave. Do not mutate tool configuration.
+
+`streaming.turn_tools(tools, facts, rp_first=...)` returns `(offered, hidden)`:
+a list preserving input order and a tool-name-to-reason dictionary. It first
+applies `decision_tools` (in-person suppression when a respond partner is
+present), then pose-setter exclusion in rp_first, inactive `cleared_by` flag
+exclusion, then each package availability hook. `inactive_clearing_tools`
+reads flag declarations generically; a clearing verb stays available if any
+state it clears is active. Existing `decision_tools` mapping callers keep
+receiving mappings; list callers receive lists. The core names no skill.

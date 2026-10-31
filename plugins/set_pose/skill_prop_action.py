@@ -18,6 +18,21 @@ class PropActionSkill(PluginSkill):
         # The manager still gives explicit character overrides precedence.
         return self.enabled and bool(self.ctx.get_config("skills.prop_action.enabled", True))
 
+    def available_now(self, facts):
+        from app.core.prop_actions import offers
+        from app.core.prop_action_store import live_runs
+        if any(run["actor"] == facts.character or (
+                run["partner"] == facts.character and run["status"] != "awaiting_consent")
+                for run in live_runs()):
+            return None
+        for offer in offers(facts.character):
+            if offer["required_partner"]:
+                if any(target["enabled"] for target in offer["available_targets"]):
+                    return None
+            elif offer["enabled"]:
+                return None
+        return "no requestable furniture action or own running action"
+
     def execute(self, raw_input):
         if not self.enabled:
             return json.dumps({"status": "refused", "reason": "skill_disabled", "execution_id": ""})

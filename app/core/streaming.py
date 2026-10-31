@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple, Union
 
+from app.skills.base import TurnFacts
 from app.core.log import get_logger
 from app.core.prompt_templates import render as render_template
 from app.utils.llm_logger import get_model_name
@@ -366,7 +367,7 @@ def _remote_comm_tool_names() -> frozenset:
 # the core never names a skill (R1).
 # ----------------------------------------------------------------------
 
-def decision_tools(tools: Dict[str, Any], *, suppress_in_person: bool) -> Dict[str, Any]:
+def decision_tools(tools, *, suppress_in_person: bool):
     """The tools the decision prompt may offer for THIS turn.
 
     In an in-person conversation the SUPPRESS_IN_PERSON verbs (movement) are
@@ -381,7 +382,45 @@ def decision_tools(tools: Dict[str, Any], *, suppress_in_person: bool) -> Dict[s
     if not suppress_in_person:
         return tools
     suppressed = _suppress_in_person_tool_names()
-    return {k: v for k, v in (tools or {}).items() if k not in suppressed}
+    if isinstance(tools, dict):
+        return {k: v for k, v in tools.items() if k not in suppressed}
+    return [tool for tool in tools or () if getattr(tool, "name", tool) not in suppressed]
+
+
+def turn_tools(tools, facts: TurnFacts, *, rp_first: bool) -> tuple[list, dict[str, str]]:
+    """Apply package-declared availability to one turn without changing inventory."""
+    from app.core.dependencies import get_skill_manager
+    from app.core.flag_lifecycle import inactive_clearing_tools
+
+    candidates = decision_tools(
+        tools, suppress_in_person=facts.mode == "respond" and facts.partner in facts.present)
+    manager = get_skill_manager()
+
+    def skill_for(tool):
+        if hasattr(tool, "available_now"):
+            return tool
+        return manager.get_skill_by_name(getattr(tool, "name", tool))
+
+    original = list(tools or ())
+    candidates = list(candidates or ())
+    hidden = {getattr(t, "name", t): "suppressed in person" for t in original if t not in candidates}
+    inactive = inactive_clearing_tools(facts.character, candidates)
+    offered = []
+    for tool in candidates:
+        skill = skill_for(tool)
+        name = getattr(tool, "name", tool)
+        reason = None
+        if rp_first and getattr(skill, "POSE_SETTER", False):
+            reason = "pose comes from the state extraction"
+        elif name in inactive:
+            reason = "state not active"
+        elif skill is not None:
+            reason = skill.available_now(facts)
+        if reason is None:
+            offered.append(tool)
+        else:
+            hidden[name] = reason
+    return offered, hidden
 
 
 def action_mapping_lines(tools: Dict[str, Any]) -> str:

@@ -1,5 +1,6 @@
 ---
 name: InteractWith
+brief: Propose or answer a pair action; {"partner":"exact name","action":"pair key","answer":"yes|no"}. Answer furniture invitations with partner and answer only.
 action_hint: Character proposes or answers a specific shared PHYSICAL action with a present partner (holding hands, embracing, dancing together); accept only an actual invitation addressed to this character
 ---
 Propose a shared physical action to ONE other character who is right here with you: a handshake, holding hands, an embrace, a dance together, and similar two-person actions. Pass JSON: {"partner": "<exact complete character name>", "action": "<what you do together>"}. Copy the partner's complete name exactly from the present-character list or the invitation; never use only a first name, a nickname, a pronoun or a guessed character. The action is matched against the known two-person poses; use the offered actions and tool results, do not invent an unavailable pair pose. Only for someone present in your room and close by — use TalkTo for talking, SetActivity for something you do alone.

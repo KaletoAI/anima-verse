@@ -1,9 +1,10 @@
 """Base class and string-compatible result contracts for skills."""
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Literal
 
 from app.core.log import get_logger
 from app.core.tool_formats import format_example
@@ -11,6 +12,15 @@ from app.core.tool_formats import format_example
 logger = get_logger("skill_base")
 
 from app.models.character import get_character_skill_config, save_character_skill_config
+
+
+@dataclass(frozen=True)
+class TurnFacts:
+    """Exact room participants and context for a single tool decision."""
+    character: str
+    mode: Literal['thought', 'respond', 'act']
+    present: tuple[str, ...]
+    partner: str = ''
 
 
 @dataclass
@@ -55,6 +65,7 @@ class BaseSkill(ABC):
     # Declarative tool metadata (F7) — read generically by the core, never
     # by skill name. Packages set them via plugin.yaml, built-ins as class
     # attributes / from their skills/<id>.md frontmatter:
+    POSE_SETTER = False         # pose belongs to state extraction in rp_first
     SINGLETON = False           # state-setting tool: only the LAST call per stream sticks
     SUPPRESS_IN_PERSON = False  # hidden while the conversation partners share a room
     CASCADE_BRAKE = False       # reply_only_to gate for messaging cascades
@@ -76,10 +87,28 @@ class BaseSkill(ABC):
         self.enabled = config.get('enabled', True)
         self.name = self.__class__.__name__
         self.description = ""
+        self._brief = ""
         # Short "Character does X" line for the constrained-mode tool prompt
         # (frontmatter `action_hint:` in the skill meta template).
         self.action_hint = ""
         self._defaults: Dict[str, Any] = {}
+
+    @property
+    def brief(self) -> str:
+        """Short-form metadata, including built-ins that load their own description."""
+        if not self._brief and self.SKILL_ID:
+            from app.core.prompt_templates import load_skill_meta, template_exists
+            if template_exists(f"skills/{self.SKILL_ID}.md"):
+                self._brief = load_skill_meta(self.SKILL_ID).get("brief", "")
+        return self._brief or re.split(r"(?<=[.!?])\s+", self.description.strip(), maxsplit=1)[0]
+
+    @brief.setter
+    def brief(self, value: str) -> None:
+        self._brief = value
+
+    def available_now(self, facts: TurnFacts) -> str | None:
+        """None offers this tool; a short reason hides it for this turn only."""
+        return None
 
     @abstractmethod
     def execute(self, *args, **kwargs) -> str:

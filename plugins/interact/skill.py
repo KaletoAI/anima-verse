@@ -65,6 +65,17 @@ class InteractSkill(PluginSkill):
         super().__init__(config, ctx)
         self._defaults = {"enabled": True}
 
+    def available_now(self, facts):
+        if facts.present:
+            return None
+        from app.core.interaction_engine import pending_invites_for
+        from app.core.prop_action_store import live_runs
+        if pending_invites_for(facts.character) or any(
+                run["partner"] == facts.character and run["status"] == "awaiting_consent"
+                for run in live_runs()):
+            return None
+        return "nobody present and no pending invitation"
+
     def visible_for(self, character_name: str) -> bool:
         """No pair clip in the library → the verb is not offered at all."""
         try:

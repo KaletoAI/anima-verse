@@ -55,6 +55,26 @@ class InstagramSkill(PluginSkill):
     INTENT_TYPES = ("instagram_post",)
     INTENT_PAYLOAD_KEYS = ("caption",)
 
+    def cooldown_left_hours(self, character: str) -> float:
+        """Remaining post cooldown in system-clock hours, shared with execution."""
+        from datetime import timedelta
+        from app.models.character import get_character_skill_config
+        hours = int(self._get_effective_config(character).get("post_cooldown_hours", 12))
+        if hours <= 0:
+            return 0.0
+        stamp = (get_character_skill_config(character, self.SKILL_ID) or {}).get("last_post_timestamp")
+        if not stamp:
+            return 0.0
+        try:
+            return max(0.0, (parse_iso(stamp) + timedelta(hours=hours) - utc_now()).total_seconds() / 3600)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def available_now(self, facts):
+        if self.cooldown_left_hours(facts.character) > 0:
+            return "post cooldown is running"
+        return None
+
     def handle_intent(self, intent_type, payload):
         """[INTENT: instagram_post]: the caption hint becomes the input."""
         import json as _json
@@ -367,24 +387,10 @@ class InstagramSkill(PluginSkill):
 
         # Check the cooldown
         cooldown_hours = int(cfg.get("post_cooldown_hours", 12))
-        if cooldown_hours > 0:
-            from datetime import datetime, timedelta
-            from app.models.character import get_character_skill_config
-            agent_config = get_character_skill_config(character_name, self.SKILL_ID)
-            last_ts = (agent_config or {}).get("last_post_timestamp")
-            if last_ts:
-                try:
-                    last_post_time = parse_iso(last_ts)
-                    cooldown_end = last_post_time + timedelta(hours=cooldown_hours)
-                    now = utc_now()
-                    if now < cooldown_end:
-                        remaining = cooldown_end - now
-                        hours_left = remaining.total_seconds() / 3600
-                        logger.info("Cooldown aktiv: %s hat noch %.1fh Cooldown", character_name, hours_left)
-                        return (f"Error: {character_name} is still on post cooldown "
-                                f"({hours_left:.1f} h of {cooldown_hours} h left).")
-                except (ValueError, TypeError):
-                    pass
+        hours_left = self.cooldown_left_hours(character_name)
+        if hours_left > 0:
+            return (f"Error: {character_name} is still on post cooldown "
+                    f"({hours_left:.1f} h of {cooldown_hours} h left).")
 
         # Step 1: get the image service and render the image
         image_skill = self._get_image_skill()

@@ -33,6 +33,13 @@ class TalkToSkill(PluginSkill):
 
     SKILL_ID = "talk_to"
 
+    def available_now(self, facts):
+        if not facts.present:
+            return "nobody is present"
+        if facts.mode == "respond" and facts.present == (facts.partner,):
+            return "the chat partner already hears the reply"
+        return None
+
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):
         super().__init__(config, ctx)
         self._defaults = {"enabled": True}

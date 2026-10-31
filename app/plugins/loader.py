@@ -646,6 +646,7 @@ def _apply_skill_meta(skill: PluginSkill, entry: SkillEntry) -> None:
             meta = load_skill_meta(entry.skill_id)
             skill.name = meta.get("name") or skill.name
             skill.description = meta.get("description") or skill.description
+            skill.brief = meta.get("brief", "")
             skill.action_hint = meta.get("action_hint", "") or getattr(
                 skill, "action_hint", "")
     except Exception as e:
@@ -681,6 +682,10 @@ def load_plugin(pkg: Package) -> List[Tuple[str, PluginSkill]]:
                 skill.ALWAYS_LOAD = True
             # Tool metadata flags (F7) — manifest can only switch ON
             # (class attributes remain the baseline).
+            declarations = pkg.manifest.get("skills") or [pkg.manifest]
+            skill.POSE_SETTER = skill.POSE_SETTER or any(
+                d.get("pose_setter", False) for d in declarations
+                if isinstance(d, dict) and d.get("skill_id") == entry.skill_id)
             if entry.singleton:
                 skill.SINGLETON = True
             if entry.suppress_in_person:
@@ -720,6 +725,14 @@ def load_all_plugins(plugin_dir: Optional[Path] = None) -> Dict[str, PluginSkill
     for pkg in discover_packages(plugin_dir, force=True):
         for skill_id, skill in load_plugin(pkg):
             results[skill_id] = skill
+    missing = []
+    for skill in results.values():
+        skill.brief  # Resolve metadata before collecting a single startup warning.
+        if not skill._brief:
+            missing.append(skill.name)
+    if missing:
+        logger.warning("Skills without brief (using first description sentence): %s",
+                       ", ".join(sorted(missing)))
     return results
 
 

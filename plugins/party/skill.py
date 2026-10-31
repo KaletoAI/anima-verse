@@ -83,6 +83,14 @@ class PartySkill(PluginSkill):
         # name/description/action_hint come from templates/llm/skills/<id>.md
         self._defaults = {"enabled": True}
 
+    def available_now(self, facts):
+        if self._verb not in ("invite", "join") or facts.present:
+            return None
+        from app.core.party_engine import get_pending_invites_for
+        if get_pending_invites_for(facts.character):
+            return None
+        return "nobody present and no pending invitation"
+
     def default_enabled_for(self, character_name: str) -> bool:
         """Offer consent/membership verbs without changing character settings."""
         from app.core.party_engine import get_party_of, get_pending_invites_for

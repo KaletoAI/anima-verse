@@ -85,6 +85,19 @@ def situation_lines(character_name: str) -> List[str]:
     return lines
 
 
+def inactive_clearing_tools(character: str, tools) -> set[str]:
+    """Offered clearing verbs whose declared states are all inactive."""
+    from app.models.character import get_character_profile
+    names = {getattr(tool, "name", tool) for tool in tools or ()}
+    specs = [s for s in _specs() if s.cleared_by and _clear_tool_name(s) in names]
+    if not specs or not character:
+        return set()
+    profile = get_character_profile(character) or {}
+    inactive = {_clear_tool_name(s) for s in specs if not profile.get(s.flag)}
+    active = {_clear_tool_name(s) for s in specs if profile.get(s.flag)}
+    return inactive - active
+
+
 def decision_state_lines(character_name: str, tool_names) -> List[str]:
     """State lines for the TOOL DECISION prompt — set AND unset flags.
 
