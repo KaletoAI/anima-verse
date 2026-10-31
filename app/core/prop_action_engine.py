@@ -1230,13 +1230,22 @@ def _activate(run):
         if ability == "pair":
             from app.core.interaction_engine import start_interaction_at
             try:
-                start_interaction_at(run["actor"], run["partner"], pose, execution_id=run["execution_id"],
-                                     plans=run["data"]["plans"], commit_profiles=entered)
+                interaction = start_interaction_at(run["actor"], run["partner"], pose,
+                                                   execution_id=run["execution_id"],
+                                                   plans=run["data"]["plans"], commit_profiles=entered)
             except ValueError as exc:
                 # Validation failures are refusals, not synthetic entry success.
                 run = store.get(run["execution_id"])
                 _finish(run, "failed", str(exc))
                 return
+            # The furniture counterpart of ``interaction.invite_started``: the
+            # pair is live. Consent was the run's, not an invitation's, so a
+            # package that starts a state with a pair pose listens here too
+            # (``interaction.ended`` already covers both endings).
+            from app.core.hooks import emit
+            from app.core.keyed_lock import _after_locks
+            _after_locks(lambda: emit("prop_action.pair_started", execution_id=run["execution_id"],
+                                      interaction=interaction, actor=run["actor"], partner=run["partner"]))
         else:
             name = run["actor"]
             anchor = run["data"]["plans"]["actor"]["entry_anchor"]

@@ -517,6 +517,10 @@ class Runs(unittest.TestCase):
         self.assertEqual(result["status"], "awaiting_consent", result)
         self.assertFalse(R.claims())
         self.assertEqual(A.respond(name, result["execution_id"], True)["reason"], "not_invitee")
+        from app.core import hooks
+        started = []
+        hooks.register("prop_action.pair_started", lambda **kw: started.append(kw), tag="smoke.pair_started")
+        self.addCleanup(hooks._hooks.pop, ("prop_action.pair_started", "smoke.pair_started"), None)
         accepted = A.respond(partner, result["execution_id"], True)
         self.assertEqual(accepted["status"], "approaching", accepted)
         self.assertEqual(len(R.claims()), 4)
@@ -536,6 +540,10 @@ class Runs(unittest.TestCase):
         a, b = (F.C.get_character_profile(n) for n in (name, partner))
         self.assertEqual(a["interaction"]["id"], b["interaction"]["id"])
         self.assertEqual(a["interaction"]["execution_ref"], result["execution_id"])
+        # The furniture start event: once, after the pair is live, naming it.
+        self.assertEqual([(kw["execution_id"], kw["actor"], kw["partner"], kw["interaction"]["id"])
+                          for kw in started],
+                         [(result["execution_id"], name, partner, a["interaction"]["id"])])
         self.assertEqual((a["place"]["slot"], b["place"]["slot"]), (0, 1))
         self.assertEqual((a["place"]["id"], b["place"]["id"]), ("device/body", "device/body"))
         from app.core.interaction_engine import end_interaction
