@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Smoke run for the WORLD PROPS of the world plane (§ A9a).
 
+Task 88: fixture bytes b"not-a-real-glb" have SHA256 prefix d8bbb279733f3606;
+serving tier URLs append &v=d8bbb279733f3606. Canonical authoring URLs stay bare.
+
 Checks ``app/models/world_props.py`` end to end without a server: the CRUD and
 its validation, the 500-cap, the worldmap payload block, and the variant
 formula against numbers derived BY HAND here (§ B5a — never recorded from an
@@ -402,14 +405,14 @@ r2 = by_id[two["id"]]
 check("one variant carries no model_variants", "model_variants" in r1, False)
 check("one variant carries no variant index", "variant" in r1, False)
 check("primary tier map", r1["variants"],
-      {"full": f"/assets/props/{BOULDER}/model?tier=full"})
+      {"full": f"/assets/props/{BOULDER}/model?tier=full&v=d8bbb279733f3606"})
 check("max_m is the largest real edge", r1["max_m"], 3.0)
 check("measure", r1["measure"], "xyz")
 check("two variants are published", len(r2["model_variants"]), 2)
-check("the primary keeps the bare URL", r2["model_variants"][0],
-      {"full": f"/assets/props/{FENCE}/model?tier=full"})
+check("the primary omits variant and carries its content version", r2["model_variants"][0],
+      {"full": f"/assets/props/{FENCE}/model?tier=full&v=d8bbb279733f3606"})
 check("the second carries its index", r2["model_variants"][1],
-      {"full": f"/assets/props/{FENCE}/model?variant=1&tier=full"})
+      {"full": f"/assets/props/{FENCE}/model?variant=1&tier=full&v=d8bbb279733f3606"})
 check("variants == model_variants[0]", r2["variants"], r2["model_variants"][0])
 check("resolved variant", r2["variant"], 1)
 check("fix_euler", r2["fix_euler"], {"x": 0.0, "y": 90.0, "z": 0.0})

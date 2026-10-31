@@ -3618,6 +3618,12 @@ def _variant_stale(prop_id: str, index: int, primary_file: str,
     return bool(stored) and bool(primary_signature) and stored != primary_signature
 
 
+def model_version(prop_id: str, tier: str = "", *, variant: Any = None) -> str:
+    """Content version of exactly the source the prop route would serve."""
+    from app.core.glb_delivery import source_version
+    return source_version(model_path(prop_id, tier, variant=variant))
+
+
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,

@@ -145,6 +145,19 @@ def find_building_model(location_id: str, room_id: str = "",
     return _gallery(owner, room_id).find(tier)
 
 
+def model_version(location_id: str, tier: str = "", *, room_id: str = "") -> str:
+    """Content version of the building/room route's source, including tier fallback."""
+    from app.core.glb_delivery import source_version
+    return source_version(find_building_model(location_id, room_id=room_id, tier=tier))
+
+
+def room_model_version(room_id: str, tier: str = "") -> str:
+    """Resolve a room's owner exactly as the room serving route does."""
+    from app.models.world import find_location_by_room
+    location = find_location_by_room(room_id)
+    return model_version(location.get("id", ""), tier, room_id=room_id) if location else ""
+
+
 def select_model(location_id: str, filename: str, room_id: str = "",
                  tier: str = DEFAULT_TIER) -> bool:
     """Make ``filename`` the active model of the stem in ``tier``. An EMPTY

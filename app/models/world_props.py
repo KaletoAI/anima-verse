@@ -403,11 +403,11 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
     maps: List[Dict[str, str]] = []
     for pos, entry in enumerate(entries):
         idx = int(entry.get("variant") or 0)
-        # The PRIMARY variant (list position 0) keeps the bare URL it has
-        # always had, whatever its store index — that identity is what keeps
-        # existing client caches valid (§ B2 addendum).
+        # The primary omits variant; the route selects its effective store
+        # index before computing the content version (§ B2 addendum).
         maps.append(variant_urls(base if pos == 0 else f"{base}?variant={idx}",
-                                 entry.get("tiers") or []))
+                                 entry.get("tiers") or [], version_for_tier=lambda t:
+                                 prop_store.model_version(prop_id, t, variant=None if pos == 0 else idx)))
     # ONE scale number per published variant, in the same order as the URL maps
     # (2026-08-24): a variant may override the prop's dims, and a placement
     # that shows the sapling variant must be scaled to the sapling. The

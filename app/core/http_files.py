@@ -58,9 +58,14 @@ def glb_file_response(path: Path, request: Request,
     """Serve a delivery GLB with the original filename; downloads keep source bytes.
 
     Content-addressed delivery names supply a stable ETag. The original uses the normal stat-based ETag.
+    A matching source ``v`` is immutable only once the selected bytes are final.
     """
-    from app.core.glb_delivery import delivery_path
+    from app.core.glb_delivery import delivery_is_final, delivery_path, source_version
     served = path if disposition == "attachment" else delivery_path(path)
+    version = request.query_params.get("v") if request.scope.get("query_string") else None
+    if (disposition != "attachment" and version and version == source_version(path)
+            and delivery_is_final(path, served)):
+        cache_control = "public, max-age=31536000, immutable"
     etag = f'"meshopt-{served.stem}"' if served != path else None
     return etag_file_response(served, request, "model/gltf-binary",
                               cache_control=cache_control, disposition=disposition,

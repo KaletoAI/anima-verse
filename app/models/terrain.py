@@ -836,7 +836,7 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     generated afterwards, a corrected height, or a boulder later told to stand
     still would otherwise never reach a client).
 
-    ``variants`` is ``{tier: "/assets/props/<id>/model?tier=<tier>"}`` for the
+    ``variants`` is ``{tier: "/assets/props/<id>/model?tier=<tier>&v=<source-sha16>"}`` for the
     tiers the prop HAS — the same map and the same ``pickVariant`` rule the
     scene payload uses for props and buildings; it stays away when the prop
     carries no mesh.
@@ -919,12 +919,12 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 for pos, variant in enumerate(
                         _props.active_variant_tiers(prop_id)):
                     idx = int(variant.get("variant") or 0)
-                    # The PRIMARY variant (list position 0) keeps the bare URL
-                    # it has always had, whatever its store index — that
-                    # identity is what keeps existing client caches valid.
+                    # The primary omits variant; the route selects its
+                    # effective store index before computing the version.
                     maps.append(variant_urls(
                         base if pos == 0 else f"{base}?variant={idx}",
-                        variant.get("tiers") or []))
+                        variant.get("tiers") or [], version_for_tier=lambda t:
+                        _props.model_version(prop_id, t, variant=None if pos == 0 else idx)))
                 cache[prop_id] = {
                     "variants": maps,
                     "height": facts.get("height_m", 0.0),

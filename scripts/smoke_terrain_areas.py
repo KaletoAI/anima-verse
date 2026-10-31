@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Smoke run for painted terrain areas (Seamless World, E1 Task 4).
 
+Task 88: fixture bytes b"glTF-smoke" have SHA256 prefix 0d3c0a9d394900f9;
+serving tier URLs append &v=0d3c0a9d394900f9. Canonical authoring URLs stay bare.
+
 Throwaway storage. Hand-derived expectations:
 
   [1] save_area({kind: "water", polygon: [[0,0],[10,0],[10,10],[0,10]]})
@@ -1195,10 +1198,10 @@ def served_scatter():
 
 entries = served_scatter()
 check("prop with two tiers -> two URLs", entries[0].get("variants"),
-      {"full": f"/assets/props/{TREE}/model?tier=full",
-       "low": f"/assets/props/{TREE}/model?tier=low"})
+      {"full": f"/assets/props/{TREE}/model?tier=full&v=0d3c0a9d394900f9",
+       "low": f"/assets/props/{TREE}/model?tier=low&v=0d3c0a9d394900f9"})
 check("prop with one tier -> one URL", entries[1].get("variants"),
-      {"full": f"/assets/props/{ROCK}/model?tier=full"})
+      {"full": f"/assets/props/{ROCK}/model?tier=full&v=0d3c0a9d394900f9"})
 check("no model -> no variants key", "variants" in entries[2], False)
 check("prop without a mesh -> no variants key", "variants" in entries[3], False)
 check("unknown prop id -> no variants key", "variants" in entries[4], False)
@@ -1264,23 +1267,23 @@ _bush_entries = next(a["meta"]["scatter"]
                      if a["id"] == _vb["id"])
 check("two variants -> one tier map each, the primary one first",
       _bush_entries[0].get("model_variants"),
-      [{"full": f"/assets/props/{BUSH}/model?tier=full",
-        "low": f"/assets/props/{BUSH}/model?tier=low"},
-       {"full": f"/assets/props/{BUSH}/model?variant={_bush_v1}&tier=full"}])
+      [{"full": f"/assets/props/{BUSH}/model?tier=full&v=0d3c0a9d394900f9",
+        "low": f"/assets/props/{BUSH}/model?tier=low&v=0d3c0a9d394900f9"},
+       {"full": f"/assets/props/{BUSH}/model?variant={_bush_v1}&tier=full&v=0d3c0a9d394900f9"}])
 check("…and `variants` IS element 0, the primary variant's map",
       _bush_entries[0].get("variants"),
       _bush_entries[0]["model_variants"][0])
-check("…so the primary variant keeps its query-less URL and every cache",
+check("…so the primary omits variant and carries tier plus content version",
       _bush_entries[0]["variants"]["full"],
-      f"/assets/props/{BUSH}/model?tier=full")
+      f"/assets/props/{BUSH}/model?tier=full&v=0d3c0a9d394900f9")
 check("the empty variant slot is dropped, not shipped as a mesh-less map",
       len(_bush_entries[0]["model_variants"]), 2)
 check("a prop with ONE variant says nothing at all",
       "model_variants" in _bush_entries[1], False)
 check("…and still gets the `variants` map it always got",
       _bush_entries[1].get("variants"),
-      {"full": f"/assets/props/{TREE}/model?tier=full",
-       "low": f"/assets/props/{TREE}/model?tier=low"})
+      {"full": f"/assets/props/{TREE}/model?tier=full&v=0d3c0a9d394900f9",
+       "low": f"/assets/props/{TREE}/model?tier=low&v=0d3c0a9d394900f9"})
 check("model_variants is payload only, never stored",
       ["model_variants" in e
        for e in next(a["meta"]["scatter"] for a in terrain.list_areas()
@@ -1399,8 +1402,8 @@ _along_rows = next(a["meta"]["stroke"]["along"]
                    if a["id"] == _along_area["id"])
 check("the tree row carries its tiers and its real height",
       {k: _along_rows[0][k] for k in ("variants", "prop_height_m", "spacing_m", "offset_m")},
-      {"variants": {"full": f"/assets/props/{TREE}/model?tier=full",
-                    "low": f"/assets/props/{TREE}/model?tier=low"},
+      {"variants": {"full": f"/assets/props/{TREE}/model?tier=full&v=0d3c0a9d394900f9",
+                    "low": f"/assets/props/{TREE}/model?tier=low&v=0d3c0a9d394900f9"},
        "prop_height_m": 8.5, "spacing_m": 25.0, "offset_m": 3.0})
 check("the mesh-less row has a height but no tiers",
       ("variants" in _along_rows[1], _along_rows[1].get("prop_height_m")), (False, 1.0))

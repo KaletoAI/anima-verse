@@ -62,8 +62,9 @@ def normalize_tier(tier: Any) -> str:
     return t if re.fullmatch(r"[a-z0-9_-]{1,16}", t or "") else ""
 
 
-def variant_urls(base_url: str, tiers: Sequence[str]) -> Dict[str, str]:
-    """``{tier: "<base_url>?tier=<tier>"}`` — the ONE shape a resolution-tier
+def variant_urls(base_url: str, tiers: Sequence[str], *,
+                 version_for_tier: Callable[[str], str] | None = None) -> Dict[str, str]:
+    """``{tier: "<base_url>?tier=<tier>&v=<source-sha16>"}`` — the ONE shape a resolution-tier
     URL has in every payload (scene models § B1, terrain scatter § A9).
 
     There is exactly one way to name a tier so there is exactly one way to
@@ -72,9 +73,22 @@ def variant_urls(base_url: str, tiers: Sequence[str]) -> Dict[str, str]:
     here — an invented one is a 404 that looks like a configured model.
 
     A base URL that already carries a query (a prop's ``?variant=<i>``, E2.3)
-    gets the tier appended to it instead of a second ``?``."""
+    gets the tier appended to it instead of a second ``?``. The optional
+    resolver hashes the source selected by the serving route for EACH tier,
+    including fallback. ``v`` is always last; without a stable source version
+    (or without a resolver) the URL stays unversioned."""
     sep = "&" if "?" in base_url else "?"
-    return {str(t): f"{base_url}{sep}tier={t}" for t in tiers if t}
+    urls = {}
+    for tier in tiers:
+        if not tier:
+            continue
+        url = f"{base_url}{sep}tier={tier}"
+        try:
+            version = version_for_tier(str(tier)) if version_for_tier else ""
+        except OSError:
+            version = ""
+        urls[str(tier)] = f"{url}&v={version}" if version else url
+    return urls
 
 
 def read_sidecar(model_path: Path) -> Dict[str, Any]:

@@ -1572,13 +1572,17 @@ def play_location_model_meta(location_id: str):
     signature; ``url`` serves the default tier, ``?tier=`` any other.
     404 = none."""
     from urllib.parse import quote
-    from app.core.location_model3d import get_client_meta
+    from app.core.location_model3d import get_client_meta, model_version
+    from app.core.model_store import variant_urls
     meta = get_client_meta(location_id)
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
     base = f"/play/locations/{quote(location_id)}/model"
-    return {**meta, "url": base,
-            "tiers": {t: {**info, "url": f"{base}?tier={t}"}
+    urls = variant_urls(base, list(meta.get("tiers") or []),
+                        version_for_tier=lambda t: model_version(location_id, t))
+    version = model_version(location_id)
+    return {**meta, "url": f"{base}?v={version}" if version else base,
+            "tiers": {t: {**info, "url": urls[t]}
                       for t, info in (meta.get("tiers") or {}).items()}}
 
 
@@ -1724,8 +1728,8 @@ def play_room_model_meta(room_id: str):
     recipe, which asks for it with ``with_surface``."""
     from urllib.parse import quote
     from app.models.world import find_location_by_room
-    from app.core.location_model3d import find_building_model, get_client_meta
-    from app.core.model_store import read_sidecar
+    from app.core.location_model3d import find_building_model, get_client_meta, model_version
+    from app.core.model_store import read_sidecar, variant_urls
     from app.core.model_surface import surface_status
     loc = find_location_by_room(room_id)
     meta = get_client_meta(loc.get("id", ""), room_id=room_id) if loc else None
@@ -1735,8 +1739,11 @@ def play_room_model_meta(room_id: str):
     meta["surface_status"] = surface_status(
         p, (read_sidecar(p) if p else {}).get("rotation"))
     base = f"/play/rooms/{quote(room_id)}/model"
-    return {**meta, "url": base,
-            "tiers": {t: {**info, "url": f"{base}?tier={t}"}
+    urls = variant_urls(base, list(meta.get("tiers") or []), version_for_tier=lambda t:
+                        model_version(loc.get("id", ""), t, room_id=room_id))
+    version = model_version(loc.get("id", ""), room_id=room_id)
+    return {**meta, "url": f"{base}?v={version}" if version else base,
+            "tiers": {t: {**info, "url": urls[t]}
                       for t, info in (meta.get("tiers") or {}).items()}}
 
 

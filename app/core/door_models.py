@@ -82,6 +82,12 @@ def model_path(sig):
         return None
 
 
+def model_version(sig, tier='full'):
+    """Door/window tiers all resolve to the same generated source."""
+    from app.core.glb_delivery import source_version
+    return source_version(model_path(sig))
+
+
 def _cached(root, sig):
     try:
         directory = _directory(root, sig)

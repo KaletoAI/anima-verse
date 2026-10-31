@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Smoke run for a prop's MODEL VARIANTS (E2.3, § B2-Nachtrag).
 
+Task 88: fixture bytes b"glTF-stub" have SHA256 prefix d51d21398ae1620a;
+serving tier URLs append &v=d51d21398ae1620a. Canonical authoring URLs stay bare.
+
 No world, no DB, no server: a throwaway props directory in /tmp gets prop
 records and GLB stubs written through the real store, and the store plus the
 scene composer are asked what they answer. Every expected value is derived BY
@@ -1611,13 +1614,13 @@ def main() -> int:
           str(spec.get("model_variants")))
     check("variants IS model_variants[0] (the primary variant contract)",
           spec["variants"] == spec["model_variants"][0], str(spec["variants"]))
-    check("the primary variant keeps the BARE url + ?tier=",
-          spec["variants"] == {"full": f"/assets/props/{fern}/model?tier=full",
-                               "low": f"/assets/props/{fern}/model?tier=low"},
+    check("the primary omits variant and carries tier plus content version",
+          spec["variants"] == {"full": f"/assets/props/{fern}/model?tier=full&v=d51d21398ae1620a",
+                               "low": f"/assets/props/{fern}/model?tier=low&v=d51d21398ae1620a"},
           str(spec["variants"]))
     check("a further variant carries ?variant=<i>&tier=<t> — one '?', then '&'",
           spec["model_variants"][1]
-          == {"full": f"/assets/props/{fern}/model?variant=1&tier=full"},
+          == {"full": f"/assets/props/{fern}/model?variant=1&tier=full&v=d51d21398ae1620a"},
           str(spec["model_variants"][1]))
     check("an unqualified placement shows the primary variant",
           spec.get("variant") == 0, str(spec.get("variant")))
@@ -1627,7 +1630,7 @@ def main() -> int:
     check("no model_variants field", "model_variants" not in one, str(one.keys()))
     check("no variant field", "variant" not in one)
     check("variants is the plain tier map",
-          one["variants"] == {"full": f"/assets/props/{stool}/model?tier=full"},
+          one["variants"] == {"full": f"/assets/props/{stool}/model?tier=full&v=d51d21398ae1620a"},
           str(one["variants"]))
 
     print("\n[7] the scatter formula — hand calculation in the docstring")
@@ -1661,7 +1664,7 @@ def main() -> int:
           off["variants"] == spec["variants"], str(off["variants"]))
     check("the remaining second map is variant 2's url",
           off["model_variants"][1]
-          == {"full": f"/assets/props/{fern}/model?variant=2&tier=full"},
+          == {"full": f"/assets/props/{fern}/model?variant=2&tier=full&v=d51d21398ae1620a"},
           str(off["model_variants"][1]))
 
     print("\n[9] deleting a variant takes its files, not its neighbour's")

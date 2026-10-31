@@ -145,7 +145,8 @@ logger = get_logger(__name__)
 #: 18 (2026-10-25): Model-owned prop and room water regions.
 #: 19 (2026-10-27): Action binding provenance and floor-only access projection.
 #: 20 (2026-10-27): Preserve broken/stale support provenance in action bindings.
-SCENE_RECIPE_VERSION = 20
+#: 21 (2026-10-31): Source-versioned model URLs and their scene change detection.
+SCENE_RECIPE_VERSION = 21
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -1607,7 +1608,8 @@ def _window_models(walls, *, styles, color, glass, bars) -> list:
         sig = meta["sig"]
         out.append({
             "role": "prop", "id": "window:" + sig,
-            "variants": _variants(meta.get("url") or f"/assets/doors/{sig}/model", ["full"]),
+            "variants": _variants(meta.get("url") or f"/assets/doors/{sig}/model", ["full"],
+                                  version_for_tier=lambda t: door_models.model_version(sig, t)),
             "room_id": wall.get("room_id", ""), "level": wall.get("level", 0),
             "fix_euler": None, "yaw_deg": _r(math.degrees(math.atan2(-uz, ux)) % 360, 1),
             "measure": "fit", "size_m": meta["size_m"],
@@ -2868,14 +2870,14 @@ def _fix_euler(rotation: Any) -> Dict[str, float]:
     return {axis: _r(_num(rot.get(axis)), 3) for axis in ("x", "y", "z")}
 
 
-def _variants(base_url: str, tiers: Any) -> Dict[str, str]:
+def _variants(base_url: str, tiers: Any, *, version_for_tier=None) -> Dict[str, str]:
     """``models[].variants`` (§ B1): one URL per resolution tier the subject
     HAS. A model that declares no tiers is a ``full`` one — that is what every
     model made before the tiers existed is. Consumers pick the tier they want
     and fall back to the best available one; an empty object means there is no
     mesh at all (then ``placeholder_dims`` carries the placement)."""
     names = [str(t) for t in (tiers or []) if t] or [DEFAULT_TIER]
-    return variant_urls(base_url, names)
+    return variant_urls(base_url, names, version_for_tier=version_for_tier)
 
 
 def scene_mesh_placement(location: Dict[str, Any], box_min: Sequence[float],
@@ -2968,6 +2970,7 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     if not meta:
         return None
     from urllib.parse import quote
+    from app.core import location_model3d
     loc_id = str(location.get("id") or "")
     ground = bool((map3d or {}).get("area_model"))
     # Detail scene (plan-area-detail-scenes.md): the area model becomes a
@@ -3013,7 +3016,8 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         "display": "shell_area" if detail else ("ground" if ground else "shell"),
         "id": loc_id,
         "variants": _variants(f"/play/locations/{quote(loc_id)}/model",
-                              meta.get("tiers")),
+                              meta.get("tiers"), version_for_tier=lambda t:
+                              location_model3d.model_version(loc_id, t)),
         "level": 0,
         "fix_euler": _fix_euler(meta.get("rotation")),
         # A building has NO yaw dial of its own any more (v6 Nr. 10): the
@@ -3083,6 +3087,7 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     if not meta:
         return None
     from urllib.parse import quote
+    from app.core import location_model3d
     lay = room.get("layout") or {}
     room_id = str(room.get("id") or "")
     level = int(recipe.get("level") or 0)
@@ -3104,7 +3109,8 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "role": "room",
         "id": room_id,
         "variants": _variants(f"/play/rooms/{quote(room_id)}/model",
-                              meta.get("tiers")),
+                              meta.get("tiers"), version_for_tier=lambda t:
+                              location_model3d.room_model_version(room_id, t)),
         "room_id": room_id,
         "level": level,
         "fix_euler": _fix_euler(meta.get("rotation")),
@@ -3528,7 +3534,7 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     """
     from urllib.parse import quote
 
-    from app.core import door_models
+    from app.core import door_models, props as prop_store
     from app.core.door_styles import load_door_styles
     from app.core.door_geometry import leaves_for
     door_styles = load_door_styles() if door_styles is None else door_styles
@@ -3568,7 +3574,8 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
                 sig = meta["sig"]
                 pair.append({
                     "role": "prop", "id": "door:" + sig,
-                    "variants": _variants(f"/assets/doors/{sig}/model", ["full"]),
+                    "variants": _variants(f"/assets/doors/{sig}/model", ["full"],
+                                          version_for_tier=lambda t: door_models.model_version(sig, t)),
                     "room_id": (door.get("rooms") or [""])[0],
                     "level": int(door.get("level") or 0), "fix_euler": None,
                     "yaw_deg": _r((math.degrees(math.atan2(-uz, ux)) +
@@ -3613,7 +3620,8 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             "role": "prop",
             "id": pid,
             "variants": (_variants(f"/assets/props/{quote(pid)}/model",
-                                   prop.get("model_tiers"))
+                                   prop.get("model_tiers"), version_for_tier=lambda t:
+                                   prop_store.model_version(pid, t))
                          if has_model else {}),
             # The room the hole was cut out of — a threshold names it first,
             # and that is the parent a renderer hangs the leaf in.
@@ -3699,9 +3707,9 @@ def _prop_variant_urls(prop_id: str,
 
     Each map is built exactly like the single ``variants`` map has always
     been (:func:`_variants`), plus the ``variant`` query the serving route
-    reads (``…/model?variant=2&tier=low``); the primary one keeps the bare URL
-    it always had, so nothing already cached by a client is invalidated by the
-    feature existing.
+    reads (``…/model?variant=2&tier=low&v=<source-sha16>``). The primary
+    omits ``variant`` so the serving route selects the effective primary;
+    each tier's source version is appended last.
 
     A recipe that carries no ``variant_tiers`` (a prop with one variant)
     yields the single primary map — the same list ``[variants]``, so the
@@ -3712,20 +3720,22 @@ def _prop_variant_urls(prop_id: str,
     position would serve the very mesh the admin just switched off.
     """
     from urllib.parse import quote
+    from app.core import props as prop_store
     base = f"/assets/props/{quote(prop_id)}/model"
     entries = placement.get("variant_tiers")
     if not isinstance(entries, list) or not entries:
-        return [_variants(base, placement.get("model_tiers"))]
+        return [_variants(base, placement.get("model_tiers"),
+                          version_for_tier=lambda t: prop_store.model_version(prop_id, t))]
     out: List[Dict[str, str]] = []
     for pos, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         idx = int(entry.get("variant") or 0)
-        # The PRIMARY variant (list position 0) keeps the bare URL it has
-        # always had, whatever its store index — that identity is what keeps
-        # existing client caches valid.
+        # The PRIMARY variant omits the store index: the route selects the
+        # effective primary, whatever its current index in the library.
         out.append(_variants(base if pos == 0 else f"{base}?variant={idx}",
-                             entry.get("tiers")))
+                             entry.get("tiers"), version_for_tier=lambda t:
+                             prop_store.model_version(prop_id, t, variant=None if pos == 0 else idx)))
     return out
 
 
@@ -4017,7 +4027,8 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                surface_sigs: Optional[Dict[str, str]] = None,
                corridor_levels: Optional[Set[int]] = None,
                walkable_props: Optional[Dict[str, bool]] = None,
-               water_sigs: Optional[Dict[str, str]] = None) -> str:
+               water_sigs: Optional[Dict[str, str]] = None,
+               model_urls: Optional[List[str]] = None) -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
@@ -4096,7 +4107,12 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     picture part) — so untagging a crate used to silently leave every running
     client walking on it. One entry per prop id, not per placement: the tag is
     a property of the prop, so two copies of the same crate say the same thing
-    twice."""
+    twice.
+
+    Versioned ``model_urls`` cover source replacements even when a gallery's
+    stat-based signature stays unchanged (same size and restored mtime).
+    They include every advertised tier and active model variant, not only
+    the tier or variant currently displayed by a client."""
     import hashlib
     import json
     season = season_token()
@@ -4107,6 +4123,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         terrain = ""
     payload = {
         "code_version": SCENE_RECIPE_VERSION,
+        "model_urls": model_urls or [],
         "map3d": location.get("map3d") or {},
         "plan_width_m": round(float(plan_width_m or 0), 3),
         "ground_kind": ground_kind,
@@ -4866,11 +4883,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                       for m in models
                       if isinstance(m, dict) and m.get("role") == "prop"}
 
+    model_urls = sorted({url for model in models
+                         for tiers in [model.get("variants") or {},
+                                       *(model.get("model_variants") or [])]
+                         for url in tiers.values()})
+
     out = {
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas, ground_kind,
                                 door_prop_sigs, surface_sigs,
-                                corridor_levels, walkable_props, water_sigs),
+                                corridor_levels, walkable_props, water_sigs, model_urls),
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,
@@ -5022,7 +5044,7 @@ def prop_lib_token() -> str:
 
 
 def _dir_stat_sig(directory: Path, depth: int = 0) -> str:
-    """``name:mtime_ns:size`` of every file under ``directory``, sorted.
+    """``name:mtime_ns:size:inode:ctime_ns`` of every file under ``directory``, sorted.
 
     ``depth`` is how many levels of SUBDIRECTORIES are descended into (0 = the
     directory's own files only). A missing directory contributes ``""`` —
@@ -5030,8 +5052,8 @@ def _dir_stat_sig(directory: Path, depth: int = 0) -> str:
     moment the first file appears.
 
     Stats, not contents: this runs on a poll and must not read a mesh to
-    notice that it changed. ``st_mtime_ns`` is nanosecond-resolution, so a
-    rewrite that keeps the size still moves the fingerprint.
+    notice that it changed. Inode and ctime also cover replacements/edits
+    that preserve size and mtime, matching the source-version memo's identity.
     """
     parts: List[str] = []
     try:
@@ -5047,7 +5069,7 @@ def _dir_stat_sig(directory: Path, depth: int = 0) -> str:
                                  + "]")
                 continue
             st = entry.stat()
-            parts.append(f"{entry.name}:{st.st_mtime_ns}:{st.st_size}")
+            parts.append(f"{entry.name}:{st.st_mtime_ns}:{st.st_size}:{st.st_ino}:{st.st_ctime_ns}")
         except OSError:
             continue
     return "|".join(parts)

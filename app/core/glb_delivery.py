@@ -57,6 +57,29 @@ def _cache_dir() -> Path:
     return paths.get_storage_dir() / ".cache" / "meshopt"
 
 
+def source_version(path: Path | None) -> str:
+    """First sixteen source SHA256 digits, or empty when no stable read is possible."""
+    try:
+        return _sha(path)[:16] if path is not None else ""
+    except OSError:
+        return ""
+
+
+def delivery_is_final(path: Path, served: Path) -> bool:
+    """A delivery copy or deterministic source choice, never a pending stand-in."""
+    try:
+        if served != path:
+            # A replacement between delivery selection and versioning must
+            # not make an old copy immutable under the new source's version.
+            return served == _cache_dir() / f"{_sha(path)}.glb"
+        if not config.get("image_generation.blender_meshopt_delivery", True):
+            return True
+        return (runner.status()["usable"]
+                and (_cache_dir() / f"{_sha(path)}.skip").is_file())
+    except OSError:
+        return False
+
+
 def _build(source: Path, cache: Path, sha: str) -> None:
     key = (cache, sha)
     try:

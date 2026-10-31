@@ -796,7 +796,17 @@ user acceptance; the proxy smoke checks forwarding configuration only.
 >     WIRKLICH gibt (fehlende Stufe fehlt im Objekt, leeres Objekt = kein
 >     Mesh → `placeholder_dims`). Kein Alias-Feld `url` daneben. Gilt für
 >     `role` building/room/prop gleichermaßen; die URLs tragen den
->     Stufen-Parameter (`…/model?tier=full`).
+>     Stufen-Parameter (`…/model?tier=full&v=<source-sha16>`).
+>     **Content versions (2026-10-31):** scene tier maps (§ B1), scatter/world props
+>     (§ A9) and building/room model meta append `v` last, e.g.
+>     `?variant=2&tier=low&v=<source-sha16>`. Each version is the first sixteen
+>     SHA-256 hex digits of the source selected by that URL, including tier
+>     fallback. Missing/unreadable sources omit `v`. Only a matching version
+>     with final delivery bytes (meshopt copy, delivery disabled, or a skip
+>     marker) receives `public, max-age=31536000, immutable`; pending delivery,
+>     an unusable runner, and absent/stale versions retain the route's normal
+>     cache policy (props/doors one hour; buildings/rooms `no-cache`). ETags and
+>     conditional 304 responses retain their existing semantics.
 >     **Konsumentenregel:** gewünschte Stufe nehmen, sonst die beste
 >     vorhandene (Reihenfolge `full`, `low`, dann alles Weitere) — eine
 >     fehlende Low-Variante darf ein Objekt nie verschwinden lassen. Die
@@ -1644,7 +1654,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   `scripts/smoke_stroke_styles.mjs` [S1]–[S11], Whitelist
   `scripts/smoke_terrain_areas.py` [11z], Auslieferung [12c].
 - **Der Server hängt an einen Eintrag mit Prop-`model` zusätzlich
-  `variants: {tier: "/assets/props/<id>/model?tier=<tier>"}`** — nur die
+  `variants: {tier: "/assets/props/<id>/model?tier=<tier>&v=<source-sha16>"}`** — nur die
   Stufen, die das Prop WIRKLICH hat, aufgelöst mit derselben einen Regel
   `pickVariant` wie die Szenen-Props (§ B1); fremde/absolute URLs und Props
   ohne Mesh bekommen den Schlüssel nicht, und ohne `variants` lädt ein Client
@@ -1655,7 +1665,8 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 - **Hat das Prop mehrere Modell-Varianten, hängt der Server zusätzlich
   `model_variants` an** — eine Stufen-Karte je AKTIVER Variante MIT Mesh, in
   der Reihenfolge des Props, gebaut wie überall sonst (§ B2-Nachtrag): die
-  primäre behält ihre query-lose URL, jede weitere trägt `?variant=<i>`.
+  primary omits `variant`, each additional map uses
+  `?variant=<i>&tier=<tier>&v=<source-sha16>` (content version/cache rule above).
   **`variants` IST Element 0.** Das Feld kommt NUR bei mehr als einer Variante
   mit, also merkt ein Prop mit einer Variante von der Sache nichts.
   **Welche Instanz welche Variante zeigt, steht NICHT im Payload** — und das
@@ -7082,7 +7093,7 @@ storey contour; shopfront applies to exterior doors on storey 0. Hull choices
 and `door_color` come from the active model's `hull.description`.
 
 A built style door is an ordinary `role: "prop"`, `measure: "fit"` spec with
-`id: "door:<sig>"`, full variants under `/assets/doors/<sig>/model`,
+`id: "door:<sig>"`, full variants under `/assets/doors/<sig>/model?tier=full&v=<source-sha16>`,
 `fix_euler: null`, the model's own `size_m` (including casing), and
 `door: {opening, hinge, swing, leaf_bbox}`. The anchor is the outer casing
 edge on the hinge side, `bottom_y` the threshold base. Glass styles carry
@@ -7113,7 +7124,8 @@ Bars follow the active hull: on while `hull_ornament_density > 0`; without a hul
 Each ready model emits `{role:'prop', id:'window:<sig>', variants: full, room_id,
 level, fix_euler:null, yaw_deg, measure:'fit', size_m, anchor, bottom_y,
 slots:{glass:{preset:'glass'}}}`. The shared asset URL is
-`/assets/doors/<sig>/model`. Width and height come from the pane; model size is
+`/assets/doors/<sig>/model?tier=full&v=<source-sha16>` (the content version and
+immutable rule above also apply to door/window models). Width and height come from the pane; model size is
 `[width+.16, height+.13]`, anchor is pane start minus wall direction × `.08`, and
 `bottom_y` is pane base minus `.07`. Rotation is `atan2(-uz, ux)` in degrees modulo
 360. The build uses `.07` wall thickness and derives outside from the pane normal.
@@ -8431,9 +8443,9 @@ URL aus einer Position ab.
 also **`variants == model_variants[0]`**. Das ist kein Kompatibilitäts-Alias,
 sondern der definierte Primär-Varianten-Vertrag — ein Konsument, der von
 Varianten nichts weiß, rendert weiter genau das, was er vorher gerendert hat,
-und die primäre Variante behält ihre bisherige URL ohne Query (`…/model` bzw.
-`…/model?tier=low`), sodass kein Client-Cache durch das Feature entwertet
-wird. Die primäre Variante ist die **erste AKTIVE** der Liste — nicht
+and the primary variant omits `variant` in its URL
+(`…/model?tier=low&v=<source-sha16>`; content-version rule above).
+Die primäre Variante ist die **erste AKTIVE** der Liste — nicht
 zwangsläufig die zuerst erzeugte.
 
 **Nachtrag 2026-08-20 (E2c) — JAHRESZEITEN.** Eine Variante darf die
