@@ -82,9 +82,8 @@ class InteractSkill(PluginSkill):
         except Exception:
             keys = ""
         extra = (f" Known free two-person actions: {keys}." if keys else "")
-        extra += (' Answer an exact prop-action invitation with '
-                  '{"execution_id":"<offered id>","answer":"yes" or "no"}; '
-                  'never substitute a pose or a different object.')
+        extra += (' Answer a furniture invitation with '
+                  '{"partner": "<who asked>", "answer": "yes" or "no"}.')
         return ToolSpec(name=self.name, description=f"{self.description}{extra}",
                         func=self.execute)
 
@@ -100,6 +99,15 @@ class InteractSkill(PluginSkill):
         partner_raw = str(data.get("partner") or data.get("name")
                           or data.get("target") or "").strip()
         action = str(data.get("action") or data.get("pose") or "").strip()
+        if partner_raw and not action and data.get("answer") is not None:
+            # A furniture invitation is answered by naming who asked; without
+            # one this is the answer to a pair invitation, as before.
+            from app.core.prop_action_engine import state_for
+            run = next((r for r in state_for(actor)["incoming"]
+                        if r["actor"].lower() == partner_raw.lower()), None)
+            if run is not None:
+                return self._answer_prop(actor, {**data, "execution_id": run["execution_id"],
+                                                 "partner": run["actor"]})
         if not partner_raw or not action:
             return ToolRefusal('pass {"partner": "<name>", "action": "<what you do together>"}.')
         try:
@@ -185,11 +193,11 @@ class InteractSkill(PluginSkill):
                                       {"yes", "ja", "accept", "agree", "true"})
         refused = _is_refusal(data)
         if not accepted and not refused:
-            return "Cannot: give an explicit answer=yes or answer=no for this execution_id."
+            return 'Cannot: give an explicit "answer": "yes" or "no".'
         result = actions.respond(actor, ref, accepted)
         if result["status"] != "refused":
             _record_answer(ref, accepted)
-        return f"Prop action {ref}: {result['status']} ({result['reason'] or 'explicit answer recorded'})."
+        return f"{run['definition']['name']}: {result['status']} ({result['reason'] or 'answer recorded'})."
 
     def _ask(self, actor: str, partner: str, key: str,
              invite_id: str = "") -> str:

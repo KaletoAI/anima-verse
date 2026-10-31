@@ -48,7 +48,21 @@ def open_questions(agent_name: str, tool_names: list) -> list:
     if VERB_NAME not in (tool_names or []):
         return []
     from app.core import interaction_engine as IE
+    from app.core.prop_action_engine import state_for
+    from app.core.prop_actions import piece_label
     lines = []
+    try:
+        incoming = state_for(agent_name)["incoming"]
+    except Exception as exc:  # noqa: BLE001 — the pair questions still count
+        logger.debug("furniture questions for %s unavailable: %s", agent_name, exc)
+        incoming = []
+    for run in incoming:
+        piece = piece_label(run["target"])
+        lines.append(
+            f'{run["actor"]} invited {agent_name} to "{run["label"]}"'
+            + (f" on {piece}" if piece else "")
+            + f'. Yes: {VERB_NAME} {{"partner": "{run["actor"]}", "answer": "yes"}}. '
+            f'No: {VERB_NAME} {{"partner": "{run["actor"]}", "answer": "no"}}.')
     for invite in IE.pending_invites_for(agent_name):
         call = f'{{"partner": "{invite["inviter"]}", "action": "{invite["pose_key"]}"}}'
         lines.append(
@@ -168,10 +182,9 @@ def _on_prop_invited(execution_id: str = "", inviter: str = "", invitee: str = "
     if (not run or run["status"] != "awaiting_consent" or run["actor"] != inviter
             or run["partner"] != invitee or is_player_controlled(invitee)):
         return
-    offer = (f"to {run['definition']['name']} at placement {run['target']['placement_id']} "
-             f"in {run['target']['location_id']}/{run['target']['room_id']}; "
-             f"action {run['action_id']}, revision {run['definition_revision']}, "
-             f"semantic initiator {inviter}, invitee {invitee}, clip roles {run['data']['clip_roles']}")
+    from app.core.prop_actions import piece_label
+    piece = piece_label(run["target"])
+    offer = f"to {run['definition']['name']}" + (f" on {piece}" if piece else "")
     try:
         if decision.is_active(PAIR_INVITE):
             d = decision.decide(PAIR_INVITE,
@@ -189,9 +202,10 @@ def _on_prop_invited(execution_id: str = "", inviter: str = "", invitee: str = "
         from app.core.agent_loop import get_agent_loop
         get_agent_loop().bump_respond(
             invitee, speaker=inviter, content=f"{inviter} invites you {offer}.", on_demand=True,
-            hint=(f"Decide explicitly in character. Answer this exact question using {VERB_NAME} "
-                  f'with execution_id="{execution_id}", answer="yes" or answer="no". '
-                  "A counter-proposal using a pose or another object is NOT consent."))
+            # Prose only, like the pair invitation: the exact yes/no call
+            # reaches the tool-calling reader through open_questions.
+            hint=(f"{inviter} invites you {offer}. Decide in character whether you "
+                  f"want to, and make your answer clear."))
     except Exception as exc:
         logger.debug("prop consent respond request failed for %s: %s", invitee, exc)
 

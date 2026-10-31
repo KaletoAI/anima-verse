@@ -8295,36 +8295,43 @@ Raw body-marker metre readbacks, access rendering/inverse picking, slot spacing
 and reference figures use that same scale, including non-right-angle fixes.
 
 The enabled `set_pose` package also loads the real `prop_action` capability/tool
-`PropAction`. Its request signature is
-`{operation:"request",action_id,revision,target,partner?,request_id?}`; stop is
-`{operation:"cancel",execution_id}`. Actor is bound by the real tool wrapper.
+`PropAction`. An LLM calls it by NAMES — `{furniture,action,partner?}`, stop of the
+own runs `{stop:true}`; the server takes the nearest usable piece of that name from
+the current offers (`prop_actions.execute`, refusals `no_such_offer` with the
+available lines, `partner_required`, the offer's own reason, `nothing_to_stop`).
+The exact form `{operation:"request",action_id,revision,target,partner?,request_id?}` /
+`{operation:"cancel",execution_id}` stays for the player API and clients.
+Actor is bound by the real tool wrapper.
 Existing characters without a `prop_action` override receive its runtime default
 when the package/global skill is enabled. Explicit per-character disable and
 generic skill-block/cost rules still take precedence. `always_load` is not used
 as a substitute for runtime activation. Structured refused/failed tool results
 remain JSON and are recognized by the shared failure classifier, so refusal
 cannot pay a success-only tool cost.
-NPC structured action answers use `{prop_action:<same payload>}` and execute
+NPC structured action answers use `{prop_action:<same named payload>}` and execute
 through that installed skill/Core instead of applying a new narrative pose.
-The mandatory NPC renderer context includes `npc_action_request_shape` and
-`npc_action_cancel_shape` with the actual top-level `prop_action` envelope.
+The mandatory NPC renderer context includes `<npc_action_response_contract>` with
+the top-level `prop_action` envelope.
 This consumer-specific contract is enforced even when a World override replaces
 the entire Shared NPC template; a bare tool request is not an NPC answer.
-`InteractWith {execution_id,answer:"yes"|"no"}` remains the exact consent verb.
+Consent is `InteractWith {partner,answer:"yes"|"no"}` naming who asked (the exact
+`{execution_id,answer}` form still works); the open question reaches the invitee's
+tool decision through `tool_decision.open_questions`, its roleplay call gets prose.
 General temporary Together's legacy acceptance is unchanged.
 
 Effective Shared/World `chat_moment`, both thought templates and `npc_action`
-render `prop_actions_block`: only the offers requestable NOW (a pair offer with its
-enabled `partners`; no blocked offer, no `enabled`/`reason`/`available_targets`,
-target fields once — a room with a package's pair poses once grew it past 200 KB,
-`scripts/smoke_prop_action_prompt_block.py`), effect timing and exact executable signatures, even when the
-legacy activity-marker switch is off. If an override drops mandatory context,
+render `prop_actions_block`: one line per furniture name with the action names
+requestable NOW (a pair action with its enabled partners), the own runs in words and
+the named `PropAction` usage — no ids, revisions, targets, distances or effects (a
+room with a package's pair poses once grew an id-carrying block past 200 KB,
+`scripts/smoke_prop_action_prompt_block.py`), even when the legacy activity-marker
+switch is off. If an override drops mandatory context,
 the renderer preserves its custom text, logs a repair warning and appends the
 real runtime block. Missing actor context raises instead of silently omitting it. A `chat_moment` rendered for
 a chat LLM that calls no tool (`rp_first` roleplay reply, `prop_actions_executable`
-false) carries the furniture names and action labels instead
-(`prop_actions.narrative_block`): no ids, no JSON — its rp_first tool decision keeps
-the executable contract and makes the action from the prose.
+false) and the roleplay call of an rp_first thought carry the same lines without
+the usage line (`prop_actions.narrative_block`) — its tool decision makes the
+action from the prose.
 Raw SetActivity never allocates a prop or bypasses action rules; room-owned
 markers/free body poses remain. Implicit chat marker/context adoption does not
 interrupt an explicitly owned semantic action. Explicit tools, movement and stop

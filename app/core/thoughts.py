@@ -422,6 +422,12 @@ class ThoughtRunner:
             from app.core.prompt_templates import render_async
             ctx = await build_thought_context_async(character_name, tools_hint=tools_hint)
             system_prompt = await render_async("chat/agent_thought.md", **ctx)
+        if mode == "rp_first":
+            # This call writes prose and calls no tool: furniture names only.
+            # The tool decision below builds its own executable block.
+            from app.core.prop_actions import narrative_block, replace_contract
+            system_prompt = replace_contract(
+                system_prompt, await asyncio.to_thread(narrative_block, character_name))
         if context_hint:
             logger.info("Thought fuer %s mit context_hint: %s",
                         character_name, context_hint[:100])

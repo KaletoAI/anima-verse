@@ -148,9 +148,27 @@ def rendered(name):
             'npc_action': system + '\n' + user}
 
 
-def offered_rows(prompt):
-    section = prompt.split('<prop_actions_contract>', 1)[1].split('</prop_actions_contract>', 1)[0]
-    return json.loads(section.split('offers=', 1)[1].split('\nown_state=', 1)[0])
+def furniture_section(prompt):
+    """What an LLM reads about furniture: the contract of a tool-calling
+    reader, else the roleplay list, else nothing."""
+    if '<prop_actions_contract>' in prompt:
+        return prompt.split('<prop_actions_contract>', 1)[1].split('</prop_actions_contract>', 1)[0]
+    marker = 'Furniture here (just describe what you do with it):'
+    return prompt.split(marker, 1)[1].split('\n\n', 1)[0] if marker in prompt else ''
+
+
+def offered_lines(prompt):
+    """The furniture lines ("- <piece>: <action>, ...") of furniture_section."""
+    return [line for line in furniture_section(prompt).split('\n') if line.startswith('- ')]
+
+
+def own_run(name):
+    """The execution id of ``name``'s one running action — an LLM's named
+    request answers in names, without it."""
+    rows = A.state_for(name)['current']
+    if len(rows) != 1:
+        raise AssertionError(('expected one own run', rows))
+    return rows[0]['execution_id']
 
 
 async def streamed_tool(name, offered):
@@ -162,8 +180,7 @@ async def streamed_tool(name, offered):
     skill = manager.get_skill('prop_action')
     if not skill or skill.name not in tools:
         raise AssertionError('real loader did not expose prop_action capability')
-    request = dict(operation='request', action_id=offered['action_id'],
-                   revision=offered['definition_revision'], target=offered['target'])
+    request = dict(furniture=offered['prop_label'], action=offered['label'])
     captured = '<tool name="' + skill.name + '">' + json.dumps(request) + '</tool>'
     matches = find_tool_calls('tag', captured, tools)
     if len(matches) != 1:
@@ -189,7 +206,9 @@ async def streamed_tool(name, offered):
         await asyncio.to_thread(
             _extract_context_from_last_chat, name,
             [{'role': 'assistant', 'content': narrative}], F.C.get_character_config(name))
-    if not calls or R.get(outcome['execution_id'])['status'] != 'approaching':
+    if 'execution_id' in outcome or outcome['status'] != 'approaching':
+        raise AssertionError(('a named request answers in names', outcome))
+    if not calls or R.get(own_run(name))['status'] != 'approaching':
         raise AssertionError('actual postprocessing lost the explicit semantic run')
     return dict(captured_model_output=captured, tool_result=outcome, narrative=narrative,
                 actual_tool_events=[type(event).__name__ for event in events],
@@ -540,14 +559,20 @@ class ApiContracts(unittest.TestCase):
                     interrupt_on_presence_change=False, phases=[], requirements=[], effects=[])]
                 F.props._write_sidecar(pid, doc)
                 S.clips._write_world_transitions([]) if mode == 'blocked' else S.measured_entry()
+                rows = P.offers(name)
+                self.assertEqual(bool(rows), mode != 'empty')
+                if rows:
+                    self.assertEqual(rows[0]['enabled'], mode == 'available', rows)
+                    if mode == 'blocked':
+                        self.assertEqual(rows[0]['reason'], 'missing_entry_transition')
+                    self.assertEqual(rows[0]['target']['placement_id'], target['placement_id'])
+                # Every LLM reads names only, and only what can be requested.
+                expected = [f"- {rows[0]['prop_label']}: Rest"] if mode == 'available' else []
                 for kind, prompt in rendered(name).items():
-                    rows = offered_rows(prompt)
-                    self.assertEqual(bool(rows), mode != 'empty', kind)
-                    if rows:
-                        self.assertEqual(rows[0]['enabled'], mode == 'available', (kind, rows))
-                        if mode == 'blocked':
-                            self.assertEqual(rows[0]['reason'], 'missing_entry_transition')
-                        self.assertEqual(rows[0]['target']['placement_id'], target['placement_id'])
+                    self.assertEqual(offered_lines(prompt), expected, kind)
+                    for field in ('action_id', 'revision', 'placement_id', 'location_id', 'distance',
+                                  target['placement_id']):
+                        self.assertNotIn(field, furniture_section(prompt), (kind, field))
         # Genuine World override ignores the new variable: preserve its content
         # and visibly repair mandatory executable context, never silently omit.
         path = 'chat/agent_thought.md'
@@ -555,7 +580,8 @@ class ApiContracts(unittest.TestCase):
         try:
             actual = rendered(name)['thought']
             self.assertIn('WORLD OVERRIDE retained for ' + name, actual)
-            self.assertEqual(offered_rows(actual), [])
+            self.assertIn('<prop_actions_contract>', actual)
+            self.assertEqual(offered_lines(actual), [])
         finally:
             template_overrides.delete_override(path)
 
@@ -565,11 +591,16 @@ class ApiContracts(unittest.TestCase):
         doc['actions'][0]['effects'] = [dict(id='energy', type='stat_delta', target='actor',
                                             when='success', stat='run_energy', amount=15)]
         F.props._write_sidecar(pid, doc)
-        offer = offered_rows(rendered(name)['thought'])[0]
+        offer = P.offers(name)[0]
+        self.assertIn(f"- {offer['prop_label']}: {offer['label']}", offered_lines(rendered(name)['thought']))
         self.assertEqual(offer['effects'][0]['amount'], 15)
         self.assertEqual(offer['effects'][0]['when'], 'success')
         evidence = asyncio.run(streamed_tool(name, offer))
-        ref = evidence['tool_result']['execution_id']
+        self.assertEqual(evidence['tool_result'], dict(status='approaching', furniture=offer['prop_label'],
+                                                       action=offer['label']))
+        ref = own_run(name)
+        # The own run in words, the piece named like its offer.
+        self.assertIn(f"You are doing: {offer['label']} on {offer['prop_label']}", P.prompt_block(name))
         self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50)
         S.tick(30)
         S.tick(2)
@@ -633,8 +664,8 @@ class ApiContracts(unittest.TestCase):
                                             when='success', stat='run_energy', amount=15)]
         F.props._write_sidecar(pid, doc)
         offer = P.offers(name)[0]
-        captured = json.dumps(dict(room=target['room_id'], prop_action=dict(operation='request',
-            target=offer['target'], action_id=offer['action_id'], revision=offer['definition_revision'])))
+        captured = json.dumps(dict(room=target['room_id'], prop_action=dict(
+            furniture=offer['prop_label'], action=offer['label'])))
         prompts = []
         def model(**kwargs):
             prompts.append(kwargs['system_prompt'] + '\n' + kwargs['user_prompt'])
@@ -646,12 +677,10 @@ class ApiContracts(unittest.TestCase):
         finally:
             template_overrides.delete_override(override)
         self.assertTrue(result, result)
-        shape = json.loads(prompts[0].split('npc_action_request_shape=', 1)[1].splitlines()[0])
-        self.assertEqual(shape['prop_action']['operation'], 'request')
-        self.assertEqual(set(shape['prop_action']['target']), set(A._TARGET))
+        self.assertIn('{"prop_action": {"furniture": "<name>", "action": "<action>"', prompts[0])
         self.assertIn('KEEP_PRIVATE_WORLD_DIRECTOR', prompts[0])
-        self.assertEqual(offered_rows(prompts[0])[0]['target'], offer['target'])
-        ref = result['action_result']['execution_id']
+        self.assertEqual(offered_lines(prompts[0]), [f"- {offer['prop_label']}: {offer['label']}"])
+        ref = own_run(name)
         self.assertEqual(R.get(ref)['status'], 'approaching')
         S.tick(30)
         S.tick(2)

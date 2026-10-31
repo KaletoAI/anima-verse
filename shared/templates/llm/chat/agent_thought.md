@@ -114,7 +114,7 @@ Decide based on this and other relevant factors — your rhythm is a guideline, 
 
 === Places and activities here ===
 {{ activity_hint_block }}
-SetActivity is only a free body pose or room-owned marker; furniture requires the exact PropAction contract below.
+SetActivity is only a free body pose or room-owned marker; furniture actions are listed below.
 {% endif %}
 {{ prop_actions_block }}
 {% if room_items_block %}

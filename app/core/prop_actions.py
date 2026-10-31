@@ -485,74 +485,157 @@ def _requestable(actor: str) -> list:
     return rows
 
 
+def piece_label(target: dict, lang: str = "en") -> str:
+    """The name of the furniture piece a target points at ("Stone Bench"),
+    the same name :func:`offers` gives it; ``""`` when it is gone."""
+    from app.core import places
+    from app.core.i18n import localized
+    from app.core.props import read_sidecar
+    try:
+        pid = next((place.get("prop_id") for place in
+                    places.room_places(target["location_id"], target["room_id"])
+                    if place.get("placement_id") == target["placement_id"]), None)
+    except (KeyError, TypeError):
+        return ""
+    if not pid:
+        return ""
+    return localized(read_sidecar(pid, read_only=True) or {}, "name", lang) or pid
+
+
+def _piece_lines(rows: list) -> list:
+    """One line per furniture NAME with its action names (a pair action with
+    its partners) — what an LLM decides on. Several pieces of one name are
+    one line: which of them is used is the server's choice (the nearest
+    usable one, :func:`execute`)."""
+    pieces: dict = {}
+    for row in rows:
+        labels = pieces.setdefault(row.get("prop_label") or "Furniture", {})
+        partners = labels.setdefault(row.get("label") or "", [])
+        partners += [p for p in row.get("partners", []) if p not in partners]
+    return [f"- {prop}: " + ", ".join(f"{label} (with {', '.join(partners)})" if partners else label
+                                      for label, partners in labels.items())
+            for prop, labels in pieces.items()]
+
+
+def _own_lines(actor: str) -> list:
+    """The actor's own running or waiting furniture actions, in words."""
+    from app.core.prop_action_engine import state_for
+    state = state_for(actor)
+    lines = []
+    for run in state["current"]:
+        other = run["partner"] if run["actor"] == actor else run["actor"]
+        piece = piece_label(run["target"])
+        lines.append(f"You are doing: {run['label']}" + (f" with {other}" if other else "")
+                     + (f" on {piece}" if piece else ""))
+    for run in state["outgoing"]:
+        piece = piece_label(run["target"])
+        lines.append(f"You asked {run['partner']} for {run['label']}"
+                     + (f" on {piece}" if piece else "") + " — waiting for the answer")
+    return lines
+
+
 def narrative_block(actor: str) -> str:
-    """The same offers for a reader that writes prose and calls no tool —
-    the roleplay reply of ``rp_first``, whose separate tool LLM turns the
-    prose into the action afterwards. Names only, no ids and no syntax::
+    """The offers for a reader that writes prose and calls no tool — the
+    roleplay reply of ``rp_first``, whose separate tool LLM turns the prose
+    into the action afterwards::
 
         Furniture here (just describe what you do with it):
-        - Wooden Stool (9): Sit, Eat
-        - Bed: Lie down, Cuddle (with Mia)
+        - Stone Bench: Sit, Lie down
+        - Bed: Cuddle (with Mia)
 
-    One line per furniture name in offer order, the count when several
-    pieces carry it; ``""`` when nothing can be requested."""
-    pieces: dict = {}
-    for row in _requestable(actor):
-        entry = pieces.setdefault(row.get("prop_label") or "Furniture", ({}, set()))
-        entry[1].add(row["target"].get("placement_id", ""))
-        label = row.get("label") or ""
-        partners = entry[0].setdefault(label, [])
-        partners += [p for p in row.get("partners", []) if p not in partners]
-    if not pieces:
+    ``""`` when nothing can be requested and nothing is running."""
+    lines = _piece_lines(_requestable(actor)) + _own_lines(actor)
+    if not lines:
         return ""
-    lines = ["Furniture here (just describe what you do with it):"]
-    for prop_label, (labels, placements) in pieces.items():
-        count = f" ({len(placements)})" if len(placements) > 1 else ""
-        lines.append(f"- {prop_label}{count}: " + ", ".join(
-            f"{label} (with {', '.join(partners)})" if partners else label
-            for label, partners in labels.items()))
-    return "\n".join(lines)
+    return "\n".join(["Furniture here (just describe what you do with it):", *lines])
 
 
 def prompt_block(actor: str) -> str:
-    """Mandatory executable context shared by every real LLM consumer."""
-    import json
-    from app.core.prop_action_engine import state_for
-    rows = _requestable(actor)
-    return ("<prop_actions_contract>\n"
-            "Use PropAction for furniture actions, never SetActivity or a raw pose. "
-            "The offers below are exactly what can be requested now; a pair offer only with one of its partners. "
-            "Effects describe real rewards and timing. "
-            "Call PropAction with JSON {\"operation\":\"request\",\"action_id\":ID,"
-            "\"revision\":DEFINITION_REVISION,\"target\":EXACT_TARGET,\"partner\":NAME_OR_EMPTY}. "
-            "An accepted request starts walking, not instant seating or success. "
-            "Consent: InteractWith {\"execution_id\":ID,\"answer\":\"yes\"|\"no\"}; "
-            "stop: PropAction {\"operation\":\"cancel\",\"execution_id\":ID}. "
-            "Never invent IDs, targets, consent or completion.\n"
-            "offers=" + json.dumps(rows, ensure_ascii=False, separators=(",", ":")) + "\n"
-            "own_state=" + json.dumps(state_for(actor), ensure_ascii=False, separators=(",", ":")) +
-            "\n</prop_actions_contract>")
+    """The furniture context of every LLM that calls tools: furniture and
+    action NAMES only — what a decision needs. Ids, revisions and targets
+    stay with the server, which resolves a named request at execution
+    (:func:`execute`); an earlier version carried them all and grew to
+    15 KB per prompt."""
+    lines = _piece_lines(_requestable(actor)) or ["(none available right now)"]
+    return "\n".join([
+        "<prop_actions_contract>",
+        'Furniture actions here. Use one: PropAction {"furniture": "<name>", "action": "<action>", '
+        '"partner": "<name, only for an action with partners>"}; stop your own: PropAction {"stop": true}. '
+        "A request starts walking there; a pair starts when the partner agrees.",
+        *lines, *_own_lines(actor),
+        "</prop_actions_contract>"])
+
+
+def replace_contract(text: str, replacement: str) -> str:
+    """``text`` with its :func:`prompt_block` section swapped for
+    ``replacement`` — for a prompt rendered before its reader was known to
+    call no tool (an rp_first thought's roleplay call)."""
+    start = text.find("<prop_actions_contract>")
+    end = text.find("</prop_actions_contract>", start)
+    if start < 0 or end < 0:
+        return text
+    return text[:start] + replacement + text[end + len("</prop_actions_contract>"):]
 
 
 def npc_action_response_contract() -> str:
-    """Mandatory JSON envelope understood by the NPC director's real dispatcher."""
-    import json
-    request = dict(prop_action=dict(operation="request", action_id="<offered action_id>",
-        revision="<offered definition_revision>",
-        target={key: "<offered " + key + ">" for key in
-                ("location_id", "room_id", "placement_id", "variant_uid")},
-        partner="<enabled exact partner, or empty string>"))
-    cancel = dict(prop_action=dict(operation="cancel", execution_id="<own execution_id>"))
+    """The JSON envelope the NPC director answers with for a furniture
+    action — names, like every LLM reader (:func:`prompt_block`)."""
     return ("<npc_action_response_contract>\n"
-            "This NPC director does not emit tool syntax. For a furniture action, "
-            "replace the ordinary room/activity/pose answer with a SINGLE JSON object "
-            "using the prop_action envelope below. Copy exact IDs, revision, target "
-            "and an enabled partner from the current offers. A bare tool payload "
-            "is not executable here. Do not also set pose, say, pair or action, "
-            "and do not change rooms. Use the cancel envelope only for an own run.\n"
-            "npc_action_request_shape=" + json.dumps(request, separators=(",", ":")) + "\n"
-            "npc_action_cancel_shape=" + json.dumps(cancel, separators=(",", ":")) +
-            "\n</npc_action_response_contract>")
+            "For a furniture action, answer with ONLY this JSON object instead of the "
+            'room/activity/pose answer: {"prop_action": {"furniture": "<name>", "action": "<action>", '
+            '"partner": "<name or empty>"}}; to stop your own: {"prop_action": {"stop": true}}.\n'
+            "</npc_action_response_contract>")
+
+
+def _named_request(actor: str, payload: dict) -> dict:
+    """A request by NAMES (``furniture`` + ``action`` [+ ``partner``]) on the
+    usable piece of that name nearest to the actor, resolved against the
+    current offers — the LLM never handles ids, revisions or targets."""
+    def refused(reason, **extra):
+        return dict(status="refused", execution_id="", reason=reason, **extra)
+    furniture = str(payload.get("furniture") or "").strip().lower()
+    action = str(payload.get("action") or "").strip().lower()
+    partner = str(payload.get("partner") or "").strip()
+    rows = [o for o in offers(actor)
+            if (o["prop_label"] or "Furniture").strip().lower() == furniture
+            and o["label"].strip().lower() == action]
+    if not rows:
+        return refused("no_such_offer", available=_piece_lines(_requestable(actor)))
+
+    def verdict(row):
+        if not row["required_partner"]:
+            return row["enabled"], row["reason"]
+        choice = next((t for t in row["available_targets"] if t["partner"].lower() == partner.lower()), None)
+        if choice is None:
+            return False, "partner_required" if not partner else "partner_not_available"
+        return choice["enabled"], choice["reason"]
+
+    rows.sort(key=lambda row: row["distance_m"] if row["distance_m"] is not None else float("inf"))
+    usable = [row for row in rows if verdict(row)[0]]
+    if not usable:
+        return refused(verdict(rows[0])[1])
+    row = usable[0]
+    exact = dict(operation="request", action_id=row["action_id"], revision=row["definition_revision"],
+                 target=row["target"])
+    if row["required_partner"]:
+        exact["partner"] = next(t["partner"] for t in row["available_targets"]
+                                if t["partner"].lower() == partner.lower())
+    # The answer goes back to the LLM: what happened, in names.
+    result = execute(actor, exact)
+    return dict(status=result["status"], furniture=row["prop_label"], action=row["label"],
+                **({"partner": exact["partner"]} if "partner" in exact else {}),
+                **({"reason": result["reason"]} if result.get("reason") else {}))
+
+
+def _stop_own(actor: str) -> dict:
+    """``{"stop": true}``: end the actor's own running or waiting actions."""
+    from app.core import prop_action_engine as engine
+    state = engine.state_for(actor)
+    runs = [run for run in state["current"] + state["outgoing"] if run["can_cancel"]]
+    if not runs:
+        return dict(status="refused", execution_id="", reason="nothing_to_stop")
+    results = [engine.cancel(actor, run["execution_id"]) for run in runs]
+    return dict(status=results[-1]["status"], stopped=[run["label"] for run in runs])
 
 
 def execute(actor: str, payload: dict) -> dict:
@@ -561,6 +644,13 @@ def execute(actor: str, payload: dict) -> dict:
     refused = dict(status="refused", execution_id="", reason="invalid_request")
     if not isinstance(payload, dict):
         return refused
+    # The LLM form (prompt_block): names, or a stop of the own actions.
+    if set(payload) == {"stop"} and payload["stop"] is True:
+        return _stop_own(actor)
+    if "furniture" in payload or "action" in payload:
+        if set(payload) - {"furniture", "action", "partner"}:
+            return refused
+        return _named_request(actor, payload)
     operation = payload.get("operation")
     if operation == "cancel":
         if set(payload) != {"operation", "execution_id"} or not isinstance(payload["execution_id"], str):

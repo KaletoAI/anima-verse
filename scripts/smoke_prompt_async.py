@@ -207,7 +207,7 @@ class AsyncPrompts(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(handed_off["thought_context_override"], expected_context)
                 self.assertEqual(handed_off["system_prompt_override"],
                                  prompt_templates.render(template, **expected_context))
-                self.assertIn('"action_id":"rest"', handed_off["system_prompt_override"])
+                self.assertIn('- Private prompt seat: Rest', handed_off["system_prompt_override"])
                 self.assertEqual(loop._recent[-1]["outcome"], "ok")
 
     async def test_actual_thought_context_preserves_room_contract(self):
@@ -215,7 +215,7 @@ class AsyncPrompts(unittest.IsolatedAsyncioTestCase):
         actual = await self.blocked_geometry(
             lambda: thought_context.build_thought_context_async(_ACTOR))
         self.assertIn("<prop_actions_contract>", actual["activity_hint_block"])
-        self.assertIn('"action_id":"rest"', actual["activity_hint_block"])
+        self.assertIn('- Private prompt seat: Rest', actual["activity_hint_block"])
         self.assertEqual(actual, expected)
 
     async def test_render_fallback_preserves_thought_and_in_chat_contract(self):

@@ -40,6 +40,19 @@ EXPECTATIONS, DERIVED BY HAND
 8  the invitee's respond hint is prose: "Halvard suggests Hug to you. Decide
    in character whether you want to, and make your answer clear." — no verb
    name, no "action=".
+FURNITURE (Halvard's open run r1 "Cuddle" on the Bed, addressed to Kira):
+9  InteractWith {"partner": "halvard", "answer": "yes"} (no action, no id)
+   -> prop_action_engine.respond("Kira", "r1", True); reply
+   "Cuddle: approaching (answer recorded)." — no "r1" in it. Without a
+   furniture run from that partner the call takes the pair path unchanged,
+   which needs an action: no resolve, the refusal 'Error: pass {"partner": ...'.
+10 open_questions lists it first, by partner name, no id:
+   'Halvard invited Kira to "Cuddle" on Bed. Yes: InteractWith {"partner":
+   "Halvard", "answer": "yes"}. No: InteractWith {"partner": "Halvard",
+   "answer": "no"}.'
+11 the invitee's respond hint for a furniture invitation is prose:
+   "Halvard invites you to Cuddle on Bed. Decide in character whether you
+   want to, and make your answer clear." — no id, no verb.
 """
 import json
 import sys
@@ -172,6 +185,46 @@ AL.get_agent_loop = lambda: type("Loop", (), {"bump_respond": lambda self, *a, *
 REG._on_invited(invite_id="i1", inviter=PARTNER, invitee=ACTOR, pose_key="hugging")
 hint = BUMPS[0]["hint"] if BUMPS else ""
 check("prose hint", hint, "Halvard suggests Hug to you. Decide in character "
+      "whether you want to, and make your answer clear.")
+
+print("9 a furniture invitation is answered by naming who asked")
+import app.core.prop_action_engine as PAE  # noqa: E402
+import app.core.prop_action_store as PAS  # noqa: E402
+import app.core.prop_actions as PA  # noqa: E402
+import plugins.interact.skill as SK  # noqa: E402
+TARGET = {"location_id": "l", "room_id": "r", "placement_id": "b", "variant_uid": "v"}
+RUN = {"execution_id": "r1", "actor": PARTNER, "partner": ACTOR, "label": "Cuddle", "target": TARGET,
+       "status": "awaiting_consent", "definition": {"name": "Cuddle"}}
+RESPONDS = []
+PAE.state_for = lambda name: dict(incoming=[dict(RUN)] if name == ACTOR else [], outgoing=[],
+                                  current=[], recent_results=[])
+PAS.get = lambda ref, **k: dict(RUN) if ref == "r1" else None
+PAE.respond = lambda actor, ref, accept: RESPONDS.append((actor, ref, accept)) or {"status": "approaching",
+                                                                                   "reason": ""}
+SK._record_answer = lambda *a, **k: None
+PA.piece_label = lambda target, lang="en": "Bed" if target == TARGET else ""
+r = SKILL.execute(json.dumps({"agent_name": ACTOR, "partner": "halvard", "answer": "yes"}))
+print(f"     reply: {r}")
+check("respond(Kira, r1, True)", RESPONDS, [(ACTOR, "r1", True)])
+check("reply in names", r, "Cuddle: approaching (answer recorded).")
+saved_state = PAE.state_for
+PAE.state_for = lambda name: dict(incoming=[], outgoing=[], current=[], recent_results=[])
+RESOLVE_CALLS.clear()
+r = SKILL.execute(json.dumps({"agent_name": ACTOR, "partner": PARTNER, "answer": "no"}))
+check("no furniture run: the pair path", (RESOLVE_CALLS, str(r).startswith('Error: pass {"partner"')), ([], True))
+PAE.state_for = saved_state
+
+print("10 open questions name the furniture invitation")
+FLINE = ('Halvard invited Kira to "Cuddle" on Bed. Yes: InteractWith {"partner": "Halvard", '
+         '"answer": "yes"}. No: InteractWith {"partner": "Halvard", "answer": "no"}.')
+check("furniture line first", REG.open_questions(ACTOR, ["InteractWith"])[:1], [FLINE])
+
+print("11 the furniture roleplay hint is prose")
+BUMPS.clear()
+REG.decision.is_active = lambda point: False
+REG._on_prop_invited(execution_id="r1", inviter=PARTNER, invitee=ACTOR)
+hint = BUMPS[0]["hint"] if BUMPS else ""
+check("prose hint", hint, "Halvard invites you to Cuddle on Bed. Decide in character "
       "whether you want to, and make your answer clear.")
 
 print()

@@ -292,13 +292,17 @@ attention:
 
 Room furniture uses mandatory `prop_actions_block`, not a catalog-wide pose
 list. `chat/chat_moment.md`, both thought templates and `tasks/npc_action.md`
-render current exact action IDs/revisions/targets of the offers requestable now
-(blocked ones stay out), the enabled partners of a pair offer, declared effects and executable `PropAction`/`InteractWith`
-signatures — except `chat/chat_moment.md` for a chat LLM that calls no tool itself
-(`rp_first`, or tools off; `prop_actions_executable` false): its roleplay reply gets
-only the furniture names and action labels (`prop_actions.narrative_block`, no ids,
-no JSON), and the rp_first tool decision, which keeps the full contract, turns the
-prose into the action. The old activity-marker enable flag only controls its marker syntax;
+render what a decision needs and nothing more: one line per furniture NAME with the
+action names requestable now (blocked ones stay out; a pair action with its enabled
+partners), the own running/waiting actions in words, and the `PropAction`
+`{"furniture","action","partner"}` / `{"stop": true}` usage line. No ids, revisions,
+targets, distances or effects — the server resolves a named request to the nearest
+usable piece (`prop_actions.execute`). A reader that calls no tool — `chat/chat_moment.md`
+with `prop_actions_executable` false (`rp_first` or tools off) and the roleplay call of
+an rp_first thought — gets the same lines without the usage line
+(`prop_actions.narrative_block`); its tool decision turns the prose into the action.
+A furniture invitation reaches the invitee's tool decision through the
+`tool_decision.open_questions` provider: `InteractWith {"partner","answer"}`. The old activity-marker enable flag only controls its marker syntax;
 it never disables semantic tool context. `set_pose` also supplies the executable
 `prop_action` capability, and NPC structured `prop_action` answers use that skill.
 
