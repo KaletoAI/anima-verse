@@ -11,6 +11,8 @@
  * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has six fields; this
  * dialog surfaces all of them:
  *   · `prompt`          → textarea, prefilled with the distilled `ctl.prompt`
+ *                         plus the optional LLM "Improve prompt" row
+ *                         (`PromptImprover`, rewrites the textarea in place)
  *   · `character_names` → one toggle chip per name (`ctl.subjects` pre-selected)
  *   · `use_room`        → checkbox, on by default (matches the server default,
  *                         ScenePanel sends `use_room !== false`)
@@ -53,6 +55,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { apiGet } from './api'
 import { useI18n } from './I18nProvider'
+import { PromptImprover } from './PromptImprover'
 import type { PhotoDialogControl, ScenePhotoSubmit } from './ScenePanel'
 
 /** One backend entry of `GET /world/imagegen-options` — the fields read here. */
@@ -112,6 +115,7 @@ export function PlayerPhotoDialog({
   const [backends, setBackends] = useState<BackendOptions | null>(backendOptions ?? null)
   const [loraSlots, setLoraSlots] = useState<LoraSlot[]>(emptySlots)
   const [busy, setBusy] = useState(false)
+  const [improving, setImproving] = useState(false)  // LLM rewrites the prompt
   const dialog = useRef<HTMLDivElement>(null)
   // The host unmounts this dialog inside its own onSubmit (ScenePanel clears
   // the prepared payload first), so the promise usually resolves after unmount.
@@ -177,7 +181,7 @@ export function PlayerPhotoDialog({
       : [...prev, name]))
 
   const submit = useCallback(async () => {
-    if (busy || !prompt.trim() || noneSelected || mediaOff) return
+    if (busy || improving || !prompt.trim() || noneSelected || mediaOff) return
     setBusy(true)
     const picked = loraOptions.length ? loraSlots.filter((s) => s.name) : []
     const payload: ScenePhotoSubmit = {
@@ -193,7 +197,7 @@ export function PlayerPhotoDialog({
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
+  }, [busy, improving, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -250,6 +254,8 @@ export function PlayerPhotoDialog({
             <textarea className="ga-input" rows={5} value={prompt} disabled={busy} autoFocus
               onChange={(e) => setPrompt(e.target.value)} />
           </label>
+          <PromptImprover prompt={prompt} onPrompt={setPrompt} disabled={busy}
+            onBusyChange={setImproving} />
 
           {!hideSceneControls && <div className="ga-field" style={{ marginBottom: 10 }}>
             <span className="ga-field-caption">{t('Who is in the picture')}</span>
@@ -334,7 +340,7 @@ export function PlayerPhotoDialog({
               {t('Cancel')}
             </button>
             <button type="button" className="player-btn-primary" onClick={submit}
-              disabled={busy || !prompt.trim() || noneSelected || mediaOff}>
+              disabled={busy || improving || !prompt.trim() || noneSelected || mediaOff}>
               {busy ? t('Generating…') : t('Generate')}
             </button>
           </div>

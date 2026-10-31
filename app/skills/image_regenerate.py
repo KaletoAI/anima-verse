@@ -24,13 +24,20 @@ class ExplicitBackendUnavailable(RuntimeError):
 def enhance_prompt(
     original_prompt: str,
     improvement_request: str,
-    agent_config: Optional[dict] = None) -> str:
+    agent_config: Optional[dict] = None,
+    allow_general: bool = False) -> str:
     """Improve an image prompt from user feedback via the LLM.
+
+    ``allow_general`` lets an EMPTY request through: the LLM then tidies the
+    prompt for the image model without changing what it shows (the dialogs'
+    "Improve prompt" button without a change wish). Without it an empty
+    request returns the prompt unchanged — the regenerate path relies on that.
 
     Returns:
         The improved prompt, or original_prompt on an error / empty request.
     """
-    if not improvement_request or not improvement_request.strip():
+    improvement_request = (improvement_request or "").strip()
+    if not improvement_request and not allow_general:
         return original_prompt
 
     from app.core.llm_router import llm_call

@@ -3677,6 +3677,13 @@
     "Build": "Bauen",
     "Stone": "Stein",
     "Layout": "Aufteilung",
-    "Set the prop's size first": "Zuerst die Größe des Objekts festlegen"
+    "Set the prop's size first": "Zuerst die Größe des Objekts festlegen",
+    "Improvement request": "Änderungswunsch",
+    "What to change (optional)": "Was soll sich ändern? (optional)",
+    "Improve prompt": "Prompt verbessern",
+    "Rewrite the prompt with this change via LLM": "Prompt per LLM mit dieser Änderung umschreiben",
+    "Optimise the prompt for the image model via LLM (content stays the same)": "Prompt per LLM für das Bildmodell optimieren (Inhalt bleibt gleich)",
+    "Prompt improvement failed.": "Prompt-Verbesserung fehlgeschlagen.",
+    "Regeneration started": "Neugenerierung gestartet"
   }
 }

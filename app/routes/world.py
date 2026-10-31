@@ -3210,23 +3210,24 @@ def get_imagegen_options(occasion: str = "", character: str = "",
 
 @router.post("/imagegen-enhance-prompt")
 async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
-    """Schreibt einen Image-Prompt per LLM um — generisch (ohne Character-Bindung).
+    """Rewrite an image prompt via the LLM — generic (no character binding).
 
-    Body: { prompt, improvement_request }
-    Returns: { prompt: "<umgeschriebener Prompt>" }
+    Body: { prompt, improvement_request? }
+    Returns: { prompt: "<rewritten prompt>" }
 
-    Gleiche enhance_prompt-Funktion wie beim Character-/Instagram-Regenerate,
-    damit der Dialog-Button „Improve" ueberall denselben Mechanismus nutzt.
+    With an improvement request the prompt is changed accordingly; without
+    one it is only optimised for the image model (same content). Same
+    enhance_prompt function as the character/Instagram regenerate, so the
+    dialogs' "Improve prompt" button uses one mechanism everywhere.
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
     improvement_request = (body.get("improvement_request") or "").strip()
     if not prompt:
-        raise HTTPException(status_code=400, detail="prompt fehlt")
-    if not improvement_request:
-        raise HTTPException(status_code=400, detail="improvement_request fehlt")
+        raise HTTPException(status_code=400, detail="prompt missing")
     from app.skills.image_regenerate import enhance_prompt
-    enhanced = await asyncio.to_thread(enhance_prompt, prompt, improvement_request, None)
+    enhanced = await asyncio.to_thread(
+        enhance_prompt, prompt, improvement_request, None, True)
     return {"prompt": enhanced}
 
 

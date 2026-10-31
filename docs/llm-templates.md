@@ -84,7 +84,7 @@ can add a template, not override one. That is where
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
 | `image_prompt_scene.md` | `image_prompt` | `routes/chat._generate_image_prompt` | Extract a visual scene from chat narrative |
-| `image_prompt_improver.md` | `image_prompt` | `skills/image_regenerate.py` | Modify an existing image prompt based on user feedback |
+| `image_prompt_improver.md` | `image_prompt` | `skills/image_regenerate.py` | Modify an existing image prompt based on user feedback; with an empty request only optimise it for the image model (dialogs' "Improve prompt") |
 | `image_prompt_enhance.md` | `image_prompt` | `prompt_adapters._llm_enhance` | Workflow-specific stylistic rewrite of an image prompt |
 | `image_prompt_compose.md` | `image_prompt` | `prompt_compose_llm` (`TEMPLATE`) | Compose the facts of a render occasion into one image prompt |
 | `scene_photo.md` | `image_prompt` | `scene_photo` | Distill a photo prompt out of a room transcript |

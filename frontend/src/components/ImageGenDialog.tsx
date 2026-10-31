@@ -191,9 +191,10 @@ interface Props {
   defaultCreateNew?: boolean
   /**
    * Endpoint for the "Improve" button next to the improvement-request field
-   * (POST { prompt, improvement_request } -> { prompt }). The rewritten prompt
-   * is written back into the Prompt field. Default: generic, character-less
-   * `/world/imagegen-enhance-prompt`.
+   * (POST { prompt, improvement_request? } -> { prompt }). With a request the
+   * prompt is changed accordingly, without one it is only optimised for the
+   * image model. The rewritten prompt is written back into the Prompt field.
+   * Default: generic, character-less `/world/imagegen-enhance-prompt`.
    */
   enhanceEndpoint?: string
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
@@ -312,14 +313,15 @@ export function ImageGenDialog({
     () => ratioLabel(parseFloat(widthText), parseFloat(heightText)),
     [widthText, heightText])
 
-  // "Improve": has the LLM rewrite the prompt from the change request and
-  // writes the result into the prompt field (visible/editable before
-  // generating). The improvement field is empty afterwards -> the generation
-  // takes the prompt literally.
+  // "Improve": has the LLM rewrite the prompt — from the change request, or
+  // (empty request) just optimised for the image model — and writes the
+  // result into the prompt field (visible/editable before generating). The
+  // improvement field is empty afterwards -> the generation takes the prompt
+  // literally.
   const applyImprovement = useCallback(async () => {
     const base = prompt.trim()
     const wish = improvement.trim()
-    if (!base || !wish || enhancing) return
+    if (!base || enhancing) return
     setEnhancing(true)
     try {
       const res = await apiPost<{ prompt?: string }>(enhanceEndpoint, {
@@ -1010,9 +1012,11 @@ export function ImageGenDialog({
                     type="button"
                     className="ga-btn ga-btn-sm"
                     style={{ alignSelf: 'flex-start' }}
-                    disabled={submitting || enhancing || !prompt.trim() || !improvement.trim()}
+                    disabled={submitting || enhancing || !prompt.trim()}
                     onClick={() => { void applyImprovement() }}
-                    title={t('Rewrite the prompt with this change via LLM')}
+                    title={improvement.trim()
+                      ? t('Rewrite the prompt with this change via LLM')
+                      : t('Optimise the prompt for the image model via LLM (content stays the same)')}
                   >
                     {enhancing ? '…' : `✨ ${t('Improve prompt')}`}
                   </button>
