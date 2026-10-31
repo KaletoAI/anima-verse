@@ -1,7 +1,10 @@
 """One availability and success-only cost boundary for character skills."""
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar
-from typing import TypeVar
+from typing import Any, TypeVar
+from time import perf_counter
+
+from app.core.tool_call_log import record, classify
 
 _Result = TypeVar('_Result')
 _running: ContextVar[frozenset[tuple[str, str]]] = ContextVar('gated_skill_calls', default=frozenset())
@@ -96,7 +99,8 @@ def charge(name: str, skill_id: str) -> dict:
                                  source=f'skill:{skill_id}')
 
 
-def run_gated(name: str, skill_id: str, call: Callable[[], _Result]) -> _Result | str:
+def run_gated(name: str, skill_id: str, call: Callable[[], _Result], *,
+              tool_input: Any = "", source: str = "", tool_name: str = "") -> _Result | str:
     """Recheck immediately before execution and charge only non-error results.
 
     Intent handlers return dictionaries; their explicit failure status obeys
@@ -104,33 +108,74 @@ def run_gated(name: str, skill_id: str, call: Callable[[], _Result]) -> _Result 
     spans a skill call, which may make network requests.
     """
     from app.core.streaming import is_error_result
-    # PropAction owns its admission boundary: replays and cancellation are free,
-    # and only the engine's authoritative creation flag permits a deduction.
-    if skill_id == 'prop_action':
-        return call()
     key = (name, skill_id)
     if key in _running.get():
         return call()
-    reason = blocked_reason(name, skill_id)
-    if reason:
-        return f'Error: {reason}'
+    display_name = tool_name or skill_id
+    if not tool_name:
+        try:
+            from app.core.dependencies import get_skill_manager
+            skill = get_skill_manager().get_skill(skill_id)
+            display_name = skill.name if skill else skill_id
+        except Exception:
+            pass
+    started = perf_counter()
+    def outcome(status, result):
+        record(character=name, tool=display_name, status=status, result=result,
+               tool_input=tool_input, source=source,
+               duration_ms=(perf_counter() - started) * 1000)
+    # PropAction owns admission and charging; preserve its direct execution.
+    if skill_id != 'prop_action':
+        reason = blocked_reason(name, skill_id)
+        if reason:
+            result = f'Error: {reason}'
+            outcome('blocked', result)
+            return result
     token = _running.set(_running.get() | {key})
     try:
-        result = call()
-        failed = (isinstance(result, dict) and
-                  (result.get('success') is False or result.get('ok') is False or bool(result.get('error'))))
-        if not failed and not is_error_result(result):
-            charge(name, skill_id)
+        try:
+            result = call()
+        except Exception as exc:
+            outcome('exception', exc)
+            raise
+        outcome(classify(result), result)
+        if skill_id != 'prop_action':
+            failed = (isinstance(result, dict) and
+                      (result.get('success') is False or result.get('ok') is False or bool(result.get('error'))))
+            if not failed and not is_error_result(result):
+                charge(name, skill_id)
         return result
     finally:
         _running.reset(token)
 
 
-def run_tool(name: str, tool_name: str, call: Callable[[], _Result]) -> _Result | str:
+def run_tool(name: str, tool_name: str, call: Callable[[], _Result], *,
+             tool_input: Any = "", source: str = "") -> _Result | str:
     """Resolve a display tool name for generic execution adapters."""
     from app.core.dependencies import get_skill_manager
     skill = get_skill_manager().get_skill_by_name(tool_name)
-    return run_gated(name, skill.SKILL_ID, call) if skill else call()
+    if skill:
+        return run_gated(name, skill.SKILL_ID, call, tool_input=tool_input,
+                         source=source, tool_name=tool_name)
+    key = (name, tool_name)
+    if key in _running.get():
+        return call()
+    token = _running.set(_running.get() | {key})
+    started = perf_counter()
+    try:
+        try:
+            result = call()
+        except Exception as exc:
+            record(character=name, tool=tool_name, status='exception', result=exc,
+                   tool_input=tool_input, source=source,
+                   duration_ms=(perf_counter() - started) * 1000)
+            raise
+        record(character=name, tool=tool_name, status=classify(result), result=result,
+               tool_input=tool_input, source=source,
+               duration_ms=(perf_counter() - started) * 1000)
+        return result
+    finally:
+        _running.reset(token)
 
 
 def prompt_lines(name: str, *, turn: str = '', check_limits: bool = False) -> list[str]:

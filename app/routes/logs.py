@@ -269,3 +269,100 @@ def _build_viewer_html() -> str:
 <script src="/static/admin/logs-viewer.js"></script>
 </body>
 </html>'''
+
+
+@router.get("/tools", response_class=HTMLResponse)
+def tool_log_viewer():
+    """Admin-only tool outcome viewer."""
+    return HTMLResponse(content=_build_tools_viewer_html())
+
+
+@router.get("/tools/data")
+def tool_log_data(
+    limit: int = Query(100, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    character: str = Query(""), tool: str = Query(""),
+    status: str = Query(""), source: str = Query(""),
+    search: str = Query(""),
+) -> Dict[str, Any]:
+    """Summaries ignore tool/status filters; entry pagination applies last."""
+    from app.core import tool_call_log
+    rows = []
+    try:
+        with tool_call_log.LOG_FILE.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except FileNotFoundError:
+        pass
+    options = {key: sorted({str(row.get(key) or "") for row in rows} - {""})
+               for key in ("character", "tool", "source")}
+    filtered = []
+    summaries = {}
+    for row in rows:
+        if character and row.get("character") != character:
+            continue
+        if source and row.get("source") != source:
+            continue
+        if search and search.lower() not in json.dumps(row, ensure_ascii=False).lower():
+            continue
+        name = str(row.get("tool") or "")
+        item = summaries.setdefault(name, dict(tool=name, total=0, by_status={}))
+        item["total"] += 1
+        state = str(row.get("status") or "")
+        item["by_status"][state] = item["by_status"].get(state, 0) + 1
+        if tool and row.get("tool") != tool:
+            continue
+        if status and row.get("status") != status:
+            continue
+        filtered.append(row)
+    summary = list(summaries.values())
+    for item in summary:
+        item["fail_rate"] = round(
+            (item["total"] - item["by_status"].get("ok", 0)) / item["total"], 3)
+    summary.sort(key=lambda item: (
+        -(item["total"] - item["by_status"].get("ok", 0)), item["tool"]))
+    filtered.reverse()
+    return dict(entries=filtered[offset:offset + limit], total=len(filtered),
+                offset=offset, limit=limit, characters=options["character"],
+                tools=options["tool"], statuses=list(tool_call_log.STATUSES),
+                sources=options["source"], summary=summary)
+
+
+def _build_tools_viewer_html() -> str:
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tool Call Log</title>
+<link rel="stylesheet" href="/static/admin/logs-tools.css">
+</head>
+<body>
+<div class="toolbar">
+    <label>Character <select id="characterFilter"><option value="">All characters</option></select></label>
+    <label>Tool <select id="toolFilter"><option value="">All tools</option></select></label>
+    <label>Status <select id="statusFilter"><option value="">All statuses</option></select></label>
+    <label>Source <select id="sourceFilter"><option value="">All sources</option></select></label>
+    <input type="search" id="searchInput" placeholder="Search..." aria-label="Search tool calls">
+    <button id="searchBtn">Search</button>
+    <button id="resetBtn">Reset</button>
+    <span id="countLabel" role="status"></span>
+    <a href="/logs/llm">LLM Logs</a>
+</div>
+<main>
+<div id="summary"></div>
+<div id="entries"></div>
+<div class="pager">
+    <button id="prevBtn" disabled>Previous</button>
+    <span id="pageLabel"></span>
+    <button id="nextBtn" disabled>Next</button>
+</div>
+</main>
+<script src="/static/admin/logs-tools.js"></script>
+</body>
+</html>'''

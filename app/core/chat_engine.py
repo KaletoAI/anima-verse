@@ -588,7 +588,7 @@ def build_chat_context(
                         except Exception:
                             pass
                     from app.core.skill_gate import run_tool
-                    return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)))
+                    return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)), tool_input=raw_input)
                 return wrapper
             tools_dict[t.name] = _make_ctx_wrapper(_orig_func)
         max_iterations = 3

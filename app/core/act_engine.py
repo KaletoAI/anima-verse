@@ -373,7 +373,7 @@ async def _run_storyteller_agent(
             t_name = t_spec.name
             t_orig = t_spec.func
 
-            def _make_wrapper(fn, _sid=sid, _agent=actor):
+            def _make_wrapper(fn, _sid=sid, _agent=actor, _tool=t_name):
                 def wrapper(raw_input):
                     ctx = {"input": raw_input, "agent_name": _agent,
                            "user_id": "", "skip_daily_limit": True}
@@ -383,7 +383,8 @@ async def _run_storyteller_agent(
                             if k not in ("agent_name", "user_id"):
                                 ctx[k] = v
                     from app.core.skill_gate import run_gated
-                    return run_gated(_agent, _sid, lambda: fn(_json.dumps(ctx)))
+                    return run_gated(_agent, _sid, lambda: fn(_json.dumps(ctx)),
+                                     tool_input=raw_input, tool_name=_tool)
                 return wrapper
 
             tools_dict[t_name] = _make_wrapper(t_orig)

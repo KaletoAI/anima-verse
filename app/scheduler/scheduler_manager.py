@@ -1060,7 +1060,8 @@ class SchedulerManager:
             })
             from app.core.skill_gate import run_gated
             from app.core.streaming import is_error_result
-            result = run_gated(agent, skill.SKILL_ID, lambda: skill.execute(payload))
+            result = run_gated(agent, skill.SKILL_ID, lambda: skill.execute(payload),
+                               tool_input=action.get("extraction_prompt", ""), source="scheduler")
             if is_error_result(result):
                 return {"success": False, "error": result}
             logger.info("knowledge_extract result: %s",

@@ -276,6 +276,7 @@ def _build_dashboard_html() -> str:
         <a href="/admin/llm-stats">LLM Stats</a>
         <a href="/logs/llm">LLM Logs</a>
         <a href="/logs/image-prompts">Image Logs</a>
+        <a href="/logs/tools">Tool Logs</a>
     </div>
 </div>
 

@@ -383,7 +383,7 @@ class ThoughtRunner:
                             pass
                     from app.core.skill_gate import run_tool
                     with bind_stat_sources(stat_collector):
-                        return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)))
+                        return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)), tool_input=raw_input)
                 return wrapper
             tools_dict[t.name] = _make_ctx_wrapper(_orig_func)
 
@@ -593,9 +593,13 @@ class ThoughtRunner:
                 if _blocked:
                     logger.info("Cascade-Brake: %s.%s an %s blockiert (reply_only_to=%s)",
                                 character_name, tool_name, _blocked, reply_only_to)
-                    return (f"Tool {tool_name} blockiert: dies ist ein Reply-Thought, "
+                    result = (f"Tool {tool_name} blockiert: dies ist ein Reply-Thought, "
                             f"Du darfst nur {reply_only_to} antworten — keine Nachrichten "
                             f"an andere ({_blocked}).")
+                    from app.core.tool_call_log import record
+                    record(character=character_name, tool=tool_name, status="blocked",
+                           tool_input=tool_input, result=result)
+                    return result
             try:
                 _tool_executions.append((tool_name, tool_input))
             except Exception:
@@ -713,9 +717,13 @@ class ThoughtRunner:
                 if _blocked:
                     logger.info("Cascade-Brake: %s.%s an %s blockiert (reply_only_to=%s)",
                                 character_name, tool_name, _blocked, reply_only_to)
-                    return (f"Tool {tool_name} blockiert: dies ist ein Reply-Thought, "
+                    result = (f"Tool {tool_name} blockiert: dies ist ein Reply-Thought, "
                             f"Du darfst nur {reply_only_to} antworten — keine Nachrichten "
                             f"an andere ({_blocked}).")
+                    from app.core.tool_call_log import record
+                    record(character=character_name, tool=tool_name, status="blocked",
+                           tool_input=tool_input, result=result)
+                    return result
             # Capture tool invocation (for INTENT-skip-logic). The raw
             # tool_input is the freetext or JSON the LLM emitted — exactly
             # what we compare against [INTENT:...] payloads.

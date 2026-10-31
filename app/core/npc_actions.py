@@ -890,11 +890,17 @@ def run_action_for(name: str, *,
     from app.core.prompt_templates import render_task
     system_prompt, user_prompt = render_task(TASK, **variables)
     answer = _ask(llm, name, system_prompt, user_prompt)
+    from app.core.tool_call_log import record
+    def _record_outcome(status, result):
+        record(character=name, tool="npc_action", source="npc_action",
+               tool_input=answer if answer is not None else "", status=status, result=result)
     if answer is None:
         logger.info("npc_action(%s): no usable answer", name)
+        _record_outcome("discarded", "no usable answer")
         return None
     if not action_available(name):
         logger.info("npc_action(%s): execution became unavailable during the turn", name)
+        _record_outcome("discarded", "execution became unavailable during the turn")
         return None
 
     if "prop_action" in answer:
@@ -902,6 +908,7 @@ def run_action_for(name: str, *,
         # The installed skill uses the same Core/consent as player requests.
         if (answer.get("room", variables["current_room_id"]) != variables["current_room_id"]
                 or any(answer.get(key) for key in ("pose", "say", "pair", "action"))):
+            _record_outcome("discarded", "prop action room or pose mismatch")
             return None
         from app.core.dependencies import get_skill_manager
         manager = get_skill_manager()
@@ -909,9 +916,11 @@ def run_action_for(name: str, *,
         available = manager.get_agent_tools(name)
         tool = next((tool for tool in available if skill and tool.name == skill.name), None)
         if not tool:
+            _record_outcome("discarded", "prop action tool unavailable")
             return None
         from app.core.skill_gate import run_tool
-        raw = run_tool(name, tool.name, lambda: tool.func(json.dumps(answer["prop_action"])))
+        raw = run_tool(name, tool.name, lambda: tool.func(json.dumps(answer["prop_action"])),
+                       tool_input=answer["prop_action"], source="npc_action")
         try:
             outcome = json.loads(raw)
         except (TypeError, ValueError):
@@ -921,7 +930,10 @@ def run_action_for(name: str, *,
     if variables["home"]:
         # The solo-action guard rechecks placement and home before writing;
         # pooling or an admin move may have happened during the model call.
-        return _apply_home_answer(name, answer, variables)
+        result = _apply_home_answer(name, answer, variables)
+        _record_outcome("ok" if isinstance(result, dict) else "discarded",
+                result if isinstance(result, dict) else "home answer unusable")
+        return result
 
     # THE PLACE MUST STILL BE THE PLACE. A turn takes seconds and the world
     # keeps running through it — a journey settling, an admin move, a party
@@ -935,6 +947,7 @@ def run_action_for(name: str, *,
     if location_now != location_id:
         logger.info("npc_action(%s): moved from %s to %s during the turn — "
                     "answer discarded", name, location_id, location_now)
+        _record_outcome("discarded", "moved during the turn")
         return None
 
     rooms = variables["rooms"]
@@ -942,6 +955,7 @@ def run_action_for(name: str, *,
     if not room:
         logger.info("npc_action(%s): answer names room %r, which this place "
                     "does not have — discarded", name, answer.get("room"))
+        _record_outcome("discarded", f"room {answer.get('room')!r} not on this place")
         return None
 
     activity = strip_subject(str(answer.get("activity") or ""), name)[:_MAX_ACTIVITY_CHARS]
@@ -953,6 +967,7 @@ def run_action_for(name: str, *,
         room, moved = current_room, False
     if moved and answer.get("action") is not None:
         logger.info("npc_action(%s): cannot leave while making a structured proposal", name)
+        _record_outcome("discarded", "cannot leave while making a structured proposal")
         return None
 
     if moved:
@@ -961,10 +976,12 @@ def run_action_for(name: str, *,
         if not allowed:
             logger.info("npc_action(%s): move to %s blocked (%s)",
                         name, room, reason)
+            _record_outcome("blocked", reason)
             return None
 
     solo = _apply_solo_action(name, answer, variables)
     if solo.get("handled") and not solo.get("success"):
+        _record_outcome("error", solo)
         return None
 
     from app.models.character import force_set_status
@@ -972,16 +989,20 @@ def run_action_for(name: str, *,
                                activity=activity or None,
                                pose=pose or None)
     if not written:
+        _record_outcome("error", "status write failed")
         return None
     talk = {} if solo.get("handled") else _apply_talk(name, answer, variables, moved=moved)
     logger.debug("npc_action(%s): %s%s%s", name,
                  f"-> {room} " if moved else "",
                  f"[{pose}] " if pose else "", activity)
-    return {"name": name, "room": room, "activity": activity, "moved": moved,
+    result = {"name": name, "room": room, "activity": activity, "moved": moved,
             "pose": pose, "said_to": talk.get("said_to", ""),
             "invited": talk.get("invited", ""),
             **({"intent_id": talk["intent_id"]} if talk.get("intent_id") else {}),
             **({"action_result": solo} if solo.get("handled") else {})}
+
+    _record_outcome("ok", result)
+    return result
 
 
 # ---------------------------------------------------------------------------

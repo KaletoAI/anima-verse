@@ -1,0 +1,33 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }
+body { margin: 0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; background: #161b22; border-bottom: 1px solid #30363d; }
+label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+input, select, button { color: inherit; background: #21262d; border: 1px solid #484f58; border-radius: 5px; padding: 7px; }
+button, summary { cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+a, tr[data-tool] { cursor: pointer; }
+tr[data-tool]:hover { background: #21262d; }
+.tool-choice { color: #58a6ff; }
+main { padding: 16px; }
+#summary { overflow-x: auto; margin-bottom: 20px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+caption { text-align: left; font-size: 18px; margin-bottom: 10px; }
+th, td { padding: 8px; text-align: left; border-bottom: 1px solid #30363d; }
+tr[data-tool] { cursor: pointer; }
+tr[data-tool]:hover { background: #21262d; }
+.tool-choice { background: transparent; border: 0; padding: 0; text-decoration: underline; }
+article { background: #161b22; border: 1px solid #30363d; border-radius: 6px; margin-bottom: 12px; padding: 12px; }
+header { line-height: 1.8; overflow-wrap: anywhere; }
+details { margin-top: 8px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; padding: 12px; background: #0d1117; }
+.badge { border-radius: 4px; padding: 3px 6px; color: #fff; font-size: 12px; }
+.status-ok { background: #216e39; }
+.status-error { background: #a12731; }
+.status-blocked { background: #805500; }
+.status-unknown_tool { background: #7945a8; }
+.status-suppressed { background: #315f8c; }
+.status-exception { background: #b63f12; }
+.status-discarded { background: #555d68; }
+.status-unknown { background: #343a42; }
+.pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 20px; }
+:focus-visible { outline: 2px solid #58a6ff; outline-offset: 3px; }

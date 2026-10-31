@@ -2024,6 +2024,7 @@ def _build_settings_html() -> str:
     <a href="#" data-section="_llm_stats" onclick="event.preventDefault(); activateIframe('_llm_stats', '/admin/llm-stats', 'LLM Stats')"><span class="nav-icon">📈</span> LLM Stats</a>
     <a href="#" data-section="_llm_log" onclick="event.preventDefault(); activateIframe('_llm_log', '/logs/llm', 'LLM Log')"><span class="nav-icon">📝</span> LLM Log</a>
     <a href="#" data-section="_image_log" onclick="event.preventDefault(); activateIframe('_image_log', '/logs/image-prompts', 'Image Prompt Log')"><span class="nav-icon">🖼</span> Image Prompt Log</a>
+    <a href="#" data-section="_tool_log" onclick="event.preventDefault(); activateIframe('_tool_log', '/logs/tools', 'Tool Call Log')"><span class="nav-icon">🔧</span> Tool Call Log</a>
 </nav>
 
 <div class="main">

@@ -205,7 +205,8 @@ def _dispatch_intent(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from app.core.skill_gate import run_gated
         result = run_gated(payload.get('agent_name', ''), skill.SKILL_ID,
-                           lambda: skill.handle_intent(intent_type, payload))
+                           lambda: skill.handle_intent(intent_type, payload),
+                           tool_input=payload, source="intent")
         if isinstance(result, str):
             return {'success': False, 'error': result}
         return result

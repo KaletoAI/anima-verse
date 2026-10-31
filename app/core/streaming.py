@@ -2105,11 +2105,14 @@ class StreamingAgent:
         tool_results: List[Tuple[str, str]],
         pending_deferred: List[Tuple[str, str]]) -> AsyncGenerator[StreamEvent, None]:
         """Execute tools, yielding events and collecting results and deferred calls."""
+        from app.core.tool_call_log import record
         for tool_name, tool_input_text in tool_matches:
             from app.core.skill_gate import tool_blocked_reason
             reason = tool_blocked_reason(self.agent_name, tool_name)
             if reason:
                 result = f"Error: {reason}"
+                record(character=self.agent_name, tool=tool_name, status="blocked",
+                       tool_input=tool_input_text, result=result)
                 tool_results.append((tool_name, result))
                 yield ToolResultEvent(tool_name=tool_name, result=result)
                 continue
@@ -2121,6 +2124,8 @@ class StreamingAgent:
                     f"Available tools: {available}. "
                     f"Please retry using the correct tool name."
                 )
+                record(character=self.agent_name, tool=tool_name, status="unknown_tool",
+                       tool_input=tool_input_text, result=error_msg)
                 tool_results.append((tool_name, f"[{tool_name} error]: {error_msg}"))
                 continue
 
@@ -2138,6 +2143,8 @@ class StreamingAgent:
             # Do not leave while answering an in-person conversation.
             # Packages declare which verbs this suppression applies to.
             if self.suppress_move_in_conversation and tool_name in _suppress_in_person_tool_names():
+                record(character=self.agent_name, tool=tool_name, status="suppressed",
+                       tool_input=tool_input_text, result="suppressed: in-person reply turn")
                 logger.info("%s unterdrueckt — Antwort im selben in-person-Turn "
                             "(man geht nicht weg, waehrend man spricht)", tool_name)
                 continue
@@ -2154,7 +2161,8 @@ class StreamingAgent:
                     tool_func = self.tools_dict[tool_name]
                     from app.core.skill_gate import run_tool
                     tool_result = await asyncio.to_thread(
-                        run_tool, self.agent_name, tool_name, lambda: tool_func(tool_input_text))
+                        run_tool, self.agent_name, tool_name, lambda: tool_func(tool_input_text),
+                        tool_input=tool_input_text)
 
                 result_preview = tool_result[:200] if len(tool_result) > 200 else tool_result
                 logger.debug("Ergebnis: %s", result_preview)
@@ -2193,8 +2201,11 @@ class StreamingAgent:
         user_text = user_input.strip() if user_input else ""
         logger.info("DEFERRED TOOLS: %d tool(s) after the chat response (rp_context=%d, user_input=%d chars)",
                      len(pending_deferred), len(rp_text), len(user_text))
+        from app.core.tool_call_log import record
         for tool_name, tool_input_text in pending_deferred:
             if tool_name not in self.tools_dict:
+                record(character=self.agent_name, tool=tool_name, status="unknown_tool",
+                       tool_input=tool_input_text, result=f"Tool '{tool_name}' is not available.")
                 continue
             # Inject RP context and the user's input into the tool input
             enriched_input = _inject_rp_context(tool_input_text, rp_text, user_text)
@@ -2208,7 +2219,8 @@ class StreamingAgent:
                     tool_func = self.tools_dict[tool_name]
                     from app.core.skill_gate import run_tool
                     tool_result = await asyncio.to_thread(
-                        run_tool, self.agent_name, tool_name, lambda: tool_func(enriched_input))
+                        run_tool, self.agent_name, tool_name, lambda: tool_func(enriched_input),
+                        tool_input=enriched_input)
                 yield ToolEndEvent(tool_name=tool_name)
                 yield ToolResultEvent(tool_name=tool_name, result=tool_result)
                 if is_error_result(tool_result):

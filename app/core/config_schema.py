@@ -194,7 +194,7 @@ SECTIONS = {
                 "default": 5,
                 "min": 1,
                 "max": 365,
-                "description": "Entries in logs/llm_calls.jsonl and logs/image_prompts.jsonl "
+                "description": "Entries in logs/llm_calls.jsonl, logs/image_prompts.jsonl and logs/tool_calls.jsonl "
                                "older than this many days are removed at server start. "
                                "SYSTEM time (real days).",
             },
