@@ -1064,7 +1064,7 @@ gegen ein totes Backend würde die Seite blockieren.
 
 Optionale Überschreibungen aus `BaseSkill`, die der Core generisch abfragt:
 `visible_for(character_name)`, `defer_for_attachment(raw_input)`,
-`thought_context_block(character_name)`, `handle_intent(intent_type, payload)`,
+`thought_context_block(character_name)`, `decision_menu(character_name)`, `handle_intent(intent_type, payload)`,
 `tool_intent_payload(raw_input)`, `get_usage_instructions(format_name, character_name)`.
 Details in `docs/skill-core-api.md` → „Skill-Hooks".
 

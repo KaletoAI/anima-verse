@@ -443,7 +443,8 @@ def tool_state_note(agent_name: str, tools: Dict[str, Any],
     """Which package-declared states are running right now ('' when no
     offered verb ends one) — for the tool-decision prompt. The lines come
     from the flag-lifecycle executor, which knows no flag by name. The
-    open questions to the character follow (:func:`open_questions_note`)."""
+    names the offered verbs take (:func:`decision_menu_note`) and the open
+    questions to the character (:func:`open_questions_note`) follow."""
     note = ""
     try:
         from app.core.flag_lifecycle import decision_state_lines
@@ -455,7 +456,34 @@ def tool_state_note(agent_name: str, tools: Dict[str, Any],
         body = "".join(f"{indent}{line}\n" for line in lines)
         note = (f"{indent}CURRENT STATES (as the server has them right now — they decide "
                 f"which of these tools can still do anything):\n{body}")
-    return note + open_questions_note(agent_name, tools, indent)
+    return note + decision_menu_note(agent_name, tools, indent) + open_questions_note(agent_name, tools, indent)
+
+
+def decision_menu_note(agent_name: str, tools: Dict[str, Any],
+                       indent: str = "   ") -> str:
+    """The names each offered verb takes for ``agent_name`` — the skill's
+    own ``decision_menu`` (the clothes for the outfit verb, say); ``''``
+    when no offered verb declares one. The tool LLM reads the roleplay
+    prose, not the character's prompt: without the menu it took a name
+    from the prose ("rotes Mieder") that matched no item ("Red Mieder")."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        manager = get_skill_manager()
+    except Exception as exc:  # noqa: BLE001 — the prompt works without it
+        logger.debug("decision menu note failed for %s: %s", agent_name, exc)
+        return ""
+    note = ""
+    for name in tools or {}:
+        skill = manager.get_skill_by_name(name)
+        try:
+            lines = [str(line) for line in (skill.decision_menu(agent_name) if skill else []) if line]
+        except Exception as exc:  # noqa: BLE001 — one skill must not break the prompt
+            logger.debug("decision menu of %s failed for %s: %s", name, agent_name, exc)
+            continue
+        if lines:
+            body = "".join(f"{indent}- {line}\n" for line in lines)
+            note += f"{indent}{name} takes these names — copy one exactly:\n{body}"
+    return note
 
 
 def open_questions_note(agent_name: str, tools: Dict[str, Any],
@@ -826,10 +854,10 @@ def _dedupe_singleton_tools(matches: List[Tuple[str, str]]) -> List[Tuple[str, s
 
 
 async def _safe_anext(aiter):
-    """Wrapper um __anext__ der StopAsyncIteration in Sentinel wandelt.
+    """Wrapper around __anext__ that turns StopAsyncIteration into a sentinel.
 
-    asyncio.create_task kann StopAsyncIteration nicht propagieren
-    (wird zu RuntimeError). Dieser Wrapper faengt es ab.
+    asyncio.create_task cannot propagate StopAsyncIteration (it becomes a
+    RuntimeError). This wrapper catches it.
     """
     try:
         return await aiter.__anext__()
@@ -1102,12 +1130,12 @@ class StreamingAgent:
         system_content: str,
         history: List,
         user_input: str) -> AsyncGenerator[StreamEvent, None]:
-        """Streamt LLM-Antwort mit optionaler Tool-Erkennung.
+        """Stream the LLM answer with optional tool detection.
 
-        Dispatcht basierend auf self.mode zu:
-        - _stream_chat_only(): Reiner Chat (no_tools)
-        - _stream_single(): Chat-LLM mit Tools (single)
-        - _stream_rp_first(): Chat-LLM zuerst, Tool-LLM danach (rp_first)
+        Dispatches on self.mode to:
+        - _stream_chat_only(): plain chat (no_tools)
+        - _stream_single(): chat LLM with tools (single)
+        - _stream_rp_first(): chat LLM first, tool LLM afterwards (rp_first)
         """
         if self.mode == "rp_first":
             method = self._stream_rp_first
@@ -1140,12 +1168,12 @@ class StreamingAgent:
 
     async def _stream_single(
         self, system_content: str, history: List, user_input: str) -> AsyncGenerator[StreamEvent, None]:
-        """Chat-LLM mit Tool-Support — max 2 Phasen.
+        """Chat LLM with tool support — at most 2 phases.
 
-        Phase 1: LLM-Call mit Tool-Instruktionen
-          → Nur Text: fertig (1 Call)
-          → Tool erkannt: ausfuehren, weiter zu Phase 2
-        Phase 2: LLM-Call mit Tool-Ergebnissen + Original-Nachricht
+        Phase 1: LLM call with tool instructions
+          → text only: done (1 call)
+          → tool detected: execute it, go on to phase 2
+        Phase 2: LLM call with the tool results + the original message
         """
         _start = time.monotonic()
         _search_hint = (_SEARCH_INTENT_HINT.format(tool=self._search_intent_tool())

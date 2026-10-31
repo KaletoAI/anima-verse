@@ -3,7 +3,7 @@ import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 
 from app.core.log import get_logger
 from app.core.tool_formats import format_example
@@ -192,6 +192,15 @@ class BaseSkill(ABC):
         tools of the same turn (its input references an attachment that
         only exists once those ran). Default: never."""
         return False
+
+    def decision_menu(self, character_name: str) -> List[str]:
+        """The names this verb takes for this character, one per entry —
+        for the tool-decision prompt of a separate tool LLM, which sees the
+        roleplay prose but not the character's prompt: without the menu it
+        guesses a name from the prose (a German "rotes Mieder" for the item
+        "Red Mieder"). Joined generically by
+        ``streaming.tool_state_note``; default: none."""
+        return []
 
     def thought_context_block(self, character_name: str) -> str:
         """Optional prompt contribution for the agent-thought context.

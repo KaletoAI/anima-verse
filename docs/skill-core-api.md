@@ -659,7 +659,7 @@ hängt, räumt ihn über denselben Weg auf (Check:
 | `app.models.unified_chat.UnifiedChatManager.get_direct_message_event(event_id) -> dict \| None` | Resolve only two matching sender/recipient mirrors with the shared ID, content, channel, timestamp and metadata; never infer provenance from old history |
 | `app.core.pending_reports.add_report(reporter, initiator, initiator_type, target, trigger_type='talk_to_response', trigger_message_id='', ttl_hours=24) -> str` | Chain-of-Command-Follow-up anlegen |
 | `app.core.pending_reports.list_open(character_name)` / `mark_resolved(reporter, report_id) -> bool` | Offene Rückmeldungen lesen / schließen |
-| `app.models.notifications.create_notification(character, content, notification_type='message', metadata=None) -> str` | User-Notification anlegen |
+| `app.models.notifications.create_notification(character, content, notification_type='message', metadata=None, *, once_unread=False) -> str` | User-Notification anlegen; `once_unread=True` stores no second row while the same one (character, type, text) is unread and returns its id |
 
 The phone and agent inbox consume only `medium="messaging"`. `talk_to` stores
 `"in_person"` and reaches room perception, never the phone. `notify_user`
@@ -1057,6 +1057,7 @@ Capabilities, die der Core heute abfragt:
 | `visible_for(character_name) -> bool` | Per-Character-Sichtbarkeit jenseits der enabled-Config (z.B. Party-Rolle) — der skill_manager fragt generisch ab. Gilt für die RUNTIME-Toolliste; der Admin-Skills-Tab zeigt das Verb weiter an (Config-Fläche ≠ Laufzeit-Fläche) |
 | `defer_for_attachment(raw_input) -> bool` | Call muss NACH den deferred Image-Tools desselben Turns laufen (Input referenziert ein erst dann existierendes Attachment) |
 | `thought_context_block(character_name) -> str` | Selbst-enthaltene Prompt-Sektion (s.u.) |
+| `decision_menu(character_name) -> List[str]` | Names this verb takes for the character (ChangeOutfit: the clothes with slot and "worn"). `streaming.tool_state_note` lists them per offered verb in every tool-decision prompt ("<Tool> takes these names — copy one exactly"), because a separate tool LLM sees the roleplay prose, not the character's prompt. Default `[]` |
 | `handle_intent(intent_type, payload) -> Dict` | Ausführung eines deklarierten Intents |
 | `tool_intent_payload(raw_input) -> str` | Vergleichs-Inhalt für den Redundanz-Skip |
 | `get_usage_instructions(format_name='', character_name='') -> str` | Eigenes Tool-Beispiel; baut man mit `app.core.tool_formats.format_example(format_name, tool_name, example_input)`, damit es zum aktiven Tool-Format passt |

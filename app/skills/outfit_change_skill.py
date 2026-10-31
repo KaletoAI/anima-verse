@@ -1,13 +1,13 @@
-"""ChangeOutfit Skill — Wechselt zwischen Outfit-Pieces aus dem Inventar.
+"""ChangeOutfit skill — switches between outfit pieces from the inventory.
 
-Dieser Skill ERZEUGT KEINE neuen Outfits — er ruestet nur Pieces an
-und ab, die der Character bereits in seinem Inventar hat. Fuer das
-Creating new pieces / outfits is CreateOutfit's job.
+This skill CREATES NO new outfits — it only puts on and takes off pieces
+the character already has in its inventory. Creating new pieces / outfits
+is CreateOutfit's job.
 
-Input-Format (JSON oder Freitext):
+Input format (JSON or free text):
   - JSON: {"equip": ["item_id1", "Name2"], "unequip_slots": ["outer"],
             "unequip_items": ["item_id3"], "outfit_preset": "Streetwear"}
-  - Freitext: "Lederjacke, schwarze Sneaker" — wird gegen Inventar gematcht
+  - free text: "leather jacket, black sneakers" — matched against the inventory
 """
 import json
 import re
@@ -29,7 +29,7 @@ logger = get_logger("outfit_change")
 
 
 class OutfitChangeSkill(BaseSkill):
-    """Wechselt zwischen Pieces im Inventar — keine Erfindungen."""
+    """Switches between pieces in the inventory — no inventions."""
     SINGLETON = True
 
     SKILL_ID = "outfit_change"
@@ -73,10 +73,10 @@ class OutfitChangeSkill(BaseSkill):
             return f"Fehler beim Outfit-Wechsel: {e}"
 
     def _execute_inner(self, raw_input: str) -> str:
-        """Setzt Outfit-Intent (forced_pieces / forbidden_slots) + ruft
-        Decency-Compliance fuer den Char auf. Auto-Fill und
-        OutfitCreation-Fallback wurden in Schritt 4 entfernt (Plan §4) —
-        Compliance ist allein zustaendig fuer Slot-Korrektheit.
+        """Set the outfit intent (forced_pieces / forbidden_slots) and run
+        the decency compliance for the character. Auto-fill and the
+        OutfitCreation fallback were removed in step 4 (plan §4) —
+        compliance alone is responsible for slot correctness.
         """
         from app.models.character import (
             get_outfit_intent, set_outfit_intent,
@@ -92,35 +92,35 @@ class OutfitChangeSkill(BaseSkill):
         results: List[str] = []
         errors: List[str] = []
 
-        # Intent laden + modifizieren (Single-Save am Ende).
+        # Load + modify the intent (a single save at the end).
         intent = get_outfit_intent(character_name)
         forced: Dict[str, str] = dict(intent.get("forced_pieces") or {})
         forbidden: set = set(intent.get("forbidden_slots") or [])
 
-        # (Frueherer outfit_type-Pfad entfernt — das outfit_types-Tag-Modell ist
-        # raus, Variante A. Ein kompletter Stil-Wechsel laeuft jetzt ueber
-        # OutfitCreation/explizites Equip; Bedeckung regelt Decency.)
+        # (The former outfit_type path is gone with the outfit_types tag
+        # model, variant A. A complete change of style runs through
+        # OutfitCreation / explicit equips; decency handles coverage.)
 
-        # 2) Unequip Slots — Slot leeren + forbidden markieren.
-        # Compliance/AutoFill respektiert forbidden_slots und fuellt nicht.
+        # 2) Unequip slots — empty the slot + mark it forbidden.
+        # Compliance/auto-fill respects forbidden_slots and does not fill.
         for slot in spec.get("unequip_slots", []):
             res = unequip_piece(character_name, slot=slot, source="skill")
             if res.get("status") == "ok":
                 # Name the removed piece, not the slot ("feet" -> the shoes).
                 _nm = self._item_label(res.get("item_id")) or f"slot '{slot}'"
                 results.append(f"'{_nm}' abgelegt")
-                # Multi-Slot-Pieces: ALLE cleared_slots forbidden machen
+                # Multi-slot pieces: mark ALL cleared_slots forbidden
                 for s in (res.get("cleared_slots") or [slot]):
                     forbidden.add(s)
                     forced.pop(s, None)
             else:
                 errors.append(f"Slot '{slot}': {res.get('reason', 'unbekannt')}")
 
-        # 3) Unequip einzelne Items — fuer Pieces gleiches Forbidden-Update,
-        # fuer Hand-Items (equipped_items) kein Intent-Begriff noetig.
+        # 3) Unequip single items — the same forbidden update for pieces;
+        # hand items (equipped_items) need no intent.
         for token in spec.get("unequip_items", []):
             iid = resolve_item_id(token) or token
-            # erst als Piece versuchen, dann als Item
+            # try as a piece first, then as an item
             r = unequip_piece(character_name, item_id=iid, source="skill")
             piece_unequipped = r.get("status") == "ok"
             if not piece_unequipped:
@@ -134,7 +134,7 @@ class OutfitChangeSkill(BaseSkill):
             else:
                 errors.append(f"'{token}': {r.get('reason', 'nicht equipped')}")
 
-        # 4) Equip Tokens — Piece-Equip + forced_pieces setzen.
+        # 4) Equip tokens — equip the piece + set forced_pieces.
         inv_items = self._inventory_item_index(character_name)
         for token in spec.get("equip", []):
             iid = self._match_inventory(token, inv_items)
@@ -169,16 +169,16 @@ class OutfitChangeSkill(BaseSkill):
                 else:
                     errors.append(f"'{token}': {r.get('reason', 'equip fehlgeschlagen')}")
 
-        # 5) Intent persistieren
+        # 5) Persist the intent
         intent["forced_pieces"] = forced
         intent["forbidden_slots"] = sorted(forbidden)
         set_outfit_intent(character_name, intent)
 
-        # 6) Compliance laufen lassen — Decency-Check + Notification.
-        # Auto-Fill schliesst Decency-Verletzungen (falls passende Pieces
-        # im Inventar), sonst geht eine Notification raus. Compliance
-        # respektiert forced_pieces und forbidden_slots — kein "Top
-        # zieht sich sofort wieder an"-Bug mehr.
+        # 6) Run compliance — decency check + notification. Auto-fill
+        # closes decency gaps (when matching pieces are in the inventory),
+        # otherwise a notification goes out. Compliance respects
+        # forced_pieces and forbidden_slots — no more "the top puts itself
+        # right back on" bug.
         try:
             from app.core.outfit_compliance import apply_outfit_compliance
             comp = apply_outfit_compliance(character_name)
@@ -190,7 +190,7 @@ class OutfitChangeSkill(BaseSkill):
         except Exception as _ce:
             logger.debug("Compliance-Aufruf in ChangeOutfit fehlgeschlagen: %s", _ce)
 
-        # Ergebnis zusammenfassen
+        # Summarise the result
         out_parts: List[str] = []
         if results:
             out_parts.append(" • ".join(results))
@@ -206,7 +206,7 @@ class OutfitChangeSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     def _parse_input_spec(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalisiert den Skill-Input in ein Dict mit equip/unequip/type Feldern."""
+        """Normalise the skill input into a dict with equip/unequip fields."""
         spec: Dict[str, Any] = {
             "equip": [],
             "unequip_slots": [],
@@ -219,8 +219,8 @@ class OutfitChangeSkill(BaseSkill):
             elif isinstance(val, str) and val.strip():
                 spec[key] = [val.strip()]
 
-        # Freitext-Fallback (input-Feld) — Liste von Tokens, kommagetrennt,
-        # als zu equippende Piece-Namen interpretiert (kein outfit_type mehr).
+        # Free-text fallback (the input field) — comma-separated tokens,
+        # read as names of pieces to equip (no outfit_type any more).
         text = (ctx.get("input") or "").strip()
         if text and not (spec["equip"] or spec["unequip_slots"]
                           or spec["unequip_items"]):
@@ -228,34 +228,49 @@ class OutfitChangeSkill(BaseSkill):
         return spec
 
     # ------------------------------------------------------------------
-    # Inventar-Matching
+    # Inventory matching
     # ------------------------------------------------------------------
 
     def _inventory_item_index(self, character_name: str) -> List[Dict[str, Any]]:
-        """Liefert die Inventar-Items des Characters mit Item-Details."""
+        """The character's inventory entries with item details."""
         inv = get_character_inventory(character_name, include_equipped=True)
         return inv.get("inventory", [])
 
     def _match_inventory(self, token: str, inv: List[Dict[str, Any]]) -> str:
-        """Resolved einen Token (ID oder Name) gegen die Inventar-Items."""
+        """Resolve a token (id or name) against the inventory entries."""
         if not token:
             return ""
         token_l = token.strip().lower()
-        # 1) ID exakt
+        # 1) exact id
         for entry in inv:
             if entry.get("item_id") == token:
                 return token
-        # 2) Name exakt (case-insensitive)
+        # 2) exact name (case-insensitive)
         for entry in inv:
             if (entry.get("item_name") or "").strip().lower() == token_l:
                 return entry.get("item_id", "")
-        # 3) Substring-Match auf Name (vermeide false positives bei zu kurzem Token)
+        # 3) substring match on the name (no false positives from too short a token)
         if len(token_l) >= 3:
             for entry in inv:
                 name_l = (entry.get("item_name") or "").strip().lower()
                 if token_l in name_l or name_l in token_l:
                     return entry.get("item_id", "")
         return ""
+
+    def decision_menu(self, character_name: str) -> List[str]:
+        """The character's clothes for the tool decision: the name this verb
+        matches, the slots, and "worn" — what goes on, what it replaces,
+        what can come off, sorted by name so the block stays the same from
+        turn to turn. Ids and prompt text stay out; the tool LLM only
+        copies a name."""
+        lines = []
+        for entry in self._inventory_item_index(character_name):
+            if entry.get("item_category") != "outfit_piece":
+                continue
+            slots = "+".join((entry.get("outfit_piece") or {}).get("slots") or [])
+            detail = ", ".join(part for part in (slots, "worn" if entry.get("equipped") else "") if part)
+            lines.append(f"{entry.get('item_name')}" + (f" ({detail})" if detail else ""))
+        return sorted(lines, key=str.lower)
 
     def _inventory_summary(self, inv: List[Dict[str, Any]]) -> List[str]:
         return [
