@@ -351,6 +351,18 @@ def main():
         body = llm_client.LLMClient("gemma-4", "k", "https://mock.test/v1", extra_params={
             "chat_template_kwargs": {"enable_thinking": True}})._build_kwargs()["extra_body"]
         assert body["chat_template_kwargs"] == {"enable_thinking": True}
+        # The task's "thinking" flag decides: secret_generation carries it,
+        # intent does not; an explicit override wins; other families get no field.
+        def routed_body(task, model="qwen3.5-9b", **overrides):
+            inst = llm_router.LLMInstance(provider_name="P", model=model, tasks=[task], _provider=provider)
+            return inst.create_llm(**overrides)._build_kwargs().get("extra_body", {})
+        assert "chat_template_kwargs" not in routed_body("secret_generation")
+        assert routed_body("intent")["chat_template_kwargs"] == {"enable_thinking": False}
+        assert routed_body("intent", thinking=True) == {}
+        assert routed_body("secret_generation", thinking=False)["chat_template_kwargs"] == {"enable_thinking": False}
+        assert routed_body("intent", model="mistral-small") == {}
+        gemma = routed_body("secret_generation", model="gemma-4-26b")
+        assert "thinking" not in gemma and "chat_template_kwargs" not in gemma
     print("LLM extra_params: routed sync/stream, fallback, direct, suitability, Anthropic, validation OK")
 
 

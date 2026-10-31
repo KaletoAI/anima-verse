@@ -259,9 +259,13 @@ class LLMClient:
         frequency_penalty: Optional[float] = None,
         top_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
-        extra_params: Optional[Dict[str, Any]] = None):
+        extra_params: Optional[Dict[str, Any]] = None,
+        thinking: bool = False):
         self.model = model
         self.model_name = model
+        # Whether the task this client serves may think (llm_tasks "thinking"
+        # flag). False switches a template-thinking model's reasoning off.
+        self.thinking = bool(thinking)
         self.openai_api_key = api_key
         self.openai_api_base = api_base
         self.base_url = api_base
@@ -314,11 +318,12 @@ class LLMClient:
         if self.max_tokens:
             kwargs["max_tokens"] = self.max_tokens
         extra_body: Dict[str, Any] = {}
-        # Disable thinking/reasoning for models with native thinking
-        _disable_thinking = thinking is False or (thinking is None and (
-            _is_qwen3_model(self.model) or _is_gemma_model(self.model)
-        ))
-        if _disable_thinking:
+        # Thinking follows the task (llm_tasks "thinking" flag, passed in by
+        # the router): a task without it switches reasoning off. Only the
+        # model families whose chat template reads enable_thinking get the
+        # field — another API (OpenAI itself) rejects an unknown parameter.
+        thinks = self.thinking if thinking is None else thinking
+        if not thinks and (_is_qwen3_model(self.model) or _is_gemma_model(self.model)):
             # llama.cpp and vLLM switch thinking off only through the chat
             # template (Qwen3 and Gemma 4 templates both read enable_thinking);
             # they ignore the Anthropic-style "thinking" field, which a

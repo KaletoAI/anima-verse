@@ -155,7 +155,12 @@ Each entry in `app/core/llm_tasks.py` → `TASK_TYPES` carries:
 - **priority** (`CHAT`, `HIGH`, `NORMAL`, `LOW`) — the provider queue's ordering.
 - **gate** (optional) — a dot path to a bool in the config. While that flag is
   off, the feature is inactive and the task needs no LLM (`is_task_gated_off`).
-- **thinking** (tool/helper tasks) — the task benefits from a reasoning pass.
+- **thinking** (tool/helper tasks) — the task runs with the model's thinking on.
+  Every other task switches it off: a Qwen3/Gemma model gets
+  `chat_template_kwargs.enable_thinking=false` (the only switch direct llama.cpp
+  and vLLM honour; Gemma also gets `thinking: {"type": "disabled"}` for
+  gateways). Other model families get no field. An entry's `extra_params`
+  override both ways (`llm_router.LLMInstance.create_llm` → `LLMClient(thinking=)`).
 - **requirements** — a profile of what a model must bring (hard: `tools`,
   `vision`, `json`, `min_context`; soft: `model_class`, `arch`,
   `hallucination_risk`, `creative`, `language_de`, `latency_sensitive`). Only

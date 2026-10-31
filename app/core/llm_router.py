@@ -104,6 +104,9 @@ class LLMInstance:
         repetition_penalty = overrides.get("repetition_penalty",
                                            self.repetition_penalty)
         extra_params = merge_extra_params(self.extra_params, overrides.get("extra_params") or {})
+        from app.core.llm_tasks import task_thinks
+        thinking = (bool(overrides["thinking"]) if "thinking" in overrides
+                    else any(task_thinks(task) for task in self.tasks))
 
         if self._provider and self._provider.type == "anthropic":
             client = AnthropicLLMClient(
@@ -127,7 +130,8 @@ class LLMInstance:
                 frequency_penalty=frequency_penalty,
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
-                extra_params=extra_params)
+                extra_params=extra_params,
+                thinking=thinking)
         client.provider_name = self.provider_name
         return client
 

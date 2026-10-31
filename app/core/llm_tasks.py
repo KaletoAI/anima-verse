@@ -633,6 +633,12 @@ def is_task_gated_off(task: str, cfg: dict) -> bool:
     return val is False
 
 
+def task_thinks(task: str) -> bool:
+    """Whether ``task`` runs with the model's thinking on (its "thinking" flag);
+    every other task switches it off."""
+    return bool((TASK_TYPES.get(task) or {}).get("thinking"))
+
+
 def get_default_priority(task: str) -> int:
     entry = TASK_TYPES.get(task)
     if entry:
