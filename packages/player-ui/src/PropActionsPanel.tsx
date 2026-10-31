@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { apiPost } from './api'
 import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
@@ -8,12 +8,38 @@ import { cancelPropAction, notifyPropActionChanged, requestPropAction, respondPr
   type PropActionExecution, type PropActionOffer } from './propActions'
 
 interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
+interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
 
-const metres = (offer: PropActionOffer) => offer.distance_m == null ? '' : ` · ${offer.distance_m.toFixed(1)} m`
+const pieceText = (offer: PropActionOffer) =>
+  `${offer.prop_label}${offer.distance_m == null ? '' : ` · ${offer.distance_m.toFixed(1)} m`}`
+
+/** One group per action (and partner); its pieces usable first, then nearest first. */
+function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] {
+  const groups = new Map<string, OfferGroup>()
+  for (const offer of offers) {
+    if (partner && !offer.required_partner) continue
+    const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
+      : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
+        : partner ? [] : [{ enabled: false, reason: offer.reason, partner: undefined }]
+    for (const choice of choices) {
+      const key = JSON.stringify([offer.label, choice.partner ?? ''])
+      const group = groups.get(key) ?? { key, label: offer.label, partner: choice.partner, entries: [], usable: false }
+      group.entries.push({ offer, partner: choice.partner, enabled: choice.enabled, reason: choice.reason })
+      group.usable ||= choice.enabled
+      groups.set(key, group)
+    }
+  }
+  for (const group of groups.values()) group.entries.sort((a, b) => Number(b.enabled) - Number(a.enabled)
+    || (a.offer.distance_m ?? Infinity) - (b.offer.distance_m ?? Infinity))
+  return [...groups.values()]
+}
 
 /** Shared presentation for canvas menus and panels; verdicts are Core's, not UI rules.
- *  One entry per action (and partner): an action several pieces offer becomes a
- *  dropdown of those pieces, nearest first, each with its distance to the avatar. */
+ *  Compact: a chip per action carries only the action's name. An action one piece
+ *  offers starts on click (the piece and its distance are the hover text); an action
+ *  several pieces offer opens a row of those pieces, nearest first. Pair actions sit
+ *  behind one "With <partner>" chip per partner, unless the menu already belongs to
+ *  one partner. No native select: its width followed the longest option. */
 export function PropActionOffers({ offers, partner, busy = false, nameProps = true, onPick }: {
   offers: PropActionOffer[]
   partner?: string
@@ -23,52 +49,75 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
   onPick: (offer: PropActionOffer, partner?: string) => void
 }) {
   const { t } = useI18n()
-  const groups = new Map<string, OfferChoice[]>()
-  for (const offer of offers) {
-    if (partner && !offer.required_partner) continue
-    const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
-      : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
-        : partner ? [] : [{ enabled: false, reason: offer.reason, partner: undefined }]
-    for (const choice of choices) {
-      const key = JSON.stringify([offer.label, choice.partner ?? ''])
-      groups.set(key, [...groups.get(key) ?? [], { offer, partner: choice.partner, enabled: choice.enabled, reason: choice.reason }])
-    }
+  const [openPartner, setOpenPartner] = useState('')
+  const [openAction, setOpenAction] = useState('')
+  const groups = offerGroups(offers, partner)
+  // Grouped by partner only where the menu is not one partner's already.
+  const solo = groups.filter(group => partner || !group.partner)
+  const partners = new Map<string, OfferGroup[]>()
+  if (!partner) for (const group of groups) if (group.partner) partners.set(group.partner, [...partners.get(group.partner) ?? [], group])
+  const shownPartner = partners.has(openPartner) ? openPartner : ''
+  const visible = [...solo, ...partners.get(shownPartner) ?? []]
+  const action = visible.find(group => group.key === openAction && group.entries.length > 1)
+
+  const chip = (group: OfferGroup) => {
+    const first = group.entries[0]
+    const several = group.entries.length > 1
+    const disabled = busy || !group.usable
+    // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
+    // the native client shows it too); a single piece names itself there.
+    const hint = !group.usable ? propActionReason(first.reason, t)
+      : !several && nameProps ? pieceText(first.offer) : undefined
+    return <HoverHint key={group.key} text={hint}>
+      <button type="button" className={`player-chip${action === group ? ' on' : ''}`} disabled={disabled}
+        aria-disabled={disabled ? true : undefined} aria-expanded={several ? action === group : undefined}
+        style={{ pointerEvents: !group.usable ? 'none' : undefined }}
+        onClick={() => several ? setOpenAction(action === group ? '' : group.key) : onPick(first.offer, first.partner)}>
+        {group.label}{several ? ' ▸' : ''}
+      </button>
+    </HoverHint>
   }
-  return <div className="player-prop-offers" style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-    {[...groups].map(([key, entries]) => {
-      // Usable pieces first, then by distance (unknown distance last).
-      entries.sort((a, b) => Number(b.enabled) - Number(a.enabled)
-        || (a.offer.distance_m ?? Infinity) - (b.offer.distance_m ?? Infinity))
-      const first = entries[0]
-      const usable = entries.some(entry => entry.enabled)
-      const disabled = busy || !usable
-      const title = `${first.offer.label}${first.partner ? ` · ${first.partner}` : ''}`
-      // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
-      // the native client shows it too).
-      const hint = !usable ? propActionReason(first.reason, t) : undefined
-      const style = { opacity: disabled ? 0.5 : undefined, pointerEvents: !usable ? 'none' as const : undefined }
-      if (entries.length === 1) return <HoverHint key={key} text={hint}>
-        <button type="button" className="player-chip" disabled={disabled}
-          aria-disabled={disabled ? true : undefined} style={style}
-          onClick={() => onPick(first.offer, first.partner)}>
-          {title}{nameProps ? <span style={{ opacity: 0.7 }}> · {first.offer.prop_label}{metres(first.offer)}</span> : null}
-        </button>
-      </HoverHint>
-      return <HoverHint key={key} text={hint}>
-        <select className="player-chip" value="" disabled={disabled} aria-label={title}
-          aria-disabled={disabled ? true : undefined} style={style}
-          onChange={event => {
-            const entry = entries[Number(event.target.value)]
-            if (entry?.enabled) onPick(entry.offer, entry.partner)
-          }}>
-          <option value="" disabled hidden>{title} ▾</option>
-          {entries.map((entry, i) => <option key={JSON.stringify([entry.offer.target, entry.offer.action_id])}
-            value={i} disabled={!entry.enabled}>
-            {entry.offer.prop_label}{metres(entry.offer)}{entry.enabled ? '' : ` — ${propActionReason(entry.reason, t)}`}
-          </option>)}
-        </select>
-      </HoverHint>
-    })}
+  const row = (children: ReactNode, onClose: () => void) =>
+    <div className="player-prop-offers-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+      {children}
+      <button type="button" className="player-chip" aria-label={t('Close')} onClick={onClose}>✕</button>
+    </div>
+
+  return <div className="player-prop-offers" style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+      {solo.map(chip)}
+      {[...partners].map(([name, pairs]) => {
+        const usable = pairs.some(group => group.usable)
+        const hint = usable ? undefined : propActionReason(pairs[0].entries[0].reason, t)
+        return <HoverHint key={`partner:${name}`} text={hint}>
+          <button type="button" className={`player-chip${shownPartner === name ? ' on' : ''}`}
+            disabled={busy || !usable} aria-expanded={shownPartner === name}
+            style={{ pointerEvents: !usable ? 'none' : undefined }}
+            onClick={() => { setOpenPartner(shownPartner === name ? '' : name); setOpenAction('') }}>
+            {t('With')} {name} ▸ {pairs.length}
+          </button>
+        </HoverHint>
+      })}
+    </div>
+    {shownPartner && row(<>
+      <span style={{ opacity: 0.7 }}>{t('With')} {shownPartner}:</span>
+      {partners.get(shownPartner)!.map(chip)}
+    </>, () => { setOpenPartner(''); setOpenAction('') })}
+    {action && row(<>
+      <span style={{ opacity: 0.7 }}>{action.label}{action.partner ? ` · ${action.partner}` : ''}:</span>
+      {action.entries.map(entry => {
+        const disabled = busy || !entry.enabled
+        return <HoverHint key={JSON.stringify([entry.offer.target, entry.offer.action_id])}
+          text={entry.enabled ? undefined : propActionReason(entry.reason, t)}>
+          <button type="button" className="player-chip" disabled={disabled}
+            aria-disabled={disabled ? true : undefined}
+            style={{ pointerEvents: !entry.enabled ? 'none' : undefined }}
+            onClick={() => { setOpenAction(''); onPick(entry.offer, entry.partner) }}>
+            {pieceText(entry.offer)}
+          </button>
+        </HoverHint>
+      })}
+    </>, () => setOpenAction(''))}
   </div>
 }
 
