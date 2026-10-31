@@ -2398,6 +2398,7 @@
     "Username and password required": "Benutzername und Passwort erforderlich",
     "Not authenticated": "Nicht angemeldet",
     "Outfit does not fit a {decency} room — missing: {slots}. No suitable clothing in the inventory.": "Outfit passt nicht in einen {decency}-Raum — es fehlt: {slots}. Keine passende Kleidung im Inventar.",
+    "Outfit does not fit a {decency} room — not dressed, missing: {slots}.": "Outfit passt nicht in einen {decency}-Raum — nicht angezogen, es fehlt: {slots}.",
     "Delete job": "Job löschen",
     "Job {id} is removed from the scheduler.": "Job {id} wird aus dem Scheduler entfernt.",
     "Delete item": "Item löschen",

@@ -57,8 +57,15 @@ def _load() -> List[Dict[str, Any]]:
 def create_notification(character: str,
     content: str,
     notification_type: str = "message",
-    metadata: Optional[Dict[str, Any]] = None) -> str:
+    metadata: Optional[Dict[str, Any]] = None,
+    *, once_unread: bool = False) -> str:
     """Create a new notification.
+
+    ``once_unread``: when the same notification (character, type and text)
+    is still unread, nothing new is stored and its id comes back — a check
+    that runs again and again (outfit compliance on every pose or room
+    change) must not stack identical rows that push the others out of the
+    window.
 
     Returns the notification id, or ``""`` when the row was NOT written
     (DATA-13): the id used to come back unconditionally, so a failed INSERT
@@ -75,6 +82,16 @@ def create_notification(character: str,
     }, ensure_ascii=False)
     try:
         with transaction() as conn:
+            if once_unread:
+                row = conn.execute(
+                    "SELECT id, meta FROM notifications WHERE read=0 AND kind=? "
+                    "AND title=? AND body=? LIMIT 1",
+                    (notification_type, character, content)).fetchone()
+                if row:
+                    try:
+                        return json.loads(row[1] or "{}").get("str_id") or str(row[0])
+                    except ValueError:
+                        return str(row[0])
             conn.execute(
                 "INSERT INTO notifications (ts, kind, title, body, read, meta) "
                 "VALUES (?, ?, ?, ?, 0, ?)",
