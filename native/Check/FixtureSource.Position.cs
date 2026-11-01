@@ -29,8 +29,13 @@ public sealed partial class FixtureSource
         if (_positionSteps.ValueKind != JsonValueKind.Array || _positionStep >= _positionSteps.GetArrayLength())
             throw new InvalidOperationException("Position fixture scenario absent or exhausted");
         var step = _positionSteps[_positionStep];
+        // The Task 46 table fixes points/stamps; facing depends on the rendered fixture frame.
+        // Task 90's resume checks assert exact facing separately, including the real HTTP serializer.
+        var pointRequest = JsonSerializer.SerializeToNode(report)!.AsObject();
+        pointRequest.Remove("yaw");
         if (step.GetProperty("method").GetString() != "POST" || step.GetProperty("path").GetString() != "/play/pos"
-            || !JsonNode.DeepEquals(JsonSerializer.SerializeToNode(report), JsonNode.Parse(step.GetProperty("request").GetRawText())))
+            || !double.IsFinite(report.yaw) || Math.Abs(report.yaw) > Math.PI
+            || !JsonNode.DeepEquals(pointRequest, JsonNode.Parse(step.GetProperty("request").GetRawText())))
             throw new InvalidOperationException("Position fixture request does not match step " + _positionStep);
         _positionStep++; PositionRequests.Add(report);
         return Task.FromResult(new PositionAnswer(step.GetProperty("status").GetInt32(), step.GetProperty("body").Clone()));

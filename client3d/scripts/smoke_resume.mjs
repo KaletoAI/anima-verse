@@ -4,7 +4,27 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { mainFunction } from './mainFunction.mjs';
+import { mainFunction, mainFunctions } from './mainFunction.mjs';
+import { buildSync, transformSync } from 'esbuild';
+import ts from 'typescript';
+
+// Execute the production serializer/accessor/figure methods without booting WebGL.
+function sourceFunction(relative, name, dependencies = {}) {
+  const source = ts.createSourceFile(relative, readFileSync(new URL(relative, import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  let found;
+  function visit(node) {
+    if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name?.getText(source) === name) found = node;
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert(found, `missing production function ${name}`);
+  const expression = ts.isMethodDeclaration(found) ? `({${found.getText(source)}}).${name}` : `(${found.getText(source).replace(/^export /, '')})`;
+  return new Function(...Object.keys(dependencies), transformSync(`return ${expression}`, { loader: 'ts' }).code)(...Object.values(dependencies));
+}
+
+const echoSource = readFileSync(new URL('../src/game/posEcho.ts', import.meta.url), 'utf8');
+const { positionYaw, positionYawChanged } = await import('data:text/javascript;base64,'
+  + Buffer.from(transformSync(echoSource, { loader: 'ts', format: 'esm' }).code).toString('base64'));
 
 if (process.argv[2]) {
   const scripts = JSON.parse(readFileSync(process.argv[2], 'utf8'));
@@ -39,13 +59,13 @@ async function fixture(overrides = {}) {
     manualPropGate: { pending: false }, propMutationPending: false, propStateUncertain: false,
     propPreparation: { pending: false }, ownedPropRun: () => null, manualPropRelease: false,
     lastMap: { characters: [{ name: 'fixture-avatar' }] }, pendingReport: null,
-    posDirty: true, posInFlight: false, posSeq: 3, posSession: 'fixture-session',
+    posDirty: true, posInFlight: false, posSeq: 3, posSession: 'fixture-session', reportedYaw: 0.8,
     roomWalk: { candidate: 'guest' }, requestedRoom: null, roomRejectedUntil: new Map(),
     roomOf: new Map([['fixture-avatar', 'bath']]),
     positionDrain: { wait: async () => {} }, roomDrain: { wait: async () => {} },
-    npcs: { positionOf: () => ({ x: 12.34, z: 56.78 }), inInteraction: () => false, hasOwnMotion: () => false },
+    npcs: { positionOf: () => ({ x: 12.34, z: 56.78 }), yawOf: () => 0.8, inInteraction: () => false, hasOwnMotion: () => false },
     getGameState: () => ({ mode: 'embodied', movementLocked: false }),
-    performance: { now: () => 340 }, AbortController,
+    performance: { now: () => 340 }, positionYaw, positionYawChanged, AbortController,
     setTimeout: (f, ms) => { const id = setTimeout(f, ms); timeouts.add(id); return id; },
     clearTimeout: id => { clearTimeout(id); timeouts.delete(id); },
     fetch: async (url, init) => { sent.push({ url, ...init, body: JSON.parse(init.body) }); return { ok: true, json: async () => ({ ok: true }) }; },
@@ -60,14 +80,17 @@ for (const unloading of [true, false]) {
   try {
     await f.fn(unloading);
     assert.deepEqual(f.sent.map(r => r.url), ['/play/pos', '/play/enter-room']);
-    assert.deepEqual(f.sent[0].body, { x: 12.34, z: 56.78, seq: 4, t_ms: 340, session: 'fixture-session' });
+    assert.deepEqual(f.sent[0].body, { x: 12.34, z: 56.78, yaw: 0.8, seq: 4, t_ms: 340, session: 'fixture-session' });
     assert.deepEqual(f.sent[1].body, { room_id: 'guest' });
     assert(f.sent.every(r => r.keepalive && r.credentials === 'include'));
     await f.fn(unloading); assert.equal(f.sent.length, 2, 'pagehide after logout must not duplicate writes');
   } finally { f.close(); }
 }
-for (const overrides of [{ avatarSeated: true }, { ownedPropRun: () => ({}) }, { avatarDrive: { kind: 'SERVER' } }]) {
-  const f = await fixture(overrides);
+for (const overrides of [{ avatarSeated: true }, { ownedPropRun: () => ({}) }, { avatarDrive: { kind: 'SERVER' } },
+  { manualPropGate: { pending: true } }, { propPreparation: { pending: true } },
+  { propMutationPending: true }, { propStateUncertain: true }, { verticalRide: {} },
+  { npcs: { inInteraction: () => true } }, { npcs: { inInteraction: () => false, hasOwnMotion: () => true } }]) {
+  const f = await fixture({ posDirty: false, reportedYaw: 0, ...overrides });
   try { await f.fn(true); assert.equal(f.sent.length, 0, 'server-owned avatars must stay seated/on their journey'); }
   finally { f.close(); }
 }
@@ -75,6 +98,14 @@ for (const overrides of [{ avatarSeated: true }, { ownedPropRun: () => ({}) }, {
   const f = await fixture({ posDirty: false });
   try { await f.fn(true); assert.deepEqual(f.sent.map(r => r.url), ['/play/enter-room'], 'room dirtiness is independent of position dirtiness'); }
   finally { f.close(); }
+}
+{
+  const f = await fixture({ posDirty: false, reportedYaw: 0 });
+  try {
+    await f.fn(true);
+    assert.equal(f.sent[0].url, '/play/pos', 'a yaw-only change must flush before the next frame');
+    assert.equal(f.sent[0].body.yaw, 0.8);
+  } finally { f.close(); }
 }
 {
   let release;
@@ -105,11 +136,88 @@ const arrive = await mainFunction('placeAvatarOnArrival', {
   applyTileFade: t => assert.equal(t.levelFilter, 1, 'show storey before revealing interior'),
   applyLevelDisplay() {}, applyRoomVisibility() {}, refreshOpenBadge() {}, openLocationId: 'house',
   computeNpcStates: () => [{ char: map.characters[0], pos: { x: 64, y: 7.03, z: 128 }, snap: false }],
-  npcs: { update(states) { update = states; }, faceTowards(...args) { facing = args; } },
+  reportedYaw: null, positionYaw,
+  npcs: { update(states) { update = states; }, faceTowards(...args) { facing = args; }, yawOf: () => 1.2 },
 });
 await arrive();
 assert.equal(tile.fade, 1);
 assert.equal(update[0].snap, true, 'arrival never walks from an earlier fallback');
 assert.deepEqual(update[0].pos, { x: 64, y: 7.03, z: 128 });
 assert.deepEqual(facing, ['fixture-avatar', Math.sin(1.2), Math.cos(1.2), true], 'authoritative facing is set directly when supplied');
-console.log('resume: PASS (handoff logout counts, final position/room, keepalive, ownership, direct upstairs arrival)');
+facing = undefined;
+map.characters[0].yaw = null;
+await arrive();
+assert.equal(facing, undefined, 'null yaw preserves default facing');
+
+// Hand oracle: atan2(x,z) means +z=0, +x=pi/2; the 3-degree threshold wraps at pi.
+for (const [before, after, dirty] of [[0, 2, false], [0, 4, true], [179, -179, false], [178, -178, true]])
+  assert.equal(positionYawChanged(before * Math.PI / 180, after * Math.PI / 180), dirty);
+const { facingYaw } = await import('data:text/javascript;base64,'
+  + Buffer.from(buildSync({ entryPoints: [new URL('../src/game/npcWalk.ts', import.meta.url).pathname],
+    bundle: true, format: 'esm', write: false }).outputFiles[0].text).toString('base64'));
+const faceTowards = sourceFunction('../src/scene/figures.ts', 'faceTowards', { facingYaw });
+const yawOf = sourceFunction('../src/scene/npcs.ts', 'yawOf');
+for (const rendered of [0, Math.PI/2, -Math.PI/2, Math.PI, 7.2]) {
+  const figure = { root: { rotation: { y: rendered } }, targetYaw: -2, holdsFacing: false };
+  const yaw = positionYaw(yawOf.call({ npcs: new Map([['avatar', { figure }]]) }, 'avatar'));
+  faceTowards.call(figure, { x: Math.sin(yaw), y: 0, z: Math.cos(yaw) }, true);
+  assert(Math.abs(positionYaw(figure.root.rotation.y - rendered)) < .01, 'rendered facing round trips through real arrival method');
+}
+assert.equal(positionYaw(0), 0);
+assert.equal(positionYaw(Math.PI/2), Math.PI/2);
+let wireBody;
+const postPos = sourceFunction('../src/api.ts', 'postPos', {
+  fetch: async (url, options) => { assert.equal(url, '/play/pos'); wireBody = JSON.parse(options.body);
+    return { status: 200, ok: true, json: async () => ({ ok: true }) }; },
+});
+await postPos(1, 2, undefined, 3, 330, 'fixture-session', .8);
+assert.deepEqual(wireBody, { x: 1, z: 2, yaw: .8, seq: 3, t_ms: 330, session: 'fixture-session' });
+const getWorldMap = sourceFunction('../src/api.ts', 'getWorldMap', {
+  performance: { now: () => 0 }, worldMapMeta: new WeakMap(), json: r => r.json(),
+  fetch: async () => ({ json: async () => ({ characters: [{ name: 'avatar', yaw: null }] }) }),
+});
+assert.equal((await getWorldMap()).characters[0].yaw, null, 'worldmap parser preserves null yaw');
+
+let now = 330, renderedYaw = 0, delayedAnswer = null;
+const reports = [];
+const channel = await mainFunctions(['tickPosReport', 'markMoved', 'reserveReport', 'flushPendingReport', 'reportPosWithSeq'], {
+  avatarName: 'fixture-avatar', npcs: { yawOf: () => renderedYaw }, positionYaw, positionYawChanged,
+  pendingSnap: null, exitFlushing: false, avatarDrive: { kind: 'PLAYER' }, avatarSeated: false,
+  manualPropGate: { pending: false }, propMutationPending: false, propStateUncertain: false,
+  propPreparation: { pending: false }, ownedPropRun: () => null, manualPropRelease: false, lastMap: null,
+  propPositionDrainActive: false, positionDrain: { begin: () => () => {} },
+  posInFlight: false, posDirty: false, reportedYaw: 0, reportedPos: null,
+  pendingReport: null, lastReportAt: 0, posSeq: 0, posSession: 'fixture-session',
+  POS_REPORT_MS: 330, POS_TIMEOUT_MS: 8000, sentSeqs: [], answerFloor: 0,
+  pushSeq() {}, answerApplies: () => true, adoptReport() {},
+  performance: { now: () => now }, AbortController, setTimeout, clearTimeout,
+  api: { async postPos(...args) { reports.push(args); return delayedAnswer ?? { ok: true }; } },
+}, ['posDirty', 'reportedYaw']);
+const tick = async () => { channel.tickPosReport({ x: 1, z: 2 }); await Promise.resolve(); };
+await tick(); assert.equal(reports.length, 0, 'standing idle sends nothing');
+renderedYaw = 2 * Math.PI / 180; await tick(); assert.equal(reports.length, 0);
+renderedYaw = 4 * Math.PI / 180; await tick(); assert.equal(reports.length, 1, 'turn in place sends once');
+assert.equal(reports[0][6], renderedYaw, 'normal report carries yaw through API');
+now = 660; await tick(); now = 990; await tick(); assert.equal(reports.length, 1, 'no idle report stream');
+now = 1000; renderedYaw = .8; await tick();
+assert.equal(reports.length, 2);
+now = 1100; renderedYaw = 1.2; await tick(); assert.equal(reports.length, 2, 'turn respects cadence');
+now = 1330; await tick(); assert.equal(reports.length, 3); assert.equal(reports[2][6], 1.2);
+let releaseAnswer;
+delayedAnswer = new Promise(resolve => { releaseAnswer = resolve; });
+now = 1660; renderedYaw = 1.6; await tick(); assert.equal(reports.length, 4);
+now = 1990; await tick();
+assert.equal(channel.snapshot().posDirty, false, 'unchanged facing during HTTP must not dirty a second report');
+delayedAnswer = null; releaseAnswer({ ok: true }); await new Promise(resolve => setImmediate(resolve));
+now = 2320; await tick(); assert.equal(reports.length, 4, 'slow HTTP still sends one report per turn');
+now = 2400; renderedYaw = 2;
+channel.markMoved({ x: 3, z: 2 }); channel.tickPosReport({ x: 3, z: 2 }); await Promise.resolve();
+now = 2410; renderedYaw = 2.2;
+channel.markMoved({ x: 3.25, z: 2 }); channel.tickPosReport({ x: 3.25, z: 2 }); await Promise.resolve();
+assert.equal(reports.length, 5, 'last walking step remains under cadence');
+now = 2730; renderedYaw = 2.3;
+channel.tickPosReport({ x: 3.25, z: 2 }); await Promise.resolve();
+assert.equal(reports.length, 6); assert.equal(reports[5][0], 3.25); assert.equal(reports[5][6], 2.3, 'final stop carries resting yaw');
+now = 3060; channel.tickPosReport({ x: 3.25, z: 2 }); await Promise.resolve();
+assert.equal(reports.length, 6, 'final stop reports only once');
+console.log('resume: PASS (handoff, position/room/yaw flush, ownership, null arrival, facing round trip, turn threshold, cadence, slow flight, final stop)');

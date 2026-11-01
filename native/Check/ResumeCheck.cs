@@ -73,8 +73,31 @@ public static class ResumeCheck
             using var api = new AnimaApi("http://fixture.invalid", transport);
             api.AdoptSession("stored-token");
             var steering = new PlayerSteering(manager, builder); steering.SetActive(true);
-            using var position = new AvatarPositionController(manager, builder, steering, api, () => 340);
+            double renderedAt = 340;
+            using var position = new AvatarPositionController(manager, builder, steering, api, () => renderedAt);
             position.SetActive(true, map.RootElement);
+            manager.Tick(0);
+            Is("standing baseline sends nothing", transport.Paths.Count == 0);
+            fig.FaceTowards(new((float)Math.Sin(1.2 + 2*Math.PI/180), 0, (float)Math.Cos(1.2 + 2*Math.PI/180)), true);
+            manager.Tick(0);
+            Is("two-degree turn stays quiet", transport.Paths.Count == 0);
+            fig.FaceTowards(new((float)Math.Sin(1.2 + 4*Math.PI/180), 0, (float)Math.Cos(1.2 + 4*Math.PI/180)), true);
+            manager.Tick(0); await position.Channel.WhenIdle;
+            Is("turn in place sends exactly one actual report", transport.Paths.Count == 1
+                && transport.Position.TryGetProperty("yaw", out var turnYaw) && Math.Abs(turnYaw.GetDouble()-fig.Yaw) < .0001);
+            renderedAt = 350;
+            manager.SnapPlayerTo("Tess Vale", new(64.25f, 7.03f, 128));
+            manager.Tick(0);
+            Is("walk inside cadence remains dirty", transport.Paths.Count == 1 && position.Channel.Dirty);
+            fig.FaceTowards(new(1, 0, 0), true);
+            renderedAt = 670; manager.Tick(0); await position.Channel.WhenIdle;
+            Is("stop report carries resting yaw", transport.Paths.Count == 2
+                && Math.Abs(transport.Position.GetProperty("yaw").GetDouble()-Math.PI/2) < .0001);
+            renderedAt = 1000; manager.Tick(0);
+            Is("idle after turn and stop sends no stream", transport.Paths.Count == 2);
+            // No position change or frame tick: quit itself must detect this facing change.
+            fig.FaceTowards(new(0, 0, 1), true);
+            transport.Paths.Clear();
             var hud = new HudOverlay();
             using var roomController = new AvatarRoomsController(manager, builder, steering, api, hud, () => 340);
             roomController.SetActive(true);
@@ -92,6 +115,9 @@ public static class ResumeCheck
                 Is("Main waits for position then dirty room before shutdown", transport.Paths.Count == 2
                     && transport.Paths[0] == "/play/pos" && transport.Paths[1] == "/play/enter-room");
                 Is("actual HTTP body carries final rendered point", transport.Position.GetProperty("x").GetDouble() == 64.25);
+                Is("actual HTTP body carries rendered yaw", transport.Position.TryGetProperty("yaw", out var yaw)
+                    && Math.Abs(yaw.GetDouble() - fig.Yaw) < .0001);
+                Is("yaw-only quit body uses +z zero", yaw.GetDouble() == 0);
             }
             finally { main.Free(); hud.Free(); }
         }
@@ -103,6 +129,16 @@ public static class ResumeCheck
         }
 
         double now = 330;
+        foreach (double rendered in new[] { 0, Math.PI/2, -Math.PI/2, Math.PI, 7.2 })
+        {
+            double yaw = PositionChannel.ReportYaw(rendered);
+            var figure = new Figure("Facing fixture");
+            figure.FaceTowards(new((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw)), true);
+            Is("rendered facing round trip", Math.Abs(PositionChannel.ReportYaw(figure.Yaw-rendered)) < .01);
+            figure.Free();
+        }
+        using (var nullMap = JsonDocument.Parse("{\"characters\":[{\"name\":\"Null facing\",\"yaw\":null}]}"))
+            Is("worldmap null yaw parses as absent", CharacterRow.ParseList(nullMap.RootElement)[0].Yaw is null);
         var writes = new List<PositionReport>();
         using var channel = new PositionChannel((p, _) => { writes.Add(p); return Task.FromResult(Answer()); }, () => now);
         channel.Tick(new(1, 1), true); now = 340; channel.Tick(new(2, 1), true);

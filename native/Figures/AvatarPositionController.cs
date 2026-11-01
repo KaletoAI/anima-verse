@@ -55,7 +55,7 @@ public sealed class AvatarPositionController : IDisposable
     {
         var point = CanReport ? CurrentPoint() : null;
         if (point is { } p)
-            Channel.Tick(p, _lastPosition is { } last && double.Hypot(p.X-last.X,p.Z-last.Z) > .00001);
+            Channel.Observe(p, _lastPosition is { } last && double.Hypot(p.X-last.X,p.Z-last.Z) > .00001);
         return Channel.FlushOnShutdownAsync(point, timeoutMs);
     }
     public PendingSnap? PendingSnap => _readiness.PendingSnap;
@@ -111,6 +111,7 @@ public sealed class AvatarPositionController : IDisposable
             return;
         }
         if (map is { } root) { double at = MapReceipt.FromMap(root)?.PolledAt ?? _clock(); Applying(root, at); Applied(root, at); }
+        Channel.SetFacingSource(() => Avatar?.Yaw ?? 0);
     }
 
     private P2? CurrentPoint() => Avatar is { } f ? new(f.Position.X, f.Position.Z) : null;

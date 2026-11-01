@@ -8,7 +8,7 @@ import { pickBenchAnchor } from './bench/benchAnchor';
 import { setTerrainLodDebug } from './scene/terrainLod';
 import { setWaterGhostOff } from './scene/submergedGhost';
 import { ambienceTarget, stepAmbience } from './scene/ambience';
-import { pushSeq, isOwnEcho, avatarDriver, NO_CANCEL, suppressedJourney, answerApplies, type DriverState, type Cancelled } from './game/posEcho';
+import { pushSeq, isOwnEcho, avatarDriver, NO_CANCEL, suppressedJourney, answerApplies, positionYaw, positionYawChanged, type DriverState, type Cancelled } from './game/posEcho';
 import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySnap, enterWhenReady, type PendingSnap, type ReadinessDeps } from './game/readiness';
 import { createFocusQueue } from './game/focusQueue';
 import { createResidencyDriver, type StepResult } from './game/residency';
@@ -3819,7 +3819,7 @@ async function startApp(username: string, role: string) {
   let avatarCancelled: Cancelled = NO_CANCEL;
   let answerFloor = 0;
   let avatarLocalPos: { x: number; z: number } | null = null;
-  let pendingReport: { x: number; z: number; seq: number } | null = null;
+  let pendingReport: { x: number; z: number; seq: number; yaw: number } | null = null;
   const posSession = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const sentSeqs: number[] = [];
   /** When the last report went out (`performance.now()`, a DURATION clock). */
@@ -3827,6 +3827,8 @@ async function startApp(username: string, role: string) {
   /** The point the last report carried, so a standing figure reports once and
    *  then stops talking: `null` = nothing reported yet this session. */
   let reportedPos: { x: number; z: number } | null = null;
+  /** Last sampled facing (or the control handoff baseline), also while its request is in flight. */
+  let reportedYaw: number | null = null;
   /** True while the figure moved since the last report — the flag that turns
    *  the "one final report on stop" into a single call instead of a stream. */
   let posDirty = false;
@@ -3843,7 +3845,8 @@ async function startApp(username: string, role: string) {
       || manualPropGate.pending || propMutationPending || propStateUncertain || propPreparation.pending || ownedPropRun()
       || (!manualPropRelease && lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry)) return;
     const point = npcs.positionOf(avatarName);
-    const position = point && (posDirty || posInFlight) ? { x: Math.round(point.x * 100) / 100, z: Math.round(point.z * 100) / 100,
+    const yaw = positionYaw(npcs.yawOf(avatarName));
+    const position = point && (posDirty || posInFlight || positionYawChanged(reportedYaw, yaw)) ? { x: Math.round(point.x * 100) / 100, z: Math.round(point.z * 100) / 100, yaw,
       seq: ++posSeq, t_ms: performance.now(), session: posSession } : null;
     const candidate = roomWalk.candidate;
     const room = candidate && candidate !== roomOf.get(avatarName) && candidate !== requestedRoom
@@ -4058,7 +4061,7 @@ async function startApp(username: string, role: string) {
   /** Reserve the next number now, sending only once the previous request has finished. */
   function reserveReport(x: number, z: number): number {
     const seq = ++posSeq;
-    pendingReport = { x, z, seq };
+    pendingReport = { x, z, seq, yaw: positionYaw(npcs.yawOf(avatarName)) };
     flushPendingReport();
     return seq;
   }
@@ -4067,12 +4070,13 @@ async function startApp(username: string, role: string) {
     if (posInFlight || !pendingReport) return;
     const p = pendingReport; pendingReport = null;
     if (avatarDrive.kind === 'SERVER') return;
-    void reportPosWithSeq(p.x, p.z, p.seq, propPositionDrainActive);
+    void reportPosWithSeq(p.x, p.z, p.seq, propPositionDrainActive, p.yaw);
   }
 
   /** Send ONE report. Never throws: every refusal is either a correction plus
    *  a toast, or (the throttle) nothing at all. */
-  async function reportPosWithSeq(x: number, z: number, seq: number, preparationDrain = false): Promise<void> {
+  async function reportPosWithSeq(x: number, z: number, seq: number, preparationDrain = false,
+    yaw = positionYaw(npcs.yawOf(avatarName))): Promise<void> {
     // A reserved cancel number may remain unsent; later reports still acknowledge seq >= S.
     if (!preparationDrain && (manualPropGate.pending || propMutationPending || propStateUncertain || propPreparation.pending || ownedPropRun()
       || (!manualPropRelease && lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry))) return;
@@ -4090,8 +4094,10 @@ async function startApp(username: string, role: string) {
       // last accepted. Both fields exist for one failure: a blocked event
       // loop, which compresses the server's own clock to nothing and lets a
       // long-abandoned report land last (§ A15).
+      // The sampled facing is the baseline during this flight too; a failed write restores posDirty.
+      reportedYaw = yaw;
       pushSeq(sentSeqs, seq);
-      const res = await api.postPos(x, z, abort.signal, seq, sentAt, posSession);
+      const res = await api.postPos(x, z, abort.signal, seq, sentAt, posSession, yaw);
       if (!answerApplies(avatarDrive, seq, answerFloor)) return;
       // Throttled or STALE: the server took none of it and said so. Not an
       // error, not a correction — but the point IS still unreported, so the
@@ -4177,8 +4183,6 @@ async function startApp(username: string, role: string) {
     if (pendingSnap) return;
     if (exitFlushing) return;
     if (avatarDrive.kind === 'SERVER') return;
-    if (posInFlight) return;
-    if (!posDirty) return;
     // A SEATED avatar reports nothing (plan-posen-plaetze.md § 4), for the
     // same reason a pair interaction reports nothing (`npcs.inInteraction`
     // at the callers): the server put the figure on that point, and a
@@ -4187,6 +4191,11 @@ async function startApp(username: string, role: string) {
     // `postActivity({activity: ''})` in the steering hook, and the first
     // report follows the first step.
     if (avatarSeated) return;
+    const yaw = positionYaw(npcs.yawOf(avatarName));
+    reportedYaw ??= yaw;
+    if (positionYawChanged(reportedYaw, yaw)) posDirty = true;
+    if (posInFlight) return;
+    if (!posDirty) return;
     if (performance.now() - lastReportAt < POS_REPORT_MS) return;
     reserveReport(Math.round(pos.x * 100) / 100, Math.round(pos.z * 100) / 100);
     posDirty = false;
@@ -6736,6 +6745,7 @@ async function startApp(username: string, role: string) {
     const yaw = own?.char.yaw;
     if (typeof yaw === 'number' && Number.isFinite(yaw))
       npcs.faceTowards(avatarName, Math.sin(yaw), Math.cos(yaw), true);
+    if (own) reportedYaw = positionYaw(npcs.yawOf(avatarName));
   }
 
   // --- Arriving IN the avatar (finding B15) ---------------------------------

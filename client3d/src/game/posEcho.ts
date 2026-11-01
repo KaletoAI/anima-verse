@@ -2,6 +2,16 @@
  *  more than 20 s — longer than a poll interval plus the slowest build. */
 export const ECHO_RING_CAP = 64;
 
+/** Rendered figure yaw already uses atan2(x,z): +z = 0, +x = pi/2. */
+export function positionYaw(rendered: number): number {
+  return Math.atan2(Math.sin(rendered), Math.cos(rendered));
+}
+
+/** Compare the shortest turn; sub-three-degree settling does not keep the channel alive. */
+export function positionYawChanged(before: number | null, after: number): boolean {
+  return before !== null && Math.abs(positionYaw(after - before)) > 3 * Math.PI / 180;
+}
+
 /** Remember a report number at SEND time (an aborted request may still land). */
 export function pushSeq(ring: number[], seq: number, cap = ECHO_RING_CAP): void {
   ring.push(seq);

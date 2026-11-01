@@ -12,8 +12,75 @@ namespace AnimaNative.Tests;
 /// <summary>Task 50: channel timing, late answers and ownership use a duration clock, never wall time.</summary>
 public sealed class PositionChannelTests
 {
+    /// <summary>World +z is zero; +x is +pi/2. Wrap comparisons take the shortest turn.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1.5707963267948966)]
+    [InlineData(-1.5707963267948966)]
+    [InlineData(3.141592653589793)]
+    [InlineData(7.2)]
+    public void RenderedFacingRoundTripsThroughArrival(double rendered)
+    {
+        double yaw = PositionChannel.ReportYaw(rendered);
+        double arrival = AnimaNative.Figures.NpcWalk.FacingYaw(new AnimaNative.Overview.Vec3(Math.Sin(yaw), 0, Math.Cos(yaw)))!.Value;
+        Assert.InRange(Math.Abs(PositionChannel.ReportYaw(arrival-rendered)), 0, .01);
+        Assert.InRange(yaw, -Math.PI, Math.PI);
+    }
+
+    [Fact]
+    public async Task TurnInPlaceUsesThresholdCadenceAndYawOnlyShutdown()
+    {
+        double now = 330, yaw = 0;
+        var sent = new List<PositionReport>();
+        using var channel = new PositionChannel((p, _) => { sent.Add(p); return Task.FromResult(Answer("{\"ok\":true}")); }, () => now);
+        channel.SetFacingSource(() => yaw);
+        channel.Tick(new(1, 1), false); Assert.Empty(sent);
+        yaw = 2 * Math.PI / 180; channel.Tick(new(1, 1), false); Assert.Empty(sent);
+        yaw = 4 * Math.PI / 180; channel.Tick(new(1, 1), false); Assert.Single(sent);
+        Assert.Equal(yaw, sent[0].yaw, 10);
+        now = 660; channel.Tick(new(1, 1), false); Assert.Single(sent);
+        yaw = .8;
+        Assert.True(await channel.FlushOnShutdownAsync(new(1, 1)));
+        Assert.Equal(2, sent.Count); Assert.Equal(.8, sent[1].yaw, 10);
+        Assert.False(channel.Dirty);
+        Assert.False(PositionChannel.YawChanged(Math.PI-.01, -Math.PI+.01));
+        Assert.True(PositionChannel.YawChanged(Math.PI-.04, -Math.PI+.04));
+    }
+
     private static PositionAnswer Answer(string body, int status = 200)
     { using var doc = JsonDocument.Parse(body); return new(status, doc.RootElement.Clone()); }
+
+    [Fact]
+    public async Task SlowYawReportDoesNotDirtyTheSameFacingAgain()
+    {
+        double now = 330, yaw = 0;
+        int writes = 0;
+        var answer = new TaskCompletionSource<PositionAnswer>();
+        using var channel = new PositionChannel((_, _) => { writes++; return answer.Task; }, () => now);
+        channel.SetFacingSource(() => yaw);
+        yaw = .8; channel.Tick(new(0, 0), false);
+        now = 660; channel.Tick(new(0, 0), false);
+        Assert.False(channel.Dirty);
+        answer.SetResult(Answer("{\"ok\":true}")); await channel.WhenIdle;
+        now = 990; channel.Tick(new(0, 0), false);
+        Assert.Equal(1, writes);
+    }
+
+    [Fact]
+    public async Task YawOnlyReportsKeepPositionOwnershipGates()
+    {
+        foreach (bool serverOwned in new[] { false, true })
+        {
+            double yaw = 0;
+            using var channel = new PositionChannel((_, _) => throw new InvalidOperationException("owned avatar must not report"), () => 330);
+            channel.SetFacingSource(() => yaw);
+            if (serverOwned) channel.ApplyDriver(new(true, "journey", null));
+            else channel.CanReport = () => false;
+            yaw = 1; channel.Tick(new(0, 0), false);
+            Assert.False(channel.Dirty);
+            Assert.True(await channel.FlushOnShutdownAsync(new(0, 0)));
+        }
+    }
 
     [Fact]
     public void WalkingReportsEvery330MsAndOneFinalPoint()
