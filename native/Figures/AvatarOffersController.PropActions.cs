@@ -58,12 +58,16 @@ public sealed partial class AvatarOffersController
         props.NotifyChanged+=PropNotifyChanged;
         props.RefreshFailed+=PropRefreshFailed;
         props.RunEnded+=PropRunEnded;
+        props.MutationRejected+=PropMutationRejected;
         props.MotionReceived+=PropMotionReceived;
         _figures.OwnPropMotionReleased+=ReleaseLocalProp;
         _hud.PropActionResult=(result,source)=> {
+            string ownId=props.OwnExecutionId;
             props.ConsumeMotion(result,source);
-            string status=PropActionMotion.Text(result["status"]);
-            if(source=="cancel" && status is not ("refused" or "failed") && _figures.OwnPropMotion?.Cancel!=true) ReleaseLocalProp();
+            string status=PropActionMotion.Text(result["status"]),id=PropActionMotion.Text(result["execution_id"]);
+            // Only cancelling the own run hands the avatar back; a withdrawn invitation leaves it seated.
+            if(source=="cancel" && status is not ("refused" or "failed") && id.Length>0 && id==ownId
+                && _figures.OwnPropMotion?.Cancel!=true) ReleaseLocalProp();
         };
         _hud.PropActionTarget=PreviewPropTarget;
         _hud.PropActionPrepare=id=>props.PrepareAsync(id);
@@ -174,6 +178,15 @@ public sealed partial class AvatarOffersController
         _nextPropPoll=_clock()+PropPollPeriod();
         if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
         ReleaseLocalProp();
+    }
+    private void PropMutationRejected(string status,string reason)
+    {
+        if(_disposed) return;
+        _nextPropPoll=_clock()+PropPollPeriod();
+        if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
+        _propPrepared=false;
+        LogProp($"mutation rejected: status={status} reason={reason}; own run kept until state says otherwise");
+        PropPauseChanged();
     }
     private void ReleaseLocalProp()
     {
@@ -296,7 +309,7 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp; props.Dispose();
+        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.MutationRejected-=PropMutationRejected; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null; _hud.PropActionResult=null; _hud.PropActionTarget=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
         _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;

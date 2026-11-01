@@ -4814,6 +4814,10 @@ async function startApp(username: string, role: string) {
       adoptPropState(state);
       propStateUncertain = false;
       propPreparation.adoptFreshState();
+      // A local release hides the avatar's server place until the server
+      // agrees: a read started after the release that shows no live own run.
+      if (manualPropRelease && !pollIsStale(mapPolledAt, ownSeatChangeAt)
+        && !state.current.some(run => run.status === 'approaching' || run.status === 'active')) manualPropRelease = false;
 
       rebuildPlaceGlyphs();
       const menu = getGameState().placeMenu;
@@ -4920,14 +4924,31 @@ async function startApp(username: string, role: string) {
     console.info('[prop] motion ended: handed back');
   }
 
+  /** A verdict about something other than the own run says nothing about the
+   *  own run: the server keeps it on a refusal, and ends it only when a new
+   *  request replaced it. Only a fresh /state read can tell, so read it. */
+  function resyncPropState(): void {
+    propStateUncertain = false; propPreparation.adoptFreshState();
+    void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
+  }
+
   function receivePropAnswer(result: PropActionResult, source: string): void {
     if (result.execution_id && releasedPropExecutions.has(result.execution_id)) return;
     const motion = result.motion;
+    const ownId = (trackedPropRun ?? ownedPropRun())?.execution_id;
+    const ownRun = !!result.execution_id && result.execution_id === ownId;
     if (source === 'cancel' && (result.status === 'refused' || result.status === 'failed')) {
       propStateUncertain = false; propPreparation.adoptFreshState();
       return;
     }
-    if (source === 'cancel' && result.status !== 'refused' && result.status !== 'failed') {
+    if (source === 'cancel' && !ownRun) {
+      // Withdrawing an invitation or stopping another row leaves the own run alone.
+      releasedPropExecutions.add(result.execution_id);
+      propClickRevert = null;
+      resyncPropState();
+      return;
+    }
+    if (source === 'cancel') {
       releasedPropExecutions.add(result.execution_id);
       trackedPropRun = requestedPropRun = null;
       propClickRevert = null;
@@ -4937,7 +4958,8 @@ async function startApp(username: string, role: string) {
       else done();
     } else if (result.status === 'refused' || result.status === 'failed' || result.status === 'cancelled') {
       propClickRevert?.(); propClickRevert = null;
-      endPropRun(result.execution_id, result.status, result.reason);
+      if (ownRun) endPropRun(result.execution_id, result.status, result.reason);
+      else { resyncPropState(); return; }
     } else if (motion && 'waypoints' in motion) {
       if (trackedPropRun && trackedPropRun.execution_id !== result.execution_id)
         releasedPropExecutions.add(trackedPropRun.execution_id);
@@ -5202,8 +5224,10 @@ async function startApp(username: string, role: string) {
         uiActions.toast?.(result.reason);
       }
     } catch (e) {
+      // A 409 keeps the server's current run; the failed answer already
+      // reached receivePropAnswer, which re-reads /state to find out.
       propClickRevert?.();
-      endPropRun(trackedPropRun?.execution_id ?? '', 'failed', String(e));
+      resyncPropState();
       uiActions.toast?.(String(e));
     } finally { propMutationPending = false; propClickRevert = null; }
   }

@@ -199,6 +199,8 @@ public static partial class PropActionsCheck
                 mgr.ApplyPolled(JsonSerializer.SerializeToElement(stalePair)); Step(0); Is("new interaction remains adoptable after release",avatar.Pair is not null);
             }
             // Real HTTP rejection is an exception, while the in-page verdict can carry refused/failed JSON.
+            // The server keeps the current run on a refusal (prop_action_engine.request_with_creation: "Refusals that
+            // need no route keep the current action"), so the own playback stays until a state read ends the run.
             foreach(bool exception in new[]{false,true}) {
                 var rejected=Motion("reject-"+exception); await Start(rejected); Step(.5); var rendered=avatar.Position;
                 source.PendingRequest=new(); source.StateOverride=RunState(rejected,"active");
@@ -206,18 +208,22 @@ public static partial class PropActionsCheck
                 if(exception) source.PendingRequest.SetException(new ApiException(409,"/play/prop-actions/request","stale_definition"));
                 else source.PendingRequest.SetResult(JsonDocument.Parse("{\"status\":\"refused\",\"reason\":\"claimed\"}"));
                 await offers.PendingPropAction!; source.PendingRequest=null;
-                Is("refusal/exception releases own playback despite stale active state "+exception,mgr.OwnPropMotion is null && !steering.PropActionDriven && offers.PropActions!.OwnedRun is null);
-                Near("refusal stays at rendered point "+exception,avatar.Position.X,rendered.X);
+                Is("refusal/exception keeps the run the server still holds "+exception,mgr.OwnPropMotion is not null && steering.PropActionDriven && offers.PropActions!.OwnedRun is not null);
+                Near("refusal does not move the figure "+exception,avatar.Position.X,rendered.X);
+                await End(rejected);
+                Is("the run's own end hands back input "+exception,mgr.OwnPropMotion is null && !steering.PropActionDriven && offers.PropActions!.OwnedRun is null);
             }
             var offline=Motion("offline-refusal"); await Start(offline); Step(.25);
             source.PendingRequest=new(); source.PendingState=new();
             hud.Handlers["pickPropAction"](new JsonArray(action["action_id"]!.DeepClone(),action["target"]!.DeepClone(),action["definition_revision"]!.DeepClone()));
             source.PendingRequest.SetException(new ApiException(409,"/play/prop-actions/request","stale_definition"));
-            Is("known request failure releases before blocked state refresh",mgr.OwnPropMotion is null && !steering.PropPreparationPending && !position.Channel.ReportsPaused && !offers.PropActions!.Paused);
+            Is("known request failure unblocks before the state refresh and keeps the run",mgr.OwnPropMotion is not null && !steering.PropPreparationPending && !position.Channel.ReportsPaused && !offers.PropActions!.Paused);
             source.PendingState.SetException(new InvalidOperationException("state offline")); await offers.PendingPropAction!;
             source.PendingRequest=source.PendingState=null;
-            Is("failed reconciliation cannot reclaim released input",mgr.OwnPropMotion is null && !mgr.ServerDriven && !steering.PropActionDriven && !steering.PropPreparationPending && !position.Channel.ReportsPaused && !offers.PropActions!.Paused);
-            Is("offline failure remains steerable",steering.WalkTo(new(avatar.Position.X+.5,avatar.Position.Z))); steering.CancelRoute();
+            Is("failed reconciliation keeps the server's last known run",mgr.OwnPropMotion is not null && offers.PropActions!.OwnedRun is not null && !steering.PropPreparationPending && !offers.PropActions!.Paused);
+            await End(offline);
+            Is("the run's end hands back input after an offline refusal",mgr.OwnPropMotion is null && !mgr.ServerDriven && !steering.PropActionDriven && !position.Channel.ReportsPaused);
+            Is("then steerable",steering.WalkTo(new(avatar.Position.X+.5,avatar.Position.Z))); steering.CancelRoute();
             // Pair pose_key names a semantic kind; role selects the installed half immediately.
             var pair=Motion("pair-role"); pair["entry"]!["pose_key"]="pair-pose"; pair["role"]="b";
             library=avatar.Player!.GetAnimationLibrary(""); library.AddAnimation("pair-pose__b",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
@@ -238,7 +244,8 @@ public static partial class PropActionsCheck
             source.StateOverride=RunState(detached,"active");
             hud.hud_bridge(new JsonObject { ["v"]=4,["kind"]="prop-actions-changed",["request_id"]="hud:refused",["source"]="request",["result"]=new JsonObject { ["status"]="refused",["reason"]="claimed" } }.ToJsonString());
             await offers.PendingPropAction!;
-            Is("detached refusal tombstones old active state",mgr.OwnPropMotion is null && !steering.PropActionDriven && offers.PropActions!.OwnedRun is null);
+            Is("detached refusal keeps the active run the server reports",mgr.OwnPropMotion is not null && steering.PropActionDriven && offers.PropActions!.OwnedRun is not null);
+            await End(detached);
             var prepareWrite=new TaskCompletionSource(); int notices=0; hud.PropActionPrepare=_=>prepareWrite.Task; hud.PropActionsChanged=_=>notices++;
             hud.hud_bridge("{\"v\":4,\"kind\":\"prop-action-prepare\",\"request_id\":\"hud:prepare\"}");
             Is("HUD waits for outstanding write",hud.PendingPropPreparation is { IsCompleted:false }); prepareWrite.SetResult(); await hud.PendingPropPreparation!;
