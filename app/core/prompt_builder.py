@@ -817,6 +817,42 @@ class PromptBuilder:
 
         return ""
 
+    def _bare_reference_for_scene_outfit(
+            self, variables: PromptVariables, idx: int, scene_outfit: str) -> None:
+        """The scene names its own outfit for person ``idx`` — keep the
+        reference image from showing a DIFFERENT, equipped one.
+
+        The reference supplies appearance only, the outfit is the text's
+        (see the slot rules); an image-edit model copies the clothes it sees
+        over the text, though, so a reference in blouse and skirt dressed a
+        scene that says nude (2026-11-01). When the scene outfit does not
+        contain every equipped piece, the reference becomes the character's
+        cached render without clothes (``find_bare_expression``); without
+        one the reference stays as it is."""
+        ref = variables.ref_images.get(idx)
+        if not ref or idx > len(variables.persons):
+            return
+        person = variables.persons[idx - 1]
+        if person.is_user:
+            return
+        worn = render_outfit(character_name=person.name).get("pieces", "")
+        fragments = [f.strip().lower() for f in worn.split(",") if f.strip()]
+        scene = (scene_outfit or "").lower()
+        if not fragments or all(f in scene for f in fragments):
+            return  # nothing equipped, or the scene wears the equipped outfit
+        try:
+            from app.core.expression_regen import find_bare_expression
+            bare = find_bare_expression(
+                person.name, get_character_current_feeling(person.name) or "")
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.debug("Bare reference unavailable for %s: %s", person.name, exc)
+            return
+        if bare:
+            variables.ref_images[idx] = str(bare)
+            logger.info("RefImage [%s]: the scene names its own outfit (%s) — "
+                        "reference without clothes %s instead of %s",
+                        person.name, scene_outfit[:80], Path(str(bare)).name, Path(ref).name)
+
     def _collect_mood(
         self, persons: List[Person], variables: PromptVariables,
         photographer_mode: bool) -> None:
@@ -1128,6 +1164,7 @@ class PromptBuilder:
             logger.info(
                 "scene_prompt: Outfit aus Tool-LLM extrahiert -> prompt_outfits[%d] = '%s'",
                 _agent_idx, _new_outfit[:120])
+            self._bare_reference_for_scene_outfit(variables, _agent_idx, _new_outfit)
 
             # A concrete tool-LLM scene already specifies its own outfit, so
             # DB state fields are irrelevant to THIS image:

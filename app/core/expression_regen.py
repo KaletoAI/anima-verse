@@ -225,6 +225,20 @@ def find_compatible_expression(request):
             return max(candidates, key=lambda row: row[0])[1] if candidates else None
 
 
+def find_bare_expression(character: str, mood: str = ""):
+    """The character's cached expression render WITHOUT clothes — nothing
+    equipped, same set, the mood's member preferred — or None.
+
+    For a scene whose text names its own outfit (the tool LLM dressed or
+    undressed the character for this one picture): the reference then must
+    not show the equipped outfit, or the image model copies those clothes
+    over the text (2026-11-01: a nude mirror scene was rendered with the
+    reference in blouse and skirt). Nothing is rendered here; a character
+    without such a cached image gets None."""
+    return find_compatible_expression(
+        expression_snapshot(character, mood, equipped_pieces={}, equipped_items=[]))
+
+
 @dataclass(frozen=True)
 class ExpressionAttempt:
     attempt_id: str
