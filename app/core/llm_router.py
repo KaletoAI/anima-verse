@@ -174,7 +174,9 @@ def create_llm_instance(
 
     provider = None
     if provider_name:
-        provider = pm.get_provider(provider_name)
+        # Outside routing (the model test) a disabled provider is reachable too.
+        provider = (pm.get_provider(provider_name) if use_routing
+                    else pm.provider_for_test(provider_name))
     if not provider and routing_entry is None and (not provider_name or use_routing):
         provider = pm.find_provider_for_model(model)
 

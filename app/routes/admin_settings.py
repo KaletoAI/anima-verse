@@ -1638,7 +1638,8 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
     'Unable to access non-serverless model') are excluded from the list.
     """
     from app.core.provider_manager import get_provider_manager
-    provider = get_provider_manager().get_provider(provider_name)
+    # A disabled provider is listed too: the model test may run against it.
+    provider = get_provider_manager().provider_for_test(provider_name)
     if not provider:
         raise HTTPException(404, f"Provider '{provider_name}' not found")
     try:
@@ -1656,12 +1657,13 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
 
 @router.get("/settings/providers-list")
 def providers_list(user=Depends(require_admin)):
-    """Return enabled provider names for the suitability test picker.
-
-    A disabled provider is not loaded, so a test against it could not run.
-    """
+    """Return every configured provider for the suitability test picker,
+    enabled or not — a test reaches a disabled one through
+    ``ProviderManager.provider_for_test`` without the game seeing it."""
     return {"providers": [p.get("name", "") for p in config.get("providers", [])
-                          if p.get("name") and p.get("enabled") is not False]}
+                          if p.get("name")],
+            "disabled": [p.get("name", "") for p in config.get("providers", [])
+                         if p.get("name") and p.get("enabled") is False]}
 
 
 @router.get("/settings/llm-suitability-cases")

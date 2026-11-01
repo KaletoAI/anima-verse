@@ -108,6 +108,7 @@ def main():
         provider = SimpleNamespace(name="P", type="openai", api_base="https://mock.test/v1",
                                    api_key="not-a-real-key", timeout=10, available=True)
         manager = SimpleNamespace(get_provider=lambda name: provider if name == "P" else None,
+                                  provider_for_test=lambda name: provider if name == "P" else None,
                                   find_provider_for_model=lambda model: provider)
         original = {"nested": {"a": 1, "b": 2}, "temperature": 0,
                     "chat_template_kwargs": {"enable_thinking": True, "extra": "retained"},

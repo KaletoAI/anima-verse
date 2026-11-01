@@ -421,10 +421,12 @@ function mountReplay(body, entry, index, searchTerm) {
             const data = await replayFetch('/admin/settings/providers-list');
             const selected = provider.value || entry.provider;
             provider.replaceChildren(new Option('Select a provider', ''));
-            (data.providers || []).forEach(name => provider.add(new Option(name, name)));
+            // Replay runs through the game's own providers: a disabled one is not offered.
+            const offered = (data.providers || []).filter(name => !(data.disabled || []).includes(name));
+            offered.forEach(name => provider.add(new Option(name, name)));
             provider.disabled = false;
             if ([...provider.options].some(option => option.value === selected)) provider.value = selected;
-            setStatus(status, data.providers && data.providers.length ? '' : 'No providers are configured.', !(data.providers || []).length);
+            setStatus(status, offered.length ? '' : 'No providers are configured.', !offered.length);
             if (provider.value) await loadModels();
         } catch (error) {
             setStatus(status, 'Could not load providers: ' + error.message + '. Use Reload providers / models to retry.', true);

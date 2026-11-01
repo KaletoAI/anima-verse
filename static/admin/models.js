@@ -445,7 +445,7 @@ async function suitInit() {
         const r = await fetch('/admin/settings/providers-list');
         const d = await r.json();
         document.getElementById('suitProvider').innerHTML = '<option value="">Provider…</option>' +
-            (d.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+            (d.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}${(d.disabled || []).includes(p) ? ' (disabled in game)' : ''}</option>`).join('');
     } catch (e) { /* ignore */ }
     suitCasesInfo();
     suitJobsRefresh();  // starts its own polling loop
@@ -555,10 +555,9 @@ function suitPrefill() {
     if (!chosen) return;
     const providerSelect = document.getElementById('suitProvider');
     providerSelect.value = chosen.provider;
-    // A disabled provider is not offered: say so instead of silently testing nothing.
     if (providerSelect.value !== chosen.provider) {
         document.getElementById('suitStatus').textContent =
-            'Provider ' + chosen.provider + ' is disabled or unavailable — values copied, pick another provider.';
+            'Provider ' + chosen.provider + ' no longer exists — values copied, pick another provider.';
     }
     document.getElementById('suitModel').value = chosen.model;
     suitCombobox.reload();

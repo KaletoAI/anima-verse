@@ -5,7 +5,8 @@
  * gives empty c order 1, and leaves other-category d untouched. Repeating is
  * a no-op. A group with chains for every task says 'all assigned'; missing a
  * and b says '2 task(s) without LLM: Alpha, Beta'. A fallback to assigned a
- * counts as assigned. Overview index 1 is green with ← now, index 0 is muted
+ * counts as assigned. Groups start collapsed (nothing stored); a toggle
+ * stores the OPENED category under rt-expanded. Overview index 1 is green with ← now, index 0 is muted
  * with (provider off), later index 2 is normal. Filtering alp returns Alpha
  * and Alpine; ArrowDown+Enter selects Alpha, typing custom+Enter or blur
  * commits the literal name. Escape closes the list without choosing a row.
@@ -49,11 +50,12 @@ assert.match(overview, /← now/);
 const fallbackOverview = read("rtOverviewBody({tasks:[{task:'child',label:'Child',via:'fallback',resolved:{index:1,order:2,provider:'p',model:'m',via_task:'parent'},chain:[{index:1,order:2,provider:'p',model:'m'}]}]})");
 assert.match(fallbackOverview, /via parent: p \/ m/);
 assert.doesNotMatch(fallbackOverview, /← now/);
+assert.equal(read("rtReadExpanded().has('chat')"), false);
 read("rtToggleCategory('chat')");
-assert.equal(stored.get('rt-collapsed'), '["chat"]');
-assert.equal(read("rtReadCollapsed().has('chat')"), true);
+assert.equal(stored.get('rt-expanded'), '["chat"]');
+assert.equal(read("rtReadExpanded().has('chat')"), true);
 read("rtToggleCategory('chat')");
-assert.equal(stored.get('rt-collapsed'), '[]');
+assert.equal(stored.get('rt-expanded'), '[]');
 console.log('PASS group append, deduplication, summary, fallback, overview, collapse persistence');
 // Render the actual Tasks page: collapsed groups hide cards; search expands
 // matching groups without changing their saved collapsed preference.
@@ -71,7 +73,6 @@ RT_TASK_STATE = {runtime_disabled:[],presets:{}};
 loadLlmCatalog = async () => RT_CATALOG;
 RT_CATALOG.tasks[0].requirements = {};
 RT_CATALOG.tasks[1].requirements = {};
-rtToggleCategory('chat');
 `);
 await read('renderLlmRoutingTasksPage(content)');
 assert.match(ctx.content.innerHTML, /aria-expanded="false"/);
@@ -81,8 +82,12 @@ read("RT_FILTER.q = 'Alpha'");
 await read('renderLlmRoutingTasksPage(content)');
 assert.match(ctx.content.innerHTML, /aria-expanded="true"/);
 assert.match(ctx.content.innerHTML, /— a<\/span>/);
-assert.equal(stored.get('rt-collapsed'), '["chat"]');
-console.log('PASS collapsed rendering and search expansion');
+assert.equal(stored.get('rt-expanded'), '[]');
+read("RT_FILTER.q = ''; rtToggleCategory('chat')");
+await read('renderLlmRoutingTasksPage(content)');
+assert.match(ctx.content.innerHTML, /aria-expanded="true"/);
+assert.match(ctx.content.innerHTML, /— a<\/span>/);
+console.log('PASS groups start collapsed, opened ones are remembered, search expands');
 const elements = {};
 function element(value='') {
     return {value,hidden:true,children:[],attrs:{},events:{},innerHTML:'',textContent:'',

@@ -326,13 +326,14 @@ function rtGroupSummary(tasks, chains, embeddingBackend, category) {
     const missing = tasks.filter(t => (category === undefined || t.category === category) && !rtHasAssignment(t, tasks, chains, embeddingBackend));
     return missing.length ? missing.length + ' task(s) without LLM: ' + missing.map(t => t.label || t.id).join(', ') : 'all assigned';
 }
-function rtReadCollapsed() {
-    try { return new Set(JSON.parse(localStorage.getItem('rt-collapsed') || '[]')); } catch (e) { return new Set(); }
+// Groups start collapsed; the browser remembers which ones were OPENED.
+function rtReadExpanded() {
+    try { return new Set(JSON.parse(localStorage.getItem('rt-expanded') || '[]')); } catch (e) { return new Set(); }
 }
 function rtToggleCategory(category) {
-    const collapsed = rtReadCollapsed();
-    if (collapsed.has(category)) collapsed.delete(category); else collapsed.add(category);
-    try { localStorage.setItem('rt-collapsed', JSON.stringify([...collapsed])); } catch (e) { /* storage may be unavailable */ }
+    const expanded = rtReadExpanded();
+    if (expanded.has(category)) expanded.delete(category); else expanded.add(category);
+    try { localStorage.setItem('rt-expanded', JSON.stringify([...expanded])); } catch (e) { /* storage may be unavailable */ }
     rtRerender();
 }
 
@@ -482,7 +483,7 @@ async function renderLlmRoutingTasksPage(content) {
     const labelById = {};
     for (const t of tasks) labelById[t.id] = t.label || t.id;
 
-    const collapsed = rtReadCollapsed();
+    const expanded = rtReadExpanded();
     let lastCat = null;
     for (const t of visible) {
         if (t.category !== lastCat) {
@@ -493,7 +494,7 @@ async function renderLlmRoutingTasksPage(content) {
                  + 'border-left:3px solid ' + cc.fg + '; border-radius:3px; font-size:11px; font-weight:600; '
                  + 'letter-spacing:0.3px; text-transform:uppercase;">'
                  + esc(t.category_label || RT_TEXT.otherCategory) + '</div>';
-            const folded = !q && collapsed.has(t.category);
+            const folded = !q && !expanded.has(t.category);
             html += '<button id="rt-category-' + esc(t.category) + '" type="button" class="btn btn-sm" aria-expanded="' + !folded + '" aria-label="Toggle ' + esc(t.category_label || t.category) + '" onclick="rtToggleCategory(\'' + rtJs(t.category) + '\')">' + (folded ? '▸' : '▾') + '</button>';
             if (folded) {
                 const summary = rtGroupSummary(tasks, chains, embBackend, t.category);
@@ -505,7 +506,7 @@ async function renderLlmRoutingTasksPage(content) {
             html += '</span></div>';
         }
 
-        if (!q && collapsed.has(t.category)) continue;
+        if (!q && !expanded.has(t.category)) continue;
         const nfo = info[t.id];
         const cc = _CAT_COLORS[t.category] || _CAT_COLORS[''];
         const persistOff = persistentDisabled.has(t.id);

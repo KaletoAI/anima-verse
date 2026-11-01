@@ -402,6 +402,37 @@ class ProviderManager:
         """Returns a provider by name."""
         return self.providers.get(name)
 
+    def provider_for_test(self, name: str) -> Optional[Provider]:
+        """The loaded provider, or for a DISABLED one a transient Provider built
+        from its config entry — for the model test and its model list only.
+
+        A disabled provider has no channel and no health probe, and routing
+        never sees it; this object is not registered anywhere, so the game
+        keeps ignoring the provider. Its reachability is probed once here."""
+        loaded = self.providers.get(name)
+        if loaded is not None:
+            return loaded
+        from app.core import config
+        from app.core.config_schema import field_default
+        entry = next((p for p in config.get("providers", []) or []
+                      if isinstance(p, dict) and p.get("name") == name), None)
+        if entry is None or not entry.get("type", field_default("providers", "type")):
+            return None
+        timeout = entry.get("timeout", field_default("providers", "timeout"))
+        provider = Provider(
+            name=name,
+            type=str(entry.get("type", field_default("providers", "type"))).strip().lower(),
+            api_base=str(entry.get("api_base", "")).strip(),
+            api_key=str(entry.get("api_key", field_default("providers", "api_key")) or "").strip(),
+            max_concurrent=max(1, int(entry.get("max_concurrent")
+                                      or field_default("providers", "max_concurrent") or 1)),
+            timeout=int(timeout) if timeout else None)
+        try:
+            provider.check_availability()
+        except Exception as exc:
+            logger.debug("provider_for_test(%s) probe failed: %s", name, exc)
+        return provider
+
     def _find_channel_for_provider(self, provider_name: str) -> Optional[ProviderQueue]:
         """Returns the channel of a named LLM provider (channel key = name)."""
         return self.channels.get(provider_name)
