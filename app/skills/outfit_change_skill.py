@@ -118,8 +118,12 @@ class OutfitChangeSkill(BaseSkill):
 
         # 3) Unequip single items — the same forbidden update for pieces;
         # hand items (equipped_items) need no intent.
+        inv_items = self._inventory_item_index(character_name)
         for token in spec.get("unequip_items", []):
-            iid = resolve_item_id(token) or token
+            # Names as the decision menu lists them, like equip — never a
+            # guess: taking off the wrong piece is worse than nothing.
+            iid = (self._match_inventory(token, inv_items, guess=False)
+                   or resolve_item_id(token) or token)
             # try as a piece first, then as an item
             r = unequip_piece(character_name, item_id=iid, source="skill")
             piece_unequipped = r.get("status") == "ok"
@@ -135,7 +139,6 @@ class OutfitChangeSkill(BaseSkill):
                 errors.append(f"'{token}': {r.get('reason', 'nicht equipped')}")
 
         # 4) Equip tokens — equip the piece + set forced_pieces.
-        inv_items = self._inventory_item_index(character_name)
         for token in spec.get("equip", []):
             iid = self._match_inventory(token, inv_items)
             if not iid:
@@ -236,11 +239,17 @@ class OutfitChangeSkill(BaseSkill):
         inv = get_character_inventory(character_name, include_equipped=True)
         return inv.get("inventory", [])
 
-    def _match_inventory(self, token: str, inv: List[Dict[str, Any]]) -> str:
-        """Resolve a token (id or name) against the inventory entries."""
+    def _match_inventory(self, token: str, inv: List[Dict[str, Any]],
+                         guess: bool = True) -> str:
+        """Resolve a token (id or name) against the inventory entries.
+
+        A trailing "(…)" is the decision menu's note and is dropped. With
+        ``guess`` a name that matches nothing takes the one outfit piece
+        that is the same kind of thing (:meth:`_closest_piece`)."""
         if not token:
             return ""
-        token_l = token.strip().lower()
+        token = re.sub(r"\s*\([^)]*\)\s*$", "", token.strip()) or token.strip()
+        token_l = token.lower()
         # 1) exact id
         for entry in inv:
             if entry.get("item_id") == token:
@@ -255,6 +264,37 @@ class OutfitChangeSkill(BaseSkill):
                 name_l = (entry.get("item_name") or "").strip().lower()
                 if token_l in name_l or name_l in token_l:
                     return entry.get("item_id", "")
+        return self._closest_piece(token_l, inv) if guess else ""
+
+    @staticmethod
+    def _closest_piece(token_l: str, inv: List[Dict[str, Any]]) -> str:
+        """The one outfit piece a free name most likely means, else "".
+
+        A tool model takes names from the roleplay text ("eine lange Bluse
+        und Shorts" -> "long blouse", "shorts") instead of the menu. First
+        the last word, the kind of piece in an English name, against the
+        piece's last word ("long blouse" -> "Sheer silk blouse"), then
+        anywhere in its name ("shorts" -> "Short skirt"); a plural "s" is
+        ignored, a colour alone never matches ("red cup" takes no red top).
+        Two candidates at the first step that finds any: no guess."""
+        def words(text):
+            found = [w[:-1] if len(w) > 3 and w.endswith("s") else w
+                     for w in re.findall(r"[^\W\d_]+", text.lower())]
+            return [w for w in found if len(w) >= 3]
+
+        wanted = words(token_l)
+        if not wanted:
+            return ""
+        pieces = [(e, words(e.get("item_name") or "")) for e in inv
+                  if e.get("item_category") == "outfit_piece"]
+        for hit in (lambda ws: bool(ws) and ws[-1] == wanted[-1],
+                    lambda ws: wanted[-1] in ws):
+            found = [e for e, ws in pieces if hit(ws)]
+            if found:
+                if len(found) > 1:
+                    return ""
+                logger.info("ChangeOutfit: '%s' taken as '%s'", token_l, found[0].get("item_name"))
+                return found[0].get("item_id", "")
         return ""
 
     def decision_menu(self, character_name: str) -> List[str]:
