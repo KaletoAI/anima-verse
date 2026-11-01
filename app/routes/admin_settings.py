@@ -1797,7 +1797,7 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
         if j.get("status") == "done" and not current_suitability(s):
             continue
         ago = j.get("finished_ago_s")
-        if j.get("status") not in ("queued", "running") and (ago is None or ago > 600):
+        if j.get("status") not in ("queued", "running", "interrupted") and (ago is None or ago > 600):
             continue
         jobs.append({
             "job_id": j["job_id"],
@@ -1814,6 +1814,18 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "verdict": s.get("verdict") or "",
         })
     return {"jobs": jobs}
+
+
+@router.post("/settings/llm-suitability-test/resume")
+def llm_suitability_resume(user=Depends(require_admin)):
+    from app.core.model_suitability import resume_interrupted
+    return {"resumed": resume_interrupted()}
+
+
+@router.post("/settings/llm-suitability-test/discard-interrupted")
+def llm_suitability_discard_interrupted(user=Depends(require_admin)):
+    from app.core.model_suitability import discard_interrupted
+    return {"discarded": discard_interrupted()}
 
 
 @router.post("/settings/llm-suitability-test/delete-old")

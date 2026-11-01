@@ -17,6 +17,11 @@ least one curated semantic case with evidence; otherwise it is not_tested.
 Helper threshold remains 70% and is explicitly format-only. Individual dimensions
 and every repetition remain visible even when an aggregate says mixed. Historical
 records are archived unchanged before a future result replaces the latest view.
+
+Queue: unfinished requests persist in the instance-wide suitability_queue.json,
+shared by all worlds. Restarted jobs load as interrupted and require explicit
+resume (repeating a running test from the start) or discard; finished jobs live
+only in the capability table. List order preserves FIFO within each provider.
 """
 import json
 import re
@@ -28,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.core.log import get_logger
-from app.core.paths import get_storage_dir
+from app.core.paths import get_storage_dir, get_instance_dir
 from app.core.timeutils import utc_now
 from app.core.suitability_scoring import (SCORER_VERSION, DIMENSIONS, prepare_case,
                                           score_case, curated_cases, fixture_version)
@@ -626,6 +631,105 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
 _ACTIVE_PROVIDERS: set[str] = set()
+_QUEUE_LOADED = False
+_PERSISTED_STATUSES = ("queued", "running", "interrupted")
+_QUEUE_FIELDS = ("job_id", "model", "provider", "settings", "concurrency", "status", "enqueued_at")
+
+
+def _persist_queue() -> None:
+    """Called under _JOBS_LOCK; config's atomic writer has no import-time I/O."""
+    from app.core.config import _atomic_write_json
+    path = get_instance_dir() / "suitability_queue.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, {"jobs": [
+        {key: job[key] for key in _QUEUE_FIELDS} for job in _JOBS.values()
+        if job["status"] in _PERSISTED_STATUSES and not job["_cancel"].is_set()]})
+
+
+def _load_queue() -> None:
+    """Load once under _JOBS_LOCK without writing or starting workers."""
+    global _QUEUE_LOADED
+    if _QUEUE_LOADED:
+        return
+    _QUEUE_LOADED = True
+    path = get_instance_dir() / "suitability_queue.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+            raise ValueError("expected an object with a jobs list")
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
+        logger.warning("Cannot load suitability queue %s: %s", path, exc)
+        return
+    for entry in data["jobs"]:
+        try:
+            if not isinstance(entry, dict):
+                raise ValueError("job must be an object")
+            job = {key: entry[key] for key in _QUEUE_FIELDS}
+            if (any(not isinstance(job[k], str) or not job[k] for k in
+                    ("job_id", "model", "provider", "enqueued_at"))
+                    or job["provider"] != job["model"].partition("::")[0]
+                    or job["status"] not in _PERSISTED_STATUSES
+                    or type(job["concurrency"]) is not int or job["concurrency"] < 1
+                    or job["job_id"] in _JOBS):
+                raise ValueError("invalid job metadata")
+            from app.core.timeutils import parse_iso
+            if parse_iso(job["enqueued_at"]) is None:
+                raise ValueError("invalid enqueued_at")
+            job["settings"] = validate_settings(job["settings"])
+            job.update(status="interrupted", total=0, done=0, checks=[], summary=None,
+                       error=None, _request=(job["settings"], job["concurrency"]),
+                       _cancel=threading.Event())
+            _JOBS[job["job_id"]] = job
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("Skipping invalid suitability queue entry: %s", exc)
+
+
+def _start_provider(provider: str) -> None:
+    """Ensure one FIFO worker per provider, called under _JOBS_LOCK."""
+    if provider not in _ACTIVE_PROVIDERS:
+        _ACTIVE_PROVIDERS.add(provider)
+        threading.Thread(target=_worker, args=(provider,), daemon=True,
+                         name="suit-test-" + provider).start()
+
+
+def interrupted_jobs() -> List[Dict[str, Any]]:
+    with _JOBS_LOCK:
+        _load_queue()
+        return [_snapshot(j) for j in _JOBS.values() if j["status"] == "interrupted"]
+
+
+def resume_interrupted() -> int:
+    with _JOBS_LOCK:
+        _load_queue()
+        jobs = [j for j in _JOBS.values() if j["status"] == "interrupted"]
+        for job in jobs:
+            job.update(status="queued", total=0, done=0, checks=[], summary=None, error=None)
+        _persist_queue()
+        for provider in dict.fromkeys(j["provider"] for j in jobs):
+            _start_provider(provider)
+        return len(jobs)
+
+
+def discard_interrupted() -> int:
+    with _JOBS_LOCK:
+        _load_queue()
+        ids = [j["job_id"] for j in _JOBS.values() if j["status"] == "interrupted"]
+        for job_id in ids:
+            del _JOBS[job_id]
+        _persist_queue()
+        return len(ids)
+
+
+def _reset_for_tests() -> None:
+    """Simulate a fresh process; callers must first stop all test workers."""
+    global _QUEUE_LOADED
+    with _JOBS_LOCK:
+        if _ACTIVE_PROVIDERS:
+            raise RuntimeError("Cannot reset while workers are active")
+        _JOBS.clear()
+        _QUEUE_LOADED = False
 
 
 def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -656,9 +760,11 @@ def _run_job(job: Dict[str, Any]) -> None:
                 elif kind == "done":
                     job["summary"] = ev.get("summary")
                     job["status"] = "done"
+                    _persist_queue()
                 elif kind == "error":
                     job["error"] = ev.get("message")
                     job["status"] = "error"
+                    _persist_queue()
     except Exception as exc:
         logger.error("suitability job %s crashed: %s", job["model"], exc)
         with _JOBS_LOCK:
@@ -672,18 +778,31 @@ def _run_job(job: Dict[str, Any]) -> None:
                 job["status"] = "error"
                 job["error"] = "Runner ended without a result"
             job["_finished"] = time.monotonic()
+            _persist_queue()
 
 
 def _worker(provider: str) -> None:
-    while True:
+    try:
+        while True:
+            with _JOBS_LOCK:
+                job = next((j for j in _JOBS.values() if j["status"] == "queued"
+                            and j["provider"] == provider), None)
+                if job is None:
+                    _ACTIVE_PROVIDERS.discard(provider)
+                    return
+                job["status"] = "running"
+                _persist_queue()
+            _run_job(job)
+    except OSError as exc:
+        # A failed write must not leave a dead worker registered forever.
         with _JOBS_LOCK:
-            job = next((j for j in _JOBS.values() if j["status"] == "queued"
-                        and j["provider"] == provider), None)
-            if job is None:
-                _ACTIVE_PROVIDERS.discard(provider)
-                return
-            job["status"] = "running"
-        _run_job(job)
+            job["status"] = "cancelled" if job["_cancel"].is_set() else "interrupted"
+            _ACTIVE_PROVIDERS.discard(provider)
+            logger.error("Suitability queue write failed for %s; worker stopped: %s", provider, exc)
+            try:
+                _persist_queue()
+            except OSError:
+                pass  # The previous atomic file remains recoverable on restart.
 
 
 def enqueue_test(model_full: str, *, settings: dict,
@@ -695,39 +814,43 @@ def enqueue_test(model_full: str, *, settings: dict,
     provider = model_full.partition("::")[0]
     request = deepcopy((settings, concurrency))
     with _JOBS_LOCK:
+        _load_queue()
         for job in _JOBS.values():
-            if (job["model"] == model_full and job["status"] in ("queued", "running")
+            if (job["model"] == model_full and job["status"] in _PERSISTED_STATUSES
                     and job["_request"] == request):
                 return _snapshot(job)
         job = {"job_id": uuid4().hex, "model": model_full, "provider": provider,
                "status": "queued", "total": 0, "done": 0, "checks": [],
                "summary": None, "error": None, "settings": settings,
-               "concurrency": concurrency, "_request": request, "_cancel": threading.Event()}
+               "concurrency": concurrency, "enqueued_at": utc_now().isoformat(),
+               "_request": request, "_cancel": threading.Event()}
         _JOBS[job["job_id"]] = job
-        start_worker = provider not in _ACTIVE_PROVIDERS
-        if start_worker:
-            _ACTIVE_PROVIDERS.add(provider)
-    if start_worker:
-        threading.Thread(target=_worker, args=(provider,), daemon=True,
-                         name="suit-test-" + provider).start()
-    with _JOBS_LOCK:
+        _persist_queue()
+        _start_provider(provider)
         return _snapshot(job)
 
 
 def cancel_test(job_id: str) -> bool:
     with _JOBS_LOCK:
+        _load_queue()
         job = _JOBS.get(job_id)
-        if job is None or job["status"] not in ("queued", "running"):
+        if job is None or job["status"] not in _PERSISTED_STATUSES:
             return False
+        if job["status"] == "interrupted":
+            del _JOBS[job_id]
+            _persist_queue()
+            return True
         job["_cancel"].set()
         if job["status"] == "queued":
             job["status"] = "cancelled"
             job["_finished"] = time.monotonic()
+        _persist_queue()
         return True
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _JOBS_LOCK:
+        _load_queue()
         job = _JOBS.get(job_id)
         return _snapshot(job) if job else None
 
@@ -735,8 +858,10 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 def list_jobs() -> List[Dict[str, Any]]:
     """Active FIFO first, then terminal jobs in submission order."""
     with _JOBS_LOCK:
+        _load_queue()
         jobs = list(_JOBS.values())
         ordered = ([j for j in jobs if j["status"] == "running"]
                    + [j for j in jobs if j["status"] == "queued"]
-                   + [j for j in jobs if j["status"] not in ("running", "queued")])
+                   + [j for j in jobs if j["status"] == "interrupted"]
+                   + [j for j in jobs if j["status"] not in _PERSISTED_STATUSES])
         return [_snapshot(j) for j in ordered]

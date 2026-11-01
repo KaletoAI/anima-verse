@@ -487,6 +487,30 @@ async function suitInit() {
     suitJobsRefresh();  // starts its own polling loop
 }
 
+let suitDiscardArmed = false;
+function suitInterruptedNotice(jobs) {
+    const count = jobs.filter(j => j.status === 'interrupted').length;
+    const notice = document.getElementById('suitInterruptedNotice');
+    notice.hidden = count === 0;
+    if (!count) { suitDiscardArmed = false; notice.innerHTML = ''; return; }
+    notice.innerHTML = '<span>' + count + ' tests were interrupted by a server restart</span> '
+        + '<button type="button" class="btn" onclick="event.preventDefault();event.stopPropagation();suitInterruptedAction(\'resume\')">Resume</button> '
+        + (suitDiscardArmed
+            ? '<span>Discard interrupted tests?</span> <button type="button" class="btn btn-danger" onclick="event.preventDefault();event.stopPropagation();suitInterruptedAction(\'discard-interrupted\')">Discard</button> '
+                + '<button type="button" class="btn" onclick="event.preventDefault();event.stopPropagation();suitDiscardArmed=false;suitJobsRefresh()">Cancel</button>'
+            : '<button type="button" class="btn" onclick="event.preventDefault();event.stopPropagation();suitDiscardArmed=true;suitJobsRefresh()">Discard</button>');
+}
+async function suitInterruptedAction(action) {
+    const notice = document.getElementById('suitInterruptedNotice');
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/' + action, {method: 'POST'});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        suitDiscardArmed = false;
+        await suitJobsRefresh();
+    } catch (error) {
+        notice.textContent = 'Could not update interrupted tests: ' + error.message;
+    }
+}
 let suitQueueDefaultOpen = false;
 function suitQueueGroups(jobs) {
     const groups = new Map();
@@ -523,16 +547,17 @@ async function suitJobsRefresh() {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         jobs = (await response.json()).jobs || [];
         document.getElementById('suitQueueSummary').textContent = suitQueueSummary(jobs);
+        suitInterruptedNotice(jobs);
         const queue = document.getElementById('suitQueueBox');
         suitQueueDefaultOpen = jobs.some(j => ['queued', 'running'].includes(j.status));
         if (suitQueuePreference === null) queue.open = suitQueueDefaultOpen;
         document.getElementById('suitQueue').innerHTML = Array.from(suitQueueGroups(jobs), ([provider, group]) =>
             '<h3>' + esc(provider) + '</h3>' + group.map(j =>
                 '<div class="suit-job"><button type="button" class="btn" onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')">'
-                + esc(j.model) + '</button> · ' + esc(j.status) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?')
+                + esc(j.model) + '</button> · ' + (j.status === 'interrupted' ? '<span class="suit-interrupted">Interrupted</span>' : esc(j.status)) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?')
                 + (j.status === 'queued' ? ' · position ' + esc(j.position) : '')
                 + '<div class="info-text">' + esc(suitSettingsText(j.settings)) + '</div>'
-                + (['queued', 'running'].includes(j.status) ? '<button type="button" class="btn" onclick="suitCancel(\''
+                + (['queued', 'running', 'interrupted'].includes(j.status) ? '<button type="button" class="btn" onclick="suitCancel(\''
                     + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>').join('')).join('');
     } catch (error) {
         document.getElementById('suitQueueSummary').textContent = 'Could not load queue';

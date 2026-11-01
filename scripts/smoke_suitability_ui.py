@@ -243,3 +243,48 @@ assert.strictEqual(ctx.suitThinkingText({thinking_runs:3,thinking_leak_runs:0,se
 assert(ctx.suitThinkingText({thinking_runs:3,thinking_leak_runs:1,settings:{thinking:{tools:true}}}).includes('although thinking was off'));
 ctx.suitStart().then(()=>{assert(!el('suitStatus').textContent.startsWith('Error:')); console.log('Suitability UI prefill, queue summary, settings detail, escaping and explicit POST OK');});
 """], check=True)
+
+subprocess.run(["node", "-e", r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const elements=new Map();
+const el=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:''});return elements.get(id);};
+const ctx={document:{getElementById:el},setTimeout:()=>0,clearTimeout:()=>{},console};
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync('static/admin/models.js','utf8').replace(/loadData\(\);\s*suitInit\(\);\s*$/, ''),ctx);
+const settings={max_tokens:900};
+// Hand-derived: one interrupted job is visible in the collapsed header;
+// Discard first arms an inline question, and recovery sends POST then refreshes.
+const queueRefresh = ctx.suitJobsRefresh;
+const interrupted = [{job_id:'saved',model:'P::<M>',provider:'P',status:'interrupted',settings}];
+ctx.fetch=async()=>({ok:true,json:async()=>({jobs:interrupted})});
+(async()=>{
+    await queueRefresh();
+    assert.strictEqual(el('suitQueueBox').open,false);
+    assert.strictEqual(el('suitInterruptedNotice').hidden,false);
+    assert(el('suitInterruptedNotice').innerHTML.includes('1 tests were interrupted by a server restart'));
+    assert(el('suitInterruptedNotice').innerHTML.includes('Resume'));
+    assert(el('suitInterruptedNotice').innerHTML.includes('Discard'));
+    assert(!el('suitInterruptedNotice').innerHTML.includes('Discard interrupted tests?'));
+    assert(el('suitQueue').innerHTML.includes('Interrupted'));
+    assert(el('suitQueue').innerHTML.includes('&lt;M&gt;'));
+    assert(el('suitQueue').innerHTML.includes('Max tokens: 900'));
+    assert(el('suitQueue').innerHTML.includes('suitCancel'));
+    vm.runInContext('suitDiscardArmed=true',ctx);
+    ctx.suitInterruptedNotice(interrupted);
+    assert(el('suitInterruptedNotice').innerHTML.includes('Discard interrupted tests?'));
+    for (const action of ['resume','discard-interrupted']) {
+        let refreshed=false;
+        ctx.suitJobsRefresh=async()=>{refreshed=true;};
+        ctx.fetch=async(url,options)=>{
+            assert.strictEqual(url,'/admin/settings/llm-suitability-test/'+action);
+            assert.strictEqual(options.method,'POST');return {ok:true};
+        };
+        await ctx.suitInterruptedAction(action);
+        assert(refreshed);
+    }
+    ctx.suitInterruptedNotice([]);
+    assert.strictEqual(el('suitInterruptedNotice').hidden,true);
+    console.log('Suitability interrupted header, rows, inline confirmation and recovery POST OK');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+"""], check=True)

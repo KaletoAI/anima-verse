@@ -276,6 +276,14 @@ check("user POST suitability delete-old",
       status("POST", "/admin/settings/llm-suitability-test/delete-old", "user"), 403)
 check("anon POST suitability delete-old",
       status("POST", "/admin/settings/llm-suitability-test/delete-old"), 401)
+# Queue recovery changes provider activity, so only administrators may POST.
+# Hand-derived: anonymous=401, player=403, admin=200 for both endpoints.
+for action in ("resume", "discard-interrupted"):
+    url = "/admin/settings/llm-suitability-test/" + action
+    check("anon POST " + url, status("POST", url), 401)
+    check("user POST " + url, status("POST", url, "user"), 403)
+    check("admin POST " + url, status("POST", url, "admin"), 200)
+
 check("user GET /admin/settings", status("GET", "/admin/settings", "user"), 403)
 check("user GET /admin/world-settings", status("GET", "/admin/world-settings", "user"), 403)
 check("user PUT /admin/world-settings", status("PUT", "/admin/world-settings", "user"), 403)

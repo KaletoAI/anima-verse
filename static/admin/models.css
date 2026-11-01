@@ -156,3 +156,7 @@ tr:hover { background: #161b22; }
 .suit-group-row { display: flex; align-items: end; gap: 12px; grid-column: 1 / -1; flex-wrap: wrap; }
 .suit-group-row strong { min-width: 65px; align-self: center; }
 .suit-group-row label { flex: 1; min-width: 120px; }
+
+.suit-interrupted-notice { display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px; padding:10px; border:1px solid #b88634; border-radius:6px; background:#332916; color:#e3b85f; }
+.suit-interrupted-notice[hidden] { display:none; }
+.suit-interrupted { color:#bda36c; }

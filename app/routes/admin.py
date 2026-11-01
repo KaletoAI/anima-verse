@@ -259,7 +259,7 @@ def _build_models_html() -> str:
         <span id="suitStatus" role="status"></span></div>
     </section>
     <details class="models-box" id="suitQueueBox">
-        <summary>Queue — <span id="suitQueueSummary">Queue empty</span></summary>
+        <summary>Queue — <span id="suitQueueSummary">Queue empty</span><span id="suitInterruptedNotice" class="suit-interrupted-notice" hidden></span></summary>
         <div id="suitQueue"></div>
     </details>
     <section class="models-box" id="suitResults">
