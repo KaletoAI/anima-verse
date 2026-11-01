@@ -57,8 +57,7 @@ P) PRE-DISCOVERY (runs first, before ``discover_packages()``). The config is
    see a ``url`` would make check C vacuous.
 
 A) Every NON-virtual schema section declares ``scope`` and the value is one
-   of instance/world/mixed. ``llm_simple`` is virtual (a page over
-   ``llm_routing``, no config key of its own) and has no scope.
+   of instance/world/mixed.
    Every explicit ``scope`` anywhere (section, field, sub_array, subsection,
    plugin field) is one of the three values, and ``mixed`` appears only on a
    node with children, never on a field.
@@ -558,12 +557,12 @@ def part_a(schema):
 
 TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
                   "embedding", "decision", "tts", "knowledge",
-                  "content_marketplace", "ui", "image_generation"]
+                  "content_marketplace", "ui", "image_generation", "model_test"]
 TABLE_WORLD = ["extension_motion", "chat", "thoughts", "intents", "relationships", "social_reactions",
                "random_events", "npc", "story_engine", "game", "messaging_frame",
-               "game_calendar", "game_seasons", "memory", "packages"]
+               "game_calendar", "game_seasons", "memory", "packages", "inventory"]
 TABLE_MIXED = ["skills"]
-TABLE_VIRTUAL = ["llm_simple"]
+TABLE_VIRTUAL = []
 
 
 def part_b(schema, has_searx):

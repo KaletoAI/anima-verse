@@ -245,7 +245,7 @@ def apply_schema_defaults(data: dict, schema: dict) -> None:
     sees which fallback would be active.
     """
     for section_key, section_def in schema.items():
-        # Virtual sections (e.g. llm_simple) have no config field of their
+        # Virtual sections have no config field of their
         # own — don't create one, or an empty {} lands in config.json.
         if section_def.get("virtual"):
             continue

@@ -93,7 +93,7 @@ function parseHash() {
     const section = slash === -1 ? raw : raw.slice(0, slash);
     const page = slash === -1 ? null : raw.slice(slash + 1);
     const base = section.indexOf('::') !== -1 ? section.slice(0, section.indexOf('::')) : section;
-    if (!SCHEMA[base] && section !== 'llm_simple' && section !== 'shipped_defaults') return null;
+    if (!SCHEMA[base] && section !== 'shipped_defaults') return null;
     return { section: section, page: page || null };
 }
 
@@ -139,8 +139,7 @@ function buildNav() {
         if (ONLY_OVERRIDES && !sectionHasOverride(key)) continue;
         const a = document.createElement('a');
         a.href = '#' + key;
-        // nav_sub: render as an indented sub-item (e.g. LLM Routing under the
-        // simple LLM Models page).
+        // nav_sub keeps subordinate sections such as game_seasons indented.
         if (sec.nav_sub) {
             a.className = 'nav-sub';
             a.innerHTML = '<span class="nav-icon">›</span> ' + esc(sec.label);
@@ -194,7 +193,7 @@ function buildNav() {
 }
 
 function activateSection(key, pageId) {
-    const special = key === 'shipped_defaults' || key === 'llm_simple' ||
+    const special = key === 'shipped_defaults' ||
         (key.includes('::') && SCHEMA[key.split('::')[0]]?.sub_arrays?.[key.split('::')[1]]);
     const sec = SCHEMA[key];
     if (!sec && !special) return;
@@ -430,8 +429,6 @@ async function renderSection(key, pageId, reloadLibrary = true) {
         }
         renderSubArrayPage(key); return;
     }
-    // Simple category-based LLM page.
-    if (key === 'llm_simple') { await renderLlmSimpleEditor(); return; }
     // Task-centric LLM routing editor — its own file (settings-routing.js),
     // loaded after this one, renders all three pages of the section.
     if (key === 'llm_routing') {
@@ -616,346 +613,6 @@ async function populateImagePreviewMetas() {
                 el.textContent = 'Not generated yet.';
             }
         } catch (e) { /* ignore */ }
-    }
-}
-
-// ── Simple, category-based LLM page ─────────────────────────────────────
-// One provider+model pick per job type; sets the primary (order 1) of that
-// group's tasks in CONFIG.llm_routing — see llmSimpleAssign(). Embedding can
-// be "Internal (built-in)", which writes CONFIG.embedding instead.
-const LLM_SIMPLE_CATS = [
-    {key:'chat',      label:'Chat & Roleplay',           desc:'The main model your characters chat and roleplay with. Pick your biggest / best writing model.'},
-    {key:'tool',      label:'Tools & Decisions',         desc:'Structured decisions and tool-calling (intent, events, outfit generation). Needs a model that reliably follows instructions / returns clean JSON.'},
-    {key:'helper',    label:'Helper (small jobs)',       desc:'Cheap background work: summaries, translation, image-prompt cleanup. A small / fast model is fine here.'},
-    {key:'image',     label:'Vision (read images)',      desc:'Looks at generated images (recognition / analysis). Needs a vision-capable model.'},
-    {key:'embedding', label:'Similarity (pose matching)',desc:'Turns text into vectors so similar poses reuse the same image. Can run built-in on CPU — no server needed.'},
-];
-const LLM_SIMPLE_TEMP = { chat:0.8, tool:0.1, helper:0.5, image:0.3, embedding:0 };
-const LLM_SIMPLE_INTERNAL = '__internal__';
-let LLM_SIMPLE_SEL = {};
-
-async function renderLlmSimpleEditor() {
-    const content = document.getElementById('content');
-    content.innerHTML = '<div class="section active"><h1 class="section-title">🧭 LLM Models (Simple)</h1><div class="desc">Loading…</div></div>';
-    const catalog = await loadLlmCatalog();
-    llmSimpleDetect(catalog.tasks || []);
-
-    let html = '<div class="section active">';
-    html += '<h1 class="section-title">🧭 LLM Models (Simple)</h1>';
-    html += '<div class="desc" style="margin-bottom:14px;">Pick one provider + model per job type. A pick makes it the primary LLM (order 1) '
-         + 'of every task in that group in the '
-         + '<a href="#llm_routing" onclick="event.preventDefault(); activateSection(\'llm_routing\')" style="color:#58a6ff;">Advanced LLM Routing</a>. '
-         + 'Only the group you change is touched — fallbacks, entry names, lanes and sampling stay, and no entry is ever deleted. '
-         + 'Opening this page changes nothing. Press <b>Save</b> when done.</div>';
-
-    const providers = CONFIG.providers || [];
-    if (!ONLY_OVERRIDES || originOf('llm_routing') === 'instance') html += '<div class="list-origin">' + originBadge('llm_routing') + '</div>';
-    for (const cat of LLM_SIMPLE_CATS) {
-        const modelPath = cat.key === 'embedding' && (CONFIG.embedding || {}).backend === 'internal'
-            ? 'embedding.internal_model' : 'llm_routing';
-        const configPath = cat.key === 'embedding' ? 'embedding' : 'llm_routing';
-        if (ONLY_OVERRIDES && (cat.key === 'embedding'
-            ? !['embedding.backend', modelPath].some(path => originOf(path) === 'instance')
-            : originOf(configPath) !== 'instance')) continue;
-        const sel = LLM_SIMPLE_SEL[cat.key] || {};
-        html += '<div class="subsection">';
-        html += '<div class="subsection-title">' + esc(cat.label) + '</div>';
-        html += '<div class="desc" style="margin-bottom:8px;">' + esc(cat.desc) + '</div>';
-        html += '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">';
-        // External embedding models share the whole-list routing badge above.
-        const embedding = cat.key === 'embedding';
-        const showBackend = !embedding || !ONLY_OVERRIDES || originOf('embedding.backend') === 'instance';
-        const showModel = !embedding || !ONLY_OVERRIDES || originOf(modelPath) === 'instance';
-        if (showBackend) {
-            if (embedding) html += originBadge('embedding.backend');
-            // Provider
-            html += '<select id="llmsimple-prov-' + cat.key + '" onchange="llmSimpleSetProvider(\'' + cat.key + '\', this.value)">';
-            html += '<option value="">— none —</option>';
-            if (cat.key === 'embedding') {
-                html += '<option value="' + LLM_SIMPLE_INTERNAL + '"' + (sel.provider === LLM_SIMPLE_INTERNAL ? ' selected' : '') + '>Internal (built-in — no setup)</option>';
-            }
-            for (const p of providers) {
-                html += '<option value="' + esc(p.name) + '"' + (p.name === sel.provider ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')</option>';
-            }
-            html += '</select>';
-        }
-        if (showModel) {
-            if (embedding && modelPath === 'embedding.internal_model') html += originBadge(modelPath);
-            // Model
-            html += '<select id="llmsimple-model-' + cat.key + '" onchange="llmSimpleSetModel(\'' + cat.key + '\', this.value)" style="min-width:240px;">';
-            html += '<option value="' + esc(sel.model || '') + '" selected>' + esc(sel.model || '— select —') + '</option>';
-            html += '</select>';
-            html += '<button class="btn btn-sm" onclick="llmSimpleLoadModels(\'' + cat.key + '\')">Load Models</button>';
-        }
-        html += '</div>';
-        html += '<div id="llmsimple-split-' + cat.key + '" class="desc" style="display:none; margin-top:6px; color:#d29922;"></div>';
-        html += '</div>';
-    }
-    html += '</div>';
-    content.innerHTML = html;
-    // Fill the model dropdowns initially (from cache / internal choices)
-    for (const cat of LLM_SIMPLE_CATS) {
-        llmSimplePopulateModels(cat.key, false);
-        llmSimpleRenderSplitNote(cat.key);
-    }
-}
-
-function llmSimpleDetect(tasks) {
-    LLM_SIMPLE_SEL = {};
-    const routing = CONFIG.llm_routing || [];
-    const catOf = {};
-    for (const t of (tasks || [])) catOf[t.id] = t.category;
-    for (const cat of LLM_SIMPLE_CATS) {
-        const tally = {};
-        for (const e of routing) {
-            if (e.enabled === false) continue;
-            for (const t of (e.tasks || [])) {
-                if ((t.order || 1) !== 1) continue;
-                if (catOf[t.task] !== cat.key) continue;
-                const k = (e.provider || '') + '\u0000' + (e.model || '');
-                tally[k] = (tally[k] || 0) + 1;
-            }
-        }
-        let best = null, bestN = 0;
-        for (const k in tally) if (tally[k] > bestN) { bestN = tally[k]; best = k; }
-        if (best) {
-            const parts = best.split('\u0000');
-            LLM_SIMPLE_SEL[cat.key] = { provider: parts[0], model: parts[1] };
-        }
-    }
-    // Embedding: the internal backend setting wins over routing detection
-    const emb = CONFIG.embedding || {};
-    if (emb.backend === 'internal') {
-        LLM_SIMPLE_SEL.embedding = { provider: LLM_SIMPLE_INTERNAL, model: emb.internal_model || '' };
-    }
-}
-
-function llmSimpleSetProvider(cat, val) {
-    const prev = Object.assign({}, LLM_SIMPLE_SEL[cat] || {});
-    if (!val) { llmSimpleCommit(cat, { provider: '', model: '' }, prev); return; }
-    if (val === LLM_SIMPLE_INTERNAL) {
-        const f = ((SCHEMA.embedding || {}).fields || {}).internal_model || {};
-        const model = (CONFIG.embedding || {}).internal_model || (f.choices || [])[0] || '';
-        llmSimpleCommit(cat, { provider: val, model: model }, prev);
-        return;
-    }
-    // A provider alone changes nothing yet — the routing is only touched once
-    // a model is picked, so switching the provider never clears a category.
-    LLM_SIMPLE_SEL[cat] = { provider: val, model: '' };
-    const m = document.getElementById('llmsimple-model-' + cat);
-    if (m) m.innerHTML = '<option value="" selected>— select —</option>';
-    llmSimplePopulateModels(cat, true);
-}
-
-function llmSimpleSetModel(cat, val) {
-    if (!val) return;
-    const prev = Object.assign({}, LLM_SIMPLE_SEL[cat] || {});
-    llmSimpleCommit(cat, { provider: (LLM_SIMPLE_SEL[cat] || {}).provider || '', model: val }, prev);
-}
-
-function llmSimplePopulateModels(cat, autoload) {
-    const sel = LLM_SIMPLE_SEL[cat] || {};
-    const el = document.getElementById('llmsimple-model-' + cat);
-    if (!el) return;
-    const cur = sel.model || '';
-    // Internal embedding models: choices from the schema
-    if (sel.provider === LLM_SIMPLE_INTERNAL) {
-        const f = ((SCHEMA.embedding || {}).fields || {}).internal_model || {};
-        const choices = f.choices || [];
-        let opts = '<option value="">— select —</option>';
-        for (const c of choices) opts += '<option value="' + esc(c) + '"' + (c === cur ? ' selected' : '') + '>' + esc(c) + '</option>';
-        el.innerHTML = opts;
-        // Display only — rendering never writes CONFIG. An unset internal
-        // model means the server's default, which is the first choice.
-        if (!cur && choices.length) el.value = choices[0];
-        return;
-    }
-    if (!sel.provider) { el.innerHTML = '<option value="">— select provider —</option>'; return; }
-    const models = PROVIDERS_CACHE[sel.provider];
-    if (models && models.length) {
-        const vis = PROVIDERS_VISION[sel.provider] || new Set();
-        let opts = '<option value="">— select —</option>';
-        for (const m of models) opts += '<option value="' + esc(m) + '"' + (m === cur ? ' selected' : '') + '>' + esc(m) + (vis.has(m) ? ' (vision)' : '') + '</option>';
-        el.innerHTML = opts;
-        if (cur && !models.includes(cur)) {
-            el.innerHTML = '<option value="' + esc(cur) + '" selected>' + esc(cur) + ' (not on server)</option>' + opts;
-        }
-    } else if (autoload) {
-        llmSimpleLoadModels(cat);
-    }
-}
-
-async function llmSimpleLoadModels(cat) {
-    const sel = LLM_SIMPLE_SEL[cat] || {};
-    if (sel.provider === LLM_SIMPLE_INTERNAL) { llmSimplePopulateModels(cat, false); return; }
-    if (!sel.provider) { toast('Select a provider first', 'error'); return; }
-    const el = document.getElementById('llmsimple-model-' + cat);
-    if (el) el.innerHTML = '<option>Loading…</option>';
-    if (!PROVIDERS_CACHE[sel.provider] || !PROVIDERS_CACHE[sel.provider].length) {
-        try {
-            const resp = await fetch('/admin/settings/providers/' + encodeURIComponent(sel.provider) + '/models', { credentials: 'same-origin' });
-            const data = await resp.json();
-            if (data.error) toast('Error: ' + data.error, 'error');
-            const list = data.models || [];
-            if (list.length) {
-                PROVIDERS_CACHE[sel.provider] = list;
-                PROVIDERS_VISION[sel.provider] = new Set(data.vision || []);
-            }
-        } catch (e) { toast('Failed to load models: ' + e.message, 'error'); }
-    }
-    llmSimplePopulateModels(cat, false);
-}
-
-// Task ids of one Simple-page category, from the task catalog.
-function llmSimpleCatTasks(cat) {
-    const tasks = (LLM_CATALOG_CACHE || EMPTY_LLM_CATALOG).tasks || [];
-    return tasks.filter(t => t.category === cat).map(t => t.id);
-}
-
-// The entries that hold a PRIMARY (order 1) assignment for one of `ids`:
-// [{idx, tasks: [id, …]}], idx = position in `routing`.
-function llmSimpleHolders(routing, ids) {
-    const want = new Set(ids);
-    const out = [];
-    (routing || []).forEach((e, idx) => {
-        const hit = (e.tasks || [])
-            .filter(t => want.has(t.task) && (t.order || 1) === 1)
-            .map(t => t.task);
-        if (hit.length) out.push({ idx, tasks: hit });
-    });
-    return out;
-}
-
-// Pure: returns a NEW routing list in which every task of `ids` has its
-// primary (order 1) on the provider+model entry — or no primary at all when
-// provider/model are empty. Nothing else changes: other tasks, fallbacks,
-// names, lanes, sampling and every entry stay; no entry is ever deleted.
-// The Advanced page is the full editor, this page must never cost it data.
-// Target entry: the provider+model entry that already held most of the
-// category's primaries, else the first enabled one with that provider+model,
-// else the first one at all (re-enabled), else `newEntry` appended.
-// When the target already served a task as a fallback (order k), the entry
-// that loses the primary takes that order k — the chain keeps its length.
-function llmSimpleAssign(routing, ids, provider, model, newEntry) {
-    const want = new Set(ids);
-    const out = (routing || []).map(e => Object.assign({}, e,
-        { tasks: (e.tasks || []).map(t => Object.assign({}, t)) }));
-    let target = -1;
-    if (provider && model) {
-        const same = e => e.provider === provider && e.model === model;
-        let best = 0;
-        for (const h of llmSimpleHolders(out, ids)) {
-            if (same(out[h.idx]) && h.tasks.length > best) { best = h.tasks.length; target = h.idx; }
-        }
-        if (target < 0) target = out.findIndex(e => same(e) && e.enabled !== false);
-        if (target < 0) {
-            target = out.findIndex(same);
-            if (target >= 0) out[target].enabled = true;
-        }
-        if (target < 0) {
-            out.push(Object.assign({}, newEntry || {}, { provider, model, enabled: true, tasks: [] }));
-            target = out.length - 1;
-        }
-    }
-    for (const id of want) {
-        let freedOrder = 0;
-        if (target >= 0) {
-            const own = out[target].tasks.find(t => t.task === id);
-            if (own && (own.order || 1) !== 1) freedOrder = own.order;
-        }
-        out.forEach((e, idx) => {
-            if (idx === target) return;
-            for (const t of e.tasks) {
-                if (t.task === id && (t.order || 1) === 1) t.order = freedOrder;
-            }
-            e.tasks = e.tasks.filter(t => !(t.task === id && t.order === 0));
-        });
-        if (target >= 0) {
-            const tt = out[target].tasks.filter(t => t.task !== id);
-            tt.push({ task: id, order: 1 });
-            out[target].tasks = tt;
-        }
-    }
-    return out;
-}
-
-function llmSimpleEntryLabel(e) {
-    return e.name ? e.name + ' (' + (e.model || '?') + ')' : (e.provider || '?') + ' / ' + (e.model || '?');
-}
-
-// Applies one category change to CONFIG. Asks first whenever the change
-// overrides something this page cannot show: a category whose tasks are split
-// over several entries (per-task setup from the Advanced page), or "none"
-// dropping existing primaries. Cancel restores the previous selection.
-async function llmSimpleCommit(cat, next, prev) {
-    const meta = LLM_SIMPLE_CATS.find(c => c.key === cat) || { label: cat };
-    const ids = llmSimpleCatTasks(cat);
-    const routing = CONFIG.llm_routing || [];
-    const internal = cat === 'embedding' && next.provider === LLM_SIMPLE_INTERNAL;
-    if (!internal && !ids.length) {
-        // Task catalog failed to load (loadLlmCatalog already toasted) — without
-        // task ids a pick would only add an empty entry.
-        toast('LLM task list not loaded — nothing changed.', 'error');
-        LLM_SIMPLE_SEL[cat] = prev;
-        const p = document.getElementById('llmsimple-prov-' + cat);
-        if (p) p.value = prev.provider || '';
-        llmSimplePopulateModels(cat, false);
-        return;
-    }
-    if (!internal) {
-        const holders = llmSimpleHolders(routing, ids);
-        let question = '';
-        if (!next.provider && holders.length) {
-            const n = holders.reduce((s, h) => s + h.tasks.length, 0);
-            question = 'Remove the primary LLM from ' + n + ' task(s) of "' + meta.label + '"? '
-                + 'They then follow their fallback chain or parent task. No entry is deleted.';
-        } else if (next.provider && holders.length > 1) {
-            question = '"' + meta.label + '" is currently split over ' + holders.length + ' LLM entries: '
-                + holders.map(h => llmSimpleEntryLabel(routing[h.idx]) + ' — ' + h.tasks.length + ' task(s)').join('; ')
-                + '. Setting ' + next.model + ' makes it the primary LLM for all ' + ids.length
-                + ' tasks of this group. Fallbacks and every entry\'s settings stay; no entry is deleted.';
-        }
-        if (question && !(await askConfirm(question, 'Apply'))) {
-            LLM_SIMPLE_SEL[cat] = prev;
-            const p = document.getElementById('llmsimple-prov-' + cat);
-            if (p) p.value = prev.provider || '';
-            llmSimplePopulateModels(cat, false);
-            return;
-        }
-        touchPath('llm_routing');
-        CONFIG.llm_routing = llmSimpleAssign(routing, ids, next.provider, next.model,
-            { name: meta.label, temperature: LLM_SIMPLE_TEMP[cat] });
-    }
-    LLM_SIMPLE_SEL[cat] = next;
-    if (cat === 'embedding') {
-        touchPath('embedding');
-        if (!CONFIG.embedding) CONFIG.embedding = {};
-        if (internal) {
-            CONFIG.embedding.backend = 'internal';
-            if (next.model) CONFIG.embedding.internal_model = next.model;
-        } else {
-            CONFIG.embedding.backend = next.provider ? 'external' : 'auto';
-        }
-    }
-    llmSimplePopulateModels(cat, false);
-    llmSimpleRenderSplitNote(cat);
-}
-
-// Shows, per category, when its tasks use more than one LLM entry — the case
-// in which a pick on this page overrides per-task setup.
-function llmSimpleRenderSplitNote(cat) {
-    const el = document.getElementById('llmsimple-split-' + cat);
-    if (!el) return;
-    const routing = CONFIG.llm_routing || [];
-    const holders = llmSimpleHolders(routing, llmSimpleCatTasks(cat));
-    if (holders.length > 1) {
-        el.textContent = '⚠ Split over ' + holders.length + ' LLM entries: '
-            + holders.map(h => llmSimpleEntryLabel(routing[h.idx]) + ' (' + h.tasks.length + ')').join(', ')
-            + '. Picking a model here makes it the primary for the whole group (you will be asked first).';
-        el.style.display = '';
-    } else {
-        el.textContent = '';
-        el.style.display = 'none';
     }
 }
 
@@ -1386,19 +1043,20 @@ function renderProviderSelect(val, path) {
 }
 
 function renderModelSelect(val, path) {
-    // The provider is read from the sibling field at click time (not baked in at
-    // render time) — otherwise the button would still point at the old provider
-    // after a provider switch and fetch the wrong model list.
-    let select = '<div class="model-picker">';
-    select += '<input type="search" id="model-search-' + esc(path) + '" aria-label="Search models" placeholder="Search models…" '
-           + 'onfocus="loadModels(\'' + sJs(path) + '\')" oninput="filterModels(\'' + sJs(path) + '\')">';
-    select += '<select id="f-' + esc(path) + '" aria-label="Model" onchange="setVal(\'' + sJs(path) + '\', this.value); onRoutingModelChanged(\'' + sJs(path) + '\')">';
-    select += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
-    select += '</select>';
-    select += '<div id="model-search-status-' + esc(path) + '" class="desc" role="status"></div>';
-    select += '<button class="btn btn-sm" onclick="loadModels(\'' + sJs(path) + '\')">Load Models</button></div>';
-    return select;
+    return ModelCombobox.render({id: 'f-' + path, value: val, ariaLabel: 'Model'})
+        .replace('<input ', '<input data-model-path="' + esc(path) + '" ');
 }
+
+document.addEventListener('focusin', event => {
+    const input = event.target;
+    const path = input.dataset && input.dataset.modelPath;
+    if (!path || input.modelCombobox) return;
+    input.modelCombobox = ModelCombobox.attach(input.id, {
+        loadModels: () => loadModels(path),
+        onChange: value => { setVal(path, value); onRoutingModelChanged(path); }
+    });
+    input.modelCombobox.open();
+});
 
 function renderImagegenBackendSelect(val, path) {
     // ALL image backends (Together, CivitAI, LocalAI, ...)
@@ -1887,7 +1545,6 @@ async function resetToDefault(path) {
 
 function sectionHasOverride(key) {
     if (key === 'llm_routing') return ['llm_routing', 'llm_task_state'].some(p => originOf(p) === 'instance');
-    if (key === 'llm_simple') return ['llm_routing', 'embedding'].some(p => originOf(p) === 'instance');
     return originOf(key.replace('::', '.')) === 'instance';
 }
 
@@ -2233,83 +1890,25 @@ async function duplicateItem(path) {
     renderSection(ACTIVE_SECTION);
 }
 
-async function loadModels(path, provName) {
-    if (!provName) {
-        // Try to detect from sibling
-        const parts = path.split('.');
-        parts[parts.length - 1] = 'provider';
-        provName = getVal(parts.join('.'));
+async function providerModelNames(provider) {
+    if (!provider) throw new Error('Select a provider first');
+    if (PROVIDERS_CACHE[provider]?.length) return PROVIDERS_CACHE[provider];
+    const resp = await fetch('/admin/settings/providers/' + encodeURIComponent(provider) + '/models', { credentials: 'same-origin' });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Failed to load models');
+    const names = data.models || [];
+    if (names.length) {
+        PROVIDERS_CACHE[provider] = names;
+        PROVIDERS_VISION[provider] = new Set(data.vision || []);
     }
-    if (!provName) { toast('Select a provider first', 'error'); return; }
-
-    const sel = document.getElementById('f-' + path);
-    if (!sel) return;
-    const currentVal = getVal(path) || '';
-
-    // Cache: do NOT cache empty lists (otherwise one failed request blocks
-    // every retry until the page is reloaded).
-    if (!PROVIDERS_CACHE[provName] || PROVIDERS_CACHE[provName].length === 0) {
-        sel.innerHTML = '<option>Loading...</option>';
-        try {
-            const resp = await fetch('/admin/settings/providers/' + encodeURIComponent(provName) + '/models', { credentials: 'same-origin' });
-            const data = await resp.json();
-            if (data.error) { toast('Error: ' + data.error, 'error'); }
-            const list = data.models || [];
-            if (list.length > 0) {
-                PROVIDERS_CACHE[provName] = list;
-                PROVIDERS_VISION[provName] = new Set(data.vision || []);
-            } else {
-                delete PROVIDERS_CACHE[provName];
-            }
-        } catch (e) {
-            toast('Failed to load models: ' + e.message, 'error');
-            delete PROVIDERS_CACHE[provName];
-        }
-    }
-
-    // A provider switch or page re-render may have happened during the request.
-    const providerPath = path.replace(/\.model$/, '.provider');
-    if (getVal(providerPath) !== provName || document.getElementById('f-' + path) !== sel) return;
-    sel.innerHTML = '<option value="' + esc(currentVal) + '" selected>' + esc(currentVal || '— select —') + '</option>';
-    filterModels(path);
+    return names;
 }
-
-function filterModels(path) {
-    const sel = document.getElementById('f-' + path);
-    const search = document.getElementById('model-search-' + path);
-    if (!sel || !search) return;
-    const provider = getVal(path.replace(/\.model$/, '.provider'));
-    const models = PROVIDERS_CACHE[provider] || [];
-    const vis = PROVIDERS_VISION[provider] || new Set();
-    const query = search.value.trim().toLowerCase();
-    const matches = models.filter(model => model.toLowerCase().includes(query));
-    const current = getVal(path) || '';
-    let opts = '<option value="">— select —</option>';
-    // Filtering is display-only: never drop or silently replace the saved pick.
-    if (current && !matches.includes(current)) {
-        opts += '<option value="' + esc(current) + '" selected>' + esc(current)
-              + (models.includes(current) ? '' : ' (not on server)') + '</option>';
-    }
-    for (const model of matches) {
-        opts += '<option value="' + esc(model) + '"' + (model === current ? ' selected' : '') + '>'
-              + esc(model) + (vis.has(model) ? ' (vision)' : '') + '</option>';
-    }
-    if (!matches.length) opts += '<option value="" disabled>No matching models</option>';
-    sel.innerHTML = opts;
-    const status = document.getElementById('model-search-status-' + path);
-    if (status) status.textContent = matches.length ? matches.length + ' matching models' : 'No matching models';
+async function loadModels(path) {
+    return providerModelNames(getVal(path.replace(/\.model$/, '.provider')));
 }
-
 function refreshModelSelect(provPath) {
-    // When provider changes, clear model cache
-    const parts = provPath.split('.');
-    parts[parts.length - 1] = 'model';
-    const modelPath = parts.join('.');
-    const provName = getVal(provPath);
-    const search = document.getElementById('model-search-' + modelPath);
-    if (search) search.value = '';
-    if (provName) loadModels(modelPath, provName);
-    else filterModels(modelPath);
+    const input = document.getElementById('f-' + provPath.replace(/\.provider$/, '.model'));
+    if (input?.modelCombobox) input.modelCombobox.reload();
 }
 
 async function validateConfig() {

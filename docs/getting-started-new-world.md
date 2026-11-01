@@ -64,18 +64,17 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
      limit for its GPU jobs — it is **not** the LLM parallelism any more (that is `Lanes`, per
      model). Optional `Serialize Group`: give the provider and any image backend sharing the same
      physical GPU the same group name so their calls run one at a time.
-   - **LLM Models (Simple)** — pick a provider + model per job category (chat / tools / helper /
-     vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
+   - **LLM Routing › Tasks** — assign LLM entries to tasks or whole categories. Embedding can run built-in
      (`Embedding → Backend: internal`) with no external endpoint. Its default model is English-only:
      if your world is not played in English and the situational memory block is on, switch
      `Embedding → Internal Model` to the multilingual `paraphrase-multilingual-mpnet-base` — the
      Validate button on the settings page reports that combination as a warning.
-   - **LLM Routing (Advanced)** (only if you want to route a single job differently) has **three**
+   - **LLM Routing** has **three**
      pages: **Tasks** — one row per task with its ordered chain of LLM entries (the order IS the
      position, you do not type a number); **LLMs** — the entries themselves (`Provider`, `Model`,
      `Lanes (max concurrent)`, `Temperature`, `Max Tokens`, `Tasks`); **Overview** — what the
      server resolves right now. A task nobody routed falls back to its parent (`intent_*` /
-     `thought_*` / `extraction_*` → the parent, `furnish` / `prop_mount_classify` /
+     `thought_*` / `extraction_*` → the parent, `building_layout` / `furnish` / `prop_mount_classify` /
      `room_description_sync` / `pose_animation_prompt` → `intent`, `npc_*` → `chat_stream`), so you never have to fill all
      of them.
    - *(optional)* **Media Generation → Backends** for image / video / mesh backends,

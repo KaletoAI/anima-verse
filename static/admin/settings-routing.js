@@ -1,4 +1,4 @@
-// ── LLM Routing (Advanced): the task-centric editor ─────────────────────
+// ── LLM Routing: the task-centric editor ─────────────────────
 // plan-llm-routing-ui.md. Loaded AFTER static/admin/settings.js, so
 // every global of that file (CONFIG, SCHEMA, toast, loadLlmCatalog,
 // renderRequirementBadges, ensureModelCaps, …) is available at run time.
@@ -157,10 +157,11 @@ function normalizePoolLanes(routing) {
 // Python-rendered admin pages are English-only by decision and get no t()
 // layer — never add keys for them to shared/languages/*.json
 // (guard: scripts/smoke_i18n_orphans.py).
+const RT_DEFAULT_TEMP = { chat:0.8, tool:0.1, helper:0.5, image:0.3, embedding:0 };
 const RT_TEXT = {
     title: 'LLM Routing', pageTasks: 'Tasks', pageLlms: 'LLMs', pageOverview: 'Overview',
     search: 'Search tasks…', catAll: 'all', thinking: 'thinking 🧠', onlyProblems: 'only problems',
-    assignLlm: 'Assign LLM ▾', newLlm: '+ New LLM…', groupAssign: 'Assign LLM to all unassigned in this group ▾',
+    assignLlm: 'Assign LLM ▾', newLlm: '+ New LLM…', groupAssign: 'Assign LLM to all tasks in this group ▾',
     noLlm: 'no LLM assigned', fallsBack: '→ falls back to', gateOff: 'feature off ({gate}) — no LLM required',
     entryDisabled: '(entry disabled)', providerMissing: 'provider "{name}" does not exist',
     providerOff: 'provider "{name}" disabled',
@@ -181,7 +182,7 @@ const RT_TEXT = {
     unassign: 'Remove this LLM from the task', remove: 'Remove',
     runtimeDisabled: 'runtime-disabled (preset)', tasksOff: 'tasks off',
     activeRuntime: 'Active: {n} tasks runtime-disabled',
-    groupAssigned: '{n} task(s) assigned to {llm}', groupNone: 'Nothing to assign — no unassigned task in this group.',
+    groupAssigned: '{n} task(s) got {llm}', groupNone: 'Every task in this group already has this LLM.',
     newLlmTitle: 'New LLM for this task', name: 'Name (optional)', temperature: 'Temperature',
     maxTokens: 'Max tokens (optional)',
     otherCategory: 'Other',
@@ -314,6 +315,27 @@ async function rtRerender(msg) {
 }
 
 // ── Tasks page ─────────────────────────────────────────────────────────
+function rtHasAssignment(task, tasks, chains, embeddingBackend, seen = new Set()) {
+    if ((chains[task.id] || []).length || task.gated_off || (task.id === 'pose_embedding' && embeddingBackend !== 'external')) return true;
+    if (seen.has(task.id)) return false;
+    seen.add(task.id);
+    const parent = tasks.find(t => t.id === task.fallback);
+    return !!parent && rtHasAssignment(parent, tasks, chains, embeddingBackend, seen);
+}
+function rtGroupSummary(tasks, chains, embeddingBackend, category) {
+    const missing = tasks.filter(t => (category === undefined || t.category === category) && !rtHasAssignment(t, tasks, chains, embeddingBackend));
+    return missing.length ? missing.length + ' task(s) without LLM: ' + missing.map(t => t.label || t.id).join(', ') : 'all assigned';
+}
+function rtReadCollapsed() {
+    try { return new Set(JSON.parse(localStorage.getItem('rt-collapsed') || '[]')); } catch (e) { return new Set(); }
+}
+function rtToggleCategory(category) {
+    const collapsed = rtReadCollapsed();
+    if (collapsed.has(category)) collapsed.delete(category); else collapsed.add(category);
+    try { localStorage.setItem('rt-collapsed', JSON.stringify([...collapsed])); } catch (e) { /* storage may be unavailable */ }
+    rtRerender();
+}
+
 async function renderLlmRoutingTasksPage(content) {
     const catalog = await loadLlmCatalog();
     RT_CATALOG = catalog;
@@ -370,7 +392,7 @@ async function renderLlmRoutingTasksPage(content) {
         // "built-in embedding" is not a missing LLM: pose_embedding runs over
         // CONFIG.embedding (fastembed/ONNX on CPU) unless the backend is external.
         const builtinEmbedding = (t.id === 'pose_embedding' && embBackend !== 'external');
-        const emptyProblem = !rows.length && !t.gated_off && !builtinEmbedding;
+        const emptyProblem = !rtHasAssignment(t, tasks, chains, embBackend);
         const problem = emptyProblem
             || rows.some(r => r.providerMissing)
             || rows.some(r => r.mismatch)
@@ -460,6 +482,7 @@ async function renderLlmRoutingTasksPage(content) {
     const labelById = {};
     for (const t of tasks) labelById[t.id] = t.label || t.id;
 
+    const collapsed = rtReadCollapsed();
     let lastCat = null;
     for (const t of visible) {
         if (t.category !== lastCat) {
@@ -470,10 +493,19 @@ async function renderLlmRoutingTasksPage(content) {
                  + 'border-left:3px solid ' + cc.fg + '; border-radius:3px; font-size:11px; font-weight:600; '
                  + 'letter-spacing:0.3px; text-transform:uppercase;">'
                  + esc(t.category_label || RT_TEXT.otherCategory) + '</div>';
+            const folded = !q && collapsed.has(t.category);
+            html += '<button id="rt-category-' + esc(t.category) + '" type="button" class="btn btn-sm" aria-expanded="' + !folded + '" aria-label="Toggle ' + esc(t.category_label || t.category) + '" onclick="rtToggleCategory(\'' + rtJs(t.category) + '\')">' + (folded ? '▸' : '▾') + '</button>';
+            if (folded) {
+                const summary = rtGroupSummary(tasks, chains, embBackend, t.category);
+                const missing = summary !== 'all assigned';
+                html += '<span class="' + (missing ? 'rt-warn' : 'rt-ok') + '" style="opacity:0.8">' + esc(summary) + '</span>';
+            }
+            html += '<span title="Applies to all tasks in this category, including tasks hidden by search or filters.">';
             html += rtEntrySelect('rtGroupAssign(\'' + rtJs(t.category) + '\', this.value)', RT_TEXT.groupAssign, false);
-            html += '</div>';
+            html += '</span></div>';
         }
 
+        if (!q && collapsed.has(t.category)) continue;
         const nfo = info[t.id];
         const cc = _CAT_COLORS[t.category] || _CAT_COLORS[''];
         const persistOff = persistentDisabled.has(t.id);
@@ -509,7 +541,7 @@ async function renderLlmRoutingTasksPage(content) {
                 html += '<div class="desc rt-ok">' + esc(rtFmt(RT_TEXT.builtinEmbedding,
                     { model: emb.internal_model || 'bge-small-en' })) + '</div>';
             } else if (!t.gated_off) {
-                let line = '<div class="desc rt-warn">' + esc(RT_TEXT.noLlm);
+                let line = '<div class="desc ' + (rtHasAssignment(t, tasks, chains, embBackend) ? 'rt-muted' : 'rt-warn') + '">' + (rtHasAssignment(t, tasks, chains, embBackend) ? '' : esc(RT_TEXT.noLlm));
                 if (t.fallback) {
                     line += ' <span class="rt-muted">' + esc(RT_TEXT.fallsBack) + ' '
                          + esc(labelById[t.fallback] || t.fallback) + '</span>';
@@ -564,6 +596,7 @@ async function renderLlmRoutingTasksPage(content) {
 
     html += '</div>';
     content.innerHTML = html;
+    rtAttachNewModel();
 }
 
 // One <select> over CONFIG.llm_routing. `withNew` adds the "+ New LLM…" option
@@ -586,21 +619,19 @@ function rtEntrySelect(onchangeJs, placeholder, withNew, excludeIdx) {
 // Inline form for a brand-new LLM entry that is assigned to `task` right away.
 function rtNewLlmForm(task) {
     const providers = CONFIG.providers || [];
-    const temp = LLM_SIMPLE_TEMP[task.category];
+    const temp = RT_DEFAULT_TEMP[task.category];
     let html = '<div class="rt-newform">';
     html += '<div style="grid-column:1 / -1; font-size:12px; color:#8b949e; font-weight:600;">' + esc(RT_TEXT.newLlmTitle) + '</div>';
     html += '<label style="font-size:11px; color:#8b949e;">' + esc(RT_TEXT.name) + '</label>';
     html += '<input type="text" id="rt-new-name">';
     html += '<label style="font-size:11px; color:#8b949e;">Provider</label>';
-    html += '<select id="rt-new-provider" onchange="rtLoadModelsFor(\'rt-new-model\', this.value)">';
+    html += '<select id="rt-new-provider">';
     html += '<option value="">' + esc(RT_TEXT.selectProvider) + '</option>';
     for (const p of providers) html += '<option value="' + esc(p.name) + '">' + esc(p.name) + ' (' + esc(p.type || '') + ')'
          + (p.enabled === false ? ' — disabled' : '') + '</option>';
     html += '</select>';
     html += '<label style="font-size:11px; color:#8b949e;">Model</label>';
-    html += '<div style="display:flex; gap:6px;"><select id="rt-new-model" style="flex:1;"><option value="">' + esc(RT_TEXT.selectModel) + '</option></select>';
-    html += '<button class="btn btn-sm" onclick="rtLoadModelsFor(\'rt-new-model\', (document.getElementById(\'rt-new-provider\')||{}).value)">'
-         + esc(RT_TEXT.loadModels) + '</button></div>';
+    html += ModelCombobox.render({id: 'rt-new-model', value: '', ariaLabel: 'Model'});
     html += '<label style="font-size:11px; color:#8b949e;">' + esc(RT_TEXT.temperature) + '</label>';
     html += '<input type="number" step="0.05" id="rt-new-temp" value="' + (temp === undefined ? 0.5 : temp) + '">';
     html += '<label style="font-size:11px; color:#8b949e;">' + esc(RT_TEXT.maxTokens) + '</label>';
@@ -645,21 +676,17 @@ function rtMove(taskId, entryIdx, delta) {
     rtRerender(RT_TEXT.saveHint);
 }
 
-// Assigns one LLM to every task of a category that has no chain yet (gated-off
-// tasks are skipped — they need no LLM).
+// Append to every catalog task in the category, regardless of filters.
 function rtGroupAssign(category, entryIdx) {
     if (entryIdx === '' || entryIdx === null || entryIdx === undefined) return;
     const idx = parseInt(entryIdx, 10);
     if (isNaN(idx)) return;
     const routing = rtRouting();
     const catalog = RT_CATALOG || { tasks: [] };
-    const chains = buildTaskChains(routing);
     let n = 0;
     for (const t of (catalog.tasks || [])) {
         if (t.category !== category) continue;
-        if (t.gated_off) continue;
-        if ((chains[t.id] || []).length) continue;
-        if (assignTask(routing, t.id, idx)) n++;
+        if (assignTask(routing, t.id, idx)) { renumberTask(routing, t.id); n++; }
     }
     if (!n) { rtRerender(); toast(RT_TEXT.groupNone, 'error'); return; }
     touchPath('llm_routing');
@@ -686,7 +713,7 @@ function rtNewLlmCreate(taskId) {
     // Unparsable numbers fall back instead of writing NaN into the config:
     // the temperature to the category default, max_tokens to "not set".
     const task = ((RT_CATALOG || {}).tasks || []).find(x => x && x.id === taskId);
-    const defTemp = LLM_SIMPLE_TEMP[task ? task.category : ''];
+    const defTemp = RT_DEFAULT_TEMP[task ? task.category : ''];
     const temp = parseFloat(tempRaw);
     const maxTok = parseInt(maxRaw, 10);
     const entry = {
@@ -717,37 +744,12 @@ function rtRemoveUnknown(entryIdx, taskId) {
     rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
-// Fills a model <select> for one provider — same endpoint and the same
-// PROVIDERS_CACHE / PROVIDERS_VISION fill as llmSimpleLoadModels() uses.
-async function rtLoadModelsFor(selectId, provider) {
-    const el = document.getElementById(selectId);
-    if (!el) return;
-    const cur = el.value || '';
-    if (!provider) { el.innerHTML = '<option value="">' + esc(RT_TEXT.selectProvider) + '</option>'; return; }
-    if (!PROVIDERS_CACHE[provider] || !PROVIDERS_CACHE[provider].length) {
-        el.innerHTML = '<option>Loading…</option>';
-        try {
-            const resp = await fetch('/admin/settings/providers/' + encodeURIComponent(provider) + '/models', { credentials: 'same-origin' });
-            const data = await resp.json();
-            if (data.error) toast('Error: ' + data.error, 'error');
-            const list = data.models || [];
-            if (list.length) {
-                PROVIDERS_CACHE[provider] = list;
-                PROVIDERS_VISION[provider] = new Set(data.vision || []);
-            }
-        } catch (e) { toast('Failed to load models: ' + e.message, 'error'); }
-    }
-    const models = PROVIDERS_CACHE[provider] || [];
-    const vis = PROVIDERS_VISION[provider] || new Set();
-    let opts = '<option value="">' + esc(RT_TEXT.selectModel) + '</option>';
-    for (const m of models) opts += '<option value="' + esc(m) + '">' + esc(m) + (vis.has(m) ? ' (vision)' : '') + '</option>';
-    // A model the user already picked that the server does not list stays
-    // selectable — the list may be stale, and dropping it would silently
-    // change the choice.
-    if (cur && !models.includes(cur)) {
-        opts = '<option value="' + esc(cur) + '" selected>' + esc(cur) + ' ' + esc(RT_TEXT.notOnServer) + '</option>' + opts;
-    }
-    el.innerHTML = opts;
+function rtAttachNewModel() {
+    if (!document.getElementById('rt-new-model')) return;
+    ModelCombobox.attach('rt-new-model', {
+        loadModels: () => providerModelNames((document.getElementById('rt-new-provider') || {}).value),
+        onChange: () => {}
+    });
 }
 
 // ── LLMs page ──────────────────────────────────────────────────────────
@@ -1189,26 +1191,23 @@ function rtOverviewBody(data) {
         html += '<div class="rt-card" style="margin-bottom:4px;">';
         html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(t.label)
              + ' <span class="rt-muted" style="font-weight:400;">— ' + esc(t.task) + '</span></div>';
-        html += '<div class="rt-chain-row">' + rtOverviewStatus(t) + '</div>';
-        // A `direct` task WITHOUT a resolved LLM (pose_embedding on the
-        // built-in model) already carries its reason as the status line —
-        // printing it again below would duplicate it.
-        const reasonIsStatus = t.via === 'direct' && !t.resolved;
-        if (t.via !== 'none' && t.reason && !reasonIsStatus) {
-            html += '<div class="desc rt-muted">' + esc(t.reason) + '</div>';
-        }
-        for (const row of (t.chain || [])) {
-            html += '<div class="rt-chain-row">';
-            html += '<span class="rt-muted" style="min-width:20px;">' + esc(row.order) + '.</span>';
-            html += '<span>' + esc(row.provider || '?') + ' / ' + esc(row.model || '?') + '</span>';
-            if (row.skipped) {
-                html += '<span class="rt-muted">' + esc(rtFmt(RT_TEXT.ovSkipped, { why: row.skipped })) + '</span>';
-            }
-            html += '</div>';
-        }
+        // A fallback borrows its parent's chain; its own card just names the
+        // parent. The parent's card shows that chain and its selected row.
+        const chain = t.via === 'fallback' ? [] : (t.chain || []);
+        if (!chain.some(row => t.resolved && row.index === t.resolved.index)) html += '<div class="rt-chain-row">' + rtOverviewStatus(t) + '</div>';
+        for (const row of chain) html += rtOverviewChainRow(row, t.resolved);
         html += '</div>';
     }
     return html;
+}
+
+function rtOverviewChainRow(row, resolved) {
+    const picked = !!resolved && row.index === resolved.index;
+    // Rows after the selected one have not been tried yet.
+    const skipped = row.skipped && (!resolved || (row.order < resolved.order || (row.order === resolved.order && row.index < resolved.index)));
+    return '<div class="rt-chain-row' + (picked ? ' rt-ok' : skipped ? ' rt-muted' : '') + '"' + (skipped ? ' style="opacity:0.55"' : '') + '>'
+        + esc(row.order) + '. ' + esc(row.provider || '?') + ' / ' + esc(row.model || '?')
+        + (picked ? ' ← now' : skipped ? ' (' + esc(row.skipped) + ')' : '') + '</div>';
 }
 
 // The one line that says what this task runs on. Colours per `via`:
@@ -1222,8 +1221,7 @@ function rtOverviewStatus(t) {
         return '<span class="rt-ok">' + (res ? model : esc(t.reason)) + '</span>';
     }
     if (t.via === 'fallback') {
-        return '<span style="color:#58a6ff;">' + model + ' — '
-             + esc(rtFmt(RT_TEXT.ovViaFallback, { task: (res && res.via_task) || t.fallback || '?' })) + '</span>';
+        return '<span style="color:#58a6ff;">via ' + esc((res && res.via_task) || t.fallback || '?') + ': ' + model + '</span>';
     }
     if (t.via === 'gated_off') return '<span class="rt-muted">' + esc(RT_TEXT.ovGatedOff) + '</span>';
     if (t.via === 'disabled') return '<span class="rt-muted">' + esc(RT_TEXT.ovDisabled) + '</span>';

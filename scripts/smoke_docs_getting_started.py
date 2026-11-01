@@ -87,7 +87,7 @@ def ui_corpus():
 
 def schema_sections():
     src = SCHEMA.read_text(encoding="utf-8")
-    # A section may open with comment lines (llm_simple does), so allow them
+    # A section may open with comment lines, so allow them
     # between the key and its label.
     return dict(re.findall(
         r'\n    "([a-z0-9_]+)": \{\n(?:\s*#[^\n]*\n)*\s*"label": "([^"]*)"', src))
@@ -133,8 +133,7 @@ def main():
 
     print("B) the admin sections it sends the reader to exist")
     sections = set(schema_sections().values())
-    named = {"Server", "LLM Providers", "LLM Models (Simple)",
-             "LLM Routing (Advanced)", "Media Generation", "Text-to-Speech",
+    named = {"Server", "LLM Providers", "LLM Routing", "Media Generation", "Text-to-Speech",
              "Game calendar"}
     check("the document still names these sections",
           all(n in doc for n in named), str(sorted(n for n in named if n not in doc)))

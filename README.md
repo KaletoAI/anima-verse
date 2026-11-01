@@ -78,7 +78,7 @@ chat, movement, own inventory and outfit, gifts, scene photos, cancelling own ta
   `/logs/image-prompts`, `/dashboard`. These are server-rendered administration pages: `/admin/settings` edits instance settings,
   `/admin/templates` edits per-world LLM templates, and the dashboard, statistics and logs provide monitoring.
   World settings live in Game-Admin → Setup. A large settings section can split itself into navigation sub-pages
-  (schema key `pages`) — **LLM Routing (Advanced)** does (*Tasks · LLMs · Overview*) and so does
+  (schema key `pages`) — **LLM Routing** does (*Tasks · LLMs · Overview*) and so does
   **Media Generation** (*General & defaults · Backends · LoRA library · Scene
   rendering · Reference renders & sizes · Blender refinement (3D) · Analysis & rebuild prompts*).
   Saving stays section-wide, the URL hash (`#image_generation/blender`) survives a reload.
@@ -107,8 +107,7 @@ stops acting autonomously).
   would resolve right now. A task nobody routed borrows its parent's LLM (`intent_*` / `thought_*` /
   `extraction_*` → the parent, `furnish` / `prop_mount_classify` / `room_description_sync` →
   `intent`, `npc_*` → `chat_stream`), so the list never has to be filled completely.
-- **Simple model picker** (`LLM Models (Simple)`): one provider + model per job category
-  (chat / tools / helper / vision / embedding) that fills the advanced routing for you.
+- **LLM Routing › Tasks** assigns LLM entries to individual tasks or whole categories.
 - **Cache lanes**: parallelism is a property of the model entry, not the provider. A lane remembers
   the prompt class + character it last served and prefers to get it back, so a backend's prompt
   cache is not thrashed. Live state at `/admin/agent-loop`.

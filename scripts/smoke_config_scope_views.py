@@ -11,7 +11,7 @@ Expected values, derived by hand from config_schema.py and the spec § 5:
 Part A — schema_for("instance")
   sections kept whole (declared instance): server, providers, llm_retry,
   llm_routing, lanes, embedding, decision, tts, knowledge, ui,
-  content_marketplace; plus the virtual llm_simple.
+  content_marketplace; no virtual sections.
   image_generation (declared instance, sub_array use_cases is world): kept,
   WITHOUT sub_arrays.use_cases and WITHOUT the page "use_cases"; the custom
   pages "routing" and "routing_overview" stay (declared scope = instance).
@@ -41,7 +41,7 @@ Part B — schema_for("world")
   (declared world, so the pseudo fields inherit world).
   skills: subsection outfit_change present; subsection searx present
   WITHOUT "url".
-  llm_simple absent. Every section has a "world_group" that is one of the
+  No virtual sections. Every section has a "world_group" that is one of the
   WORLD_GROUPS ids.
 
 Part C — shipped_tree (the five list defaults include E11 providers)
@@ -171,7 +171,7 @@ finally:
 # Part A
 inst = config_scope.schema_for("instance")
 for k in ("server", "providers", "llm_retry", "llm_routing", "lanes", "embedding",
-          "decision", "tts", "knowledge", "ui", "content_marketplace", "llm_simple"):
+          "decision", "tts", "knowledge", "ui", "content_marketplace"):
     check(k in inst, f"A: instance view has {k}")
 for k in ("chat", "relationships", "social_reactions", "thoughts", "intents",
           "random_events", "npc", "story_engine", "game", "messaging_frame",
@@ -195,7 +195,6 @@ for k in ("chat", "memory", "relationships", "social_reactions", "thoughts", "in
           "random_events", "npc", "story_engine", "game", "messaging_frame",
           "game_calendar", "game_seasons", "skills", "image_generation"):
     check(k in world, f"B: world view has {k}")
-check("llm_simple" not in world, "B: llm_simple absent")
 check(data_fields(world["memory"]) == data_fields(SECTIONS["memory"]) - {"chat_retention_days"},
       "B: memory without chat_retention_days")
 check("_grp_situational" in world["memory"]["fields"], "B: situational header stays")

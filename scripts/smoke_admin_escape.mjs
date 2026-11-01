@@ -158,6 +158,7 @@ function loadFns(sources) {
 // `settings-routing.js` has no escaper of its own: it is loaded next to
 // `settings.js` on /admin/settings and uses that file's `esc`.
 const ESCAPERS = [
+  ['model-combobox.js', 'escapeHtml'],
   ['agent-loop.js', 'escapeHtml'],
   ['dashboard.js', '_esc'],
   ['llm-stats.js', 'escapeHtml'],

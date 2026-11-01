@@ -268,19 +268,10 @@ SECTIONS = {
             "busy_base_delay_seconds": {"type": "float", "label": "Busy Retry Base Delay (s)", "default": 10, "min": 1, "max": 120, "step": 1, "description": "Backoff base wait before retrying a busy (503) model. Doubles each attempt (e.g. 10 → 20 → 40s), capped at 120s. Keep total backoff under the provider Timeout so the queue worker does not abort mid-wait. SYSTEM time."},
         },
     },
-    "llm_simple": {
-        # Virtual section (no config field of its own) — a simple,
-        # category-based page that sets the primary LLM of each task group in
-        # llm_routing. Rendered by renderLlmSimpleEditor() in static/admin/settings.js.
-        "label": "LLM Models (Simple)",
-        "icon": "🧭",
-        "virtual": True,
-    },
     "llm_routing": {
-        "label": "LLM Routing (Advanced)",
+        "label": "LLM Routing",
         "icon": "🔧",
         "scope": "instance",
-        "nav_sub": True,
         "is_array": True,
         "item_label_field": ["name", "model"],
         # Paged section (see image_generation for the generic mechanism). The

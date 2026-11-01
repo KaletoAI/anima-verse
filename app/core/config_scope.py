@@ -540,9 +540,7 @@ def schema_for(scope: str) -> Dict[str, Any]:
 
     A section of that scope stays whole, a section of the other scope goes,
     a MIXED section is filtered down to its ``scope`` part (fields,
-    subsections, sub_arrays, pages). The virtual sections (``llm_simple``)
-    are UI pages of the instance's LLM routing and stay in the instance view
-    only. A deep copy — callers may mutate it.
+    subsections, sub_arrays, pages). A deep copy — callers may mutate it.
     """
     if scope not in (INSTANCE, WORLD):
         raise ValueError(f"scope must be {INSTANCE!r} or {WORLD!r}: {scope!r}")

@@ -238,7 +238,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
     cursor: help; white-space: nowrap; text-decoration: none;
 }
 
-/* ── LLM Routing (Advanced): the task-centric editor ──
+/* ── LLM Routing: the task-centric editor ──
    Rendered by static/admin/settings-routing.js. Same palette as the .req-*
    rules above; the per-category left border colour comes in as an inline
    style, except on a problem card, where the warning colour wins. */
