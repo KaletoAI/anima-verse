@@ -32,6 +32,20 @@ Hand-derived expectations:
   (f) Copied placeholders before JSON are stripped in both parsers; plain
       JSON is unchanged. Bare angle placeholders are returned unchanged by both parsers,
       as before.
+  (g) Bare ``ToolName: {json}`` lines (gemma-4 tool decisions, 2026-11-01:
+      58 of 266 answers, all calls dropped — fails on 2d33fa51), format
+      natural_en, offered tools ChangeOutfit/TalkTo/Act:
+      - Rosi's real answer ``ChangeOutfit: {"equip":["Red lace bra"],
+        "unequip_slots":["top"]}`` + an [INTENT:] line -> exactly that one
+        call, input the JSON object verbatim;
+      - two TalkTo lines with different messages -> two calls, in order;
+      - ``- TalkTo: {...}`` (list bullet) -> one call;
+      - ``GoToCharacter: {"partner": "Kai"}`` with GoToCharacter NOT offered,
+        ``Act: she smiles`` (no JSON), ``Act: {broken`` (no object that
+        parses), ``Act: ["x"]`` (not an object) and a mid-line
+        ``I think Act: {"text": "x"}`` -> no call;
+      - ``Use Act for: {"text": "wave"}`` still goes through the taught
+        format -> one call, unchanged.
 
 Usage:  ./.venv/bin/python scripts/smoke_tool_formats.py
 """
@@ -120,6 +134,26 @@ for raw, want in (
     match = find_stream_tool_call("tag", text)
     check("stream input " + raw, match.group(2).strip() if match else None, want)
     check("stream span " + raw, match.span() if match else None, (0, len(text)))
+
+print("(g) bare ToolName: {json} lines, offered tools only")
+offered = {"ChangeOutfit": None, "TalkTo": None, "Act": None}
+outfit = '{"equip":["Red lace bra"],"unequip_slots":["top"]}'
+check("Rosi's answer", find_tool_calls(
+    "natural_en", "ChangeOutfit: " + outfit
+    + "\n[INTENT: 998d3b40 | Go to the inn | when=now | prio=3 | by=self]", offered),
+    [("ChangeOutfit", outfit)])
+check("two TalkTo lines", find_tool_calls(
+    "natural_en", 'TalkTo: {"name": "Luisa", "message": "Komm!"}\n'
+    'TalkTo: {"name": "Renate", "message": "Du auch!"}', offered),
+    [("TalkTo", '{"name": "Luisa", "message": "Komm!"}'),
+     ("TalkTo", '{"name": "Renate", "message": "Du auch!"}')])
+check("bullet", find_tool_calls("natural_en", '- TalkTo: {"name": "Ben", "message": "Hi"}', offered),
+      [("TalkTo", '{"name": "Ben", "message": "Hi"}')])
+for text in ('GoToCharacter: {"partner": "Kai"}\n[INTENT_DONE: 7fd96d4d]',
+             "Act: she smiles", "Act: {broken", 'Act: ["x"]', 'I think Act: {"text": "x"}'):
+    check("no call: " + text.splitlines()[0], find_tool_calls("natural_en", text, offered), [])
+check("taught format unchanged", find_tool_calls("natural_en", 'Use Act for: {"text": "wave"}', offered),
+      [("Act", '{"text": "wave"}')])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed"
       + (": " + ", ".join(FAILURES) if FAILURES else ""))
