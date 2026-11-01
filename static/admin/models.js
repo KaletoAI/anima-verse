@@ -131,7 +131,7 @@ function renderModels(models) {
         const instrId = 'instr-' + cssId(m.name);
 
         row.innerHTML = `
-            <td><span class="badge-provider">${esc(m.provider)}</span></td>
+            <td><span class="badge-provider">${esc(m.provider)}</span>${m.listed === false ? ' <span class="info-text" title="The provider is disabled or not reachable right now; this row comes from the saved test result.">not loaded</span>' : ''}</td>
             <td><strong>${esc(m.name)}</strong></td>
             <td><span class="badge-size">${sizeStr}</span></td>
             <td>${capToggle(m.name, 'tool_calling', caps.tool_calling, reported.tool_calling)}</td>

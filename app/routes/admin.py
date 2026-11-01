@@ -109,8 +109,33 @@ def model_capabilities_data() -> Dict[str, Any]:
                 "reported": reported,
                 "has_custom_entry": has_custom,
                 "has_result": has_result,
+                "listed": True,
             })
             seen_names.add(name.lower())
+
+    # A saved test result whose provider is disabled or offline is not in the
+    # live lists above, yet it is a result — list it from the saved record.
+    listed_keys = {f"{m['provider']}::{m['name']}".lower() for m in models}
+    for key, sd in suit_all.items():
+        if key in listed_keys:
+            continue
+        full = str(((sd or {}).get("tested_suitability") or {}).get("model") or key)
+        prov_name, _, name = full.partition("::")
+        if not name:
+            continue
+        caps = dict(get_model_capabilities(full))
+        vision_rate = (((sd.get("tested_suitability") or {}).get("vision")) or {}).get("rate")
+        reported = {}
+        if caps.get("vision") is None and vision_rate:
+            caps["vision"] = True
+            reported["vision"] = "test"
+        caps.update(sd)
+        models.append({
+            "provider": prov_name, "name": name, "size_gb": 0, "parameter_size": "",
+            "family": "", "quantization": "", "capabilities": caps, "reported": reported,
+            "has_custom_entry": True, "has_result": True, "listed": False,
+        })
+        seen_names.add(name.lower())
 
     # Sort by provider, then name
     models.sort(key=lambda x: (x["provider"], x["name"]))

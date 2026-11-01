@@ -114,7 +114,10 @@ with tempfile.TemporaryDirectory() as directory:
     listed = {"P": {"models": [
         {"name": "seen-images", "vision": False, "tool_calling": None},
         {"name": "text-only", "vision": False, "tool_calling": True}]}}
-    suits = {"p::seen-images": {"tested_suitability": {"scorer_version": "suitability-5", "vision": {"rate": 1.0}}}}
+    suits = {"p::seen-images": {"tested_suitability": {"scorer_version": "suitability-5", "vision": {"rate": 1.0}}},
+             # A disabled/offline provider lists no models; its saved result still gets a row.
+             "off::tested-elsewhere": {"tested_score": "9/16", "tested_suitability": {
+                 "scorer_version": "suitability-5", "model": "Off::tested-elsewhere", "vision": {"rate": 0.0}}}}
     manager = SimpleNamespace(list_all_models=lambda: listed)
     with patch.object(admin_routes, "get_provider_manager", return_value=manager), patch.object(
             admin_routes, "get_all_suitability", return_value=suits), patch.object(
@@ -123,6 +126,10 @@ with tempfile.TemporaryDirectory() as directory:
         rows = {m["name"]: m for m in admin_routes.model_capabilities_data()["models"]}
     assert rows["seen-images"]["capabilities"]["vision"] is True and rows["seen-images"]["reported"] == {"vision": "test"}
     assert rows["text-only"]["capabilities"]["vision"] is False
+    assert rows["seen-images"]["listed"] is True
+    off = rows["tested-elsewhere"]
+    assert (off["provider"], off["listed"], off["has_result"], off["capabilities"]["tested_score"]) == \
+        ("Off", False, True, "9/16"), off
     assert rows["text-only"]["reported"] == {"vision": "provider", "tool_calling": "provider"}
 print("Suitability UI old-result filtering, deletion and exact diagnostic identity OK")
 subprocess.run(["node", "--check", "static/admin/models.js"], check=True)
