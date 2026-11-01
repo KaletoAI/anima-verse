@@ -36,6 +36,24 @@ from app.routes.admin_settings import (
 
 
 BODIES = []
+# Reuse the loop for SDK clients; repeated asyncio.run closes their owning loop
+# while the same async client is still needed by subsequent wire checks.
+_LOOP = asyncio.new_event_loop()
+
+
+def run_async(coro):
+    # Some restricted runners block the loop self-pipe wakeup from SDK workers.
+    # A timer lets the loop process completed worker callbacks in that case.
+    timer = None
+    def tick():
+        nonlocal timer
+        timer = _LOOP.call_later(0.01, tick)
+    tick()
+    try:
+        return _LOOP.run_until_complete(coro)
+    finally:
+        timer.cancel()
+
 
 
 
@@ -132,7 +150,7 @@ def main():
             assert routed.create_llm(max_tokens=77).invoke(
                 [{"role": "user", "content": "ping"}]).content == "ok"
             assert BODIES[-1]["max_tokens"] == 1800  # Explicit extra_body wins on normal calls.
-            streamed = asyncio.run(stream_body(client))
+            streamed = run_async(stream_body(client))
             assert streamed["chat_template_kwargs"] == body["chat_template_kwargs"]
             assert streamed["stream_options"] == {"probe": True}
             # The routed vision clients use the same SDK request assembly.
@@ -168,7 +186,7 @@ def main():
                     assert instagram._analyze_image(str(image), "demo") == "ok"
                     assert BODIES[-1]["nested"] == {"a": 1, "b": 2}
             expensive = {**first, "extra_params": {**saved, "max_tokens": 9999}}
-            asyncio.run(llm_router._warmup_one(expensive))
+            run_async(llm_router._warmup_one(expensive))
             assert BODIES[-1]["max_tokens"] == 9999
             assert BODIES[-1]["temperature"] == 0
             assert saved == original  # Neither SDK call mutates saved configuration.
@@ -184,7 +202,7 @@ def main():
                 assert fallback.extra_params == second["extra_params"]
                 assert fallback.create_llm().invoke([{"role": "user", "content": "ping"}]).content == "ok"
                 assert BODIES[-1]["nested"] == {"a": 99}
-                assert "chat_template_kwargs" not in BODIES[-1]  # backup is not Qwen3
+                assert BODIES[-1]["chat_template_kwargs"] == {"enable_thinking": False}
             with patch.object(model_suitability, "load_cases", return_value={
                     "allowed_tools": [], "cases": [{"id": "one", "label": "one", "category": "helper",
                     "fmt": "text", "system": "system", "user": "ping", "expect": {}}]}), patch.object(
@@ -208,7 +226,7 @@ def main():
                                                 extra_params={"temperature": 0, "metadata": {"user_id": "demo"}})
             assert anth.invoke([{"role": "user", "content": "ping"}]).content == "ok"
             assert BODIES[-1]["temperature"] == 0 and BODIES[-1]["metadata"] == {"user_id": "demo"}
-            assert asyncio.run(stream_body(anth))["temperature"] == 0
+            assert run_async(stream_body(anth))["temperature"] == 0
             anth_provider = SimpleNamespace(
                 name="P", type="anthropic", api_base="https://mock.test/v1",
                 api_key="not-a-real-key", timeout=10, available=True)
@@ -330,16 +348,16 @@ def main():
         llm_client._NO_STREAM_USAGE.clear()
         default = llm_client.LLMClient("default", "key", "https://mock.test/v1")
         before = len(BODIES)
-        assert asyncio.run(stream_body(default))["stream"] is True
+        assert run_async(stream_body(default))["stream"] is True
         assert len(BODIES) == before + 2  # Reject then retry without stream_options.
         assert "stream_options" not in BODIES[-1]
-        assert asyncio.run(stream_body(default))["stream"] is True
+        assert run_async(stream_body(default))["stream"] is True
         assert "stream_options" not in BODIES[-1]
         explicit = llm_client.LLMClient("explicit", "key", "https://mock.test/v1",
                                         extra_params={"stream_options": {"probe": True}})
         before = len(BODIES)
         try:
-            asyncio.run(stream_body(explicit))
+            run_async(stream_body(explicit))
         except openai.BadRequestError:
             pass
         else:
@@ -367,7 +385,7 @@ def main():
         assert routed_body("intent")["chat_template_kwargs"] == {"enable_thinking": False}
         assert routed_body("intent", thinking=True) == {}
         assert routed_body("secret_generation", thinking=False)["chat_template_kwargs"] == {"enable_thinking": False}
-        assert routed_body("intent", model="mistral-small") == {}
+        assert routed_body("intent", model="mistral-small")["chat_template_kwargs"] == {"enable_thinking": False}
         gemma = routed_body("secret_generation", model="gemma-4-26b")
         assert "thinking" not in gemma and "chat_template_kwargs" not in gemma
     print("LLM extra_params: routed sync/stream, fallback, direct, suitability, Anthropic, validation OK")
@@ -377,4 +395,5 @@ if __name__ == "__main__":
     try:
         main()
     finally:
+        _LOOP.close()
         _test_storage.cleanup()

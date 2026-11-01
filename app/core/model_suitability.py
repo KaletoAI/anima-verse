@@ -438,13 +438,15 @@ def iter_suitability_results(
                    "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
                    "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
                    "runs": outputs,
+                   "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
+                   "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
                    "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
                    "run_checks": dimensions}
             rec["invalid_input"] = rec["dimensions"]["invalid_input"]
             results.append(rec)
             yield {"type": "check", "index": idx, **{k: rec[k] for k in
                    ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                    "infra", "duration_s", "tok_s", "dimensions", "run_checks")},
+                    "infra", "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens")},
                    "prompt": {"system": case.get("system", ""), "user": case.get("user", "")},
                    "runs": outputs}
 
@@ -506,7 +508,21 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
                     (("tools", tool_ok), ("helpers", helper_ok), ("vision", vision_ok), ("speed", speed_ok))
                     if ok is not True), "yes")
     infra = any(r.get("infra") for r in results)
+    all_runs = [run for r in results for run in r.get("runs", [])]
+    positive_tokens = [(run.get("usage") or {}).get("reasoning_tokens", 0) or 0 for run in all_runs]
+    positive_tokens = [n for n in positive_tokens if n > 0]
+    failed_by_truncation = []
+    for record in results:
+        failing = [run for run in record.get("run_checks", []) if run.get("ok") is False]
+        if record.get("ok") is False and failing and all(run.get("truncated") for run in failing):
+            failed_by_truncation.append(record["id"])
     return {
+        "total_runs": len(all_runs),
+        "truncated_runs": sum(run.get("finish_reason") == "length" for run in all_runs),
+        "truncated_cases": [r["id"] for r in results if any(run.get("finish_reason") == "length" for run in r.get("runs", []))],
+        "failed_by_truncation": failed_by_truncation,
+        "thinking_runs": sum(((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0 or bool((run.get("reasoning") or "").strip()) for run in all_runs),
+        "reasoning_tokens_median": median(positive_tokens) if positive_tokens else None,
         "model": model_full,
         "date": utc_now().date().isoformat(),
         "score": f"{passed}/{len(eligible)}",
@@ -538,7 +554,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "dimensions", "run_checks")} for r in results]
+                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
                    "cases": {r["id"]: r.get("runs", []) for r in results}}
@@ -570,7 +586,8 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "verdict": summary["verdict"],
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
-                                                      "max_turn_seconds", "vision", "curated_only")},
+                                                      "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
+                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "reasoning_tokens_median")},
             "checks": stored_checks,
         },
     }

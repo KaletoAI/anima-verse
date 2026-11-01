@@ -50,6 +50,10 @@ def main():
             shared = json.loads(caps_path.read_text())
             stored = shared['suitability']['fake::demo']['tested_suitability']
             # The Speed column reads these from the saved record.
+            assert stored['total_runs'] == 4 and stored['truncated_runs'] == 0
+            assert stored['thinking_runs'] == 3 and stored['reasoning_tokens_median'] is None
+            assert stored['checks'][0]['reasoning_tokens'] == [None, None, None]
+            assert stored['checks'][0]['truncated_runs'] == 0
             assert 'speed_ok' in stored and 'max_turn_seconds' in stored, sorted(stored)
             assert long_answer not in caps_path.read_text() and 'synthetic reasoning' not in caps_path.read_text()
             raw = json.loads(outs_path.read_text())['outputs']['fake::demo']

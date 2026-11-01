@@ -167,6 +167,17 @@ ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',verdict
 assert(el('suitProgress').innerHTML.includes('&lt;system&gt;'));
 assert(el('suitProgress').innerHTML.includes('&lt;answer&gt;'));
 assert(el('suitProgress').innerHTML.includes('<details>'));
+// Hand expectation: three stored run checks, all truncated, give 3/3 even without summary counts.
+const cutoff = {scorer_version:'suitability-5',settings:{thinking:false,max_tokens:900},thinking_runs:3,reasoning_tokens_median:216,
+    checks:[{id:'facts_only',ok:false,run_checks:[{ok:false,truncated:true},{ok:false,truncated:true},{ok:false,truncated:true}],
+    runs:[{content:'',finish_reason:'length',usage:{reasoning_tokens:216}}]}]};
+assert(ctx.testBadge({tested_suitability:cutoff}).includes('3/3 cut off'));
+assert(ctx.testBadge({tested_suitability:cutoff}).includes('thinks (3 runs)'));
+ctx.suitRenderJob({status:'done',summary:cutoff});
+assert(el('suitDetailStatus').innerHTML.includes('suit-warn'));
+assert(el('suitDetailStatus').innerHTML.includes('3 of 3 answers were cut off'));
+assert(el('suitProgress').innerHTML.includes('cut off 3/3'));
+assert(el('suitProgress').innerHTML.includes('cut off at the token limit - 216 reasoning tokens'));
 const entries = [
     {index:0,provider:'P',model:'M',temperature:0.1,tasks:[{task:'thought',order:0}]},
     {index:1,provider:'P',model:'M',temperature:0.5,tasks:[{task:'extraction',order:0}]},

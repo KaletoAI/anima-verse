@@ -216,6 +216,39 @@ function renderUnmatched(entries) {
     });
 }
 
+function suitCutoffStats(result) {
+    const checks = result.checks || [];
+    const count = check => check.truncated_runs ?? (check.run_checks || []).filter(r => r.truncated).length;
+    return {
+        total: result.total_runs ?? checks.reduce((n, c) => n + (c.run_checks || c.runs || []).length, 0),
+        cut: result.truncated_runs ?? checks.reduce((n, c) => n + count(c), 0),
+        failed: result.failed_by_truncation ?? checks.filter(c => {
+            const failing = (c.run_checks || []).filter(r => r.ok === false);
+            return c.ok === false && failing.length && failing.every(r => r.truncated);
+        }).map(c => c.id),
+    };
+}
+function suitThinkingText(result) {
+    return result.thinking_runs > 0 && (result.settings || {}).thinking === false
+        ? 'The model produced reasoning although thinking was off (median '
+            + (result.reasoning_tokens_median ?? 'unknown') + ' reasoning tokens).' : '';
+}
+function suitWarning(result, settings) {
+    const stats = suitCutoffStats(result);
+    if (!stats.cut) return '';
+    return '<div class="suit-warn">⚠ ' + stats.cut + ' of ' + stats.total
+        + ' answers were cut off at the token limit (Max tokens ' + esc((settings || {}).max_tokens ?? 'unknown')
+        + ').<div>Failed only because of this: ' + esc(stats.failed.join(', ') || 'none')
+        + '</div>' + (suitThinkingText(result) ? '<div>' + esc(suitThinkingText(result)) + '</div>' : '') + '</div>';
+}
+function suitDiagnosticBadges(result) {
+    const stats = suitCutoffStats(result);
+    const tooltip = stats.cut + ' of ' + stats.total + ' answers hit the token limit (finish_reason=length). Cases that failed only because of this: '
+        + stats.failed.length + '. Usually thinking that was not switched off or a too small Max tokens - the score then says little about the model.';
+    return (stats.cut ? ' <span class="test-badge amber" title="' + esc(tooltip) + '">✂ ' + stats.cut + '/' + stats.total + ' cut off</span>' : '')
+        + (suitThinkingText(result) ? ' <span class="test-badge amber" title="' + esc(suitThinkingText(result)) + '">🧠 thinks (' + result.thinking_runs + ' runs)</span>' : '');
+}
+
 function testBadge(caps) {
     const result = caps.tested_suitability;
     if (!suitCurrent(result)) return '<span class="test-badge none">-</span>';
@@ -231,7 +264,7 @@ function testBadge(caps) {
     return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
         + ' title="' + esc(tooltip) + '"'
         + (key ? ' onclick="suitShowSaved(\'' + escJs(key) + '\')"' : '') + '>'
-        + esc((caps.tested_score || result.score || '') + ' · ' + verdict) + '</span>';
+        + esc((caps.tested_score || result.score || '') + ' · ' + verdict) + '</span>' + suitDiagnosticBadges(result);
 }
 
 // Speed of the last current test: projected seconds per thought turn, big,
@@ -691,6 +724,7 @@ function suitRenderJob(job) {
         const limit = job.max_turn_seconds == null ? 20 : job.max_turn_seconds;
         const number = value => value == null ? 'not tested' : String(value);
         status.innerHTML = '<b>' + esc(job.model || summary.model || '') + '</b> · Finished'
+            + suitWarning({...summary, settings}, settings)
             + '<div>Tools: ' + esc(summary.tool || 'not tested')
             + ' · Helpers: ' + esc(summary.helper || 'not tested')
             + ' · Vision: ' + esc(vision.verdict === 'not_tested' || vision.rate == null ? 'not tested' : (vision.rate * 100).toFixed(1) + '%') + '</div>'
@@ -719,14 +753,19 @@ function suitRenderJob(job) {
     prog.innerHTML = checks.map(check => {
         const prompt = check.prompt || {};
         const runs = check.runs || [];
+        const cut = check.truncated_runs ?? (check.run_checks || []).filter(r => r.truncated).length;
         return '<div class="suit-case"><b>' + esc(check.ok === false ? 'Failed' : check.ok ? 'Passed' : 'Excluded')
+            + (cut ? ' · cut off ' + cut + '/' + (check.run_checks || runs).length : '')
             + ' · ' + esc(check.group || '') + ' · ' + esc(check.task || check.label || check.id || '') + '</b>'
             + '<div>' + esc(check.detail || '') + '</div>'
             + (check.ok === false ? '<details><summary>Prompt (system + user)</summary><h4>System</h4><pre>'
                 + esc(prompt.system || 'Prompt unavailable') + '</pre><h4>User</h4><pre>' + esc(prompt.user || '')
                 + '</pre></details><details open><summary>Model answer(s)</summary>'
                 + (runs.length ? runs.map((run, index) => '<h4>Run ' + (index + 1) + '</h4><pre>'
-                    + esc(run.content || run.error || '(empty answer)') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
+                    + esc(run.content || run.error || (run.finish_reason === 'length' ? '' : '(empty answer)'))
+                    + esc(run.finish_reason === 'length' ? (run.content ? '\n' : '') + '(cut off at the token limit'
+                        + ((run.usage || {}).reasoning_tokens != null ? ' - ' + run.usage.reasoning_tokens + ' reasoning tokens' : '') + ')'
+                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
                 + '</details>' : '') + '</div>';
     }).join('');
 }

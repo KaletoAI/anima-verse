@@ -149,3 +149,6 @@ tr:hover { background: #161b22; }
 #suitQueue h3 { margin-top:12px; }
 #suitDetail { padding:12px; margin:12px 0; background:#161b22; border-radius:6px; }
 #suitSettings pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0; }
+
+.test-badge.amber { background: #fff0c2; color: #754400; border: 1px solid #d99b28; }
+.suit-warn { background: #fff0c2; color: #754400; border: 1px solid #d99b28; border-radius: 6px; padding: 12px; margin: 8px 0; font-weight: 600; }

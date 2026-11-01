@@ -115,6 +115,7 @@ class LLMResponse:
     # provider sent no reason — NOT that the answer is complete. Never guess a
     # value here: a fabricated "stop" would claim a completeness nobody checked.
     finish_reason: Optional[str] = None
+    reasoning: Optional[str] = None
 
 
 @dataclass
@@ -173,6 +174,8 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
     The key is left OUT when none of them is present. That is not "0 cached":
     the backend behind the gateway is not ours to choose, and one that reports
     nothing must stay distinguishable from one that reports a cold cache.
+    Reasoning tokens come from completion_tokens_details.reasoning_tokens;
+    the key is left OUT when absent, just like cached_tokens.
     Returns None when there is no usage and no timings at all.
     """
     if usage is None and timings is None:
@@ -188,6 +191,9 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
         cached = _as_count(_field(timings, "cache_n"))
     if cached is not None:
         out["cached_tokens"] = cached
+    reasoning = _as_count(_field(_field(usage, "completion_tokens_details"), "reasoning_tokens"))
+    if reasoning is not None:
+        out["reasoning_tokens"] = reasoning
     return out
 
 
@@ -196,18 +202,13 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
 # OpenAI-compatible server may answer that field with a 400 — such a server
 # then streams without usage instead of not streaming at all.
 _NO_STREAM_USAGE: set = set()
+_NO_CHAT_TEMPLATE_KWARGS: set = set()
 
 
 def _rejects_stream_options(err: BaseException) -> bool:
     """True when a 400/422 names ``stream_options`` as the unaccepted field."""
     status = getattr(err, "status_code", None)
     return status in (400, 422) and "stream_options" in str(err).lower()
-
-
-def _is_qwen3_model(model_name: str) -> bool:
-    """Check if a model is Qwen3-based (has native thinking that should be disabled by default)."""
-    lower = model_name.lower()
-    return "qwen3" in lower
 
 
 def _is_gemma_model(model_name: str) -> bool:
@@ -318,16 +319,10 @@ class LLMClient:
         if self.max_tokens:
             kwargs["max_tokens"] = self.max_tokens
         extra_body: Dict[str, Any] = {}
-        # Thinking follows the task (llm_tasks "thinking" flag, passed in by
-        # the router): a task without it switches reasoning off. Only the
-        # model families whose chat template reads enable_thinking get the
-        # field — another API (OpenAI itself) rejects an unknown parameter.
+        # Measured on SGLang, vLLM and llama.cpp: all honour
+        # chat_template_kwargs.enable_thinking, regardless of model family.
         thinks = self.thinking if thinking is None else thinking
-        if not thinks and (_is_qwen3_model(self.model) or _is_gemma_model(self.model)):
-            # llama.cpp and vLLM switch thinking off only through the chat
-            # template (Qwen3 and Gemma 4 templates both read enable_thinking);
-            # they ignore the Anthropic-style "thinking" field, which a
-            # gateway may still map for Gemma.
+        if not thinks:
             extra_body["chat_template_kwargs"] = {"enable_thinking": False}
             if _is_gemma_model(self.model):
                 extra_body["thinking"] = {"type": "disabled"}
@@ -339,9 +334,26 @@ class LLMClient:
         # serializes the request; log metadata must use that same precedence.
         if self.extra_params:
             extra_body = merge_extra_params(extra_body, self.extra_params)
+        if (self.base_url, self.model) in _NO_CHAT_TEMPLATE_KWARGS:
+            extra_body.pop("chat_template_kwargs", None)
         if extra_body:
             kwargs["extra_body"] = extra_body
         return _merge_sdk_dict_fields(kwargs)
+
+    def _retry_without_chat_template_kwargs(self, err, kwargs) -> bool:
+        """Remember strict servers and remove only the rejected template field."""
+        body = kwargs.get("extra_body", {})
+        if (getattr(err, "status_code", None) not in (400, 422)
+                or "chat_template_kwargs" not in str(err).lower()
+                or "chat_template_kwargs" not in body):
+            return False
+        key = (self.base_url, self.model)
+        if key not in _NO_CHAT_TEMPLATE_KWARGS:
+            logger.warning("%s @ %s refuses chat_template_kwargs — omitting it from now on",
+                           self.model, self.base_url)
+            _NO_CHAT_TEMPLATE_KWARGS.add(key)
+        body.pop("chat_template_kwargs")
+        return True
 
     def invoke(self, messages: List) -> LLMResponse:
         """Synchronous LLM call (for the provider_queue.py worker threads)."""
@@ -355,6 +367,8 @@ class LLMClient:
                     messages=openai_msgs, **kwargs)
                 break
             except Exception as e:
+                if self._retry_without_chat_template_kwargs(e, kwargs):
+                    continue
                 if not _is_busy_error(e) or attempt >= max_attempts:
                     raise
                 attempt += 1
@@ -370,13 +384,14 @@ class LLMClient:
         return LLMResponse(
             content=choice.message.content or "",
             usage=usage,
-            finish_reason=finish)
+            finish_reason=finish,
+            reasoning=_field(choice.message, "reasoning_content") or _field(choice.message, "reasoning"))
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async streaming generator (for the streaming.py agent loop).
 
         Thinking/reasoning is disabled by default (tool LLM in dual mode).
-        The chat LLM is a separate large model that is not Gemma/Qwen3.
+        Template thinking is switched off for every model unless requested.
         """
         openai_msgs = to_openai_messages(messages)
         kwargs = self._build_kwargs()
@@ -395,6 +410,8 @@ class LLMClient:
                     messages=openai_msgs, stream=True, **kwargs)
                 break
             except Exception as e:
+                if self._retry_without_chat_template_kwargs(e, kwargs):
+                    continue
                 if (not explicit_stream_options and "stream_options" in kwargs
                         and _rejects_stream_options(e)):
                     logger.info("%s @ %s refuses stream_options — streaming "
