@@ -3142,7 +3142,8 @@ def regenerate_image_worker(character_name, image_path, prompt, improvement_requ
             negative_prompt_override=negative_prompt_override, track_id=_track_id,
             create_new=bool(create_new), use_room=bool(use_room),
             use_source_as_reference=use_source_as_reference,
-            source_image_path=str(image_path), pose_check=pose_check)
+            source_image_path=str(image_path), pose_check=pose_check,
+            keep_source_references=True)
         _actual_filename = Path(actual_path).name
         if final_prompt != prompt:
             add_character_image_prompt(character_name, _actual_filename, final_prompt)

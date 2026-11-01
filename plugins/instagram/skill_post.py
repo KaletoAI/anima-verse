@@ -591,6 +591,8 @@ class InstagramSkill(PluginSkill):
         # Copy the reference images into the metadata (for regeneration + character detection)
         if gen_meta.get("reference_images"):
             image_meta["reference_images"] = gen_meta["reference_images"]
+        if gen_meta.get("reference_paths"):
+            image_meta["reference_paths"] = gen_meta["reference_paths"]
         # Extended fields for the re-creation dialog + image info panel —
         # without them a rebuild runs blind on the current character state
         # (the "no original values stored" hint in the UI). `routing` /

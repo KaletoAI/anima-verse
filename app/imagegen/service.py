@@ -2611,6 +2611,7 @@ class ImageService:
             ]
             # Reference image names for the metadata
             # Depending on the workflow the references live in face_refs instead of params
+            from app.imagegen.source_refs import meta_paths as _source_ref_paths
             _ref_source = params.get("reference_images") or face_refs.get("reference_images") or {}
             _ref_meta = {}
             for _rk, _rv in _ref_source.items():
@@ -2645,6 +2646,9 @@ class ImageService:
                     or getattr(backend, "checkpoint", "")
                     or ""),
                 "reference_images": _ref_meta,
+                # The exact files, so a regenerate renders with them again
+                # (app/imagegen/source_refs.py).
+                "reference_paths": _source_ref_paths(_ref_source),
                 "target_model": locals().get("_target_model", ""),
                 "canonical": locals().get("_canonical_dict", {}),
                 "template_prompt": locals().get("template_prompt", ""),

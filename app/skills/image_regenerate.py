@@ -163,7 +163,8 @@ def regenerate_image(character_name: str,
     source_image_path: str = "",
     occasion: str = "regenerate",
     source_file: str = "",
-    pose_check: Optional[bool] = None) -> Tuple[bool, str, str]:
+    pose_check: Optional[bool] = None,
+    keep_source_references: bool = False) -> Tuple[bool, str, str]:
     """Renders an image again. ``create_new=True`` writes a new file next to
     the source instead of overwriting it.
 
@@ -189,6 +190,12 @@ def regenerate_image(character_name: str,
             written into the new file's meta in the same write
         pose_check: the dialog's pose-check override; None = the routing
             switch of ``occasion`` decides (app/imagegen/pose_check.py)
+        keep_source_references: a regenerate of the image at ``output_path``
+            — its people keep the reference images it was rendered with
+            (outfit/nudity of THAT moment) and its room keeps its room
+            reference unless the dialog picked another room
+            (app/imagegen/source_refs.py). Persons the dialog adds resolve
+            live. False for a NEW render (scene photo, portrait).
 
     Returns:
         (success, final_prompt, actual_output_path) — final_prompt is the
@@ -264,6 +271,38 @@ def regenerate_image(character_name: str,
         except Exception as _ape:
             logger.warning("Appearance detection failed: %s", _ape)
 
+    # The source image's meta: location/created_at for the new meta and, on
+    # a regenerate, the reference images it was rendered with.
+    _orig_filename = Path(output_path).name
+    _orig_meta = None
+    if "/instagram/" in output_path:
+        try:
+            from app.models.instagram import load_image_meta as _load_ig_meta
+            _orig_meta = _load_ig_meta(_orig_filename)
+        except Exception:
+            pass
+    elif character_name:
+        try:
+            from app.models.character import _load_single_image_meta
+            _orig_meta = _load_single_image_meta(character_name, _orig_filename)
+        except Exception:
+            pass
+    _orig_meta = _orig_meta or {}
+
+    _source_refs: Dict[str, Any] = {"persons": {}, "room": ""}
+    if keep_source_references and _orig_meta and Path(output_path).exists():
+        from app.imagegen.source_refs import source_references
+        _source_refs = source_references(
+            _orig_meta, names=[character_name, *(character_names or [])],
+            location_id=location_id)
+        logger.info("Source references [%s]: persons=%s room=%s", _orig_filename,
+                    {n: Path(p).name for n, p in _source_refs["persons"].items()},
+                    Path(_source_refs["room"]).name if _source_refs["room"] else "-")
+    # A room picked in the dialog that IS the source image's room is no
+    # change: the source's room reference stays.
+    _source_room = str(_orig_meta.get("room_id") or source_room_id or "")
+    _room_changed = bool(room_id) and room_id != _source_room
+
     _attempt = {"n": 0}
     # Context for the CENTRAL logging in backend.generate() (final prompt,
     # backend, model, LoRAs, refs and duration are set by generate() itself).
@@ -327,7 +366,10 @@ def regenerate_image(character_name: str,
                 _regen_pv = PromptVariables(persons=persons)
                 _regen_pv.ref_images = {}
                 for idx, p in enumerate(persons, 1):
-                    ref = _regen_builder._resolve_person_ref_image(p)
+                    # A person of the source image keeps the reference it was
+                    # rendered with; anyone else resolves live.
+                    ref = (_source_refs["persons"].get(p.name)
+                           or _regen_builder._resolve_person_ref_image(p))
                     if ref:
                         _regen_pv.ref_images[idx] = ref
                 _regen_builder._collect_location(_regen_pv)
@@ -342,7 +384,11 @@ def regenerate_image(character_name: str,
                 # generated purely from the text prompt. Otherwise the user
                 # would not notice the room change in the dialog because the
                 # previously chosen default image comes back again.
-                if room_id:
+                if _source_refs["room"] and not _room_changed:
+                    _regen_pv.ref_image_room = _source_refs["room"]
+                    logger.info("Room reference of the source image: %s",
+                                Path(_source_refs["room"]).name)
+                elif room_id:
                     from app.models.world import get_background_path
                     from app.models.character import get_character_current_location
                     _loc_id = location_id or get_character_current_location(character_name)
@@ -471,28 +517,12 @@ def regenerate_image(character_name: str,
         # Update metadata (backend, duration)
         import os as _os
         from app.models.character import get_character_current_location
+        from app.imagegen.source_refs import meta_paths as _ref_paths_meta
         _ref_source = params.get("reference_images") or face_refs.get("reference_images") or {}
         _ref_meta = {}
         for _rk, _rv in _ref_source.items():
             _ref_meta[_rk] = _os.path.basename(_rv) if _rv else ""
         _now_iso = utc_now_iso()
-
-        # Load the original metadata (for location, created_at and other fields)
-        _orig_filename = Path(output_path).name
-        _orig_meta = None
-        if "/instagram/" in output_path:
-            try:
-                from app.models.instagram import load_image_meta as _load_ig_meta
-                _orig_meta = _load_ig_meta(_orig_filename)
-            except Exception:
-                pass
-        elif character_name:
-            try:
-                from app.models.character import _load_single_image_meta
-                _orig_meta = _load_single_image_meta(character_name, _orig_filename)
-            except Exception:
-                pass
-        _orig_meta = _orig_meta or {}
 
         # Location from the original meta or the passed parameter
         _location_val = location_id or _orig_meta.get("location", "")
@@ -509,6 +539,7 @@ def regenerate_image(character_name: str,
             "duration_s": round(_gen_duration, 1),
             "regenerated_at": _now_iso,
             "reference_images": _ref_meta,
+            "reference_paths": _ref_paths_meta(_ref_source),
             "character_names": character_names if character_names is not None else [p["name"] for p in appearances],
             "room_id": room_id or _orig_meta.get("room_id", ""),
             "location": _location_val,

@@ -542,7 +542,9 @@ def regenerate_character_gallery_image(name: str, filename: str, backend: str) -
             name, entry["path"], entry["prompt"], backend_name=backend,
             create_new=True, use_room=True, room_id=entry["room_id"],
             location_id=entry["location"], character_names=entry["character_names"],
-            source_file=filename, pose_check=False)
+            source_file=filename, pose_check=False,
+            # The same image on its intended backend: same references.
+            keep_source_references=True)
     except image_regenerate.ExplicitBackendUnavailable as gone:
         # The backend dropped out after the caller picked it — load, not a
         # defect of this image (the location path maps its 503 the same way).
