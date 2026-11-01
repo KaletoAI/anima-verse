@@ -1551,7 +1551,7 @@ function sectionHasOverride(key) {
 function pageHasOverride(key, sec, page) {
     if (key === 'llm_routing' && page.id === 'tasks') return sectionHasOverride(key);
     if (sec.is_array) return originOf(key) === 'instance';
-    if (key === 'image_generation' && ['routing', 'routing_overview'].includes(page.id)) return originOf(key + '.routing') === 'instance';
+    if (key === 'image_generation' && ['routing', 'routing_overview'].includes(page.id)) return originOf(key + '.routing') === 'instance' || originOf(key + '.pose_check') === 'instance';
     if (key === 'decision' && page.id === 'points') return originOf('decision.points') === 'instance';
     if (key === 'decision' && page.id === 'shadow') return originOf('decision.points') === 'instance';
     return [...page.fields, ...page.sub_arrays].some(f => originOf(key + '.' + f) === 'instance');

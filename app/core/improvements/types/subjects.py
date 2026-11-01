@@ -472,7 +472,9 @@ def regenerate_profile(name: str, backend: str) -> None:
     try:
         ok, _final_prompt, new_path = regenerate_image(
             name, current["path"], current["prompt"], backend_name=backend,
-            create_new=True, use_room=False, source_file=current["filename"])
+            create_new=True, use_room=False, source_file=current["filename"],
+            # The stored prompt is what rendered — a re-render repeats it.
+            pose_check=False)
     except ExplicitBackendUnavailable as gone:
         # The backend dropped out after the caller picked it — load, not a
         # defect of this portrait (the location path maps its 503 the same way).
@@ -540,7 +542,7 @@ def regenerate_character_gallery_image(name: str, filename: str, backend: str) -
             name, entry["path"], entry["prompt"], backend_name=backend,
             create_new=True, use_room=True, room_id=entry["room_id"],
             location_id=entry["location"], character_names=entry["character_names"],
-            source_file=filename)
+            source_file=filename, pose_check=False)
     except image_regenerate.ExplicitBackendUnavailable as gone:
         # The backend dropped out after the caller picked it — load, not a
         # defect of this image (the location path maps its 503 the same way).

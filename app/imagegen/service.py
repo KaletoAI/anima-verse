@@ -2017,6 +2017,9 @@ class ImageService:
             # undressed ones included. Anything a caller passes has to be
             # picked up here.
             "clothed": ctx.get("clothed", True),
+            # The dialog's pose-check override (True/False); absent = the
+            # occasion's routing switch decides (app/imagegen/pose_check.py).
+            "pose_check": ctx.get("pose_check"),
         }
 
         if isinstance(data.get("prompt"), str):
@@ -2521,6 +2524,7 @@ class ImageService:
                 }.items() if v},
                 "pose_prompt": params.get("pose_prompt", ""),
                 "expression_prompt": params.get("expression_prompt", ""),
+                "pose_checked_from": input_data.get("_pose_checked_from", ""),
             }
             def _op(b):
                 def _gen():
@@ -2744,6 +2748,19 @@ class ImageService:
             return "Error: No image description given."
         if not character_name:
             return "Error: Character name missing for storing the image."
+
+        # Optional LLM pose check of the subject prompt (routing switch of the
+        # occasion, or the dialog's override) — here, before routing, so the
+        # LLM wait never holds a backend slot and every re-run renders the
+        # same checked prompt.
+        from app.imagegen import pose_check as _pose_check
+        _checked, _did = _pose_check.apply(
+            (input_data.get("occasion") or "photo").strip(), prompt_text,
+            override=_pose_check.parse_override(input_data.get("pose_check")),
+            character=character_name)
+        if _did:
+            input_data["_pose_checked_from"] = prompt_text
+            input_data["prompt"] = prompt_text = _checked
 
         # Resolve only the server's current portrait, never a caller-supplied
         # path. Capture it once before routing so every re-run uses the same

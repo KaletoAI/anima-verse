@@ -3053,6 +3053,11 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
         result.update({"occasion": occasion, "resolved": row["resolved"],
                        "via": row["via"], "reason": row["reason"],
                        "chain": row["chain"]})
+        # The dialogs' pose-check controls: offered for occasions with
+        # people, the checkbox preset from the occasion's routing switch.
+        from app.imagegen import pose_check as _pose_check
+        result["pose_check"] = {"supported": _pose_check.supported(occasion),
+                                "default": _pose_check.enabled_for(occasion)}
     return result
 
 

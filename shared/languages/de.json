@@ -3684,6 +3684,10 @@
     "Rewrite the prompt with this change via LLM": "Prompt per LLM mit dieser Änderung umschreiben",
     "Optimise the prompt for the image model via LLM (content stays the same)": "Prompt per LLM für das Bildmodell optimieren (Inhalt bleibt gleich)",
     "Prompt improvement failed.": "Prompt-Verbesserung fehlgeschlagen.",
-    "Regeneration started": "Neugenerierung gestartet"
+    "Regeneration started": "Neugenerierung gestartet",
+    "Check pose": "Pose prüfen",
+    "Pose check before generating": "Pose vor dem Generieren prüfen",
+    "Repair arms, legs and poses in the prompt via LLM (what the image shows stays the same)": "Arme, Beine und Posen im Prompt per LLM reparieren (was das Bild zeigt, bleibt gleich)",
+    "An LLM repairs arms, legs and poses in the prompt right before the image is generated. Preset from the image routing of this occasion.": "Ein LLM repariert Arme, Beine und Posen im Prompt direkt vor dem Generieren. Vorbelegt aus dem Image-Routing dieses Anlasses."
   }
 }

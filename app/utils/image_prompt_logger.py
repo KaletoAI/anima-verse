@@ -49,33 +49,36 @@ def log_image_prompt(
     compose: Optional[Dict[str, Any]] = None,
     negative_folded: Optional[List[str]] = None,
     media: str = "",
-    error: str = ""):
-    """Loggt einen Bildgenerierungs-Prompt als JSONL-Zeile.
+    error: str = "",
+    pose_checked_from: str = ""):
+    """Log one image-generation prompt as a JSONL line.
 
     Args:
-        agent_name: Character-Name
-        original_prompt: Urspruenglicher Prompt (vor Enhancement)
-        final_prompt: Finaler Prompt (mit Appearances, Prefix, Suffix etc.)
-        negative_prompt: Negative Prompt
-        backend_name: Name des verwendeten Backends (z.B. "LocalSD", "ComfyUI")
-        backend_type: Typ des Backends (z.B. "a1111", "comfyui", "mammouth")
-        model: Modell-Name (z.B. Checkpoint bei A1111, Model bei Mammouth)
-        appearances: Liste der erkannten Appearances [{name, appearance}]
-        agent_mentioned: Ob der Agent im Prompt erkannt wurde
-        auto_enhance: Ob Auto-Enhancement aktiv war
-        context: Kontext-Daten (outfit, feeling, activity, location)
-        duration_s: Dauer der Bildgenerierung in Sekunden
-        reference_images: Referenzbilder {slot_title: file_path}
-        compose: Kompositions-Metadaten von prompt_compose.compose
+        agent_name: character name
+        original_prompt: the original prompt (before enhancement)
+        final_prompt: the final prompt (with appearances, prefix, suffix etc.)
+        negative_prompt: negative prompt
+        backend_name: name of the backend used (e.g. "LocalSD", "ComfyUI")
+        backend_type: backend type (e.g. "a1111", "comfyui", "mammouth")
+        model: model name (e.g. the checkpoint on A1111, the model on Mammouth)
+        appearances: the detected appearances [{name, appearance}]
+        agent_mentioned: whether the agent was detected in the prompt
+        auto_enhance: whether auto-enhancement was active
+        context: context data (outfit, feeling, activity, location)
+        duration_s: generation duration in seconds
+        reference_images: reference images {slot_title: file_path}
+        compose: composition meta of prompt_compose.compose
             (use_case, family, style_had_slot, hint_rendered,
-            negations_moved) — Grundlage der numerischen Prompt-Verifikation
-        negative_folded: Begriffe, die dieser Lauf aus dem Negativ in den
-            Prompt gefaltet hat (Backend ohne Negativ-Eingang,
-            supports_negative_prompt=false). Leer/None = nicht gefaltet.
-        media: "video" / "mesh" fuer Nicht-Bild-Backends (leer = Bild).
-            Ohne diesen Parameter warf der zentrale Logger fuer jede
-            Video-/Mesh-Generierung einen (verschluckten) TypeError — sie
-            tauchten NIE im Log auf.
+            negations_moved) — the basis of the numeric prompt verification
+        negative_folded: terms this run folded from the negative into the
+            prompt (backend without a negative input,
+            supports_negative_prompt=false). Empty/None = nothing folded.
+        media: "video" / "mesh" for non-image backends (empty = image).
+            Without this parameter the central logger raised a (swallowed)
+            TypeError for every video/mesh generation — they NEVER showed
+            up in the log.
+        pose_checked_from: the subject prompt BEFORE the LLM pose check
+            (app/imagegen/pose_check.py) rewrote it; empty = no rewrite.
     """
     end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s) if duration_s > 0 else end_time
@@ -131,6 +134,8 @@ def log_image_prompt(
         entry["media"] = media
     if error:
         entry["error"] = error
+    if pose_checked_from:
+        entry["pose_checked_from"] = pose_checked_from
 
     # JSONL schreiben
     with _lock:

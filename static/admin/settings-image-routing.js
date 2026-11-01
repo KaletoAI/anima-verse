@@ -214,6 +214,12 @@ const IR_TEXT = {
     ovError: 'Could not load the effective routing ({what}). After a code update the server needs a restart.',
     ovResolved: 'renders on', ovNone: 'no backend', ovCheapest: 'cheapest', ovCharPos: 'character',
     mediaImage: 'image', mediaVideo: 'video', mediaMesh: 'mesh', charScoped: 'per character',
+    poseCheck: 'Pose check before generating (LLM)',
+    poseCheckHint: 'Before every render of this occasion an LLM (task "Image Pose Check", LLM Routing) repairs '
+                 + 'the body logic of the prompt: two arms and two legs per person with one task each, framing '
+                 + 'that fits the pose, a clear arrangement of several people. What the image shows stays the '
+                 + 'same. Adds one LLM call per image; a failure renders the original prompt. The regenerate '
+                 + 'and photo dialogs preset their own checkbox from this switch.',
 };
 
 let IR_OCCASIONS = null;   // catalog rows (GET …/occasions)
@@ -325,7 +331,7 @@ function imageRoutingSaveResult(ok, result) {
     const r = result || {};
     const detail = typeof r.detail === 'string' ? r.detail : '';
     const warnings = Array.isArray(r.warnings) ? r.warnings.filter(w => typeof w === 'string' && w) : [];
-    if (!ok && detail.startsWith('Image routing:')) IR_SAVE_NOTICE = { kind: 'error', lines: [detail] };
+    if (!ok && (detail.startsWith('Image routing:') || detail.startsWith('Pose check:'))) IR_SAVE_NOTICE = { kind: 'error', lines: [detail] };
     else if (ok && warnings.length) IR_SAVE_NOTICE = { kind: 'warn', lines: warnings };
     else IR_SAVE_NOTICE = null;
     if (ACTIVE_SECTION === 'image_generation' && ACTIVE_PAGE === 'routing' && IR_OCCASIONS !== null) irRerender();
@@ -348,7 +354,8 @@ function renderImageRoutingRules(content) {
     const occs = IR_OCCASIONS || [];
     const known = new Set(occs.map(o => o.id));
     const survey = irSurvey(stored, known);
-    if (ONLY_OVERRIDES && originOf('image_generation.routing') !== 'instance') {
+    if (ONLY_OVERRIDES && originOf('image_generation.routing') !== 'instance'
+            && originOf('image_generation.pose_check') !== 'instance') {
         content.innerHTML = '<div class="section active"><p>No overrides on this page.</p></div>';
         return;
     }
@@ -401,6 +408,7 @@ function renderImageRoutingRules(content) {
              + '<span class="rt-muted" style="font-size:11px;">— ' + irEsc(o.id) + '</span></div>';
         if (o.covers) html += '<div class="desc rt-muted">' + irEsc(o.covers) + '</div>';
         if (o.character_scoped) html += '<div class="desc rt-muted">' + irEsc(IR_TEXT.position0) + '</div>';
+        if (o.pose_check) html += irPoseCheckHtml(o);
         if (malformed.has(o.id)) {
             html += '<div class="rt-chain-row"><span class="rt-err">'
                  + irEsc(irFmt(IR_TEXT.malformed, { raw: irRaw(routing[o.id]) })) + '</span>'
@@ -420,6 +428,33 @@ function renderImageRoutingRules(content) {
     }
     html += '</div>';
     content.innerHTML = html;
+}
+
+// LLM pose check before generating (app/imagegen/pose_check.py): one switch
+// per occasion that renders people, stored apart from the chains as
+// CONFIG.image_generation.pose_check = {occasion: true}. Off = key absent.
+function irPoseFlags() {
+    const ig = CONFIG.image_generation;
+    const flags = ig && typeof ig === 'object' ? ig.pose_check : undefined;
+    return flags && typeof flags === 'object' && !Array.isArray(flags) ? flags : {};
+}
+
+function irPoseCheckHtml(o) {
+    const on = irPoseFlags()[o.id] === true;
+    return '<label class="desc" style="display:flex; gap:6px; align-items:center; margin:4px 0;" '
+         + 'title="' + irEsc(IR_TEXT.poseCheckHint) + '">'
+         + '<input type="checkbox"' + (on ? ' checked' : '')
+         + ' onchange="irSetPoseCheck(\'' + sJs(o.id) + '\', this.checked)">'
+         + irEsc(IR_TEXT.poseCheck) + '</label>';
+}
+
+function irSetPoseCheck(occ, on) {
+    if (!CONFIG.image_generation || typeof CONFIG.image_generation !== 'object') CONFIG.image_generation = {};
+    const ig = CONFIG.image_generation;
+    if (!ig.pose_check || typeof ig.pose_check !== 'object' || Array.isArray(ig.pose_check)) ig.pose_check = {};
+    if (on) ig.pose_check[occ] = true; else delete ig.pose_check[occ];
+    touchPath('image_generation.pose_check');
+    irRerender();
 }
 
 function irCustomDefault(occ, cheapest) {

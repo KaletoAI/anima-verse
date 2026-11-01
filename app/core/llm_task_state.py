@@ -33,7 +33,7 @@ PRESETS = {
         # All background LLM activity that gets in the way in world-dev mode
         "random_event", "thought", "secret_generation",
         "consolidation", "relationship_summary",
-        "instagram_caption", "image_prompt", "image_recognition",
+        "instagram_caption", "image_prompt", "image_pose_check", "image_recognition",
         "outfit_generation",
     ],
     "chat_only": [

@@ -67,6 +67,9 @@ interface ImagegenOptionsResponse {
   // refuses every render with 409, so the dialog blocks its own submit
   // instead of letting the user compose a prompt for nothing.
   media_generation_enabled?: boolean
+  // Only with `?occasion=`: whether the occasion offers the LLM pose check
+  // and the checkbox preset (its routing switch, app/imagegen/pose_check.py).
+  pose_check?: { supported: boolean; default: boolean }
 }
 
 /** Answer of POST /world/compose-preview (app/core/prompt_compose.py). */
@@ -113,6 +116,9 @@ export interface ImageGenSubmit {
   cache_hit?: boolean
   // Gallery file used as the appearance reference of a back/side view (view renders only).
   front_reference?: string
+  // LLM pose check before generating (regenerate mode, occasions with people):
+  // true/false overrides the occasion's routing switch.
+  pose_check?: boolean
 }
 
 interface Props {
@@ -305,6 +311,11 @@ export function ImageGenDialog({
   )
   const [submitting, setSubmitting] = useState(false)
   const [enhancing, setEnhancing] = useState(false)
+  // Pose check: offered when the occasion renders people; the checkbox starts
+  // at the routing switch until the user touches it (or runs the check here).
+  const [poseSupported, setPoseSupported] = useState(false)
+  const [poseCheck, setPoseCheck] = useState(false)
+  const poseTouched = useRef(false)
   // Output size as TEXT: empty is a meaningful state ("keep the default"), so
   // the fields never coerce an empty input to a number.
   const [widthText, setWidthText] = useState('')
@@ -337,6 +348,27 @@ export function ImageGenDialog({
       setEnhancing(false)
     }
   }, [prompt, improvement, enhancing, enhanceEndpoint])
+
+  // "Check pose": the LLM pose check right now, result into the prompt field.
+  // The automatic check before generating is then switched off — the prompt
+  // is already checked.
+  const applyPoseCheck = useCallback(async () => {
+    const base = prompt.trim()
+    if (!base || enhancing) return
+    setEnhancing(true)
+    try {
+      const res = await apiPost<{ prompt?: string }>(enhanceEndpoint, { prompt: base, mode: 'pose' })
+      if (res?.prompt) {
+        setPrompt(res.prompt)
+        poseTouched.current = true
+        setPoseCheck(false)
+      }
+    } catch {
+      /* Fail silently — the prompt stays as it was. */
+    } finally {
+      setEnhancing(false)
+    }
+  }, [prompt, enhancing, enhanceEndpoint])
 
   // Resync prompt + independent config parts when the caller changes them
   // (e.g. day → night, with a different suffix).
@@ -409,6 +441,8 @@ export function ImageGenDialog({
         setMediaOff(d.media_generation_enabled === false)
         setRoutedName(d.resolved || '')
         setRoutedChain(d.chain || [])
+        setPoseSupported(!!d.pose_check?.supported)
+        if (!poseTouched.current) setPoseCheck(!!d.pose_check?.default)
       })
       .catch(() => { if (latestQuery.current === q) setOptions([]) })
       .finally(() => { if (latestQuery.current === q) setOptionsLoading(false) })
@@ -589,6 +623,7 @@ export function ImageGenDialog({
     }
     if (isRegen || showCreateNew) payload.create_new = createNew
     if (isRegen && improvement.trim()) payload.improvement_request = improvement.trim()
+    if (isRegen && poseSupported) payload.pose_check = poseCheck
     // A backend without a negative input gets none: its negations already
     // stand in the prompt, and the handoff folds whatever the use case adds.
     if (!hideNegative && !noNegative && negative.trim()) {
@@ -617,7 +652,7 @@ export function ImageGenDialog({
   }, [currentOption, optionsLoading, loadedQuery, optionsQuery, isAuto, prompt, prefixText, suffixText, settingsPrefix,
       settingsSuffix, styleText, styleUseCase, composeRequest, composeLlm,
       loraSlots, onSubmit, onClose,
-      isRegen, showCreateNew, createNew,
+      isRegen, showCreateNew, createNew, poseSupported, poseCheck,
       improvement, hideNegative, noNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource,
       showResolution, widthText, heightText,
@@ -1008,18 +1043,38 @@ export function ImageGenDialog({
                     disabled={submitting || enhancing}
                     onChange={(e) => setImprovement(e.target.value)}
                   />
-                  <button
-                    type="button"
-                    className="ga-btn ga-btn-sm"
-                    style={{ alignSelf: 'flex-start' }}
-                    disabled={submitting || enhancing || !prompt.trim()}
-                    onClick={() => { void applyImprovement() }}
-                    title={improvement.trim()
-                      ? t('Rewrite the prompt with this change via LLM')
-                      : t('Optimise the prompt for the image model via LLM (content stays the same)')}
-                  >
-                    {enhancing ? '…' : `✨ ${t('Improve prompt')}`}
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm"
+                      disabled={submitting || enhancing || !prompt.trim()}
+                      onClick={() => { void applyImprovement() }}
+                      title={improvement.trim()
+                        ? t('Rewrite the prompt with this change via LLM')
+                        : t('Optimise the prompt for the image model via LLM (content stays the same)')}
+                    >
+                      {enhancing ? '…' : `✨ ${t('Improve prompt')}`}
+                    </button>
+                    {poseSupported ? (
+                      <button
+                        type="button"
+                        className="ga-btn ga-btn-sm"
+                        disabled={submitting || enhancing || !prompt.trim()}
+                        onClick={() => { void applyPoseCheck() }}
+                        title={t('Repair arms, legs and poses in the prompt via LLM (what the image shows stays the same)')}
+                      >
+                        {enhancing ? '…' : `🦴 ${t('Check pose')}`}
+                      </button>
+                    ) : null}
+                  </div>
+                  {poseSupported ? (
+                    <label className="ga-check-row"
+                      title={t('An LLM repairs arms, legs and poses in the prompt right before the image is generated. Preset from the image routing of this occasion.')}>
+                      <input type="checkbox" checked={poseCheck} disabled={submitting}
+                        onChange={(e) => { poseTouched.current = true; setPoseCheck(e.target.checked) }} />
+                      {t('Pose check before generating')}
+                    </label>
+                  ) : null}
                 </>
               ) : null}
 

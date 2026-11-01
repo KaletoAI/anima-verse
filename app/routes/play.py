@@ -1429,7 +1429,8 @@ async def play_scene_photo_prepare(user=Depends(get_current_user)):
 async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     """📷 step 2: renders the photo into the avatar's gallery. Body may
     carry dialog overrides (prompt, backend, loras, negative_prompt,
-    character_names, use_room) — without them the one-click defaults run.
+    character_names, use_room, pose_check) — without them the one-click
+    defaults run.
     The action is announced as a narrator line so present characters can
     react."""
     import asyncio
@@ -1445,6 +1446,7 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
         body = {}
     body = body if isinstance(body, dict) else {}
     from app.core.lora_library import LoraNotAllowedError
+    from app.imagegen.pose_check import parse_override
     try:
         result = await asyncio.to_thread(
             take_scene_photo, avatar,
@@ -1453,7 +1455,8 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
             body.get("loras"),
             str(body.get("negative_prompt") or ""),
             body.get("character_names"),
-            bool(body.get("use_room", True)))
+            bool(body.get("use_room", True)),
+            parse_override(body.get("pose_check")))
     except LoraNotAllowedError as e:
         # An explicitly picked LoRA the library does not associate with the
         # picked backend: the user's own choice, said verbatim.
@@ -2913,8 +2916,10 @@ def _play_read_image_sync(body: Any, *, action: str = "prepare"):
                 or not math.isfinite(v.get("strength", 1)) for v in loras):
             raise HTTPException(status_code=400, detail="loras must contain names and finite numeric strengths")
     try:
+        from app.imagegen.pose_check import parse_override
         return enqueue_page_image(avatar, item_id, index, page_ref=page_ref,
-            prompt=prompt.strip(), backend=backend.strip(), loras=loras, negative_prompt=negative)
+            prompt=prompt.strip(), backend=backend.strip(), loras=loras, negative_prompt=negative,
+            pose_check=parse_override(body.get("pose_check")))
     except (HTTPException, MediaGenerationDisabled):
         raise
     except LoraNotAllowedError as exc:

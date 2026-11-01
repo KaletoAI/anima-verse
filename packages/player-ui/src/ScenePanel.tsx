@@ -142,6 +142,8 @@ export interface ScenePhotoSubmit {
   negative_prompt?: string
   character_names?: string[]
   use_room?: boolean
+  /** Pose-check override; absent = the occasion's routing switch decides. */
+  pose_check?: boolean
 }
 
 /** What the host needs to render its image-generation dialog for the 📷 flow:
@@ -392,6 +394,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         negative_prompt: payload.negative_prompt || '',
         character_names: payload.character_names || null,
         use_room: payload.use_room !== false,
+        ...(typeof payload.pose_check === 'boolean' ? { pose_check: payload.pose_check } : {}),
       })
       if (d?.ok) {
         toast(t('Photo saved to your gallery.'), 'success')

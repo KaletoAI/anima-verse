@@ -4,6 +4,8 @@ import type { FieldImageSubmit } from './character/CharacterFormHost'
 
 export function regenPayload(f: {
   prompt: string; names: string[]; useRoom: boolean; useSource: boolean; negative: string
+  /** Pose-check override; undefined = the occasion's routing switch decides. */
+  poseCheck?: boolean
 }): GalleryRegenSubmit | null {
   const prompt = f.prompt.trim()
   // An empty selection restores detected subjects on the server; it cannot mean nobody.
@@ -12,6 +14,7 @@ export function regenPayload(f: {
     prompt, character_names: f.names, use_room: f.useRoom,
     use_source_as_reference: f.useSource,
     ...(f.negative.trim() ? { negative_prompt: f.negative.trim() } : {}),
+    ...(typeof f.poseCheck === 'boolean' ? { pose_check: f.poseCheck } : {}),
   }
 }
 

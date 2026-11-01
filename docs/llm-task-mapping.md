@@ -141,6 +141,7 @@ Overview page all show the same answer:
 | `intent_*`, `thought_*`, `extraction_*` | `intent` / `thought` / `extraction` |
 | `building_layout`, `furnish`, `prop_mount_classify`, `room_description_sync`, `pose_animation_prompt` | `intent` |
 | `npc_*` | `chat_stream` |
+| `image_pose_check` | `image_prompt` |
 | anything else | none — the task simply has no LLM |
 
 A fallback is a convenience, not a recommendation: an unrouted `npc_action`
@@ -312,6 +313,7 @@ exist as routing tasks — only as template file names.
 | Task id | Label | Category | Gate | Caller | Purpose |
 |---|---|---|---|---|---|
 | `image_prompt` | Image Prompt Enhancer | helper | `image_generation.enabled` | `core/prompt_adapters.py`, `core/scene_photo.py` | Turns a short scene description into a detailed image prompt, in the image family of the selected backend. |
+| `image_pose_check` | Image Pose Check | helper | `image_generation.enabled` | `imagegen/pose_check.py` (render hooks + `POST /world/imagegen-enhance-prompt` `mode: "pose"`) | Repairs the body logic of a subject prompt before it renders — limb budget, framing vs. pose, arrangement of several people — without changing what it shows. Runs per image-routing occasion when `image_generation.pose_check.<occasion>` is on, or from the regenerate/photo dialogs. Route it at a model that handles the world's content. |
 | `instagram_caption` | Instagram Caption | image | `skills.instagram.enabled` | `routes/instagram.py`, `core/character_ops.py`, `plugins/instagram/skill_post.py` | Post caption in the character's voice; also the image-to-video motion prompt. Vision model. |
 | `image_recognition` | Vision (analysis · comments · recognition) | image | `image_generation.enabled` | `imagegen/service.py`, `routes/chat.py`, `plugins/instagram/social_reactions.py` | The ONE vision task — every image call resolves it. Objective analysis after a generation, the character's own comment on the picture, and the look at a photo before other characters react to it. `image_analysis` and `image_comment` are queue labels and metadata keys, not routing tasks. |
 

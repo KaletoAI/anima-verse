@@ -285,6 +285,11 @@ def _do_generate(event_id: str,
                                    None) == "outdoor"
     from app.core.prompt_compose import compose as _compose
     from app.core.prompt_compose import outdoor_conditions as _conditions
+    # Optional LLM pose check (routing switch of "event") — once, before
+    # routing, so a re-run renders the same checked prompt.
+    from app.imagegen import pose_check as _pose_check
+    _pre_check = image_prompt
+    image_prompt, _pose_checked = _pose_check.apply("event", image_prompt)
 
     def _render(b):
         """Prompt, negative and reference slot built FOR ``b`` — the routing
@@ -304,7 +309,8 @@ def _do_generate(event_id: str,
             params["reference_images"] = {"input_reference_image_1": str(bg_path)}
         _log_meta = {"agent_name": f"Event {event_id}",
                      "original_prompt": image_prompt, "auto_enhance": False,
-                     "compose": composed.meta}
+                     "compose": composed.meta,
+                     "pose_checked_from": _pre_check if _pose_checked else ""}
 
         def _op(bb):
             # EVERY backend goes through the backend's GPU channel — two

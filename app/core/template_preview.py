@@ -663,6 +663,18 @@ def _drive_image_prompt_improver(agent: str, avatar: str) -> PreviewResult:
             "note": "Production: image_regenerate.enhance_prompt with sample prompts."}
 
 
+def _drive_image_pose_check(agent: str, avatar: str) -> PreviewResult:
+    from app.imagegen.pose_check import check_pose
+    task, sys, user = _capture_render(
+        lambda: check_pose(
+            f"Candid selfie from the waist up, {agent} sitting on a sofa, legs crossed, "
+            "one hand holding a cup, the other hand waving, arms folded",
+            character=agent))
+    return {"ok": True, "output": _format(task, sys, user),
+            "note": "Production: imagegen.pose_check.check_pose on a sample prompt "
+                    "with an over-allocated limb budget."}
+
+
 def _drive_image_prompt_enhance(agent: str, avatar: str) -> PreviewResult:
     # ``_llm_enhance`` is gone; ``maybe_enhance_via_llm`` is the enhancer that
     # renders this template today (review 2026-09-20, KOORD-1).
@@ -840,6 +852,7 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/image_prompt_scene.md": _drive_image_prompt_scene,
     "tasks/image_prompt_improver.md": _drive_image_prompt_improver,
     "tasks/image_prompt_enhance.md": _drive_image_prompt_enhance,
+    "tasks/image_pose_check.md": _drive_image_pose_check,
     "tasks/image_analysis.md": _drive_image_analysis,
     "tasks/instagram_caption.md": _drive_instagram_caption,
     "tasks/animation_prompt.md": _drive_animation_prompt,

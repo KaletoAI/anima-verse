@@ -3212,19 +3212,24 @@ def get_imagegen_options(occasion: str = "", character: str = "",
 async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     """Rewrite an image prompt via the LLM — generic (no character binding).
 
-    Body: { prompt, improvement_request? }
+    Body: { prompt, improvement_request?, mode? }
     Returns: { prompt: "<rewritten prompt>" }
 
-    With an improvement request the prompt is changed accordingly; without
-    one it is only optimised for the image model (same content). Same
-    enhance_prompt function as the character/Instagram regenerate, so the
-    dialogs' "Improve prompt" button uses one mechanism everywhere.
+    ``mode: "pose"`` runs the LLM pose check (app/imagegen/pose_check.py) —
+    the dialogs' "Check pose" button. Otherwise, with an improvement request
+    the prompt is changed accordingly; without one it is only optimised for
+    the image model (same content). Same enhance_prompt function as the
+    character/Instagram regenerate, so the dialogs' "Improve prompt" button
+    uses one mechanism everywhere.
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
     improvement_request = (body.get("improvement_request") or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt missing")
+    if body.get("mode") == "pose":
+        from app.imagegen.pose_check import check_pose
+        return {"prompt": await asyncio.to_thread(check_pose, prompt)}
     from app.skills.image_regenerate import enhance_prompt
     enhanced = await asyncio.to_thread(
         enhance_prompt, prompt, improvement_request, None, True)

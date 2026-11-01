@@ -416,8 +416,13 @@ image bytes. Preparation must receive the token of the already displayed page.
 ```python
 hooks.register_provider("item_page_image.<source>", provider)
 # provider(item, reader, page, *, action, page_ref="", prompt="", backend="",
-#          loras=None, negative_prompt="", task_id="", admit=None) -> dict
+#          loras=None, negative_prompt="", pose_check=None, task_id="", admit=None) -> dict
 ```
+
+`pose_check` is the dialog's override of the LLM pose check (True/False; None =
+the routing switch of the render's occasion decides). A source that renders
+people runs `app.imagegen.pose_check.apply(occasion, prompt, override=pose_check)`
+on the subject before routing (see "Image pose check" below).
 
 For `action="prepare"`, return `{prompt, subjects, available, page_ref, backend_options}`;
 the core adds `avatar`. Resolve `backend_options` with the actual scene references,
@@ -442,7 +447,7 @@ cancelled status contains no image bytes.
 
 `POST /play/read/image-prepare {item_id, index, page_ref}` requires an active
 authorized session. `POST /play/read/image-regenerate` accepts
-`{item_id, index, page_ref, prompt, backend?, loras?, negative_prompt?}` and returns
+`{item_id, index, page_ref, prompt, backend?, loras?, negative_prompt?, pose_check?}` and returns
 HTTP 202 `{task_id, page_ref, status: "queued"}` without waiting for generation.
 `POST /play/read/image-status {item_id, index, page_ref, task_id}` returns
 `{status, detail?, reading?}` only for the authorized reader/page/job. Its completed
@@ -471,7 +476,7 @@ part of the render, independently of changing the prompt or backend.
 | `end_session(reader: str, reason: str) -> None` | Deletes the reader's session. |
 | `heartbeat(reader: str, item_id: str) -> dict` | Returns `{caught_by: owner}` for a matching pending catch, otherwise `{caught_by: ""}` and extends a live matching session. Does not start a session. |
 | `prepare_page_image(reader: str, item_id: str, index: int, *, page_ref: str) -> dict` | Prepare a regenerable page only in the reader's current authorized session and with the displayed immutable page token. A shifted index never selects a different page. Does not load image bytes or learn another secret. |
-| `enqueue_page_image(reader: str, item_id: str, index: int, *, page_ref: str, prompt: str, backend: str = "", loras=None, negative_prompt: str = "") -> dict` | Validate current read authority and admit a durable, source-owned replacement. Returns `{task_id, page_ref, status: "queued"}` or an access/catch result; it never waits for the image. |
+| `enqueue_page_image(reader: str, item_id: str, index: int, *, page_ref: str, prompt: str, backend: str = "", loras=None, negative_prompt: str = "", pose_check: bool \| None = None) -> dict` | Validate current read authority and admit a durable, source-owned replacement. Returns `{task_id, page_ref, status: "queued"}` or an access/catch result; it never waits for the image. |
 | `page_image_status(reader: str, item_id: str, index: int, *, page_ref: str, task_id: str) -> dict` | Check reader/item/page/job ownership and current read permission, then return job status and, only on completed authorized reads, the refreshed selected page. |
 
 Sessions persist in `item_reading_sessions(reader PRIMARY KEY, item_id,
@@ -971,6 +976,25 @@ mit `tpose_workflow` (falls leer: `workflow`) und `tpose_loras` (falls leer: nor
 | `explain_image_routing(character='', pool=None) -> Dict` | Je Anlass die Kette mit Status pro Eintrag und dem Backend, das ein Render nähme — reine Anzeige, prüft **nie** aktiv (kein Probe) |
 | `run_routed(occasion, render, *, character='', has_ref=False, pool=None, on_route=None) -> Tuple[Any, Route]` | Löst auf und ruft den Callback `render` mit dem Backend; läuft nur dann auf dem nächsten Ketteneintrag neu an, wenn `render` einen `BackendFailedError` **des gerouteten Backends** wirft (Last, 4xx, Abbruch, Hauptschalter: kein Neuanlauf), höchstens `MAX_REENTRIES` = 2 Mal. `render` baut alles Backend-Abhängige selbst. `on_route` (optional) bekommt jede Route direkt vor dem `render`-Aufruf — ein Hub-Vorgang speichert so die Routing-Meta mit dem Job, den er abschickt |
 | `route_meta(route)` | `{"routing": {...}, "fallback_from": {...}?}` — gehört in die Meta/Sidecar jedes gerouteten Ergebnisses; `fallback_from` nur, wenn ein Laufzeit-Ausfall (Cooldown/nicht erreichbar/Neuanlauf) den vorgesehenen Eintrag übersprang. Eine explizite Wahl schreibt keines der beiden |
+
+## Image pose check — `app.imagegen.pose_check` ✅
+
+An optional LLM pass (task `image_pose_check`, unrouted → `image_prompt`) that makes the body
+logic of a subject prompt physically possible — limb budget, framing vs. pose, arrangement of
+several people — without changing what it shows. Switched per routing occasion
+(`image_generation.pose_check`, only occasions with `pose_check` in the catalog); the dialogs
+override it per request. Run it on the SUBJECT before routing, never inside a GPU channel.
+`generate_from_input` and `image_regenerate.regenerate_image` already do; a package that
+renders itself calls `apply`.
+
+| Function | Semantics |
+|---|---|
+| `apply(occasion, prompt, *, override=None, character='') -> Tuple[str, bool]` | `(prompt, checked)`. `override` True/False wins over the occasion switch, None follows it; an occasion without people never checks. Blocking (one LLM call). |
+| `check_pose(prompt, *, character='') -> str` | The rewrite alone; the original on any failure, empty answer or an answer under half the length (dropped content / refusal). |
+| `parse_override(value) -> bool \| None` | A request body's `pose_check` field. |
+| `supported(occasion)` / `enabled_for(occasion)` | Whether the occasion offers the check / its routing switch is on. |
+
+Log the pre-check prompt as `pose_checked_from` in the render's `log_meta` (`logs/image_prompts.jsonl`).
 
 ## Queue — `app.core.task_queue` ✅
 

@@ -122,6 +122,7 @@ export function GalleryTab({ character }: { character: string }) {
     if (payload.create_new) body.create_new = true
     if (payload.use_room === false) body.use_room = false
     if (payload.use_source_as_reference) body.use_source_as_reference = true
+    if (typeof payload.pose_check === 'boolean') body.pose_check = payload.pose_check
     try {
       await apiPost(`${imgUrl(target.file)}/regenerate`, body)
       toast(t('Regeneration started'))

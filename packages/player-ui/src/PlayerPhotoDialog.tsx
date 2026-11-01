@@ -8,11 +8,14 @@
  * it fills the slot with THIS dialog: the same flow, reduced to what a player
  * decides in the moment.
  *
- * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has six fields; this
+ * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has seven fields; this
  * dialog surfaces all of them:
  *   · `prompt`          → textarea, prefilled with the distilled `ctl.prompt`
- *                         plus the optional LLM "Improve prompt" row
- *                         (`PromptImprover`, rewrites the textarea in place)
+ *                         plus the optional LLM "Improve prompt" / "Check pose"
+ *                         row (`PromptImprover`, rewrites the textarea in place)
+ *   · `pose_check`      → "Pose check before generating" checkbox, only when
+ *                         the occasion renders people; preset from its routing
+ *                         switch (`backends.pose_check`), sent as an override
  *   · `character_names` → one toggle chip per name (`ctl.subjects` pre-selected)
  *   · `use_room`        → checkbox, on by default (matches the server default,
  *                         ScenePanel sends `use_room !== false`)
@@ -55,7 +58,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { apiGet } from './api'
 import { useI18n } from './I18nProvider'
-import { PromptImprover } from './PromptImprover'
+import { PromptImprover, usePoseCheck, type PoseCheckOption } from './PromptImprover'
 import type { PhotoDialogControl, ScenePhotoSubmit } from './ScenePanel'
 
 /** One backend entry of `GET /world/imagegen-options` — the fields read here. */
@@ -80,6 +83,8 @@ export interface BackendOptions {
   /** What "Auto (routing)" resolves this scene's occasion to right now. */
   resolved?: string | null
   media_generation_enabled?: boolean
+  /** Whether the occasion offers the LLM pose check + the checkbox preset. */
+  pose_check?: PoseCheckOption
 }
 
 interface PlayerPhotoDialogProps extends PhotoDialogControl {
@@ -113,6 +118,8 @@ export function PlayerPhotoDialog({
   const [useRoom, setUseRoom] = useState(true)
   const [backend, setBackend] = useState('')  // '' = Auto (routing)
   const [backends, setBackends] = useState<BackendOptions | null>(backendOptions ?? null)
+  // LLM pose check: offered when the occasion renders people, preset from its routing switch.
+  const pose = usePoseCheck(backends?.pose_check)
   const [loraSlots, setLoraSlots] = useState<LoraSlot[]>(emptySlots)
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState(false)  // LLM rewrites the prompt
@@ -191,13 +198,14 @@ export function PlayerPhotoDialog({
       character_names: selected,
       use_room: useRoom,
       negative_prompt: negative.trim(),
+      ...(pose.value !== undefined ? { pose_check: pose.value } : {}),
     }
     try {
       await onSubmit(payload)
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, improving, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
+  }, [busy, improving, pose.value, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -255,7 +263,7 @@ export function PlayerPhotoDialog({
               onChange={(e) => setPrompt(e.target.value)} />
           </label>
           <PromptImprover prompt={prompt} onPrompt={setPrompt} disabled={busy}
-            onBusyChange={setImproving} />
+            onBusyChange={setImproving} pose={pose} />
 
           {!hideSceneControls && <div className="ga-field" style={{ marginBottom: 10 }}>
             <span className="ga-field-caption">{t('Who is in the picture')}</span>

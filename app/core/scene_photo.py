@@ -10,7 +10,7 @@ present NPCs perceive "X takes a photo" and can react to it on their next
 loop turn.
 """
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 from app.core.lora_library import LoraNotAllowedError
@@ -173,7 +173,8 @@ def take_scene_photo(avatar: str,
                      loras: Any = None,
                      negative_prompt: str = "",
                      character_names: Any = None,
-                     use_room: bool = True) -> Dict[str, Any]:
+                     use_room: bool = True,
+                     pose_check: Optional[bool] = None) -> Dict[str, Any]:
     """Synchronous — the caller (route) runs it in a worker thread.
 
     Without overrides it prepares everything itself (one-click path);
@@ -211,7 +212,8 @@ def take_scene_photo(avatar: str,
             negative_prompt_override=(negative_prompt or "").strip(),
             create_new=True,
             use_room=bool(use_room),
-            occasion="photo")
+            occasion="photo",
+            pose_check=pose_check)
     except (MediaGenerationDisabled, LoraNotAllowedError):
         # Refusals, not failed renders: the world's master switch (the route
         # maps it to a 409) and an explicitly picked LoRA the library does

@@ -281,6 +281,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
       backend: payload.backend || undefined,
       loras: payload.loras,
       negative_prompt: payload.negative_prompt,
+      ...(typeof payload.pose_check === 'boolean' ? { pose_check: payload.pose_check } : {}),
     })
     // Await only admission; the render outlives this dialog and read session.
     try {

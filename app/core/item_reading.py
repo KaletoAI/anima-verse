@@ -5,6 +5,7 @@ are admitted by their source and publish independently of the read session;
 only reading/status responses remain subject to the current access gates.
 """
 import json
+from typing import Optional
 from uuid import uuid4
 
 from app.core import config, hooks
@@ -281,7 +282,8 @@ def prepare_page_image(reader: str, item_id: str, index: int, *, page_ref: str) 
 
 def enqueue_page_image(reader: str, item_id: str, index: int, *,
                        page_ref: str, prompt: str, backend: str = "",
-                       loras=None, negative_prompt: str = "") -> dict:
+                       loras=None, negative_prompt: str = "",
+                       pose_check: Optional[bool] = None) -> dict:
     """Authorize the displayed page and persist its source-owned render job."""
     context = _image_context(reader, item_id, index)
     if isinstance(context, dict):
@@ -310,7 +312,7 @@ def enqueue_page_image(reader: str, item_id: str, index: int, *,
 
     return provider(item, reader, page, action="enqueue", page_ref=page_ref,
                     prompt=prompt, backend=backend, loras=loras,
-                    negative_prompt=negative_prompt, admit=admit)
+                    negative_prompt=negative_prompt, pose_check=pose_check, admit=admit)
 
 
 def page_image_status(reader: str, item_id: str, index: int, *,

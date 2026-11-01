@@ -2494,6 +2494,8 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
     create_new = body.get("create_new", False)
     use_room = body.get("use_room", True)
     use_source_as_reference = bool(body.get("use_source_as_reference", False))
+    from app.imagegen.pose_check import parse_override
+    pose_check = parse_override(body.get("pose_check"))  # None = routing switch
     # The original location from the image meta (not the character's current one)
     from app.models.character import get_single_image_meta
     _img_meta = get_single_image_meta(character_name, image_name) or {}
@@ -2522,7 +2524,7 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
               backend_name, agent_config, loras, model_override, character_names, room_id,
               original_location_id, original_room_id, negative_prompt_override,
               _track_id, create_new,
-              use_room, use_source_as_reference, _tq),
+              use_room, use_source_as_reference, _tq, pose_check),
         daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
 

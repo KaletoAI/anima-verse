@@ -974,6 +974,9 @@ def _settings_save_sync(values: dict, resets: list, confirm_drop: list,
                 stored_routing=(current.get("image_generation") or {}).get("routing"))
             if img_err:
                 raise HTTPException(400, img_err)
+            pose_err = _validate_pose_check(merged.get("image_generation"))
+            if pose_err:
+                raise HTTPException(400, pose_err)
             result = config_admin._persist_layer(config_scope.INSTANCE, merged, current)
     except config_admin.LayerStale as exc:
         raise HTTPException(409, {"code": "stale", "reason": exc.reason,
@@ -1388,6 +1391,23 @@ def _validate_image_routing(img_cfg: Any,
         warnings.append(f"Image routing: stored chain '{occasion}' is invalid "
                         f"and was kept unchanged — {detail}")
     return "", warnings
+
+
+def _validate_pose_check(img_cfg: Any) -> str:
+    """``image_generation.pose_check`` on save: an object {occasion: bool}
+    whose keys are occasions that offer the pose check. "" = fine."""
+    if not isinstance(img_cfg, dict) or img_cfg.get("pose_check") is None:
+        return ""
+    flags = img_cfg.get("pose_check")
+    if not isinstance(flags, dict):
+        return "Pose check: 'pose_check' must be an object {occasion: true|false}."
+    from app.imagegen.pose_check import supported
+    for occasion, value in flags.items():
+        if not isinstance(value, bool):
+            return f"Pose check: '{occasion}' must be true or false."
+        if not supported(occasion):
+            return f"Pose check: '{occasion}' is not an occasion that renders people."
+    return ""
 
 
 @router.get("/settings/schema")

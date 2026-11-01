@@ -30,6 +30,10 @@ Per occasion:
   needs_ref_slot      True: only backends with ref_slot_count >= 1.
   style_use_cases     info only — the style use cases these renders use.
   covers              info only — the call sites (admin tooltip).
+  pose_check          True: the occasion renders people, so the routing page
+                      offers the LLM pose check before generating
+                      (app/imagegen/pose_check.py, config
+                      ``image_generation.pose_check``).
 """
 from typing import Any, Dict, List, Tuple
 
@@ -37,6 +41,8 @@ _CHAR = {"character_scoped": True, "char_spec_field": "workflow",
          "char_spec_fallback": ""}
 _WORLD = {"character_scoped": False, "char_spec_field": "",
           "char_spec_fallback": ""}
+# Occasions that render people: they offer the pose check.
+_PEOPLE = {"pose_check": True}
 
 
 def _image(label: str, covers: str, style_use_cases: List[str],
@@ -62,16 +68,17 @@ _CHAR_MESH = {"character_scoped": True, "char_spec_field": "mesh_workflow",
 OCCASIONS: Dict[str, Dict[str, Any]] = {
     "photo": _image(
         "Photo", "TakePhoto, scene photo button, story image + visualize, "
-        "video still", ["character", "story"], _CHAR),
-    "instagram": _image("Instagram post", "Instagram post", ["instagram"], _CHAR),
+        "video still", ["character", "story"], _CHAR, **_PEOPLE),
+    "instagram": _image("Instagram post", "Instagram post", ["instagram"], _CHAR,
+                        **_PEOPLE),
     "profile": _image(
         "Profile portrait", "Character portrait, temporary NPC portrait",
         ["profile"], {"character_scoped": True, "char_spec_field": "profile_workflow",
-                      "char_spec_fallback": ""}),
+                      "char_spec_fallback": ""}, **_PEOPLE),
     "expression": _image(
         "Expression & outfit variant",
         "Mood/activity variants, wardrobe preview, NPC default variant",
-        ["expression", "outfit"], _CHAR),
+        ["expression", "outfit"], _CHAR, **_PEOPLE),
     "tpose": _image(
         "T-pose main reference", "Standard pose reference, main mesh input",
         ["tpose", "tpose_animal", "outfit"],
@@ -83,7 +90,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",
-                         ["scene"], _WORLD),
+                         ["scene"], _WORLD, **_PEOPLE),
     "location": _image(
         "Location & room image", "New location, location gallery, room image",
         ["location", "building", "building_outdoor", "room_model",
@@ -91,7 +98,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "timevariant": _image("Day/night variant", "Day/night variant convert",
                           ["location"], _WORLD, needs_ref_slot=True),
     "event": _image("Random event image", "Random event illustration",
-                    ["event"], _WORLD),
+                    ["event"], _WORLD, **_PEOPLE),
     "prop": _image("Prop source image", "Prop source front/back/side",
                    ["prop", "prop_back", "prop_side"], _WORLD),
     "surface_texture": _image("Surface texture", "Ground/wall surface texture",
@@ -99,7 +106,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "item": _image("Item image", "Inventory item image", ["item"], _WORLD),
     "regenerate": _image(
         "Gallery regenerate", "Character/Instagram gallery regenerate",
-        ["character"], _CHAR),
+        ["character"], _CHAR, **_PEOPLE),
     "frame": _image("Messaging frame", "Messaging frame product shot", [],
                     _WORLD),
     "video": {"label": "Video (animate)", "media": "video", "category": "render",
@@ -195,5 +202,6 @@ def catalog_payload() -> List[Dict[str, Any]]:
              "character_scoped": bool(o["character_scoped"]),
              "needs_ref_slot": bool(o.get("needs_ref_slot")),
              "covers": o.get("covers", ""),
+             "pose_check": bool(o.get("pose_check")),
              "default_chain": list(o.get("default_chain", []))}
             for oid, o in OCCASIONS.items()]

@@ -138,6 +138,9 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
 
     # Image / Prompt
     "image_prompt":       {"label": "Image Prompt Enhancer",    "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
+    # Body-logic pass before a render (app/imagegen/pose_check.py). Unrouted
+    # it borrows image_prompt; route it at a model that handles the world's content.
+    "image_pose_check":   {"label": "Image Pose Check",         "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
     "instagram_caption":  {"label": "Instagram Caption",        "priority": Priority.NORMAL, "category": "image",  "gate": "skills.instagram.enabled"},
 
     # Vision
@@ -577,6 +580,11 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     "image_prompt": {
         "tools": False, "vision": False, "json": False, "min_context": 2048,
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
+        "creative": False, "language_de": False, "latency_sensitive": True,
+    },
+    "image_pose_check": {
+        "tools": False, "vision": False, "json": False, "min_context": 2048,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": False, "latency_sensitive": True,
     },
     "instagram_caption": {

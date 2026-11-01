@@ -5,7 +5,7 @@ import type { GalleryRegenControl } from './GalleryPanel'
 import type { InstagramImageGenControl } from './InstagramPanel'
 import { regenPayload } from './playerDialogPayloads'
 import { PlayerDialogFrame } from './PlayerDialogFrame'
-import { PromptImprover } from './PromptImprover'
+import { PromptImprover, usePoseCheck, usePoseCheckOption } from './PromptImprover'
 
 export function PlayerRegenDialog({ ctl }: { ctl: GalleryRegenControl | InstagramImageGenControl }) {
   const { t } = useI18n()
@@ -15,8 +15,10 @@ export function PlayerRegenDialog({ ctl }: { ctl: GalleryRegenControl | Instagra
   const [useSource, setUseSource] = useState(true)
   const [negative, setNegative] = useState('')
   const [improving, setImproving] = useState(false)
+  // Gallery and Instagram regenerate both render on the "regenerate" occasion.
+  const pose = usePoseCheck(usePoseCheckOption('regenerate'))
   const available = Array.from(new Set([...ctl.available, ...ctl.detected]))
-  const payload = regenPayload({ prompt, names, useRoom, useSource, negative })
+  const payload = regenPayload({ prompt, names, useRoom, useSource, negative, poseCheck: pose.value })
   return <PlayerDialogFrame title={t('Regenerate image')} action={t('Generate')} disabled={!payload || improving}
     onClose={ctl.onClose} onSubmit={() => { if (payload) return ctl.onSubmit(payload) }}>
     <label className="ga-field">
@@ -24,7 +26,7 @@ export function PlayerRegenDialog({ ctl }: { ctl: GalleryRegenControl | Instagra
       <textarea className="ga-input" rows={5} autoFocus value={prompt} onChange={(e) => setPrompt(e.target.value)} />
     </label>
     {!prompt.trim() && <div className="player-photo-hint">{t('Enter a prompt.')}</div>}
-    <PromptImprover prompt={prompt} onPrompt={setPrompt} onBusyChange={setImproving} />
+    <PromptImprover prompt={prompt} onPrompt={setPrompt} onBusyChange={setImproving} pose={pose} />
     <div className="ga-field">
       <span className="ga-field-caption">{t('Who is in the picture')}</span>
       <div className="player-photo-chips">

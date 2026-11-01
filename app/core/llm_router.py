@@ -386,6 +386,7 @@ def fallback_parent(task: str) -> Optional[str]:
         → "intent"
         (strict-JSON tool work; the tool-class anchor)
       * npc_* → "chat_stream" (character writing; the chat anchor)
+      * image_pose_check → "image_prompt" (the image-prompt anchor)
     """
     from app.core.llm_tasks import plugin_task_fallback
     declared_parent = plugin_task_fallback(task)
@@ -398,6 +399,8 @@ def fallback_parent(task: str) -> Optional[str]:
         return "intent"
     if task.startswith("npc_"):
         return "chat_stream"
+    if task == "image_pose_check":
+        return "image_prompt"
     return None
 
 

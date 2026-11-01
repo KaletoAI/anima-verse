@@ -438,7 +438,13 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     from app.core.prompt_compose import compose as _compose
     from app.core.task_queue import get_task_queue
     from app.imagegen.routing import route_meta, run_routed
+    from app.imagegen import pose_check as _pose_check
     _tq = get_task_queue()
+    # The subject depends on the backend's slot budget, so the optional LLM
+    # pose check (routing switch of "scene_view") runs per subject — memoised,
+    # so a re-run with the same subject does not ask again. Never inside the
+    # GPU channel: _render runs before run_on_backend.
+    _checked: Dict[str, str] = {}
 
     def _render(b):
         """References, people lines and the composed prompt depend on the
@@ -493,6 +499,12 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                        f"keeping its layout, lighting and perspective")
         if _ev:
             subject += f" Ongoing event shaping this scene: {_ev}"
+        _pre_check = subject
+        if lines:
+            if subject not in _checked:
+                _checked[subject] = _pose_check.apply("scene_view", subject,
+                                                      character=avatar or "")[0]
+            subject = _checked[subject]
         composed = _compose(use_case="scene", subject=subject, backend=b,
                             negative_extra=_neg_base,
                             conditions=state.get("conditions", ""))
@@ -506,7 +518,8 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                                    agent_name=avatar, provider=b.name)
         _log_meta = {"agent_name": avatar or "scene", "original_prompt": subject,
                      "auto_enhance": False, "compose": composed.meta,
-                     "prompt_location": state.get("location", "")}
+                     "prompt_location": state.get("location", ""),
+                     "pose_checked_from": _pre_check if subject != _pre_check else ""}
 
         def _op(bb):
             # EVERY backend goes through the backend's GPU channel — two

@@ -74,6 +74,8 @@ export interface InstagramImageGenSubmit {
   character_names?: string[]
   use_room?: boolean
   use_source_as_reference?: boolean
+  /** Pose-check override; absent = the occasion's routing switch decides. */
+  pose_check?: boolean
 }
 
 /** What the host needs to render its image-generation dialog for the
@@ -337,6 +339,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
       if (payload.create_new) body.create_new = true
       if (payload.use_room === false) body.use_room = false
       if (payload.use_source_as_reference) body.use_source_as_reference = true
+      if (typeof payload.pose_check === 'boolean') body.pose_check = payload.pose_check
       try {
         const r = await apiPost<{ track_id?: string }>(
           `/instagram/post/${encodeURIComponent(p.id)}/regenerate`, body,

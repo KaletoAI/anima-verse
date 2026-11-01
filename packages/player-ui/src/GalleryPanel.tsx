@@ -51,6 +51,8 @@ export interface GalleryRegenSubmit {
   character_names?: string[]
   use_room?: boolean
   use_source_as_reference?: boolean
+  /** Pose-check override; absent = the occasion's routing switch decides. */
+  pose_check?: boolean
 }
 
 /** What the host needs to render its image-generation dialog for the
@@ -148,6 +150,7 @@ export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
     if (payload.create_new) body.create_new = true
     if (payload.use_room === false) body.use_room = false
     if (payload.use_source_as_reference) body.use_source_as_reference = true
+    if (typeof payload.pose_check === 'boolean') body.pose_check = payload.pose_check
     try {
       await apiPost(`/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/regenerate`, body)
     } catch { /* gallery poll picks up the result */ }

@@ -3128,7 +3128,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     return {"status": "success", "image": image_filename, "image_url": image_url}
 
 
-def regenerate_image_worker(character_name, image_path, prompt, improvement_request, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, original_room_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq):
+def regenerate_image_worker(character_name, image_path, prompt, improvement_request, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, original_room_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq, pose_check=None):
     from app.skills.image_regenerate import regenerate_image
     from app.models.character import add_character_image_prompt
     from pathlib import Path
@@ -3142,7 +3142,7 @@ def regenerate_image_worker(character_name, image_path, prompt, improvement_requ
             negative_prompt_override=negative_prompt_override, track_id=_track_id,
             create_new=bool(create_new), use_room=bool(use_room),
             use_source_as_reference=use_source_as_reference,
-            source_image_path=str(image_path))
+            source_image_path=str(image_path), pose_check=pose_check)
         _actual_filename = Path(actual_path).name
         if final_prompt != prompt:
             add_character_image_prompt(character_name, _actual_filename, final_prompt)

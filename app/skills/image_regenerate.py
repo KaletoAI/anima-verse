@@ -162,7 +162,8 @@ def regenerate_image(character_name: str,
     use_source_as_reference: bool = False,
     source_image_path: str = "",
     occasion: str = "regenerate",
-    source_file: str = "") -> Tuple[bool, str, str]:
+    source_file: str = "",
+    pose_check: Optional[bool] = None) -> Tuple[bool, str, str]:
     """Renders an image again. ``create_new=True`` writes a new file next to
     the source instead of overwriting it.
 
@@ -186,6 +187,8 @@ def regenerate_image(character_name: str,
             photo), "profile" (portrait re-render)
         source_file: the image this render replaces (fallback_rerender) —
             written into the new file's meta in the same write
+        pose_check: the dialog's pose-check override; None = the routing
+            switch of ``occasion`` decides (app/imagegen/pose_check.py)
 
     Returns:
         (success, final_prompt, actual_output_path) — final_prompt is the
@@ -235,6 +238,13 @@ def regenerate_image(character_name: str,
                 f"Backend '{backend_name}' is not available — no automatic fallback")
     explicit = backend is not None
 
+    # 3b. Optional LLM pose check of the subject prompt — before routing, so
+    # the LLM wait never holds a backend slot and a re-run reuses the result.
+    from app.imagegen import pose_check as _pose_check
+    _pre_check = final_prompt
+    final_prompt, _pose_checked = _pose_check.apply(
+        occasion, final_prompt, override=pose_check, character=character_name)
+
     # 4. Person detection (backend-independent) ALWAYS runs when
     # character_name is present — the external post-processing needs
     # appearances to resolve the persons.
@@ -258,7 +268,8 @@ def regenerate_image(character_name: str,
     # Context for the CENTRAL logging in backend.generate() (final prompt,
     # backend, model, LoRAs, refs and duration are set by generate() itself).
     _log_meta = {"agent_name": character_name, "original_prompt": original_prompt,
-                 "auto_enhance": bool(improvement_request)}
+                 "auto_enhance": bool(improvement_request),
+                 "pose_checked_from": _pre_check if _pose_checked else ""}
 
     # Track activation: the timer starts only when GPU work actually begins.
     def _activate_track(provider_name: str = ""):
