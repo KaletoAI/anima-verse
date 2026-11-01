@@ -74,6 +74,11 @@ public static class CheckRunner
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
+            if (only == "resume")
+            {
+                GD.Print($"CHECK ok {await ResumeCheck.RunAsync(host, dir)}");
+                return 0;
+            }
             if (only == "graphics")
             {
                 GD.Print($"CHECK ok {await GraphicsCheck.RunAsync(host)}");
@@ -339,6 +344,7 @@ public static class CheckRunner
             var scatter = await ScatterCheck.RunAsync(world, source, builder.Height!, dir);
             var graphics = await GraphicsCheck.RunAsync(host);
             var hud = HudCheck.Run(source);
+            var resume = await ResumeCheck.RunAsync(host, dir);
             var ground = await GroundCheck.RunAsync(world, source, builder, stats, dir);
             var s3c = await S3cCheck.RunAsync(host, dir);
             var launcher = LauncherCheck.Run();
@@ -377,7 +383,7 @@ public static class CheckRunner
             var cacheLine = await CacheCheck.RunAsync(host, dir, cacheDir);
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
-                     + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
+                     + $"primitives={stats.Primitives} skipped={stats.Skipped} | {resume} | {stats.Summary()} plate_area={area:0.###} "
                      + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {residency} | {embody} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
             builder.Models?.FreeAll();
             world.QueueFree();

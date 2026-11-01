@@ -144,6 +144,7 @@ dotnet test tests                             # xUnit tests of the Godot-free co
 $GODOT --headless --path . --import           # first import (creates .godot/)
 $GODOT --headless --path . -- --check         # offline self-test → "CHECK ok …", exit 0
 $GODOT --headless --path . -- --check-bench   # offline bench smoke → "CHECK-BENCH ok …", exit 0
+$GODOT --headless --path . -- --check resume  # Task 89: stored-token scripts, upstairs arrival, final position/room drain
 
 GODOT=/path/to/Godot_v4.7.2-stable_mono_linux.x86_64 ./build.sh [out_dir]
                                               # build + import + export "Linux" preset
@@ -267,6 +268,8 @@ the pre-fill; delete it to forget server and user.
 
 **Back to the title.** The HUD's "Back to title" (game menu) and "Log out" (top
 bar) end the session and return to the login screen, server and user filled in:
+the native first freezes movement and drains the final position and pending room change, within one second.
+Window close / Alt+F4 use the same drain. Updates are installed on the title screen, before a world exists.
 the HUD page ends ITS session first (`GET /auth/status`, then `POST /auth/logout`
 only for a live session — only the server can drop CEF's HttpOnly cookie, and an
 anonymous logout is not a no-op on the server), CEF goes to `about:blank`, Godot
@@ -1245,8 +1248,11 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
 - **One login**: the Godot login screen logs in; its session cookie
   (`av_session`) is then written into CEF by a script on `/health` (the
   server's smallest anonymous page, same origin) — gdCEF exposes no cookie
-  manager — and the HUD opens already signed in. CEF runs incognito (no
-  cookie on disk; the HUD settings are kept by Godot instead), without a DevTools port; its log (incl. the page's console
+  manager — and the HUD opens already signed in. CEF requests incognito and uses a fresh private temporary
+  profile per process, removed after CEF shuts down. This also isolates cookies when the Chrome runtime uses
+  a disk profile despite the incognito setting. Reusing the same token skips browser logout; a different
+  token retains the guarded cleanup of an unfinished back-to-title. Each handoff logs its outcome.
+  HUD settings are kept by Godot, independently of the profile. CEF has no DevTools port; its log (incl. the page's console
   at "info") is `user://cef/debug.log` (Linux:
   `~/.local/share/godot/app_userdata/Anima Native/cef/debug.log`). "Back to
   title" in the menu logs out through the HUD page (CEF drops its cookie),

@@ -293,7 +293,7 @@ public static class HudCheck
                $"{status}/{guard}/{logout}: {end}");
         var handoff = HudOverlay.HandoffScript("tok-EN_1", false, "http://h:8000/static/client3d/hud.html?bridge=gdcef");
         Expect("handoff = end session, then the cookie script",
-               handoff == end + ".catch(() => 'unreachable').then(() => { " + got + " });", handoff);
+               handoff.StartsWith(end, StringComparison.Ordinal) && handoff.EndsWith(got + " });", StringComparison.Ordinal), handoff);
         Expect("leave = end session, then a blank page naming the outcome",
                HudOverlay.LeaveScript == end + ".catch(() => 'unreachable').then(o => location.replace('about:blank#' + o));",
                HudOverlay.LeaveScript);

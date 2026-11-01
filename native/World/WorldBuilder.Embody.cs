@@ -14,6 +14,31 @@ namespace AnimaNative.World;
 /// <summary>Task 49 / E7-T4: main.ts walking lookups over the same mounted ground ladder used by NPCs.</summary>
 public sealed partial class WorldBuilder
 {
+    /// <summary>Reveal the authoritative room before the avatar's first placement, like browser placeAvatarOnArrival.</summary>
+    public bool PrepareAvatarArrival(JsonElement map)
+    {
+        string name = Json.Str(map, "avatar");
+        foreach (var row in Json.Arr(map, "characters"))
+        {
+            if (Json.Str(row, "name") != name) continue;
+            string id = Json.Str(row, "location_id"), room = Json.Str(row, "room_id");
+            if (id.Length == 0 || (row.TryGetProperty("travel", out var travel) && travel.ValueKind == JsonValueKind.Object)) return true;
+            // No slot at all (off-map / no scene): nothing to prepare, place as before. A mounting slot is waited for.
+            if (!_slots.TryGetValue(id, out var slot)) return true;
+            if (!slot.Ready) return false;
+            SetLevel(id, slot.Stands.RoomLevels.GetValueOrDefault(room));
+            if (slot.Openable)
+            {
+                SetOpen(id, true);
+                slot.Fade.Snap(1);
+            }
+            slot.Storeys.Apply(slot.LevelFilter, slot.Openable ? slot.Fade.Fade : 0, slot.Openable, slot.Fade);
+            _log($"[spawn] view location={id} room={room} storey={slot.LevelFilter} interior={slot.Fade.Fade} ready={slot.Ready}");
+            return true;
+        }
+        return true;
+    }
+
     private readonly Dictionary<(string Id, int Level), (LocationSlot Slot, ScenePayload Scene, TileFrame Frame, List<WallSegment> Segments)> _avatarWalls = new();
 
     public LocationSlot? FootprintAt(double x, double z) => TileAt(x,z)?.Slot;

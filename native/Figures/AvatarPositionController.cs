@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Figures;
 using AnimaNative.Scatter;
@@ -49,6 +50,14 @@ public sealed class AvatarPositionController : IDisposable
     }
     public Action<string>? Toast { get; set; }
     public Action<Vector3>? FlyTo { get; set; }
+    public Action<string>? Log { get; set; }
+    public Task<bool> FlushOnShutdownAsync(int timeoutMs = 1000)
+    {
+        var point = CanReport ? CurrentPoint() : null;
+        if (point is { } p)
+            Channel.Tick(p, _lastPosition is { } last && double.Hypot(p.X-last.X,p.Z-last.Z) > .00001);
+        return Channel.FlushOnShutdownAsync(point, timeoutMs);
+    }
     public PendingSnap? PendingSnap => _readiness.PendingSnap;
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private bool InPair => Avatar?.Pair is not null;
@@ -66,7 +75,14 @@ public sealed class AvatarPositionController : IDisposable
     {
         _figures = figures; _world = world; _steering = steering;
         _clock = clock ?? (() => source.MonotonicMs);
-        Channel = channel ?? new PositionChannel(source.ReportPositionAsync, _clock);
+        Channel = channel ?? new PositionChannel(async (report, ct) =>
+        {
+            var level = _world.Slots.GetValueOrDefault(LocationId)?.Stands.RoomLevels.GetValueOrDefault(RoomId);
+            Log?.Invoke($"[pos] send seq={report.seq} point=({report.x},{report.z}) location={LocationId} room={RoomId} storey={level}");
+            var answer = await source.ReportPositionAsync(report, ct);
+            Log?.Invoke($"[pos] answer seq={report.seq} status={answer.Status} ok={answer.Ok} room={answer.RoomId}");
+            return answer;
+        }, _clock);
         Channel.CanReport = () => CanReport;
         Channel.CanPrepareReport = () => _active && !_disposed && _readiness.PendingSnap is null && _steering.Correction is null;
         Channel.Adopted += answer => SetRoom(Text(answer.Body,"location_id"), answer.RoomId);
@@ -173,6 +189,7 @@ public sealed class AvatarPositionController : IDisposable
         _steering.VerticalRide = null; _figures.SetStairRide(f.CharacterName, null);
         _world.ClearPlayerApproach(); _steering.CancelRoute(); _steering.WalkIn = null;
         var goal = GroundPoint(point);
+        Log?.Invoke($"[spawn] correction from={f.Position} to={goal} room={RoomId} mode={(double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM ? "snap" : "walk")}");
         if (double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM)
         { _figures.SnapPlayerTo(f.CharacterName,goal); _steering.Correction = null; }
         else

@@ -29,6 +29,14 @@ public sealed class RoomEntryChannel(Func<string,CancellationToken,Task<Position
     public bool Rejected(string room) => _rejected.GetValueOrDefault(room)>clock();
     public void Idle() => _walk=RoomWalk.IdleRoomWalk();
 
+    /// <summary>The last room candidate must survive quitting during the normal 1.5 s walking hold.</summary>
+    public async Task FlushOnShutdownAsync()
+    {
+        if (Pending is { } pending) await pending;
+        if (_walk.Candidate is { } room && room != RequestedRoom && !Rejected(room))
+            await EnterAsync(room);
+    }
+
     /// <summary>Keep the old due clock while gated, so a freed line does not add a second hold.</summary>
     public void Walk(string? current, P2 pos, IReadOnlyList<ElevatorRoom> rooms, int level)
     {

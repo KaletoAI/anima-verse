@@ -243,7 +243,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "graphics" or "loginlook" or "update" or "cache" or "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel" or "residency" or "embody" or "propactions" or "minimap" or "audio";
+             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel" or "residency" or "embody" or "propactions" or "minimap" or "audio" or "resume";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'graphics', 'loginlook', 'update', 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "

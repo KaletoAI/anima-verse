@@ -45,6 +45,7 @@ public sealed class AvatarRoomsController : IDisposable
     public Action<string?>? AutoOpen { get; set; }
     public Action<string>? AdoptRoom { get; set; }
     public Action<string>? Toast { get; set; }
+    public Action<string>? Log { get; set; }
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private LocationSlot? Tile => Avatar is { } f ? _world.FootprintAt(f.Position.X,f.Position.Z) : null;
     private bool CanUse => _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
@@ -52,7 +53,13 @@ public sealed class AvatarRoomsController : IDisposable
     public AvatarRoomsController(FigureManager figures,WorldBuilder world,PlayerSteering steering,IWorldSource source,HudOverlay hud,Func<double>? clock=null)
     {
         _figures=figures; _world=world; _steering=steering; _hud=hud; _clock=clock ?? (()=>source.MonotonicMs);
-        Channel=new(source.EnterRoomAsync,_clock) { Toast=message=>Toast?.Invoke(message) };
+        Channel=new(async (room, ct) =>
+        {
+            Log?.Invoke($"[pos] enter-room send room={room}");
+            var answer = await source.EnterRoomAsync(room, ct);
+            Log?.Invoke($"[pos] enter-room answer status={answer.Status} room={room}");
+            return answer;
+        },_clock) { Toast=message=>Toast?.Invoke(message) };
         Picking=new(world,UsableTargets);
         hud.Handlers["rideStairs"] = RideStairsAction;
         hud.Handlers["rideElevator"] = RideElevatorAction;
@@ -79,6 +86,9 @@ public sealed class AvatarRoomsController : IDisposable
         foreach(var (id,name) in tile.DetailRooms) if(name==raw) return id;
         return null;
     }
+
+    public Task FlushOnShutdownAsync() => CanUse && !_steering.AvatarSeated && Avatar?.Pair is null
+        ? Channel.FlushOnShutdownAsync() : Task.CompletedTask;
     private int? Level(LocationSlot tile,string? room) => room is null || room==GroundRoomId ? 0
         : tile.Stands.RoomLevels.TryGetValue(room,out int level) ? level : null;
 

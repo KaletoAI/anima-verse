@@ -206,6 +206,7 @@ public static class LoginLookCheck
                 Input.ParseInputEvent(new InputEventKey { Keycode = Key.Enter, PhysicalKeycode = Key.Enter, Pressed = false });
                 await Frame(host); await Frame(host);
                 Expect("keyboard enters via shared callback without login", accepted == 1 && fixture.LoginCalls == 0);
+                Expect("remembered session entry sends no logout", fixture.LogoutCalls == 0);
                 Expect("gate entry becomes loading", HasText(gate, "Starting…") && !HasText(gate, "Signed in as Ada"));
             }
             finally { gate.Free(); }

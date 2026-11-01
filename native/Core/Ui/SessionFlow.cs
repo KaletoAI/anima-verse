@@ -65,8 +65,8 @@ public readonly record struct SessionState(SessionPhase Phase, bool HudLoaded);
 /// navigation) only sets <see cref="SessionState.HudLoaded"/>, every later one rebuilds. <c>markResume</c> is only
 /// acknowledged, and it may arrive before or after the reload (two IPC paths, no order to rely on). A scene started
 /// by a rebuild has its page loaded already — that reload was the trigger — so its next reload rebuilds again. The
-/// rebuild keeps the session: the HUD page has already reloaded on that very cookie, and a handoff would end it
-/// (<c>HudOverlay.HandoffScript</c> logs out what the browser holds).
+/// rebuild keeps the session: the HUD page has already reloaded on that very cookie, so no handoff is needed.
+/// Repeated handoffs with that same token also skip browser logout (Task 89).
 ///
 /// Leaving is final for a scene: a back-to-title or a 401 that comes while a rebuild is under way changes nothing
 /// more, and the next scene starts from <see cref="Start"/>.

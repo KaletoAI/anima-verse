@@ -16,6 +16,51 @@ namespace AnimaNative;
 /// </summary>
 public partial class Main : Node3D
 {
+    private bool _shuttingDown;
+    private Task? _shutdownFlush;
+
+    public override void _Notification(int what)
+    {
+        if (what == NotificationWMCloseRequest) _ = QuitAsync();
+    }
+
+    private async Task QuitAsync()
+    {
+        // AutoAcceptQuit is off: the window must close even when the flush throws.
+        try { await FlushPlayerOnExitAsync(); }
+        catch (Exception e) { Log($"[spawn] quit flush failed: {e.Message}"); }
+        finally { GetTree().Quit(); }
+    }
+
+    /// <summary>Freeze the rendered point and drain both writers within one second, before logout/cancellation.</summary>
+    private Task FlushPlayerOnExitAsync() => _shutdownFlush ??= FlushPlayerOnExitCoreAsync();
+    private async Task FlushPlayerOnExitCoreAsync()
+    {
+        _shuttingDown = true;
+        _figures?.SetProcess(false);
+        StopSync();
+        var started = Time.GetTicksMsec();
+        bool position = true;
+        bool ended = false;
+        try
+        {
+            async Task Drain()
+            {
+                if (_avatarPosition is { } pos) position = await pos.FlushOnShutdownAsync();
+                if (ended) return;
+                if (_avatarRooms is { } rooms) await rooms.FlushOnShutdownAsync();
+            }
+            await Drain().WaitAsync(TimeSpan.FromMilliseconds(1000));
+            Log($"[spawn] quit flush position={(position ? "drained" : "failed/skipped")} room={_avatarPosition?.RoomId} elapsed_ms={Time.GetTicksMsec()-started}");
+        }
+        catch (Exception e) { Log($"[spawn] quit flush incomplete after {Time.GetTicksMsec()-started} ms: {e.Message}"); }
+        finally
+        {
+            ended = true;
+            _avatarRooms?.Channel.Reset();
+            _avatarPosition?.Channel.Dispose();
+        }
+    }
     /// <summary>The session a rebuild hands to the next scene (survives the scene reload, taken once).</summary>
     private sealed record CarriedSession(string Server, string Token, string Role, bool BackdropCaptured);
     private static CarriedSession? _carried;
@@ -61,7 +106,7 @@ public partial class Main : Node3D
     /// side: the world that stands belongs to the character just left, so it is rebuilt from scratch — the same scene
     /// reload as back to the title, but WITHOUT a logout and without the login screen. The live session goes to the
     /// next scene (<see cref="ResumeAsync"/>); the HUD page has already reloaded on that very cookie, so there is no
-    /// handoff either (it would end the session the browser holds).
+    /// handoff either (the browser already holds this session).
     /// </summary>
     private void RebuildWithSession()
     {
@@ -232,7 +277,7 @@ public partial class Main : Node3D
     {
         DeleteSavedSession();
         Log("back to title");
-        StopSync();
+        await FlushPlayerOnExitAsync();
         _stop.Cancel();
         try
         {

@@ -529,6 +529,7 @@ function mountHudFrame(): void {
 }
 
 async function startApp(username: string, role: string) {
+  let exitFlushing = false, exitReportsReady = false;
   markBootStart();
   // --- Knowledge filter (stage 5): the ONE switch that decides which view is
   // fetched. Only an administrator may see the unfiltered map — a stored `1`
@@ -688,6 +689,7 @@ async function startApp(username: string, role: string) {
   const backToTitle = async () => {
     cancelPendingControl();
     try {
+      await flushPlayerOnExit();
       await api.logout();
     } finally {
       location.reload();
@@ -3828,6 +3830,54 @@ async function startApp(username: string, role: string) {
   /** True while the figure moved since the last report — the flag that turns
    *  the "one final report on stop" into a single call instead of a stream. */
   let posDirty = false;
+  window.addEventListener('pagehide', () => { void flushPlayerOnExit(true); });
+
+  /** Capture the final point and room before page teardown, including a room still in its walking hold. */
+  async function flushPlayerOnExit(unloading = false): Promise<void> {
+    if (exitFlushing) return;
+    exitFlushing = true;
+    if (!exitReportsReady) return;
+    const state = getGameState();
+    if (state.mode !== 'embodied' || state.movementLocked || avatarSeated || avatarDrive.kind === 'SERVER'
+      || pendingSnap || correction || verticalRide || npcs.inInteraction(avatarName) || npcs.hasOwnMotion(avatarName)
+      || manualPropGate.pending || propMutationPending || propStateUncertain || propPreparation.pending || ownedPropRun()
+      || (!manualPropRelease && lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry)) return;
+    const point = npcs.positionOf(avatarName);
+    const position = point && (posDirty || posInFlight) ? { x: Math.round(point.x * 100) / 100, z: Math.round(point.z * 100) / 100,
+      seq: ++posSeq, t_ms: performance.now(), session: posSession } : null;
+    const candidate = roomWalk.candidate;
+    const room = candidate && candidate !== roomOf.get(avatarName) && candidate !== requestedRoom
+      && (roomRejectedUntil.get(candidate) ?? 0) <= performance.now() ? candidate : null;
+    pendingReport = null;
+    const abort = new AbortController();
+    let deadline: ReturnType<typeof setTimeout>;
+    const expired = new Promise<void>(resolve => { deadline = setTimeout(() => { abort.abort(); resolve(); }, 1000); });
+    const post = async (url: string, body: unknown) => {
+      const response = await fetch(url, { method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true, signal: abort.signal });
+      if (!response.ok || (await response.json()).ok === false) throw new Error(`${url} refused the final write`);
+    };
+    try {
+      const drain = async () => {
+        if (!unloading) {
+          await Promise.all([positionDrain.wait(), roomDrain.wait()]);
+          // Wait from receipt, since the server's throttle is independent of our 330 ms send cadence.
+          if (position) await new Promise<void>(resolve => setTimeout(resolve, 250));
+          if (abort.signal.aborted) return;
+          if (position) await post('/play/pos', position);
+          if (room) await post('/play/enter-room', { room_id: room });
+        } else {
+          // Schedule both while the page still runs. keepalive owns delivery after pagehide.
+          await Promise.all([...(position ? [post('/play/pos', position)] : []),
+            ...(room ? [post('/play/enter-room', { room_id: room })] : [])]);
+        }
+      };
+      await Promise.race([drain(), expired]);
+      if (abort.signal.aborted) { console.warn('[spawn] quit flush timed out after 1000 ms'); return; }
+      console.info(`[spawn] quit flush point=${JSON.stringify(position)} room=${room ?? 'unchanged'}`);
+    } catch (e) { console.warn('[spawn] quit flush incomplete', e); }
+    finally { clearTimeout(deadline!); }
+  }
   /** True while the server has the avatar on a PLACE (plan-posen-plaetze.md
    *  § 4, `reconcileAvatarPlace`): no position reports, and the first
    *  steering input stands it up. */
@@ -4125,6 +4175,7 @@ async function startApp(username: string, role: string) {
    */
   function tickPosReport(pos: { x: number; z: number }): void {
     if (pendingSnap) return;
+    if (exitFlushing) return;
     if (avatarDrive.kind === 'SERVER') return;
     if (posInFlight) return;
     if (!posDirty) return;
@@ -4254,6 +4305,7 @@ async function startApp(username: string, role: string) {
   const walkGoal = new THREE.Vector3();
   engine.addFrameHook((dt) => {
     const state = getGameState();
+    if (exitFlushing) return;
     if (state.mode !== 'embodied') {
       cancelRoute();                      // leaving the mode drops the route
       verticalRide = null;   // ditto for a ride nobody is in any more
@@ -5284,6 +5336,7 @@ async function startApp(username: string, role: string) {
    *  change for the rest of the session. */
   const ROOM_TIMEOUT_MS = 10_000;
   let roomWalk: RoomWalkState = idleRoomWalk();
+  const roomDrain = createPositionDrain();
   /** Room the server was asked for, until `roomOf` confirms it. NOT a local
    *  anticipation of the room — the payload alone decides where the avatar is;
    *  this only stops the hysteresis from asking again while the answer is
@@ -5292,6 +5345,7 @@ async function startApp(username: string, role: string) {
   let requestedAt = 0;
   /** room id -> time until which a refused switch stays refused */
   const roomRejectedUntil = new Map<string, number>();
+  exitReportsReady = true;
 
   /** A room reference from `roomOf` as a room ID: it carries the worldmap's
    *  `room_id`, but the pre-AV3D-8 fallback poll writes a room NAME into the
@@ -5451,6 +5505,7 @@ async function startApp(username: string, role: string) {
    *                  (the ride does, the room walk stays silent).
    *  @returns true when the server accepted the room. */
   async function enterRoomOnFoot(roomId: string, announce = false): Promise<boolean> {
+    const releaseDrain = roomDrain.begin();
     roomRequestInFlight = true;
     requestedRoom = roomId;
     requestedAt = performance.now();
@@ -5479,6 +5534,7 @@ async function startApp(username: string, role: string) {
     } finally {
       clearTimeout(deadline);
       roomRequestInFlight = false;   // guaranteed, or the interlock never opens
+      releaseDrain();
     }
   }
 
@@ -5545,6 +5601,7 @@ async function startApp(username: string, role: string) {
   // and a clock correction must not make a hold fire instantly or never.
   engine.addFrameHook(() => {
     const state = getGameState();
+    if (exitFlushing) return;
     if (state.mode !== 'embodied') { roomWalk = idleRoomWalk(); return; }
     const pos = npcs.positionOf(avatarName);
     // No figure on the map (a model reload throws the group away and rebuilds
@@ -6671,7 +6728,14 @@ async function startApp(username: string, role: string) {
     }
     refreshOpenBadge();
     // Now the placement has everything it reads.
-    npcs.update(computeNpcStates(lastMap ?? firstMap));
+    const states = computeNpcStates(lastMap ?? firstMap);
+    for (const st of states) if (st.char.name === avatarName && !st.char.travel && !st.char.local_approach
+      && !st.char.prop_action_entry && !st.char.place && !st.interaction) st.snap = true;
+    npcs.update(states);
+    const own = states.find(st => st.char.name === avatarName && st.snap && !st.char.place && !st.interaction);
+    const yaw = own?.char.yaw;
+    if (typeof yaw === 'number' && Number.isFinite(yaw))
+      npcs.faceTowards(avatarName, Math.sin(yaw), Math.cos(yaw), true);
   }
 
   // --- Arriving IN the avatar (finding B15) ---------------------------------

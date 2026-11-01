@@ -58,6 +58,27 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     public event Action<string>? Toast;
     public event Action<DriverState, DriverState>? DriverChanged;
     public Task WhenIdle => _idle?.Task ?? Task.CompletedTask;
+    /// <summary>Drain the final rendered point before disposal, bypassing only the ordinary send cadence.</summary>
+    public async Task<bool> FlushOnShutdownAsync(P2? point, int timeoutMs = 1000)
+    {
+        if (_disposed) return false;
+        if (point is { } p && CanReport() && Driver.Kind != DriverKind.SERVER)
+        {
+            if (Dirty || InFlight) Tick(p, moved: true);
+        }
+        else point = null;
+        try
+        {
+            await PreparePropActionAsync(point, point is null).WaitAsync(TimeSpan.FromMilliseconds(timeoutMs));
+            return !Dirty;
+        }
+        catch (Exception)
+        {
+            _pending = null;
+            _lifetime.Cancel();
+            return false;
+        }
+    }
     private readonly List<long> _sent = new();
     private readonly CancellationTokenSource _lifetime = new();
     private TaskCompletionSource? _idle;
@@ -161,5 +182,5 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
         }
     }
 
-    public void Dispose() { _disposed = true; _pending = null; _lifetime.Cancel(); _lifetime.Dispose(); }
+    public void Dispose() { if (_disposed) return; _disposed = true; _pending = null; _lifetime.Cancel(); _lifetime.Dispose(); }
 }

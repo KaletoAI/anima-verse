@@ -31,7 +31,7 @@ namespace AnimaNative.Hud;
 ///   • LOGIN — ONE login: Godot logs in, then hands its session to CEF (see
 ///     <see cref="Start"/>): gdCEF exposes no cookie manager, so the cookie is
 ///     written by a script on a page of the server's origin.
-///   • SETTINGS — the browser profile is in memory, so the page's localStorage
+///   • SETTINGS — the browser profile is isolated to this process, so the page's localStorage
 ///     would be gone at every start: the page mirrors each localStorage write to
 ///     <see cref="hud_storage"/> (a second JS binding method, not the bridge
 ///     protocol), Godot keeps it in <c>user://hud_storage.json</c> per server
@@ -72,6 +72,8 @@ public partial class HudOverlay : CanvasLayer
     private JsonObject? _boot;
     private Uri? _server;
     private string? _token;
+    private bool _sameSession;
+    private string? _cefProfile;
     private enum Phase { Idle, Cookie, Hud, Leaving }
     private Phase _phase = Phase.Idle;
     private bool _failed, _loaded, _hello;
@@ -174,14 +176,16 @@ public partial class HudOverlay : CanvasLayer
         _cef.Runtime.Name = "GdCEF";
         AddChild(_cef.Runtime);
         var dir = ProjectSettings.GlobalizePath("user://cef");
+        _cefProfile = System.IO.Directory.CreateTempSubdirectory("anima-cef-").FullName;
         var config = new Godot.Collections.Dictionary
         {
-            // In-memory profile: the session cookie never reaches a disk cache (the
-            // HUD's localStorage prefs live in user://hud_storage.json instead, see
-            // hud_storage). root_cache_path still takes CEF's lock files — under
-            // user://, not next to the binary.
+            // CEF's Chrome runtime can put its default profile under root_cache_path
+            // even with incognito enabled. Never reuse a previous process's cookie jar.
+            // Keep localStorage through HudStorage, independently of this private profile.
             ["incognito"] = true,
-            ["root_cache_path"] = dir,
+            ["root_cache_path"] = _cefProfile,
+            ["cache_path"] = _cefProfile + "/cache",
+            ["persist_session_cookies"] = false,
             // Console messages of the page (the bridge's own warnings) land here at "info";
             // next to the exported binary (run.sh's logs/) so the build host can read them.
             ["log_file"] = CefLogFile(dir),
@@ -197,12 +201,16 @@ public partial class HudOverlay : CanvasLayer
             Log($"hud: CEF failed to initialise ({_cef.RuntimeError.Trim()}) — running without the HUD; CEF log {dir}/debug.log");
             return;
         }
-        Log($"hud: CEF initialised (log {dir}/debug.log)");
+        Log($"hud: CEF initialised (fresh profile {_cefProfile}, log {dir}/debug.log)");
     }
 
     public override void _ExitTree()
     {
         FlushStorage();
+        // Child nodes have exited: gdCEF has shut down and released its profile lock.
+        if (_cefProfile is { } profile)
+            try { System.IO.Directory.Delete(profile, recursive: true); }
+            catch (Exception e) { Log($"hud: temporary profile cleanup: {e.Message}"); }
         if (Instance == this) Instance = null;
     }
 
@@ -225,6 +233,7 @@ public partial class HudOverlay : CanvasLayer
     public void Start(Uri server, string? token)
     {
         if (_failed || _cef is null || _rect is null) return;
+        _sameSession = token is not null && token == _token && _server?.GetLeftPart(UriPartial.Authority) == server.GetLeftPart(UriPartial.Authority);
         _server = server;
         _token = token;
         _loaded = _hello = false;
@@ -254,6 +263,7 @@ public partial class HudOverlay : CanvasLayer
         // Before the first page runs a script: messages to an unregistered method are dropped.
         if (!_cef.RegisterMethod(this, Channel)) Log("hud: register_method failed — the HUD cannot reach the scene");
         if (!_cef.RegisterMethod(this, StorageMethod)) Log("hud: register_method hud_storage failed — HUD settings are not kept across starts");
+        if (!_cef.RegisterMethod(this, "hud_handoff")) Log("hud: register_method hud_handoff failed — handoff diagnostics unavailable");
         // gdCEF emits on_page_loaded(http_status, browser) — gdbrowser.cpp, emit_signal("on_page_loaded", httpStatusCode, this).
         _cef.ConnectBrowser(GdCef.SignalPageLoaded, Callable.From<int, GodotObject>((_, browser) => OnPageLoaded(browser)));
         _cef.ConnectBrowser(GdCef.SignalPageFailed, Callable.From<int, string, GodotObject>(OnPageFailed));
@@ -286,11 +296,16 @@ public partial class HudOverlay : CanvasLayer
     /// the new one), then write the stored HUD settings into this origin's localStorage
     /// (<see cref="HudStorage.SeedScript"/>; nothing for none), then <see cref="CookieScript"/>,
     /// which navigates to the HUD — so its first read finds them. A failure of the first
-    /// two parts never stops the handoff.
+    /// two parts never stops the handoff. A repeated handoff with the same token skips the end-session step.
     /// </summary>
-    public static string HandoffScript(string token, bool secure, string hudUrl, IReadOnlyDictionary<string, string>? stored = null)
-        => EndSessionScript + ".catch(() => 'unreachable').then(() => { "
+    public static string HandoffScript(string token, bool secure, string hudUrl, IReadOnlyDictionary<string, string>? stored = null,
+        bool endPreviousSession = true)
+        => (endPreviousSession ? EndSessionScript : "Promise.resolve('same-session')")
+           + ".catch(() => 'unreachable').then(o => { try { window.godotMethods.hud_handoff(o); } catch (_) {} "
            + HudStorage.SeedScript(stored ?? new Dictionary<string, string>()) + CookieScript(token, secure, hudUrl) + " });";
+
+    /// <summary>One non-secret diagnostic per handoff, before navigation destroys the health page.</summary>
+    public void hud_handoff(Variant outcome) => Log("hud: handoff browser session: " + outcome.AsString());
 
     /// <summary>Back to the title: end the browser's session, then a blank page whose fragment names the outcome.</summary>
     public const string LeaveScript =
@@ -299,7 +314,7 @@ public partial class HudOverlay : CanvasLayer
     /// <summary>
     /// The cookie handoff: a NON-HttpOnly copy of the session cookie (page scripts
     /// cannot set HttpOnly), same name/path/SameSite as the server's, Secure on
-    /// https, without an expiry (the browser is incognito anyway). The server's
+    /// https, without an expiry (the browser profile is process-local). The server's
     /// next Set-Cookie for it (sliding refresh) replaces it with an HttpOnly one.
     /// </summary>
     public static string CookieScript(string token, bool secure, string hudUrl)
@@ -316,7 +331,7 @@ public partial class HudOverlay : CanvasLayer
         {
             _phase = Phase.Hud;
             var stored = StoredEntries(_server);
-            _cef.ExecuteJavaScript(HandoffScript(_token!, _server!.Scheme == Uri.UriSchemeHttps, HudUrl, stored));
+            _cef.ExecuteJavaScript(HandoffScript(_token!, _server!.Scheme == Uri.UriSchemeHttps, HudUrl, stored, !_sameSession));
             Log($"hud: session handed to CEF ({stored.Count} stored HUD settings), opening the HUD");
             return;
         }

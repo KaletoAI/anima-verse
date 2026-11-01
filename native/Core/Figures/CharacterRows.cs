@@ -21,6 +21,8 @@ public sealed record CharacterRow(
     public JsonObject? LocalApproach { get; init; }
     public JsonObject? PropActionEntry { get; init; }
     public bool HasPos => PosX.HasValue && PosZ.HasValue;
+    /// <summary>Optional authoritative facing in radians; older servers do not publish it.</summary>
+    public double? Yaw { get; init; }
 
     /// <summary><c>activity_animation</c>: THE clip kind of a standing figure (npcs.ts → <c>standingClipFor</c>); "" = none.</summary>
     public string ActivityAnimation { get; init; } = "";
@@ -107,6 +109,7 @@ public sealed record CharacterRow(
         return new CharacterRow(Json.Str(c, "name"), Json.Str(c, "location_id"), px, pz,
                                 Json.NumOrNull(c, "height_cm"), sig, travel)
         {
+            Yaw = Json.NumOrNull(c, "yaw"),
             LocalApproach = c.TryGetProperty("local_approach",out var la) && la.ValueKind==JsonValueKind.Object ? JsonNode.Parse(la.GetRawText())!.AsObject() : null,
             PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
             ActivityAnimation = Json.Str(c, "activity_animation"),

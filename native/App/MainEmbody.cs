@@ -143,6 +143,8 @@ public partial class Main
         _pendingArrivalTakeControl = false;
         SetEntryPin(null);
         _embody?.Enter();
+        if (AvatarFigure() is { } arrived)
+            Log($"[spawn] control rests position={arrived.Position} target={arrived.Target} yaw={arrived.Yaw} room={_avatarPosition?.RoomId}");
     }
 
     /// <summary>Self panel path: wait, fly to the map point (or tile centre) at min(distance,15), open, enter.</summary>
@@ -256,12 +258,14 @@ public partial class Main
             { LoadingPlace = () => EmbodyToast("Loading this place…") };
             _avatarPosition = new AvatarPositionController(_figures, _builder, _playerSteering, _source!)
             {
+                Log = Log,
                 Toast = EmbodyToast,
                 FlyTo = point => { if (_camera is { } cam) cam.FlyTo(point, cam.Control.TargetDist); }
             };
             if (_hud is { } overlay)
                 _avatarRooms = new AvatarRoomsController(_figures, _builder, _playerSteering, _source!, overlay)
                 {
+                    Log = Log,
                     Toast = EmbodyToast,
                     AdoptRoom = room => _avatarPosition?.AdoptRoom(room),
                     AutoOpen = id => { if (id is null) CloseOpenLocation(); else OpenLocation(id); }

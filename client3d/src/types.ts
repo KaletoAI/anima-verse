@@ -269,6 +269,8 @@ export interface MapCharacter {
    *  location is unplaced). Clients place the figure BY `pos` and only fall
    *  back to the location centre when it is null. */
   pos: { x: number; z: number } | null;
+  /** Optional authoritative facing in radians; older servers do not publish it. */
+  yaw?: number | null;
   /** Report that produced this point; null for every other writer. */
   pos_origin: { session: string; seq: number } | null;
   /** AV3D-6: Authoritative animation category of the current activity */

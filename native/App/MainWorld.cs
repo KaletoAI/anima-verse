@@ -157,6 +157,7 @@ public partial class Main : Node3D
                 FocusTarget = () => _camera is { } c && IsInstanceValid(c) ? c.Target : null,
                 // Task 29: the room placement reads every mounted location's view state and stands.
                 Slots = () => builder.Slots,
+                PrepareAvatarPlacement = map => builder.PrepareAvatarArrival(map),
                 CamDist = () => _camera is { } c && IsInstanceValid(c) ? c.Distance : FigureManager.DefaultCamDist,
             };
             world.AddChild(_figures);

@@ -134,7 +134,7 @@ for (const name of ['no_scene', 'retarget_far_near', 'open_arrival_tiers', 'tick
     const map = { characters: [{ name: 'avatar', location_id: 'X' }] };
     const residency = new Map(['X', 'Y'].map(id => [id, { tile: { loc: { id }, roomGroups: new Map() } }]));
     const deps = { state, residency, firstMap: map, avatarName: 'avatar', places: new Map([['X', {}], ['Y', {}]]), driver: { want: (id) => { assert.equal(state.open(), id, 'open before want'); wants.push(id); }, settled: id => gates[id].promise }, setPinOwner: (owner, id) => { pins.set(owner, id); }, distanceOf: () => 0, followAvatarStorey: t => placed.push(t.loc.id) };
-    const api = compile(['awaitArrivalMount', 'placeAvatarOnArrival'], deps, `let lastMap = firstMap; let bootPin = ''; let openLocationId = null; state.open = () => openLocationId; const refreshOpenBadge = () => {}; const roomOf = new Map(); const openable = () => true; const npcs = {update(){}}; const computeNpcStates = () => {}; const applyTileFade = () => {}; const applyLevelDisplay = () => {}; const applyRoomVisibility = () => {};`);
+    const api = compile(['awaitArrivalMount', 'placeAvatarOnArrival'], deps, `let lastMap = firstMap; let bootPin = ''; let openLocationId = null; state.open = () => openLocationId; const refreshOpenBadge = () => {}; const roomOf = new Map(); const openable = () => true; const npcs = {update(){}}; const computeNpcStates = () => []; const applyTileFade = () => {}; const applyLevelDisplay = () => {}; const applyRoomVisibility = () => {};`);
     const p = api.placeAvatarOnArrival();
     await flush();
     map.characters[0].location_id = 'Y';

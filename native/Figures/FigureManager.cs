@@ -279,6 +279,8 @@ public partial class FigureManager : Node3D
         _ageAtAppliedS = _source.ReceiptOf(root) is { } receipt
             ? TravelPath.AgeAtReceiptS(TravelSync.Parse(root), receipt) + (_source.MonotonicMs - receipt.ParsedAt) / 1000 : 0;
         AvatarName = Json.Str(root, "avatar");
+        bool arriving = !_figures.ContainsKey(AvatarName);
+        bool arrivalReady = !arriving || PrepareAvatarPlacement?.Invoke(root) != false;
         PositionMapApplying?.Invoke(root, _source.ReceiptOf(root)?.PolledAt ?? _source.MonotonicMs);
         WorldFrozen = root.TryGetProperty("game_rate", out var rate) && rate.ValueKind == JsonValueKind.Number && rate.GetDouble() == 0;
         _rows = CharacterRow.ParseList(root);
@@ -288,6 +290,7 @@ public partial class FigureManager : Node3D
         var loads = new List<Task>();
         foreach (var row in _rows)
         {
+            if (row.Name == AvatarName && !arrivalReady) continue;
             if (!plans.TryGetValue(row.Name, out var plan)) continue;
             bool fresh = !_figures.TryGetValue(row.Name, out var fig);
             // Task 52: a poll older than a local seat write cannot restore its activity/clip/label either.
@@ -304,6 +307,13 @@ public partial class FigureManager : Node3D
             fig.AvatarUrl = row.AvatarUrl;
             fig.IsAvatar = row.Name == AvatarName;
             ApplyPlan(fig, plan, fresh);
+            if (fresh && fig.IsAvatar)
+            {
+                if (row.Place is null && row.Interaction is null && row.Yaw is { } yaw && double.IsFinite(yaw))
+                    fig.FaceTowards(new Vector3((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw)), snap: true);
+                _log($"[spawn] server location={row.LocationId} room={row.RoomId} pos=({row.PosX},{row.PosZ}) yaw={row.Yaw?.ToString() ?? "absent"} journey={row.Travel?.JourneyId ?? "none"} progress_m={row.Travel?.ProgressM} floor_y={row.Travel?.FloorY}");
+                _log($"[spawn] placed position={fig.Position} yaw={fig.Yaw} target={fig.Target} rule={plan.Rule} hidden={plan.Hidden}");
+            }
             if (fresh && IsPlayerDriven(row.Name)) TakeOver(fig);
             fig.WantedSig = row.ModelSig;
             fig.WantedRev = row.ModelRev;
@@ -333,6 +343,8 @@ public partial class FigureManager : Node3D
 
     /// <summary>The mounted locations (id → slot) the room placement reads; null = none (every row free or offmap).</summary>
     public Func<IReadOnlyDictionary<string, LocationSlot>>? Slots { get; set; }
+    /// <summary>Initial own-avatar placement waits for its room mount, open interior and displayed storey.</summary>
+    public Func<JsonElement, bool>? PrepareAvatarPlacement { get; set; }
     /// <summary>The last parsed rows and placed locations of <see cref="Apply"/> (the 1 Hz pass re-places from them).</summary>
     private List<CharacterRow> _rows = new();
     private Dictionary<string, CharacterRow> _rowByName = new();

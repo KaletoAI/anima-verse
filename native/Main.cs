@@ -132,6 +132,7 @@ public partial class Main : Node3D
 
     public override void _Ready()
     {
+        GetTree().AutoAcceptQuit = false;
         GD.Print($"Anima Native {BuildInfo.Version}");
         Ui.HitchLog.Init(GetViewport());
         _ = RunAsync();
@@ -290,6 +291,7 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        if (_shuttingDown) return;
         // delta is the frame that just ended: log it if it was a hitch, with what the heavy main-thread steps reported.
         if (!Ui.HitchLog.Armed && _figures?.FirstPollDone.IsCompleted == true) Ui.HitchLog.Armed = true;
         Ui.HitchLog.EndFrame(delta * 1000, Log);
@@ -326,7 +328,8 @@ public partial class Main : Node3D
             TickVeil(delta);
         }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
-        if (_interactive && !Embodied && _openView.OpenId is { } open && _camera is not null)
+        if (_interactive && ControlBootReady && !_pendingTakeControl && !_pendingArrivalTakeControl
+            && !Embodied && _openView.OpenId is { } open && _camera is not null)
         {
             var slot = _builder?.Slots.GetValueOrDefault(open);
             var target = _camera.Target;
