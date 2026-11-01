@@ -32,10 +32,18 @@ DEFAULTS = {
         {'t0': .1, 'tip_offset': .02, 'phase': math.pi, 'wobble': .03, 'freq': 1., 'offset': 0., 'r0': .0007, 'r1': .0005}],
     'ridge_blend': .0018, 'pod_scale': 1.2,
     'pods': {'down': .046, 'back': .018, 'blend': .008, 'ellipsoids': [
-        {'lateral': .012, 'down': .006, 'back': 0., 'radii': [.014, .013, .024]},
-        {'lateral': -.012, 'down': .002, 'back': 0., 'radii': [.014, .013, .024]},
-        {'lateral': 0., 'down': .012, 'back': 0., 'radii': [.016, .011, .013]},
-        {'lateral': 0., 'down': -.008, 'back': .006, 'radii': [.013, .010, .012]}]},
+        {'lateral': .012, 'down': .006, 'back': 0., 'radii': [.014, .011, .024]},
+        {'lateral': -.012, 'down': .002, 'back': 0., 'radii': [.014, .011, .024]},
+        {'lateral': 0., 'down': .012, 'back': 0., 'radii': [.016, .0095, .013]},
+        {'lateral': 0., 'down': -.008, 'back': .006, 'radii': [.016, .012, .016]}],
+        # Rugae: wavy transverse folds pressed INTO the skin (a loose, slightly
+        # sunken sack, not a taut one), a crossing set for irregularity and the
+        # midline seam. Lengths scale with the pods; free of folds near the root.
+        'folds': {'depth': .0007, 'wavelength': .0075, 'width': .3, 'wobble': .003, 'wobble_wavelength': .021,
+                  'raphe': .0005, 'raphe_width': .0018, 'root_clear': .016, 'root_fall': .012, 'shade': .3}},
+    # The shaft-pods union widens near the root into a web of skin; along the
+    # free shaft it stays tight so a lifted shaft does not drag the sack along.
+    'pod_web': {'blend': .016, 'until': .4},
     'pod_link': .7, 'pod_link_distance': .03, 'k_tip_pods': .004, 'k_body': .016,
     'body_window': {'radius': .03, 'fall': .02}, 'skin_sink': .003,
     'hidden_band': {'lateral': .025, 'above': -.02, 'radius': .045, 'depth': .006},
@@ -96,9 +104,17 @@ def parameters(raw):
     if settings['reweight']['from'] < 0 or settings['reweight']['to'] <= settings['reweight']['from']:
         raise ValueError('Invalid radial reweight interval')
     for section, keys in (('body_window', ['radius', 'fall']), ('relief', ['rise', 'fall']),
-                           ('texture', ['bake', 'patch_max', 'flood', 'blur', 'tone_tolerance'])):
-        if any(settings[section][key] <= 0 for key in keys):
+                           ('texture', ['bake', 'patch_max', 'flood', 'blur', 'tone_tolerance']),
+                           ('pods.folds', ['wavelength', 'width', 'wobble_wavelength', 'raphe_width', 'root_fall']),
+                           ('pod_web', ['until'])):
+        values = settings
+        for part_ in section.split('.'):
+            values = values[part_]
+        if any(values[key] <= 0 for key in keys):
             raise ValueError('Invalid ' + section)
+    folds = settings['pods']['folds']
+    if any(folds[key] < 0 for key in ('depth', 'wobble', 'raphe', 'root_clear', 'shade')) or folds['shade'] > 1 or settings['pod_web']['blend'] < 0:
+        raise ValueError('Invalid pod folds or web')
     if settings['texture']['blur'] % 2 != 1:
         raise ValueError('Texture blur must be odd')
     for e in settings['pods']['ellipsoids']:
@@ -370,13 +386,51 @@ def build_part(group, companions, output):
         return (np.linalg.norm(q, axis=1) - 1) * r.min()
 
 
+    folds = settings['pods']['folds']
+
+
+    def pod_folds(P):
+        """Crease depth in [0, 1], faded out near the root.
+
+        Narrow creases sit on the zero lines of a warped mix of three
+        non-commensurate waves: wrinkles of varying length and direction,
+        mostly transverse, with smooth skin between them."""
+        q = (P - np.array(tuple(pod_center))) @ FR.T / pod_factor
+        x, y, z = q[:, 0], q[:, 1], q[:, 2]
+        lam, wl = folds['wavelength'], folds['wobble_wavelength']
+        w_ = folds['wobble'] * (np.sin(2 * np.pi * x / wl + 1.7) + .6 * np.sin(2 * np.pi * (x - .7 * y + .4 * z) / (.57 * wl) + .4))
+        s_ = z + w_
+        n_ = (.6 * np.sin(2 * np.pi * s_ / lam)
+              + .45 * np.sin(2 * np.pi * (.38 * x + .92 * s_) / (1.41 * lam) + 2.1)
+              + .3 * np.sin(2 * np.pi * (-.52 * x + .85 * s_ + .3 * y) / (.79 * lam) + .7))
+        crease = np.exp(-(n_ / folds['width']) ** 2)
+        strength = .55 + .45 * np.sin(2 * np.pi * (.8 * x + .6 * z) / (3.1 * lam) + 1.1)
+        r_ = np.linalg.norm(P - np.array(tuple(root)), axis=1) / pod_factor
+        return crease * strength * np.clip((r_ - folds['root_clear']) / folds['root_fall'], 0, 1)
+
+
     def pods_sdf(P):
         if not pod_ellipsoids:
             return np.full(len(P), 1e9)
         d = ellip(P, *pod_ellipsoids[0])
         for c, r in pod_ellipsoids[1:]:
             d = smin(d, ellip(P, c, r), settings['pods']['blend'] * pod_factor)
+        # Creases only cut inward (half-wave), the raphe is a low ridge on the midline.
+        near = np.where(d < .006 * pod_factor)[0]
+        if len(near):
+            d = d.copy()
+            Pn = P[near]
+            x = ((Pn - np.array(tuple(pod_center))) @ np.array(tuple(lat))) / pod_factor
+            raphe = folds['raphe'] * np.exp(-(x / folds['raphe_width']) ** 2)
+            fade = np.clip((np.linalg.norm(Pn - np.array(tuple(root)), axis=1) / pod_factor - folds['root_clear']) / folds['root_fall'], 0, 1)
+            d[near] += (folds['depth'] * pod_folds(Pn) - raphe * fade) * pod_factor
         return d
+
+
+    def pod_link_k(station):
+        """Shaft-pods blend radius: the web near the root, tight along the free shaft."""
+        web = np.clip(1 - np.asarray(station, float) / settings['pod_web']['until'], 0, 1)
+        return pod_blend + settings['pod_web']['blend'] * size_factor * web * web * (3 - 2 * web)
 
 
 
@@ -468,7 +522,7 @@ def build_part(group, companions, output):
     print('grid', nx, ny, nz, len(grid_points))
     ds, dt = shaft_sdf(grid_points)
     dc = pods_sdf(grid_points)
-    part = smin(ds, dc, pod_blend)
+    part = smin(ds, dc, pod_link_k(dt))
     db = np.full(len(grid_points), 1.0)
     band = np.where(part < 2.5 * body_blend)[0]
     for i in band:
@@ -538,7 +592,7 @@ def build_part(group, companions, output):
     # Keep the shell, including a short hidden band at the root.
     shaft_distance, part_station = shaft_sdf(positions)
     pod_distance = pods_sdf(positions)
-    part_distance = smin(shaft_distance, pod_distance, pod_blend)
+    part_distance = smin(shaft_distance, pod_distance, pod_link_k(part_station))
     skin_distance = np.empty(len(positions))
     skin_nearest = []
     for i, point in enumerate(positions):
@@ -625,9 +679,12 @@ def build_part(group, companions, output):
     dark = skin_tone * np.array(settings['tone']['shaft'])
     tip = dark * np.array(settings['tone']['tip'])
 
+    # Smoothing and decimation soften the creases; the bake keeps them readable.
+    pod_share = np.clip(.5 + (shaft_distance - pod_distance) / .01, 0, 1)
+    crease_shade = folds['shade'] * pod_folds(positions) * pod_share
     vertex_colors = np.zeros((len(positions), 4))
     for i in range(len(positions)):
-        tone = dark * (1 - tip_weight[i]) + tip * tip_weight[i]
+        tone = (dark * (1 - tip_weight[i]) + tip * tip_weight[i]) * (1 - crease_shade[i])
         under = skin_texel(*skin_nearest[i]) if skin_weight[i] > 0 else skin_tone
         vertex_colors[i, :3] = under * skin_weight[i] + tone * (1 - skin_weight[i])
         vertex_colors[i, 3] = 1
