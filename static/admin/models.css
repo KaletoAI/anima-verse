@@ -152,3 +152,7 @@ tr:hover { background: #161b22; }
 
 .test-badge.amber { background: #fff0c2; color: #754400; border: 1px solid #d99b28; }
 .suit-warn { background: #fff0c2; color: #754400; border: 1px solid #d99b28; border-radius: 6px; padding: 12px; margin: 8px 0; font-weight: 600; }
+
+.suit-group-row { display: flex; align-items: end; gap: 12px; grid-column: 1 / -1; flex-wrap: wrap; }
+.suit-group-row strong { min-width: 65px; align-self: center; }
+.suit-group-row label { flex: 1; min-width: 120px; }

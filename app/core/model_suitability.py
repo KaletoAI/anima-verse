@@ -271,7 +271,8 @@ def validate_settings(settings: dict) -> dict:
     from app.core.llm_router import parse_extra_params
     defaults = {"temperature": {"tools": 0.1, "helpers": 0.5, "vision": 0.3},
                 "repetition_penalty": None, "max_tokens": 900, "chat_template": "",
-                "thinking": False, "extra_params": {}}
+                "thinking": dict.fromkeys(("tools", "helpers", "vision"), False),
+                "thinking_budget": dict.fromkeys(("tools", "helpers", "vision")), "extra_params": {}}
     if not isinstance(settings, dict) or settings.keys() - defaults.keys():
         raise ValueError("settings must be an object with known keys only")
     result = {**defaults, **deepcopy(settings)}
@@ -290,8 +291,14 @@ def validate_settings(settings: dict) -> dict:
         raise ValueError("max_tokens must be an integer from 0 to 200000")
     if not isinstance(result["chat_template"], str):
         raise ValueError("chat_template must be text")
-    if not isinstance(result["thinking"], bool):
-        raise ValueError("thinking must be a boolean")
+    groups = {"tools", "helpers", "vision"}
+    thinking = result["thinking"]
+    if not isinstance(thinking, dict) or set(thinking) != groups or not all(isinstance(v, bool) for v in thinking.values()):
+        raise ValueError("thinking must contain tools, helpers and vision booleans")
+    budgets = result["thinking_budget"]
+    if (not isinstance(budgets, dict) or set(budgets) != groups
+            or not all(v is None or (type(v) is int and 1 <= v <= 32000) for v in budgets.values())):
+        raise ValueError("thinking_budget must contain tools, helpers and vision integers from 1 to 32000 or null")
     if not isinstance(result["extra_params"], dict):
         raise ValueError("extra_params must be a JSON object")
     result["extra_params"] = parse_extra_params(result["extra_params"])
@@ -326,8 +333,9 @@ def iter_suitability_results(
         return
     try:
         clients = {group: inst.create_llm(
-            temperature=temperature,
-            **{k: v for k, v in settings.items() if k != "temperature"})
+            temperature=temperature, thinking=settings["thinking"][group],
+            thinking_budget=settings["thinking_budget"][group],
+            **{k: v for k, v in settings.items() if k not in ("temperature", "thinking", "thinking_budget")})
             for group, temperature in settings["temperature"].items()}
     except Exception as e:
         yield {"type": "error", "message": f"client init failed: {e}"}
@@ -367,6 +375,7 @@ def iter_suitability_results(
         ctok = int(usage.get("completion_tokens") or 0)
         raw = {"content": getattr(resp, "content", "") or "",
                "reasoning": getattr(resp, "reasoning", None),
+               "budget_hit": bool(getattr(resp, "budget_hit", False)),
                "finish_reason": getattr(resp, "finish_reason", None),
                "usage": usage, "duration_s": dt}
         return raw, dt, ctok
@@ -382,7 +391,7 @@ def iter_suitability_results(
                        (not case.get("image") or not (ROOT / case["image"]).is_file()))
             if missing or case.get("fixture_error"):
                 raw, dt, ctok = {"content": "", "reasoning": None, "finish_reason": None,
-                                 "usage": {}, "duration_s": 0}, 0, 0
+                                 "budget_hit": False, "usage": {}, "duration_s": 0}, 0, 0
             else:
                 raw, dt, ctok = ask(case)
             evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
@@ -397,7 +406,7 @@ def iter_suitability_results(
                         else score_case(case, "", infra_error=not missing))
             dt, ctok = time.monotonic() - attempt_start, 0
             raw = {"content": "", "reasoning": None, "finish_reason": None,
-                   "usage": {}, "duration_s": dt, "error": str(exc)}
+                   "budget_hit": False, "usage": {}, "duration_s": dt, "error": str(exc)}
         return evidence, raw, dt, ctok
 
     results: List[Dict[str, Any]] = []
@@ -438,6 +447,7 @@ def iter_suitability_results(
                    "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
                    "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
                    "runs": outputs,
+                   "budget_hits": sum(bool(r.get("budget_hit")) for r in outputs),
                    "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
                    "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
                    "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
@@ -446,7 +456,7 @@ def iter_suitability_results(
             results.append(rec)
             yield {"type": "check", "index": idx, **{k: rec[k] for k in
                    ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                    "infra", "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens")},
+                    "infra", "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits")},
                    "prompt": {"system": case.get("system", ""), "user": case.get("user", "")},
                    "runs": outputs}
 
@@ -454,7 +464,7 @@ def iter_suitability_results(
     with _JOBS_LOCK:
         if cancel_event is not None and cancel_event.is_set():
             return
-        summary = _summarize(model_full, results)
+        summary = _summarize(model_full, results, settings=settings)
         summary.update(concurrency=concurrency, live_play=live_play,
                        curated_only=bool(data.get("curated_only")))
         summary.update(settings=settings, scorer_version=SCORER_VERSION,
@@ -463,7 +473,7 @@ def iter_suitability_results(
         yield {"type": "done", "summary": summary}
 
 
-def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Optional[dict] = None) -> Dict[str, Any]:
     eligible = [r for r in results if r.get("ok") is not None]
     tool = [r for r in eligible if r["category"] == "tool"]
     tp = sum(1 for r in tool if r["ok"])
@@ -495,7 +505,11 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
         runs = timings([r for r in eligible if group_of(r) == group])
         durations = [r["duration_s"] for r in runs]
         tokens = sum(int((r.get("usage") or {}).get("completion_tokens") or 0) for r in runs)
-        speed[group] = {"median_latency_s": round(median(durations), 2) if durations else None,
+        reasoning_counts = [(run.get("usage") or {}).get("reasoning_tokens")
+                            for record in results if group_of(record) == group for run in record.get("runs", [])]
+        reasoning_counts = [n for n in reasoning_counts if n is not None]
+        speed[group] = {"reasoning_tokens_median": median(reasoning_counts) if reasoning_counts else None,
+                        "median_latency_s": round(median(durations), 2) if durations else None,
                         "tok_s": round(tokens / sum(durations), 1) if durations else None}
     task_medians = []
     for task in ("thought", "extraction_chat_state", "extraction"):
@@ -517,6 +531,11 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
         if record.get("ok") is False and failing and all(run.get("truncated") for run in failing):
             failed_by_truncation.append(record["id"])
     return {
+        "budget_hits": sum(bool(run.get("budget_hit")) for run in all_runs),
+        "thinking_leak_runs": sum(
+            (((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0 or bool((run.get("reasoning") or "").strip()))
+            for record in results if not ((settings or {}).get("thinking") or {}).get(group_of(record), False)
+            for run in record.get("runs", [])),
         "total_runs": len(all_runs),
         "truncated_runs": sum(run.get("finish_reason") == "length" for run in all_runs),
         "truncated_cases": [r["id"] for r in results if any(run.get("finish_reason") == "length" for run in r.get("runs", []))],
@@ -554,7 +573,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens")} for r in results]
+                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
                    "cases": {r["id"]: r.get("runs", []) for r in results}}
@@ -587,7 +606,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
-                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "reasoning_tokens_median")},
+                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "reasoning_tokens_median")},
             "checks": stored_checks,
         },
     }

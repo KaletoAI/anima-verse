@@ -996,7 +996,8 @@ function renderInput(f, val, path) {
                 + _phAttr(f)
                 + 'step="' + esc(f.step || 0.1) + '" onchange="setVal(\'' + sJs(path) + '\', parseFloat(this.value) || 0)">';
         case 'select':
-            let opts = (f.choices || []).map(c => '<option value="' + esc(c) + '"' + (c == val ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
+            // choice_labels (optional) names a value; the stored value stays the raw choice.
+            let opts = (f.choices || []).map(c => '<option value="' + esc(c) + '"' + (c == val ? ' selected' : '') + '>' + esc((f.choice_labels || {})[c] ?? c) + '</option>').join('');
             const onChg = f.triggers_rerender
                 ? "setVal('" + sJs(path) + "', this.value); renderSection(ACTIVE_SECTION)"
                 : "setVal('" + sJs(path) + "', this.value)";

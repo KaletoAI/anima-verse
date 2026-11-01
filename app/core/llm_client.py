@@ -116,6 +116,7 @@ class LLMResponse:
     # value here: a fabricated "stop" would claim a completeness nobody checked.
     finish_reason: Optional[str] = None
     reasoning: Optional[str] = None
+    budget_hit: bool = False
 
 
 @dataclass
@@ -197,11 +198,20 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
     return out
 
 
+# Thought tags of the budget forcing in LLMClient.invoke: Qwen-family,
+# SenseNova, Nanbeige, Groot and DeepSeek think in these; a model with a
+# different thought format (Gemma 4) should get no budget.
+THINK_OPEN = "<think>\n"
+THINK_CLOSE = "\n</think>\n\n"
+# (base_url, model) pairs that could not continue a capped thought (400/422
+# or an empty answer); their budgeted calls run without thinking from then on.
+_NO_CONTINUE: set = set()
 # (base_url, model) pairs whose server refused ``stream_options``. The OpenAI
 # SDK only sends the final usage chunk on request, and a strict or older
 # OpenAI-compatible server may answer that field with a 400 — such a server
 # then streams without usage instead of not streaming at all.
 _NO_STREAM_USAGE: set = set()
+# (base_url, model) pairs whose server refused ``chat_template_kwargs``.
 _NO_CHAT_TEMPLATE_KWARGS: set = set()
 
 
@@ -261,11 +271,13 @@ class LLMClient:
         top_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
         extra_params: Optional[Dict[str, Any]] = None,
-        thinking: bool = False):
+        thinking: bool = False,
+        thinking_budget: Optional[int] = None):
         self.model = model
         self.model_name = model
         # Whether the task this client serves may think (llm_tasks "thinking"
         # flag). False switches a template-thinking model's reasoning off.
+        self.thinking_budget = thinking_budget
         self.thinking = bool(thinking)
         self.openai_api_key = api_key
         self.openai_api_base = api_base
@@ -355,10 +367,8 @@ class LLMClient:
         body.pop("chat_template_kwargs")
         return True
 
-    def invoke(self, messages: List) -> LLMResponse:
-        """Synchronous LLM call (for the provider_queue.py worker threads)."""
-        openai_msgs = to_openai_messages(messages)
-        kwargs = self._build_kwargs()
+    def _request(self, openai_msgs, kwargs, *, warn_cutoff=True) -> LLMResponse:
+        """One request with the existing per-request retry policy."""
         max_attempts, base = _busy_retry_policy()
         attempt = 0
         while True:
@@ -380,16 +390,80 @@ class LLMClient:
         usage = usage_from_openai(resp.usage, _field(resp, "timings"))
         choice = resp.choices[0]
         finish = getattr(choice, "finish_reason", None) or None
-        _warn_if_cut_off("Call", self.model, finish)
+        if warn_cutoff or finish != "length":
+            _warn_if_cut_off("Call", self.model, finish)
         return LLMResponse(
             content=choice.message.content or "",
             usage=usage,
             finish_reason=finish,
             reasoning=_field(choice.message, "reasoning_content") or _field(choice.message, "reasoning"))
 
+    def invoke(self, messages: List) -> LLMResponse:
+        """Synchronous call; optionally force a thought budget before the answer."""
+        msgs = to_openai_messages(messages)
+        budget = self.thinking_budget
+        if not (self.thinking and type(budget) is int and budget > 0):
+            return self._request(msgs, self._build_kwargs())
+        key = (self.base_url, self.model)
+
+        def plain():
+            kwargs = self._build_kwargs(thinking=False)
+            # Fallback overrides explicit extra_params enabling thinking.
+            if key not in _NO_CHAT_TEMPLATE_KWARGS:
+                kwargs.setdefault("extra_body", {}).setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+            return self._request(msgs, kwargs)
+
+        if key in _NO_CONTINUE:
+            return plain()
+        kwargs = self._build_kwargs()
+        kwargs["max_tokens"] = budget
+        if "max_tokens" in kwargs.get("extra_body", {}):
+            kwargs["extra_body"]["max_tokens"] = budget
+        first = self._request(msgs, kwargs, warn_cutoff=False)
+        if first.finish_reason != "length":
+            return first
+        partial = first.content
+        if not first.reasoning and partial.startswith("<think>") and "</think>" not in partial:
+            prefill = partial.rstrip() + THINK_CLOSE
+            first.reasoning = partial[len("<think>"):].strip()
+            partial = ""
+        else:
+            prefill = THINK_OPEN + (first.reasoning or "").strip() + THINK_CLOSE + partial
+        kwargs = self._build_kwargs()
+        kwargs.setdefault("extra_body", {}).update(continue_final_message=True, add_generation_prompt=False)
+        try:
+            final = self._request(msgs + [{"role": "assistant", "content": prefill}], kwargs)
+            answer = final.content or final.reasoning or ""
+            if "</think>" in answer:
+                answer = answer.rsplit("</think>", 1)[1]
+            answer = answer.lstrip()
+            if not answer.strip():
+                final = None
+            elif partial and not answer.startswith(partial):
+                answer = partial + answer
+        except Exception as exc:
+            if getattr(exc, "status_code", None) not in (400, 422):
+                raise
+            final = None
+        if final is None:
+            if key not in _NO_CONTINUE:
+                _NO_CONTINUE.add(key)
+                logger.warning("%s @ %s cannot continue a capped thought — disabling thinking for budgeted calls",
+                               self.model, self.base_url)
+            final = plain()
+            answer = final.content
+        usage = None
+        if first.usage is not None or final.usage is not None:
+            usage = dict(first.usage or {})
+            for name, count in (final.usage or {}).items():
+                usage[name] = usage.get(name, 0) + count
+        return LLMResponse(content=answer, usage=usage, finish_reason=final.finish_reason,
+                           reasoning=first.reasoning, budget_hit=True)
+
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async streaming generator (for the streaming.py agent loop).
 
+        Budget forcing does not apply here; streaming callers are RP chat paths.
         Thinking/reasoning is disabled by default (tool LLM in dual mode).
         Template thinking is switched off for every model unless requested.
         """

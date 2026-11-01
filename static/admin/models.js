@@ -228,8 +228,11 @@ function suitCutoffStats(result) {
         }).map(c => c.id),
     };
 }
+function suitThinkingLeaks(result) {
+    return result.thinking_leak_runs ?? ((result.settings || {}).thinking === false ? (result.thinking_runs || 0) : 0);
+}
 function suitThinkingText(result) {
-    return result.thinking_runs > 0 && (result.settings || {}).thinking === false
+    return suitThinkingLeaks(result) > 0
         ? 'The model produced reasoning although thinking was off (median '
             + (result.reasoning_tokens_median ?? 'unknown') + ' reasoning tokens).' : '';
 }
@@ -246,7 +249,7 @@ function suitDiagnosticBadges(result) {
     const tooltip = stats.cut + ' of ' + stats.total + ' answers hit the token limit (finish_reason=length). Cases that failed only because of this: '
         + stats.failed.length + '. Usually thinking that was not switched off or a too small Max tokens - the score then says little about the model.';
     return (stats.cut ? ' <span class="test-badge amber" title="' + esc(tooltip) + '">✂ ' + stats.cut + '/' + stats.total + ' cut off</span>' : '')
-        + (suitThinkingText(result) ? ' <span class="test-badge amber" title="' + esc(suitThinkingText(result)) + '">🧠 thinks (' + result.thinking_runs + ' runs)</span>' : '');
+        + (suitThinkingText(result) ? ' <span class="test-badge amber" title="' + esc(suitThinkingText(result)) + '">🧠 thinks (' + suitThinkingLeaks(result) + ' runs)</span>' : '');
 }
 
 function testBadge(caps) {
@@ -258,7 +261,7 @@ function testBadge(caps) {
     const visionText = vision.rate == null ? 'not tested' : Math.round(vision.rate * 100) + '%';
     const tooltip = 'Tools ' + (result.tool || '-') + ' · Helpers ' + (result.helper || '-')
         + ' · Vision ' + visionText + '\n'
-        + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s').join(' · ')
+        + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s, reasoning median ' + ((speed[g] || {}).reasoning_tokens_median ?? '-') + ' tokens').join(' · ')
         + '\n' + suitSettingsText(result.settings) + (result.settings ? '\n' + JSON.stringify(result.settings) : '') + '\n' + (caps.tested_date || '') + ' · ' + result.scorer_version + ' · click for details';
     const key = result.model || '';
     return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
@@ -507,7 +510,10 @@ function suitSettingsText(settings) {
     const temps = settings.temperature || {};
     return 'Temperatures: tools ' + (temps.tools ?? '—') + ' / helpers ' + (temps.helpers ?? '—')
         + ' / vision ' + (temps.vision ?? '—') + ' · Max tokens: ' + (settings.max_tokens ?? '—')
-        + ' · Thinking: ' + (settings.thinking ? 'on' : 'off');
+        + ' · Thinking: ' + (typeof settings.thinking === 'boolean' ? (settings.thinking ? 'on' : 'off')
+            : ['tools', 'helpers', 'vision'].map(group => group + ' ' + (settings.thinking?.[group]
+                ? 'on' + (settings.thinking_budget?.[group] != null ? ' (budget ' + settings.thinking_budget[group] + ')' : '')
+                : 'off')).join(', '));
 }
 async function suitJobsRefresh() {
     if (suitJobsTimer) { clearTimeout(suitJobsTimer); suitJobsTimer = null; }
@@ -601,11 +607,18 @@ function suitPrefill() {
     document.getElementById('suitPenalty').value = chosen.repetition_penalty ?? '';
     document.getElementById('suitMaxTokens').value = chosen.max_tokens ?? 900;
     document.getElementById('suitChatTemplate').value = chosen.chat_template || '';
-    document.getElementById('suitThinking').value = chosen.thinking ? 'on' : 'off';
+    ['Tools', 'Helpers', 'Vision'].forEach(group => {
+        document.getElementById('suitThinking' + group).value = chosen.thinking === 'on' ? 'on' : 'off';
+        document.getElementById('suitBudget' + group).value = chosen.thinking === 'on' ? (chosen.thinking_budget ?? '') : '';
+        suitThinkingChanged(group);
+    });
     document.getElementById('suitExtraParams').value = JSON.stringify(chosen.extra_params || {}, null, 2);
     suitValidateExtraParams();
     // Selection is a one-time copy and is never sent with a test request.
     document.getElementById('suitPrefill').value = '';
+}
+function suitThinkingChanged(group) {
+    document.getElementById('suitBudget' + group).disabled = document.getElementById('suitThinking' + group).value !== 'on';
 }
 function suitFinite(value) {
     if (typeof value === 'number') return Number.isFinite(value);
@@ -653,7 +666,12 @@ async function suitStart() {
         repetition_penalty: penalty === '' ? null : Number(penalty),
         max_tokens: Number(document.getElementById('suitMaxTokens').value),
         chat_template: document.getElementById('suitChatTemplate').value,
-        thinking: document.getElementById('suitThinking').value === 'on', extra_params: extraParams,
+        thinking: Object.fromEntries(['Tools', 'Helpers', 'Vision'].map(group =>
+            [group.toLowerCase(), document.getElementById('suitThinking' + group).value === 'on'])),
+        thinking_budget: Object.fromEntries(['Tools', 'Helpers', 'Vision'].map(group => {
+            const value = document.getElementById('suitBudget' + group).value;
+            return [group.toLowerCase(), value === '' ? null : Number(value)];
+        })), extra_params: extraParams,
     };
     document.getElementById('suitStartBtn').disabled = true;
     status.textContent = 'Starting…';
@@ -733,7 +751,7 @@ function suitRenderJob(job) {
             + '<div>' + ['tools', 'helpers', 'vision'].map(group => {
                 const measured = speed[group] || {};
                 return esc(group) + ': median ' + esc(number(measured.median_latency_s)) + ' s · '
-                    + esc(number(measured.tok_s)) + ' tok/s';
+                    + esc(number(measured.tok_s)) + ' tok/s · reasoning median ' + esc(number(measured.reasoning_tokens_median)) + ' tokens';
             }).join(' | ') + '</div>'
             + '<div>Projected non-RP time per thought turn: ' + esc(number(summary.projected_turn_s))
             + ' s / maximum ' + esc(limit) + ' s</div>'
@@ -756,6 +774,7 @@ function suitRenderJob(job) {
         const cut = check.truncated_runs ?? (check.run_checks || []).filter(r => r.truncated).length;
         return '<div class="suit-case"><b>' + esc(check.ok === false ? 'Failed' : check.ok ? 'Passed' : 'Excluded')
             + (cut ? ' · cut off ' + cut + '/' + (check.run_checks || runs).length : '')
+            + (check.budget_hits > 0 ? ' · budget hit ' + check.budget_hits + '/' + (check.run_checks || runs).length : '')
             + ' · ' + esc(check.group || '') + ' · ' + esc(check.task || check.label || check.id || '') + '</b>'
             + '<div>' + esc(check.detail || '') + '</div>'
             + (check.ok === false ? '<details><summary>Prompt (system + user)</summary><h4>System</h4><pre>'
@@ -765,7 +784,7 @@ function suitRenderJob(job) {
                     + esc(run.content || run.error || (run.finish_reason === 'length' ? '' : '(empty answer)'))
                     + esc(run.finish_reason === 'length' ? (run.content ? '\n' : '') + '(cut off at the token limit'
                         + ((run.usage || {}).reasoning_tokens != null ? ' - ' + run.usage.reasoning_tokens + ' reasoning tokens' : '') + ')'
-                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
+                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + (run.budget_hit ? ' (thinking capped at the budget, answer continued)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
                 + '</details>' : '') + '</div>';
     }).join('');
 }

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Explicit suitability settings. Usage: .venv/bin/python scripts/smoke_suitability_settings.py
 
-Hand-derived: three cases in tools/helpers/vision invoke clients at 0.1/0.5/0.3.
+Hand-derived: old boolean thinking and budgets 0/32001 are rejected; tools/vision
+receive thinking on with budgets 200/40, helpers off with no budget. All three
+return reasoning text, so three thinking runs, one leak and two budget hits.
+Reported reasoning counts 200/0/missing give group medians 200/0/None. Three cases in tools/helpers/vision invoke clients at 0.1/0.5/0.3.
 A configured entry at 0.9 contributes nothing. One provider instance creates three
 clients. The exact settings survive summary persistence. Unknown keys, non-finite
 numbers, temperatures outside [0,2], penalties outside [0,1.5], token counts outside
@@ -30,7 +33,8 @@ with tempfile.TemporaryDirectory() as directory:
     from fastapi import HTTPException
     settings = dict(temperature=dict(tools=.1, helpers=.5, vision=.3),
                     repetition_penalty=1.03, max_tokens=900, chat_template='template',
-                    thinking=False, extra_params={'nested': {'test': True}})
+                    thinking=dict(tools=True, helpers=False, vision=True),
+                    thinking_budget=dict(tools=200, helpers=None, vision=40), extra_params={'nested': {'test': True}})
     with patch.object(suit, 'enqueue_test', return_value={'job_id': 'fake'}) as enqueue:
         start(None, dict(provider='P', model='M', settings=settings, concurrency=3))
         assert enqueue.call_args.kwargs['settings'] == settings
@@ -38,7 +42,12 @@ with tempfile.TemporaryDirectory() as directory:
                    dict(temperature={'tools': .1, 'helpers': .5, 'vision': 3}),
                    dict(repetition_penalty=2), dict(repetition_penalty=True),
                    dict(max_tokens=-1), dict(max_tokens=200001), dict(max_tokens=1.5),
-                   dict(thinking='off'), dict(chat_template=[]), dict(extra_params=[]),
+                   dict(thinking=False), dict(thinking=True), dict(thinking='off'),
+                   dict(thinking={'tools': True}), dict(thinking_budget=True),
+                   dict(thinking_budget=dict(tools=True, helpers=None, vision=None)),
+                   dict(thinking_budget=dict(tools=1.5, helpers=None, vision=None)),
+                   dict(thinking_budget=dict(tools=0, helpers=None, vision=None)),
+                   dict(thinking_budget=dict(tools=32001, helpers=None, vision=None)), dict(chat_template=[]), dict(extra_params=[]),
                    dict(extra_params='{}'), dict(extra_params={'x': float('nan')})]
         for change in invalid:
             try:
@@ -54,6 +63,10 @@ with tempfile.TemporaryDirectory() as directory:
                 assert exc.status_code == 400
             else:
                 raise AssertionError(f'Accepted removed key {key}')
+    defaults = suit.validate_settings({})
+    assert defaults['thinking'] == dict(tools=False, helpers=False, vision=False)
+    assert defaults['thinking_budget'] == dict(tools=None, helpers=None, vision=None)
+    assert suit.validate_settings({'thinking_budget': dict(tools=1, helpers=32000, vision=None)})['thinking_budget']['helpers'] == 32000
     image = Path(directory) / 'image.png'
     image.write_bytes(b'fake image')
     cases = [dict(id=g, group=g, task=t, system=g, user='ping', fmt='text',
@@ -65,7 +78,8 @@ with tempfile.TemporaryDirectory() as directory:
         clients.append(copy.deepcopy(kwargs))
         def invoke(messages):
             invoked.append((messages[0]['content'], kwargs['temperature']))
-            return SimpleNamespace(content='ok')
+            return SimpleNamespace(content='ok', reasoning='R', budget_hit=kwargs['thinking'],
+                                   usage={} if kwargs['temperature'] == .3 else {'reasoning_tokens': 0 if kwargs['temperature'] == .5 else 200})
         return SimpleNamespace(invoke=invoke)
     from app.core import llm_router
     provider = SimpleNamespace(name='P', available=True)
@@ -88,13 +102,28 @@ with tempfile.TemporaryDirectory() as directory:
         events = list(suit.iter_suitability_results('P::M', settings=settings))
         summary = events[-1]['summary']
         assert summary['settings'] == settings
+        assert summary['budget_hits'] == 2 and summary['thinking_runs'] == 3 and summary['thinking_leak_runs'] == 1
+        assert summary['speed']['tools']['reasoning_tokens_median'] == 200
+        assert summary['speed']['helpers']['reasoning_tokens_median'] == 0
+        assert summary['speed']['vision']['reasoning_tokens_median'] is None
+        assert all(run['budget_hit'] == settings['thinking'][event['group']]
+                   for event in events if event['type'] == 'check' for run in event['runs'])
         assert sorted(invoked) == [('helpers', .5), ('tools', .1), ('vision', .3)], invoked
         assert len(clients) == 3 and all(c['temperature'] != .9 for c in clients)
         assert all(c['max_tokens'] == 900 and c['repetition_penalty'] == 1.03
-                   and c['chat_template'] == 'template' and c['thinking'] is False
+                   and c['chat_template'] == 'template'
                    and c['extra_params'] == settings['extra_params'] for c in clients)
+        for c in clients:
+            group = next(g for g, temp in settings['temperature'].items() if temp == c['temperature'])
+            assert c['thinking'] == settings['thinking'][group]
+            assert c['thinking_budget'] == settings['thinking_budget'][group]
         assert create.call_count == 1 and 'routing_entry' not in create.call_args.kwargs
-        assert caps.get_all_suitability()['p::m']['tested_suitability']['settings'] == settings
+        stored = caps.get_all_suitability()['p::m']['tested_suitability']
+        assert stored['settings'] == settings
+        assert stored['budget_hits'] == 2 and stored['thinking_leak_runs'] == 1 and stored['thinking_runs'] == 3
+        assert stored['speed'] == summary['speed']
+        assert sum(c['budget_hits'] for c in stored['checks']) == 2
+        assert all('runs' not in c and 'reasoning' not in c for c in stored['checks'])
         caps.invalidate_cache()
     with patch.object(llm_router, 'get_provider_manager', return_value=SimpleNamespace(
             get_provider=lambda name: None, provider_for_test=lambda name: None,

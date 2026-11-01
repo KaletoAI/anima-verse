@@ -178,6 +178,13 @@ assert(el('suitDetailStatus').innerHTML.includes('suit-warn'));
 assert(el('suitDetailStatus').innerHTML.includes('3 of 3 answers were cut off'));
 assert(el('suitProgress').innerHTML.includes('cut off 3/3'));
 assert(el('suitProgress').innerHTML.includes('cut off at the token limit - 216 reasoning tokens'));
+// One capped run among two runs shows 1/2; reported median 40 sits beside speed.
+ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',speed:{tools:{reasoning_tokens_median:40}},checks:[
+    {ok:false,group:'tools',budget_hits:1,run_checks:[{},{}],runs:[{content:'answer',budget_hit:true},{content:'other'}]}]}});
+assert(el('suitProgress').innerHTML.includes('budget hit 1/2'));
+assert(el('suitProgress').innerHTML.includes('(thinking capped at the budget, answer continued)'));
+assert(el('suitDetailStatus').innerHTML.includes('reasoning median 40 tokens'));
+assert(ctx.suitSettingsText({thinking:false}).includes('Thinking: off'));
 const entries = [
     {index:0,provider:'P',model:'M',temperature:0.1,tasks:[{task:'thought',order:0}]},
     {index:1,provider:'P',model:'M',temperature:0.5,tasks:[{task:'extraction',order:0}]},
@@ -195,15 +202,24 @@ assert.strictEqual(fallback.vision,0.9);
 ctx.prefillEntries = entries;
 vm.runInContext('suitEntries = prefillEntries; suitGroupTasks = {tools:["thought"], helpers:["extraction"], vision:["image_analysis"]}; suitCombobox = {reload:()=>{}};',ctx);
 entries[1].repetition_penalty=1.03;entries[1].max_tokens=1200;entries[1].chat_template='<template>';
-entries[1].thinking=true;entries[1].extra_params={nested:{test:true}};
+entries[1].thinking='on';entries[1].thinking_budget=200;entries[1].extra_params={nested:{test:true}};
 el('suitPrefill').value='1';ctx.suitPrefill();
 assert.strictEqual(el('suitProvider').value,'P');assert.strictEqual(el('suitModel').value,'M');
 assert.strictEqual(el('suitTempTools').value,0.1);assert.strictEqual(el('suitTempHelpers').value,0.5);assert.strictEqual(el('suitTempVision').value,0.3);
 assert.strictEqual(el('suitPenalty').value,1.03);assert.strictEqual(el('suitMaxTokens').value,1200);
-assert.strictEqual(el('suitChatTemplate').value,'<template>');assert.strictEqual(el('suitThinking').value,'on');
+assert.strictEqual(el('suitChatTemplate').value,'<template>');for (const group of ['Tools','Helpers','Vision']) { assert.strictEqual(el('suitThinking'+group).value,'on'); assert.strictEqual(el('suitBudget'+group).value,200); assert.strictEqual(el('suitBudget'+group).disabled,false); }
 assert.strictEqual(JSON.parse(el('suitExtraParams').value).nested.test,true);
 assert.strictEqual(el('suitPrefill').value,'');
 entries[1].max_tokens=2000;assert.strictEqual(el('suitMaxTokens').value,1200);
+for (const mode of ['off','task']) {
+    entries[1].thinking=mode;el('suitPrefill').value='1';ctx.suitPrefill();
+    for (const group of ['Tools','Helpers','Vision']) {
+        assert.strictEqual(el('suitThinking'+group).value,'off');
+        assert.strictEqual(el('suitBudget'+group).disabled,true);
+    }
+}
+el('suitThinkingTools').value='on';ctx.suitThinkingChanged('Tools');
+assert.strictEqual(el('suitBudgetTools').disabled,false);
 
 assert.strictEqual(ctx.suitQueueSummary([{model:'A::one',status:'running'},{model:'A::two',status:'queued'},{model:'B::one',status:'running'}]),'A: 1 running, 1 waiting · B: 1 running');
 assert.strictEqual(ctx.suitQueueSummary([]),'Queue empty');
@@ -219,8 +235,11 @@ assert(settingsBadge.includes('Temperatures: tools 0.1'));
 assert(settingsBadge.includes('repetition_penalty') && settingsBadge.includes('&lt;template&gt;'));
 el('suitProvider').value='P'; el('suitModel').value='M'; el('suitConcurrency').value='2';
 el('suitTempTools').value='0.1';el('suitTempHelpers').value='0.5';el('suitTempVision').value='0.3';
-el('suitMaxTokens').value='900';el('suitThinking').value='off';el('suitExtraParams').value='{}';
+el('suitMaxTokens').value='900';for (const group of ['Tools','Helpers','Vision']) { el('suitThinking'+group).value='off'; el('suitBudget'+group).value=''; }el('suitExtraParams').value='{}';
 ctx.suitPoll=()=>{}; ctx.suitJobsRefresh=()=>{};
-ctx.fetch=async (url,options)=>{const body=JSON.parse(options.body);assert.strictEqual(body.concurrency,2);assert.strictEqual(JSON.stringify(body.settings.temperature),JSON.stringify({tools:0.1,helpers:0.5,vision:0.3}));assert.strictEqual(Object.keys(body).sort().join(','),'concurrency,model,provider,settings');return {ok:true,json:async()=>({job_id:'one'})};};
+ctx.fetch=async (url,options)=>{const body=JSON.parse(options.body);assert.strictEqual(body.concurrency,2);assert.strictEqual(JSON.stringify(body.settings.temperature),JSON.stringify({tools:0.1,helpers:0.5,vision:0.3}));assert.strictEqual(JSON.stringify(body.settings.thinking),JSON.stringify({tools:false,helpers:false,vision:false}));assert.strictEqual(JSON.stringify(body.settings.thinking_budget),JSON.stringify({tools:null,helpers:null,vision:null}));assert.strictEqual(Object.keys(body).sort().join(','),'concurrency,model,provider,settings');return {ok:true,json:async()=>({job_id:'one'})};};
+assert.strictEqual(ctx.suitSettingsText({thinking:{tools:true,helpers:false,vision:false},thinking_budget:{tools:200}}).includes('Thinking: tools on (budget 200), helpers off, vision off'),true);
+assert.strictEqual(ctx.suitThinkingText({thinking_runs:3,thinking_leak_runs:0,settings:{thinking:{tools:true}}}), '');
+assert(ctx.suitThinkingText({thinking_runs:3,thinking_leak_runs:1,settings:{thinking:{tools:true}}}).includes('although thinking was off'));
 ctx.suitStart().then(()=>{assert(!el('suitStatus').textContent.startsWith('Error:')); console.log('Suitability UI prefill, queue summary, settings detail, escaping and explicit POST OK');});
 """], check=True)

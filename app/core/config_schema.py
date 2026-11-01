@@ -299,7 +299,7 @@ SECTIONS = {
                 # sampling setting.
                 "fields": ["name", "preload_on_startup", "provider",
                            "model", "max_concurrent", "accepts_overflow", "temperature",
-                           "repetition_penalty", "max_tokens", "chat_template", "extra_params", "tasks"],
+                           "repetition_penalty", "max_tokens", "thinking", "thinking_budget", "chat_template", "extra_params", "tasks"],
                 # Rendered as a click toggle in the collapsed entry header
                 # instead of inside the accordion body.
                 "header_fields": ["enabled"],
@@ -371,6 +371,17 @@ SECTIONS = {
                 "description": "Penalty on tokens that already occur in the prompt OR the reply (1.0 = neutral), sent via extra_body — a vLLM / llama.cpp parameter, NOT an OpenAI one, so leave it empty (= not sent) for OpenAI, Anthropic and any backend that rejects unknown fields. It is the one sampler that stops a character from copying its own earlier replies out of the history: frequency_penalty only counts the reply being written. Measured 2026-10-23 on a 111B RP model (vLLM) over eight real chat histories, 32 replies per value: 1.03 cut the reuse of earlier sentences from 19% to 10% with no full copy left; on the four most looped histories full copies went 28% → 25% (1.03) → 16% (1.05) → 9% (1.08), but from 1.08 on the share of broken marker lines rose from about 25% to over 40% and English replies appeared. Chat models: 1.03. The reactive anti-loop (Chat / Anti-Repetition) raises it from here when a character repeats itself — only on entries that have a value.",
             },
             "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
+            "thinking": {
+                "type": "select", "label": "Thinking", "choices": ["task", "off", "on"],
+                "choice_labels": {"task": "Follow task (brain flag)", "off": "Off", "on": "On"},
+                "default": "task", "hide_for_embedding": True,
+                "description": "Follow task uses the task's brain flag; Off disables thinking; On allows thinking for every task. On helps tool-step accuracy of thinking models but costs time; combine it with a budget.",
+            },
+            "thinking_budget": {
+                "type": "int", "label": "Thinking budget", "min": 1, "max": 32000,
+                "placeholder": "unlimited", "hide_for_embedding": True,
+                "description": "Only effective when thinking is on. Client-side cap: after N thinking tokens the client closes the thought and asks for the answer in a second short request (prompt cache makes it cheap). Only for models that think in <think> tags. Max tokens stays the budget for the ANSWER. Streaming RP chat does not apply this cap.",
+            },
             "chat_template": {
                 "type": "text",
                 "label": "Chat Template (optional)",

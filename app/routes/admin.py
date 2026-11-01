@@ -56,7 +56,7 @@ def model_capabilities_data() -> Dict[str, Any]:
         {"index": index, "provider": entry["provider"], "model": entry["model"],
          "name": str(entry.get("name") or f"Entry #{index + 1}"),
          **{key: entry.get(key) for key in ("enabled", "tasks", "temperature",
-             "repetition_penalty", "max_tokens", "chat_template", "thinking", "extra_params")}}
+             "repetition_penalty", "max_tokens", "chat_template", "thinking", "thinking_budget", "extra_params")}}
         for index, entry in enumerate(routing if isinstance(routing, list) else [])
         if isinstance(entry, dict)
         and isinstance(entry.get("provider"), str) and isinstance(entry.get("model"), str)
@@ -231,13 +231,24 @@ def _build_models_html() -> str:
             <label>Provider<select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select></label>
             <label>Model<span id="suitModelPicker"></span></label>
             <label>Prefill from LLM entry<select id="suitPrefill" onchange="suitPrefill()"><option value="">Choose an entry…</option></select></label>
-            <label>Temperature — Tools<input id="suitTempTools" type="number" min="0" max="2" step="0.1" value="0.1"></label>
-            <label>Temperature — Helpers<input id="suitTempHelpers" type="number" min="0" max="2" step="0.1" value="0.5"></label>
-            <label>Temperature — Vision<input id="suitTempVision" type="number" min="0" max="2" step="0.1" value="0.3"></label>
+            <div class="suit-group-row"><strong>Tools</strong>
+                <label>Temperature<input id="suitTempTools" type="number" min="0" max="2" step="0.1" value="0.1"></label>
+                <label>Thinking<select id="suitThinkingTools" onchange="suitThinkingChanged('Tools')"><option value="off">Off</option><option value="on">On</option></select></label>
+                <label>Budget<input id="suitBudgetTools" type="number" min="1" max="32000" step="1" placeholder="unlimited" disabled></label>
+            </div>
+            <div class="suit-group-row"><strong>Helpers</strong>
+                <label>Temperature<input id="suitTempHelpers" type="number" min="0" max="2" step="0.1" value="0.5"></label>
+                <label>Thinking<select id="suitThinkingHelpers" onchange="suitThinkingChanged('Helpers')"><option value="off">Off</option><option value="on">On</option></select></label>
+                <label>Budget<input id="suitBudgetHelpers" type="number" min="1" max="32000" step="1" placeholder="unlimited" disabled></label>
+            </div>
+            <div class="suit-group-row"><strong>Vision</strong>
+                <label>Temperature<input id="suitTempVision" type="number" min="0" max="2" step="0.1" value="0.3"></label>
+                <label>Thinking<select id="suitThinkingVision" onchange="suitThinkingChanged('Vision')"><option value="off">Off</option><option value="on">On</option></select></label>
+                <label>Budget<input id="suitBudgetVision" type="number" min="1" max="32000" step="1" placeholder="unlimited" disabled></label>
+            </div>
             <label>Repetition penalty<input id="suitPenalty" type="number" min="0" max="1.5" step="0.01" placeholder="not sent"></label>
             <label>Max tokens<input id="suitMaxTokens" type="number" min="0" max="200000" step="1" value="900"></label>
             <label>Chat template<textarea id="suitChatTemplate" rows="1" placeholder="Provider default (Jinja, only if the model has none)"></textarea></label>
-            <label>Thinking<select id="suitThinking"><option value="off">Off</option><option value="on">On</option></select></label>
             <label>Parallel requests<input id="suitConcurrency" type="number" min="1" step="1" value="3"></label>
         </div>
         <label for="suitExtraParams">Extra params (JSON)</label>

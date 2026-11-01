@@ -48,6 +48,8 @@ class LLMInstance:
     tasks: list = field(default_factory=list)
     temperature: float = 0.7
     max_tokens: Optional[int] = None
+    thinking: str = "task"
+    thinking_budget: Optional[int] = None
     chat_template: Optional[str] = None
     # The entry's repetition_penalty; None = not sent (see LLMClient).
     repetition_penalty: Optional[float] = None
@@ -106,6 +108,7 @@ class LLMInstance:
         extra_params = merge_extra_params(self.extra_params, overrides.get("extra_params") or {})
         from app.core.llm_tasks import task_thinks
         thinking = (bool(overrides["thinking"]) if "thinking" in overrides
+                    else True if self.thinking == "on" else False if self.thinking == "off"
                     else any(task_thinks(task) for task in self.tasks))
 
         if self._provider and self._provider.type == "anthropic":
@@ -131,7 +134,8 @@ class LLMInstance:
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
                 extra_params=extra_params,
-                thinking=thinking)
+                thinking=thinking,
+                thinking_budget=overrides.get("thinking_budget", self.thinking_budget) if thinking else None)
         client.provider_name = self.provider_name
         return client
 
@@ -478,6 +482,8 @@ def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
         max_tokens=max_tokens,
         chat_template=(entry.get("chat_template") or "") or None,
         repetition_penalty=repetition_penalty,
+        thinking=entry.get("thinking", "task"),
+        thinking_budget=entry.get("thinking_budget") or None,
         extra_params=_entry_extra_params(entry),
         _provider=provider)
 
