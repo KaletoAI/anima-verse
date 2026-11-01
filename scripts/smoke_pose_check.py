@@ -25,7 +25,13 @@ E) Guard — an answer shorter than half the prompt (111 chars -> < 55.5) is a
    exception keep the original too.
 F) Save validator — {"photo": true} passes; a non-object, a non-bool value and
    an occasion without people ("location") are refused with "Pose check:".
-G) Template — renders the prompt into the user turn and names the limb budget.
+G) Template — renders the prompt into the user turn and names the limb budget,
+   the selfie rule and the CHECK/PROMPT answer form.
+H) Answer form (2026-11-01, the model returned a waist-up selfie unchanged
+   until it had to list every limb first) — "CHECK: …\nPROMPT: <p>" yields
+   <p>; a bare prompt without markers is taken as it is; an answer that is
+   only "CHECK: …" carries no prompt -> the original stays. The length guard
+   measures the extracted prompt: "CHECK: <long>\nPROMPT: short" is refused.
 """
 import os
 import sys
@@ -139,6 +145,20 @@ from app.core.prompt_templates import render_task  # noqa: E402
 system, user = render_task("image_pose_check", original_prompt=PROMPT)
 check("prompt in the user turn", PROMPT in user)
 check("limb budget in the system prompt", "two arms" in system and "two legs" in system)
+check("selfie rule in the system prompt", "selfie needs one hand" in system)
+check("answer form in the system prompt", "CHECK:" in system and "PROMPT:" in system)
+
+print("H) answer form")
+answer["text"] = "CHECK: Kira: left hand elbow, right hand cup\nPROMPT: " + FIXED
+check("CHECK + PROMPT -> the prompt", pose_check.check_pose(PROMPT) == FIXED)
+answer["text"] = "CHECK:\nKira: left hand x\nKai: both arms y\n\nPROMPT:\n" + FIXED + "\n"
+check("multi-line CHECK, prompt on its own line", pose_check.check_pose(PROMPT) == FIXED)
+answer["text"] = FIXED
+check("bare prompt without markers", pose_check.check_pose(PROMPT) == FIXED)
+answer["text"] = "CHECK: Kira: left hand elbow, right hand cup, no conflicts at all here " * 2
+check("CHECK only -> original", pose_check.check_pose(PROMPT) == PROMPT)
+answer["text"] = "CHECK: " + "x" * 200 + "\nPROMPT: too short"
+check("guard measures the extracted prompt", pose_check.check_pose(PROMPT) == PROMPT)
 
 print()
 if failures:

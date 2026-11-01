@@ -22,6 +22,7 @@ It runs on the SUBJECT prompt before routing, never inside a GPU channel —
 an LLM wait must not hold a backend slot. A failure, an empty answer or an
 answer that looks like a refusal keeps the original prompt.
 """
+import re
 from typing import Any, Optional, Tuple
 
 from app.core.log import get_logger
@@ -34,6 +35,25 @@ TASK = "image_pose_check"
 # An answer this much shorter than the prompt dropped content (or is a
 # refusal) — the original is the safer render.
 _MIN_LENGTH_RATIO = 0.5
+
+# The template asks for "CHECK: <limb list>" first and "PROMPT: <prompt>"
+# after it — listing every limb's task makes the model actually find the
+# conflicts instead of returning the prompt untouched.
+_PROMPT_MARKER = re.compile(r"^[ \t]*PROMPT:[ \t]*", re.MULTILINE)
+_CHECK_MARKER = re.compile(r"^[ \t]*CHECK:", re.MULTILINE)
+
+
+def _extract_prompt(answer: str) -> Tuple[str, str]:
+    """``(prompt, check)`` from an answer in the template's form. An answer
+    without the PROMPT marker counts as the bare prompt — unless it is only a
+    CHECK part, which is no prompt at all (empty)."""
+    match = _PROMPT_MARKER.search(answer)
+    if match:
+        check = answer[:match.start()]
+        return answer[match.end():].strip(), _CHECK_MARKER.sub("", check, count=1).strip()
+    if _CHECK_MARKER.match(answer):
+        return "", answer.strip()
+    return answer.strip(), ""
 
 
 def supported(occasion: str) -> bool:
@@ -63,10 +83,13 @@ def check_pose(prompt: str, *, character: str = "") -> str:
         system, user = render_task("image_pose_check", original_prompt=original)
         response = llm_call(task=TASK, system_prompt=system, user_prompt=user,
                             agent_name=character)
-        checked = (getattr(response, "content", "") or "").strip()
+        answer = (getattr(response, "content", "") or "").strip()
     except Exception as e:  # noqa: BLE001 — a failed check never blocks a render
         logger.warning("Pose check failed, rendering the original prompt: %s", e)
         return prompt
+    checked, findings = _extract_prompt(answer)
+    if findings:
+        logger.info("Pose check findings: %s", " | ".join(findings.split("\n"))[:400])
     if not checked:
         logger.warning("Pose check returned nothing, rendering the original prompt")
         return prompt
