@@ -636,6 +636,25 @@
           "default": "false",
           "hint": "When on, this character vanishes from the world while no one controls it, and reappears at its last controlled spot (or home location) when taken over as an avatar.",
           "hint_de": "Wenn an, verschwindet dieser Charakter aus der Welt solange ihn niemand steuert, und taucht beim Übernehmen am letzten Steuer-Ort (sonst Heimat-Ort) wieder auf."
+        },
+        {
+          "key": "away_note",
+          "label": "Away note",
+          "label_de": "Abwesenheits-Hinweis",
+          "type": "text",
+          "visible_when": {
+            "field": "avatar_only_presence",
+            "values": [
+              "true"
+            ]
+          },
+          "store": "config",
+          "in_prompt": false,
+          "llm_generable": false,
+          "placeholder": "is travelling and will be back soon",
+          "placeholder_de": "ist gerade auf Reisen und wird bald zurück sein",
+          "hint": "What the other characters' thoughts are told while this character is gone. Written to follow the name, e.g. \"is travelling and will be back soon\". Empty: \"is away right now and cannot be reached\".",
+          "hint_de": "Was die Gedanken der anderen Charaktere erfahren, solange dieser Charakter weg ist. Folgt auf den Namen, z. B. „ist gerade auf Reisen und wird bald zurück sein“. Leer: „is away right now and cannot be reached“."
         }
       ]
     },

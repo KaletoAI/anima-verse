@@ -237,6 +237,29 @@ def _has_avatar_only_presence(character_name: str) -> bool:
         return False
 
 
+AWAY_NOTE_DEFAULT = "is away right now and cannot be reached"
+
+
+def away_note(character_name: str) -> str:
+    """The away line of a character that is out of the world, else "".
+
+    A character with ``avatar_only_presence`` exists only while a player
+    controls it; uncontrolled it is offmap. Other characters still remember
+    and plan around it, so their prompts need to know it is gone — and why,
+    in the words of the profile field ``away_note`` (a predicate that follows
+    the name, e.g. "is travelling and will be back soon")."""
+    if not _has_avatar_only_presence(character_name):
+        return ""
+    if is_player_controlled(character_name):
+        return ""
+    try:
+        from app.models.character import get_character_config
+        note = str((get_character_config(character_name) or {}).get("away_note") or "").strip()
+    except Exception:
+        note = ""
+    return note or AWAY_NOTE_DEFAULT
+
+
 def apply_presence_transition(old_avatar: str, new_avatar: str) -> None:
     """Avatar-only presence transition on an avatar switch/release.
 

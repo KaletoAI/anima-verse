@@ -239,11 +239,13 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 
     # has_assignments may have changed if the filter dropped assignments_block
     ctx["has_assignments"] = bool(ctx["assignments_block"])
-    excluded = {"present_people_block", "elsewhere_block", "absent_block", "tools_hint"}
-    ctx["absent_people"] = absent_named_people(
+    excluded = {"present_people_block", "elsewhere_block", "absent_block",
+                "away_block", "tools_hint"}
+    ctx["absent_people"], ctx["away_people"] = split_away(absent_named_people(
         character_name, location_id, room_id,
         [value for key, value in ctx.items()
-         if key not in excluded and isinstance(value, str)])
+         if key not in excluded and isinstance(value, str)]))
+    ctx["away_block"] = away_block(ctx["away_people"])
     from app.models.account import get_active_character
     avatar = (get_active_character() or "").strip()
     ctx["absent_block"] = "\n".join(
@@ -1186,6 +1188,28 @@ def absent_named_people(character_name: str, location_id: str, room_id: str,
                 if match:
                     mentioned[name] = (index, match.start())
     return sorted(mentioned, key=mentioned.get)[:6]
+
+
+def split_away(names: Iterable[str]) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """Split absent names into (elsewhere in the world, away from it).
+
+    An away character (``account.away_note``) is not at another place — it
+    is out of the world. Telling the model to message or visit it, like any
+    other absent person, sends it chasing someone who cannot answer."""
+    from app.models.account import away_note
+    absent: List[str] = []
+    away: List[Tuple[str, str]] = []
+    for name in names:
+        note = away_note(name)
+        if note:
+            away.append((name, note))
+        else:
+            absent.append(name)
+    return absent, away
+
+
+def away_block(away: Iterable[Tuple[str, str]]) -> str:
+    return "\n".join(f"- {name} {note}" for name, note in away)
 
 
 def location_presence_split(character_name: str, location_id: str,

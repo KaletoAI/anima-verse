@@ -18,6 +18,8 @@
 
      room_name                 — current room display name, empty when unknown
      absent_block              — mentioned people outside this place, avatar marked
+     away_block                — mentioned people out of the world (avatar-only presence,
+                                 uncontrolled) with their away note
 
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block          — active status modifiers (drunk, exhausted, …)
@@ -90,6 +92,11 @@ Current situation:
   activity or your last turns say, they are not here). SendMessage reaches them; to be with them, go to
   them first:
 {{ absent_block }}
+{% endif %}
+{% if away_block %}
+- AWAY — out of the world for now (they cannot be messaged, visited or met, and they do not
+  turn up in this turn; do not wait for them or plan anything with them until they are back):
+{{ away_block }}
 {% endif %}
 {% if outfit_self_block %}
 - {{ outfit_self_block }}

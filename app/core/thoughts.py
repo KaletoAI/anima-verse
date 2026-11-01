@@ -526,7 +526,8 @@ class ThoughtRunner:
         if ctx is None:
             # A caller supplying only a system override needs presence data,
             # not another full system context (or its skill/tool builders).
-            from app.core.thought_context import room_presence_names, absent_named_people
+            from app.core.thought_context import (room_presence_names, absent_named_people,
+                                                  split_away)
             from app.core.perception import prompt_place
             from app.models.character import get_character_profile, get_character_language
             from app.models.world import get_room_name
@@ -534,12 +535,15 @@ class ThoughtRunner:
             loc = profile.get("current_location", "") or ""
             room = profile.get("current_room", "") or ""
             presence = room_presence_names(character_name, loc, room)
+            absent, away = split_away(
+                absent_named_people(character_name, loc, room, [system_prompt]))
             ctx = {
                 "room_presence_names": presence[0] if presence is not None else None,
                 "location_name": prompt_place(character_name, loc)[0],
                 "room_name": get_room_name(loc, room, get_character_language(character_name) or "de")
                              if loc and room else "",
-                "absent_people": absent_named_people(character_name, loc, room, [system_prompt]),
+                "absent_people": absent,
+                "away_people": away,
             }
         presence_line = await render_async("chat/thought_presence.md", **ctx)
         user_input = thought_user_input(context_hint, presence_line=presence_line)
