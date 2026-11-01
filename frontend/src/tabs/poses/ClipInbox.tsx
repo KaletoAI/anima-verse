@@ -550,7 +550,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
             background: dragOver ? 'rgba(88,166,255,0.08)' : 'transparent',
           }}
         >
-          <div>{uploading ? t('Uploading…') : t('Drop FBX files here')}</div>
+          <div>{uploading ? t('Uploading…') : t('Drop FBX or BVH files here')}</div>
           <div className="ga-hint" style={{ marginTop: 4 }}>
             {t('or')}{' '}
             <button type="button" className="ga-btn ga-btn-sm" disabled={uploading}
@@ -561,7 +561,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
           <input
             ref={fileInput}
             type="file"
-            accept=".fbx"
+            accept=".fbx,.bvh"
             multiple
             style={{ display: 'none' }}
             onChange={(e) => { void upload(e.target.files); e.target.value = '' }}

@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Drop FBX or BVH files here": "FBX- oder BVH-Dateien hier ablegen",
     "Reset footprint from size": "Grundfläche aus Größe zurücksetzen",
     "Render resolution": "Render-Auflösung",
     "Auto: {percent} % · {width} × {height}": "Auto: {percent} % · {width} × {height}",

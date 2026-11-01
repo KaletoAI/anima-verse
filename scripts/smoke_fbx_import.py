@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke run for the foreign-FBX import inbox (plan-clip-import.md steps 1+3).
+"""Smoke run for the foreign-FBX/BVH import inbox (plan-clip-import.md steps 1+3).
 
 Builds a throwaway inbox and two throwaway clip libraries and points
 ANIMATION_CLIPS_INBOX_DIR / ANIMATION_CLIPS_DIR / ANIMATION_CLIPS_LICENSED_DIR
@@ -106,6 +106,15 @@ only offers files of the picked file's own family.
   started. Letting it through would leave the family to ``bone_map: "auto"``
   inside Blender — a late error at best, and at worst a silent retarget
   against the wrong family where the byte probe and Blender disagree.
+
+RULE 7 — a BVH is read from its HIERARCHY text. The SOMA map contains
+6 torso + 2 x (4 arm + 5 leg + 5 x 4 finger) = 64 mapped joints.
+Root, Neck2, HeadEnd, face joints and the eight non-thumb metacarpals
+are not mapped. Namespaces and CRLF do not change recognition. A generic
+Mixamo BVH uses its existing family. Missing required header fields fail
+closed. One BVH is one take: 30 x 0.033333 rounds to 1.0 s;
+90 x 0.0166667 rounds to 1.5 s. Motion rows must never be parsed.
+Uploads accept .bvh and continue refusing .txt.
 
 RULE 5 — "a converted clip is CONTINUOUS". The positional retargeter rebuilds
 a bone's roll from an anatomical secondary axis, and the limbs have TWO
@@ -1430,6 +1439,63 @@ def test_library_writer_lock():
     print("PASS FBX/CMU final library writers hold the shared lock; staging/previews do not")
 
 
+def test_bvh() -> None:
+    print("\n[15] RULE 7 — BVH hierarchy and uploads")
+    torso = ["Hips", "Spine1", "Spine2", "Chest", "Neck1", "Head"]
+    mapped = torso + [side + part for side in ("Left", "Right")
+                     for part in ("Shoulder", "Arm", "ForeArm", "Hand",
+                                  "Leg", "Shin", "Foot", "ToeBase", "ToeEnd")]
+    for side in ("Left", "Right"):
+        for finger in ("Thumb", "Index", "Middle", "Ring", "Pinky"):
+            parts = ("1", "2", "3", "End") if finger == "Thumb" else ("2", "3", "4", "End")
+            mapped.extend(side + "Hand" + finger + part for part in parts)
+    names = ["Root", "Neck2", "HeadEnd", "Jaw", "LeftEye", "RightEye"] + mapped
+    names += [side + "Hand" + finger + "1" for side in ("Left", "Right")
+              for finger in ("Index", "Middle", "Ring", "Pinky")]
+
+    def fixture(joints, frames=30, frame_time="0.033333"):
+        return ("HIERARCHY\nROOT " + joints[0] + "\n{\n" +
+                "".join("JOINT " + n + "\n{\n}\n" for n in joints[1:]) +
+                "}\nMOTION\nFrames: " + str(frames) +
+                "\nFrame Time: " + frame_time + "\n").encode()
+
+    body = fixture(names)
+    for label, data in (("bare", body), ("namespace", fixture(["mb:" + n for n in names])),
+                        ("crlf", body.replace(b"\n", b"\r\n"))):
+        path = FIXT / (label + ".bvh")
+        path.write_bytes(data + b"\xffmotion must not be decoded\n")
+        probe = fbx_import.probe_fbx(path)
+        check(label + " SOMA BVH probe", probe["skeleton_family"] == "soma"
+              and probe["take_count"] == 1 and probe["has_fingers"] is True
+              and probe["bone_count"] == 64, str(probe))
+    check("SOMA table mirrors the Decisions map", set(fbx_import.BONE_NAMES.get("soma", ())) == set(mapped))
+    path = FIXT / "mixamo.bvh"
+    path.write_bytes(fixture(["Hips", "LeftUpLeg", "LeftForeArm", "Spine2"], 90, "0.0166667"))
+    check("BVH supports existing families", fbx_import.probe_fbx(path)["skeleton_family"] == "mixamo-noprefix")
+    try:
+        takes = fbx_import.fbx_takes(path)
+    except fbx_import.FbxReadError:
+        takes = []
+    check("90 frames at 60 fps is one 1.5 s take", takes == [{"index": 0, "name": "mixamo", "duration_s": 1.5}], str(takes))
+    for field in (b"HIERARCHY\n", b"MOTION\n", b"Frames: 30\n", b"Frame Time: 0.033333\n"):
+        path = FIXT / ("missing-" + field.decode().split(":")[0].strip().replace(" ", "-") + ".bvh")
+        path.write_bytes(body.replace(field, b""))
+        probe = fbx_import.probe_fbx(path)
+        check("missing " + field.decode().strip() + " fails closed", bool(probe.get("error")) and probe["skeleton_family"] == "", str(probe))
+    from fastapi import UploadFile
+    for name, expected in (("uploaded.bvh", 200), ("refused.txt", 400)):
+        stream = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
+        stream.write(body)
+        stream.seek(0)
+        upload = UploadFile(filename=name, file=stream)
+        code = status_of(lambda: asyncio.run(assets.post_clips_inbox_upload([upload], None)))
+        check(name + " upload status", code == expected, str(code))
+        stream.close()
+    check("BVH upload stores the original bytes", (INBOX / "uploaded.bvh").is_file()
+          and (INBOX / "uploaded.bvh").read_bytes() == body)
+    (INBOX / "uploaded.bvh").unlink(missing_ok=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--real", action="store_true",
@@ -1442,6 +1508,7 @@ def main() -> int:
           paths.get_animation_clips_dir() == FREE
           and paths.get_licensed_clips_dir() == LICENSED)
     test_library_writer_lock()
+    test_bvh()
     test_probe()
     test_families()
     test_pairs()

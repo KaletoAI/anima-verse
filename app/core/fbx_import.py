@@ -1,6 +1,6 @@
 """The import inbox for FOREIGN animation files (core, route-free).
 
-A user drops an FBX into ``shared/models/clips-inbox`` (``paths.get_clips_inbox_dir``)
+A user drops an FBX or BVH into ``shared/models/clips-inbox`` (``paths.get_clips_inbox_dir``)
 or uploads it in the Poses tab; this module is everything that happens between
 that file and a playable clip:
 
@@ -10,7 +10,8 @@ that file and a playable clip:
   FBX (binary or ASCII) keeps its node names as plain ASCII in the byte
   stream, so the printable runs are enough to recognise a rig. That keeps the
   listing instant and honest — an unknown rig is refused before a Blender run
-  is ever started.
+  is ever started. BVH uses joint names from its text hierarchy and timing
+  from its MOTION header; motion rows are never scanned.
 * :func:`pair_suggestion` and :func:`rest_suggestion` propose what the two
   extra slots of the converter want: the partner file of a pair recording and
   a reference-pose export of the same rig.
@@ -47,8 +48,8 @@ from app.core.paths import (get_animation_clips_dir, get_clips_inbox_dir,
 
 logger = get_logger(__name__)
 
-#: Only FBX for now — the ASF/AMC path is the CMU catalog, BVH is not written.
-INBOX_EXTS = (".fbx",)
+#: Foreign FBX/BVH sources; ASF/AMC uses the CMU catalog.
+INBOX_EXTS = (".fbx", ".bvh")
 
 #: Printable ASCII runs of at least three characters — an FBX node name.
 _TOKEN_RE = re.compile(rb"[\x20-\x7e]{3,}")
@@ -114,6 +115,22 @@ def _mixamo_noprefix_bones() -> Tuple[str, ...]:
     return tuple(names)
 
 
+def _soma_bones() -> Tuple[str, ...]:
+    """Source names of the SOMA map specified for ``fbx_clip._soma()``.
+
+    Non-thumb metacarpals are omitted; their second joint is the knuckle.
+    """
+    names = ["Hips", "Spine1", "Spine2", "Chest", "Neck1", "Head"]
+    for side in ("Left", "Right"):
+        names.extend(side + part for part in (
+            "Shoulder", "Arm", "ForeArm", "Hand", "Leg", "Shin", "Foot",
+            "ToeBase", "ToeEnd"))
+        for finger in ("Thumb", "Index", "Middle", "Ring", "Pinky"):
+            parts = ("1", "2", "3", "End") if finger == "Thumb" else ("2", "3", "4", "End")
+            names.extend(side + "Hand" + finger + part for part in parts)
+    return tuple(names)
+
+
 def _meshy_biped_bones() -> Tuple[str, ...]:
     """The node names ``fbx_clip._meshy_biped()`` maps — Meshy AI's rigged
     biped. Mixamo's names except for the spine (numbered DOWNWARDS from the
@@ -153,6 +170,7 @@ def _autorig_pro_bones() -> Tuple[str, ...]:
 #: family → the node names that must ALL be present (mirror of
 #: ``fbx_clip.SIGNATURES``; "auto" picks the first family that matches).
 SIGNATURES: Dict[str, Tuple[str, ...]] = {
+    "soma": ("Hips", "LeftShin", "LeftToeBase", "Neck2"),
     "unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Chest"),
     "mixamo-noprefix": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine2"),
     # ``Spine02`` vs ``Spine2`` is the whole difference between the two
@@ -177,6 +195,7 @@ EXCLUDE_FRAGMENTS: Dict[str, Tuple[str, ...]] = {
 #: family → every node name the bone map knows (mirror of ``fbx_clip.BONE_MAPS``),
 #: used for the bone count and the finger check.
 BONE_NAMES: Dict[str, Tuple[str, ...]] = {
+    "soma": _soma_bones(),
     "unity-humanoid": _unity_humanoid_bones(),
     "mixamo-noprefix": _mixamo_noprefix_bones(),
     "meshy-biped": _meshy_biped_bones(),
@@ -185,6 +204,7 @@ BONE_NAMES: Dict[str, Tuple[str, ...]] = {
 
 #: family → node names that only exist when the rig has fingers.
 FINGER_NAMES: Dict[str, Tuple[str, ...]] = {
+    "soma": ("LeftHandIndex2", "RightHandIndex2"),
     "unity-humanoid": ("Left_IndexProximal", "Right_IndexProximal"),
     "mixamo-noprefix": ("LeftHandIndex1", "RightHandIndex1"),
     # The Meshy biped has no finger joints at all — listed explicitly so the
@@ -271,7 +291,40 @@ _HDR_NARROW = struct.Struct("<III")
 
 
 class FbxReadError(ValueError):
-    """The file is not a binary FBX, or its node tree does not add up."""
+    """The FBX node tree or BVH header is invalid."""
+
+
+def bvh_header(path: Path) -> Dict[str, Any]:
+    """Read hierarchy names and timing line by line, stopping before motion.
+
+    Binary line iteration avoids decoding or parsing any buffered motion rows.
+    """
+    joints: List[str] = []
+    hierarchy = motion = False
+    frames = None
+    with Path(path).open("rb") as fh:
+        for raw in fh:
+            line = raw.decode("utf-8").strip()
+            if line == "HIERARCHY":
+                hierarchy = True
+            elif line == "MOTION":
+                motion = True
+            elif hierarchy and not motion and re.match(r"^(ROOT|JOINT)\s+", line):
+                joints.append(line.split()[1].rsplit(":", 1)[-1])
+            elif motion and line.startswith("Frames:"):
+                try:
+                    frames = int(line.split(":", 1)[1])
+                except ValueError as e:
+                    raise FbxReadError("invalid BVH Frames") from e
+            elif line.startswith("Frame Time:"):
+                if not hierarchy or not motion or frames is None:
+                    raise FbxReadError("incomplete BVH header")
+                try:
+                    frame_time = float(line.split(":", 1)[1])
+                except ValueError as e:
+                    raise FbxReadError("invalid BVH Frame Time") from e
+                return {"joints": joints, "frames": frames, "frame_time": frame_time}
+    raise FbxReadError("BVH requires HIERARCHY, MOTION, Frames and Frame Time")
 
 
 def _node_header(fh, hdr: struct.Struct):
@@ -329,7 +382,7 @@ def _scalar_props(blob: bytes) -> List[Any]:
 
 
 def fbx_takes(path: Path) -> List[Dict[str, Any]]:
-    """Every animation take of a binary FBX — ``[{index, name, duration_s}]``,
+    """Every animation take of a binary FBX or the single take of a BVH — ``[{index, name, duration_s}]``,
     in FILE ORDER.
 
     The INDEX is the contract with the converter, not the name: Blender caps
@@ -345,6 +398,10 @@ def fbx_takes(path: Path) -> List[Dict[str, Any]]:
     memory is one property blob.
     """
     path = Path(path)
+    if path.suffix.lower() == ".bvh":
+        header = bvh_header(path)
+        return [{"index": 0, "name": path.stem,
+                 "duration_s": round(header["frames"] * header["frame_time"], 3)}]
     out: List[Dict[str, Any]] = []
     with path.open("rb") as fh:
         # "Kaydara FBX Binary  " + NUL, then two more bytes, then the version.
@@ -434,7 +491,8 @@ def probe_fbx(path: Path) -> Dict[str, Any]:
     ``skeleton_family`` is ``""`` when no signature matches: an unknown rig,
     which the importer refuses (the retargeter has no bone map for it).
 
-    The file is walked in ``MAX_PROBE_BYTES`` chunks and the walk STOPS at the
+    BVH reads joint names and timing from its text header, without motion rows.
+    FBX is walked in ``MAX_PROBE_BYTES`` chunks and the walk STOPS at the
     chunk that identifies the family — an animation export is answered by its
     first chunk, a skinned character export (mesh first, armature last) is
     followed to wherever its armature sits, and neither costs more memory than
@@ -454,21 +512,25 @@ def probe_fbx(path: Path) -> Dict[str, Any]:
     tokens: set = set()
     family = ""
     try:
-        with path.open("rb") as fh:
-            carry = b""
-            while True:
-                chunk = fh.read(MAX_PROBE_BYTES)
-                if not chunk:
-                    break
-                # A node name can straddle the read boundary; the tail of the
-                # previous chunk is re-scanned with this one so the split
-                # cannot swallow one.
-                tokens |= _tokens(carry + chunk if carry else chunk)
-                family = _match_family(tokens)
-                if family:
-                    break
-                carry = chunk[-_TOKEN_OVERLAP:]
-    except OSError as e:
+        if path.suffix.lower() == ".bvh":
+            tokens = set(bvh_header(path)["joints"])
+            family = _match_family(tokens)
+        else:
+            with path.open("rb") as fh:
+                carry = b""
+                while True:
+                    chunk = fh.read(MAX_PROBE_BYTES)
+                    if not chunk:
+                        break
+                    # A node name can straddle the read boundary; the tail of the
+                    # previous chunk is re-scanned with this one so the split
+                    # cannot swallow one.
+                    tokens |= _tokens(carry + chunk if carry else chunk)
+                    family = _match_family(tokens)
+                    if family:
+                        break
+                    carry = chunk[-_TOKEN_OVERLAP:]
+    except (OSError, FbxReadError, UnicodeError) as e:
         out["error"] = str(e)
         return out
     if family:

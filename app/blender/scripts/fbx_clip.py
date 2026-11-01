@@ -1,11 +1,11 @@
-"""Retargets a FOREIGN rig's FBX animation onto the Mixamo rig — clip files
+"""Retargets a FOREIGN rig's FBX/BVH animation onto the Mixamo rig — clip files
 the library can play, through the same pipeline as the CMU converter.
 
 Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
 
     inputs   rig            the Mixamo skeleton to drive
                             (``shared/models/rig/reference.fbx``)
-             src            the animation FBX (solo), or
+             src            the animation FBX/BVH (solo), or
              src_a, src_b   the two halves of a pair (same world space)
              rest           OPTIONAL: an FBX of the SAME rig in a reference
                             pose (T/A-pose export). With it the bones take
@@ -67,7 +67,8 @@ secondary axes are exact). Positions still come from the animation, so
 lengths, anchor and floor are unchanged.
 
 Units/axes: Blender imports the FBX into a Z-up world in metres (the root
-node's 0.01 scale applied); positions are converted back to the clip space
+node's 0.01 scale applied); BVH uses global_scale=0.01 for centimetres
+and the same Y-up to Z-up axis conversion. Positions return to clip space
 (Y up, centimetres) before any frame is built.
 """
 import json
@@ -228,10 +229,33 @@ def _autorig_pro():
     return m
 
 
+def _soma():
+    """SOMA anatomy: Leg is the thigh; non-thumb joint 2 is the knuckle.
+
+    Root is already folded into world transforms. Neck2, face helpers and
+    metacarpals are omitted; head_end is synthesised by the shared sampler.
+    """
+    m = {"Hips": "root", "Spine1": "lowerback", "Spine2": "upperback",
+         "Chest": "thorax", "Neck1": "lowerneck", "Head": "upperneck"}
+    for side, short in (("Left", "l"), ("Right", "r")):
+        for source, target in (("Shoulder", "clavicle"), ("Arm", "humerus"),
+                               ("ForeArm", "radius"), ("Hand", "hand"),
+                               ("Leg", "femur"), ("Shin", "tibia"),
+                               ("Foot", "foot"), ("ToeBase", "toes"),
+                               ("ToeEnd", "toes_end")):
+            m[side + source] = short + target
+        for finger in _FINGER_SRC:
+            parts = ("1", "2", "3", "End") if finger == "Thumb" else ("2", "3", "4", "End")
+            for target, source in enumerate(parts, 1):
+                m[f"{side}Hand{finger}{source}"] = f"{side}Hand{finger}{target}"
+    return m
+
+
 BONE_MAPS = {"unity-humanoid": _unity_humanoid,
              "mixamo-noprefix": _mixamo_noprefix,
              "meshy-biped": _meshy_biped,
-             "autorig-pro": _autorig_pro}
+             "autorig-pro": _autorig_pro,
+             "soma": _soma}
 
 # Signature node names per family — "auto" picks the first family whose
 # signature is fully present.
@@ -245,7 +269,8 @@ SIGNATURES = {"unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Ches
               # with any Mixamo-shaped rig, so this one cannot be confused with
               # the three above and its order among them does not matter.
               "autorig-pro": ("root.x", "spine_01.x", "arm_stretch.l",
-                              "thigh_stretch.l")}
+                              "thigh_stretch.l"),
+              "soma": ("Hips", "LeftShin", "LeftToeBase", "Neck2")}
 
 # Node-name prefixes that DISQUALIFY a family. The unprefixed Mixamo names are
 # a substring of the prefixed ones, so a plain Mixamo export must never be read
@@ -798,7 +823,7 @@ def _synth_hand_targets(P: dict, nodes: dict, palm: dict = None) -> None:
 
 
 class _Source:
-    """ONE imported FBX, sampled take by take.
+    """ONE imported FBX/BVH, sampled take by take.
 
     Open the file once and sample every requested take from that scene.
     With one animated layer per take, the C++ importer creates one action
@@ -822,11 +847,21 @@ class _Source:
                     initial.append((owner, anim.action, anim.action_slot))
                     anim.action = None
 
-        bpy.app.handlers.depsgraph_update_pre.append(suspend_actions)
-        try:
-            bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0)
-        finally:
-            bpy.app.handlers.depsgraph_update_pre.remove(suspend_actions)
+        is_bvh = Path(path).suffix.lower() == ".bvh"
+        if is_bvh:
+            bpy.ops.import_anim.bvh(filepath=path, global_scale=0.01,
+                                    rotate_mode="NATIVE", update_scene_fps=True,
+                                    update_scene_duration=True)
+            for owner in bpy.data.objects:
+                anim = owner.animation_data
+                if anim and anim.action and anim.action_slot:
+                    initial.append((owner, anim.action, anim.action_slot))
+        else:
+            bpy.app.handlers.depsgraph_update_pre.append(suspend_actions)
+            try:
+                bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0)
+            finally:
+                bpy.app.handlers.depsgraph_update_pre.remove(suspend_actions)
         self.static_transforms = [
             (owner, owner.matrix_basis.copy(),
              [(pb, pb.matrix_basis.copy()) for pb in owner.pose.bones]
@@ -838,6 +873,9 @@ class _Source:
             owner.animation_data.action = action
             owner.animation_data.action_slot = slot
         scene_nodes = _scene_nodes()
+        if is_bvh:
+            scene_nodes = {name.rsplit(":", 1)[-1]: node
+                           for name, node in scene_nodes.items()}
         names = set(scene_nodes)
         if family == "auto":
             family = _detect_family(names)
@@ -856,6 +894,8 @@ class _Source:
                 f"{family}: essential bones missing in the file: {missing}")
         scene = bpy.context.scene
         self.fps = float(scene.render.fps) / float(scene.render.fps_base or 1.0)
+        if is_bvh:
+            self.fps = round(self.fps, 3)
         # With ONE animated layer per stack, the C++ importer creates one
         # action per take, in file order, with one slot per animated object.
         # Multiple animated layers create multiple actions and are unsupported.
