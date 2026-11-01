@@ -663,7 +663,7 @@
       "visible_when": { "feature": "thoughts_enabled" },
       "label": "Thoughts",
       "label_de": "Gedanken",
-      "column": 9,
+      "column": 7,
       "row": 1,
       "fields": [
         {
@@ -882,8 +882,8 @@
       "visible_when": { "feature": "memory_enabled" },
       "label": "Memory",
       "label_de": "Memory",
-      "column": 8,
-      "row": 1,
+      "column": 9,
+      "row": 0,
       "fields": [
         {
           "key": "memory_max_semantic",
