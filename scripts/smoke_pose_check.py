@@ -32,6 +32,16 @@ H) Answer form (2026-11-01, the model returned a waist-up selfie unchanged
    <p>; a bare prompt without markers is taken as it is; an answer that is
    only "CHECK: …" carries no prompt -> the original stays. The length guard
    measures the extracted prompt: "CHECK: <long>\nPROMPT: short" is refused.
+I) Image text (2026-11-01: a photo prompt carried the photo tool's whole scene
+   object — role-play context and turn instructions — and a complete repair
+   was refused as "too short"). The guard measures the prompt with an
+   embedded scene object reduced to its "image_prompt":
+   "Action: " (8) + {"image_prompt": 100 x "a", "rp_context": 1000 x "r",
+   "user_input": 500 x "u"} + " end" (4) -> 8 + 100 + 4 = 112 chars of image
+   text, so the limit is 56: a 60-char answer passes (the old guard measured
+   the whole ~1650 chars and refused it), a 50-char answer is refused.
+   Braces that are no JSON ("{smiles}") stay text; an object without
+   "image_prompt" counts as nothing.
 """
 import os
 import sys
@@ -159,6 +169,21 @@ answer["text"] = "CHECK: Kira: left hand elbow, right hand cup, no conflicts at 
 check("CHECK only -> original", pose_check.check_pose(PROMPT) == PROMPT)
 answer["text"] = "CHECK: " + "x" * 200 + "\nPROMPT: too short"
 check("guard measures the extracted prompt", pose_check.check_pose(PROMPT) == PROMPT)
+
+print("I) image text")
+import json as _json  # noqa: E402
+SCENE = "Action: " + _json.dumps({"image_prompt": "a" * 100, "rp_context": "r" * 1000,
+                                  "user_input": "u" * 500}) + " end"
+check("scene object reduced to its image_prompt",
+      pose_check._image_text(SCENE) == "Action: " + "a" * 100 + " end",
+      pose_check._image_text(SCENE)[:60])
+check("braces without JSON stay text", pose_check._image_text("Kira {smiles} now") == "Kira {smiles} now")
+check("object without image_prompt counts as nothing",
+      pose_check._image_text('x {"rp_context": "r"} y') == "x  y")
+answer["text"] = "z" * 60
+check("60 chars against 112 chars of image text pass", pose_check.check_pose(SCENE) == "z" * 60)
+answer["text"] = "z" * 50
+check("50 chars are refused", pose_check.check_pose(SCENE) == SCENE)
 
 print()
 if failures:

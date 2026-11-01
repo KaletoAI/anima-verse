@@ -22,6 +22,7 @@ It runs on the SUBJECT prompt before routing, never inside a GPU channel —
 an LLM wait must not hold a backend slot. A failure, an empty answer or an
 answer that looks like a refusal keeps the original prompt.
 """
+import json
 import re
 from typing import Any, Optional, Tuple
 
@@ -54,6 +55,37 @@ def _extract_prompt(answer: str) -> Tuple[str, str]:
     if _CHECK_MARKER.match(answer):
         return "", answer.strip()
     return answer.strip(), ""
+
+
+_SCENE_DECODER = json.JSONDecoder()
+
+
+def _image_text(prompt: str) -> str:
+    """The part of ``prompt`` that describes the picture — what the length
+    guard measures. A scene object embedded by the photo tool
+    (``{"image_prompt": …, "rp_context": …, "user_input": …}``) counts only
+    with its ``image_prompt``: the role-play context and the turn's
+    instructions are no image content, and a repair that leaves them out
+    dropped nothing (2026-11-01: a 2546-character prompt, most of it that
+    context, rejected a complete 686-character repair as "too short")."""
+    out, pos = [], 0
+    while True:
+        start = prompt.find("{", pos)
+        if start < 0:
+            out.append(prompt[pos:])
+            return "".join(out)
+        try:
+            obj, end = _SCENE_DECODER.raw_decode(prompt, start)
+        except ValueError:
+            out.append(prompt[pos:start + 1])
+            pos = start + 1
+            continue
+        out.append(prompt[pos:start])
+        if isinstance(obj, dict):
+            out.append(str(obj.get("image_prompt") or ""))
+        else:
+            out.append(prompt[start:end])
+        pos = end
 
 
 def supported(occasion: str) -> bool:
@@ -93,10 +125,11 @@ def check_pose(prompt: str, *, character: str = "") -> str:
     if not checked:
         logger.warning("Pose check returned nothing, rendering the original prompt")
         return prompt
-    if len(checked) < len(original) * _MIN_LENGTH_RATIO:
-        logger.warning("Pose check answer is too short (%d < %d chars) — looks like "
-                       "dropped content or a refusal; rendering the original prompt",
-                       len(checked), len(original))
+    measured = len(_image_text(original).strip())
+    if len(checked) < measured * _MIN_LENGTH_RATIO:
+        logger.warning("Pose check answer is too short (%d < %d chars of image text) — "
+                       "looks like dropped content or a refusal; rendering the original prompt",
+                       len(checked), measured)
         return prompt
     logger.info("Pose check rewrote the prompt: %s", checked[:160])
     return checked
