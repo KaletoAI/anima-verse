@@ -1625,8 +1625,7 @@ def _build_chat_prompt(character_name: str,
                  uncovered=uncovered, facts=moment_facts)
     except Exception as e:
         logger.debug("moment facts for %s failed: %s", character_name, e)
-    moment = render(
-        "chat/chat_moment.md",
+    moment_ctx = dict(
         character_name=character_name,
         # Only a chat LLM that calls tools itself gets the executable
         # furniture contract; the rp_first roleplay reply gets names.
@@ -1658,6 +1657,21 @@ def _build_chat_prompt(character_name: str,
         addressed_names=addressed_names,
         respond_opportunity=respond_opportunity,
         winding_down=winding_down)
+    # A character out of the world (avatar-only presence, uncontrolled) that
+    # this prompt or the line being answered names: without the note the
+    # model sends the player to find someone who is not there.
+    try:
+        from app.core.thought_context import away_block, away_mentioned
+        _scan = [system, incoming_text or ""] + [
+            v for v in moment_ctx.values() if isinstance(v, str)] + [
+            line for key in ("self_state_lines", "moment_notes", "partner_state_lines")
+            for line in (moment_ctx.get(key) or []) if isinstance(line, str)]
+        moment_ctx["away_block"] = away_block(away_mentioned(
+            _scan, exclude=[character_name, _partner_name or ""]))
+    except Exception as e:
+        logger.debug("away block for %s failed: %s", character_name, e)
+        moment_ctx["away_block"] = ""
+    moment = render("chat/chat_moment.md", **moment_ctx)
     if system_template == "chat/npc_talk.md":
         moment += "\n\n" + render(
             "chat/npc_reply_cue.md",

@@ -1178,8 +1178,14 @@ def absent_named_people(character_name: str, location_id: str, room_id: str,
     from app.models.character import list_available_characters
     here, elsewhere = presence
     excluded = {character_name, *here, *elsewhere}
+    return _first_mentions([name for name in list_available_characters()
+                            if name not in excluded], texts)[:6]
+
+
+def _first_mentions(names: Iterable[str], texts: Iterable[str]) -> List[str]:
+    """The names mentioned in *texts* (possessives included), in first-mention order."""
     patterns = [(name, re.compile(r"(?<!\w)" + re.escape(name) + r"(?:s|'s|’s)?(?!\w)"))
-                for name in list_available_characters() if name not in excluded]
+                for name in names]
     mentioned = {}
     for index, text in enumerate(texts):
         for name, pattern in patterns:
@@ -1187,7 +1193,7 @@ def absent_named_people(character_name: str, location_id: str, room_id: str,
                 match = pattern.search(text)
                 if match:
                     mentioned[name] = (index, match.start())
-    return sorted(mentioned, key=mentioned.get)[:6]
+    return sorted(mentioned, key=mentioned.get)
 
 
 def split_away(names: Iterable[str]) -> Tuple[List[str], List[Tuple[str, str]]]:
@@ -1210,6 +1216,18 @@ def split_away(names: Iterable[str]) -> Tuple[List[str], List[Tuple[str, str]]]:
 
 def away_block(away: Iterable[Tuple[str, str]]) -> str:
     return "\n".join(f"- {name} {note}" for name, note in away)
+
+
+def away_mentioned(texts: Iterable[str], exclude: Iterable[str] = ()) -> List[Tuple[str, str]]:
+    """(name, away note) of every away character the texts mention, at most six.
+
+    The chat counterpart of the thought split: a chat has no "absent people"
+    list to take them out of, only the prompt and the line being answered."""
+    from app.models.character import list_available_characters
+    skip = set(exclude)
+    mentioned = _first_mentions([name for name in list_available_characters()
+                                 if name not in skip], texts)
+    return split_away(mentioned)[1][:6]
 
 
 def location_presence_split(character_name: str, location_id: str,

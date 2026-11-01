@@ -22,7 +22,7 @@ on the last user turn, BEHIND the history. Derived expectations:
         present_characters, present_details, inventory_carrying_section,
         inventory_room_section, focused_items, known_activities,
         events_section, assignment_section, recent_activity_section,
-        memory_section, relationships_section, reply_shape_section,
+        memory_section, relationships_section, away_block, reply_shape_section,
         addressed_to_me, addressed_names, winding_down, respond_opportunity
     Changing these facts must not change either stable system prompt.
 
@@ -43,7 +43,7 @@ on the last user turn, BEHIND the history. Derived expectations:
 
 [5] Order inside the scene state, the moment's most binding facts last:
         [SCENE STATE < SITUATION < SELFSTATE < NOTE < PRESENT < PLACES
-        < MEMORY < RELATIONS < "spoke to YOU directly" < This moment:
+        < MEMORY < RELATIONS < AWAYLINE < "spoke to YOU directly" < This moment:
         < SKIP < [END OF SCENE STATE]
     (winding_down on: its SKIP line is the last rule before the end marker.)
 
@@ -114,7 +114,7 @@ PER_TURN = {
     "present_characters", "present_details", "inventory_carrying_section",
     "inventory_room_section", "focused_items", "known_activities",
     "events_section", "assignment_section", "recent_activity_section",
-    "memory_section", "relationships_section", "reply_shape_section",
+    "memory_section", "relationships_section", "away_block", "reply_shape_section",
     "addressed_to_me", "addressed_names", "winding_down", "respond_opportunity",
     "partner_address",
 }
@@ -174,7 +174,7 @@ def _moment(**over):
         self_wearing="", partner_wearing="", inventory_carrying_section="",
         inventory_room_section="", focused_items="", known_activities="PLACES",
         events_section="", assignment_section="", recent_activity_section="",
-        memory_section="MEMORY", relationships_section="RELATIONS",
+        memory_section="MEMORY", relationships_section="RELATIONS", away_block="- AWAYLINE",
         reply_shape_section="- brief", moment_facts=[], addressed_to_me=True, addressed_names="",
         respond_opportunity=False, winding_down=True)
     ctx.update(over)
@@ -183,7 +183,7 @@ def _moment(**over):
 
 m = _moment()
 morder = ["[SCENE STATE", "SITUATION", "SELFSTATE", "NOTE", "PRESENT", "PLACES",
-          "MEMORY", "RELATIONS", "spoke to YOU directly", "This moment:",
+          "MEMORY", "RELATIONS", "AWAYLINE", "spoke to YOU directly", "This moment:",
           "reply with exactly: SKIP", "[END OF SCENE STATE]"]
 mpos = [m.find(s) for s in morder]
 check("[5] every scene-state sentinel present", [s for s, p in zip(morder, mpos) if p < 0], [])

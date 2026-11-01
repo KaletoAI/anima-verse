@@ -15,6 +15,9 @@ person (message him or go to him). Ava's prompt names all three:
   the user-turn presence line says "Kai is travelling … — away from this world".
 Once a player controls Kai, he is a normal absent person again and his note
 vanishes. With the flag off, the note is ignored even if it is filled in.
+Chat: Ava answers Ben's "Where is Kai these days?" -> the scene state (not the
+system prompt) carries "Away — out of the world" with "- Kai is travelling …",
+before [END OF SCENE STATE]; a line naming nobody away carries no such block.
 """
 import sys
 import tempfile
@@ -97,4 +100,19 @@ with patch.object(tc, "_build_skill_context_blocks", return_value=[]):
 assert ctx["away_people"] == [] and ctx["away_block"] == ""
 assert "AWAY —" not in render("chat/agent_thought.md", **ctx)
 assert "away from this world" not in render("chat/thought_presence.md", **ctx)
-print("OK — away characters leave the absent list and get their own note")
+
+# Chat: the scene state names an away person the answered line mentions.
+assert save_character_config("Kai", {"avatar_only_presence": "true", "away_note": KAI_NOTE})
+from app.routes.chat import _build_chat_prompt
+assert tc.away_mentioned(["Where is Kai? And Ben?"]) == [("Kai", KAI_NOTE)]
+assert tc.away_mentioned(["Kai"], exclude=["Kai"]) == []
+prompt = _build_chat_prompt("Ava", "", "", partner_override="Ben",
+                            incoming_text="Where is Kai these days?")
+assert "Away — out of the world for now" in prompt.moment, prompt.moment
+assert f"- Kai {KAI_NOTE}" in prompt.moment
+assert prompt.moment.index("Away — out of") < prompt.moment.index("[END OF SCENE STATE]")
+assert "Away — out of" not in prompt.system, "per-turn fact stays out of the system prompt"
+prompt = _build_chat_prompt("Ava", "", "", partner_override="Ben",
+                            incoming_text="Nice weather today.")
+assert "Away — out of" not in prompt.moment, "nobody away named -> no block"
+print("OK — away characters leave the absent list and get their own note (thought + chat)")

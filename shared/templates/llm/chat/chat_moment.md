@@ -29,6 +29,8 @@
        when it does not (prop_actions_executable false, the rp_first reply)
      events_section, assignment_section, recent_activity_section
      memory_section, relationships_section
+     away_block — people named in this prompt or the answered line who are out
+       of the world (avatar-only presence, uncontrolled), "- <name> <away note>"
      reply_shape_section — "This moment" facts
      moment_facts: list[str] — more "This moment" lines, from packages
        (hook chat.moment_facts; one "- " bullet each, after the reply shape)
@@ -123,6 +125,11 @@ FOCUSED ITEMS IN THE ROOM (the person you're talking to has drawn attention to t
 {% if relationships_section %}
 
 {{ relationships_section }}
+{% endif %}
+{% if away_block %}
+
+Away — out of the world for now. They cannot be met, visited, fetched or joined, and they do not turn up in this scene; if they come up, this is all you know:
+{{ away_block }}
 {% endif %}
 {% if partner_mode == "room" and partner_name %}
 
