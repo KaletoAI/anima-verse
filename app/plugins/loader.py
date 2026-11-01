@@ -24,6 +24,7 @@ Manifest format (package format v1):
         - templates/character/courage.json
     llm_tasks:                    # routable package tasks
       demo_note: {label: Demo note, category: chat, fallback: chat_stream}
+                                  # optional: priority, lane_priority (chat/normal/low)
     config_schema:                # admin settings subsections under "skills"
       training:
         label: Training

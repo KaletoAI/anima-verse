@@ -249,8 +249,15 @@ def lane_priority_for(task_type: str) -> int:
       everything else -> NORMAL
 
     Only the lane priority changes; ``LLMTask.priority`` (panel, queue pause)
-    stays what it was.
+    stays what it was. A task that declares ``lane_priority`` (``chat`` /
+    ``normal`` / ``low``) in the catalog gets that instead — a short call
+    someone in the scene waits for, without the chat prompt class (its cache
+    key stays its own).
     """
+    from app.core.llm_tasks import TASK_TYPES
+    declared = (TASK_TYPES.get(task_type) or {}).get("lane_priority")
+    if declared in ("chat", "normal", "low"):
+        return int({"chat": Priority.CHAT, "normal": Priority.NORMAL, "low": Priority.LOW}[declared])
     cls = task_class_for(task_type)
     if cls == "chat":
         return int(Priority.CHAT)

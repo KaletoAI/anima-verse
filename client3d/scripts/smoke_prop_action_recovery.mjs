@@ -90,7 +90,29 @@ for(const [answer,source,label] of [
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(f.calls.filter(c=>c==='release').length,1,'a run the server ended is released after the read');
 }
-console.log('prop action recovery: PASS (request/respond/state, release, stale execution, no burst, cancel exit ownership, foreign verdicts keep the own run)');
+// partner_consent "react": the run is the avatar's own from the start, on
+// either side. The partner's resist ends it on the server — the initiator sees
+// it end in /state, the partner in its own cancel answer — and the figure is
+// released exactly once, however often the ended row is read again.
+{
+ const f=setup();const scope=await mainFunctions(RECOVERY_NAMES,f.deps);
+ scope.receivePropAnswer({execution_id:'run',status:'approaching',motion:plan},'request');
+ scope.adoptPropState(state([{execution_id:'run',status:'approaching',reason:'',motion:plan}]));
+ const resisted={...state([]),recent_results:[{execution_id:'run',status:'cancelled',reason:'partner_resisted'}]};
+ scope.adoptPropState(resisted);scope.adoptPropState(resisted);
+ assert.equal(f.calls.filter(c=>c==='release').length,1,'initiator: resisted run released once');
+ assert.equal(scope.ownedPropRun(),undefined,'initiator: no run left owned');
+}
+{
+ const f=setup();const scope=await mainFunctions(RECOVERY_NAMES,f.deps);
+ scope.adoptPropState(state([{execution_id:'run',status:'approaching',reason:'',motion:plan}]));
+ assert.equal(scope.ownedPropRun()?.execution_id,'run','partner: the react run is owned at once');
+ scope.receivePropAnswer({execution_id:'run',status:'cancelled',reason:'partner_resisted'},'cancel');
+ scope.adoptPropState({...state([]),recent_results:[{execution_id:'run',status:'cancelled',reason:'partner_resisted'}]});
+ assert.equal(f.calls.filter(c=>c==='release').length,1,'partner: pushed-away run released once');
+ assert.equal(scope.ownedPropRun(),undefined,'partner: no run left owned');
+}
+console.log('prop action recovery: PASS (request/respond/state, release, stale execution, no burst, cancel exit ownership, foreign verdicts keep the own run, partner_resisted releases once)');
 
 import {mainFunction} from './mainFunction.mjs';
 for(const name of ['applyDriver','reconcileAvatarPlace','reconcileAvatarPos']){

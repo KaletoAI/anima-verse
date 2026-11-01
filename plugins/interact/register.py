@@ -17,11 +17,16 @@ module is where that knowledge lives:
   continuations without another package importing this verb directly;
 * the ``tool_decision.open_questions`` provider names every open invitation
   to a character with the exact yes/no call — what a tool-calling reader
-  needs, while the invitee's own roleplay prompt only hears the question.
+  needs, while the invitee's own roleplay prompt only hears the question;
+* the ``pair_reaction`` provider (``reaction.py``): a furniture pair action
+  set to ``partner_consent: react`` starts without asking, and an NPC
+  partner's reaction — accept or resist — comes from the ``pair_reaction``
+  task. Without this package such runs simply go on.
 """
 from app.core import decision, decision_points
 from app.core.hooks import register, register_provider
 from app.core.log import get_logger
+from plugins.interact.reaction import ask_reaction
 from plugins.interact.skill import PAIR_INVITE
 from plugins.interact.undertakings import (shared_activity_cancel,
                                           shared_activity_options,
@@ -221,6 +226,7 @@ decision.register_point(
     origin="interact",
 )
 register_provider("pair_verb_name", pair_verb_name)
+register_provider("pair_reaction", ask_reaction)
 register_provider("tool_decision.open_questions", open_questions)
 register_provider("shared_activity_options", shared_activity_options)
 register_provider("shared_activity_validate", shared_activity_validate)

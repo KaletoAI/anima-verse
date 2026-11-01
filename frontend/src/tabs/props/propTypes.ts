@@ -765,6 +765,8 @@ export interface ActionDefinition {
   participants: 1 | 2
   presence: 'any' | 'alone' | 'others' | 'participants_only'
   interrupt_on_presence_change: boolean
+  /** Pair only; absent = "ask". "react": starts at once, the partner reacts and may push it away. */
+  partner_consent?: 'ask' | 'react'
   phases: { id: string; label: string; duration_game_s: number; pose_key: string }[]
   requirements: ActionRequirement[]
   effects: ActionEffect[]

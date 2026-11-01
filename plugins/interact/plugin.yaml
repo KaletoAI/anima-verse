@@ -21,6 +21,18 @@ skills:
 templates:
   llm: templates/llm
 
+llm_tasks:
+  # A furniture pair action with partner_consent "react" starts without
+  # asking; this short call decides the partner's reaction while both walk
+  # over (the run waits at the furniture for it). The scene waits on it, so it
+  # ranks with a live conversation on the lanes.
+  pair_reaction:
+    label: Pair action reaction
+    category: chat
+    priority: high
+    lane_priority: chat
+    fallback: intent
+
 config_schema:
   interact:
     label: InteractWith (pair animations)

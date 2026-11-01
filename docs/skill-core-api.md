@@ -117,6 +117,7 @@ Stat-Namen.
 | `evaluate_stat_effects(character_name, situation_text, *, source, per_hour=False, elapsed_min=0.0) -> Dict[str, int]` | EINE LLM-Runde gegen alle deklarierten Stats; der Text ist Paket-Policy. `per_hour=True` skaliert auf die verstrichene Zeit |
 | Aktivitäts-Tick (automatisch) | Der Agent-Loop bewertet die LAUFENDE Freitext-Aktivität gegen alle Stats — kein Library-Lookup; für jedes Paket nutzbar (Workout ⇒ Stamina-Deklaration + Hints genügen) |
 | `app.models.character.adjust_status_effects(character_name, deltas, source='')` | Direkte Deltas ohne LLM-Runde (clamped 0–100) |
+| `build_stat_list(character_name, *, profile=None, config=None, excluded=frozenset()) -> (enabled, text)` | All status values of a character as prompt bullets (`- key, currently N/100, rests at B — hint`) from its template — for a package prompt that lets the values matter without naming any. `(False, "")` when the feature is off or there are none |
 
 RP chat uses a separate, event-addressed contract: `stat_results`, documented
 in [LLM templates](llm-templates.md#chat-state-extraction-contract). The generic
@@ -1065,6 +1066,7 @@ Capabilities, die der Core heute abfragt:
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
 | `shared_activity_options`, `shared_activity_validate`, `shared_activity_request`, `shared_activity_status`, `shared_activity_cancel` | Structured intent continuation and exact pair ownership | No pair continuation; available options are empty. The action is only `{type:"pair", pose_key:"<exact available key>"}`. Request/status return `pending`, `approaching`, `running`, `declined` or `blocked` with `invite_id` and optional `interaction_id`/`reason`; status never starts anything. Initial unsubmitted requests alone may return `not_found`; missing questions without exact live pair provenance and accepted-but-not-live requests block, never replay. Exact provenance reports a running pair even before `accepted` or start hooks persist. Cancel's optional `interaction_id` restricts actual receipt/provenance ownership; it never grants ownership or ends another pair |
 | `tool_decision.open_questions` | `streaming.tool_state_note` / `open_questions_note`: the rp_first tool decision (both paths) and, for a `single` character, the chat turn's scene state. `fn(agent_name, tool_names) -> list[str]`: one line per question someone put to the character that an offered verb answers, with the exact yes and no call (`interact`: open pair invitations) | No open-question block; the invitee only hears the question in prose |
+| `pair_reaction` | `prop_action_engine`: a pair furniture action with `partner_consent: "react"` that an NPC partner did not start. Called with the keywords execution_id, actor and partner, it must return at once; the answer goes to `app.core.prop_action_engine.react` (below). The run waits at the furniture for it up to `REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such runs never wait: reaction `none`, the action goes straight in |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |
@@ -1472,7 +1474,21 @@ rows used by the named-request validator. Repeated placements may share names.
 `app.core.prop_action_engine.state_for(actor) -> dict` scopes `current`,
 `outgoing`, `incoming` and `recent_results` to the participant. Current and
 outgoing rows include `target` and action `label`; incoming invitations belong
-in the open-questions block, not the proposal menu.
+in the open-questions block, not the proposal menu. Every row also carries
+`own_role` (`actor`/`partner`), `partner_consent` (`ask`/`react`, empty for a
+solo run), `reaction` (a react run's partner reaction: `pending`, `accepted`,
+`resisted`, `timeout`, `player`, `none`) and `can_resist`.
+
+`app.core.prop_action_engine.react(partner, execution_id, accept, *, line="",
+feeling=0, romantic=False) -> dict` answers a waiting `partner_consent: "react"`
+run: `accept=False` ends it (`cancelled` / `partner_resisted`), `True` lets it
+go on (into the furniture at once if both already wait there). `line` is told
+to the room as it is; `feeling` (-2..2) moves the partner's sentiment toward
+the actor by 0.05 per step, `romantic` the romantic tension by 0.02 per step,
+and a resist lowers the actor's own sentiment by 0.03 (`record_interaction`
+type `pair_reaction`). An answer for a run that no longer waits changes
+nothing. A player-controlled partner pushes such a run away with the ordinary
+`cancel` while it is approaching — the same resist with `feeling` -1.
 
 `app.core.interaction_engine.check_can_pair(actor, partner) -> str` returns
 an empty string when two distinct characters are awake, present and free to

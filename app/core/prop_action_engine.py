@@ -17,7 +17,7 @@ import uuid
 
 from app.core import prop_action_store as store, places, props, travel_engine as travel
 from app.core.game_time import GameTime, GameDuration
-from app.core.timeutils import game_time, game_speed_factor, utc_now
+from app.core.timeutils import game_time, game_speed_factor, parse_iso, utc_now
 from app.core.keyed_lock import keyed_lock, _DeferredRLock
 from app.core.log import get_logger
 from app.models import character as C
@@ -30,6 +30,17 @@ _OPS = dict(lt=operator.lt, le=operator.le, eq=operator.eq, ge=operator.ge, gt=o
 _TARGET = ("location_id", "room_id", "placement_id", "variant_uid")
 _INTERNAL_MUTATION = ContextVar("prop_action_owned_mutation", default=False)
 logger = get_logger("prop_action_engine")
+
+#: A ``partner_consent: react`` run waits at the furniture this long (SYSTEM
+#: seconds: it waits for a model, not for the world) for the partner's
+#: reaction; without one it goes on as accepted.
+REACTION_WAIT_S = 60.0
+#: Relationship change per ``feeling`` step (-2..2) of a reaction: the
+#: partner's sentiment toward the actor, romantic tension for a romantic
+#: action; a resisted actor's own sentiment drops by the fixed amount.
+_REACTION_SENTIMENT_STEP = 0.05
+_REACTION_ROMANTIC_STEP = 0.02
+_RESISTED_ACTOR_SENTIMENT = -0.03
 
 
 @contextmanager
@@ -76,6 +87,13 @@ def _refused(reason):
 
 def _members(run):
     return [("actor", run["actor"])] + ([("partner", run["partner"])] if run["partner"] else [])
+
+
+def _reacts(run_or_definition, partner=None):
+    """A pair run that starts without consent: the partner REACTS instead."""
+    definition = run_or_definition.get("definition", run_or_definition)
+    partner = run_or_definition.get("partner") if partner is None else partner
+    return bool(partner) and definition.get("partner_consent") == "react"
 
 
 def _save(run):
@@ -547,9 +565,10 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     if bool(partner) != (definition["participants"] == 2) or actor == partner:
         return _refused("invalid_partner"), False
     now = game_time().canonical()
+    asks = bool(partner) and not _reacts(definition, partner)
     run = dict(execution_id=uuid.uuid4().hex, actor=actor, partner=partner, request_id=request_id or None,
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
-               status="awaiting_consent" if partner else "approaching", phase="", reason="", target=target,
+               status="awaiting_consent" if asks else "approaching", phase="", reason="", target=target,
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
                                                 last_game=now, elapsed=0.0, consent_elapsed=0.0))
     replaces = _replaceable(actor, target, action_id)
@@ -606,6 +625,9 @@ def _admit_timed(run, fingerprint, marks):
                         else _refused("request_id_conflict")), False
             return _refused(reason), False
         run["data"]["plans"] = plans
+        reacts = _reacts(run)
+        if reacts:
+            run["data"].update(consented=True, reaction=_reaction_request(partner))
         with _claim_transaction(run) as conn:
             previous = store.by_request(actor, request_id, conn=conn)
             if previous:
@@ -615,14 +637,18 @@ def _admit_timed(run, fingerprint, marks):
             if reason:
                 return _refused(reason), False
             store.insert(conn, run)
-            if not partner:
+            if not partner or reacts:
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
         marks.append(("claim", time.perf_counter()))
-        if not partner:
+        if not partner or reacts:
             _start_checked(run)
         marks.append(("start", time.perf_counter()))
     _notify(run)
-    if partner:
+    if reacts:
+        _narrate(run, "{actor} approaches {partner}: {pose}.")
+        if run["data"]["reaction"]["state"] == "pending":
+            _ask_reaction(run)
+    elif partner:
         _narrate(run, "{inviter} suggests {pose} to {invitee}.", inviter=actor, invitee=partner)
         # A decision/model or respond-lane request must never run inside an
         # execution/profile/place lock or an SQLite transaction.
@@ -818,11 +844,12 @@ def _held_pose(run):
     return definition["pose_key"]
 
 
-def _narrate(run, key, **fmt):
+def _narrate(run, key, *, literal=False, **fmt):
     """One storyteller line in the run's room, in the actor's language, after
     every lock is released. The room has to SEE a figure sit down or get up —
     the perception stream is what the characters remember of the scene, and
-    the player's chat shows it. Never raises."""
+    the player's chat shows it. ``literal``: ``key`` is the finished line
+    (a partner's reaction), neither translated nor formatted. Never raises."""
     from app.core.keyed_lock import _after_locks
 
     def deliver():
@@ -840,8 +867,8 @@ def _narrate(run, key, **fmt):
             pose = pose_label(_held_pose(run), lang)
             record_utterance(
                 speaker=STORYTELLER_SPEAKER,
-                content=t(key, lang).format(actor=actor, partner=run["partner"], prop=prop,
-                                            pose=pose, **fmt),
+                content=key if literal else t(key, lang).format(
+                    actor=actor, partner=run["partner"], prop=prop, pose=pose, **fmt),
                 volume=VOLUME_NORMAL, location_id=target["location_id"], room_id=target["room_id"],
                 source="prop_action", anchor=actor)
         except Exception as e:
@@ -958,6 +985,12 @@ def cancel(actor: str, execution_id: str) -> dict:
             if run["data"].get("cleanup_pending"):
                 _cleanup(run)
             return _result(run)
+        if actor == run["partner"] and _reacts(run) and run["status"] == "approaching":
+            # The partner of a react run pushes it away before it begins.
+            run["data"].setdefault("reaction", {}).update(state="resisted", feeling=-1)
+            _narrate(run, "{partner} pushes {actor} away.")
+            _book_reaction(run, False, -1, False)
+            return _finish(run, "cancelled", "partner_resisted")
         normal = run["status"] == "active" and run["definition"]["ability"] in ("pose", "pair")
         return _finish(run, "completed" if normal else "cancelled", "ended" if normal else "cancelled")
 
@@ -1109,7 +1142,7 @@ def _arrived(actor, journey):
         if actor not in run["data"]["arrived"]:
             run["data"]["arrived"].append(actor)
             _save(run)
-        if len(run["data"]["arrived"]) == len(_members(run)):
+        if len(run["data"]["arrived"]) == len(_members(run)) and not _awaits_reaction(run):
             _begin_entry(run)
 
 
@@ -1330,6 +1363,13 @@ def advance(now: GameTime) -> int:
                         _activate(run)
                         advanced += 1
                         continue
+                elif len(data["arrived"]) == len(_members(run)):
+                    # Both are there: a react run waits for the partner's
+                    # reaction (no approach deadline), the others go in.
+                    if not _awaits_reaction(run):
+                        _begin_entry(run)
+                        advanced += 1
+                        continue
                 else:
                     data["elapsed"] += delta
                     if data["elapsed"] > data.get("deadline", 60):
@@ -1351,7 +1391,8 @@ def advance(now: GameTime) -> int:
                                 continue
                         _finish(run, "failed", "approach_journey_lost")
                         break
-                    if run["status"] not in store.TERMINAL and len(data["arrived"]) == len(_members(run)):
+                    if (run["status"] not in store.TERMINAL and len(data["arrived"]) == len(_members(run))
+                            and not _awaits_reaction(run)):
                         _begin_entry(run)
                         advanced += 1
                         continue
@@ -1394,6 +1435,13 @@ def due_in_game_s(now: GameTime):
     soonest = None
     for run in store.live_runs():
         data = run["data"]
+        if (run["status"] == "approaching" and run["phase"] != "entry"
+                and len(data.get("arrived", [])) == len(_members(run))
+                and (data.get("reaction") or {}).get("state") == "pending"):
+            # Waiting at the furniture on the SYSTEM clock: due once it ran out.
+            if _reaction_waited_s(data["reaction"]) >= REACTION_WAIT_S:
+                return 0.0
+            continue
         if run["status"] == "approaching" and run["phase"] == "entry" and data.get("entries"):
             left = max(e["duration_game_s"] for e in data["entries"].values()) - data.get("entry_elapsed", 0.0)
         elif run["status"] == "active" and run["definition"]["ability"] == "combined":
@@ -1478,7 +1526,12 @@ def state_for(actor: str) -> dict:
                    roles={"actor": run["actor"], **({"partner": run["partner"]} if run["partner"] else {}),
                           "clip": run["data"].get("clip_roles", {}),
                           "access": run["data"].get("access_roles", {})},
-                   can_respond=pending and actor == run["partner"], can_cancel=not terminal)
+                   can_respond=pending and actor == run["partner"], can_cancel=not terminal,
+                   own_role="partner" if actor == run["partner"] else "actor",
+                   partner_consent=("react" if _reacts(run) else "ask") if run["partner"] else "",
+                   reaction=(run["data"].get("reaction") or {}).get("state", ""),
+                   can_resist=(not terminal and actor == run["partner"] and _reacts(run)
+                               and run["status"] == "approaching"))
         if terminal:
             row["effects"] = run["data"].get("effect_results", {})
             result["recent_results"].append(row)
@@ -1488,6 +1541,125 @@ def state_for(actor: str) -> dict:
             row["motion"] = motion_for(actor, run)
             result["current"].append(row)
     return result
+
+
+def _reaction_request(partner):
+    """The reaction a react run starts with: ``player`` — a player-controlled
+    partner reacts with the HUD (it can push the run away), nothing waits;
+    ``none`` — no package supplies ``pair_reaction``, nothing waits;
+    ``pending`` — the model is asked, the run waits at the furniture."""
+    from app.core.hooks import get_provider
+    from app.models.account import is_player_controlled
+    if is_player_controlled(partner):
+        state = "player"
+    elif get_provider("pair_reaction") is None:
+        state = "none"
+    else:
+        state = "pending"
+    return dict(state=state, asked_at=utc_now().isoformat())
+
+
+def _ask_reaction(run):
+    """Hand the reaction to the ``pair_reaction`` provider after every lock;
+    the provider returns at once and answers through :func:`react`."""
+    from app.core.hooks import get_provider
+    from app.core.keyed_lock import _after_locks
+    provider = get_provider("pair_reaction")
+    if provider is None:
+        return
+
+    def ask():
+        try:
+            provider(execution_id=run["execution_id"], actor=run["actor"], partner=run["partner"])
+        except Exception as e:
+            logger.warning("pair_reaction provider failed for %s: %s", run["execution_id"], e)
+
+    _after_locks(ask)
+
+
+def _reaction_waited_s(reaction):
+    try:
+        return (utc_now() - parse_iso(reaction["asked_at"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return REACTION_WAIT_S
+
+
+def _awaits_reaction(run) -> bool:
+    """Whether the run must still wait for its partner's reaction. Past
+    REACTION_WAIT_S the reaction counts as given (``timeout``) — a model that
+    is down must not block every react action."""
+    reaction = run["data"].get("reaction") or {}
+    if reaction.get("state") != "pending":
+        return False
+    if _reaction_waited_s(reaction) < REACTION_WAIT_S:
+        return True
+    reaction["state"] = "timeout"
+    logger.info("prop action %s: no reaction from %s within %.0f s — goes on",
+                run["execution_id"], run["partner"], REACTION_WAIT_S)
+    return False
+
+
+def _book_reaction(run, accepted, feeling, romantic):
+    """The reaction's mark on the pair, after every lock: the partner's
+    sentiment toward the actor by ``feeling``, romantic tension for a romantic
+    action, and a resisted actor's own sentiment."""
+    from app.core.keyed_lock import _after_locks
+    actor, partner, name = run["actor"], run["partner"], run["definition"]["name"]
+
+    def book():
+        try:
+            from app.models.relationship import record_interaction
+            record_interaction(
+                partner, actor, "pair_reaction",
+                summary=f"{partner} {'accepted' if accepted else 'resisted'} {actor}'s {name}",
+                sentiment_delta_a=_REACTION_SENTIMENT_STEP * feeling,
+                sentiment_delta_b=0.0 if accepted else _RESISTED_ACTOR_SENTIMENT,
+                strength_delta=1.0,
+                romantic_delta=_REACTION_ROMANTIC_STEP * feeling if romantic else 0.0)
+        except Exception as e:
+            logger.warning("booking the reaction of %s failed: %s", partner, e)
+
+    _after_locks(book)
+
+
+def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
+          feeling: int = 0, romantic: bool = False) -> dict:
+    """The partner's reaction to a ``partner_consent: react`` run.
+
+    ``accept`` False ends the run (``cancelled`` / ``partner_resisted``);
+    True lets it go on — at once into the furniture when both already wait
+    there. ``line`` is told to the room as it is (the partner's visible
+    reaction, in its language); ``feeling`` (-2..2) and ``romantic`` change
+    the relationship (:func:`_book_reaction`). A reaction that comes after the
+    wait ran out, or for a run that is over, changes nothing.
+    """
+    if type(accept) is not bool:
+        return _refused("invalid_response")
+    try:
+        feeling = max(-2, min(2, int(feeling)))
+    except (TypeError, ValueError):
+        feeling = 0
+    with _lock(execution_id):
+        run = store.get(execution_id)
+        if not run or run["partner"] != partner or not _reacts(run):
+            return _refused("not_partner")
+        reaction = run["data"].get("reaction") or {}
+        if run["status"] in store.TERMINAL or reaction.get("state") != "pending":
+            return _result(run)
+        reaction.update(state="accepted" if accept else "resisted", feeling=feeling)
+        run["data"]["reaction"] = reaction
+        line = line.strip() if isinstance(line, str) else ""
+        if line:
+            _narrate(run, line, literal=True)
+        _book_reaction(run, accept, feeling, bool(romantic))
+        if not accept:
+            return _finish(run, "cancelled", "partner_resisted")
+        if (run["status"] == "approaching" and run["phase"] != "entry"
+                and len(run["data"]["arrived"]) == len(_members(run))):
+            _begin_entry(run)
+        else:
+            _save(run)
+        return _result(store.get(execution_id))
 
 
 def respond(actor: str, execution_id: str, accept: bool) -> dict:

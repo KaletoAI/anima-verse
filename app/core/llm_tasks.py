@@ -173,7 +173,8 @@ def register_plugin_task(task_id: str, spec: dict, package: str) -> bool:
             or not isinstance(spec, dict)
             or not isinstance(spec.get("label"), str) or not spec["label"].strip()
             or spec.get("category") not in ("chat", "tool", "helper", "image")
-            or spec.get("priority", "normal") not in ("low", "normal", "high")):
+            or spec.get("priority", "normal") not in ("low", "normal", "high")
+            or spec.get("lane_priority", "normal") not in ("chat", "normal", "low")):
         logger.warning("Package %s: invalid LLM task %s", package, task_id)
         return False
     if task_id in _CORE_TASK_IDS or (
@@ -199,6 +200,8 @@ def register_plugin_task(task_id: str, spec: dict, package: str) -> bool:
         "priority": {"low": Priority.LOW, "normal": Priority.NORMAL,
                      "high": Priority.HIGH}[spec.get("priority", "normal")],
     }
+    if spec.get("lane_priority"):
+        TASK_TYPES[task_id]["lane_priority"] = spec["lane_priority"]
     _PLUGIN_TASK_PACKAGES[task_id] = package
     _PLUGIN_TASK_FALLBACKS.pop(task_id, None)
     if parent:

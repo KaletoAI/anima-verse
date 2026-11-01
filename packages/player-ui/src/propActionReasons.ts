@@ -72,6 +72,7 @@ const REASONS: Record<string, string> = {
   pair_roles_changed: "The partner roles changed; try again",
   consent_declined: "The invited person declined",
   consent_expired: "The invitation expired",
+  partner_resisted: "The partner pushed you away",
   approach_timeout: "It took too long to reach the furniture",
   journey_owner_mismatch: "This journey no longer belongs to the action",
   room_mismatch: "A participant is in a different room",

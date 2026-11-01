@@ -86,6 +86,14 @@ export interface PropActionExecution extends PropActionResult {
   }
   can_respond: boolean
   can_cancel: boolean
+  /** The viewer's side of the run. */
+  own_role?: 'actor' | 'partner'
+  /** Pair runs: "ask" = the partner consents first, "react" = it starts and the partner reacts. */
+  partner_consent?: '' | 'ask' | 'react'
+  /** A react run's partner reaction: pending / accepted / resisted / timeout / player / none. */
+  reaction?: string
+  /** The partner of a react run that has not begun may push it away. */
+  can_resist?: boolean
 }
 export interface PropActionState {
   incoming: PropActionExecution[]

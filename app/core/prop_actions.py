@@ -131,7 +131,7 @@ def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = 
         # convention (``i18n.localized``) — a package names its actions so.
         fields(action, {'id', 'name', 'description', 'enabled', 'ability', 'pose_key',
                         'participants', 'presence', 'interrupt_on_presence_change',
-                        'phases', 'requirements', 'effects'}
+                        'partner_consent', 'phases', 'requirements', 'effects'}
                | {k for k in action if isinstance(k, str) and re.fullmatch(r'(name|description)_[a-z]{2}', k)
                   and isinstance(action[k], str)}, p)
         if text(action.get('id')):
@@ -156,6 +156,11 @@ def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = 
             issue(p + '.participants', 'unsupported_combination', 'Pair actions require two participants; others one')
         if action.get('presence') not in ('any', 'alone', 'others', 'participants_only'):
             issue(p + '.presence', 'invalid_presence', 'Unknown presence policy')
+        # Optional, pair only: "ask" (the partner consents first, the default)
+        # or "react" (the action starts, the partner reacts and may resist).
+        if 'partner_consent' in action and (action['partner_consent'] not in ('ask', 'react') or not pair):
+            issue(p + '.partner_consent', 'invalid_partner_consent',
+                  'Partner consent is "ask" or "react", and only for pair actions')
         phases = rows(action.get('phases'), p + '.phases')
         identities(phases, p + '.phases')
         if (ability == 'combined' and not phases) or (ability != 'combined' and phases):

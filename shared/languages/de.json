@@ -3689,6 +3689,16 @@
     "Check pose": "Pose prüfen",
     "Pose check before generating": "Pose vor dem Generieren prüfen",
     "Repair arms, legs and poses in the prompt via LLM (what the image shows stays the same)": "Arme, Beine und Posen im Prompt per LLM reparieren (was das Bild zeigt, bleibt gleich)",
-    "An LLM repairs arms, legs and poses in the prompt right before the image is generated. Preset from the image routing of this occasion.": "Ein LLM repariert Arme, Beine und Posen im Prompt direkt vor dem Generieren. Vorbelegt aus dem Image-Routing dieses Anlasses."
+    "An LLM repairs arms, legs and poses in the prompt right before the image is generated. Preset from the image routing of this occasion.": "Ein LLM repariert Arme, Beine und Posen im Prompt direkt vor dem Generieren. Vorbelegt aus dem Image-Routing dieses Anlasses.",
+    "{actor} approaches {partner}: {pose}.": "{actor} geht auf {partner} zu: {pose}.",
+    "{partner} pushes {actor} away.": "{partner} stößt {actor} weg.",
+    "Waiting for reaction": "Wartet auf Reaktion",
+    "Push away": "Wegstoßen",
+    "Partner": "Partner",
+    "Ask for consent first": "Erst um Zustimmung fragen",
+    "Start at once, the partner reacts": "Sofort beginnen, der Partner reagiert",
+    "The partner is chosen at runtime. The action starts without asking; the partner reacts on the way and may push it away, which ends it. Actor and partner are effect targets; the pair ability assigns the physical A/B clip roles.": "Der Partner wird zur Laufzeit gewählt. Die Aktion beginnt ohne zu fragen; der Partner reagiert auf dem Weg und kann sie abwehren, dann endet sie. Akteur und Partner sind Effektziele; die Paar-Fähigkeit vergibt die körperlichen A/B-Clip-Rollen.",
+    "The partner pushed the action away.": "Der Partner hat die Aktion abgewehrt.",
+    "The partner pushed you away": "Der Partner hat dich weggestoßen"
   }
 }

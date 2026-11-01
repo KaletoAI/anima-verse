@@ -129,10 +129,16 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
 }) {
   const { t } = useI18n()
   const state = run.phase === 'entry' && run.status === 'approaching' ? 'Entering'
+    : run.status === 'approaching' && run.own_role === 'actor' && run.reaction === 'pending' ? 'Waiting for reaction'
     : ({ awaiting_consent: 'Awaiting consent', approaching: 'Approaching', active: 'Active', sleeping: 'Sleeping',
       completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed' } as Record<string, string>)[run.status] || run.status
+  // A pair row names the other person: "Kira: Hug" for the one it is done
+  // to, "Hug with Kira" for the one who started it.
+  const title = !run.partner ? run.label
+    : run.own_role === 'partner' ? `${run.actor}: ${run.label}`
+    : t('{pose} with {name}').replace('{pose}', run.label).replace('{name}', run.partner)
   return <div className="player-prop-execution" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', padding: '4px 0' }}>
-    <span>{run.label} · {t(state)}</span>
+    <span>{title} · {t(state)}</span>
     {kind === 'incoming' && run.can_respond && <>
       <button type="button" className="player-chip" disabled={busy}
         onClick={() => perform(() => respondPropAction(run.execution_id, true))}>{t('Accept')}</button>
@@ -140,7 +146,7 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
         onClick={() => perform(() => respondPropAction(run.execution_id, false))}>{t('Decline')}</button>
     </>}
     {run.can_cancel && <button type="button" className="player-chip" disabled={busy}
-      onClick={() => perform(() => cancelPropAction(run.execution_id))}>{t(kind === 'outgoing' ? 'Withdraw' : 'Stop')}</button>}
+      onClick={() => perform(() => cancelPropAction(run.execution_id))}>{t(run.can_resist ? 'Push away' : kind === 'outgoing' ? 'Withdraw' : 'Stop')}</button>}
     {run.status === 'sleeping' && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(async () => {
         // Existing player wake path; Core clears sleep and semantic bed ownership.
