@@ -47,7 +47,10 @@ j. Editor (phase 2): the validate route lists "sit back" read-only as
    ([sit back] from [sit back, sit back]) — a new author revision, the
    runtime revision now equal to it, no offer; an own id ("rest") is a 422
    (PropDocumentInvalid), a non-list a ValueError; saving [] removes the key
-   and the offer comes back.
+   and the offer comes back. The single-prop route (update_prop) checks the
+   same: an own id there is refused (422, invalid_action_reference) with the
+   sidecar unchanged and "rest" still offered — stored, it would make the
+   runtime refuse every action of the prop.
 """
 import io
 import json
@@ -237,10 +240,23 @@ def main():
             pass
         else:
             raise AssertionError(f"{bad} was accepted")
+    before = props.read_sidecar(pid)
+    from fastapi import HTTPException
+    from app.routes.world import _prop_update_sync
+    try:
+        _prop_update_sync(pid, {"exclude_actions": ["rest"]})
+    except HTTPException as e:
+        assert e.status_code == 422, e.status_code
+        assert [i["code"] for i in e.detail["issues"] if i["severity"] == "error"] \
+            == ["invalid_action_reference"], e.detail
+    else:
+        raise AssertionError("the single-prop route stored an own id in exclude_actions")
+    assert props.read_sidecar(pid) == before and "rest" in offers(name)
     cleared = props.bulk_update(pid, {"exclude_actions": []}, base_revision=saved["revision"])
     assert "exclude_actions" not in props.read_sidecar(pid) and SIT["id"] in offers(name)
     assert cleared["action_revision"] != cleared["revision"]
-    print("PASS j: the editor lists package actions read-only and saves the prop's exclusion")
+    print("PASS j: the editor lists package actions read-only and saves the prop's exclusion;"
+          " the single-prop route refuses an own id")
     SRC.unregister_source("testpack")
     F.assert_no_external_work()
 

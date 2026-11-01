@@ -15,7 +15,8 @@ boundary (authored in LOCAL metres around the pin, ±10 → world 0..20 ×
 12..32; ``set_character_pos`` derives the location from the point, so
 without the boundary nobody would stand IN the plaza and the room's places
 could never be found), both characters inside it and in the same room
-"square". Game clock pinned (factor 0). Catalog (private copy): "standing"
+"square"; "cellar" and "elsewhere" are its other rooms, the targets of the
+room-change blocks (a room outside the current location is never stored). Game clock pinned (factor 0). Catalog (private copy): "standing"
 (group stand), "embracing" (solo false, group stand, places 2, yaw_offset 0,
 animation "hug"), "cuddling" (solo false, group SEAT, animation "hug"),
 "kissing" (no clip pair), "swaying" (loop clip). Blocks [1]–[8] run with a
@@ -288,7 +289,11 @@ set_game_factor(0.0)
 set_game_time(START)
 
 PLAZA = add_location(name="Smoke Plaza", description="interaction smoke",
-                     rooms=[{"id": "square", "name": "Square"}])["id"]
+                     rooms=[{"id": "square", "name": "Square"},
+                            # Room changes need real rooms of this location: a
+                            # room of another location is never stored.
+                            {"id": "cellar", "name": "Cellar"},
+                            {"id": "elsewhere", "name": "Elsewhere"}])["id"]
 update_location_position(PLAZA, 10.0, 22.0)
 _data = _load_world_data()
 for _loc in _data.get("locations", []):

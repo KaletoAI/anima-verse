@@ -3087,6 +3087,10 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
     moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
     a 400. Ignoring them would be worse than refusing: the admin would get a
     green "Saved" for a size that was never stored anywhere.
+
+    An ``exclude_actions`` patch is checked like the batch save's
+    (:class:`PropDocumentInvalid`, nothing written): an id that is no package
+    action would make the runtime refuse EVERY action of this prop.
     """
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
@@ -3096,6 +3100,11 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
         patch = {}
     _check_prop_patch(patch, meta)
     _apply_prop_fields(meta, patch)
+    if "exclude_actions" in patch:
+        from app.core.prop_actions import validate_document
+        issues = validate_document(meta)
+        if any(i["severity"] == "error" for i in issues):
+            raise PropDocumentInvalid(issues)
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
 

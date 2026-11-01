@@ -8173,7 +8173,12 @@ slot. The server keeps its own journey (observers, NPC parity, per-tick
 revalidation, arrival, entry, activation, effects); the two meet at the same
 anchor, the server a few hundred milliseconds ahead or behind. A run that
 ends early (`cancelled`/`failed` in `/state`) hands the figure back to the
-player at its rendered point. Observers and NPCs are unchanged
+player at its rendered point. Only the own run's end does that: a refused or
+failed `request`/`respond` (409 included), a declined invitation and the
+cancel of another execution (a withdrawn invitation) say nothing about the
+own run — the server keeps the current action on a refusal and ends it only
+when a new request replaced it — so the client re-reads `/state` and releases
+the figure only if that run is terminal there. Observers and NPCs are unchanged
 (`local_approach`, `prop_action_entry`).
 
 The `cancel` answer carries `motion` for a participant that was seated or

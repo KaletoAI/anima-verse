@@ -17,9 +17,11 @@ Presence: flavor is last after appearance and states; sleep overrides flavor,
 pose_key is the fallback, no pose adds nothing, 100 chars become 80 plus …,
 and the default chat path omits activity. Expectations are derived by hand.
 All database imports follow paths.init in a temporary directory.
-Left-off expectations: alone with absent mentions withholds the journal;
-alone without them, company, and unknown presence keep it in both templates.
+Left-off expectations: alone with an absent person named IN THE JOURNAL withholds
+it; alone without one, company, and unknown presence keep it in both templates.
 Scanning precedes withholding: a journal-only mention still names the absent person.
+A name only elsewhere in the prompt (the avatar's outfit block names the avatar
+in every prompt) is listed as absent but keeps the journal.
 """
 import sys
 from contextlib import ExitStack
@@ -43,17 +45,20 @@ from jinja2 import meta
 
 class Focus(unittest.TestCase):
     def test_leftoff_alone(self):
-        for presence, journal, absent, kept in [
-            (([], []), "- Waiting for Kai, hearing the door handle move.", ["Kai"], False),
-            (([], []), "- Reading my book.", [], True),
-            ((["Lukas"], []), "- Waiting for Kai.", ["Kai"], True),
-            (None, "- Waiting for Kai.", [], True),
+        kai_outfit = "Avatar outfit (Kai): a grey coat"
+        for presence, journal, avatar_outfit, absent, kept in [
+            (([], []), "- Waiting for Kai, hearing the door handle move.", "", ["Kai"], False),
+            (([], []), "- Reading my book.", "", [], True),
+            ((["Lukas"], []), "- Waiting for Kai.", "", ["Kai"], True),
+            (None, "- Waiting for Kai.", "", [], True),
+            (([], []), "- Reading my book.", kai_outfit, ["Kai"], True),
+            (([], []), "- Waiting for Kai.", kai_outfit, ["Kai"], False),
         ]:
-            with self.subTest(presence=presence, journal=journal), ExitStack() as stack:
+            with self.subTest(presence=presence, journal=journal, avatar=avatar_outfit), ExitStack() as stack:
                 # Keep the real absence scan; isolate unrelated context loaders.
                 for name in (
                     "inbox", "events", "assignments", "state_flags", "outfit_decision",
-                    "arc", "retrospective", "recent_chat", "avatar_outfit", "known_secrets",
+                    "arc", "retrospective", "recent_chat", "known_secrets",
                     "room_items", "inventory", "tracker", "activity_hint",
                 ):
                     stack.enter_context(patch.object(tc, f"_build_{name}_block", return_value=""))
@@ -62,6 +67,7 @@ class Focus(unittest.TestCase):
                     ("_build_daily_schedule_context", ("", False)),
                     ("_build_skill_context_blocks", []), ("_room_presence", presence),
                     ("recent_thoughts_block", journal),
+                    ("_build_avatar_outfit_block", avatar_outfit),
                 ]:
                     stack.enter_context(patch.object(tc, name, return_value=value))
                 for target, value in [

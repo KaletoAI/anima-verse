@@ -36,6 +36,12 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     private string _offeredOwnKey="";
     private JsonObject? _requestedRun,_trackedRun;
     public event Action<string,string>? RunEnded;
+    /// <summary>A refused or failed mutation that was not about the own run. The server keeps the current run on a
+    /// refusal and ends it only when a new request replaced it, so only the following state read
+    /// (<see cref="ReconcileRun"/>) may end it; this only undoes the local click preview.</summary>
+    public event Action<string,string>? MutationRejected;
+    /// <summary>The own run the client tracks or plays ("" = none).</summary>
+    public string OwnExecutionId=>PropActionMotion.Text((_trackedRun ?? OwnedRun)?["execution_id"]);
     public event Action<JsonObject,string,string>? MotionReceived;
     private string OwnStateKey => OwnedRun is { } run ? $"{PropActionMotion.Text(run["execution_id"])}|{PropActionMotion.Text(run["status"])}|{PropActionMotion.Text(run["phase"])}" : "";
     public Func<Task> RefreshWorld { get; set; }=()=>Task.CompletedTask;
@@ -104,24 +110,32 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     {
         if(_disposed) return;
         string id=PropActionMotion.Text(answer["execution_id"]),status=PropActionMotion.Text(answer["status"]);
-        if(source=="cancel") {
-            if(status is "refused" or "failed") return;
-            _released.Add(id); _trackedRun=_requestedRun=null;
-            _uncertain=false; Preparation.AdoptFreshState();
-        } else {
-            if(status is "failed" or "refused") { RejectMutation(status,PropActionMotion.Text(answer["reason"])); return; }
-            if(_released.Contains(id) || status=="cancelled") return;
-            if(source!="state" && status=="approaching") { _requestedRun=(JsonObject)answer.DeepClone(); _trackedRun=(JsonObject)answer.DeepClone(); }
+        bool own=id.Length>0 && id==OwnExecutionId;
+        if(source=="cancel") { ConsumeCancel(answer,id,status,own); return; }
+        if(status is "failed" or "refused") {
+            string reason=PropActionMotion.Text(answer["reason"]);
+            if(own) { _trackedRun??=OwnedRun?.DeepClone().AsObject(); EndRun(status,reason); }
+            else RejectMutation(status,reason);
+            return;
         }
+        if(_released.Contains(id) || status=="cancelled") return;
+        if(source!="state" && status=="approaching") { _requestedRun=(JsonObject)answer.DeepClone(); _trackedRun=(JsonObject)answer.DeepClone(); }
         if(answer["motion"] is JsonObject motion) MotionReceived?.Invoke((JsonObject)motion.DeepClone(),source,id);
+    }
+    private void ConsumeCancel(JsonObject answer,string id,string status,bool own)
+    {
+        if(status is "refused" or "failed") return;
+        _released.Add(id);
+        _uncertain=false; Preparation.AdoptFreshState();
+        // Withdrawing an invitation or stopping another row leaves the own run alone.
+        if(!own) return;
+        _trackedRun=_requestedRun=null;
+        if(answer["motion"] is JsonObject motion) MotionReceived?.Invoke((JsonObject)motion.DeepClone(),"cancel",id);
     }
     private void RejectMutation(string status,string reason)
     {
-        var previous=_trackedRun ?? OwnedRun;
-        if(previous is not null) _released.Add(PropActionMotion.Text(previous["execution_id"]));
-        _trackedRun=_requestedRun=null;
         _uncertain=false; _knownFailedEpoch=_epoch;
-        RunEnded?.Invoke(status,reason);
+        MutationRejected?.Invoke(status,reason);
     }
     public async Task<JsonDocument> MutateAsync(Func<Task<JsonDocument>> mutation,string source="request")
     {
@@ -189,10 +203,7 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
                 string status=result.RootElement.TryGetProperty("status",out var s) ? s.GetString() ?? "" : "";
                 if(status is "refused" or "failed") throw new InvalidOperationException(result.RootElement.GetProperty("reason").GetString());
                 if(_disposed) return;
-                _released.Add(executionId);
-                _trackedRun=_requestedRun=null;
-                _uncertain=false; Preparation.AdoptFreshState();
-                ConsumeMotion(JsonNode.Parse(result.RootElement.GetRawText())!.AsObject(),"cancel");
+                ConsumeCancel(JsonNode.Parse(result.RootElement.GetRawText())!.AsObject(),executionId,status,own:true);
                 release();
             } finally {
                 if(!_disposed) { _uncertain=false; Preparation.Changed(requestId); Preparation.AdoptFreshState(); PauseChanged?.Invoke(); }

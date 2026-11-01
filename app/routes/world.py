@@ -2382,11 +2382,13 @@ async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
 
 def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
     """The blocking body of ``prop_update`` — runs in the threadpool."""
-    from app.core.props import update_prop
+    from app.core.props import update_prop, PropDocumentInvalid
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
         prop = update_prop(prop_id, data)
+    except PropDocumentInvalid as e:
+        raise HTTPException(status_code=422, detail={"issues": e.issues})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not prop:
