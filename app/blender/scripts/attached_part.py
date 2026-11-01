@@ -43,7 +43,7 @@ DEFAULTS = {
                 'front': .03, 'normal_front': .2, 'iterations': 150},
     'reweight': {'from': .045, 'to': .095},
     'tone': {'shaft': [.9, .83, .8], 'tip': [1.04, .84, .82]}, 'border_lift': .010,
-    'texture': {'bake': 1024, 'patch_max': 256, 'flood': .07, 'blur': 9},
+    'texture': {'bake': 1024, 'patch_max': 256, 'flood': .07, 'blur': 9, 'tone_tolerance': .15},
     'voxel': .0014, 'smooth': {'iterations': 2, 'factor': .5}, 'decimate': .3,
     'protrusion_warn_mm': 12.,
 }
@@ -96,7 +96,7 @@ def parameters(raw):
     if settings['reweight']['from'] < 0 or settings['reweight']['to'] <= settings['reweight']['from']:
         raise ValueError('Invalid radial reweight interval')
     for section, keys in (('body_window', ['radius', 'fall']), ('relief', ['rise', 'fall']),
-                           ('texture', ['bake', 'patch_max', 'flood', 'blur'])):
+                           ('texture', ['bake', 'patch_max', 'flood', 'blur', 'tone_tolerance'])):
         if any(settings[section][key] <= 0 for key in keys):
             raise ValueError('Invalid ' + section)
     if settings['texture']['blur'] % 2 != 1:
@@ -595,15 +595,6 @@ def build_part(group, companions, output):
     wl = np.clip(1 - skin_distance / settings['border_lift'], 0, 1)
     wl = wl * wl * (3 - 2 * wl)
     skin_weight = np.maximum(fillet_weight, wl)
-    cols = []
-    for l in body.data.loops:
-        point = body_matrix @ body.data.vertices[l.vertex_index].co
-        if abs(point.x - att.x) < .05 and att.z + .05 < point.z < att.z + .15 and point.y < att.y + .02:
-            q = body.data.uv_layers.active.data[l.index].uv
-            cols.append(pixels[int(q.y % 1 * texture_height) % texture_height, int(q.x % 1 * texture_width) % texture_width, :3])
-    skin_tone = np.median(np.array(cols), 0) if cols else skin_texel_fallback(pixels)
-    dark = skin_tone * np.array(settings['tone']['shaft'])
-    tip = dark * np.array(settings['tone']['tip'])
     from mathutils.geometry import barycentric_transform
     body.data.calc_loop_triangles()
     uvd = body.data.uv_layers.active.data
@@ -617,6 +608,22 @@ def build_part(group, companions, output):
         uvp = barycentric_transform(q, vs[0], vs[1], vs[2], uvs[0], uvs[1], uvs[2])
         return pixels[int(uvp.y % 1 * texture_height) % texture_height, int(uvp.x % 1 * texture_width) % texture_width, :3]
 
+
+    # The part's tone comes from the skin where it attaches: rings around the
+    # root, from the shaft's girth out to the edge of the body fillet, projected
+    # onto the outer skin. The belly 5-15 cm higher is often paler than the groin.
+    ring_u = surface_normal.cross(lat).normalized()
+    cols = []
+    for ring_radius in np.linspace(shaft_radius, shaft_radius + body_blend, 4):
+        for angle in np.linspace(0, 2 * math.pi, 32, endpoint=False):
+            probe = root + (lat * math.cos(angle) + ring_u * math.sin(angle)) * ring_radius
+            q, _, fi, _ = bvh.find_nearest(body_inverse @ probe)
+            if fi is not None:
+                cols.append(skin_texel(body_matrix @ q, fi))
+    skin_tone = np.median(np.array(cols), 0) if cols else skin_texel_fallback(pixels)
+    print('root skin tone', [round(float(c), 3) for c in skin_tone], 'samples', len(cols))
+    dark = skin_tone * np.array(settings['tone']['shaft'])
+    tip = dark * np.array(settings['tone']['tip'])
 
     vertex_colors = np.zeros((len(positions), 4))
     for i in range(len(positions)):
@@ -787,21 +794,26 @@ def build_part(group, companions, output):
                 vg.add([i], current + take, 'REPLACE')
     print('part tris', sum(len(poly.vertices) - 2 for poly in partobj.data.polygons))
 
-    # Extract a clean skin square from the nearby UV island.
-    hb = bvh.ray_cast(body_inverse @ (root + upv * .08 + Vector((0, -.25, 0))), inverse_normal_matrix @ Vector((0, 1, 0)))
+    # Extract a clean skin square from the UV island at the root. Only texels
+    # near the root's skin tone count: clothing painted onto the body (a top
+    # above the groin) must not lend its weave to the part.
+    hb = bvh.ray_cast(body_inverse @ (root + Vector((0, -.25, 0))), inverse_normal_matrix @ Vector((0, 1, 0)))
     face0 = hb[2]
     if face0 is None:
         raise ValueError('Skin patch ray missed the body')
+    # Edges are keyed by position: a flat-shaded or seamed import splits the
+    # vertices of neighbouring faces, and the flood must still cross them.
+    vkey = [tuple(round(c / 1e-5) for c in v.co) for v in body.data.vertices]
     ek = {}
     for poly in body.data.polygons:
         for e_ in poly.edge_keys:
-            ek.setdefault(e_, []).append(poly.index)
+            ek.setdefault(frozenset((vkey[e_[0]], vkey[e_[1]])), []).append(poly.index)
     isl, st_ = {face0}, [face0]
     c0 = body_matrix @ body.data.polygons[face0].center
     while st_:
         f_ = st_.pop()
         for e_ in body.data.polygons[f_].edge_keys:
-            for g_ in ek[e_]:
+            for g_ in ek[frozenset((vkey[e_[0]], vkey[e_[1]]))]:
                 if g_ not in isl and (body_matrix @ body.data.polygons[g_].center - c0).length < settings['texture']['flood']:
                     isl.add(g_)
                     st_.append(g_)
@@ -826,19 +838,28 @@ def build_part(group, companions, output):
         yy_, xx_ = (ys[ins] - .5).astype(int) % texture_height, (xs[ins] - .5).astype(int) % texture_width
         mask[yy_, xx_] = True
     mpp = math.sqrt(a3 / max(auv, 1e-12))
-    ys_, xs_ = np.nonzero(mask)
-    y0b, x0b = ys_.min(), xs_.min()
-    sub = mask[y0b:ys_.max() + 1, x0b:xs_.max() + 1]
-    dp = np.zeros(sub.shape, int)
-    for i_ in range(sub.shape[0]):
-        for j_ in range(sub.shape[1]):
-            if sub[i_, j_]:
-                dp[i_, j_] = 1 + (min(dp[i_ - 1, j_], dp[i_, j_ - 1], dp[i_ - 1, j_ - 1]) if i_ and j_ else 0)
-    i_, j_ = np.unravel_index(dp.argmax(), dp.shape)
-    S_ = min(int(dp[i_, j_]) - 2, settings['texture']['patch_max'])
+
+    def largest_square(m):
+        ys_, xs_ = np.nonzero(m)
+        if not len(ys_):
+            return 0, 0, 0
+        y0b, x0b = ys_.min(), xs_.min()
+        sub = m[y0b:ys_.max() + 1, x0b:xs_.max() + 1]
+        dp = np.zeros(sub.shape, int)
+        for i_ in range(sub.shape[0]):
+            for j_ in range(sub.shape[1]):
+                if sub[i_, j_]:
+                    dp[i_, j_] = 1 + (min(dp[i_ - 1, j_], dp[i_, j_ - 1], dp[i_ - 1, j_ - 1]) if i_ and j_ else 0)
+        i_, j_ = np.unravel_index(dp.argmax(), dp.shape)
+        size = min(int(dp[i_, j_]) - 2, settings['texture']['patch_max'])
+        return size, y0b + i_ - size + 1, x0b + j_ - size + 1
+    skin_like = np.abs(pixels[..., :3] - skin_tone).max(-1) < settings['texture']['tone_tolerance']
+    S_, y0p, x0p = largest_square(mask & skin_like)
+    if S_ < 8:
+        # Too little root-coloured skin in the island: any clean square beats none.
+        S_, y0p, x0p = largest_square(mask)
     if S_ < 1:
         raise ValueError('No clean skin patch in the UV island')
-    y0p, x0p = y0b + i_ - S_ + 1, x0b + j_ - S_ + 1
     P_ = pixels[y0p:y0p + S_, x0p:x0p + S_, :3].copy()
     print('skin patch', S_, 'px =', round(S_ * mpp * 100, 1), 'cm, island faces', len(isl))
     curve_end = np.concatenate([np.concatenate([P_, P_[:, ::-1]], 1), np.concatenate([P_[::-1], P_[::-1, ::-1]], 1)], 0)
