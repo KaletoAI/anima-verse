@@ -12,6 +12,16 @@ A new B/1 resets that order. SQL lint at 15924012 finds three bare statements
 (character UPDATE and INSERT, pool UPDATE); adjacent literals are one statement.
 All storage is temporary; expected numbers are independent of implementation.
 Validation: a trailing newline is outside the session alphabet, so returns 400.
+Facing (yaw, radians): a report with yaw 1.5 stores 1.5 and the avatar's map
+row says 1.5, an NPC row null; a report WITHOUT yaw keeps 1.5; yaw 7.0 is
+stored as remainder(7, 2*pi) = 7 - 6.283185 = 0.716815 -> 0.7168 (4 places);
+yaw -3.5 -> -3.5 + 6.283185 = 2.783185 -> 2.7832; true / "x" / NaN return
+400 and leave 2.7832. Every server writer clears it: set_character_pos
+without yaw, the owned-runtime commit (write_effect_profile) with pos_x, the
+pool unplace. The SQL lint additionally demands pos_yaw in every pos_x write
+(fails on ad79c128: 4 statements — the character UPDATE and INSERT, the
+travel tick UPDATE, the pool UPDATE; the sleep/stand UPDATE is built from
+fragments the lint cannot join and clears pos_yaw by hand).
 10**400 exceeds the finite float range for x/z/t_ms and the seq maximum;
 each field must return 400 rather than raising an overflow error.
 """
@@ -144,29 +154,63 @@ rows = {c["name"]:c for c in build_worldmap_payload("demo", show_all=True)["char
 check("map avatar origin", rows["demo"]["pos_origin"], {"session":A,"seq":9})
 check("map foreign origin", rows["npc_other"]["pos_origin"], None)
 
+# Facing: stored with the accepted report, kept by a report without one,
+# cleared by every server writer.
+def facing():
+    return get_avatar_sync_snapshot("demo")["yaw"]
+for state in (play._pos_session_current, play._pos_session_retired,
+              play._pos_session_seq, play._pos_client_at):
+    state.pop("demo", None)
+set_character_pos("demo", 1, 2)
+check("yaw report", report(dict(x=1, z=2, yaw=1.5)).get("ok"), True)
+check("yaw stored", facing(), 1.5)
+rows = {c["name"]: c for c in build_worldmap_payload("demo", show_all=True)["characters"]}
+check("map avatar yaw", rows["demo"]["yaw"], 1.5)
+check("map npc yaw", rows["npc_other"]["yaw"], None)
+check("yaw absent keeps", (report(dict(x=1.5, z=2)).get("ok"), facing()), (True, 1.5))
+check("yaw null keeps", (report(dict(x=1.5, z=2, yaw=None)).get("ok"), facing()), (True, 1.5))
+check("yaw wraps", (report(dict(x=1.5, z=2, yaw=7.0)).get("ok"), facing()), (True, 0.7168))
+check("yaw wraps negative", (report(dict(x=1.5, z=2, yaw=-3.5)).get("ok"), facing()), (True, 2.7832))
+for label, bad_yaw in (("yaw bool", True), ("yaw text", "x"), ("yaw nan", float("nan"))):
+    check(label, (report(dict(x=1.5, z=2, yaw=bad_yaw)), facing()), (400, 2.7832))
+set_character_pos("demo", 4, 2)
+check("yaw server move clears", facing(), None)
+report(dict(x=4, z=2, yaw=1.0))
+from app.models.character import write_effect_profile, get_character_profile
+with transaction() as conn:
+    write_effect_profile(conn, "demo", get_character_profile("demo"),
+                         runtime=dict(pos_x=5.0, pos_z=2.0, pos_session=None, pos_seq=None))
+check("yaw runtime commit clears", (get_avatar_sync_snapshot("demo")["pos"], facing()),
+      ({"x": 5.0, "z": 2.0}, None))
+report(dict(x=5, z=2, yaw=1.0))
+_unplace("demo")
+check("yaw pool clears", facing(), None)
+
 import ast, pathlib, re
 _WRITE = re.compile(r"\b(UPDATE|INSERT\s+INTO)\s+character_state\b", re.I)
 
 def unstamped_pos_writes(source: str, filename: str = "<src>") -> list:
     """Every SQL string constant that WRITES character_state.pos_x without also
-    naming pos_session AND pos_seq — one finding per statement (line number)."""
+    naming pos_session, pos_seq AND pos_yaw — one finding per statement (line number)."""
     out = []
     for node in ast.walk(ast.parse(source, filename)):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             sql = node.value
             if _WRITE.search(sql) and re.search(r"\bpos_x\b", sql):
-                if not (re.search(r"\bpos_session\b", sql) and re.search(r"\bpos_seq\b", sql)):
+                if not all(re.search(rf"\b{column}\b", sql) for column in ("pos_session", "pos_seq", "pos_yaw")):
                     out.append(f"{filename}:{node.lineno}")
     return out
 
 # negative fixtures — the checker itself must catch each statement on its own
-FIX = ('cur.execute("UPDATE character_state SET pos_x=?, pos_z=?, pos_session=?, pos_seq=? "\n'
+FIX = ('cur.execute("UPDATE character_state SET pos_x=?, pos_z=?, pos_session=?, pos_seq=?, pos_yaw=? "\n'
        '            "WHERE character_name=?")\n'
        'cur.execute("INSERT INTO character_state (character_name, pos_x, pos_z) "\n'
        '            "VALUES (?, ?, ?)")\n')
 check("lint catches the bare INSERT", unstamped_pos_writes(FIX), ["<src>:3"])
-check("lint passes a stamped UPDATE",
-      unstamped_pos_writes('x("UPDATE character_state SET pos_x=NULL, pos_session=NULL, pos_seq=NULL")'), [])
+check("lint passes a stamped UPDATE", unstamped_pos_writes(
+    'x("UPDATE character_state SET pos_x=NULL, pos_session=NULL, pos_seq=NULL, pos_yaw=NULL")'), [])
+check("lint catches a write without pos_yaw", unstamped_pos_writes(
+    'x("UPDATE character_state SET pos_x=NULL, pos_session=NULL, pos_seq=NULL")'), ["<src>:1"])
 check("lint ignores SELECT", unstamped_pos_writes('x("SELECT pos_x FROM character_state")'), [])
 bad = []
 for p in sorted(list(pathlib.Path("app").rglob("*.py")) + list(pathlib.Path("plugins").rglob("*.py"))):

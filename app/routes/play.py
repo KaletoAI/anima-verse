@@ -1011,7 +1011,7 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                                       is_character_sleeping,
                                       save_character_current_room,
                                       set_is_sleeping,
-                                      set_character_pos)
+                                      set_character_pos, KEEP_YAW)
 
     lang = get_character_language(avatar) or "de"
 
@@ -1028,6 +1028,21 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="x/z must be numbers")
     if not (math.isfinite(x) and math.isfinite(z)):
         raise HTTPException(status_code=400, detail="x/z must be finite")
+    # The facing in radians (view vector (sin, 0, cos) in world x/z), stored
+    # with the point so a restart shows the avatar looking the same way. A
+    # report without one keeps the stored facing.
+    yaw = KEEP_YAW
+    if body.get("yaw") is not None:
+        raw_yaw = body["yaw"]
+        try:
+            if isinstance(raw_yaw, bool):
+                raise TypeError
+            yaw = float(raw_yaw)
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(status_code=400, detail="yaw must be a number")
+        if not math.isfinite(yaw):
+            raise HTTPException(status_code=400, detail="yaw must be finite")
+        yaw = round(math.remainder(yaw, 2 * math.pi), 4)
 
     # PRESENCE is the KEY, not its value: an explicit null is a malformed stamp (400),
     # only a report that omits all three keys is judged unstamped (contract § A15).
@@ -1353,7 +1368,7 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                    t("That slope is too steep to climb.", lang))
 
     written = set_character_pos(avatar, x, z,
-                                origin=(session, seq) if session is not None else None)
+                                origin=(session, seq) if session is not None else None, yaw=yaw)
     if entry_room:
         save_character_current_room(avatar, entry_room)
     # DISCOVERY BY SIGHT (E6): walking past a place reveals it, the same rule

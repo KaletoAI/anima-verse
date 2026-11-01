@@ -1163,6 +1163,10 @@ ALTER_MIGRATIONS = [
     ("character_state", "pos_z", "REAL"),
     ("character_state", "pos_session", "TEXT"),
     ("character_state", "pos_seq", "INTEGER"),
+    # Facing of a free-standing avatar in radians (view vector (sin, 0, cos)
+    # in world x/z), as its own position report gave it. NULL = none known:
+    # every server writer that puts the character somewhere clears it.
+    ("character_state", "pos_yaw", "REAL"),
     # Wilderness perception (Aug 2026, E6): a speaker outside every location
     # has no room to name, so the utterance carries the metre point it was
     # spoken from. NULL means "spoken inside a location" — the walls, not a

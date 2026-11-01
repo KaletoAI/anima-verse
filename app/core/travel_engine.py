@@ -1158,7 +1158,7 @@ def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: 
                     raw["journey"] = dict(journey, position_checkpoint_game=(now or game_time()).canonical())
                 conn.execute("UPDATE characters SET profile_json=?,updated_at=? WHERE name=?",
                              (json.dumps(raw), utc_now_iso(), name))
-                sql = "UPDATE character_state SET pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL"
+                sql = "UPDATE character_state SET pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=NULL"
                 if arrived:
                     sql += ",meta=json_set(meta,'$.movement_target','')"
                 conn.execute(sql + " WHERE character_name=?", (round(pos[0], 2), round(pos[1], 2), name))

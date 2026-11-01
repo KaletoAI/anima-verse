@@ -999,6 +999,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # only fall back to the location centre when it is null.
             "pos": pos,
             "pos_origin": (_avatar_snap["origin"] if name == avatar and _avatar_snap else None),
+            # The avatar's own reported facing in radians, null when none is
+            # stored (a server move clears it) and on every other row.
+            "yaw": (_avatar_snap["yaw"] if name == avatar and _avatar_snap else None),
             "height_cm": cm,
             "room_id": get_character_current_room(name, profile=_prof) or "",
             "activity": activity,

@@ -1872,15 +1872,15 @@ def get_avatar_sync_snapshot(character_name: str) -> Dict[str, Any]:
     from app.core.travel_engine import get_journey
 
     row = get_connection().execute(
-        "SELECT s.pos_x, s.pos_z, s.pos_session, s.pos_seq, "
+        "SELECT s.pos_x, s.pos_z, s.pos_session, s.pos_seq, s.pos_yaw, "
         "json_extract(c.profile_json, '$.journey'), "
         "COALESCE(json_extract(s.meta, '$.movement_target'), "
         "json_extract(c.profile_json, '$.movement_target'), '') "
         "FROM characters c LEFT JOIN character_state s ON s.character_name = c.name "
         "WHERE c.name = ?", (character_name,)).fetchone()
     if not row:
-        return {"pos": None, "origin": None, "journey": None, "movement_target": ""}
-    x, z, session, seq, raw, target = row
+        return {"pos": None, "origin": None, "yaw": None, "journey": None, "movement_target": ""}
+    x, z, session, seq, yaw, raw, target = row
     pos = {"x": float(x), "z": float(z)} if x is not None and z is not None else None
     origin = {"session": session, "seq": seq} if pos is not None and session is not None and seq is not None else None
     try:
@@ -1888,7 +1888,8 @@ def get_avatar_sync_snapshot(character_name: str) -> Dict[str, Any]:
     except (TypeError, ValueError):
         journey = None
     journey = get_journey(character_name, profile={"journey": journey, "movement_target": target})
-    return {"pos": pos, "origin": origin, "journey": journey, "movement_target": target}
+    return {"pos": pos, "origin": origin, "yaw": float(yaw) if pos is not None and yaw is not None else None,
+            "journey": journey, "movement_target": target}
 
 
 def list_wilderness_positions() -> List[Dict[str, Any]]:
@@ -1939,26 +1940,39 @@ def list_character_positions() -> List[Dict[str, Any]]:
             for r in rows if _is_real_character(r[0])]
 
 
+#: ``yaw`` of :func:`_write_character_pos`: leave the stored facing as it is.
+KEEP_YAW = object()
+
+
 def _write_character_pos(character_name: str, x: Optional[float], z: Optional[float],
-                         *, origin: Optional[Tuple[str, int]] = None) -> None:
+                         *, origin: Optional[Tuple[str, int]] = None,
+                         yaw: Any = None) -> None:
     """Raw write of the position columns AND their origin (None/None clears the position).
 
     ``origin`` is ``(session, seq)`` of the ``POST /play/pos`` report that produced this
     point; every other writer passes nothing and the origin is cleared — that is what lets a
-    client tell its own echo from a server move (§ A15)."""
+    client tell its own echo from a server move (§ A15).
+
+    ``yaw`` is the facing in radians that belongs to this point. Only a position report
+    knows one; ``None`` (every other writer) clears it, so a figure put somewhere else never
+    looks the way it once looked at its old place. ``KEEP_YAW`` — a report without a facing —
+    leaves the stored one alone."""
     if not character_name:
         return
     sess, seq = (origin if origin else (None, None))
+    keep = yaw is KEEP_YAW
     try:
         with transaction() as conn:
             cur = conn.execute(
-                "UPDATE character_state SET pos_x=?, pos_z=?, pos_session=?, pos_seq=? "
-                "WHERE character_name=?", (x, z, sess, seq, character_name))
+                "UPDATE character_state SET pos_x=?, pos_z=?, pos_session=?, pos_seq=?, "
+                "pos_yaw=CASE WHEN ? THEN pos_yaw ELSE ? END "
+                "WHERE character_name=?",
+                (x, z, sess, seq, int(keep), None if keep else yaw, character_name))
             if cur.rowcount == 0:
                 conn.execute(
                     "INSERT INTO character_state (character_name, pos_x, pos_z, "
-                    "pos_session, pos_seq) VALUES (?, ?, ?, ?, ?)",
-                    (character_name, x, z, sess, seq))
+                    "pos_session, pos_seq, pos_yaw) VALUES (?, ?, ?, ?, ?, ?)",
+                    (character_name, x, z, sess, seq, None if keep else yaw))
     except Exception as e:
         logger.error("_write_character_pos DB error for %s: %s", character_name, e)
 
@@ -2077,7 +2091,8 @@ def _clear_location_and_room(character_name: str) -> None:
 
 def set_character_pos(character_name: str, x: float, z: float,
                       preserve_movement_target: bool = False, *,
-                      origin: Optional[Tuple[str, int]] = None) -> Dict[str, Any]:
+                      origin: Optional[Tuple[str, int]] = None,
+                      yaw: Any = None) -> Dict[str, Any]:
     """Put a character at a free metre point; the location is DERIVED from it.
 
     The point is the truth — ``current_location`` follows from
@@ -2096,6 +2111,9 @@ def set_character_pos(character_name: str, x: float, z: float,
     False, the default, is the honest opposite: an editor re-place, a teleport
     spell or an admin move ENDS a running journey, because the ticker would
     pull the character back onto its baked polyline on the next tick.
+
+    ``yaw``: the facing that goes with the point (see ``_write_character_pos``);
+    the default clears it.
     """
     if not character_name:
         raise ValueError("character_name is required")
@@ -2136,7 +2154,7 @@ def set_character_pos(character_name: str, x: float, z: float,
             # scope here — the reverse step back INTO a location still runs
             # through the normal setter and gets all of them.
             _clear_location_and_room(character_name)
-    _write_character_pos(character_name, fx, fz, origin=origin)
+    _write_character_pos(character_name, fx, fz, origin=origin, yaw=yaw)
     return {"pos": {"x": fx, "z": fz}, "location_id": location_id}
 
 
@@ -4449,6 +4467,9 @@ def write_effect_profile(conn, character_name: str, profile: dict, *, runtime: d
     for key in ("pose_key", "pose_flavor", "current_activity", "is_sleeping", "pos_x", "pos_z", "pos_session", "pos_seq"):
         if key in patch:
             columns[key] = patch.pop(key)
+    if "pos_x" in columns:
+        # A server-placed point has no reported facing (``_write_character_pos``).
+        columns["pos_yaw"] = None
     conn.execute("UPDATE character_state SET " + ",".join(key + "=?" for key in columns) +
                  " WHERE character_name=?", (*columns.values(), character_name))
     if patch:
@@ -4629,7 +4650,7 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
                 # without changing this solo place; preserve all four columns
                 # in that case (including same-XZ reports with a newer origin).
                 if point is not None and tuple(state)[3:] == position_authority:
-                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL"
+                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=NULL"
                     args.extend((round(point[0], 2), round(point[1], 2)))
                 conn.execute(sql + " WHERE character_name=?", (*args, character_name))
             else:

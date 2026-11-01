@@ -1069,7 +1069,7 @@ Minimap-Maßstab), muss das abfangen.
 
 Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 (E1), und **`travel`** hat mit E3 eine andere INNERE Form bekommen (§ A11).
-Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `height_cm`,
+Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
@@ -1082,6 +1082,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `height_c
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
 | `pos_origin` | `{session: str, seq: int} \| null` | Origin of the accepted position report, only on the avatar row; null for every other writer and every other character. Always present. |
+| `yaw` | `float \| null` | The avatar's own facing in radians, as its last position report gave it (§ A15, view vector `(sin yaw, 0, cos yaw)` in world x/z, normalised to [−π, π]). Only on the avatar row; null on every other row and whenever none is stored — every server writer that puts the character somewhere (travel, furniture, pool, admin move) clears it. A client applies it when it first places a free-standing avatar. Always present. |
 | `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `floor_y`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **`pos` gilt auch IN einem Raum** (2026-09-13, T4). Der Server hat den Punkt
@@ -4131,7 +4132,7 @@ nicht mehr pro Kante um Erlaubnis, sondern **beurteilt einen gemeldeten
 Punkt**. `POST /world/avatar/step` ist mit E3 gelöscht und hat hier keinen
 Nachfolger pro Richtung.
 
-**Request** `{"x": <metres>, "z": <metres>, "seq": <number>, "t_ms": <ms>, "session": <token>}` ·
+**Request** `{"x": <metres>, "z": <metres>, "yaw": <radians>, "seq": <number>, "t_ms": <ms>, "session": <token>}` ·
 **Antwort** `{ok: true, pos: {x, z}, location_id, room_id}`.
 
 **Meldefrequenz:** ~3/s während der Bewegung plus einmal beim Anhalten.
@@ -4148,6 +4149,12 @@ server processes them after the client's 8 s request deadline.
 | `session` | String matching `^[A-Za-z0-9_-]{8,64}$` |
 | `seq` | Integer from 1 to 2^31−1; booleans and fractional numbers are rejected |
 | `t_ms` | Finite number ≥ 0; booleans are rejected |
+
+**`yaw` (optional):** the avatar's facing in radians, view vector
+`(sin yaw, 0, cos yaw)` in world x/z. A finite number (booleans and non-finite
+values return 400), stored normalised to [−π, π] with the accepted point and
+returned as `yaw` on the avatar's worldmap row (§ A1.4). Omitted or null keeps
+the stored facing; a refused, stale or throttled report stores nothing.
 
 Omitting all three fields preserves unstamped reporting: server elapsed time,
 no ordering check, and a null position origin. Sending only some fields, an
