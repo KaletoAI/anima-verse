@@ -2022,12 +2022,45 @@ class ImageService:
             "pose_check": ctx.get("pose_check"),
         }
 
+        if "prompt" not in ctx and self._json_keys(data.get("prompt")):
+            # No "prompt" key, and "input" is a JSON object (the raw tool
+            # input, or TakePhoto's copy of it): a tool-calling LLM named the
+            # picture argument itself (image_prompt, description, ...).
+            # Without this the whole JSON — with the injected
+            # rp_context/user_input — became the prompt text.
+            free_text = self._free_text_value(ctx, data)
+            if free_text is None:
+                free_text = self._free_text_value(
+                    self._parse_base_input(data["prompt"]), data)
+            data["prompt"] = free_text or ""
+
         if isinstance(data.get("prompt"), str):
             data["prompt"] = data["prompt"].strip()
         else:
             data["prompt"] = ""
 
         return data
+
+    @staticmethod
+    def _json_keys(raw_input: Any) -> set:
+        """The keys of a JSON-object input (empty for plain text)."""
+        if not isinstance(raw_input, str) or not raw_input.strip().startswith("{"):
+            return set()
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(raw_input.strip())
+        except ValueError:
+            return set()
+        return set(parsed) if isinstance(parsed, dict) else set()
+
+    @staticmethod
+    def _free_text_value(ctx: Dict[str, Any], known: Dict[str, Any]):
+        """The longest non-empty string under a key the payload whitelist does
+        not name — the picture text of a tool call whose argument name the
+        LLM chose. None when there is none (or the input was no JSON)."""
+        skip = set(known) | {"input", "agent_name", "user_id"}
+        texts = [v.strip() for k, v in ctx.items()
+                 if k not in skip and isinstance(v, str) and v.strip()]
+        return max(texts, key=len) if texts else None
 
     def _resolve_gallery_character(self, character_name: str, prompt_text: str,
                                    rp_context: str, input_data: Dict[str, Any],
