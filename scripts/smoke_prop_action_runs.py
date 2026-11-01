@@ -371,8 +371,10 @@ class Runs(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             answers = list(pool.map(start, (name, other)))
         self.assertEqual(sum(a["status"] == "approaching" for a in answers), 1, answers)
-        winner = next(n for n, a in zip((name, other), answers) if a["status"] == "approaching")
-        self.assertEqual(request(winner, target)["reason"], "participant_claimed")
+        winner, won = next((n, a) for n, a in zip((name, other), answers) if a["status"] == "approaching")
+        # The winner naming its own run again gets that run back, not a refusal.
+        again = request(winner, target)
+        self.assertEqual((again["execution_id"], again.get("already")), (won["execution_id"], True))
         self.assertEqual(len(R.claims()), 2)
 
     def test_stale_revision_and_deleted_variant_have_no_side_effect(self):

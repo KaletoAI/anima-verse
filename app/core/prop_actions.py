@@ -131,7 +131,7 @@ def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = 
         # convention (``i18n.localized``) — a package names its actions so.
         fields(action, {'id', 'name', 'description', 'enabled', 'ability', 'pose_key',
                         'participants', 'presence', 'interrupt_on_presence_change',
-                        'partner_consent', 'phases', 'requirements', 'effects'}
+                        'phases', 'requirements', 'effects'}
                | {k for k in action if isinstance(k, str) and re.fullmatch(r'(name|description)_[a-z]{2}', k)
                   and isinstance(action[k], str)}, p)
         if text(action.get('id')):
@@ -156,11 +156,6 @@ def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = 
             issue(p + '.participants', 'unsupported_combination', 'Pair actions require two participants; others one')
         if action.get('presence') not in ('any', 'alone', 'others', 'participants_only'):
             issue(p + '.presence', 'invalid_presence', 'Unknown presence policy')
-        # Optional, pair only: "ask" (the partner consents first, the default)
-        # or "react" (the action starts, the partner reacts and may resist).
-        if 'partner_consent' in action and (action['partner_consent'] not in ('ask', 'react') or not pair):
-            issue(p + '.partner_consent', 'invalid_partner_consent',
-                  'Partner consent is "ask" or "react", and only for pair actions')
         phases = rows(action.get('phases'), p + '.phases')
         identities(phases, p + '.phases')
         if (ability == 'combined' and not phases) or (ability != 'combined' and phases):
@@ -672,6 +667,8 @@ def _named_request(actor: str, payload: dict) -> dict:
     result = execute(actor, exact)
     return dict(status=result["status"], furniture=row["prop_label"], action=row["label"],
                 **({"partner": exact["partner"]} if "partner" in exact else {}),
+                # Already part of that very run (agreed to it a moment ago).
+                **({"already": True} if result.get("already") else {}),
                 **({"reason": result["reason"]} if result.get("reason") else {}))
 
 
@@ -707,7 +704,7 @@ def execute(actor: str, payload: dict) -> dict:
             return refused
         return engine.cancel(actor, payload["execution_id"])
     if operation != "request" or set(payload) - {
-            "operation", "action_id", "revision", "target", "partner", "request_id"}:
+            "operation", "action_id", "revision", "target", "partner", "request_id", "consent"}:
         return refused
     from app.core.skill_gate import blocked_reason, charge
     request_id = payload.get("request_id", "")
@@ -722,7 +719,8 @@ def execute(actor: str, payload: dict) -> dict:
                 return dict(status="refused", execution_id="", reason=reason)
         result, created = engine.request_with_creation(
             actor, payload.get("target"), payload.get("action_id"),
-            payload.get("revision"), payload.get("partner", ""), request_id)
+            payload.get("revision"), payload.get("partner", ""), request_id,
+            payload.get("consent", "ask"))
         if created and result["status"] not in ("failed", "cancelled"):
             charge(actor, "prop_action")
     if created:

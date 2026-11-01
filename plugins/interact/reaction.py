@@ -1,5 +1,5 @@
 """The ``pair_reaction`` provider: how an NPC reacts to a furniture pair
-action started WITHOUT asking (``partner_consent: react``).
+action started WITHOUT asking (requested with ``consent="react"``).
 
 The core starts the run at once and waits at the furniture for the answer
 (``prop_action_engine.REACTION_WAIT_S``); this module asks the model in a

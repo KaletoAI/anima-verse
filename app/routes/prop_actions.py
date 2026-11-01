@@ -1,5 +1,6 @@
 """Session-avatar execution and read-only admin authoring adapters."""
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
@@ -29,6 +30,9 @@ class ActionRequest(Input):
     revision: StrictStr
     partner: StrictStr = ""
     request_id: StrictStr = ""
+    #: Pair actions: "ask" the partner first, or start at once and let the
+    #: partner "react" (prop_action_engine.CONSENTS).
+    consent: Literal["ask", "react"] = "ask"
 
 
 class ResponseRequest(Input):
@@ -66,7 +70,7 @@ def _answer(result):
 
 def _request(actor, body):
     return engine.request(actor, body.target.model_dump(), body.action_id, body.revision,
-                          body.partner, body.request_id)
+                          body.partner, body.request_id, body.consent)
 
 
 @router.get("/play/prop-actions")
@@ -115,7 +119,7 @@ def _request_route(body: ActionRequest, user):
             raise
         result, created = engine.request_with_creation(
             actor, body.target.model_dump(), body.action_id, body.revision,
-            body.partner, body.request_id)
+            body.partner, body.request_id, body.consent)
         result = _answer(result)
         if created and skill is not None and result["status"] not in ("failed", "cancelled"):
             from app.core.skill_gate import charge

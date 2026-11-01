@@ -19,7 +19,7 @@ module is where that knowledge lives:
   to a character with the exact yes/no call — what a tool-calling reader
   needs, while the invitee's own roleplay prompt only hears the question;
 * the ``pair_reaction`` provider (``reaction.py``): a furniture pair action
-  set to ``partner_consent: react`` starts without asking, and an NPC
+  requested with ``consent="react"`` starts without asking, and an NPC
   partner's reaction — accept or resist — comes from the ``pair_reaction``
   task. Without this package such runs simply go on.
 """

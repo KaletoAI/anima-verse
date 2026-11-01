@@ -370,8 +370,9 @@ class ApiContracts(unittest.TestCase):
         accepted = json.loads(asyncio.run(captured_call(request)))
         self.assertEqual(accepted['status'], 'approaching')
         self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
-        refused = json.loads(asyncio.run(captured_call(request)))
-        self.assertEqual(refused['reason'], 'participant_claimed')
+        # Naming the own running action again answers that run — and is not paid again.
+        again = json.loads(asyncio.run(captured_call(request)))
+        self.assertEqual((again['execution_id'], again.get('already')), (accepted['execution_id'], True))
         self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
 
     def test_startup_repairs_legacy_marker_prerequisites_before_actions(self):

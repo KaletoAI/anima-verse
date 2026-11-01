@@ -228,8 +228,13 @@ async function mutate(path: string, body: unknown): Promise<PropActionResult> {
     notifyPropActionChanged(requestId, result, path.slice(path.lastIndexOf('/') + 1) as PropActionSource)
   }
 }
-export function requestPropAction(actionId: string, target: PropActionTarget, revision: string, partner?: string): Promise<PropActionResult> {
-  return mutate('/play/prop-actions/request', { action_id: actionId, target, revision, ...(partner === undefined ? {} : { partner }) })
+/** How a pair action begins, chosen per request: "ask" the partner first, or
+ *  "react" — it starts at once and the partner reacts (may push it away). */
+export type PropActionConsent = 'ask' | 'react'
+export function requestPropAction(actionId: string, target: PropActionTarget, revision: string, partner?: string,
+  consent?: PropActionConsent): Promise<PropActionResult> {
+  return mutate('/play/prop-actions/request', { action_id: actionId, target, revision,
+    ...(partner === undefined ? {} : { partner }), ...(partner && consent === 'react' ? { consent } : {}) })
 }
 export function respondPropAction(executionId: string, accept: boolean): Promise<PropActionResult> {
   return mutate('/play/prop-actions/respond', { execution_id: executionId, accept })

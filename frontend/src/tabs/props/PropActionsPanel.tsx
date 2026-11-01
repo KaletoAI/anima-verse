@@ -93,14 +93,8 @@ export function PropActionsPanel({ workspace, onIssue }: { workspace: PropWorksp
             const participants = Number(event.target.value) as 1 | 2
             const ability = participants === 2 ? 'pair' : 'pose'
             const choices = presentations(catalog, ability)
-            patch({ participants, ability, phases: [], pose_key: choices.some(pose => pose.key === action.pose_key) ? action.pose_key : choices[0]?.key || '',
-              ...(participants === 1 ? { partner_consent: undefined } : {}) })
+            patch({ participants, ability, phases: [], pose_key: choices.some(pose => pose.key === action.pose_key) ? action.pose_key : choices[0]?.key || '' })
           }}><option value={1}>1</option><option value={2} disabled={!presentations(catalog, 'pair').length}>2</option></select></ActionField>
-          {action.participants === 2 && <ActionField label={t('Partner')}><select className="ga-input" value={action.partner_consent || 'ask'}
-            data-author-path={`${path}.partner_consent`} onChange={event => patch({ partner_consent: event.target.value === 'react' ? 'react' : undefined })}>
-            <option value="ask">{t('Ask for consent first')}</option>
-            <option value="react">{t('Start at once, the partner reacts')}</option>
-          </select></ActionField>}
           {action.participants === 1 && action.ability !== 'combined' && catalog.poses.find(pose => pose.key === action.pose_key)?.group === 'lie' &&
             <label className="ga-form-row"><input type="checkbox" checked={action.ability === 'sleep'} onChange={event => patch({ ability: event.target.checked ? 'sleep' : 'pose' })} />{t('Really fall asleep')}</label>}
         </section>
@@ -113,9 +107,7 @@ export function PropActionsPanel({ workspace, onIssue }: { workspace: PropWorksp
         <p className="ga-hint">{t('Applies to:')} {binding?.marker_ids.length || 0} {t('places on this variant')}{binding?.marker_ids.length ? ` (${Object.entries((shownVariant?.markers || []).filter(marker => binding.marker_ids.includes(marker.id || '')).reduce<Record<string, number>>((counts, marker) => { counts[marker.group] = (counts[marker.group] || 0) + 1; return counts }, {})).map(([group, count]) => `${group} x${count}`).join(', ')})` : ''}</p>
         <PropActionEffects action={action} catalog={catalog} path={path} onChange={effects => patch({ effects })} />
         <details className="prop-inspector-group"><summary>{t('Advanced')}</summary>
-          {action.ability === 'pair' && <p className="ga-hint">{t(action.partner_consent === 'react'
-            ? 'The partner is chosen at runtime. The action starts without asking; the partner reacts on the way and may push it away, which ends it. Actor and partner are effect targets; the pair ability assigns the physical A/B clip roles.'
-            : 'The partner is chosen at runtime. Both people must explicitly consent before starting. Actor and partner are effect targets; the pair ability assigns the physical A/B clip roles.')}</p>}
+          {action.ability === 'pair' && <p className="ga-hint">{t('The partner is chosen at runtime. Whoever starts the action chooses each time: ask first, or start at once and the partner reacts on the way and may push it away. Actor and partner are effect targets; the pair ability assigns the physical A/B clip roles.')}</p>}
           {action.presence !== 'any' && <>
             <label className="ga-form-row"><input type="checkbox" checked={action.interrupt_on_presence_change} data-author-path={`${path}.interrupt_on_presence_change`} onChange={event => patch({ interrupt_on_presence_change: event.target.checked })} />{t('Cancel if presence changes during the action')}</label>
             <p className="ga-hint">{t('With “Only alone”, someone entering the room ends the action; a sleeping person wakes up.')}</p>

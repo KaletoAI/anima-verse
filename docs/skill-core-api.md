@@ -1066,7 +1066,7 @@ Capabilities, die der Core heute abfragt:
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
 | `shared_activity_options`, `shared_activity_validate`, `shared_activity_request`, `shared_activity_status`, `shared_activity_cancel` | Structured intent continuation and exact pair ownership | No pair continuation; available options are empty. The action is only `{type:"pair", pose_key:"<exact available key>"}`. Request/status return `pending`, `approaching`, `running`, `declined` or `blocked` with `invite_id` and optional `interaction_id`/`reason`; status never starts anything. Initial unsubmitted requests alone may return `not_found`; missing questions without exact live pair provenance and accepted-but-not-live requests block, never replay. Exact provenance reports a running pair even before `accepted` or start hooks persist. Cancel's optional `interaction_id` restricts actual receipt/provenance ownership; it never grants ownership or ends another pair |
 | `tool_decision.open_questions` | `streaming.tool_state_note` / `open_questions_note`: the rp_first tool decision (both paths) and, for a `single` character, the chat turn's scene state. `fn(agent_name, tool_names) -> list[str]`: one line per question someone put to the character that an offered verb answers, with the exact yes and no call (`interact`: open pair invitations) | No open-question block; the invitee only hears the question in prose |
-| `pair_reaction` | `prop_action_engine`: a pair furniture action with `partner_consent: "react"` that an NPC partner did not start. Called with the keywords execution_id, actor and partner, it must return at once; the answer goes to `app.core.prop_action_engine.react` (below). The run waits at the furniture for it up to `REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such runs never wait: reaction `none`, the action goes straight in |
+| `pair_reaction` | `prop_action_engine`: a pair furniture action requested with consent "react" that an NPC partner did not start. Called with the keywords execution_id, actor and partner, it must return at once; the answer goes to `app.core.prop_action_engine.react` (below). The run waits at the furniture for it up to `REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such runs never wait: reaction `none`, the action goes straight in |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |
@@ -1475,8 +1475,8 @@ rows used by the named-request validator. Repeated placements may share names.
 `outgoing`, `incoming` and `recent_results` to the participant. Current and
 outgoing rows include `target` and action `label`; incoming invitations belong
 in the open-questions block, not the proposal menu. Every row also carries
-`own_role` (`actor`/`partner`), `partner_consent` (`ask`/`react`, empty for a
-solo run), `reaction` (a react run's partner reaction: `pending`, `accepted`,
+`own_role` (`actor`/`partner`), `partner_consent` (`ask`/`react` — how the
+requester chose to begin it, empty for a solo run), `reaction` (a react run's partner reaction: `pending`, `accepted`,
 `resisted`, `timeout`, `player`, `none`) and `can_resist`.
 
 `app.core.prop_actions.furniture_for_pose(actor, pose_key) -> list[dict]` lists
@@ -1492,8 +1492,8 @@ False, nothing written) — a package that sets poses reaches furniture through
 `take_furniture_for_pose` instead.
 
 `app.core.prop_action_engine.react(partner, execution_id, accept, *, line="",
-feeling=0, romantic=False) -> dict` answers a waiting `partner_consent: "react"`
-run: `accept=False` ends it (`cancelled` / `partner_resisted`), `True` lets it
+feeling=0, romantic=False) -> dict` answers a waiting run requested with
+consent "react": `accept=False` ends it (`cancelled` / `partner_resisted`), `True` lets it
 go on (into the furniture at once if both already wait there). `line` is told
 to the room as it is; `feeling` (-2..2) moves the partner's sentiment toward
 the actor by 0.05 per step, `romantic` the romantic tension by 0.02 per step,

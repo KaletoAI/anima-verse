@@ -26,6 +26,7 @@ import type { GraphicsPrefs, Prefs, ScatterPrefs } from '../game/prefs';
 import type { StairPrompt } from '../game/stairs';
 import type { InfoPanelData } from '../game/infoPanel';
 import type { MapCharacter, PlaceOffer, PropActionTarget } from '../types';
+import type { PropActionConsent } from '@anima/player-ui/propActions';
 
 export type GameMode = 'overview' | 'embodied';
 
@@ -115,7 +116,9 @@ export interface HudGameActions {
   infoAction?: (id: string, kind: 'zoom' | 'lookInside' | 'closeView') => void;
   closeInfo?: () => void;
   closeOpenView?: () => void;
-  pickPropAction?: (actionId: string, target: PropActionTarget, revision: string, partner?: string) => void | Promise<void>;
+  /** `consent` (pair actions): "ask" the partner first, or "react" — start at once. */
+  pickPropAction?: (actionId: string, target: PropActionTarget, revision: string, partner?: string,
+                    consent?: PropActionConsent) => void | Promise<void>;
   pickRoomPose?: (placeId: string, poseKey: string) => void | Promise<void>;
   closePlaceMenu?: () => void;
   respondPropAction?: (executionId: string, accept: boolean) => void | Promise<void>;

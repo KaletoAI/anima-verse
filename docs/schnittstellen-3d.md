@@ -7895,7 +7895,7 @@ registers the prop owner before jobs start; final client cutover is still requir
 ### Durable prop executions
 
 `app.core.prop_action_engine.request(actor, target, action_id, revision,
-partner='', request_id='')`, `respond(actor, execution_id, accept)`,
+partner='', request_id='', consent='ask')`, `respond(actor, execution_id, accept)`,
 `cancel(actor, execution_id)` and `advance(now: GameTime)` are real Core
 operations. A target has exactly `location_id`, `room_id`, `placement_id`,
 `variant_uid`; the separate action/revision arguments pin the complete author
@@ -8116,7 +8116,12 @@ therefore leave furniture actions visibly blocked.
 Player routes require the authenticated user's current authorized avatar:
 
 - `GET /play/prop-actions` returns offers; body/query actor cannot select a figure.
-- `POST /play/prop-actions/request`: `{target,action_id,revision,partner?,request_id?}`.
+- `POST /play/prop-actions/request`: `{target,action_id,revision,partner?,request_id?,consent?}`.
+  `consent` (pair actions, default `ask`): `ask` waits for the partner's consent,
+  `react` starts at once and the partner reacts and may push it away — every pair
+  action offers both, the requester chooses. A request naming the run the actor
+  already takes part in (same action, piece and pair) answers that run with
+  `already: true` instead of refusing it as `participant_claimed`.
   Extra payload fields are rejected; nonces are scoped to actor and exact input.
   The declared player skill gate checks current skill-block rules and configured
   cost shortfalls for a truly new execution. Only its creator charges the accepted,

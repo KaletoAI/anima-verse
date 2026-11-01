@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""A pair furniture action with ``partner_consent: react`` starts at once;
-the partner reacts while both walk over, and may push it away.
+"""A pair furniture action requested with ``consent="react"`` starts at
+once; the partner reacts while both walk over, and may push it away. Every
+pair action offers it — the requester chooses, nothing is authored.
 
 Usage: ./.venv/bin/python scripts/smoke_prop_action_react.py
 
@@ -21,7 +22,7 @@ change into avg*10):
       is its own label — the fixture pose has none). Rows: the
       partner's has own_role partner, partner_consent react, can_resist; the
       actor's reaction "pending" and no can_resist.
-      (Fails on 7128f396: the request is refused — the field is unknown.)
+      (Fails on 837538f1: request() takes no ``consent``.)
   [2] both arrive, no reaction yet: still "approaching", phase "" — never
       "entry"; 10 more game seconds change nothing (no approach deadline
       while waiting). react(accept, feeling 2, line) -> phase "entry" at
@@ -41,8 +42,13 @@ change into avg*10):
       actor->partner -0.03.
   [7] no provider registered (the interact package removed): reaction
       "none", the run goes straight in.
-  [8] react() by someone else -> "not_partner"; the field on a solo action
-      or with another value -> issue "invalid_partner_consent".
+  [8] react() by someone else -> "not_partner"; consent "maybe" ->
+      refused "invalid_request"; the same action requested with "ask"
+      (the default) -> "awaiting_consent".
+  [11] the partner names the run it is in again (actor and partner swapped,
+      same piece and action): the answer is that run — same execution id,
+      its status, ``already`` True — not "participant_claimed"; the claims
+      stay 4 and the run is untouched. The actor repeating it gets the same.
   [9] a plugin task declaring lane_priority chat ranks as CHAT on the lanes.
   [10] the interact package: the parser takes the first JSON object, clamps
       feeling -5 -> -2, strips the line, refuses anything without
@@ -60,13 +66,6 @@ import smoke_prop_action_runs as S
 from smoke_prop_action_runs import A, F, R, request, tick
 from app.core import hooks
 from app.core.game_time import GameDuration
-
-
-def set_react(pid, target):
-    doc = F.props.read_sidecar(pid)
-    doc["actions"][0]["partner_consent"] = "react"
-    F.props._write_sidecar(pid, doc)
-    target["definition_revision"] = F.props.get_prop(pid)["revision"]
 
 
 def sentiment(source, target):
@@ -102,8 +101,7 @@ class React(unittest.TestCase):
 
     def start(self):
         name, partner, target, pid = S.authored_pair()
-        set_react(pid, target)
-        result = request(name, target, partner=partner)
+        result = request(name, target, partner=partner, consent="react")
         self.assertEqual(result["status"], "approaching", result)
         return name, partner, result["execution_id"]
 
@@ -201,17 +199,22 @@ class React(unittest.TestCase):
 
     def test_8_wrong_partner_and_validation(self):
         name, partner, target, pid = S.authored_pair()
-        set_react(pid, target)
-        eid = request(name, target, partner=partner)["execution_id"]
+        self.assertEqual(request(name, target, partner=partner, consent="maybe")["reason"], "invalid_request")
+        eid = request(name, target, partner=partner, consent="react")["execution_id"]
         self.assertEqual(A.react(name, eid, False)["reason"], "not_partner")
-        from app.core.prop_actions import validate_document
-        doc = F.props.read_sidecar(pid)
-        self.assertNotIn("invalid_partner_consent", [i["code"] for i in validate_document(doc)])
-        for change in (dict(participants=1, ability="pose", pose_key="sitting", partner_consent="react"),
-                       dict(partner_consent="maybe")):
-            bad = dict(doc, actions=[dict(doc["actions"][0], **change)])
-            codes = [i["code"] for i in validate_document(bad)]
-            self.assertIn("invalid_partner_consent", codes, change)
+        A.cancel(name, eid)
+        self.assertEqual(request(name, target, partner=partner)["status"], "awaiting_consent")
+
+    def test_11_naming_the_own_run_again(self):
+        name, partner, target, pid = S.authored_pair()
+        eid = request(name, target, partner=partner, consent="react")["execution_id"]
+        before = R.get(eid)
+        for who, other in ((partner, name), (name, partner)):
+            answer = request(who, target, partner=other)
+            self.assertEqual((answer["execution_id"], answer["status"], answer.get("already")),
+                             (eid, "approaching", True))
+        self.assertEqual(len(R.claims()), 4)
+        self.assertEqual(R.get(eid), before)
 
     def test_10_package_prompt_and_parser(self):
         from app.core import prompt_templates

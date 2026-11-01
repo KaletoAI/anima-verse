@@ -5,7 +5,7 @@ import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
 import { cancelPropAction, notifyPropActionChanged, requestPropAction, respondPropAction,
-  type PropActionExecution, type PropActionOffer } from './propActions'
+  type PropActionConsent, type PropActionExecution, type PropActionOffer } from './propActions'
 
 interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
 interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
@@ -39,14 +39,17 @@ function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] 
  *  offers starts on click (the piece and its distance are the hover text); an action
  *  several pieces offer opens a row of those pieces, nearest first. Pair actions sit
  *  behind one "With <partner>" chip per partner, unless the menu already belongs to
- *  one partner. No native select: its width followed the longest option. */
+ *  one partner. No native select: its width followed the longest option. A pair
+ *  action always opens its row: every piece there offers "Ask" (the partner
+ *  consents first) and "Just do it" (it starts, the partner reacts) — the
+ *  requester chooses each time, no action is authored twice. */
 export function PropActionOffers({ offers, partner, busy = false, nameProps = true, onPick }: {
   offers: PropActionOffer[]
   partner?: string
   busy?: boolean
   /** Off where the menu already belongs to one piece (the canvas place menu). */
   nameProps?: boolean
-  onPick: (offer: PropActionOffer, partner?: string) => void
+  onPick: (offer: PropActionOffer, partner?: string, consent?: PropActionConsent) => void
 }) {
   const { t } = useI18n()
   const [openPartner, setOpenPartner] = useState('')
@@ -58,11 +61,12 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
   if (!partner) for (const group of groups) if (group.partner) partners.set(group.partner, [...partners.get(group.partner) ?? [], group])
   const shownPartner = partners.has(openPartner) ? openPartner : ''
   const visible = [...solo, ...partners.get(shownPartner) ?? []]
-  const action = visible.find(group => group.key === openAction && group.entries.length > 1)
+  const opens = (group: OfferGroup) => group.entries.length > 1 || !!group.partner
+  const action = visible.find(group => group.key === openAction && opens(group))
 
   const chip = (group: OfferGroup) => {
     const first = group.entries[0]
-    const several = group.entries.length > 1
+    const several = opens(group)
     const disabled = busy || !group.usable
     // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
     // the native client shows it too); a single piece names itself there.
@@ -107,15 +111,24 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
       <span style={{ opacity: 0.7 }}>{action.label}{action.partner ? ` · ${action.partner}` : ''}:</span>
       {action.entries.map(entry => {
         const disabled = busy || !entry.enabled
-        return <HoverHint key={JSON.stringify([entry.offer.target, entry.offer.action_id])}
-          text={entry.enabled ? undefined : propActionReason(entry.reason, t)}>
-          <button type="button" className="player-chip" disabled={disabled}
-            aria-disabled={disabled ? true : undefined}
-            style={{ pointerEvents: !entry.enabled ? 'none' : undefined }}
-            onClick={() => { setOpenAction(''); onPick(entry.offer, entry.partner) }}>
-            {pieceText(entry.offer)}
-          </button>
-        </HoverHint>
+        const key = JSON.stringify([entry.offer.target, entry.offer.action_id])
+        const button = (label: string, hint: string | undefined, consent?: PropActionConsent) =>
+          <HoverHint key={`${key}:${consent ?? ''}`} text={entry.enabled ? hint : propActionReason(entry.reason, t)}>
+            <button type="button" className="player-chip" disabled={disabled}
+              aria-disabled={disabled ? true : undefined}
+              style={{ pointerEvents: !entry.enabled ? 'none' : undefined }}
+              onClick={() => { setOpenAction(''); onPick(entry.offer, entry.partner, consent) }}>
+              {label}
+            </button>
+          </HoverHint>
+        if (!entry.partner) return button(pieceText(entry.offer), undefined)
+        // The piece is named where there is a choice of pieces or the menu is not one piece's.
+        const piece = action.entries.length > 1 || nameProps ? `${pieceText(entry.offer)} · ` : ''
+        return <span key={key} style={{ display: 'inline-flex', gap: 5 }}>
+          {button(`${piece}${t('Ask')}`, t('Ask {name} first').replace('{name}', entry.partner), 'ask')}
+          {button(`${piece}${t('Just do it')}`,
+            t('Start at once; {name} reacts and may push you away').replace('{name}', entry.partner), 'react')}
+        </span>
       })}
     </>, () => setOpenAction(''))}
   </div>
@@ -190,6 +203,6 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true 
     {groups.map(([kind, runs]) => runs.map(run => <PropActionExecutionRow key={`${kind}:${run.execution_id}`}
       run={run} kind={kind} busy={busy} perform={operation => { void perform(operation) }} />))}
     {showOffers && data && <PropActionOffers offers={data.offers} partner={partner} busy={busy || error != null}
-      onPick={(offer, selectedPartner) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision, selectedPartner)) }} />}
+      onPick={(offer, selectedPartner, consent) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision, selectedPartner, consent)) }} />}
   </section>
 }

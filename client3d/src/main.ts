@@ -5294,7 +5294,7 @@ async function startApp(username: string, role: string) {
   }
   gameActions.pairFacing = (phase, id, partner) => npcs.pairFacing(avatarName, phase, id, partner);
   let propClickRevert: (() => void) | null = null;
-  gameActions.pickPropAction = (actionId, target, revision, partner) => {
+  gameActions.pickPropAction = (actionId, target, revision, partner, consent) => {
     if (propMutationPending) return;
     const entry = [...(placeEntries?.values() ?? [])].find(e => e.placementId === target.placement_id && e.variantUid === target.variant_uid);
     const point = entry?.slots[0];
@@ -5306,7 +5306,7 @@ async function startApp(username: string, role: string) {
       propRequestDiagnostic.placement = target.placement_id;
       propRequestDiagnostic.sentAt = undefined;
       try {
-        const result = await api.requestPropAction(actionId, target, revision, partner);
+        const result = await api.requestPropAction(actionId, target, revision, partner, consent);
         console.info(`[prop] request answered status=${result.status} ms=${Math.round(performance.now() - (propRequestDiagnostic.sentAt ?? at))}`);
         return result;
       } catch (e) { console.info(`[prop] request answered status=${propRequestDiagnostic.sentAt === undefined ? 'preparation-error' : 'error'} ms=${Math.round(performance.now() - (propRequestDiagnostic.sentAt ?? at))}`); throw e; }

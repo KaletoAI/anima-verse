@@ -31,7 +31,7 @@ _TARGET = ("location_id", "room_id", "placement_id", "variant_uid")
 _INTERNAL_MUTATION = ContextVar("prop_action_owned_mutation", default=False)
 logger = get_logger("prop_action_engine")
 
-#: A ``partner_consent: react`` run waits at the furniture this long (SYSTEM
+#: A pair run requested with ``consent="react"`` waits at the furniture this long (SYSTEM
 #: seconds: it waits for a model, not for the world) for the partner's
 #: reaction; without one it goes on as accepted.
 REACTION_WAIT_S = 60.0
@@ -89,11 +89,27 @@ def _members(run):
     return [("actor", run["actor"])] + ([("partner", run["partner"])] if run["partner"] else [])
 
 
-def _reacts(run_or_definition, partner=None):
+#: How a pair run begins — chosen by whoever requests it, for every pair
+#: action: "ask" (the partner consents first) or "react" (it starts at once,
+#: the partner reacts and may resist).
+CONSENTS = ("ask", "react")
+
+
+def _reacts(run):
     """A pair run that starts without consent: the partner REACTS instead."""
-    definition = run_or_definition.get("definition", run_or_definition)
-    partner = run_or_definition.get("partner") if partner is None else partner
-    return bool(partner) and definition.get("partner_consent") == "react"
+    return bool(run.get("partner")) and run["data"].get("consent") == "react"
+
+
+def _same_run(actor, target, action_id, partner):
+    """The live run ``actor`` already takes part in that this request names
+    again — the same action on the same piece with the same two people,
+    whichever of them requested it. None otherwise."""
+    held = store.held(store.person_key(actor))
+    run = store.get(held) if held else None
+    if (not run or run["status"] in store.TERMINAL or run["action_id"] != action_id
+            or run["target"] != target):
+        return None
+    return run if {run["actor"], run["partner"]} - {""} == {actor, partner} - {""} else None
 
 
 def _save(run):
@@ -533,14 +549,20 @@ def _revalidate_admission(run, conn, planned_state):
     return ""
 
 
-def request(actor: str, target: dict, action_id: str, revision: str, partner: str = "", request_id: str = "") -> dict:
+def request(actor: str, target: dict, action_id: str, revision: str, partner: str = "", request_id: str = "",
+            consent: str = "ask") -> dict:
     """Public Core result remains unchanged; admission metadata stays internal."""
-    return request_with_creation(actor, target, action_id, revision, partner, request_id)[0]
+    return request_with_creation(actor, target, action_id, revision, partner, request_id, consent)[0]
 
 
 def request_with_creation(actor: str, target: dict, action_id: str, revision: str,
-                          partner: str = "", request_id: str = "") -> tuple[dict, bool]:
+                          partner: str = "", request_id: str = "", consent: str = "ask") -> tuple[dict, bool]:
     """Return (result, created), with creation decided at the SQLite insert.
+
+    ``consent`` (pair requests): "ask" or "react" (``CONSENTS``). Naming the
+    run one already takes part in again — the partner's tool repeating the
+    action it just agreed to — answers that run, marked ``already``, instead
+    of refusing it as a busy participant.
 
     Adapters must not infer creation from a successful status: a replay has the
     same result. The second nonce lookup under BEGIN IMMEDIATE also handles a
@@ -548,13 +570,17 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     """
     if (not isinstance(actor, str) or not actor or not isinstance(target, dict) or set(target) != set(_TARGET)
             or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
-            or not all(isinstance(v, str) for v in (action_id, revision, partner, request_id))):
+            or not all(isinstance(v, str) for v in (action_id, revision, partner, request_id))
+            or consent not in CONSENTS):
         return _refused("invalid_request"), False
-    fingerprint = store.encode([target, action_id, revision, partner])
+    fingerprint = store.encode([target, action_id, revision, partner] + ([consent] if consent != "ask" else []))
     previous = store.by_request(actor, request_id)
     if previous:
         return (_result(previous) if previous["request_fingerprint"] == fingerprint
                 else _refused("request_id_conflict")), False
+    same = _same_run(actor, target, action_id, partner)
+    if same:
+        return dict(_result(same), already=True), False
     if places.where(actor) != (target["location_id"], target["room_id"]):
         return _refused("target_not_in_actor_room"), False
     if is_world_frozen():
@@ -565,12 +591,13 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     if bool(partner) != (definition["participants"] == 2) or actor == partner:
         return _refused("invalid_partner"), False
     now = game_time().canonical()
-    asks = bool(partner) and not _reacts(definition, partner)
+    asks = bool(partner) and consent != "react"
     run = dict(execution_id=uuid.uuid4().hex, actor=actor, partner=partner, request_id=request_id or None,
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
                status="awaiting_consent" if asks else "approaching", phase="", reason="", target=target,
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
-                                                last_game=now, elapsed=0.0, consent_elapsed=0.0))
+                                                last_game=now, elapsed=0.0, consent_elapsed=0.0,
+                                                **({"consent": consent} if partner else {})))
     replaces = _replaceable(actor, target, action_id)
     if not replaces:
         return _admit(run, fingerprint)
@@ -1000,7 +1027,7 @@ def _replaceable(actor, target, action_id):
 
     Choosing another action while seated means: stand up and go there. A
     sleeping run wakes through its own path, and asking again for the very
-    action already running stays a refusal (participant_claimed).
+    action already running answers that run (``_same_run``).
     """
     held = store.held(store.person_key(actor))
     old = store.get(held) if held else None
@@ -1624,7 +1651,7 @@ def _book_reaction(run, accepted, feeling, romantic):
 
 def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
           feeling: int = 0, romantic: bool = False) -> dict:
-    """The partner's reaction to a ``partner_consent: react`` run.
+    """The partner's reaction to a pair run requested with ``consent="react"``.
 
     ``accept`` False ends the run (``cancelled`` / ``partner_resisted``);
     True lets it go on — at once into the furniture when both already wait
