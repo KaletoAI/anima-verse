@@ -1689,52 +1689,23 @@ async def llm_suitability_test_start(request: Request, user=Depends(require_admi
 def _llm_suitability_test_start_sync(user, body: Any):
     """The blocking body of ``llm_suitability_test_start`` — runs in the
     threadpool."""
-    from copy import deepcopy
-    from app.core.llm_router import parse_extra_params
-    from app.core.model_suitability import enqueue_test
-    if not isinstance(body, dict):
-        raise HTTPException(400, "body must be a JSON object")
-    provider = str(body.get("provider") or "").strip()
-    model = str(body.get("model") or "").strip()
-    if not model:
+    from app.core.model_suitability import enqueue_test, validate_settings
+    if not isinstance(body, dict) or body.keys() - {"provider", "model", "settings", "concurrency"}:
+        raise HTTPException(400, "body must be an object with known keys only")
+    provider, model = body.get("provider"), body.get("model")
+    if not isinstance(provider, str) or not provider.strip():
+        raise HTTPException(400, "provider required")
+    if not isinstance(model, str) or not model.strip():
         raise HTTPException(400, "model required")
     concurrency = body.get("concurrency", 3)
-    if not isinstance(concurrency, int) or isinstance(concurrency, bool):
-        raise HTTPException(400, "concurrency must be an integer")
-    concurrency = max(1, min(3, concurrency))
-    extra_params = None
-    if "extra_params" in body:
-        try:
-            extra_params = parse_extra_params(body["extra_params"])
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-    if not provider:
-        from app.core.provider_manager import get_provider_manager
-        found = get_provider_manager().find_provider_for_model(model)
-        provider = found.name if found else ""
-    routing = config.get("llm_routing", [])
-    routing = routing if isinstance(routing, list) else []
-    matching = [index for index, entry in enumerate(routing)
-                if isinstance(entry, dict) and entry.get("enabled") is not False
-                and entry.get("provider") == provider and entry.get("model") == model]
-    selected = None
-    index = None
-    if "entry_index" in body:
-        index = body["entry_index"]
-        if not isinstance(index, int) or isinstance(index, bool) or index not in matching:
-            raise HTTPException(400, "Selected LLM entry is no longer valid for this provider/model")
-        from app.core.config_admin import layer_revision
-        if body.get("routing_revision") != layer_revision("instance"):
-            raise HTTPException(409, "LLM routing changed; reload Model Capabilities and select the entry again")
-        selected = deepcopy(routing[index])
-    elif len(matching) > 1:
-        raise HTTPException(400, "Select an LLM entry for this provider/model")
-    elif matching:
-        index = matching[0]
-        selected = deepcopy(routing[index])
-    full = f"{provider}::{model}" if provider else model
-    return enqueue_test(full, extra_params=extra_params, routing_entry=selected,
-                        entry_index=index, concurrency=concurrency)
+    if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
+        raise HTTPException(400, "concurrency must be a positive integer")
+    try:
+        settings = validate_settings(body.get("settings"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return enqueue_test(f"{provider.strip()}::{model.strip()}", settings=settings,
+                        concurrency=concurrency)
 
 
 @router.post("/settings/llm-suitability-test/cancel")
@@ -1783,8 +1754,9 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
     for check in checks:
         if check.get("ok") is False:
             case = cases.get(check.get("id"), {}) if fixture_matches else {}
-            check["prompt"] = (diagnostics.get("prompts", {}).get(check.get("id")) if matches else None) or {
-                "system": case.get("system", ""), "user": case.get("user", "")}
+            if "prompt" not in check:
+                check["prompt"] = (diagnostics.get("prompts", {}).get(check.get("id")) if matches else None) or {
+                    "system": case.get("system", ""), "user": case.get("user", "")}
             check["prompt_source"] = "local test fixtures"
             if "runs" not in check:
                 check["runs"] = raw.get(check.get("id"), [])
@@ -1812,8 +1784,10 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "status": j.get("status", ""),
             "done": j.get("done", 0),
             "total": j.get("total", 0),
-            "entry_index": j.get("entry_index"),
-            "entry_name": j.get("entry_name", ""),
+            "provider": j.get("provider", j.get("model", "").partition("::")[0]),
+            "settings": j.get("settings", {}),
+            "concurrency": j.get("concurrency"),
+            "finished_ago_s": ago,
             "score": s.get("score", ""),
             "verdict": s.get("verdict") or "",
         })

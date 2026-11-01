@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Task 12 UI contract. Usage: .venv/bin/python scripts/smoke_suitability_ui.py
 
-Suitability 1/2 are obsolete; 3 and later survive. Deletion must read disk
+Suitability 1–4 are obsolete; 5 and later survive.
+Hand-derived UI expectations: entries for thought/extraction/image_analysis on one
+model at 0.1/0.5/0.3 copy those three temperatures, regardless of the chosen entry.
+Without a vision assignment its prior 0.7 stays. One running and one queued A job
+plus one running B job produce "A: 1 running, 1 waiting · B: 1 running".
+The detail panel and badge contain the explicit settings; POST contains settings
+and concurrency only, with no routing reference. Deletion must read disk
 under the write lock, preserve capabilities and current history, and remove
 obsolete raw answers. Node exercises actual rendering and start serialization.
 """
@@ -67,6 +73,16 @@ with tempfile.TemporaryDirectory() as directory:
         raw["prompts"]["failure"] = {"system": "actual system", "user": "actual user"}
         status = routes.llm_suitability_test_status("saved:new", user=None)
         assert status["summary"]["checks"][0]["prompt"]["system"] == "actual system"
+    # Running detail must retain this job's own prompts and answers.
+    live_check = {"id": "failure", "ok": False, "prompt": {"system": "live system", "user": "live user"},
+                  "runs": [{"content": "live answer"}]}
+    with patch("app.core.model_suitability.get_job", return_value={
+            "model": "P::M", "status": "running", "checks": [live_check]}), patch.object(
+            caps, "get_suitability_outputs", return_value={}), patch(
+            "app.core.model_suitability.load_cases", return_value=fixture):
+        status = routes.llm_suitability_test_status("live", user=None)
+        assert status["checks"][0]["prompt"]["system"] == "live system"
+        assert status["checks"][0]["runs"][0]["content"] == "live answer"
     # The queue lists waiting/running jobs and those ended within ten minutes;
     # saved results are no queue rows (they open from the model table).
     jobs = [{"job_id": j, "position": 0, "model": "m", "status": st, "finished_ago_s": ago,
@@ -119,8 +135,8 @@ const ctx = {document:{getElementById:el}, setTimeout:()=>0, clearTimeout:()=>{}
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync('static/admin/models.js','utf8').replace(/loadData\(\);\s*suitInit\(\);\s*$/, ''), ctx);
 ctx.suitRenderJob({status:'done', summary:{scorer_version:'suitability-5', verdict:'no - speed', tool:'9/10',helper:'8/10',vision:{rate:1},speed:{tools:{median_latency_s:2,tok_s:30}},projected_turn_s:25,live_play:true,checks:[]}});
-assert(el('suitStatus').innerHTML.includes('no - speed'));
-assert(el('suitStatus').innerHTML.includes('measured under live play'));
+assert(el('suitDetailStatus').innerHTML.includes('no - speed'));
+assert(el('suitDetailStatus').innerHTML.includes('measured under live play'));
 assert(ctx.testBadge({tested_score:'1/1',tested_verdict:'yes',tested_suitability:{scorer_version:'suitability-5'}}).includes('yes'));
 assert(ctx.testBadge({tested_score:'1/1',tested_suitability:{scorer_version:'suitability-4'}}).includes('none'));
 const rich = ctx.testBadge({tested_score:'13/16',tested_verdict:'no - tools',tested_suitability:{scorer_version:'suitability-5',
@@ -144,8 +160,49 @@ ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',verdict
 assert(el('suitProgress').innerHTML.includes('&lt;system&gt;'));
 assert(el('suitProgress').innerHTML.includes('&lt;answer&gt;'));
 assert(el('suitProgress').innerHTML.includes('<details>'));
+const entries = [
+    {index:0,provider:'P',model:'M',temperature:0.1,tasks:[{task:'thought',order:0}]},
+    {index:1,provider:'P',model:'M',temperature:0.5,tasks:[{task:'extraction',order:0}]},
+    {index:2,provider:'P',model:'M',temperature:0.3,tasks:[{task:'image_analysis',order:0}]},
+    {index:3,provider:'P',model:'M',temperature:0.9,enabled:false,tasks:[{task:'image_analysis'}]},
+];
+const tasks = {tools:['thought'],helpers:['extraction'],vision:['image_analysis']};
+const copied = ctx.suitPrefillTemperatures(entries[1],entries,tasks,{tools:1,helpers:1,vision:0.7});
+assert.strictEqual(JSON.stringify(copied), JSON.stringify({tools:0.1,helpers:0.5,vision:0.3}));
+const partial = ctx.suitPrefillTemperatures(entries[1],[entries[0],entries[1],entries[3]],tasks,{tools:1,helpers:1,vision:0.7});
+assert.strictEqual(partial.vision,0.7);
+// No enabled match: the chosen entry still supplies its own served group.
+const fallback = ctx.suitPrefillTemperatures(entries[3],[entries[3]],tasks,{tools:0.1,helpers:0.5,vision:0.7});
+assert.strictEqual(fallback.vision,0.9);
+ctx.prefillEntries = entries;
+vm.runInContext('suitEntries = prefillEntries; suitGroupTasks = {tools:["thought"], helpers:["extraction"], vision:["image_analysis"]}; suitCombobox = {reload:()=>{}};',ctx);
+entries[1].repetition_penalty=1.03;entries[1].max_tokens=1200;entries[1].chat_template='<template>';
+entries[1].thinking=true;entries[1].extra_params={nested:{test:true}};
+el('suitPrefill').value='1';ctx.suitPrefill();
+assert.strictEqual(el('suitProvider').value,'P');assert.strictEqual(el('suitModel').value,'M');
+assert.strictEqual(el('suitTempTools').value,0.1);assert.strictEqual(el('suitTempHelpers').value,0.5);assert.strictEqual(el('suitTempVision').value,0.3);
+assert.strictEqual(el('suitPenalty').value,1.03);assert.strictEqual(el('suitMaxTokens').value,1200);
+assert.strictEqual(el('suitChatTemplate').value,'<template>');assert.strictEqual(el('suitThinking').value,'on');
+assert.strictEqual(JSON.parse(el('suitExtraParams').value).nested.test,true);
+assert.strictEqual(el('suitPrefill').value,'');
+entries[1].max_tokens=2000;assert.strictEqual(el('suitMaxTokens').value,1200);
+
+assert.strictEqual(ctx.suitQueueSummary([{model:'A::one',status:'running'},{model:'A::two',status:'queued'},{model:'B::one',status:'running'}]),'A: 1 running, 1 waiting · B: 1 running');
+assert.strictEqual(ctx.suitQueueSummary([]),'Queue empty');
+assert.strictEqual(ctx.suitQueueSummary([{model:'A::one',status:'done'}]),'A: idle');
+const settings = {temperature:{tools:0.1,helpers:0.5,vision:0.3},max_tokens:900,thinking:false,repetition_penalty:1.03,chat_template:'<template>',extra_params:{foo:'<bar>'}};
+ctx.suitRenderJob({status:'running',model:'P::M',settings,checks:[]});
+assert.strictEqual(el('suitDetail').hidden,false);
+assert(el('suitSettings').innerHTML.includes('Max tokens: 900'));
+assert(el('suitSettings').innerHTML.includes('&lt;template&gt;'));
+assert(el('suitSettings').innerHTML.includes('&lt;bar&gt;'));
+const settingsBadge = ctx.testBadge({tested_suitability:{scorer_version:'suitability-5',settings}});
+assert(settingsBadge.includes('Temperatures: tools 0.1'));
+assert(settingsBadge.includes('repetition_penalty') && settingsBadge.includes('&lt;template&gt;'));
 el('suitProvider').value='P'; el('suitModel').value='M'; el('suitConcurrency').value='2';
+el('suitTempTools').value='0.1';el('suitTempHelpers').value='0.5';el('suitTempVision').value='0.3';
+el('suitMaxTokens').value='900';el('suitThinking').value='off';el('suitExtraParams').value='{}';
 ctx.suitPoll=()=>{}; ctx.suitJobsRefresh=()=>{};
-ctx.fetch=async (url,options)=>{assert.strictEqual(JSON.parse(options.body).concurrency,2);return {ok:true,json:async()=>({job_id:'one'})};};
-ctx.suitStart().then(()=>{assert(!el('suitStatus').textContent.startsWith('Error:')); console.log('Suitability UI JavaScript parses, string verdict renders, concurrency sent OK');});
+ctx.fetch=async (url,options)=>{const body=JSON.parse(options.body);assert.strictEqual(body.concurrency,2);assert.strictEqual(JSON.stringify(body.settings.temperature),JSON.stringify({tools:0.1,helpers:0.5,vision:0.3}));assert.strictEqual(Object.keys(body).sort().join(','),'concurrency,model,provider,settings');return {ok:true,json:async()=>({job_id:'one'})};};
+ctx.suitStart().then(()=>{assert(!el('suitStatus').textContent.startsWith('Error:')); console.log('Suitability UI prefill, queue summary, settings detail, escaping and explicit POST OK');});
 """], check=True)

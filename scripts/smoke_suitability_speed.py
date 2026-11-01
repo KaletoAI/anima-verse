@@ -42,7 +42,7 @@ def main():
                        limit if key == "model_test.max_turn_seconds" else
                        [{"name": "fake", "max_concurrent": lanes}] if key == "providers" else default):
                 return list(suit.iter_suitability_results("fake::demo", concurrency=concurrency,
-                    routing_entry={"provider": "fake", "model": "demo", "max_concurrent": lanes}))[-1]["summary"]
+                    settings={}))[-1]["summary"]
 
         with patch("app.core.llm_router.create_llm_instance", return_value=instance), \
              patch.object(suit, "_persist", return_value=True), \

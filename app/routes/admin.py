@@ -47,16 +47,18 @@ def model_capabilities_page():
 @router.get("/models/data")
 def model_capabilities_data() -> Dict[str, Any]:
     """JSON API: every available model plus its capabilities and routing labels."""
-    from app.core import config, config_admin
+    from app.core import config
     pm = get_provider_manager()
     all_caps = get_all_capabilities()
     suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
     routing = config.get("llm_routing", [])
     routing_entries = [
         {"index": index, "provider": entry["provider"], "model": entry["model"],
-         "name": str(entry.get("name") or f"Entry #{index + 1}")}
+         "name": str(entry.get("name") or f"Entry #{index + 1}"),
+         **{key: entry.get(key) for key in ("enabled", "tasks", "temperature",
+             "repetition_penalty", "max_tokens", "chat_template", "thinking", "extra_params")}}
         for index, entry in enumerate(routing if isinstance(routing, list) else [])
-        if isinstance(entry, dict) and entry.get("enabled") is not False
+        if isinstance(entry, dict)
         and isinstance(entry.get("provider"), str) and isinstance(entry.get("model"), str)
     ]
 
@@ -131,12 +133,17 @@ def model_capabilities_data() -> Dict[str, Any]:
     except Exception:
         default_instruction = ""
 
+    from app.core.model_suitability import runnable_cases
+    cases = runnable_cases()
+    group_tasks = {group: sorted({case.get("task") for case in cases
+                                 if case.get("group") == group and case.get("task")})
+                   for group in ("tools", "helpers", "vision")}
     return {
         "models": models,
         "unmatched_entries": unmatched,
         "all_capabilities": {k: v for k, v in all_caps.items() if not k.startswith("_")},
         "routing_entries": routing_entries,
-        "routing_revision": config_admin.layer_revision("instance"),
+        "suitability_group_tasks": group_tasks,
         "default_tool_instruction": default_instruction,
     }
 
@@ -191,31 +198,42 @@ def _build_models_html() -> str:
 </div>
 
 <div class="content">
-    <div id="suitBox" style="border:1px solid #30363d; border-radius:8px; padding:12px; margin-bottom:18px; background:#0d1117;">
-        <h2 style="margin:0 0 6px;">🧪 Tool / Helper Suitability Test</h2>
-        <p class="info-text" style="margin:0 0 8px;">Sends curated cases rendered from the real game prompts (tools, helpers, vision), each three times. Reports format, offered tools, arguments and the expected decision separately, plus speed. Missing images and invalid or truncated inputs are excluded. <b>Runs in the background</b> — you can leave the page; the result is saved to the table below.</p>
-        <div id="suitCases" class="info-text" style="margin-bottom:8px;">Loading test cases…</div>
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select>
-            <input type="text" id="suitSearch" placeholder="Search models…" style="min-width:160px;" oninput="suitRenderModels()" />
-            <select id="suitModel" style="min-width:240px;" onchange="suitOnModelChange()"><option value="">Model…</option></select>
-            <label for="suitEntry">LLM entry</label>
-            <select id="suitEntry" style="min-width:200px;"><option value="">Select a model…</option></select>
-            <span id="suitModelCount" class="info-text"></span>
-            <button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Start test</button>
-            <span id="suitStatus" class="info-text"></span>
+    <section class="models-box" id="suitBox">
+        <h2>Test setup</h2>
+        <p class="info-text">Tests tools, helpers, vision and speed with curated and reviewed game prompts. Tests run in the background, FIFO per provider; different providers run in parallel.</p>
+        <div id="suitCases" class="info-text">Loading test cases…</div>
+        <div class="suit-fields">
+            <label>Provider<select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select></label>
+            <label>Model<span id="suitModelPicker"></span></label>
+            <label>Prefill from LLM entry<select id="suitPrefill" onchange="suitPrefill()"><option value="">Choose an entry…</option></select></label>
+            <label>Temperature — Tools<input id="suitTempTools" type="number" min="0" max="2" step="0.1" value="0.1"></label>
+            <label>Temperature — Helpers<input id="suitTempHelpers" type="number" min="0" max="2" step="0.1" value="0.5"></label>
+            <label>Temperature — Vision<input id="suitTempVision" type="number" min="0" max="2" step="0.1" value="0.3"></label>
+            <label>Repetition penalty<input id="suitPenalty" type="number" min="0" max="1.5" step="0.01" placeholder="not sent"></label>
+            <label>Max tokens<input id="suitMaxTokens" type="number" min="0" max="200000" step="1" value="900"></label>
+            <label>Chat template<textarea id="suitChatTemplate" rows="1" placeholder="Provider default (Jinja, only if the model has none)"></textarea></label>
+            <label>Thinking<select id="suitThinking"><option value="off">Off</option><option value="on">On</option></select></label>
+            <label>Parallel requests<input id="suitConcurrency" type="number" min="1" step="1" value="3"></label>
         </div>
-        <div style="margin-top:10px;">
-            <label><input type="checkbox" id="suitOverride" onchange="suitOverrideChanged()"> Use temporary request parameters (saved LLM entry settings still apply)</label>
-            <div id="suitOverrideFields" hidden>
-                <textarea id="suitExtraParams" aria-label="Temporary request parameters (JSON object)" placeholder="{}" oninput="suitValidateExtraParams()" style="display:block;width:100%;min-height:72px;margin-top:6px;">{}</textarea>
-                <button class="btn" type="button" onclick="suitVeniceTemplate()">Venice template</button>
-                <span id="suitExtraError" role="alert" style="color:#f85149;"></span>
-            </div>
-        </div>
-        <div id="suitJobs" style="margin-top:10px;"></div>
-        <div id="suitProgress" style="margin-top:10px;"></div>
+        <label for="suitExtraParams">Extra params (JSON)</label>
+        <textarea id="suitExtraParams" aria-label="Extra params (JSON object)" oninput="suitValidateExtraParams()">{}</textarea>
+        <button class="btn" type="button" onclick="suitVeniceTemplate()">Venice template</button>
+        <span id="suitExtraError" role="alert"></span>
+        <div class="suit-actions"><button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Start test</button>
+        <span id="suitStatus" role="status"></span></div>
+    </section>
+    <details class="models-box" id="suitQueueBox">
+        <summary>Queue — <span id="suitQueueSummary">Queue empty</span></summary>
+        <div id="suitQueue"></div>
+    </details>
+    <section class="models-box" id="suitResults">
+    <h2>Results</h2>
+    <div id="suitDetail" hidden>
+        <div id="suitDetailStatus" role="status"></div>
+        <div id="suitSettings"></div>
+        <div id="suitProgress"></div>
     </div>
+    <button type="button" class="btn" onclick="suitDeleteOld(this)">Delete old test results</button>
 
     <h2>Available models</h2>
     <p class="info-text">Click Tool/Vision to toggle the value. Edit notes directly — saved automatically.
@@ -261,8 +279,10 @@ def _build_models_html() -> str:
         </div>
     </div>
 
+    </section>
 </div>
 
+<script src="/static/admin/model-combobox.js"></script>
 <script src="/static/admin/models.js"></script>
 </body>
 </html>'''

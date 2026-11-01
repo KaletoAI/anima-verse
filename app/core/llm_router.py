@@ -164,8 +164,9 @@ def create_llm_instance(
     provider_name: str = "",
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    routing_entry: Optional[dict] = None) -> Optional[LLMInstance]:
-    """Creates an LLMInstance for a concrete model (for the dev routes)."""
+    routing_entry: Optional[dict] = None,
+    *, use_routing: bool = True) -> Optional[LLMInstance]:
+    """Create a concrete model instance; use_routing=False ignores saved entries."""
     pm = get_provider_manager()
 
     if model and "::" in model and not provider_name:
@@ -174,15 +175,18 @@ def create_llm_instance(
     provider = None
     if provider_name:
         provider = pm.get_provider(provider_name)
-    if not provider and routing_entry is None:
+    if not provider and routing_entry is None and (not provider_name or use_routing):
         provider = pm.find_provider_for_model(model)
 
     if not provider:
         logger.warning("No provider found for model '%s' (task=%s)", model, task)
         return None
 
-    instance = (_instance_for(task, routing_entry, provider) if routing_entry is not None
-                else _named_instance(provider, model))
+    if not use_routing:
+        instance = LLMInstance(provider_name=provider.name, model=model, _provider=provider)
+    else:
+        instance = (_instance_for(task, routing_entry, provider) if routing_entry is not None
+                    else _named_instance(provider, model))
     instance.tasks = [task]
     instance.temperature = temperature if temperature is not None else instance.temperature
     instance.max_tokens = max_tokens if max_tokens is not None else instance.max_tokens

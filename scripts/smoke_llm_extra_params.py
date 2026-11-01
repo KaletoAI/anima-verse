@@ -7,6 +7,9 @@ MockTransport intercepts requests before the network: no provider calls or world
 The expected JSON is derived from explicit defaults and overrides below, not from
 recorded SDK output. Both client implementations and the suitability runner use
 exactly the same body assembly as normal sync/stream calls.
+For suitability, the explicit nested override {b:3} contains no saved {a:1};
+the default budget is 900 rather than the saved 1800, and an explicit extra-body
+budget 9999 wins. These are hand-derived expectations of routing isolation.
 """
 import asyncio
 import json
@@ -20,6 +23,10 @@ import httpx
 import httpx2
 import openai
 from fastapi import HTTPException
+
+from app.core import paths
+_test_storage = TemporaryDirectory()
+paths.init(_test_storage.name)
 
 from app.core import embedding, llm_client, llm_log_replay, llm_router, model_suitability
 from app.imagegen.service import ImageService
@@ -183,14 +190,14 @@ def main():
                     model_suitability, "_persist", return_value=False):
                 temporary = {"nested": {"b": 3}, "temperature": 0.2}
                 events = list(model_suitability.iter_suitability_results(
-                    "P::qwen3-test", extra_params=temporary))
+                    "P::qwen3-test", settings={"extra_params": temporary}))
                 assert events[0]["type"] == "start" and events[-1]["type"] == "done"
-                assert BODIES[-1]["nested"] == {"a": 1, "b": 3}
+                assert BODIES[-1]["nested"] == {"b": 3}
                 assert BODIES[-1]["temperature"] == 0.2
-                assert BODIES[-1]["max_tokens"] == 1800
+                assert BODIES[-1]["max_tokens"] == 900
                 assert saved == original and temporary == {"nested": {"b": 3}, "temperature": 0.2}
                 list(model_suitability.iter_suitability_results(
-                    "P::qwen3-test", extra_params={"max_tokens": 9999}))
+                    "P::qwen3-test", settings={"extra_params": {"max_tokens": 9999}}))
                 assert BODIES[-1]["max_tokens"] == 9999
             default_anth = llm_client.AnthropicLLMClient(
                 "test", "not-a-real-key", "https://mock.test/v1", temperature=0.4)
@@ -288,7 +295,7 @@ def main():
             assert "extra_params" in _validate_llm_routing([{"extra_params": invalid}])
             try:
                 _llm_suitability_test_start_sync(None, {"provider": "P", "model": "test",
-                                                       "extra_params": invalid})
+                                                       "settings": {"extra_params": invalid}})
             except HTTPException as exc:
                 assert exc.status_code == 400
             else:
@@ -306,17 +313,16 @@ def main():
             else:
                 raise AssertionError("Saved routing accepted string extra_params")
             persist.assert_not_called()
-        # The test POST accepts textarea JSON independently of saved settings.
+        # The test POST requires an explicit object, independently of saved settings.
         with patch("app.core.model_suitability.enqueue_test", return_value={"status": "running"}):
             assert _llm_suitability_test_start_sync(None, {
-                "provider": "P", "model": "test", "extra_params": '{"temperature":0}'
+                "provider": "P", "model": "test", "settings": {"extra_params": {"temperature": 0}}
             }) == {"status": "running"}
         with patch("app.core.model_suitability.enqueue_test", return_value={"status": "running"}) as start:
             assert _llm_suitability_test_start_sync(None, {
-                "provider": "P", "model": "test", "extra_params": {}
+                "provider": "P", "model": "test", "settings": {"extra_params": {}}
             }) == {"status": "running"}
-            start.assert_called_once_with("P::test", extra_params={},
-                                          routing_entry=None, entry_index=None, concurrency=3)
+            start.assert_called_once_with("P::test", settings=model_suitability.validate_settings({}), concurrency=3)
     rejecting_wire = httpx.MockTransport(rejecting_stream_options)
     with patch.object(openai, "AsyncOpenAI", side_effect=lambda **kw: real_async_openai(
             **kw, http_client=httpx.AsyncClient(transport=rejecting_wire))):
@@ -367,4 +373,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _test_storage.cleanup()

@@ -136,3 +136,16 @@ tr:hover { background: #161b22; }
 .speed-turn.slow { color: #f85149; }
 .speed-groups { font-size: 11px; color: #8b949e; white-space: nowrap; }
 .cap-toggle.cap-reported { opacity: 0.6; font-style: italic; }
+
+.models-box { border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:18px; }
+.models-box > summary { cursor:pointer; font-weight:600; }
+.suit-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:12px 0; }
+.suit-fields label { display:flex; flex-direction:column; gap:5px; font-size:13px; }
+.suit-fields input, .suit-fields select, #suitExtraParams { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:7px; border-radius:5px; }
+#suitExtraParams { display:block; width:100%; min-height:80px; margin:6px 0; }
+#suitExtraError { color:#f85149; }
+.suit-actions { margin-top:12px; display:flex; gap:12px; align-items:center; }
+.suit-job { padding:10px 0; border-bottom:1px solid #30363d; }
+#suitQueue h3 { margin-top:12px; }
+#suitDetail { padding:12px; margin:12px 0; background:#161b22; border-radius:6px; }
+#suitSettings pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0; }

@@ -264,14 +264,48 @@ def _rejected_by_model(exc: BaseException) -> bool:
     return isinstance(status, int) and 400 <= status < 500 and status not in (408, 409, 429)
 
 
+def validate_settings(settings: dict) -> dict:
+    """Validate and copy explicit test parameters; never consult routing."""
+    import math
+    from copy import deepcopy
+    from app.core.llm_router import parse_extra_params
+    defaults = {"temperature": {"tools": 0.1, "helpers": 0.5, "vision": 0.3},
+                "repetition_penalty": None, "max_tokens": 900, "chat_template": "",
+                "thinking": False, "extra_params": {}}
+    if not isinstance(settings, dict) or settings.keys() - defaults.keys():
+        raise ValueError("settings must be an object with known keys only")
+    result = {**defaults, **deepcopy(settings)}
+    def number(value, low, high):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and low <= value <= high and math.isfinite(value))
+    temps = result["temperature"]
+    if (not isinstance(temps, dict) or set(temps) != set(defaults["temperature"])
+            or not all(number(v, 0, 2) for v in temps.values())):
+        raise ValueError("temperature must contain tools, helpers and vision numbers from 0 to 2")
+    penalty = result["repetition_penalty"]
+    if penalty is not None and not number(penalty, 0, 1.5):
+        raise ValueError("repetition_penalty must be null or a number from 0 to 1.5")
+    tokens = result["max_tokens"]
+    if not isinstance(tokens, int) or isinstance(tokens, bool) or not 0 <= tokens <= 200000:
+        raise ValueError("max_tokens must be an integer from 0 to 200000")
+    if not isinstance(result["chat_template"], str):
+        raise ValueError("chat_template must be text")
+    if not isinstance(result["thinking"], bool):
+        raise ValueError("thinking must be a boolean")
+    if not isinstance(result["extra_params"], dict):
+        raise ValueError("extra_params must be a JSON object")
+    result["extra_params"] = parse_extra_params(result["extra_params"])
+    return result
+
+
 def iter_suitability_results(
-    model_full: str, extra_params: Optional[Dict[str, Any]] = None,
-    routing_entry: Optional[dict] = None,
+    model_full: str, *, settings: dict,
     cancel_event: Optional[threading.Event] = None,
     concurrency: int = 3,
 ) -> Iterator[Dict[str, Any]]:
     """Run frozen fixture cases against a model and yield NDJSON events."""
     from app.core.llm_router import create_llm_instance
+    settings = validate_settings(settings)
     data = load_cases(auto_build=False)
     # Unreviewed log candidates (possibly from an older prompt layout) wait
     # for review in scripts/suitability_capture_cases.py.
@@ -283,8 +317,7 @@ def iter_suitability_results(
         yield {"type": "error", "message": "No test cases"}
         return
 
-    inst = create_llm_instance("suitability_test", model_full,
-                               routing_entry=routing_entry)
+    inst = create_llm_instance("suitability_test", model_full, use_routing=False)
     if inst is None:
         yield {"type": "error", "message": f"No provider found for model '{model_full}'"}
         return
@@ -292,8 +325,10 @@ def iter_suitability_results(
         yield {"type": "error", "message": f"Provider '{inst.provider_name}' is not available"}
         return
     try:
-        client = inst.create_llm(temperature=0.3, max_tokens=900,
-                                 extra_params=extra_params or {})
+        clients = {group: inst.create_llm(
+            temperature=temperature,
+            **{k: v for k, v in settings.items() if k != "temperature"})
+            for group, temperature in settings["temperature"].items()}
     except Exception as e:
         yield {"type": "error", "message": f"client init failed: {e}"}
         return
@@ -323,7 +358,7 @@ def iter_suitability_results(
         user = case["user"]
         if case["group"] == "vision":
             user = image_user_content(user, ROOT / case["image"])
-        resp = client.invoke([
+        resp = clients[case["group"]].invoke([
             {"role": "system", "content": case["system"]},
             {"role": "user", "content": user},
         ])
@@ -409,7 +444,9 @@ def iter_suitability_results(
             results.append(rec)
             yield {"type": "check", "index": idx, **{k: rec[k] for k in
                    ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                    "infra", "duration_s", "tok_s", "dimensions", "run_checks")}}
+                    "infra", "duration_s", "tok_s", "dimensions", "run_checks")},
+                   "prompt": {"system": case.get("system", ""), "user": case.get("user", "")},
+                   "runs": outputs}
 
     # Cancellation and final persistence must be atomic with job completion.
     with _JOBS_LOCK:
@@ -418,7 +455,7 @@ def iter_suitability_results(
         summary = _summarize(model_full, results)
         summary.update(concurrency=concurrency, live_play=live_play,
                        curated_only=bool(data.get("curated_only")))
-        summary.update(scorer_version=SCORER_VERSION,
+        summary.update(settings=settings, scorer_version=SCORER_VERSION,
                        fixture_version=data.get("fixture_version") or fixture_version(cases))
         summary["saved"] = _persist(model_full, summary, results)
         yield {"type": "done", "summary": summary}
@@ -532,7 +569,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "helper": summary["helper"],
             "verdict": summary["verdict"],
             "speed": summary.get("speed"),
-            **{key: summary.get(key) for key in ("concurrency", "live_play", "projected_turn_s", "speed_ok",
+            **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only")},
             "checks": stored_checks,
         },
@@ -552,13 +589,14 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
 # ---------------------------------------------------------------------------
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
-_WORKER_ACTIVE = False
+_ACTIVE_PROVIDERS: set[str] = set()
 
 
 def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     from copy import deepcopy
     result = deepcopy({k: v for k, v in job.items() if not k.startswith("_")})
-    waiting = [j["job_id"] for j in _JOBS.values() if j["status"] == "queued"]
+    waiting = [j["job_id"] for j in _JOBS.values() if j["status"] == "queued"
+               and j["provider"] == job["provider"]]
     result["position"] = waiting.index(job["job_id"]) + 1 if job["status"] == "queued" else 0
     finished = job.get("_finished")
     result["finished_ago_s"] = round(time.monotonic() - finished, 1) if finished else None
@@ -566,10 +604,9 @@ def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _run_job(job: Dict[str, Any]) -> None:
-    _, routing, params = job["_request"]
     try:
-        for ev in iter_suitability_results(job["model"], extra_params=params,
-                                          routing_entry=routing, cancel_event=job["_cancel"],
+        for ev in iter_suitability_results(job["model"], settings=job["settings"],
+                                          cancel_event=job["_cancel"],
                                           concurrency=job["concurrency"]):
             with _JOBS_LOCK:
                 if job["_cancel"].is_set():
@@ -601,44 +638,42 @@ def _run_job(job: Dict[str, Any]) -> None:
             job["_finished"] = time.monotonic()
 
 
-def _worker() -> None:
-    global _WORKER_ACTIVE
+def _worker(provider: str) -> None:
     while True:
         with _JOBS_LOCK:
-            job = next((j for j in _JOBS.values() if j["status"] == "queued"), None)
+            job = next((j for j in _JOBS.values() if j["status"] == "queued"
+                        and j["provider"] == provider), None)
             if job is None:
-                _WORKER_ACTIVE = False
+                _ACTIVE_PROVIDERS.discard(provider)
                 return
             job["status"] = "running"
         _run_job(job)
 
 
-def enqueue_test(model_full: str, *, extra_params: Optional[Dict[str, Any]] = None,
-                 routing_entry: Optional[dict] = None, entry_index: Optional[int] = None,
+def enqueue_test(model_full: str, *, settings: dict,
                  concurrency: int = 3) -> Dict[str, Any]:
-    """Queue a test, reusing an identical active request."""
+    """Queue a frozen explicit request, FIFO within each provider."""
     from copy import deepcopy
     from uuid import uuid4
-    global _WORKER_ACTIVE
-    request = deepcopy((entry_index, routing_entry, extra_params))
+    settings = validate_settings(settings)
+    provider = model_full.partition("::")[0]
+    request = deepcopy((settings, concurrency))
     with _JOBS_LOCK:
         for job in _JOBS.values():
             if (job["model"] == model_full and job["status"] in ("queued", "running")
                     and job["_request"] == request):
                 return _snapshot(job)
-        entry_name = (str(routing_entry.get("name") or
-                          (f"Entry #{entry_index + 1}" if entry_index is not None
-                           else "Saved LLM entry")) if routing_entry else "")
-        job = {"job_id": uuid4().hex, "model": model_full, "status": "queued",
-               "total": 0, "done": 0, "checks": [], "summary": None, "error": None,
-               "entry_index": entry_index, "entry_name": entry_name,
+        job = {"job_id": uuid4().hex, "model": model_full, "provider": provider,
+               "status": "queued", "total": 0, "done": 0, "checks": [],
+               "summary": None, "error": None, "settings": settings,
                "concurrency": concurrency, "_request": request, "_cancel": threading.Event()}
         _JOBS[job["job_id"]] = job
-        start_worker = not _WORKER_ACTIVE
+        start_worker = provider not in _ACTIVE_PROVIDERS
         if start_worker:
-            _WORKER_ACTIVE = True
+            _ACTIVE_PROVIDERS.add(provider)
     if start_worker:
-        threading.Thread(target=_worker, args=(), daemon=True, name="suit-test").start()
+        threading.Thread(target=_worker, args=(provider,), daemon=True,
+                         name="suit-test-" + provider).start()
     with _JOBS_LOCK:
         return _snapshot(job)
 

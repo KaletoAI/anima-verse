@@ -43,7 +43,7 @@ def main():
         data = {'cases': [case, {'id': 'image', 'label': 'image', 'category': 'helper', 'fmt': 'text', 'task': 'image_analysis', 'repeats': 1}]}
         with patch.object(caps, '_caps_path', return_value=caps_path), patch.object(caps, '_outputs_path', return_value=outs_path), patch.object(suit, 'load_cases', return_value=data), patch('app.core.llm_router.create_llm_instance', return_value=fake):
             with patch.object(fake_client, 'invoke', wraps=fake_client.invoke) as invoke:
-                events = list(suit.iter_suitability_results('fake::demo'))
+                events = list(suit.iter_suitability_results('fake::demo', settings={}))
                 assert invoke.call_count == 3
             done = events[-1]['summary']
             assert done['saved'] and done['score'] == '1/1' and done['helper'] == '0/0'
@@ -56,13 +56,13 @@ def main():
             saved = raw['cases'][case['id']]
             assert len(saved) == 3
             assert all(r['content'] == long_answer and r['reasoning'] == 'synthetic reasoning' and r['finish_reason'] == 'stop' and r['usage']['completion_tokens'] == 5 and r['duration_s'] >= 0 for r in saved)
-            list(suit.iter_suitability_results('fake::demo'))
+            list(suit.iter_suitability_results('fake::demo', settings={}))
             assert len(json.loads(caps_path.read_text())['suitability_history']['fake::demo']) == 1
             before = caps_path.read_bytes()
             def fail(messages):
                 raise RuntimeError('synthetic outage')
             with patch.object(fake_client, 'invoke', side_effect=fail):
-                done = list(suit.iter_suitability_results('fake::demo'))[-1]['summary']
+                done = list(suit.iter_suitability_results('fake::demo', settings={}))[-1]['summary']
                 assert done['saved'] is False
             assert caps_path.read_bytes() == before
             raw = json.loads(outs_path.read_text())['outputs']['fake::demo']

@@ -2,8 +2,8 @@
 let allModels = [];
 let unmatchedEntries = [];
 let defaultToolInstruction = '';
-let suitEntries = [];         // public routing labels and indices, never entry settings
-let suitRoutingRevision = '';
+let suitEntries = [];
+let suitGroupTasks = {};
 let sortField = '';
 let sortDir = 0; // 0=none, 1=asc, -1=desc
 
@@ -23,7 +23,7 @@ async function loadData() {
     unmatchedEntries = data.unmatched_entries || [];
     defaultToolInstruction = data.default_tool_instruction || '';
     suitEntries = data.routing_entries || [];
-    suitRoutingRevision = data.routing_revision || '';
+    suitGroupTasks = data.suitability_group_tasks || {};
     suitRenderEntries();
 
     // Populate the provider filter.
@@ -226,7 +226,7 @@ function testBadge(caps) {
     const tooltip = 'Tools ' + (result.tool || '-') + ' · Helpers ' + (result.helper || '-')
         + ' · Vision ' + visionText + '\n'
         + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s').join(' · ')
-        + '\n' + (caps.tested_date || '') + ' · ' + result.scorer_version + ' · click for details';
+        + '\n' + suitSettingsText(result.settings) + (result.settings ? '\n' + JSON.stringify(result.settings) : '') + '\n' + (caps.tested_date || '') + ' · ' + result.scorer_version + ' · click for details';
     const key = result.model || '';
     return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
         + ' title="' + esc(tooltip) + '"'
@@ -254,7 +254,7 @@ function speedCell(caps) {
 // Open a saved result (model table badge) in the test detail view.
 function suitShowSaved(model) {
     suitSelectJob('saved:' + model);
-    const target = document.getElementById('suitStatus');
+    const target = document.getElementById('suitDetail');
     if (target) target.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
@@ -425,23 +425,22 @@ function cssId(s) {
 // ── Tool/Helper Suitability Test (runs in the background) ──
 let suitPollTimer = null;
 let suitCur = { provider: '', model: '' };
-let suitModels = [];          // every model of the selected provider
-let suitEntryModel = '';      // key for retaining selection on data refresh only
-let suitVision = new Set();   // of those, the vision-capable ones
-let suitLoadErr = '';         // error text from loading the model list
-
+let suitCombobox = null;
 let suitJobsTimer = null;
+let suitQueuePreference = null;
 
 async function suitInit() {
-    const start = document.getElementById('suitStartBtn');
-    start.insertAdjacentHTML('beforebegin', '<label for="suitConcurrency">Concurrency</label> '
-        + '<input type="number" id="suitConcurrency" min="1" max="3" step="1" value="3"> ');
-    document.getElementById('suitJobs').id = 'suitQueue';
-    document.getElementById('suitQueue').insertAdjacentHTML('beforebegin',
-        '<button type="button" class="btn" onclick="suitDeleteOld(this)">Delete old test results</button>');
-    document.querySelector('#suitBox h2').textContent = 'Single helper model suitability test';
-    document.querySelector('#suitBox p').textContent = 'Tests tools, helpers, vision and speed using logged and curated structural cases. Tests run in a FIFO queue, one model at a time, with up to three requests inside a test. Results are saved; the queue survives page reloads.';
-
+    document.getElementById('suitModelPicker').innerHTML = ModelCombobox.render({id: 'suitModel'});
+    suitCombobox = ModelCombobox.attach('suitModel', {loadModels: suitFetchModels, onChange: () => {}});
+    try { suitQueuePreference = localStorage.getItem('suit-queue-open'); } catch (e) { /* Storage may be unavailable. */ }
+    const queue = document.getElementById('suitQueueBox');
+    if (suitQueuePreference !== null) queue.open = suitQueuePreference === 'true';
+    queue.addEventListener('toggle', () => {
+        // Programmatic default changes do not create a persistent preference.
+        if (queue.open === suitQueueDefaultOpen && suitQueuePreference === null) return;
+        suitQueuePreference = String(queue.open);
+        try { localStorage.setItem('suit-queue-open', suitQueuePreference); } catch (e) { /* Storage may be unavailable. */ }
+    });
     try {
         const r = await fetch('/admin/settings/providers-list');
         const d = await r.json();
@@ -452,42 +451,54 @@ async function suitInit() {
     suitJobsRefresh();  // starts its own polling loop
 }
 
-// The test queue: waiting and running jobs plus those ended in the last ten minutes.
+let suitQueueDefaultOpen = false;
+function suitQueueGroups(jobs) {
+    const groups = new Map();
+    jobs.forEach(job => {
+        const provider = job.provider || job.model.split('::')[0];
+        if (!groups.has(provider)) groups.set(provider, []);
+        groups.get(provider).push(job);
+    });
+    return groups;
+}
+function suitQueueSummary(jobs) {
+    if (!jobs.length) return 'Queue empty';
+    return Array.from(suitQueueGroups(jobs), ([provider, group]) => {
+        const running = group.filter(j => j.status === 'running').length;
+        const waiting = group.filter(j => j.status === 'queued').length;
+        return provider + ': ' + ([running ? running + ' running' : '', waiting ? waiting + ' waiting' : ''].filter(Boolean).join(', ') || 'idle');
+    }).join(' · ');
+}
+function suitSettingsText(settings) {
+    if (!settings) return 'Settings not recorded (older test)';
+    const temps = settings.temperature || {};
+    return 'Temperatures: tools ' + (temps.tools ?? '—') + ' / helpers ' + (temps.helpers ?? '—')
+        + ' / vision ' + (temps.vision ?? '—') + ' · Max tokens: ' + (settings.max_tokens ?? '—')
+        + ' · Thinking: ' + (settings.thinking ? 'on' : 'off');
+}
 async function suitJobsRefresh() {
     if (suitJobsTimer) { clearTimeout(suitJobsTimer); suitJobsTimer = null; }
-    const el = document.getElementById('suitQueue');
-    if (!el) return;
-    let jobs = [];
+    let jobs;
     try {
-        const r = await fetch('/admin/settings/llm-suitability-test/jobs');
-        jobs = (await r.json()).jobs || [];
-    } catch (e) { /* ignore */ }
-    const running = jobs.filter(j => j.status === 'running');
-    if (!jobs.length) { el.innerHTML = ''; }
-    else {
-        el.innerHTML = '<div class="info-text" style="margin-bottom:4px;">Test jobs ('
-            + running.length + ' running):</div>'
-            + jobs.map(j => {
-                const v = j.verdict || '';
-                let st, col;
-                if (j.status === 'running') { st = (j.done || 0) + '/' + (j.total || '?'); col = '#58a6ff'; }
-                else if (j.status === 'queued') { st = 'Queued · position ' + j.position; col = '#8b949e'; }
-                else if (j.status === 'done') {
-                    st = (j.score || '') + ' · ' + v; col = v === 'yes' ? '#3fb950' : '#d29922';
-                } else if (j.status === 'error') { st = 'Error'; col = '#f85149'; }
-                else { st = j.status || ''; col = '#8b949e'; }
-                const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
-                return '<div style="padding:2px 0; cursor:pointer; font-size:13px;" '
-                    + 'onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')" title="Show details">'
-                    + esc(j.position || 0) + ' · ' + dot + ' <b>' + esc(j.model) + '</b> '
-                    + (j.entry_name ? '<span class="info-text">(' + esc(j.entry_name) + ')</span> ' : '')
-                     + '<span style="color:' + col + ';">' + esc(j.status) + ' · ' + esc(st) + '</span>'
-                    + (['queued', 'running'].includes(j.status) ? ' <button type="button" class="btn" onclick="event.stopPropagation();suitCancel(\'' + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>';
-            }).join('');
+        const response = await fetch('/admin/settings/llm-suitability-test/jobs');
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        jobs = (await response.json()).jobs || [];
+        document.getElementById('suitQueueSummary').textContent = suitQueueSummary(jobs);
+        const queue = document.getElementById('suitQueueBox');
+        suitQueueDefaultOpen = jobs.some(j => ['queued', 'running'].includes(j.status));
+        if (suitQueuePreference === null) queue.open = suitQueueDefaultOpen;
+        document.getElementById('suitQueue').innerHTML = Array.from(suitQueueGroups(jobs), ([provider, group]) =>
+            '<h3>' + esc(provider) + '</h3>' + group.map(j =>
+                '<div class="suit-job"><button type="button" class="btn" onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')">'
+                + esc(j.model) + '</button> · ' + esc(j.status) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?')
+                + (j.status === 'queued' ? ' · position ' + esc(j.position) : '')
+                + '<div class="info-text">' + esc(suitSettingsText(j.settings)) + '</div>'
+                + (['queued', 'running'].includes(j.status) ? '<button type="button" class="btn" onclick="suitCancel(\''
+                    + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>').join('')).join('');
+    } catch (error) {
+        document.getElementById('suitQueueSummary').textContent = 'Could not load queue';
     }
-    if (!suitCur.job_id && running.length) suitSelectJob(running[0].job_id);
-    // Refresh active queues often, and completed results less often.
-    suitJobsTimer = setTimeout(suitJobsRefresh, jobs.some(j => ['queued', 'running'].includes(j.status)) ? 2000 : 8000);
+    suitJobsTimer = setTimeout(suitJobsRefresh, 2000);
 }
 
 // Show a selected job in the detail view.
@@ -507,59 +518,62 @@ async function suitCasesInfo() {
         el.textContent = (i.total || 0) + ' test cases' + (parts.length ? ': ' + parts.join(', ') : '');
     } catch (e) { el.textContent = 'Could not load test cases'; }
 }
-async function suitLoadModels() {
-    const prov = document.getElementById('suitProvider').value;
-    const msel = document.getElementById('suitModel');
-    msel.value = '';
-    suitRenderEntries();
-    suitModels = []; suitVision = new Set();
-    if (!prov) { suitRenderModels(); return; }
-    msel.innerHTML = '<option value="">Loading…</option>';
-    try {
-        const r = await fetch('/admin/settings/providers/' + encodeURIComponent(prov) + '/models');
-        const d = await r.json();
-        suitModels = d.models || [];
-        suitVision = new Set(d.vision || []);
-        suitLoadErr = (!suitModels.length && d.error) ? d.error : '';
-    } catch (e) { suitModels = []; suitLoadErr = 'error'; }
-    suitRenderModels();
+async function suitFetchModels() {
+    const provider = document.getElementById('suitProvider').value;
+    if (!provider) return [];
+    const response = await fetch('/admin/settings/providers/' + encodeURIComponent(provider) + '/models');
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (data.error && !(data.models || []).length) throw new Error(data.error);
+    return data.models || [];
 }
-// Build the model dropdown from suitModels, filtered by search.
-function suitRenderModels() {
-    const msel = document.getElementById('suitModel');
-    const cnt = document.getElementById('suitModelCount');
-    if (!msel) return;
-    const q = (document.getElementById('suitSearch').value || '').trim().toLowerCase();
-    const prev = msel.value;
-    if (!suitModels.length) {
-        msel.innerHTML = '<option value="">' + (suitLoadErr ? '(no models: ' + esc(suitLoadErr) + ')' : 'Model…') + '</option>';
-        if (cnt) cnt.textContent = '';
-        return;
-    }
-    const filtered = q ? suitModels.filter(m => m.toLowerCase().includes(q)) : suitModels;
-    msel.innerHTML = '<option value="">Model…</option>' +
-        filtered.map(m => `<option value="${esc(m)}"${m === prev ? ' selected' : ''}>${esc(m)}${suitVision.has(m) ? ' (vision)' : ''}</option>`).join('');
-    if (cnt) cnt.textContent = q ? (filtered.length + '/' + suitModels.length) : (suitModels.length + ' models');
-    if (!filtered.includes(prev)) suitRenderEntries();
+function suitLoadModels() {
+    document.getElementById('suitModel').value = '';
+    return suitCombobox.reload();
 }
 function suitRenderEntries() {
-    const select = document.getElementById('suitEntry');
+    const select = document.getElementById('suitPrefill');
     if (!select) return;
-    const provider = document.getElementById('suitProvider').value;
-    const model = document.getElementById('suitModel').value;
-    const key = provider + '::' + model;
-    const previous = suitEntryModel === key ? select.value : '';
-    const entries = model ? suitEntries.filter(e => e.provider === provider && e.model === model) : [];
-    select.replaceChildren();
-    if (!model) select.add(new Option('Select a model…', ''));
-    else if (!entries.length) select.add(new Option('No saved LLM entry (temporary parameters optional)', ''));
-    else {
-        select.add(new Option(entries.length > 1 ? 'Select an LLM entry…' : 'LLM entry…', ''));
-        entries.forEach(e => select.add(new Option(e.name + ' (#' + (e.index + 1) + ')', String(e.index))));
-        select.value = entries.some(e => String(e.index) === previous) ? previous
-            : (entries.length === 1 ? String(entries[0].index) : '');
+    const previous = select.value;
+    select.innerHTML = '<option value="">Choose an entry…</option>' + suitEntries.map(e =>
+        '<option value="' + esc(e.index) + '">' + esc(e.name + ' · ' + e.provider + '::' + e.model) + '</option>').join('');
+    select.value = previous;
+}
+function suitPrefillTemperatures(chosen, entries, tasks, current) {
+    const result = {...current};
+    const serves = (entry, group) => (tasks[group] || []).some(task => (entry.tasks || []).some(assignment => assignment.task === task));
+    ['tools', 'helpers', 'vision'].forEach(group => {
+        const matching = entries.find(e => e.enabled !== false && e.provider === chosen.provider
+            && e.model === chosen.model && serves(e, group));
+        const source = matching || (serves(chosen, group) ? chosen : null);
+        if (source && typeof source.temperature === 'number') result[group] = source.temperature;
+    });
+    return result;
+}
+function suitPrefill() {
+    const chosen = suitEntries.find(e => String(e.index) === document.getElementById('suitPrefill').value);
+    if (!chosen) return;
+    const providerSelect = document.getElementById('suitProvider');
+    providerSelect.value = chosen.provider;
+    // A disabled provider is not offered: say so instead of silently testing nothing.
+    if (providerSelect.value !== chosen.provider) {
+        document.getElementById('suitStatus').textContent =
+            'Provider ' + chosen.provider + ' is disabled or unavailable — values copied, pick another provider.';
     }
-    suitEntryModel = key;
+    document.getElementById('suitModel').value = chosen.model;
+    suitCombobox.reload();
+    const ids = {tools: 'suitTempTools', helpers: 'suitTempHelpers', vision: 'suitTempVision'};
+    const current = Object.fromEntries(Object.entries(ids).map(([group, id]) => [group, Number(document.getElementById(id).value)]));
+    const temps = suitPrefillTemperatures(chosen, suitEntries, suitGroupTasks, current);
+    Object.entries(ids).forEach(([group, id]) => { document.getElementById(id).value = temps[group]; });
+    document.getElementById('suitPenalty').value = chosen.repetition_penalty ?? '';
+    document.getElementById('suitMaxTokens').value = chosen.max_tokens ?? 900;
+    document.getElementById('suitChatTemplate').value = chosen.chat_template || '';
+    document.getElementById('suitThinking').value = chosen.thinking ? 'on' : 'off';
+    document.getElementById('suitExtraParams').value = JSON.stringify(chosen.extra_params || {}, null, 2);
+    suitValidateExtraParams();
+    // Selection is a one-time copy and is never sent with a test request.
+    document.getElementById('suitPrefill').value = '';
 }
 function suitFinite(value) {
     if (typeof value === 'number') return Number.isFinite(value);
@@ -567,44 +581,14 @@ function suitFinite(value) {
     if (value && typeof value === 'object') return Object.values(value).every(suitFinite);
     return true;
 }
-async function suitOnModelChange() {
-    suitCur = { provider: document.getElementById('suitProvider').value,
-                model: document.getElementById('suitModel').value };
-    suitRenderEntries();
-    if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
-    document.getElementById('suitProgress').innerHTML = '';
-    document.getElementById('suitStatus').textContent = '';
-    if (suitCur.model) {
-        const full = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
-        try {
-            const response = await fetch('/admin/settings/llm-suitability-test/jobs');
-            const jobs = ((await response.json()).jobs || []).filter(j => j.model.toLowerCase() === full.toLowerCase());
-            const job = jobs.find(j => j.status === 'running' || j.status === 'queued') || jobs[jobs.length - 1];
-            const current = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
-            if (current !== full) return;
-            // No job in the queue: show the model's saved result, if any.
-            suitCur = job || { job_id: 'saved:' + full };
-            suitPoll();
-        } catch (e) { /* The jobs list will retry on its next refresh. */ }
-    }
-}
-function suitOverrideChanged() {
-    document.getElementById('suitOverrideFields').hidden = !document.getElementById('suitOverride').checked;
-    suitValidateExtraParams();
-}
 function suitVeniceTemplate() {
     document.getElementById('suitExtraParams').value =
         JSON.stringify({venice_parameters: {disable_thinking: true}}, null, 2);
-    document.getElementById('suitOverride').checked = true;
-    suitOverrideChanged();
+    suitValidateExtraParams();
 }
 function suitValidateExtraParams() {
     const input = document.getElementById('suitExtraParams');
     const error = document.getElementById('suitExtraError');
-    if (!document.getElementById('suitOverride').checked) {
-        error.textContent = '';
-        return null;
-    }
     try {
         const value = input.value.trim() ? JSON.parse(input.value) : {};
         if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -623,20 +607,22 @@ async function suitStart() {
     const model = document.getElementById('suitModel').value;
     const status = document.getElementById('suitStatus');
     if (!model) { status.textContent = 'Please pick a model'; return; }
-    const entry = document.getElementById('suitEntry');
-    const matches = suitEntries.filter(e => e.provider === provider && e.model === model);
-    if (matches.length && !matches.some(e => String(e.index) === entry.value)) {
-        status.textContent = 'Please select an LLM entry';
-        return;
-    }
     const concurrency = Number(document.getElementById('suitConcurrency').value);
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3) {
-        status.textContent = 'Concurrency must be an integer from 1 to 3';
-        return;
+    if (!Number.isInteger(concurrency) || concurrency < 1) {
+        status.textContent = 'Parallel requests must be a positive integer'; return;
     }
-    const override = document.getElementById('suitOverride').checked;
     const extraParams = suitValidateExtraParams();
-    if (override && extraParams === null) { status.textContent = 'Fix temporary request parameters before starting.'; return; }
+    if (extraParams === null) { status.textContent = 'Fix extra params before starting.'; return; }
+    const penalty = document.getElementById('suitPenalty').value;
+    const settings = {
+        temperature: {tools: Number(document.getElementById('suitTempTools').value),
+            helpers: Number(document.getElementById('suitTempHelpers').value),
+            vision: Number(document.getElementById('suitTempVision').value)},
+        repetition_penalty: penalty === '' ? null : Number(penalty),
+        max_tokens: Number(document.getElementById('suitMaxTokens').value),
+        chat_template: document.getElementById('suitChatTemplate').value,
+        thinking: document.getElementById('suitThinking').value === 'on', extra_params: extraParams,
+    };
     document.getElementById('suitStartBtn').disabled = true;
     status.textContent = 'Starting…';
     document.getElementById('suitProgress').innerHTML = '';
@@ -644,18 +630,14 @@ async function suitStart() {
     try {
         const r = await fetch('/admin/settings/llm-suitability-test/start', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, model, concurrency,
-                ...(matches.length ? {
-                    entry_index: Number(entry.value),
-                    routing_revision: suitRoutingRevision,
-                } : {}),
-                ...(override ? {extra_params: extraParams} : {}) }),
+            body: JSON.stringify({provider, model, settings, concurrency}),
         });
         if (!r.ok) {
             const data = await r.json().catch(() => ({}));
             throw new Error(typeof data.detail === 'string' ? data.detail : 'HTTP ' + r.status);
         }
         suitCur = await r.json();
+        status.textContent = 'Test queued';
         suitPoll();
         suitJobsRefresh();
     } catch (e) {
@@ -693,7 +675,11 @@ async function suitDeleteOld(button) {
 }
 
 function suitRenderJob(job) {
-    const status = document.getElementById('suitStatus');
+    const status = document.getElementById('suitDetailStatus');
+    document.getElementById('suitDetail').hidden = false;
+    const settings = job.settings || (job.summary || {}).settings;
+    document.getElementById('suitSettings').innerHTML = '<p>' + esc(suitSettingsText(settings)) + '</p>'
+        + (settings ? '<pre>' + esc(JSON.stringify(settings, null, 2)) + '</pre>' : '');
     const prog = document.getElementById('suitProgress');
     // Starting another model is allowed while the current job waits or runs.
     document.getElementById('suitStartBtn').disabled = false;
@@ -724,7 +710,7 @@ function suitRenderJob(job) {
         checks = checks.filter(check => check.ok === false);
         if (!checks.length) { prog.innerHTML = '<div>No failing cases.</div>'; return; }
     } else if (job.status === 'running') {
-        status.textContent = 'Running ' + (job.model || '') + ' · ' + (job.entry_name || '')
+        status.textContent = 'Running ' + (job.model || '')
             + ' (' + (job.done || 0) + '/' + (job.total || '?') + ')';
     } else if (job.status === 'queued') {
         status.textContent = 'Queued · position ' + job.position;
@@ -748,15 +734,19 @@ function suitRenderJob(job) {
 async function suitPoll() {
     if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
     if (!suitCur.job_id) return;
+    const selectedJob = suitCur.job_id;
     try {
-        const q = 'job_id=' + encodeURIComponent(suitCur.job_id);
+        const q = 'job_id=' + encodeURIComponent(selectedJob);
         const r = await fetch('/admin/settings/llm-suitability-test/status?' + q);
+        if (selectedJob !== suitCur.job_id) return;
         if (r.status === 404) {  // No saved result for this model yet.
-            document.getElementById('suitStatus').textContent = '';
+            document.getElementById('suitDetailStatus').textContent = 'Result no longer available';
             document.getElementById('suitProgress').innerHTML = '';
             return;
         }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
         const job = await r.json();
+        if (selectedJob !== suitCur.job_id) return;
         suitRenderJob(job);
         if (job.status === 'running' || job.status === 'queued') {
             suitPollTimer = setTimeout(suitPoll, 1500);
@@ -765,7 +755,7 @@ async function suitPoll() {
             if (job.status === 'done') loadData();  // Refresh table and badges.
         }
     } catch (e) {
-        suitPollTimer = setTimeout(suitPoll, 2500);
+        if (selectedJob === suitCur.job_id) suitPollTimer = setTimeout(suitPoll, 2500);
     }
 }
 
