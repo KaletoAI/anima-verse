@@ -831,7 +831,8 @@ def parse_and_apply_intent_markers(character_name: str,
 
     DONE/PROGRESS only touch an intent the character owns or takes part in —
     an id from someone else's list is ignored. A new intent whose title an
-    active one already covers (``find_duplicate``) is not created.
+    active one already covers (``find_duplicate``) is not created, nor one
+    whose title is the id of an existing intent.
 
     Returns the intents CREATED by this text (in marker order) — the caller
     uses them for the player feedback line.
@@ -851,6 +852,12 @@ def parse_and_apply_intent_markers(character_name: str,
         parts = [p.strip() for p in m.group(1).split("|")]
         title = parts[0] if parts else ""
         if not title:
+            continue
+        if get_intent(title):
+            # "[INTENT: 998d3b40 | Go to the inn | …]" re-states a listed plan
+            # by its id; created, it became a second plan titled "998d3b40".
+            logger.info("[%s] INTENT ignored: title %s is the id of an existing intent",
+                        character_name, title)
             continue
         desc, when, prio, source = "", "standing", 3, "character"
         for p in parts[1:]:
