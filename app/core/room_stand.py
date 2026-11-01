@@ -31,7 +31,9 @@ EXIT clip carries the figure off the seat (a bridge with root motion,
 ``get-up-chair``), ``near`` is where that clip sets it down —
 :func:`bridge_stand_point`, the seat plus the clip's travel turned by the
 seat's facing — because that is where the client's figure already stands
-when the clip ends.
+when the clip ends. Exit-clip points use ACCESS_BODY_R_M (0.15 m),
+like the entry access point: the clip ends with the feet next to the seat.
+All other stand points keep BODY_R_M (0.30 m).
 
 :func:`pick_stand` is PURE — polygon, blockers, door zones, mates, near in, a
 point out — so ``scripts/smoke_room_stand.py`` can check it without a world.
@@ -112,8 +114,12 @@ def _edge_clearance(pt: Point, poly: Sequence[Point]) -> float:
 
 def _free(pt: Point, poly: Sequence[Point], blockers: Sequence[Blocker],
           door_zones: Sequence[Sequence[Point]],
-          mates: Sequence[Point]) -> Optional[float]:
-    """The candidate's wall clearance when it is free, else None.
+          mates: Sequence[Point], furniture_r: float = BODY_R_M) -> Optional[float]:
+    """Exit-clip points use ACCESS_BODY_R_M (0.15 m) for furniture, like
+    entry access points, because the clip ends with feet next to the seat.
+    Other stand points keep BODY_R_M (0.30 m).
+
+    The candidate's wall clearance when it is free, else None.
 
     The four conditions in the order they get cheaper to fail on: inside the
     hull with wall clearance, out of the furniture, out of the door zones, away
@@ -125,7 +131,7 @@ def _free(pt: Point, poly: Sequence[Point], blockers: Sequence[Blocker],
     if clear < WALL_CLEAR_M:
         return None
     for box in blockers:
-        if _in_footprint(pt[0], pt[1], box, BODY_R_M):
+        if _in_footprint(pt[0], pt[1], box, furniture_r):
             return None
     for zone in door_zones:
         if len(zone) >= 3 and fg.point_in_poly(pt, zone):
@@ -140,10 +146,11 @@ def pick_stand(polygon: Sequence[Sequence[float]],
                blockers: Sequence[Blocker],
                door_zones: Sequence[Sequence[Sequence[float]]],
                mates: Sequence[Sequence[float]],
-               near: Sequence[float]) -> Optional[Point]:
-    """The free standing point nearest ``near``, or None when the room has
+               near: Sequence[float], furniture_r: float = BODY_R_M) -> Optional[Point]:
+    """    The free standing point nearest ``near``, or None when the room has
     none. PURE — every argument is plain geometry in ONE frame (world metres
-    in the running server).
+    in the running server). ``furniture_r`` grows every footprint (see
+    :func:`_free`).
 
     ``near`` unchanged when it is itself free: standing up must not make a
     figure walk across the room, and entering a room must not pull it off the
@@ -155,7 +162,7 @@ def pick_stand(polygon: Sequence[Sequence[float]],
     pins: List[Point] = [(float(m[0]), float(m[1])) for m in mates]
     zones = [[(float(p[0]), float(p[1])) for p in z] for z in door_zones]
     at = (float(near[0]), float(near[1]))
-    if _free(at, poly, blockers, zones, pins) is not None:
+    if _free(at, poly, blockers, zones, pins, furniture_r) is not None:
         return at
     xs = [p[0] for p in poly]
     zs = [p[1] for p in poly]
@@ -171,7 +178,7 @@ def pick_stand(polygon: Sequence[Sequence[float]],
         x = x0 + i * STAND_GRID_M
         for j in range(nz + 1):
             z = z0 + j * STAND_GRID_M
-            clear = _free((x, z), poly, blockers, zones, pins)
+            clear = _free((x, z), poly, blockers, zones, pins, furniture_r)
             if clear is None:
                 continue
             # Nearest to `near` first; a tie goes to the larger wall clearance,
@@ -360,8 +367,8 @@ def _mates(location_id: str, room_id: str, exclude: str) -> List[Point]:
 
 
 def free_stand_point(location_id: str, room_id: str, near: Sequence[float],
-                     exclude: str = "") -> Optional[Point]:
-    """The free standing point of ``location_id``/``room_id`` nearest ``near``,
+                     exclude: str = "", furniture_r: float = BODY_R_M) -> Optional[Point]:
+    """    The free standing point of ``location_id``/``room_id`` nearest ``near``,
     or None when the room offers none (and then nobody is moved).
 
     ``exclude`` is the character being placed — it must not keep itself out of
@@ -379,7 +386,7 @@ def free_stand_point(location_id: str, room_id: str, near: Sequence[float],
         return None
     poly, blockers, zones = geo
     return pick_stand(poly, blockers, zones, _mates(location_id, room_id, exclude),
-                      near)
+                      near, furniture_r)
 
 
 #: How close the character's current point must lie to the resolved seat
@@ -495,7 +502,7 @@ def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None,
 
 def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,
              from_pose_key: str = "") -> Optional[Point]:
-    """THE WRITE PATH: put ``name`` on a free standing point of the room it is
+    """    THE WRITE PATH: put ``name`` on a free standing point of the room it is
     in, starting from where it stands right now — or, when it has just left
     a seat (``from_place``, the old profile field ``{"id", "slot",
     "room_id"}``, and ``from_pose_key``, the pose it held there) and that
@@ -526,19 +533,21 @@ def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,
     if pos is None:
         return None
     here = (float(pos["x"]), float(pos["z"]))
-    near = here
+    stand = None
     if from_place and from_pose_key:
         # The seat is resolved from the field the caller just cleared — the
         # profile no longer holds it, so ``place_of`` would answer None.
         seat = places.resolve_place(name, from_place)
         stand = (bridge_stand_point(name, seat, from_pose_key, at=here)
                  if seat else None)
-        if stand is not None:
-            near = stand
-    point = free_stand_point(loc, room, near, exclude=name)
+    if stand is not None:
+        point = free_stand_point(loc, room, stand, exclude=name,
+                                 furniture_r=ACCESS_BODY_R_M)
+    else:
+        point = free_stand_point(loc, room, here, exclude=name)
     # Nothing to write when the answer is where the character already stands
-    # — compared with the CURRENT position, not with `near`: from a stand
-    # point `near` is not where the character is.
+    # — compared with the CURRENT position, since the clip endpoint is not
+    # where the character is yet.
     if point is None or (round(point[0], 2), round(point[1], 2)) == (
             round(here[0], 2), round(here[1], 2)):
         return None

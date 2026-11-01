@@ -1102,7 +1102,8 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `height_c
   Slot-Position). Gewählt wird der freie Kandidat mit dem kleinsten Abstand zum
   AUSGANGSPUNKT — bei Gleichstand größerer Wandabstand, dann kleinstes x, dann
   kleinstes z. Ist der Ausgangspunkt selbst frei, bleibt er stehen: niemand
-  läuft grundlos. Ausgangspunkt ist immer die aktuelle Position (der
+  läuft grundlos. Ein Punkt aus einem Exit-Clip wird gegen Möbel mit
+  `ACCESS_BODY_R_M` **0,15 m** statt `BODY_R_M` **0,30 m** geprüft. Ausgangspunkt ist immer die aktuelle Position (der
   Ankunftspunkt beim Betreten, der Sitz nach einer Pose). Geschrieben wird nur
   auf den SCHREIBWEGEN — Raumwechsel, Ortswechsel (auch Teleport: der
   Ankunftsraum wird dort mitgeschrieben) und Aufstehen —, nie beim Bau eines

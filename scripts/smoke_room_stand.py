@@ -18,6 +18,18 @@ THE RULE (the four constants are the contract):
     free candidate nearest to `near` wins; tie -> larger wall clearance,
     then smallest x, then smallest z. `near` itself, when free, wins outright.
 
+Exit-clip points grow furniture by ACCESS_BODY_R_M 0.15, like entry access
+points, because the clip ends with the feet next to the seat.
+
+[A] In SQUARE 6x6, blocker (3,3), yaw 0, width/depth 0.6, near (3,3.5):
+    body half extent 0.3+0.3=0.60 > 0.5 blocks. Grid (3,3.75) is free
+    (0.75 > 0.60), 0.25 m away; x escape needs |dx| 0.75, farther.
+    Access half extent 0.3+0.15=0.45 < 0.5 leaves near unchanged.
+[B] Same fixture, near (3,3.4), radius 0.15: 0.40 < 0.45 blocks;
+    grid (3,3.5) is free (0.50 > 0.45), only 0.10 m away.
+[C] The bridge fixture carries (2,3) east to (2.4,3). stand_up checks
+    that endpoint with access radius 0.15; without a bridge, default 0.30.
+
 THE FIXTURES AND THEIR HAND-DERIVED ANSWERS
 
 [1] SQUARE 6 x 6, (0,0)…(6,6), nothing in it, near = (3, 3).
@@ -333,6 +345,17 @@ def near_xz(point, x: float, z: float, eps: float = 1e-6) -> bool:
     return at(point, x, z, eps)
 
 
+def test_exit_clip_furniture_radius() -> None:
+    room = [(0, 0), (6, 0), (6, 6), (0, 6)]
+    boxes = [{"at": [3, 3], "yaw": 0, "width_m": 0.6, "depth_m": 0.6}]
+    check("[A] body radius moves to (3, 3.75)",
+          pick_stand(room, boxes, [], [], (3, 3.5)) == (3.0, 3.75))
+    for label, near in (("[A] access preserves near", (3, 3.5)),
+                        ("[B] access grid search", (3, 3.4))):
+        check(label, pick_stand(room, boxes, [], [], near,
+                               furniture_r=room_stand.ACCESS_BODY_R_M) == (3.0, 3.5))
+
+
 def test_bridge_offset() -> None:
     print("\n[8]-[10] the clip travel turned by the seat's facing")
     bo = room_stand.bridge_offset
@@ -411,8 +434,11 @@ def _stand_up_stubs(pos, seat):
         places.inside = lambda *a: True
         ch.get_character_pos = lambda n: {"x": pos[0], "z": pos[1]}
         ch.set_character_pos = lambda n, x, z, **k: seen.setdefault("written", (x, z))
-        room_stand.free_stand_point = lambda loc, room, near, exclude="": (
-            seen.setdefault("near", tuple(near)) and tuple(near))
+        def record_free(loc, room, near, exclude="", **kwargs):
+            seen["kwargs"] = kwargs
+            seen["near"] = tuple(near)
+            return tuple(near)
+        room_stand.free_stand_point = record_free
         yield seen
     finally:
         (places.where, places.resolve_place, places.inside, ch.get_character_pos,
@@ -429,6 +455,8 @@ def test_still_on_the_seat() -> None:
                                       from_pose_key="sitting")
         check("[14] on the seat: the search starts at (2.4, 3.0)",
               at(seen.get("near"), 2.4, 3.0), str(seen.get("near")))
+        check("[C] bridge uses access radius",
+              seen["kwargs"].get("furniture_r") == room_stand.ACCESS_BODY_R_M)
         check("[14] …and the character is written there",
               at(got, 2.4, 3.0) and at(seen.get("written"), 2.4, 3.0), str(got))
         check("[15] 1 m off a same-id seat: no stand point",
@@ -439,6 +467,7 @@ def test_still_on_the_seat() -> None:
                                       from_pose_key="sitting")
         check("[15] …stand_up searches from the current point (3, 3)",
               at(seen.get("near"), 3.0, 3.0), str(seen.get("near")))
+        check("[C] no bridge uses default", "furniture_r" not in seen["kwargs"])
         check("[15] …and, already standing there, writes nothing",
               got is None and "written" not in seen, str(got))
 
@@ -491,6 +520,7 @@ def main() -> int:
     test_door_zone()
     test_no_room()
     test_idempotent()
+    test_exit_clip_furniture_radius()
     test_bridge_offset()
     test_stand_from_bridge_point()
     test_bridge_scale()

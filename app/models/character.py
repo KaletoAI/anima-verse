@@ -4568,7 +4568,7 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
     """
     from app.core import places
     from app.core.keyed_lock import keyed_lock, _after_locks
-    from app.core.room_stand import bridge_stand_point, free_stand_point
+    from app.core.room_stand import ACCESS_BODY_R_M, bridge_stand_point, free_stand_point
     initial = get_character_profile(character_name)
     location, room = places.where(character_name, profile=initial)
     with keyed_lock("places", location), keyed_lock("character_profile", character_name):
@@ -4590,9 +4590,13 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
             seat = places.resolve_place(character_name, field, profile=profile)
             if row is not None and row[0] is not None and row[1] is not None:
                 here = (float(row[0]), float(row[1]))
-                near = (bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here)
-                        if seat else None) or here
-                candidate = free_stand_point(location, room, near, exclude=character_name)
+                bridge_point = (bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here)
+                                if seat else None)
+                if bridge_point is not None:
+                    candidate = free_stand_point(location, room, bridge_point, exclude=character_name,
+                                                 furniture_r=ACCESS_BODY_R_M)
+                else:
+                    candidate = free_stand_point(location, room, here, exclude=character_name)
                 if candidate is not None and places.inside(location, *candidate):
                     point = candidate
         woke = False
