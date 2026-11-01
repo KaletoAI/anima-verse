@@ -451,7 +451,9 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                target=target, label=localized(action, "name", lang) or action["name"],
                                description=localized(action, "description", lang) or action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
-                               available_targets=targets, effects=action.get("effects", [])))
+                               available_targets=targets, effects=action.get("effects", []),
+                               # The body pose the action holds (ability "pose" only).
+                               pose_key=(action.get("pose_key") or "") if action.get("ability") == "pose" else ""))
     # Capture the entire key before reading; a concurrent mutation must never
     # publish an older snapshot under a newer version. Lazy readers can write,
     # so recheck before publishing as well.
@@ -464,6 +466,47 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                 while len(_offers_cache) > 128:
                     _offers_cache.popitem(last=False)
     return result
+
+
+def furniture_for_pose(actor: str, pose_key: str) -> list[dict]:
+    """The enabled solo furniture actions in ``actor``'s room that put it in
+    ``pose_key``: actions holding exactly that pose first, then those holding
+    another pose of the same place group (a sofa that only knows "sitting"
+    for "lounging"); nearest piece first within each. Read only."""
+    from app.core.pose_catalog import group_of
+    key = (pose_key or "").strip().lower()
+    group = group_of(key)
+    rows = [o for o in offers(actor)
+            if o["enabled"] and not o["required_partner"] and o.get("pose_key")]
+
+    def nearest(row):
+        return row["distance_m"] if row["distance_m"] is not None else math.inf
+
+    exact = sorted((o for o in rows if o["pose_key"] == key), key=nearest)
+    alike = sorted((o for o in rows if o["pose_key"] != key and group
+                    and group_of(o["pose_key"]) == group), key=nearest)
+    return exact + alike
+
+
+def strikable_pose_keys(actor: str, keys: list[str], *, keep: str = "") -> list[str]:
+    """``keys`` without the solo poses ``actor`` cannot take right now — a
+    pose whose group needs a place stays only when the room has a free
+    room-owned place of the group (``places.free_seat_groups``) or an enabled
+    furniture action holding a pose of the group (:func:`furniture_for_pose`
+    reaches it). ``keep`` (the current pose) always stays, so "keep the
+    current one" remains possible. Order is kept."""
+    from app.core import places
+    from app.core.pose_catalog import get_catalog, group_of, needs_place
+    catalog = get_catalog("pose")
+    usable = places.free_seat_groups(actor) | {
+        group_of(o["pose_key"]) for o in offers(actor)
+        if o["enabled"] and not o["required_partner"] and o.get("pose_key")}
+    out = []
+    for key in keys:
+        group = (catalog.get(key.lower()) or {}).get("group", "")
+        if key == keep or not group or not needs_place(group) or group in usable:
+            out.append(key)
+    return out
 
 
 def _requestable(actor: str) -> list:
@@ -482,7 +525,7 @@ def _requestable(actor: str) -> list:
         elif not offer["enabled"]:
             continue
         row = {k: v for k, v in offer.items()
-               if k not in ("enabled", "reason", "available_targets", "placement_id", "variant_uid")
+               if k not in ("enabled", "reason", "available_targets", "placement_id", "variant_uid", "pose_key")
                and v not in ("", [], None)}
         if offer["required_partner"]:
             row["partners"] = partners

@@ -68,6 +68,21 @@ class SetPoseSkill(PluginSkill):
                     f"{character_name} does alone. {how}For a solo pose, "
                     f"pass a pose key from the list plus a short detail.",
                     correction_tools=(_name,) if _name else ())
+            if not written:
+                # A sitting/lying pose the room has no free place for is not
+                # struck in mid-air: the furniture that has it is taken.
+                from app.core import places
+                from app.core.pose_catalog import split_key_detail
+                wanted = split_key_detail(key)[0]
+                if wanted and places.seat_missing(character_name, wanted):
+                    from app.core.prop_action_engine import take_furniture_for_pose
+                    taken = take_furniture_for_pose(character_name, wanted)
+                    if taken:
+                        return (f"{character_name}: goes to the {taken['prop_label']} "
+                                f"({taken['label']})")
+                    return ToolRefusal(
+                        f"'{wanted}' needs a place to sit or lie on, and there is "
+                        f"none free here. Pick a pose that needs no place.")
             return f"{character_name}: {written or key or detail}"
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, character_name, e)

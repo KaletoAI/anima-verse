@@ -1479,6 +1479,18 @@ in the open-questions block, not the proposal menu. Every row also carries
 solo run), `reaction` (a react run's partner reaction: `pending`, `accepted`,
 `resisted`, `timeout`, `player`, `none`) and `can_resist`.
 
+`app.core.prop_actions.furniture_for_pose(actor, pose_key) -> list[dict]` lists
+the enabled solo furniture actions in the actor's room that hold `pose_key`
+(offer rows, which carry `pose_key` for ability `pose`), then those holding
+another pose of the same place group, nearest first.
+`app.core.prop_action_engine.take_furniture_for_pose(actor, pose_key) -> dict | None`
+starts the first of them that accepts (the request result plus `label` and
+`prop_label`), or returns None. `app.core.places.seat_missing(name, pose_key) -> bool`
+says whether a solo pose needs a place the room has no free room-owned one
+for; `app.models.character.set_pose_intent` refuses such a pose (returns
+False, nothing written) — a package that sets poses reaches furniture through
+`take_furniture_for_pose` instead.
+
 `app.core.prop_action_engine.react(partner, execution_id, accept, *, line="",
 feeling=0, romantic=False) -> dict` answers a waiting `partner_consent: "react"`
 run: `accept=False` ends it (`cancelled` / `partner_resisted`), `True` lets it

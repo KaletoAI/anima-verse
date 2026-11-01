@@ -2188,7 +2188,7 @@ def get_character_pose_flavor(character_name: str) -> str:
 
 
 def set_pose_intent(character_name: str, pose: str, prefer: str = "",
-                    flavor: Optional[str] = None) -> None:
+                    flavor: Optional[str] = None) -> bool:
     """Canonical setter for 'character does X now'. Resolves the free text to
     a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets.
 
@@ -2209,12 +2209,23 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     returns early and never re-assigns. Any other seat failure degrades to
     "pose without place" — never into a lost pose.
 
+    A solo pose whose group needs a place (sitting, lying) is NOT written
+    when the room has no free place of that group (``places.seat_missing``):
+    it would be played in mid-air. Nothing changes then — not the pose, not
+    the place — and the call returns False; a furniture piece is reached
+    through its furniture action (``prop_action_engine.take_furniture_for_pose``).
+    Checked BEFORE the place step, which would otherwise already have stood
+    the character up from the seat its current pose needs.
+
     Raises ``PairPoseWithoutPartner`` when the text resolves to a two-person
     key (catalog ``solo: false``) and no running interaction names that key:
     such a pose on a single profile is an invalid state, and the caller is
-    meant to redirect to the pair verb instead of writing it."""
+    meant to redirect to the pair verb instead of writing it.
+
+    Returns False when nothing was written for lack of a place (or without a
+    name), True otherwise."""
     if not character_name:
-        return
+        return False
     raw = (pose or "").strip()
     display = flavor          # the caller's own sentence, or None
     key, flavor = "", ""
@@ -2249,7 +2260,13 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     unchanged = ((profile.get("pose_key") or "") == key
                  and (profile.get("pose_flavor") or "") == flavor)
     if unchanged and not prefer:
-        return
+        return True
+    if key and not prefer:
+        from app.core import places
+        if places.seat_missing(character_name, key):
+            logger.info("pose %r for %s not written: no free place of its group here",
+                        key, character_name)
+            return False
     running = profile.get("interaction")
     if isinstance(running, dict) and running.get("pose_key") != key:
         from app.core.interaction_engine import StaleDecision, stale_against_pair
@@ -2301,6 +2318,7 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
             stored = save_character_profile(character_name, profile)
     _publish_activity_changed(character_name, flavor or key, old_display, key,
                               place, old_place, stored=stored)
+    return True
 
 
 def set_pose_key_detail(character_name: str, key: str, detail: str, *,
@@ -2330,16 +2348,15 @@ def set_pose_key_detail(character_name: str, key: str, detail: str, *,
     canonical, extra = split_key_detail(key or "")
     text_detail = (detail or "").strip() or extra
     if canonical:
-        set_pose_intent(character_name, canonical, flavor=text_detail)
-        return canonical
+        # Not written for lack of a place: nothing was written.
+        return canonical if set_pose_intent(character_name, canonical, flavor=text_detail) else ""
     if unknown == "keep":
         current = get_character_pose_key(character_name) or ""
         # A detail the sanitizer drops (first person, speech only) must not
         # wipe the flavor already there — "keep" means keep.
         from app.core.pose_catalog import sanitize_flavor
         if current and text_detail and sanitize_flavor(text_detail):
-            set_pose_intent(character_name, current, flavor=text_detail)
-            return current
+            return current if set_pose_intent(character_name, current, flavor=text_detail) else ""
         return ""
     # The ORIGINAL fields, not text_detail: with no canonical key the split
     # handed the whole key text back as the detail, and joining it to itself

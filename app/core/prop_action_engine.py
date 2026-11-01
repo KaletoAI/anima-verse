@@ -1671,6 +1671,26 @@ def respond(actor: str, execution_id: str, accept: bool) -> dict:
     return result
 
 
+def take_furniture_for_pose(actor: str, pose_key: str) -> dict | None:
+    """A sitting/lying pose the room has no free place for, reached the
+    honest way: start the nearest furniture action in ``actor``'s room that
+    holds that pose (or another pose of its group —
+    ``prop_actions.furniture_for_pose``). The run walks the character over
+    and seats it; its pose is the action's. Returns the accepted request
+    result, or None when no piece takes it (each candidate is tried once, a
+    refused one — taken meanwhile, no route — passes to the next)."""
+    from app.core.prop_actions import furniture_for_pose
+    for offer in furniture_for_pose(actor, pose_key):
+        result = request(actor, offer["target"], offer["action_id"], offer["definition_revision"])
+        if result.get("status") not in ("refused", "failed", "cancelled"):
+            logger.info("%s takes %s for pose %r: %s on %s", actor, offer["label"], pose_key,
+                        result.get("status"), offer["prop_label"])
+            return dict(result, label=offer["label"], prop_label=offer["prop_label"])
+        logger.info("%s: %s on %s refused for pose %r: %s", actor, offer["label"],
+                    offer["prop_label"], pose_key, result.get("reason"))
+    return None
+
+
 def has_semantic_action(actor: str) -> bool:
     """Implicit narration never overrides an explicit, still-owned action."""
     row = store.db.get_connection().execute(

@@ -593,6 +593,58 @@ def release(name: str) -> None:
                  from_pose_key=pose)
 
 
+def free_seat_groups(name: str) -> set:
+    """ADVISORY: the place groups :func:`assign` could seat ``name`` in right
+    now — a ROOM-OWNED marker of the group with a free slot in its room (its
+    own seat counts as free). Furniture props are not in it: a raw pose never
+    takes one, that is a furniture action's job. No lock, no write."""
+    loc, room = where(name)
+    if not loc or not room:
+        return set()
+    occ = occupancy(loc, room, exclude=name)
+    return {p["group"] for p in room_places(loc, room)
+            if p.get("source") != "prop" and free_slots(p, occ.get(p["id"], []))}
+
+
+def seat_missing(name: str, pose_key: str) -> bool:
+    """Would ``pose_key`` leave ``name`` without the place it needs? True
+    for a SOLO pose whose group needs a marker (``needs_place``) when
+    :func:`free_seat_groups` has none of it — the pose would be played in
+    mid-air. Pair poses are seated by :func:`assign_pair`, ungrouped and
+    placeless poses need nothing."""
+    from app.core.pose_catalog import get_catalog, needs_place
+    entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
+    group = entry.get("group", "")
+    if not group or not entry.get("solo", True) or not needs_place(group):
+        return False
+    return group not in free_seat_groups(name)
+
+
+def clear_placeless_poses() -> List[str]:
+    """Start-up repair: a solo pose that needs a place, held WITHOUT one —
+    written before ``set_pose_intent`` refused such poses — is played in
+    mid-air. Its pose is cleared (nothing moves: there is no seat to stand
+    up from). A character in a furniture action or a pair keeps what it has;
+    those own their pose and place. Returns the names cleared."""
+    from app.core.pose_catalog import get_catalog, needs_place
+    from app.core.prop_action_engine import has_semantic_action
+    from app.models.character import (clear_pose_intent, get_character_profile,
+                                      list_available_characters)
+    catalog = get_catalog("pose")
+    cleared = []
+    for name in list_available_characters(include_pooled=True):
+        profile = get_character_profile(name) or {}
+        entry = catalog.get((profile.get("pose_key") or "").strip().lower()) or {}
+        group = entry.get("group", "")
+        if (not group or not entry.get("solo", True) or not needs_place(group)
+                or profile.get("interaction") or place_of(name, profile) is not None
+                or has_semantic_action(name)):
+            continue
+        clear_pose_intent(name)
+        cleared.append(name)
+    return cleared
+
+
 def can_take(name: str, pose_key: str, place_id: str, ignore: Tuple[str, ...] = ()) -> bool:
     """ADVISORY: has ``place_id`` in ``name``'s room a free slot for the
     pose's group right now, with the characters in ``ignore`` (the one

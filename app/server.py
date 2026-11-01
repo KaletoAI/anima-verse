@@ -324,6 +324,17 @@ async def lifespan(app: FastAPI):
     from app.core.prop_action_migration import prepare_runtime
     prepare_runtime()
 
+    # A sitting/lying pose held without a place is played in mid-air; the
+    # pose setter refuses such poses now, this clears the ones written before.
+    # AFTER prepare_runtime: a figure in a furniture action keeps its pose.
+    try:
+        from app.core.places import clear_placeless_poses
+        _pp = clear_placeless_poses()
+        if _pp:
+            logger.info("Poses without their place cleared: %s", ", ".join(_pp))
+    except Exception as _ppe:
+        logger.warning("placeless pose cleanup failed: %s", _ppe)
+
     # Picture areas, the door-leaf box and the orientation fix belong to the
     # MODEL FILE now (spec-bild-props-v2.md E1, ruling V0, 2026-08-28): every
     # variant is its own generation with its own axes. The legacy prop-level

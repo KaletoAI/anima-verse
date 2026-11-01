@@ -811,6 +811,17 @@ def _extract_context_from_last_chat(agent_name: str,
         from app.core.npc_actions import _solo_pose_keys
         from app.core.streaming import current_pose_text
         pose_keys = _solo_pose_keys() if not is_avatar and source_available else []
+        if pose_keys:
+            # Only the poses that can happen in this room right now: a seat or
+            # bed pose needs a free place of its group or a furniture action
+            # holding one — offered otherwise, it would be played in mid-air.
+            from app.core.prop_actions import strikable_pose_keys
+            from app.models.character import get_character_pose_key
+            try:
+                pose_keys = strikable_pose_keys(
+                    target_name, pose_keys, keep=get_character_pose_key(target_name) or "")
+            except Exception as e:
+                logger.warning("Chat context [%s]: pose menu filter failed: %s", target_name, e)
         # The pose this call would overwrite — the prompt keeps it unless
         # the body clearly changes shape.
         current_pose = current_pose_text(target_name) if not is_avatar and source_available else ""
@@ -915,6 +926,18 @@ def _extract_context_from_last_chat(agent_name: str,
                     logger.info("Chat context [%s]: pose %r detail %r -> %r",
                                 target_name, extracted_pose[:40],
                                 extracted_detail[:80], written)
+                    from app.core import places
+                    from app.core.pose_catalog import split_key_detail
+                    wanted = split_key_detail(extracted_pose)[0]
+                    if not written and wanted and places.seat_missing(target_name, wanted):
+                        # No free place for it here: take the furniture that
+                        # has the pose instead of striking it in mid-air.
+                        from app.core.prop_action_engine import take_furniture_for_pose
+                        taken = take_furniture_for_pose(target_name, wanted)
+                        logger.info("Chat context [%s]: pose %r needs a place — %s",
+                                    target_name, wanted,
+                                    f"{taken['label']} on {taken['prop_label']}" if taken
+                                    else "no furniture takes it, pose kept")
                 except PairPoseWithoutPartner as e:
                     logger.info("Chat context [%s]: pose %r discarded — '%s' "
                                 "is a two-person pose", target_name,
