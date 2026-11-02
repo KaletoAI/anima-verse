@@ -977,8 +977,7 @@
         "verschnaufen",
         "erschöpft sitzen",
         "nach luft schnappen",
-        "durchschnaufen",
-        "catching breath"
+        "durchschnaufen"
       ],
       "animation": "recovering",
       "group": "seat",
@@ -1422,6 +1421,20 @@
       "animation": "treading-water",
       "group": "stand",
       "solo": true
+    },
+    "catching breath": {
+      "prompt": "standing bent forward, out of breath, hands braced on the thighs above the knees, flushed face, breathing hard",
+      "synonyms": [
+        "durchatmen",
+        "außer atem",
+        "luft holen",
+        "out of breath",
+        "catching breath"
+      ],
+      "animation": "catch-breath",
+      "group": "stand",
+      "solo": true,
+      "label_de": "Durchatmen"
     }
   }
 }
