@@ -1813,6 +1813,7 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "status": j.get("status", ""),
             "done": j.get("done", 0),
             "total": j.get("total", 0),
+            "phase": j.get("phase") if j.get("status") == "running" else None,
             "provider": j.get("provider", j.get("model", "").partition("::")[0]),
             "settings": j.get("settings", {}),
             "concurrency": j.get("concurrency"),

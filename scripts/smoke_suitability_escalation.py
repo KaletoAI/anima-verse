@@ -9,7 +9,8 @@ make vision unsupported, excluded from the score and verdict. A winning
 600-token candidate coexists with an excluded fixture without a crash. A model
 that thinks for X but not for Z stops only Z (stages 0/300, no group stop, since
 models such as Nanbeige decide per case) and keeps X's earned 600 candidate:
-1/2 beats off 0/2; Z has no fabricated latency sample at an untried setting. Fake clients,
+1/2 beats off 0/2; Z has no fabricated latency sample at an untried setting. Progress: the off pass reports
+done 1, 2, 3 before the first check event, then one phase per escalation stage. Fake clients,
 no provider requests; all storage is temporary.
 """
 import sys
@@ -53,9 +54,16 @@ with tempfile.TemporaryDirectory() as tmp:
              patch('app.core.llm_router.create_llm_instance', return_value=instance), \
              patch('app.core.agent_loop.get_agent_loop', return_value=NS(status=lambda: {'running': False})), \
              patch('app.models.world.is_world_frozen', return_value=True):
-            return list(suit.iter_suitability_results('fake::M', settings={
-                'thinking_max': dict(tools=0, helpers=900, vision=900)}))[-1]['summary']
+            events = list(suit.iter_suitability_results('fake::M', settings={
+                'thinking_max': dict(tools=0, helpers=900, vision=900)}))
+            run.events = events
+            return events[-1]['summary']
     summary = run(cases)
+    kinds = [(e['type'], e.get('done'), e.get('phase')) for e in run.events]
+    first_check = next(i for i, k in enumerate(kinds) if k[0] == 'check')
+    assert [k[1] for k in kinds[:first_check] if k[2] == 'without thinking'] == [1, 2, 3]
+    assert ('progress', None, 'helpers: X with thinking up to 600') in kinds
+    assert ('progress', None, 'helpers: verifying Y at 600') in kinds
     checks = {c['id']: c for c in summary['checks']}
     t = summary['thinking']['helpers']
     assert checks['X']['stage'] == 600 and checks['Y']['stage'] == 0 and checks['Z']['stage'] is None

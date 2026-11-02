@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
 _storage = tempfile.TemporaryDirectory()
 paths.init(_storage.name)
+paths.init_instance(Path(_storage.name) / "instance")  # the queue persists in the instance
 from app.core import model_suitability as suit
 
 
@@ -63,7 +64,7 @@ def main():
             print('[1] Independent provider workers and provider-local position 1 OK')
             assert suit.enqueue_test('A::two', settings={})['job_id'] == a2['job_id']
             changed = suit.enqueue_test('A::two', settings={}, concurrency=2)
-            other = suit.enqueue_test('A::two', settings={'thinking': True})
+            other = suit.enqueue_test('A::two', settings={'thinking_max': {'tools': 300, 'helpers': 0, 'vision': 0}})
             assert len({changed['job_id'], other['job_id'], a2['job_id']}) == 3
             assert changed['position'] == 2 and other['position'] == 3
             for job in (a2, changed, other):
@@ -81,6 +82,8 @@ def main():
             cancel = threading.Event()
             events = suit.iter_suitability_results('A::one', settings={}, cancel_event=cancel)
             assert next(events)['type'] == 'start'
+            # The off pass reports progress before the group's final check.
+            assert next(events) == {'type': 'progress', 'done': 1, 'phase': 'without thinking'}
             assert next(events)['type'] == 'check'
             cancel.set()
             assert list(events) == [] and persisted == ['A::one']

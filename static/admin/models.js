@@ -554,7 +554,7 @@ async function suitJobsRefresh() {
         document.getElementById('suitQueue').innerHTML = Array.from(suitQueueGroups(jobs), ([provider, group]) =>
             '<h3>' + esc(provider) + '</h3>' + group.map(j =>
                 '<div class="suit-job"><button type="button" class="btn" onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')">'
-                + esc(j.model) + '</button> · ' + (j.status === 'interrupted' ? '<span class="suit-interrupted">Interrupted</span>' : esc(j.status)) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?')
+                + esc(j.model) + '</button> · ' + (j.status === 'interrupted' ? '<span class="suit-interrupted">Interrupted</span>' : esc(j.status)) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?') + (j.phase ? ' · ' + esc(j.phase) : '')
                 + (j.status === 'queued' ? ' · position ' + esc(j.position) : '')
                 + '<div class="info-text">' + esc(suitSettingsText(j.settings)) + '</div>'
                 + (['queued', 'running', 'interrupted'].includes(j.status) ? '<button type="button" class="btn" onclick="suitCancel(\''
@@ -854,7 +854,7 @@ function suitRenderJob(job) {
         if (!checks.length) { prog.innerHTML = '<div>No failing cases.</div>'; return; }
     } else if (job.status === 'running') {
         status.textContent = 'Running ' + (job.model || '')
-            + ' (' + (job.done || 0) + '/' + (job.total || '?') + ')';
+            + ' (' + (job.done || 0) + '/' + (job.total || '?') + (job.phase ? ' · ' + job.phase : '') + ')';
     } else if (job.status === 'queued') {
         status.textContent = 'Queued · position ' + job.position;
     } else {

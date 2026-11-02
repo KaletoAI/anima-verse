@@ -512,6 +512,9 @@ def iter_suitability_results(
             rec = record(case, attempts)
             off[case["id"]] = rec
             stage_records[(case["id"], 0)] = rec
+            # Checks are only final after their group's escalation; report
+            # progress meanwhile so the queue does not sit at 0/N.
+            yield {"type": "progress", "done": idx + 1, "phase": "without thinking"}
 
         for group in ("tools", "helpers", "vision"):
             group_cases = [c for c in cases if c["group"] == group]
@@ -530,6 +533,7 @@ def iter_suitability_results(
                 if (not unsupported and rec["ok"] is False and not rec["infra"]
                         and stopped != "budget_unenforceable"):
                     for budget in range(300, settings["thinking_max"][group] + 1, 300):
+                        yield {"type": "progress", "phase": f"{group}: {case['id']} with thinking up to {budget}"}
                         rec = run_stage(case, budget)
                         if rec is None:
                             return
@@ -554,6 +558,7 @@ def iter_suitability_results(
                     if rec["stage"] == candidate:
                         verified[case["id"]] = rec
                     elif rec["stage"] is not None:
+                        yield {"type": "progress", "phase": f"{group}: verifying {case['id']} at {candidate}"}
                         check = run_stage(case, candidate)
                         if check is None:
                             return
@@ -899,9 +904,12 @@ def _run_job(job: Dict[str, Any]) -> None:
                 kind = ev.get("type")
                 if kind == "start":
                     job["total"] = ev.get("total", 0)
+                elif kind == "progress":
+                    job["done"] = max(job.get("done", 0), ev.get("done", 0))
+                    job["phase"] = ev.get("phase")
                 elif kind == "check":
                     job["checks"].append({k: v for k, v in ev.items() if k not in ("type", "index")})
-                    job["done"] = len(job["checks"])
+                    job["done"] = max(job.get("done", 0), len(job["checks"]))
                 elif kind == "done":
                     job["summary"] = ev.get("summary")
                     job["status"] = "done"
