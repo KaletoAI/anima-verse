@@ -1,5 +1,5 @@
 /** Shared polling state machine. The host owns the clock and visibility events. */
-export type SyncTopic = 'presence' | 'scene' | 'notices' | 'self' | 'world';
+export type SyncTopic = 'presence' | 'scene' | 'notices' | 'self' | 'world' | 'clips';
 export interface EndpointSpec {
   intervalMs: number;
   pushedIntervalMs?: number;

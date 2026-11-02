@@ -566,6 +566,7 @@ async function startApp(username: string, role: string) {
   // figures.load() never throws (manifest/clips catch their own errors) and
   // must not be repeated — another run would attach every model twice.
   void figures.load();
+  syncHub().onTopics(['clips'], () => figures.requestClipReload());
   let npcBootReady = false;
   let bootDone = false;
   let arrivalReady = false;

@@ -153,6 +153,7 @@ interface LoadedModel {
   name: string;
   template: THREE.Group;
   clips: THREE.AnimationClip[];
+  ownClips?: THREE.AnimationClip[];
   scale: number;
   height: number; // world height after scaling
   assignOnly: boolean;
@@ -875,6 +876,7 @@ export class FigureLibrary {
         : (await loader.parseAsync(buf, '')).animations;
       return animations[0]?.clone() ?? null;
     };
+    this.parseReloadClip = parseFirstClip;
     this.loadFile = async (url: string, forceFbx = false): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
       if (forceFbx || /\.fbx(\?|$)/i.test(url)) {
         const obj = await (await getFbxLoader()).loadAsync(url);
@@ -908,6 +910,8 @@ export class FigureLibrary {
         return { models: [] };
       })();
       const libraryP = getAnimationClips().then((library) => {
+        this.clipRevision = library.revision;
+        this.clipListing = library.clips;
         setMovementPoses(library.movement_poses);
         setClipTransitions(library.transition_clips);
         return library;
@@ -1007,6 +1011,7 @@ export class FigureLibrary {
         isPair: isPairClipName,
         pairRoot: extractRootPath,
       });
+      this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${c.role ? `${c.kind}__${c.role}` : c.kind}\0${c.set ?? ''}`, JSON.stringify(c)]));
       this.clipIndex = committed.index;
       this.pairRoots = committed.pairRoots as Map<string, RootPath>;
       if (opts.only) await this.ensureFallbackPool(opts);
@@ -1018,6 +1023,96 @@ export class FigureLibrary {
       this.settle();
     }
     return this.state === 'ready';
+  }
+
+  private clipRevision?: string;
+  private clipListing: import('../api').ApiClip[] = [];
+  private clipEpoch = 0;
+  private parseReloadClip?: (buf: ArrayBuffer, url: string) => Promise<THREE.AnimationClip | null>;
+  private clipPreparation: Promise<void> | null = null;
+  private reloadInFlight: Promise<boolean> | null = null;
+  private reloadAgain = false;
+  private reloadTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Trailing one-second debounce; an in-flight fetch gets one follow-up. */
+  requestClipReload(): void {
+    if (this.reloadInFlight) { this.reloadAgain = true; return; }
+    clearTimeout(this.reloadTimer);
+    this.reloadTimer = setTimeout(() => { void this.reloadClips(); }, 1000);
+  }
+
+  reloadClips(): Promise<boolean> {
+    if (this.reloadInFlight) { this.reloadAgain = true; return this.reloadInFlight; }
+    this.reloadInFlight = (async () => {
+      await this.settled;
+      const library = await getAnimationClips();
+      if (!library.ok || library.revision === this.clipRevision) return false;
+      // Finish any old preparation before publishing the next generation.
+      await this.clipPreparation;
+      this.clipRevision = library.revision;
+      this.clipListing = library.clips;
+      setMovementPoses(library.movement_poses);
+      setClipTransitions(library.transition_clips);
+      this.clipEpoch++;
+      this.clipPreparation = null;
+      return true;
+    })().catch(e => { console.warn('[figures] clip reload failed', e); return false; }).finally(() => {
+      this.reloadInFlight = null;
+      if (this.reloadAgain) { this.reloadAgain = false; this.requestClipReload(); }
+    });
+    return this.reloadInFlight;
+  }
+
+  /** URLs are registered by reload; bytes are fetched on the next figure play. */
+  private prepareReloadClips(): Promise<void> {
+    return this.clipPreparation ??= (async () => {
+      const index = new Map<string, Map<string, THREE.AnimationClip>>();
+      const roots = new Map<string, RootPath>();
+      for (const source of this.clipListing) {
+        const kind = source.role ? `${source.kind}__${source.role}` : source.kind;
+        const set = source.set ?? '';
+        const previous = this.clipListingAtLoad.get(`${kind}\0${set}`);
+        let clip = previous === JSON.stringify(source) ? this.clipIndex.get(kind)?.get(set) : undefined;
+        if (!clip && this.parseReloadClip) {
+          try {
+            const res = await fetch(source.url);
+            if (!res.ok) throw new Error(String(res.status));
+            clip = await this.parseReloadClip(await res.arrayBuffer(), source.url) ?? undefined;
+            if (clip) {
+              clip.name = kind;
+              setClipLoop(clip, source.loop);
+              setClipRootMotion(clip, !!source.root_motion && source.root_motion.mode !== 'strip', source.root_motion?.mode);
+              setClipHeightOffsets(clip, source.height_offsets_cm);
+            }
+          } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
+        }
+        if (!clip) continue;
+        if (!index.has(kind)) index.set(kind, new Map());
+        index.get(kind)!.set(set, clip);
+        if (isPairClipName(kind)) roots.set(kind, extractRootPath(clip));
+      }
+      this.clipIndex = index;
+      this.pairRoots = roots;
+      this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${c.role ? `${c.kind}__${c.role}` : c.kind}\0${c.set ?? ''}`, JSON.stringify(c)]));
+    })();
+  }
+  private clipListingAtLoad = new Map<string, string>();
+
+  private makeFigure(name: string, model: LoadedModel): Figure {
+    const figure = new Figure(model);
+    let epoch = 0;
+    let preparing = false;
+    figure.prepareClips = () => {
+      if (epoch === this.clipEpoch || preparing || model.noClips || model.ownClips === undefined) return;
+      preparing = true;
+      const wanted = this.clipEpoch;
+      void this.prepareReloadClips().then(async () => {
+        const fit = await this.fitLibraryAsync(name, model.template, model.ownClips ?? [], model.scale);
+        figure.replaceClips([...(model.ownClips ?? []), ...fit.extra]);
+        epoch = wanted;
+      }).catch(e => console.warn('[figures] clip refit failed', e)).finally(() => { preparing = false; });
+    };
+    return figure;
   }
 
   private ensureFallbackPool(opts: { only?: string } = {}): Promise<void> {
@@ -1101,6 +1196,7 @@ export class FigureLibrary {
       // (Soldier, Xbot, Robot) keeps those and takes swim, yoga and the rest
       // of the library on top. Its own clips win for their own kinds.
       await nextFrame();
+      m.ownClips ??= [...m.clips];
       const fit = await this.fitLibraryAsync(m.name, m.template, m.clips, m.scale);
       m.libraryFits = fit.fits;
       if (fit.extra.length) {
@@ -1655,6 +1751,7 @@ export class FigureLibrary {
       markPhase('model:build', performance.now() - buildStart);
       await nextFrame();
       await this.settled;
+      model.ownClips ??= [...model.clips];
       const fit = await this.fitLibraryAsync(name, template, model.clips, model.scale);
       buildStart = performance.now();
       model.libraryFits = fit.fits;
@@ -1667,7 +1764,7 @@ export class FigureLibrary {
   /** Model choice: server model > manifest assignment > pool (demo world). */
   instantiate(charName: string): Figure | null {
     const api = this.apiModels.get(charName);
-    if (api) return new Figure(api);
+    if (api) return this.makeFigure(charName, api);
     if (api === undefined) this.fetchCharacterModel(charName);   // kick off the load
     // api === null (the server has none) or not loaded yet: on to the manifest
     // assignment/pool — the portrait fallback is the last resort.
@@ -1692,7 +1789,7 @@ export class FigureLibrary {
       const rnd = seededRandom('model:' + charName);
       model = pool[Math.floor(rnd() * pool.length)];
     }
-    return new Figure(model);
+    return this.makeFigure(charName, model);
   }
 }
 
@@ -2048,6 +2145,22 @@ export class Figure {
     this.play(poseClip('standing'));
   }
 
+  prepareClips?: () => void;
+  private disposed = false;
+
+  /** Replace the vocabulary only. Current and bridge actions keep ownership. */
+  replaceClips(clips: THREE.AnimationClip[]): void {
+    if (this.disposed) return;
+    this.actions.clear();
+    const byName = new Map(clips.map(c => [c.name.toLowerCase(), c]));
+    for (const [kind, clip] of byName) this.actions.set(kind, this.mixer.clipAction(clip));
+    for (const [kind, needles] of Object.entries(CLIP_SYNONYMS)) {
+      if (this.actions.has(kind)) continue;
+      const name = resolveClipName([...byName.keys()], needles);
+      if (name) this.actions.set(kind, this.mixer.clipAction(byName.get(name)!));
+    }
+  }
+
   get currentClip(): string | null { return this.currentKind; }
 
   /** A journey's activity_animation names its holding departure clip directly. */
@@ -2145,6 +2258,7 @@ export class Figure {
    *  caller's decision (`walk.sinkForState`); the two are different numbers
    *  because a swimmer lies flat and a treader hangs upright. */
   play(rawKind: ClipKind, terrainClip = false, sink = 0, surfaceGroup?: string) {
+    this.prepareClips?.();
     const kind = (rawKind || poseClip('standing')).toLowerCase();
     // A bridge is running: let it finish. Cutting it short is the abruptness
     // this exists to remove, and a figure that changes its mind mid-standup
@@ -2518,6 +2632,8 @@ export class Figure {
    *  itself is retired). The ghost's materials, the mixer's bindings and the
    *  skeleton's bone texture are per figure, and those go here. */
   dispose() {
+    this.disposed = true;
+    this.prepareClips = undefined;
     this.secondary.dispose();
     this.ghost.dispose();
     // The mixer's bindings hold the clone bone by bone; without this they keep

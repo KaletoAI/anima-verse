@@ -581,6 +581,7 @@ export interface ApiClip {
 
 /** Server clip library, resolved movement poses and clip-keyed transitions. */
 export interface ApiClipLibrary {
+  revision?: string;
   ok: boolean;
   clips: ApiClip[];
   /** Fixed movement poses resolved by the server, including public fallbacks. */
@@ -595,7 +596,7 @@ export async function getAnimationClips(): Promise<ApiClipLibrary> {
     const res = await fetch('/assets/animation-clips');
     if (!res.ok) return empty;
     const data = await res.json();
-    return {ok: true, clips: (data.clips ?? []) as ApiClip[],
+    return {ok: true, revision: data.revision, clips: (data.clips ?? []) as ApiClip[],
       movement_poses: data.movement_poses && typeof data.movement_poses === 'object'
         ? data.movement_poses : null,
       transition_clips: Array.isArray(data.transition_clips) ? data.transition_clips : []};
