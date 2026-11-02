@@ -287,6 +287,11 @@ export interface NpcState {
   committedPropKey?: string;
 }
 
+/** Plain walkable ground: no water, no sink. The default before the map hands in its
+ *  ground reader, and what a route on its own floor (`route.floorY`) walks on. */
+const PLAIN_FLOOR_MOVE: GroundMove = { movement: 'walk_run', scope: 'wilderness', speed: 1,
+  sink: { move: 0, idle: 0 }, water: null, swimFrom: SWIM_FROM_DEFAULT_M };
+
 export class NpcManager {
   onPropEntryError: ((message: string) => void) | null = null;
   group = new THREE.Group();
@@ -329,10 +334,7 @@ export class NpcManager {
    * and a tiled hall standing in that lake is walked and stood in. The default
    * is the world without painted ground: walk, run and idle as always.
    */
-  private groundMoveAt: (x: number, z: number) => GroundMove =
-    () => ({ movement: 'walk_run', scope: 'wilderness', speed: 1,
-      sink: { move: 0, idle: 0 }, water: null,
-      swimFrom: SWIM_FROM_DEFAULT_M });
+  private groundMoveAt: (x: number, z: number) => GroundMove = () => PLAIN_FLOOR_MOVE;
 
   /**
    * The PLACE a pair anchor names (§ A8a: `anchor.place_id`), looked up in
@@ -951,7 +953,8 @@ export class NpcManager {
             npc.route.shownM = a.shownM;
             if (a.snap === 'back') {
               const at = pointAtDistance(npc.route.points, a.shownM)!;
-              npc.root.position.set(at[0], (npc.route.exact ? npc.route.floorY ?? this.roomStandAt(npc.name, at[0], at[1]) : null)
+              npc.root.position.set(at[0], npc.route.floorY
+                ?? (npc.route.exact ? this.roomStandAt(npc.name, at[0], at[1]) : null)
                 ?? this.groundY(at[0], at[1]), at[1]);
               npc.figure?.resetSecondaryMotion();
               this.syncCounters.travBack += 1;
@@ -1768,7 +1771,8 @@ export class NpcManager {
         // one the last poll reported: between two polls the figure covers
         // several metres of open country, and holding the poll's height would
         // have it walk into the hill and out of it again every three seconds.
-        const goalPos = new THREE.Vector3(at[0], this.groundY(at[0], at[1]), at[1]);
+        // A route with its own floor (`travel.floor_y`, an upper storey) walks that floor.
+        const goalPos = new THREE.Vector3(at[0], r.floorY ?? this.groundY(at[0], at[1]), at[1]);
         const rootYBefore = npc.root.position.y;
         const delta = goalPos.clone().sub(npc.root.position);
         delta.y = 0;
@@ -1780,7 +1784,8 @@ export class NpcManager {
         // (`delta.y = 0` above), so deciding the pose before the height is not
         // a circle.
         const travelling = d > 0.02 || (r.shownM < r.totalM && (rateAt(r.points, r.paces, r.shownM) ?? 0) > 0);
-        const raw = this.groundMoveAt(at[0], at[1]);
+        // An indoor floor is plain floor: the terrain's water, sand or snow under the building says nothing about it.
+        const raw = r.floorY != null ? PLAIN_FLOOR_MOVE : this.groundMoveAt(at[0], at[1]);
         // TWO REACH RULES, in order: the SCOPE (a built place replaces the
         // ground with its floor) and, since W4c, the WATER DEPTH under the
         // figure — shallower than the kind's `swim_from_m` the ground says

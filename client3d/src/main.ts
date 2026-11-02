@@ -2672,8 +2672,10 @@ async function startApp(username: string, role: string) {
       const tile = exact ? tileAt(at[0], at[1]) : null;
       const localAt = tile ? worldToTile(tile, at[0], at[1]) : null;
       // The server's floor_y is the bare floor; the walking clearance comes on top, as for every room floor.
-      const floorY = exact ? (tr.floor_y != null ? tr.floor_y + WALK_CLEARANCE_M : null) ?? (tile && localAt
-        ? roomStandY(tile, c.room_id ?? '', localAt.x, localAt.z) : null) ?? undefined : undefined;
+      // An ordinary route walks it too: a withheld local route (an NPC getting up from a seat) must not
+      // fall to the terrain under the building.
+      const floorY = (tr.floor_y != null ? tr.floor_y + WALK_CLEARANCE_M : null) ?? (exact && tile && localAt
+        ? roomStandY(tile, c.room_id ?? '', localAt.x, localAt.z) : null) ?? undefined;
       return {
         char: c,
         // Overland journeys sample world relief. Owned indoor motion stays on its

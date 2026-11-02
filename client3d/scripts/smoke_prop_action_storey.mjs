@@ -44,6 +44,26 @@ for (const floor of [9.4, undefined, 0]) {
   assert.equal(root.position.y, floor === undefined ? 9.4 : floor + 0.01, 'exact route never falls to terrain');
   assert.ok(root.position.x > .9 && root.position.x < 1.1, 'walk advances on the polyline');
 }
+// A withheld local route (an NPC getting up from a seat: the seat leg starts
+// inside the furniture) still walks the journey's own floor, never the terrain
+// under the building (fails on 6c23234e: pos.y 0, the figure fell to storey 0).
+for (const floor of [9.4, null]) {
+  const walker = {...char, name:'walker', local_approach:null, travel:{...char.travel, floor_y:floor}};
+  const state = routeFor(walker, 1, map);
+  const expected = floor === null ? 0 : floor + 0.01;
+  assert.equal(state.pos.y, expected, 'ordinary route stands on travel.floor_y (+ clearance), terrain without one');
+  assert.equal(state.route.floorY ?? 0, expected, 'route carries the floor to frame ticks');
+  const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
+  const root = new THREE.Group();
+  const npc = { name: walker.name, root, target: new THREE.Vector3(), figure: null,
+    sprite: null, label: {}, labelName: {}, labelActivity: {}, waypoints: [],
+    interaction: null, entry: null, bubbleUntil: 0, route: null, travelLine: null, travelKey: '' };
+  root.position.copy(state.pos);  // a figure appears where its first state puts it
+  mgr.npcs.set(walker.name, npc); mgr.update([state]);
+  mgr.setGroundHeight(() => 0); mgr.setRoomStandAt(() => 9.4);
+  for (let i = 0; i < 20; i++) mgr.tick(.1, 10);
+  assert.ok(Math.abs(root.position.y - expected) < 1e-6, `ordinary route keeps its floor while walking (${root.position.y})`);
+}
 // Arrival bypasses any ordinary walk-to-sit bridge. A failed live entry also
 // yields to authoritative place state rather than permanently hiding the avatar.
 const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
