@@ -145,11 +145,14 @@ export function OthersPanel() {
   // The world's two-person actions — fetched once; the clip library does not
   // change while a scene is being played.
   const [pairPoses, setPairPoses] = useState<PairPose[]>([])
+  // Why the avatar may not propose any of them (a block rule or a cost on
+  // the pair verb) — fetched with the list, "" = free to ask.
+  const [pairBlocked, setPairBlocked] = useState('')
   const [note, setNote] = useState('')
   useEffect(() => {
     let cancelled = false
-    apiGet<{ poses: PairPose[] }>('/play/interact/options')
-      .then((d) => { if (!cancelled) setPairPoses(d.poses || []) })
+    apiGet<{ poses: PairPose[]; blocked?: string }>('/play/interact/options')
+      .then((d) => { if (!cancelled) { setPairPoses(d.poses || []); setPairBlocked(d.blocked || '') } })
       .catch(() => { if (!cancelled) setPairPoses([]) })
     return () => { cancelled = true }
   }, [])
@@ -216,10 +219,11 @@ export function OthersPanel() {
             )}
             {pairPoses.map((pose) => {
               const busy = !!c.interaction && c.interaction.partner !== data.avatar
-              return <HoverHint key={pose.key} text={busy ? t('Busy with someone else') : undefined}>
-                <button type="button" className="player-chip" disabled={busy}
-                  aria-disabled={busy ? true : undefined}
-                  style={{ pointerEvents: busy ? 'none' : undefined }}
+              const off = busy || !!pairBlocked
+              return <HoverHint key={pose.key} text={busy ? t('Busy with someone else') : (pairBlocked || undefined)}>
+                <button type="button" className="player-chip" disabled={off}
+                  aria-disabled={off ? true : undefined}
+                  style={{ pointerEvents: off ? 'none' : undefined }}
                   onClick={() => propose(c.name, pose.key)}>
                   {pose.label || pose.key}
                 </button>

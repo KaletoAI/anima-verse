@@ -701,6 +701,20 @@ class Runs(unittest.TestCase):
             self.assertEqual(request(name, target)["reason"], "privacy")
             self.assertEqual(calls[-1][-1], False, "a start asks with offer=False")
             self.assertFalse(R.claims())
+            # P3: a blocked refusal stays in the menu with its reason ...
+            from app.core import prop_actions as PA
+            PA.invalidate_offers_cache()
+            rows = [o for o in PA.offers(name) if o["action_id"] == target["action_id"]]
+            self.assertTrue(rows and all(o["reason"] == "privacy" for o in rows), rows)
+        finally:
+            unregister_owned_providers("smoke-policy")
+        # ... "no_capability" (participation.NOT_OFFERED) leaves it out entirely.
+        register_provider("participation.check", lambda *a, **k: {"reason": "no_capability", "message": "x"},
+                          owner="smoke-policy", multiple=True)
+        try:
+            from app.core import prop_actions as PA
+            PA.invalidate_offers_cache()
+            self.assertEqual([o for o in PA.offers(name) if o["action_id"] == target["action_id"]], [])
         finally:
             unregister_owned_providers("smoke-policy")
 

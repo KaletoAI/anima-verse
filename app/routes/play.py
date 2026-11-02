@@ -1932,6 +1932,10 @@ def play_interact_options(user=Depends(get_current_user)):
     Also empty when no package supplies the ``pair_verb_name`` capability:
     without the verb an NPC has no way to agree, so proposing a pair would
     be an offer nobody could ever accept.
+
+    ``blocked`` is why the avatar cannot propose any of them right now — a
+    block rule or a cost shortfall on the pair verb (``skill_gate``), the
+    same check ``/play/interact`` refuses with; "" = free to ask.
     """
     from app.core.hooks import get_provider
     from app.core.interaction_engine import partner_poses
@@ -1940,9 +1944,32 @@ def play_interact_options(user=Depends(get_current_user)):
     from app.core.pose_catalog import pose_label
     from app.models.character import get_character_language
     from app.models.account import get_active_character
-    lang = get_character_language(get_active_character() or "")
+    avatar = get_active_character() or ""
+    lang = get_character_language(avatar)
     return {"poses": [{"key": k, "kind": kind, "label": pose_label(k, lang)}
-                      for k, kind in partner_poses()]}
+                      for k, kind in partner_poses()],
+            "blocked": _interact_blocked(avatar) if avatar else ""}
+
+
+def _interact_blocked(avatar: str) -> str:
+    """The pair verb's block rule or cost shortfall for the avatar ("" =
+    allowed, or no package declares the route)."""
+    from app.core.dependencies import get_skill_manager
+    from app.core.skill_gate import blocked_reason
+    skill = next((s for s in get_skill_manager().skills
+                  if getattr(s, "PLAYER_ACTION", "") == "interact"), None)
+    return blocked_reason(avatar, skill.SKILL_ID) if skill is not None else ""
+
+
+def _interact_charge(avatar: str) -> None:
+    """Book the pair verb's costs once the avatar's ask or yes went through
+    — like the NPC verb, whose successful call pays (``skill_gate.run_tool``)."""
+    from app.core.dependencies import get_skill_manager
+    from app.core.skill_gate import charge
+    skill = next((s for s in get_skill_manager().skills
+                  if getattr(s, "PLAYER_ACTION", "") == "interact"), None)
+    if skill is not None:
+        charge(avatar, skill.SKILL_ID)
 
 
 @router.post("/play/interact")
@@ -1976,6 +2003,12 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="partner and pose required")
     if pose not in dict(IE.partner_poses()):
         raise HTTPException(status_code=400, detail="not a two-person action")
+    # The NPC's verb runs through the skill gate; the avatar's route does too
+    # (block rules, costs — asking and answering alike). A plain string
+    # detail: the panel shows it as it is.
+    gated = _interact_blocked(avatar)
+    if gated:
+        raise HTTPException(status_code=409, detail=gated)
     # The partner asked first: the avatar's proposal IS its acceptance —
     # the same brake the verb applies between two NPCs.
     open_ask = IE.find_pending_invite(partner, avatar, pose)
@@ -1984,6 +2017,7 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         if res.get("status") not in ("started", "approaching"):
             raise HTTPException(status_code=409,
                                 detail=res.get("reason") or res.get("status"))
+        _interact_charge(avatar)
         return {"ok": True, "status": res["status"], "partner": partner,
                 "pose": pose}
     blocked = IE.check_can_pair(avatar, partner, pose)
@@ -1994,6 +2028,7 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     invite_id = IE.create_invite(avatar, partner, pose)
     if not invite_id:
         raise HTTPException(status_code=409, detail="could not ask")
+    _interact_charge(avatar)
     row = IE.get_invite(invite_id) or {}
     invite_status = str(row.get("status") or "")
     out = {"ok": True, "status": "asked", "partner": partner, "pose": pose,
@@ -2029,11 +2064,17 @@ def _play_interact_respond_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     inv = IE.get_invite(invite_id)
     if not inv or inv.get("invitee") != avatar:
         raise HTTPException(status_code=404, detail="invite not found")
+    # A yes uses the pair verb (block rules, costs); a no is always possible.
+    gated = _interact_blocked(avatar) if accept else ""
+    if gated:
+        raise HTTPException(status_code=409, detail=gated)
     res = IE.resolve_invite(invite_id, accept)
     if res["status"] == "not_found":
         raise HTTPException(status_code=404, detail="invite not found")
     if res["status"] == "cannot":
         raise HTTPException(status_code=409, detail=res.get("reason") or "cannot")
+    if accept and res["status"] in ("started", "approaching"):
+        _interact_charge(avatar)
     if res["status"] == "approaching":
         # Yes was said and the walk has begun — not a refusal, so not a 409.
         return {"ok": True, "status": "approaching", "partner": inv["inviter"],

@@ -61,6 +61,8 @@ def _record_answer(invite_id: str, accepted: bool) -> None:
 
 class InteractSkill(PluginSkill):
     SKILL_ID = "interact"
+    # The avatar's /play/interact goes through the same block rules and costs.
+    PLAYER_ACTION = "interact"
 
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):
         super().__init__(config, ctx)
@@ -112,7 +114,11 @@ class InteractSkill(PluginSkill):
         if any(name != character_name and not check_can_pair(character_name, name)
                for name in list_available_characters()):
             # The second tuple member is an animation kind, not a display label.
-            lines += list(dict.fromkeys(key for key, _kind in partner_poses()))
+            # A pose a package rules out for this character entirely
+            # (``participation.offered``) is not on the menu at all.
+            from app.core.participation import offered
+            lines += [key for key in dict.fromkeys(key for key, _kind in partner_poses())
+                      if offered("pose", key, [character_name])]
         return lines[:20]
 
     def as_tool(self, **kwargs) -> ToolSpec:

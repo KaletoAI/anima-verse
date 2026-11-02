@@ -141,7 +141,7 @@ propApi.setPropActionHost(false);
 console.log('PASS hosted prop panel snapshot through actual usePropActions hook');
 
 // Reasons a package answers through ``participation.check`` (presence "policy").
-for (const code of ['privacy']) {
+for (const code of ['privacy', 'sated', 'no_capability']) {
   assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
   assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
 }

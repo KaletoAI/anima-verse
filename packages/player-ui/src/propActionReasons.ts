@@ -53,6 +53,8 @@ const REASONS: Record<string, string> = {
   // A package's participation rule (``participation.check``): the
   // characters' own privacy setting does not allow the people present.
   privacy: "Not with others here — someone involved keeps this private",
+  sated: "Someone involved is still sated — not now",
+  no_capability: "Someone involved does not take part in this",
   slot_claim_lost: "The reserved place is no longer available",
   approach_target_changed: "The furniture access changed; try again",
   access_position_lost: "A participant moved away from the furniture access",

@@ -848,9 +848,15 @@ registration order wins; a raising provider is logged and skipped. The furniture
 path returns the code as the run's reason (a new code needs a player text in
 `packages/player-ui/src/propActionReasons.ts`), the pose path the message.
 
+The code `no_capability` (`participation.NOT_OFFERED`) means a participant cannot
+do this at all: the furniture menu leaves such an action out (for the actor
+alone, or drops that partner), the pair verb's menu leaves out such a pose.
+Every other refusal stays listed, blocked, with its reason.
+
 | Function | Semantics |
 |---|---|
 | `app.core.participation.check(kind, key, members, location_id, room_id, *, offer=False) -> dict` | `{}` or the first refusal `{reason, message}` (a refusal without message carries its code as message) |
+| `app.core.participation.offered(kind, key, members, location_id="", room_id="") -> bool` | Whether a menu lists the entry at all: False only for a `NOT_OFFERED` refusal (asked with `offer=True`) |
 | `app.core.participation.onlookers(members, location_id, room_id) -> list[str]` | The PEOPLE besides `members` who are there: the room inside a location, everyone within earshot of a member in the open (`perception.addressable_for`); not humanoid = nobody. Sorted |
 
 ## Abschluss-Clip einer laufenden Aktion — `app.core.prop_action_engine` ✅
@@ -1189,9 +1195,11 @@ alle Tool-Namen mit einem gesetzten Flag) — im Manifest setzbar:
 `SINGLETON`, `SUPPRESS_IN_PERSON`, `CASCADE_BRAKE`, `SEARCH_INTENT`,
 `DELIVERS_SPEECH`, `USER_NOTIFICATION`, `REMOTE_COMM`, `PROGRESS_TYPE`
 (`skill_manager.progress_type_for_tool(tool_name)`).
-`PLAYER_ACTION` (class attribute, e.g. `"travel"`, `"scene_photo"`) names the
+`PLAYER_ACTION` (class attribute, e.g. `"travel"`, `"scene_photo"`, `"interact"`) names the
 /play action a skill stands behind, so the player route is gated and charged
-by that skill without the core naming it.
+by that skill without the core naming it (`"interact"`: `/play/interact` and a
+yes on `/play/interact/respond`; `/play/interact/options` carries the block
+reason as `blocked`).
 
 Nur als **Klassenattribut** (sie ändern den Ausführungszeitpunkt, nicht bloß Metadaten):
 `ALWAYS_LOAD`, `DEFERRED` (Tool läuft erst nach der Chat-Antwort),

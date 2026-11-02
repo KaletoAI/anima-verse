@@ -14,6 +14,10 @@ called as ``fn(kind, key, members, location_id, room_id, *, offer=False)``.
 A provider answers ``""`` (none of its business, or allowed) or
 ``{"reason": <code>, "message": <English sentence for the LLM>}``. The first
 refusal wins, in registration order; a provider that raises is skipped.
+
+One code has a meaning of its own: ``NOT_OFFERED`` ("no_capability") says a
+participant cannot do this at all — menus leave such an entry out instead of
+showing it blocked (``offered``). Every other refusal is shown with its reason.
 """
 from typing import Dict, Iterable, List
 
@@ -22,6 +26,8 @@ from app.core.log import get_logger
 logger = get_logger("participation")
 
 CAPABILITY = "participation.check"
+#: the refusal that hides an entry from menus instead of greying it out
+NOT_OFFERED = "no_capability"
 
 
 def check(kind: str, key: str, members: Iterable[str], location_id: str, room_id: str,
@@ -42,6 +48,13 @@ def check(kind: str, key: str, members: Iterable[str], location_id: str, room_id
             return {"reason": got["reason"],
                     "message": message if isinstance(message, str) and message else got["reason"]}
     return {}
+
+
+def offered(kind: str, key: str, members: Iterable[str], location_id: str = "",
+            room_id: str = "") -> bool:
+    """Whether a menu lists the entry at all: every refusal but
+    ``NOT_OFFERED`` still lists it (blocked, with its reason)."""
+    return check(kind, key, members, location_id, room_id, offer=True).get("reason") != NOT_OFFERED
 
 
 def onlookers(members: Iterable[str], location_id: str, room_id: str) -> List[str]:

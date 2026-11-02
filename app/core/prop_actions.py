@@ -412,6 +412,11 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
         if place.get("placement_id") and place.get("slots"):
             d = math.dist((here["x"], here["z"]), places.centre_of(place))
             distance[place["placement_id"]] = min(d, distance.get(place["placement_id"], d))
+    from app.core import participation
+    # Whether the actor can do a "policy" action at all, once per pose key:
+    # a package that says "never" (``participation.NOT_OFFERED``) hides the
+    # entry instead of greying it out — on every piece of furniture alike.
+    actor_offered = {}
     result = []
     for placement in (recipe or {}).get("placements", []):
         pid = placement.get("prop_id", "")
@@ -428,17 +433,28 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             if (not pair and action.get("ability") != "pair"
                     and not engine.animated_for(actor, action, profile=query.profile(actor))):
                 continue
+            if action.get("presence") == "policy":
+                key = str(action.get("pose_key") or "")
+                if key not in actor_offered:
+                    actor_offered[key] = participation.offered(
+                        "prop_action", key, [actor], location_id, room_id)
+                if not actor_offered[key]:
+                    continue
             targets = []
             if pair:
                 for partner in present:
                     checked = engine.check(actor, target, action["id"], revision, partner, _query=query,
                                            offer=True)
-                    targets.append(dict(partner=partner, **checked))
+                    # A partner who cannot do this at all is no partner for it.
+                    if checked["reason"] != participation.NOT_OFFERED:
+                        targets.append(dict(partner=partner, **checked))
                 checked = next((t for t in targets if t["enabled"]), None)
                 if checked is None:
                     checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
             else:
                 checked = engine.check(actor, target, action["id"], revision, _query=query, offer=True)
+                if checked["reason"] == participation.NOT_OFFERED:
+                    continue
             result.append(dict(action_id=action["id"], definition_revision=revision,
                                placement_id=target["placement_id"], variant_uid=target["variant_uid"],
                                prop_label=localized(document, "name", lang) or pid,

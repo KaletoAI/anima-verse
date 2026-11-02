@@ -26,6 +26,17 @@ more), no location. Fakes on ``participation.check``:
     furniture rule already) the provider is not asked again.
 [6] A refusal without a message falls back to its reason code; a provider
     answering a non-dict or an empty reason is no refusal.
+[7] offered(): no provider → True; a "privacy" refusal → True (listed,
+    blocked); "no_capability" (NOT_OFFERED) → False; the menu question is
+    asked with offer=True.
+[8] The pair verb's menu (interact package, decision_menu): partner poses
+    hug and wave, B pairable; a provider answering no_capability for hug
+    leaves exactly ["wave"]; without it both are listed.
+[9] The avatar's route (P3, part C): with a block rule on the pair verb
+    ("Not tonight"), /play/interact/options carries blocked "Not tonight",
+    /play/interact answers 409 "Not tonight" and creates no invitation; a
+    yes on /play/interact/respond answers 409 too, a no still goes through.
+    Without the rule options carry blocked "" and the ask is recorded.
 """
 import os
 from pathlib import Path
@@ -133,6 +144,72 @@ def main():
             unregister_owned_providers(owner)
         for owner in ('t_quiet', 't_boom'):
             unregister_owned_providers(owner)
+
+        print('[7] offered')
+        check('no provider', participation.offered('pose', 'hug', ['A']), True)
+        seen = []
+
+        def answer(code):
+            def fn(kind, key, members, location_id, room_id, *, offer=False):
+                seen.append(offer)
+                return {"reason": code, "message": code}
+            return fn
+        register_provider(participation.CAPABILITY, answer('privacy'), owner='t_o', multiple=True)
+        check('privacy is listed', participation.offered('pose', 'hug', ['A']), True)
+        check('asked as offer', seen[-1], True)
+        unregister_owned_providers('t_o')
+        register_provider(participation.CAPABILITY, answer('no_capability'), owner='t_o', multiple=True)
+        check('no_capability is not', participation.offered('pose', 'hug', ['A']), False)
+        unregister_owned_providers('t_o')
+
+        print('[8] the pair verb menu')
+        from plugins.interact.skill import InteractSkill
+        from app.plugins.context import PluginContext
+        verb = InteractSkill({}, PluginContext('interact'))
+
+        def hug_never(kind, key, members, location_id, room_id, *, offer=False):
+            return {"reason": "no_capability", "message": "x"} if key == 'hug' else ""
+        with patch('app.core.interaction_engine.partner_poses',
+                   return_value=[('hug', 'k1'), ('wave', 'k2')]):
+            check('both', [l for l in verb.decision_menu('A') if l in ('hug', 'wave')], ['hug', 'wave'])
+            register_provider(participation.CAPABILITY, hug_never, owner='t_menu', multiple=True)
+            check('hug left out', [l for l in verb.decision_menu('A') if l in ('hug', 'wave')], ['wave'])
+            unregister_owned_providers('t_menu')
+
+        print('[9] the avatar route')
+        from fastapi import HTTPException
+        from app.routes import play
+        from app.core import interaction_engine as IE2
+
+        class _SM:
+            skills = [verb]
+        rows_before = len(IE2.pending_invites_for('B'))
+        with patch('app.core.dependencies.get_skill_manager', return_value=_SM()), \
+                patch('app.models.account.get_active_character', return_value='A'), \
+                patch('app.routes.play._require_avatar', return_value='A'), \
+                patch('app.core.hooks.get_provider', return_value=lambda: 'Interact'), \
+                patch('app.core.interaction_engine.partner_poses', return_value=[('hug', 'k1')]):
+            with patch('app.core.skill_gate.blocked_reason', return_value='Not tonight'):
+                check('options blocked', play.play_interact_options(user={})['blocked'], 'Not tonight')
+                try:
+                    play._play_interact_sync({'partner': 'B', 'pose': 'hug'})
+                    check('ask refused', 'asked', 409)
+                except HTTPException as e:
+                    check('ask refused', (e.status_code, e.detail), (409, 'Not tonight'))
+                check('no invitation', len(IE2.pending_invites_for('B')), rows_before)
+            check('options free', play.play_interact_options(user={})['blocked'], '')
+            got = play._play_interact_sync({'partner': 'B', 'pose': 'hug'})
+            check('asked', got.get('status'), 'asked')
+            inv = IE2.create_invite('B', 'A', 'hug')
+            with patch('app.core.skill_gate.blocked_reason', return_value='Not tonight'):
+                try:
+                    play._play_interact_respond_sync({'invite_id': inv, 'accept': True})
+                    check('yes refused', 'accepted', 409)
+                except HTTPException as e:
+                    check('yes refused', (e.status_code, e.detail), (409, 'Not tonight'))
+                with patch('app.core.agent_loop.get_agent_loop'):
+                    got = play._play_interact_respond_sync({'invite_id': inv, 'accept': False})
+                check('no still goes through', got.get('status'), 'declined')
 
     print('\nFAILED: ' + ', '.join(FAILS) if FAILS else '\nall checks passed')
     return 1 if FAILS else 0
