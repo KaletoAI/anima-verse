@@ -1634,14 +1634,15 @@ async def imagegen_backend_models(backend_name: str,
         _want_type = "video"
     elif api_type == "openai_mesh":
         _want_type = "mesh"
-    elif api_type == "openai_mesh_animation":
+    elif api_type in ("openai_mesh_animation", "openai_motion_transition"):
         _want_type = "animation"
     else:
         _want_type = "image"
     try:
         if api_type in ("together", "openai_diffusion", "localai", "openai_chat",
                         "localai_video", "together_video", "openai_video",
-                        "openai_mesh", "openai_mesh_animation", "openai_upscale"):
+                        "openai_mesh", "openai_mesh_animation", "openai_motion_transition",
+                        "openai_upscale"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
             # api_key optional for localai/localai_video (LocalAI without auth);
             # gateway/Together need it

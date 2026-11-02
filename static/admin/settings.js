@@ -829,8 +829,12 @@ async function applyTaskPreset(preset) {
 function renderFields(fields, data, path, inItem = false) {
     let html = '';
     for (const [fKey, field] of Object.entries(fields)) {
-        const f = field.min_by_api_type && field.min_by_api_type[data?.api_type] !== undefined
+        // Per-type overrides of a shared field: its minimum and its prefilled default
+        // (a MotionBricks backend must not be prefilled with UniMate's licence).
+        let f = field.min_by_api_type && field.min_by_api_type[data?.api_type] !== undefined
             ? {...field, min: field.min_by_api_type[data.api_type]} : field;
+        if (f.default_by_api_type && f.default_by_api_type[data?.api_type] !== undefined)
+            f = {...f, default: f.default_by_api_type[data.api_type]};
         if (!inItem && ONLY_OVERRIDES && originOf(path + '.' + fKey) !== 'instance') continue;
         // Schema-level visibility: a field with `applicable_for` is only shown
         // when `data.api_type` is in the list. While no api_type is set, the
