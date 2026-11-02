@@ -94,7 +94,7 @@ import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
-import { placeAtLocation } from './game/npcPlacement';
+import { placeAtLocation, RoomPositionDiagnostics } from './game/npcPlacement';
 import { bootStatus } from './ui';
 import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
 import { connectSceneSide, pointInRects, postMessageTransport } from './hud/bridge';
@@ -2420,6 +2420,7 @@ async function startApp(username: string, role: string) {
    *  halves are needed to tell a real room change from a mere visibility
    *  change — see `game/placement.figureTransition` (finding B5). */
   const shownPlacement = new Map<string, ShownPlacement>();
+  const roomPositionDiagnostics = new RoomPositionDiagnostics(line => console.warn(line));
   /** The drawn room of a figure — `null` while it stands outside, and also
    *  while nothing has been drawn for it yet. */
   const shownRoomOf = (name: string): string | null =>
@@ -2846,9 +2847,9 @@ async function startApp(username: string, role: string) {
       // are its facing, lean, visibility and snap/route/stay. WHERE the figure
       // stands is the server's word twice over: a character the server SEATED
       // (plan-posen-plaetze.md § 4) carries `place`, looked up by marker ID; a
-      // character WITHOUT a place stands on its own `pos`, which the server
-      // picks INSIDE the room (§ A1.4, T4). The client chooses no room point of
-      // its own; the one HEIGHT question a payload point cannot answer — a
+      // character WITHOUT a place uses its own `pos` only inside its room,
+      // otherwise the room's existing centre rule. The HEIGHT question a
+      // payload point cannot answer — a
       // sitting or lying figure without a marker — is put on a surface sampled
       // off the furniture itself. Travellers never get here — `travellerState`
       // took them out of the grouping above (§ A11).
@@ -2859,6 +2860,7 @@ async function startApp(username: string, role: string) {
         shownOf: (name) => shownPlacement.get(name),
         seatOf: slotFor,
         roomStandY: (room, lx, lz) => roomStandY(tile, room, lx, lz),
+        stalePos: (name, room, point) => roomPositionDiagnostics.report(locId, name, room, point),
         // Stand on the building mesh's baked ground skin instead of sinking
         // into it at y=0.
         groundY: (x, z) => tileGroundY(tile, new THREE.Vector3(x, 0, z)),

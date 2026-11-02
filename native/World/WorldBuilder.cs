@@ -193,6 +193,7 @@ public sealed class LocationSlot
     {
         Frame = Stands.Frame, Width = Width, IsBuilding = IsBuilding, Fade = Fade.Fade, LevelFilter = LevelFilter,
         AlwaysVisibleRooms = Stands.AlwaysVisible, RoomCenters = Stands.RoomCenters, RoomLevels = Stands.RoomLevels,
+        RoomFloors = Stands.RoomFloors.ToDictionary(e => e.Key, e => e.Value),
         RoomMarkers = Places.Markers, RoomSitSpots = Stands.SitSpots, RoomLieSpots = Stands.LieSpots,
         Corridors = Figures.FigureStands.CorridorIds(Places),
     };

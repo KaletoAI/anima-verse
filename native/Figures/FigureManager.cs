@@ -227,6 +227,7 @@ public partial class FigureManager : Node3D
         _source = source;
         _height = height;
         _log = log;
+        _roomPositionDiagnostics = new RoomPositionDiagnostics(log);
         _strict = strict;
         Clips = new ClipLibrary(source, log, cache) { NextFrame = NextFrame };
     }
@@ -383,6 +384,7 @@ public partial class FigureManager : Node3D
     private Dictionary<string, MapPlace> _mapPlaces = new();
     /// <summary>main.ts <c>shownPlacement</c>: where each figure was drawn last (room, interior revealed).</summary>
     private readonly Dictionary<string, ShownPlacement> _shown = new();
+    private readonly RoomPositionDiagnostics _roomPositionDiagnostics;
     private double _placeClock;
     /// <summary>The placement pass interval (main.ts' <c>setInterval(…, 1000)</c> over <c>computeNpcStates(lastMap)</c>).</summary>
     public const double PlaceTickS = 1.0;
@@ -409,7 +411,8 @@ public partial class FigureManager : Node3D
             };
         }
         var plans = FigurePlacement.Plan(_rows, TileOf, _height.GroundAt, _shown,
-            id => _mapPlaces.TryGetValue(id, out var p) ? new Vec3(p.X, 0, p.Z) : null);
+            id => _mapPlaces.TryGetValue(id, out var p) ? new Vec3(p.X, 0, p.Z) : null,
+            _roomPositionDiagnostics.Report);
         _lastPlans = plans.ToDictionary(p => p.Name);
         Stats.Offmap = _rows.Count(r => !_lastPlans.ContainsKey(r.Name));
         Stats.Hidden = plans.Count(p => p.Hidden);

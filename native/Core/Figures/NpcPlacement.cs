@@ -30,6 +30,8 @@ public sealed class PlacementTile
     public IReadOnlySet<string> AlwaysVisibleRooms { get; init; } = new HashSet<string>();
     public IReadOnlyDictionary<string, Vec3> RoomCenters { get; init; } = new Dictionary<string, Vec3>();
     public IReadOnlyDictionary<string, int> RoomLevels { get; init; } = new Dictionary<string, int>();
+    /// <summary>The authoritative room's tile-local footprint, including upper storeys.</summary>
+    public IReadOnlyDictionary<string, RoomFloor> RoomFloors { get; init; } = new Dictionary<string, RoomFloor>();
     public IReadOnlyDictionary<string, Dictionary<string, PlaceEntry>> RoomMarkers { get; init; }
         = new Dictionary<string, Dictionary<string, PlaceEntry>>();
     public IReadOnlyDictionary<string, IReadOnlyList<Vec3>> RoomSitSpots { get; init; } = new Dictionary<string, IReadOnlyList<Vec3>>();
@@ -53,6 +55,8 @@ public sealed class PlacementContext
     public Func<PlaceEntry, int?, Vec3?> SeatOf { get; init; } = (e, slot) => PlaceSlots.SlotFor(e.Slots, slot);
     /// <summary>The standing height in a room at a TILE-LOCAL point (<c>tiles.roomStandY</c>), null = unknown.</summary>
     public Func<string, double, double, double?> RoomStandY { get; init; } = (_, _, _) => null;
+    /// <summary>The session owner deduplicates rejected pos diagnostics.</summary>
+    public Action<string, string, P2>? StalePos { get; init; }
     /// <summary>The ground a huddle figure stands on at a WORLD point (<c>tiles.tileGroundY</c>).</summary>
     public Func<double, double, double> GroundY { get; init; } = (_, _) => 0;
     /// <summary>The centre of a known location, null when unknown.</summary>
@@ -78,12 +82,25 @@ public sealed class LocaleCompare : IComparer<string>
     public int Compare(string? a, string? b) => string.Compare(a, b, CultureInfo.InvariantCulture, CompareOptions.None);
 }
 
+/// <summary>Session-owned diagnostics: repeated placement ticks and polls report each stale point only once.</summary>
+public sealed class RoomPositionDiagnostics(Action<string> log)
+{
+    private readonly HashSet<(string Location, string Name, string Room, P2 Point)> _seen = new();
+
+    public void Report(string location, string name, string room, P2 point)
+    {
+        if (_seen.Add((location, name, room, point)))
+            log(FormattableString.Invariant($"[figures] {name}: pos ({point.X},{point.Z}) outside room {room} — placed in the room"));
+    }
+}
+
 /// <summary>
 /// WHERE THE FIGURES OF ONE LOCATION ARE DRAWN — client3d/src/game/npcPlacement.ts (<c>huddleOffset</c>,
 /// <c>placeAtLocation</c>), the room ladder of <c>main.computeNpcPlacements</c>; checked against
 /// shared/test-vectors/npc_placement.json. Rows sorted by <see cref="LocaleCompare"/> (a stable sort, like
 /// <c>Array.sort</c>); per character: in a revealed room seat &gt; sit/lie pool &gt; corridor stand &gt; server
-/// <c>pos</c> at the room's standing height &gt; room centre; otherwise the huddle on the tile ground. Facing towards the
+/// <c>pos</c> inside its room hull (0.3 m tolerance) at the room's standing height &gt; room centre;
+/// otherwise the huddle on the tile ground. Facing towards the
 /// movement target's place; hidden on another storey or in a closed interior; transition from the last placement.
 /// </summary>
 public static class NpcPlacement
@@ -160,16 +177,23 @@ public static class NpcPlacement
                     branch = "corridor";
                     pos = centre;
                 }
-                else if (c.Pos is { } at)
-                {
-                    branch = "pos";
-                    var local = SceneView.WorldToTile(tile.Frame, at.X, at.Z);
-                    pos = new Vec3(at.X, ctx.RoomStandY(inRoom, local.X, local.Z) ?? centre.Y, at.Z);
-                }
                 else
                 {
                     branch = "centre";
                     pos = centre;
+                    if (c.Pos is { } at)
+                    {
+                        var local = SceneView.WorldToTile(tile.Frame, at.X, at.Z);
+                        // The row's room owns the footprint on its storey; a floor-height lookup is not containment.
+                        if (double.IsFinite(at.X) && double.IsFinite(at.Z)
+                            && tile.RoomFloors.TryGetValue(inRoom, out var floor)
+                            && SceneView.PolygonDistance(local.X, local.Z, floor.Hull) <= 0.3)
+                        {
+                            branch = "pos";
+                            pos = new Vec3(at.X, ctx.RoomStandY(inRoom, local.X, local.Z) ?? centre.Y, at.Z);
+                        }
+                        else ctx.StalePos?.Invoke(c.Name, inRoom, at);
+                    }
                 }
             }
             else

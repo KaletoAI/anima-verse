@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -23,6 +24,7 @@ namespace AnimaNative.Check;
 ///      back onto their seats;
 ///   P4 the fallback pool (ruling P3-R10): no character has a model → the browser's manifest models, the seeded pick
 ///      over the rigs the library fits (Soldier / Xbot; the Robot's own bones do not take the library).
+///   P98 a stale room point falls back, valid/threshold points stay, and NPC/avatar arrival logs once across polls.
 /// </summary>
 public static class PlacementCheck
 {
@@ -35,6 +37,7 @@ public static class PlacementCheck
         var world = new Node3D { Name = "PlacementWorld" };
         host.AddChild(world);
         var builder = new WorldBuilder(source, line => GD.Print("[check-placement] " + line), strict: true);
+        var figureLines = new List<string>();
         FigureManager? mgr = null;
         try
         {
@@ -59,7 +62,9 @@ public static class PlacementCheck
             Expect("P0 bench re-derived from the hall floor", bench.All(s => Math.Abs(s.Y - 4.096875) < 1e-6), $"{bench[0].Y}");
             NearV("P0 bed marker (prop, composed)", inn.Places.Markers["r-bed"]["bed1"].Slots[0], 64, 4.503125, 125);
 
-            mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-placement] " + line), strict: true)
+            mgr = new FigureManager(source, builder.Height!, line => {
+                figureLines.Add(line); GD.Print("[check-placement] " + line);
+            }, strict: true)
             {
                 ClipFit = ClipFitMode.OnDemandSync,
                 AutoTick = false, Slots = () => builder.Slots,
@@ -129,7 +134,39 @@ public static class PlacementCheck
                    && ada.ClipKinds.Contains("stand-relaxed"), string.Join(",", ada.ClipKinds));
             Expect("P4 tag over the pool height", ada.TagHeight is { } th && Math.Abs(th - 1.7) < 1e-9, $"{ada.TagHeight}");
 
-            return $"placement P1..P4 ok (seated {s.Seated}, hidden {s.Hidden}, pool {mgr.Stats.PoolFigures}, picks {picks})";
+            // Task 98 uses the same literal two-room cases as Core and the browser smoke.
+            using var staleFixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "stale_positions.json")));
+            foreach (bool own in new[] { false, true })
+            {
+                var check = mgr;
+                check.PrepareAvatarPlacement = builder.PrepareAvatarArrival;
+                foreach (var c in staleFixture.RootElement.GetProperty("cases").EnumerateArray())
+                {
+                    using var empty = JsonDocument.Parse("{\"characters\":[]}");
+                    await check.Apply(empty.RootElement);
+                    figureLines.Clear();
+                    string name = own ? "Tess Vale" : "Room check";
+                    using var map = JsonDocument.Parse(JsonSerializer.Serialize(new
+                    {
+                        avatar = own ? name : "", characters = new[] { new {
+                            name, location_id = "loc-inn", room_id = "r-bed", pos = c.GetProperty("pos") } }
+                    }));
+                    if (own) inn.Fade.Snap(0);
+                    await check.Apply(map.RootElement);
+                    var expected = c.GetProperty("expected");
+                    Fig(check, name, c.GetProperty("branch").GetString()!, expected.GetProperty("x").GetDouble(),
+                        expected.GetProperty("y").GetDouble(), expected.GetProperty("z").GetDouble(), true);
+                    for (int repeat = 0; repeat < 3; repeat++)
+                    {
+                        check.TickPlacement();
+                        await check.Apply(map.RootElement);
+                    }
+                    Expect("P98 one diagnostic per stale point", figureLines.Count(l => l.Contains("outside room")) == c.GetProperty("logs").GetInt32(), string.Join("\n", figureLines));
+                    Expect("P98 authoritative room unchanged", check.LastPlans[name].InRoom == "r-bed", "");
+                }
+            }
+
+            return $"placement P1..P4 + P98 ok (8 room-point/arrival cases, picks {picks})";
         }
         finally
         {

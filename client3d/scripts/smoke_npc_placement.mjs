@@ -54,6 +54,8 @@
  * (104.5, 5.5, 53.5). Standing height: hall 0.1·lx + 2.01, loft none.
  * Huddle ground 0.01·x + 0.02·z + 1. Targets: market (120, 0, 60), house
  * (= the location itself) (100, 2, 50).
+ * Footprints in tile metres: hall [0,5] × [-4,0], loft [-4,1] × [1,5].
+ * These contain every standing point of the original placement cases.
  *
  * ============================================================================
  * [1] huddleOffset(isBuilding, width, index, count)
@@ -188,6 +190,7 @@ function tileOf(t) {
     fade: t.fade, levelFilter: t.levelFilter,
     alwaysVisibleRooms: new Set(t.alwaysVisibleRooms ?? []),
     roomCenters: mapOf(t.roomCenters), roomLevels: mapOf(t.roomLevels),
+    roomFloors: mapOf(t.roomFloors),
     roomMarkers: markers,
     roomSitSpots: mapOf(t.roomSitSpots), roomLieSpots: mapOf(t.roomLieSpots),
     corridors: (t.corridors ?? []).map((roomId) => ({ roomId })),

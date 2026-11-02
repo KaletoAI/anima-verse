@@ -1003,6 +1003,13 @@ poll), with each mounted location's view state NOW — interior fade (> 0.5 = re
 - `--check placement` (`Check/PlacementCheck.cs`, `fixtures/placement/`, README there) and `--offline` print a
   `offline placement <loc> open[…] closed[…]` census per location.
 
+Task 98: the standing `pos` rung accepts a server point only inside its authoritative room's footprint, with
+0.3 m tolerance at walls and door thresholds. A stale point uses the existing room centre; one `[figures] … outside
+room … — placed in the room` line is logged per figure/room/point per scene session. The own avatar's direct arrival
+uses the same rule after its room/storey is revealed. The shared rotated two-room cases in
+`fixtures/placement/stale_positions.json` run in Core/xUnit, `--check placement`, and
+`node client3d/scripts/smoke_room_position.mjs` (including the browser's production arrival and poll closures).
+
 ### NPC walking (Task 30)
 
 The browser's `NpcManager` walk (`client3d/src/scene/npcs.ts` `update`/`tick`, pure rules `game/npcWalk.ts`), ported

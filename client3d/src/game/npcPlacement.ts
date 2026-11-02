@@ -28,9 +28,9 @@
  *               ring only); `index` = position among the room mates of the
  *               sorted list;
  *      corridor the room is a storey corridor: its stand centre;
- *      pos      the server's own `pos`, at the room's standing height there
+ *      pos      the server's own `pos` inside the room hull (0.3 m tolerance), at its standing height there
  *               (`roomStandY`), else at the centre's height;
- *      centre   no point at all: the room's centre.
+ *      centre   no valid room point: the room's existing centre.
  *  - Otherwise the HUDDLE: `huddleOffset` in the tile frame, at
  *    `groundY` of the turned point.
  *  - FACING towards the movement target's place centre (y = 0) when the
@@ -48,6 +48,7 @@ import { animFamily } from '../scene/clipCoverage';
 import { tileDirToWorld, tileToWorld } from '../scene/sceneView';
 import { worldToLocalXZ } from '@anima/scene-render';
 import { figureTransition, type FigureTransition, type ShownPlacement } from './placement';
+import { polygonDistance, type Polygon } from './polygon';
 
 /** A WORLD-metre point. */
 export interface PlacementPoint { x: number; y: number; z: number }
@@ -83,6 +84,8 @@ export interface PlacementTile<M extends PlacementMarker = PlacementMarker> {
   /** Inventory, keyed by room id AND name like the tile's own maps. */
   roomCenters: ReadonlyMap<string, PlacementPoint>;
   roomLevels: ReadonlyMap<string, number>;
+  /** The authoritative room's footprint, in tile metres (including upper storeys). */
+  roomFloors: ReadonlyMap<string, { hull: Polygon }>;
   roomMarkers: ReadonlyMap<string, ReadonlyMap<string, M>>;
   roomSitSpots: ReadonlyMap<string, readonly PlacementPoint[]>;
   roomLieSpots: ReadonlyMap<string, readonly PlacementPoint[]>;
@@ -103,6 +106,8 @@ export interface PlacementContext<M extends PlacementMarker> {
   seatOf: (marker: M, slot: number | 'pair') => PlacementPoint | undefined;
   /** The standing height in a room at a tile-local point (`tiles.roomStandY`). */
   roomStandY: (room: string, lx: number, lz: number) => number | null;
+  /** Called only when the pos rung rejects a point; the session owner deduplicates diagnostics. */
+  stalePos?: (name: string, room: string, point: { x: number; z: number }) => void;
   /** The ground a huddle figure stands on at a world point (`tiles.tileGroundY`). */
   groundY: (x: number, z: number) => number;
   /** The centre of a known location (`places.get(id)?.center`). */
@@ -140,6 +145,18 @@ export function huddleOffset(isBuilding: boolean, width: number,
 }
 
 const copy = (p: PlacementPoint): PlacementPoint => ({ x: p.x, y: p.y, z: p.z });
+
+/** Session-owned deduplication, shared by NPC placement and the own avatar's arrival. */
+export class RoomPositionDiagnostics {
+  private readonly seen = new Set<string>();
+  constructor(private readonly log: (line: string) => void) {}
+  report(location: string, name: string, room: string, point: { x: number; z: number }): void {
+    const key = JSON.stringify([location, name, room, point.x, point.z]);
+    if (this.seen.has(key)) return;
+    this.seen.add(key);
+    this.log(`[figures] ${name}: pos (${point.x},${point.z}) outside room ${room} — placed in the room`);
+  }
+}
 
 export function placeAtLocation<R extends PlacementRow, M extends PlacementMarker>(
   rows: readonly R[], tile: PlacementTile<M>, ctx: PlacementContext<M>,
@@ -207,22 +224,19 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
         // that storey, so the figure is drawn there.
         branch = 'corridor';
         pos = copy(roomCenter);
-      } else if (c.pos) {
-        // THE SERVER'S STANDING POINT, a WORLD metre like every other `pos`;
-        // only the height is the client's: the room's own floor AT THAT
-        // POINT — the ladder the avatar walks on indoors (baked lattice,
-        // declared floor, terrain), asked per figure, so a figure on a
-        // diorama's hillock stands on the hillock.
-        branch = 'pos';
-        const local = worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, c.pos.x, c.pos.z);
-        pos = { x: c.pos.x,
-                y: ctx.roomStandY(inRoom, local.x, local.z) ?? roomCenter.y,
-                z: c.pos.z };
       } else {
-        // No point at all (a character that was never positioned): the room's
-        // centre is the only thing left.
         branch = 'centre';
         pos = copy(roomCenter);
+        if (c.pos) {
+          const local = worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, c.pos.x, c.pos.z);
+          // Use this room's hull on its storey, with wall/door threshold tolerance.
+          // A floor-height lookup also answers outside the footprint.
+          if (Number.isFinite(c.pos.x) && Number.isFinite(c.pos.z)
+            && polygonDistance(local.x, local.z, tile.roomFloors.get(inRoom)?.hull) <= 0.3) {
+            branch = 'pos';
+            pos = { x: c.pos.x, y: ctx.roomStandY(inRoom, local.x, local.z) ?? roomCenter.y, z: c.pos.z };
+          } else ctx.stalePos?.(c.name, inRoom, c.pos);
+        }
       }
     } else {
       branch = 'huddle';

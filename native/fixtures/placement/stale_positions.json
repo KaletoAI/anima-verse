@@ -1,0 +1,14 @@
+{
+  "note": "Task 98: hall A and bedroom B share x=0 in tile metres. Frame (64,4,128), yaw pi/2: world=(64+lz,128-lx). Ground=x/32+z/64; standing clearance=.01. Bedroom centre=(64,3.963125,125).",
+  "center": {"x":64,"y":4,"z":128},
+  "yaw": 1.5707963267948966,
+  "room": "r-bed",
+  "roomCenters": {"r-hall":{"x":64,"y":4.056875,"z":131},"r-bed":{"x":64,"y":3.963125,"z":125}},
+  "hulls": {"r-hall":[[-6,-4],[0,-4],[0,4],[-6,4]],"r-bed":[[0,-4],[6,-4],[6,4],[0,4]]},
+  "cases": [
+    {"label":"point in A falls back to B","pos":{"x":61,"z":131},"branch":"centre","expected":{"x":64,"y":3.963125,"z":125},"logs":1},
+    {"label":"point inside B stays","pos":{"x":63,"z":125},"branch":"pos","expected":{"x":63,"y":3.931875,"z":125},"logs":0},
+    {"label":"door threshold 0.25m outside stays","pos":{"x":64,"z":128.25},"branch":"pos","expected":{"x":64,"y":4.01390625,"z":128.25},"logs":0},
+    {"label":"beyond 0.3m falls back","pos":{"x":64,"z":128.31},"branch":"centre","expected":{"x":64,"y":3.963125,"z":125},"logs":1}
+  ]
+}

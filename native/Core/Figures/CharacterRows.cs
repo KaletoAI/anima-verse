@@ -264,7 +264,8 @@ public static class FigurePlacement
 {
     public static List<FigurePlan> Plan(IReadOnlyList<CharacterRow> rows, Func<string, LocationPlacement?> tileOf,
                                         Func<double, double, double> terrainY, Dictionary<string, ShownPlacement> shown,
-                                        Func<string, Vec3?> targetCentre)
+                                        Func<string, Vec3?> targetCentre,
+                                        Action<string, string, string, P2>? stalePos = null)
     {
         var plans = new List<FigurePlan>();
         var byLoc = new Dictionary<string, List<CharacterRow>>();
@@ -308,6 +309,7 @@ public static class FigurePlacement
                     RoomOf = name => roomOf.TryGetValue(name, out var r) ? r : null,
                     ShownOf = name => shown.TryGetValue(name, out var s) ? s : null,
                     RoomStandY = loc.RoomStandY, GroundY = loc.GroundY, TargetCentre = targetCentre,
+                    StalePos = (name, room, point) => stalePos?.Invoke(locId, name, room, point),
                 });
             foreach (var f in placed)
             {

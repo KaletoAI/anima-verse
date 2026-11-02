@@ -262,6 +262,10 @@ public class NpcPlacementVectorTests
             AlwaysVisibleRooms = ((JsonArray)Key(t, "alwaysVisibleRooms")!).Select(Str).ToHashSet(),
             RoomCenters = Map(Key(t, "roomCenters"), XYZ),
             RoomLevels = Map(Key(t, "roomLevels"), Int),
+            RoomFloors = Map(Key(t, "roomFloors"), f => new RoomFloor
+            {
+                Hull = ((JsonArray)Key(f, "hull")!).Select(p => new P2(Num(p![0]), Num(p[1]))).ToList(),
+            }),
             RoomMarkers = markers,
             RoomSitSpots = Map(Key(t, "roomSitSpots"), l => (IReadOnlyList<Vec3>)((JsonArray)l!).Select(XYZ).ToList()),
             RoomLieSpots = Map(Key(t, "roomLieSpots"), l => (IReadOnlyList<Vec3>)((JsonArray)l!).Select(XYZ).ToList()),
