@@ -148,6 +148,7 @@ def clear_template_cache() -> None:
     global _override_fields_cache
     with _template_cache_lock:
         _template_cache.clear()
+        _field_keys_cache.clear()
         _override_fields_cache = None
 
 
@@ -414,6 +415,27 @@ def _select_options(field: Dict[str, Any]) -> List[Dict[str, str]]:
         out.append({"value": str(v), "label": str(o.get("label") or v),
                     "label_de": str(o.get("label_de") or "")})
     return out
+
+
+#: template name -> the field keys it carries (``template_field_keys``)
+_field_keys_cache: Dict[str, frozenset] = {}
+
+
+def template_field_keys(name: str) -> frozenset:
+    """The field keys of one template (package fragments merged), cached
+    with the template cache. A cheap "does this character have field X"
+    for per-poll callers — ``get_template`` hands out a deep copy."""
+    if not name:
+        return frozenset()
+    with _template_cache_lock:
+        hit = _field_keys_cache.get(name)
+    if hit is not None:
+        return hit
+    keys = frozenset(f.get("key") for f in get_all_template_fields(get_template(name) or {})
+                     if f.get("key"))
+    with _template_cache_lock:
+        _field_keys_cache[name] = keys
+    return keys
 
 
 _warned_override_fields: set = set()

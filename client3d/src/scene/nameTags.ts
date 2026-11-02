@@ -63,3 +63,17 @@ export function tagAnchorY(figureHeight: number | null): number {
 export function locationLabelLift(placeHeight: number): number {
   return placeHeight + LOCATION_LABEL_LIFT_M;
 }
+
+/**
+ * The icons behind a figure's name (`badges` of its map row, part E of
+ * plan-intim-privatsphaere.md): `text` is the icons side by side, `title` the
+ * tooltip, one line per badge. `key` changes exactly when either does, so the
+ * label rewrites its badge span only then — not on every 3-second poll.
+ */
+export function tagBadges(badges: ReadonlyArray<{ icon: string; title?: string }> | null | undefined):
+  { text: string; title: string; key: string } {
+  const list = badges || [];
+  const text = list.map((b) => b.icon).join('');
+  const title = list.map((b) => b.title || '').filter(Boolean).join('\n');
+  return { text, title, key: `${text}\u0001${title}` };
+}

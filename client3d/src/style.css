@@ -55,6 +55,21 @@ html, body, #app {
   text-shadow: 0 1px 3px #000, 0 0 4px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
 }
+/* Name and the icons behind it on one line (plan-intim-privatsphaere.md,
+   part E). The label ignores the pointer so clicks reach the scene; only the
+   icons take it, for their tooltip. */
+.npc-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.npc-badges {
+  font-size: 11px;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: auto;
+  cursor: help;
+}
+.npc-badges:empty { display: none; }
 .npc-activity {
   font-size: 10px;
   color: #d8d2c2;

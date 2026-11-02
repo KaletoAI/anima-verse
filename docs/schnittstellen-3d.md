@@ -1075,13 +1075,14 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
 `interaction` (§ A8a), `finale` (§ A8c), `place` (§ A8a), `avatar_url`,
-**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`.
+**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`, `badges` (nur wenn vorhanden).
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
 | `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
+| `badges` | `[{icon: str, title: str}]` (optional) | Icons behind the name tag, e.g. the intimacy privacy level. Packages contribute them on the server (capability `character.name_badges`); `title` is already in the avatar's language and is the tooltip. The client draws the icons after the name in their own element and leaves the name line (`tagName`) and the anchor height unchanged. **Absent** when there are none. |
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
 | `pos_origin` | `{session: str, seq: int} \| null` | Origin of the accepted position report, only on the avatar row; null for every other writer and every other character. Always present. |
 | `yaw` | `float \| null` | The avatar's own facing in radians, as its last position report gave it (§ A15, view vector `(sin yaw, 0, cos yaw)` in world x/z, normalised to [−π, π]). Only on the avatar row; null on every other row and whenever none is stored — every server writer that puts the character somewhere (travel, furniture, pool, admin move) clears it. A client applies it when it first places a free-standing avatar. Always present. |

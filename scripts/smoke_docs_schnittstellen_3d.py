@@ -329,7 +329,8 @@ def main():
     row = src[src.index("characters.append({"):]
     row = row[:row.index("\n        })")]
     row_keys = set(re.findall(r'^\s{12}"([a-z_]+)":', row, re.M))
-    row_keys |= set(re.findall(r'\{"([a-z_]+)": _model_sig\}', row))
+    # Optional keys spread in as `**({"key": _var} if ...)` (model_sig, badges).
+    row_keys |= set(re.findall(r'\{"([a-z_]+)": _[a-z_]+\}', row))
     doc_row = character_row_fields(text)
     check("no character-row key missing from the spec",
           not (row_keys - doc_row), str(sorted(row_keys - doc_row)))

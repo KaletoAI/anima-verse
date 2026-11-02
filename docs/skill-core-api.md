@@ -177,6 +177,23 @@ A template field with `"state_override": true` (a `select` stored in the profile
 | `effective_field(profile, key, *, strict=False)` | `(value, source)`: the override of the latest-started active state, else the stored value, else the template default. `source` is the override info `{value, state, label, icon}` or `None`. A key that is no overridable field yields the stored value. |
 | `active_overrides(profile, *, strict=False, fields=None)` | `{key: {value, state, label, icon}}` for every field some active state overrides. Ties on the start go to the alphabetically first state id; a value the field no longer offers is ignored. |
 | `app.core.stat_boosts.active_states(profile, *, now=None, strict=False)` | Yields `(state, entry, remaining_hours)` for every enabled, unexpired state carried as a tag in `active_conditions` — the one loop stat boosts and field overrides both read. Expression-triggered states are not listed. |
+| `app.models.character_template.state_override_fields()` | The overridable fields of all templates as `{key, label, label_de, options: [{value, label, label_de}]}` (first template by file name wins a key), for labels in a package's own texts. |
+| `app.models.character_template.template_field_keys(name)` | The field keys of one template, package fragments merged, cached with the template cache — the cheap "does this character have field X" for per-poll callers. |
+
+## Name badges — capability `character.name_badges` ✅
+
+Small icons behind a character's name: in the chat's address chips
+(`/play/scene` → `present_badges {name: [badge]}`) and in the 3D name tag
+(worldmap row `badges`, `docs/schnittstellen-3d.md`). The core names no badge;
+a package contributes with
+`register_provider("character.name_badges", fn, owner="<package id>", multiple=True)`,
+called as `fn(name, profile) -> [{"icon": str, "title": str, "title_<lang>"?: str}]`.
+`app.core.name_badges.badges_for(name, *, profile=None, lang="en")` collects
+them in registration order and resolves the title with `i18n.localized` in the
+avatar's language; a contributor that raises or answers no list is skipped, an
+entry without an icon dropped. Answer `[]` for a character the badge does not
+concern — this runs on every 3-second poll for every character, so keep it to
+profile reads (no DB query per call).
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 

@@ -92,6 +92,10 @@ export interface SceneData {
   room_name: string
   present: string[]
   present_detail: Array<{ name: string; avatar_url: string; expr_version?: string }>
+  /** Icons behind each present name (plan-intim-privatsphaere.md, part E),
+   *  contributed by packages on the server; `title` is already localised.
+   *  A name without any is absent. */
+  present_badges?: Record<string, Array<{ icon: string; title: string }>>
   scene: Array<{ id?: number; ts: string; content: string; kind: string; meta?: Record<string, unknown> }>
   /** Expression cache-buster per renderable SPEAKER of `scene[]` — including
    *  speakers who have left the room since (they stay in the history). The
@@ -745,6 +749,9 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                   <button key={name} onClick={() => toggleAddressee(name)}
                     className={`player-chip${on ? ' on' : ''}`}>
                     {name}
+                    {(data?.present_badges?.[name] || []).map((b, i) => (
+                      <span key={i} title={b.title} style={{ marginLeft: 3 }}>{b.icon}</span>
+                    ))}
                   </button>
                 )
               })}

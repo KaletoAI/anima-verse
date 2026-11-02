@@ -311,6 +311,16 @@ export interface MapCharacter {
   model_sig?: string;
   model_rev?: string;
   motion?: MotionPayload;
+  /** Icons behind the name (plan-intim-privatsphaere.md, part E): packages
+   *  contribute them on the server (`name_badges`), `title` is already in the
+   *  avatar's language. Absent = none. */
+  badges?: NameBadge[];
+}
+
+/** One icon behind a character's name — name tag and chat address chip. */
+export interface NameBadge {
+  icon: string;
+  title: string;
 }
 
 /** A pair interaction as the server states it (§ A8a): two characters play

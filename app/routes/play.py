@@ -228,6 +228,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
 
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
+             "present_badges": {},
              "scene": [], "rooms": [], "travel": None,
              "speaker_expr_versions": {},
              "avatar_expr_version": "", "bg_version": "",
@@ -301,6 +302,10 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     from app.core.world_ops import build_avatar_rooms
     from app.models.character import get_character_language
     lang = get_character_language(avatar) or "de"
+    # Icons behind each present name (address chips) — packages contribute
+    # them (``name_badges``); a name without any is absent from the map.
+    from app.core.name_badges import badges_map
+    present_badges = badges_map(present, lang=lang)
     # Each room carries its lock state FOR THIS AVATAR (enterable + reason) —
     # the same check /play/enter-room refuses with, so the UI never offers a
     # room the route would turn away (plan-betreten-und-tueren.md § 5 C).
@@ -422,6 +427,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         "location_id": loc, "location_name": location_name,
         "room_id": room, "room_name": room_name,
         "present": present, "present_detail": present_detail, "scene": scene,
+        "present_badges": present_badges,
         "follow_suggestions": follow_suggestions,
         "party": party, "party_invites": party_invites,
         "interaction_invites": interaction_invites,

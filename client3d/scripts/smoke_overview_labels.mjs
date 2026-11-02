@@ -33,6 +33,12 @@
  *     3·1 = 3 < 12 -> limit 12; offset (12, 0) -> stays, (12.01, 0) -> closes.
  *     Width 8 at (-40, 100) -> limit max(12, 24) = 24; target (-40, 76) is 24 off
  *     -> stays; (-40, 75.5) is 24.5 off -> closes.
+ * [B] tagBadges(badges) — browser-only (no shared vector): text = the icons
+ *     joined without a gap, title = the non-empty titles joined by "\n",
+ *     key = text + "\u0001" + title. null and [] -> text "", title "", key
+ *     "\u0001". [{🔒, "Private"}] -> "🔒" / "Private". [{🔒, "A"}, {⭐, ""}]
+ *     -> "🔒⭐" / "A" (the empty title leaves no blank line). Same icons, other
+ *     title -> other key (the span must be rewritten when only the state changed).
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -59,6 +65,7 @@ const tags = await load('client3d/src/scene/nameTags.ts', 'tags.mjs');
 const view = await load('client3d/src/game/openView.ts', 'view.mjs');
 
 let extra = 0;
+let extraCount = 7;
 const constant = (label, ok) => {
   console.log(`${ok ? '  ok  ' : 'FAIL'} ${label}`);
   if (!ok) extra += 1;
@@ -71,6 +78,17 @@ constant('CLOSE_CAM_DIST is 60', view.CLOSE_CAM_DIST === 60);
 constant('CLOSE_TARGET_FOOTPRINTS is 3', view.CLOSE_TARGET_FOOTPRINTS === 3);
 constant('CLOSE_TARGET_MIN_M is 12', view.CLOSE_TARGET_MIN_M === 12);
 
+const b0 = tags.tagBadges(null);
+constant('tagBadges(null) is empty', b0.text === '' && b0.title === '' && b0.key === '\u0001');
+constant('tagBadges([]) is empty', tags.tagBadges([]).key === '\u0001');
+const b1 = tags.tagBadges([{ icon: '🔒', title: 'Private' }]);
+constant('tagBadges one', b1.text === '🔒' && b1.title === 'Private');
+const b2 = tags.tagBadges([{ icon: '🔒', title: 'A' }, { icon: '⭐', title: '' }]);
+constant('tagBadges two, empty title dropped', b2.text === '🔒⭐' && b2.title === 'A');
+constant('tagBadges key follows the title',
+  tags.tagBadges([{ icon: '🔒', title: 'Private (state: X)' }]).key !== b1.key);
+extraCount += 5;
+
 const { passed, failed } = runVectors(loadVectors('overview_labels'), {
   tagVisible: tags.tagVisible,
   tagTravelling: tags.tagTravelling,
@@ -80,5 +98,5 @@ const { passed, failed } = runVectors(loadVectors('overview_labels'), {
   closeTargetDist: view.closeTargetDist,
   openViewShouldClose: view.openViewShouldClose,
 });
-console.log(failed + extra ? `\n${failed + extra} FAILED` : `\nall ok (${passed + 7})`);
+console.log(failed + extra ? `\n${failed + extra} FAILED` : `\nall ok (${passed + extraCount})`);
 process.exit(failed + extra ? 1 : 0);

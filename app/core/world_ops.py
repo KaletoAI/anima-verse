@@ -821,6 +821,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     _fog = _fog_inputs() if fogged else {}
     _fog.pop(avatar, None)  # The avatar position and journey come from one snapshot.
     _row_ctx = (avatar, fogged, visible_ids, _in_sight, _under_veil)
+    # Icons behind the name tag (``name_badges``), titled in the avatar's
+    # language — the same badges the chat's address chips show.
+    from app.core.name_badges import badges_for as _badges_for
+    from app.models.character import get_character_language as _char_lang
+    _badge_lang = (_char_lang(avatar) if avatar else "") or "de"
     characters = []
     for name in list_available_characters():
         pos = _avatar_snap["pos"] if name == avatar and _avatar_snap else _pos.get(name)
@@ -1052,6 +1057,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # one has nothing to poll, and an absent field says exactly that
             # (one fewer empty string per row per 3-second poll).
             **({"model_sig": _model_sig} if _model_sig else {}),
+            # Icons behind the name (plan-intim-privatsphaere.md, part E);
+            # absent when there are none, like model_sig.
+            **({"badges": _badges} if (_badges := _badges_for(
+                name, profile=_prof, lang=_badge_lang)) else {}),
             "model_rev": _model_rev,
             "motion": motion_payload(name, profile=_prof),
         })

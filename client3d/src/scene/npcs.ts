@@ -19,7 +19,7 @@ import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
-import { tagAnchorY, tagName, tagTravelling, tagVisible } from './nameTags';
+import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
 import type { PlaceEntry } from './placeSlot';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
@@ -124,6 +124,9 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
 
 interface Npc {
   name: string;
+  /** the icons behind the name (`tagBadges`) and the key last written there */
+  labelBadges: HTMLSpanElement;
+  badgeKey: string;
   /** the closing clip this figure plays once inside its action (§ A8c,
    *  `game/finaleClip.ts`); `finaleSeen` = the last finale id taken over */
   finale: FinalePlay | null;
@@ -1083,6 +1086,12 @@ export class NpcManager {
       // alone walked it while the standing-up clip was still running.
       const travelling = tagTravelling(st.char.travel);
       npc.labelName.textContent = tagName(st.char.name, st.char.travel);
+      const badges = tagBadges(st.char.badges);
+      if (badges.key !== npc.badgeKey) {
+        npc.badgeKey = badges.key;
+        npc.labelBadges.textContent = badges.text;
+        npc.labelBadges.title = badges.title;
+      }
       npc.travelling = travelling;
       // DEAD RECKONING for a traveller the fog left without a route (§ A12,
       // decision `77dbdb61`): the payload thins a foreign traveller's row down
@@ -1167,6 +1176,13 @@ export class NpcManager {
     const nameEl = document.createElement('span');
     nameEl.className = 'npc-name';
     nameEl.textContent = st.char.name;
+    // Icons behind the name — their own span, so the name line (`tagName`)
+    // stays the plain name and the badges change without touching it.
+    const badgeEl = document.createElement('span');
+    badgeEl.className = 'npc-badges';
+    const badges = tagBadges(st.char.badges);
+    badgeEl.textContent = badges.text;
+    badgeEl.title = badges.title;
     const actEl = document.createElement('span');
     actEl.className = 'npc-activity';
     // The bubble is the FIRST child, so it grows upwards out of the label
@@ -1174,7 +1190,10 @@ export class NpcManager {
     const bubbleEl = document.createElement('div');
     bubbleEl.className = 'npc-bubble';
     bubbleEl.hidden = true;
-    el.append(bubbleEl, nameEl, actEl);
+    const nameRow = document.createElement('div');
+    nameRow.className = 'npc-name-row';
+    nameRow.append(nameEl, badgeEl);
+    el.append(bubbleEl, nameRow, actEl);
     const label = new CSS2DObject(el);
     label.position.set(0, labelY, 0);
     root.add(label);
@@ -1182,6 +1201,7 @@ export class NpcManager {
     return {
       name: st.char.name, root, figure, sprite, label,
       labelName: nameEl, labelActivity: actEl,
+      labelBadges: badgeEl, badgeKey: badges.key,
       labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
       travelling: false, reckon: null, interaction: null, finale: null, finaleSeen: '', entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
