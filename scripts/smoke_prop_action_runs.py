@@ -242,7 +242,7 @@ class Runs(unittest.TestCase):
         F.props._write_sidecar(pid, doc)
         clips._write_world_transitions([{"from": "walking", "to": "lying", "kind": "run-enter", "accel": 0}])
         target["definition_revision"] = F.props.get_prop(pid)["revision"]
-        for mid, x, yaw in (("left", 9.5, 90), ("right", 6.5, 270)):
+        for mid, x, yaw in (("left", 9.5, 90), ("right", 6.5, -90)):
             plan = plan_approach(name, dict(target, marker_id=mid, slot=0), "actor")
             self.assertEqual(plan["status"], "ok", plan)
             self.assertAlmostEqual(plan["access"]["x"], x)

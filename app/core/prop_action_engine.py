@@ -997,6 +997,7 @@ def _cleanup(run, keep_seated=""):
             released = C.release_prop_action_state(name, run["execution_id"])
             after = C.get_character_pos(name)
             if released and held and before and after:
+                after["yaw"] = C.get_avatar_sync_snapshot(name)["yaw"]
                 run["data"].setdefault("exit_motions", {})[name] = _exit_motion(pose, before, after)
     # Pair interaction cleanup can release both members itself. Capture and
     # release every owned place first, while its original pose still exists.
@@ -1030,7 +1031,9 @@ def _exit_motion(pose, before, after):
         kind = str(rule.get("kind") or "")
         seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
     return dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
-                exit_clip=kind, exit_s=round(seconds, 3))
+                exit_clip=kind, exit_s=round(seconds, 3),
+                stand_yaw_deg=(None if after.get("yaw") is None
+                               else math.degrees(float(after["yaw"]))))
 
 
 def cancel(actor: str, execution_id: str) -> dict:

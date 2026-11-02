@@ -22,6 +22,7 @@ from it clamps the grounds differently, weights other frames as planted and
 reports another number for the very same keys (111_11 from 1.533 s: 0.97 cm in
 the pass, 2.83 cm "in the file", with the joint tracks equal within 0.001 cm).
 """
+import math
 import sys
 from pathlib import Path
 
@@ -87,9 +88,38 @@ def lock_path(arm, fps: int):
     return rm.foot_lock_path(tracks, weights)
 
 
+def measure_turn_deg(joints, frames) -> float:
+    """Pelvis heading from RightUpLeg to LeftUpLeg, projected onto XZ:
+    atan2(left.x-right.x, left.z-right.z) - pi/2. This is three.js yaw
+    (forward = (sin yaw, cos yaw)), exactly bridgeHeading.headingTrack and
+    native BridgeHeading. Keep the previous heading when horizontal/length
+    is below 0.5; leading invalid frames take the first valid heading.
+    Accumulate wrapped sample differences, then return degrees in (−180,180].
+    No valid heading (or missing UpLeg joints) means zero.
+    """
+    previous = None
+    accumulated = 0.0
+    for frame in frames:
+        pose = joints[frame]
+        left, right = pose.get(PREFIX + "LeftUpLeg"), pose.get(PREFIX + "RightUpLeg")
+        if left is None or right is None:
+            continue
+        x, y, z = (float(left[0][i] - right[0][i]) for i in range(3))
+        length = math.sqrt(x*x + y*y + z*z)
+        if length <= 0 or math.hypot(x, z) / length < 0.5:
+            continue
+        heading = math.atan2(x, z) - math.pi / 2
+        if previous is not None:
+            accumulated += math.atan2(math.sin(heading - previous), math.cos(heading - previous))
+        previous = heading
+    value = (math.degrees(accumulated) + 180) % 360 - 180
+    return 180.0 if value == -180 else value
+
+
 def apply(arm, mode: str, fps: int) -> dict:
     """Runs ``mode`` on the armature's action in place and returns the sidecar
-    block ``{mode, travel_m, ref_height_m, contact_s, max_drift_cm}``.
+    block ``{mode, travel_m, turn_deg, ref_height_m, contact_s, max_drift_cm}``.
+    Turn uses ``measure_turn_deg``: three.js yaw, degrees in (−180,180].
     Raises ValueError when foot_lock cannot hold the feet."""
     if mode not in rm.MODES:
         raise ValueError(f"root_motion must be one of {rm.MODES}, not {mode!r}")
@@ -115,6 +145,7 @@ def apply(arm, mode: str, fps: int) -> dict:
         drift = rm.max_planted_drift(tracks, weights, zero)
     t0, t1 = mats[frames[0]][hips].translation, mats[frames[-1]][hips].translation
     return {"mode": mode,
+            "turn_deg": measure_turn_deg(joints, frames),
             "travel_m": [round((t1.x - t0.x) / 100, 3), round((t1.z - t0.z) / 100, 3)],
             "ref_height_m": round(ref_height_m, 3),
             "contact_s": rm.contact_spans(weights, fps),
@@ -146,6 +177,7 @@ def run(job):
     hips = PREFIX + "Hips"
     zero = [(0.0, 0.0)] * len(frames)
     return {"frames": len(frames),
+            "turn_deg": measure_turn_deg(joints, frames),
             "max_drift_cm": round(rm.max_planted_drift(tracks, weights, zero), 2),
             # per contact point: height per frame, its weight, its rest height
             "contact_y": {p: [round(v[1], 3) for v in pts] for p, pts in tracks.items()},

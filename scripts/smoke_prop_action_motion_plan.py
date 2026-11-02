@@ -224,7 +224,7 @@ class MotionPlan(unittest.TestCase):
             finish.result(timeout=5)
             row = next(r for r in state.result(timeout=5)['recent_results']
                        if r['execution_id'] == first['execution_id'])
-        self.assertEqual(row['motion'], dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0))
+        self.assertEqual(row['motion'], dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0, stand_yaw_deg=0))
 
     def test_server_end_persists_departure(self):
         # By hand: the fixture exit travels 2 m forward from (8,5), yaw 0,
@@ -235,7 +235,7 @@ class MotionPlan(unittest.TestCase):
         run = until_active(first['execution_id'])
         stale = deepcopy(run)
         S.A._finish(run, 'cancelled', 'interaction_avatar')
-        expected = dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0)
+        expected = dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0, stand_yaw_deg=0)
         stand = F.C.get_character_pos(name)
         self.assertEqual([stand['x'], stand['z']], expected['stand'])
         row = next(r for r in S.A.state_for(name)['recent_results'] if r['execution_id'] == first['execution_id'])
@@ -246,6 +246,19 @@ class MotionPlan(unittest.TestCase):
         S.A._cleanup(saved)  # A retry cannot replace a released place's motion.
         S.A._cleanup(stale)  # Neither can a snapshot taken before the finish.
         self.assertEqual(S.A.cancel_with_motion(name, first['execution_id'])['motion'], expected)
+
+    def test_turning_exit_persists_heading(self):
+        # Facing 0 plus turn 90 -> stored pi/2 radians, motion heading 90.
+        # Travel remains rotated by the initial facing: (8,5) -> (8,7).
+        name, target, _ = S.setup_run()
+        exit_clip_fixture()
+        first = S.request(name, target)
+        until_active(first['execution_id'])
+        with patch('app.core.animation_clips.clip_turn_deg', return_value=90):
+            answer = A.cancel_with_motion(name, first['execution_id'])
+        self.assertEqual(answer['motion']['stand'], [8, 7])
+        self.assertAlmostEqual(answer['motion']['stand_yaw_deg'], 90)
+        self.assertAlmostEqual(F.C.get_avatar_sync_snapshot(name)['yaw'], math.pi / 2)
 
     def test_cancel_while_seated_returns_the_stand_up(self):
         name, target, _ = S.setup_run()
@@ -259,7 +272,7 @@ class MotionPlan(unittest.TestCase):
         stand = F.C.get_character_pos(name)
         self.assertNotEqual((stand['x'], stand['z']), (seat['x'], seat['z']))
         self.assertEqual(answer.json()['motion'], dict(
-            seat=[seat['x'], seat['z']], stand=[stand['x'], stand['z']], exit_clip='run-exit', exit_s=1.0))
+            seat=[seat['x'], seat['z']], stand=[stand['x'], stand['z']], exit_clip='run-exit', exit_s=1.0, stand_yaw_deg=0))
         # Cancelling a walk moves nobody: no stand-up to play.
         again = player.post('/play/prop-actions/request', json=API.payload(target)).json()
         self.assertEqual(again['status'], 'approaching', again)

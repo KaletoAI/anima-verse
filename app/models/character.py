@@ -1953,8 +1953,9 @@ def _write_character_pos(character_name: str, x: Optional[float], z: Optional[fl
     point; every other writer passes nothing and the origin is cleared — that is what lets a
     client tell its own echo from a server move (§ A15).
 
-    ``yaw`` is the facing in radians that belongs to this point. Only a position report
-    knows one; ``None`` (every other writer) clears it, so a figure put somewhere else never
+    ``yaw`` is the facing in radians that belongs to this point. Position
+    reports and measured bridge endpoints supply one; ``None`` clears it,
+    so a figure put somewhere else never
     looks the way it once looked at its old place. ``KEEP_YAW`` — a report without a facing —
     leaves the stored one alone."""
     if not character_name:
@@ -4606,7 +4607,7 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
     """
     from app.core import places
     from app.core.keyed_lock import keyed_lock, _after_locks
-    from app.core.room_stand import ACCESS_BODY_R_M, bridge_stand_point, free_stand_point
+    from app.core.room_stand import ACCESS_BODY_R_M, SEAT_MATCH_M, bridge_stand_point, bridge_stand_yaw, free_stand_point
     initial = get_character_profile(character_name)
     location, room = places.where(character_name, profile=initial)
     with keyed_lock("places", location), keyed_lock("character_profile", character_name):
@@ -4620,6 +4621,7 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
         old_place = dict(field) if own_place else None
         point = None
         position_authority = None
+        stand_yaw = None
         if own_place and places.where(character_name, profile=profile) == (location, room):
             row = get_connection().execute(
                 "SELECT pos_x,pos_z,pos_session,pos_seq FROM character_state WHERE character_name=?",
@@ -4630,6 +4632,11 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
                 here = (float(row[0]), float(row[1]))
                 bridge_point = (bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here)
                                 if seat else None)
+                if seat and math.dist(here, (float(seat["x"]), float(seat["z"]))) <= SEAT_MATCH_M:
+                    from app.core.animation_clips import clip_turn_deg
+                    from app.core.travel_engine import exit_bridge_for_pose
+                    kind, _seconds = exit_bridge_for_pose(old_pose)
+                    stand_yaw = math.radians(bridge_stand_yaw(float(seat.get("facing") or 0), clip_turn_deg(kind)))
                 if bridge_point is not None:
                     candidate = free_stand_point(location, room, bridge_point, exclude=character_name,
                                                  furniture_r=ACCESS_BODY_R_M)
@@ -4667,8 +4674,10 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
                 # without changing this solo place; preserve all four columns
                 # in that case (including same-XZ reports with a newer origin).
                 if point is not None and tuple(state)[3:] == position_authority:
-                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=NULL"
-                    args.extend((round(point[0], 2), round(point[1], 2)))
+                    # The heading the exit clip ends with (radians) commits with
+                    # the point; None clears it as before.
+                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=?"
+                    args.extend((round(point[0], 2), round(point[1], 2), stand_yaw))
                 conn.execute(sql + " WHERE character_name=?", (*args, character_name))
             else:
                 changed = conn.execute(

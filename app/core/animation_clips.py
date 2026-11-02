@@ -850,6 +850,22 @@ def clip_travel_m(kind: str, cset: str = "") -> Tuple[float, float]:
     return (x, z) if math.isfinite(x) and math.isfinite(z) else (0.0, 0.0)
 
 
+def clip_turn_deg(kind: str, cset: str = "") -> float:
+    """Measured pelvis turn, three.js yaw degrees — only for a ``foot_lock``
+    clip, the one mode whose turn both clients take out of the hips and apply
+    to the figure's root (native ``TemplateClips`` relocks with
+    ``turn: !KeepFacing``; a ``keep`` clip keeps its turn inside the pose and
+    the root keeps facing the seat). Zero for every other mode or unknown."""
+    rm = clip_root_motion(clip_meta(kind, cset))
+    if not rm or rm["mode"] != "foot_lock":
+        return 0.0
+    try:
+        value = float(rm.get("turn_deg"))
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
+
+
 def clip_ref_height_m(kind: str, cset: str = "") -> Optional[float]:
     """The standing height of the reference rig the travel was measured on,
     in metres — what ``clip_travel_m`` is scaled by for a taller or shorter

@@ -6,6 +6,8 @@ Hand-derived entry geometry: clip travel (0, -1) metres, reference height
 so bench slots (-.6,0),(0,0),(.6,0), capacity 3 spacing .6, need access
 (-.6,1),(0,1),(.6,1). At yaw90 offset=(-1,0), bed marker (-.5,0)
 needs (.5,0); yaw270 offset=(1,0), marker (.5,0) needs (-.5,0).
+Yaw 270 normalises to -90. With turn 90, facing 0, travel (0,-1),
+start yaw -90 gives offset (1,0), so slot (2,3) needs access (1,3).
 Each access plus its entry travel ends exactly on its slot (<5cm).
 An explicit override remains verbatim, so a displaced override must fail
 entry checking rather than being silently corrected.
@@ -45,7 +47,7 @@ class Access(unittest.TestCase):
                     self.assertEqual(reason, '')
                     self.assertAlmostEqual(point['x'], want[0])
                     self.assertAlmostEqual(point['z'], want[1])
-                    self.assertEqual(point['yaw'], facing)
+                    self.assertEqual(point['yaw'], -90 if facing == 270 else facing)
                     self.assertEqual(point['y'], 2)
                     dx, dz = bridge_offset((0, -1), point['yaw'], 1)
                     self.assertLess(math.dist((point['x']+dx, point['z']+dz), slots[i]), .05)
@@ -57,6 +59,18 @@ class Access(unittest.TestCase):
             point, _ = slot_access(dict(slots=[[0, 0]], facing=0, floor_y=2),
                                    0, 'actor', action, {'height': 85})
             self.assertAlmostEqual(point['z'], .5)
+
+    def test_turning_entry(self):
+        with patch('app.core.prop_action_engine._entry_capability', return_value=(('entry', {}), '')), \
+             patch('app.core.animation_clips.clip_travel_m', return_value=(0, -1)), \
+             patch('app.core.animation_clips.clip_ref_height_m', return_value=1.7), \
+             patch('app.core.animation_clips.clip_turn_deg', return_value=90):
+            point, reason = slot_access(dict(slots=[[2, 3]], facing=0, floor_y=2),
+                                       0, 'actor', {'pose_key': 'sitting'}, {'height': 170})
+            self.assertEqual(reason, '')
+            self.assertAlmostEqual(point['x'], 1)
+            self.assertAlmostEqual(point['z'], 3)
+            self.assertEqual(point['yaw'], -90)
 
 if __name__ == '__main__':
     unittest.main()

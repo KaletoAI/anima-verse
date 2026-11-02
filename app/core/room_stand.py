@@ -417,11 +417,26 @@ def bridge_scale(height_cm: Optional[float], ref_height_m: Optional[float]) -> f
     return (float(height_cm) / 100.0) / float(ref_height_m)
 
 
+def _wrap_heading(degrees: float) -> float:
+    value = (degrees + 180.0) % 360.0 - 180.0
+    return 180.0 if value == -180.0 else value
+
+
+def bridge_start_yaw(facing_deg: float, turn_deg: float) -> float:
+    """Entry heading whose clip turn ends at facing, in (−180, 180]."""
+    return _wrap_heading(facing_deg - turn_deg)
+
+
+def bridge_stand_yaw(facing_deg: float, turn_deg: float) -> float:
+    """Exit heading after the clip turn, in (−180, 180]."""
+    return _wrap_heading(facing_deg + turn_deg)
+
+
 def bridge_start_point(slot: Sequence[float], travel_m: Sequence[float],
                        facing_deg: float, actor_height_cm: Optional[float],
-                       ref_height_m: Optional[float]) -> Tuple[float, float]:
+                       ref_height_m: Optional[float], turn_deg: float = 0.0) -> Tuple[float, float]:
     """Start of an entry bridge whose final point is the chosen body slot."""
-    dx, dz = bridge_offset(travel_m, facing_deg,
+    dx, dz = bridge_offset(travel_m, bridge_start_yaw(facing_deg, turn_deg),
                            bridge_scale(actor_height_cm, ref_height_m))
     return float(slot[0]) - dx, float(slot[1]) - dz
 
@@ -452,14 +467,14 @@ def bridge_stand_point(name: str, place: Dict[str, Any], pose_key: str,
     if at is None or math.dist((float(at[0]), float(at[1])),
                                (float(place["x"]), float(place["z"]))) > SEAT_MATCH_M:
         return None
-    from app.core.animation_clips import clip_ref_height_m, clip_travel_m
+    from app.core.animation_clips import clip_ref_height_m, clip_travel_m, clip_turn_deg
     from app.core.height import height_cm
     from app.core.travel_engine import exit_bridge_for_pose
     kind, _s = exit_bridge_for_pose(pose_key)
     if not kind:
         return None
     travel = clip_travel_m(kind)
-    if travel == (0.0, 0.0):
+    if travel == (0.0, 0.0) and clip_turn_deg(kind) == 0.0:
         return None
     if profile is None:
         from app.models.character import get_character_profile
@@ -534,27 +549,33 @@ def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,
         return None
     here = (float(pos["x"]), float(pos["z"]))
     stand = None
+    stand_yaw = None
     if from_place and from_pose_key:
         # The seat is resolved from the field the caller just cleared — the
         # profile no longer holds it, so ``place_of`` would answer None.
         seat = places.resolve_place(name, from_place)
         stand = (bridge_stand_point(name, seat, from_pose_key, at=here)
                  if seat else None)
+        if seat and math.dist(here, (float(seat["x"]), float(seat["z"]))) <= SEAT_MATCH_M:
+            from app.core.animation_clips import clip_turn_deg
+            from app.core.travel_engine import exit_bridge_for_pose
+            kind, _seconds = exit_bridge_for_pose(from_pose_key)
+            stand_yaw = math.radians(bridge_stand_yaw(float(seat.get("facing") or 0), clip_turn_deg(kind)))
     if stand is not None:
         point = free_stand_point(loc, room, stand, exclude=name,
                                  furniture_r=ACCESS_BODY_R_M)
     else:
         point = free_stand_point(loc, room, here, exclude=name)
-    # Nothing to write when the answer is where the character already stands
-    # — compared with the CURRENT position, since the clip endpoint is not
-    # where the character is yet.
-    if point is None or (round(point[0], 2), round(point[1], 2)) == (
-            round(here[0], 2), round(here[1], 2)):
+    # An unchanged point still needs a write when standing hands off a
+    # heading. Otherwise compare with the current position, since the clip
+    # endpoint is not where the character is yet.
+    if point is None or (stand_yaw is None and (round(point[0], 2), round(point[1], 2)) == (
+            round(here[0], 2), round(here[1], 2))):
         return None
     if not places.inside(loc, point[0], point[1]):
         logger.warning("room_stand: %s's stand point (%.2f, %.2f) in %s/%s lies "
                        "outside the location — not moved",
                        name, point[0], point[1], loc, room)
         return None
-    set_character_pos(name, point[0], point[1], preserve_movement_target=True)
+    set_character_pos(name, point[0], point[1], preserve_movement_target=True, yaw=stand_yaw)
     return point

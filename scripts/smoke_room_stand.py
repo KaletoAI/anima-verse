@@ -30,6 +30,18 @@ points, because the clip ends with the feet next to the seat.
 [C] The bridge fixture carries (2,3) east to (2.4,3). stand_up checks
     that endpoint with access radius 0.15; without a bridge, default 0.30.
 
+TURNING BRIDGES (Task 6):
+[T1] slot (2,3), facing 0, travel (0,-0.4): turn 0 -> yaw 0,
+     offset (0,-0.4), start (2,3.4); turn 180 -> yaw 180,
+     offset (0,0.4), start (2,2.6); turn 90 -> yaw -90,
+     offset (0.4,0), start (1.6,3). Start yaw + turn = facing.
+[T2] seat (2,3), facing 90, travel (0,0.4), turn 90: offset (0.4,0),
+     stand (2.4,3), stand yaw 180.
+[T3] foot_lock sidecar turn 179.6 -> 179.6; strip, missing, non-finite -> 0;
+     a keep clip (lie-down measures 104.75) -> 0: the clients turn the root
+     only for foot_lock clips, a keep clip keeps its turn inside the pose.
+[T4] stand_up with turn 90 and facing 90 writes pi radians (90 + 90).
+
 THE FIXTURES AND THEIR HAND-DERIVED ANSWERS
 
 [1] SQUARE 6 x 6, (0,0)…(6,6), nothing in it, near = (3, 3).
@@ -433,7 +445,10 @@ def _stand_up_stubs(pos, seat):
         places.resolve_place = lambda n, pl: dict(seat) if pl else None
         places.inside = lambda *a: True
         ch.get_character_pos = lambda n: {"x": pos[0], "z": pos[1]}
-        ch.set_character_pos = lambda n, x, z, **k: seen.setdefault("written", (x, z))
+        def record_write(n, x, z, **kwargs):
+            seen["write_kwargs"] = kwargs
+            seen["written"] = (x, z)
+        ch.set_character_pos = record_write
         def record_free(loc, room, near, exclude="", **kwargs):
             seen["kwargs"] = kwargs
             seen["near"] = tuple(near)
@@ -510,9 +525,91 @@ def test_effective_pose() -> None:
                                             at=(2.0, 3.0)) is None)
 
 
+def test_in_place_exit_heading() -> None:
+    """No travel or turn, seat facing 90: standing heading is still pi/2.
+    The fallback free point is the seat itself; heading must still be written.
+    """
+    from unittest.mock import patch
+    seat = {"x": 2, "z": 3, "facing": 90}
+    with _bridge_fixture(accel=0), patch('app.core.animation_clips.clip_travel_m', return_value=(0, 0)), \
+         patch('app.core.animation_clips.clip_turn_deg', return_value=0):
+        with _stand_up_stubs((2, 3), seat) as seen:
+            room_stand.stand_up("smoke", from_place={"id": "s1"}, from_pose_key="sitting")
+        check("in-place exit keeps seat heading", seen.get("write_kwargs", {}).get("yaw") == math.pi / 2)
+
+
+def test_measured_turn() -> None:
+    """Hand vectors: (1,0,0) -> (0,0,-1) -> (-1,0,0) turn +180.
+    A vertical vector is invalid and holds the previous heading. Headings
+    170 -> -170 cross the boundary by +20, not -340. No valid axis -> zero.
+    Load only the arithmetic function, without importing Blender's bpy.
+    """
+    import ast
+    source = Path("app/blender/scripts/clip_root_motion.py").read_text()
+    function = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
+                    and n.name == "measure_turn_deg")
+    scope = {"math": math, "PREFIX": "mixamorig:"}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), source, "exec"), scope)
+    def measure(vectors):
+        frames = list(range(len(vectors)))
+        joints = {f: {"mixamorig:LeftUpLeg": (v, None),
+                      "mixamorig:RightUpLeg": ((0, 0, 0), None)}
+                  for f, v in enumerate(vectors)}
+        return scope["measure_turn_deg"](joints, frames)
+    check("measured turn +180 and invalid frames hold", abs(measure(
+        [(0, 1, 0), (1, 0, 0), (0, 0, -1), (0, 1, 0), (-1, 0, 0)]) - 180) < 1e-9)
+    check("measured turn -90", abs(measure([(1, 0, 0), (0, 0, 1)]) + 90) < 1e-9)
+    axes = [(math.cos(math.radians(a)), 0, -math.sin(math.radians(a))) for a in (170, -170)]
+    check("measured turn crosses wrap by +20", abs(measure(axes) - 20) < 1e-9)
+    check("no valid measured heading", measure([(0, 1, 0), (0, 0, 0)]) == 0)
+
+
+def test_turning_bridges() -> None:
+    import app.core.animation_clips as ac
+    for turn, yaw, x, z in ((0, 0, 2, 3.4), (180, 180, 2, 2.6), (90, -90, 1.6, 3)):
+        check(f"[T1] turn {turn} start yaw",
+              getattr(room_stand, "bridge_start_yaw", lambda *a: None)(0, turn) == yaw)
+        try:
+            point = room_stand.bridge_start_point((2, 3), (0, -.4), 0, None, None, turn_deg=turn)
+        except TypeError:
+            point = None
+        check(f"[T1] turn {turn} start point", at(point, x, z), str(point))
+    check("[T2] stand yaw 180",
+          getattr(room_stand, "bridge_stand_yaw", lambda *a: None)(90, 90) == 180)
+    original = ac.clip_meta
+    try:
+        for mode, value, expected in (("foot_lock", 179.6, 179.6), ("strip", 179.6, 0),
+                                      ("keep", 104.75, 0), ("foot_lock", None, 0),
+                                      ("foot_lock", float("nan"), 0),
+                                      ("foot_lock", float("inf"), 0)):
+            ac.clip_meta = lambda *a: {"geometry": {"root_motion": {"mode": mode, "turn_deg": value}}}
+            check(f"[T3] {mode} {value}",
+                  getattr(ac, "clip_turn_deg", lambda *a: None)("fixture") == expected)
+    finally:
+        ac.clip_meta = original
+    original_turn = getattr(ac, "clip_turn_deg", None)
+    ac.clip_turn_deg = lambda *a: 90
+    try:
+        with _bridge_fixture(accel=0):
+            seat = {"x": 2, "z": 3, "facing": 90}
+            check("[T2] stand point", at(room_stand.bridge_stand_point(
+                "smoke", seat, "sitting", profile={}, at=(2, 3)), 2.4, 3))
+            with _stand_up_stubs((2, 3), seat) as seen:
+                room_stand.stand_up("smoke", from_place={"id": "s1"}, from_pose_key="sitting")
+            check("[T4] stand_up writes radians", seen.get("write_kwargs", {}).get("yaw") == math.pi)
+    finally:
+        if original_turn is None:
+            del ac.clip_turn_deg
+        else:
+            ac.clip_turn_deg = original_turn
+
+
 def main() -> int:
     print("Smoke: the free standing point in a room (T4)")
     test_constants()
+    test_turning_bridges()
+    test_measured_turn()
+    test_in_place_exit_heading()
     test_near_is_free()
     test_l_room()
     test_table()

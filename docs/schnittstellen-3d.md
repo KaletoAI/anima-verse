@@ -7709,6 +7709,24 @@ Access is automatic for each chosen marker slot and physical role, using the
 pose's entry transition root travel and the actual figure height. It shares the
 room-marker bridge offset/scale rule: subtract the rotated entry travel from
 the chosen body slot and keep the heading required to finish at marker facing.
+The sidecar's `geometry.root_motion.turn_deg` measures pelvis heading from
+RightUpLeg to LeftUpLeg projected onto XZ: `atan2(L.x,L.z) - pi/2`.
+It uses three.js yaw (forward `(sin f, cos f)`), degrees normalised to
+`(-180,180]`. Samples with horizontal/length below 0.5 retain the previous
+valid heading; leading invalid samples use the first valid heading. The
+turn is the accumulated wrapped difference, normalised at the end.
+Only a `foot_lock` clip's turn is used (`clip_turn_deg`): both clients take the
+turn out of the hips and onto the root only for `foot_lock` clips; a `keep`
+clip keeps its turn inside the pose. Every other mode, missing and non-finite
+values resolve to zero. `stand_yaw_deg` is null when no heading is stored.
+
+Entry start yaw is `facing - turn`, normalised to `(-180,180]`
+(`bridge_start_yaw`); travel is rotated by that start yaw, using
+`x' = tx*cos f + tz*sin f`, `z' = -tx*sin f + tz*cos f`.
+Both clients set yaw to `access.yaw` and add the clip turn during playback.
+Exit travel is rotated by seat facing; end yaw is `facing + turn`
+(`bridge_stand_yaw`). Stand-up and prop release persist this yaw in radians
+with the stand point (`pos_yaw`), including turns with no travel.
 An authored marker role override replaces that point verbatim. Entry still
 checks its endpoint against the body slot within 5 cm, and unwalkable points
 refuse with `access_not_walkable`.
@@ -8150,7 +8168,7 @@ Player routes require the authenticated user's current authorized avatar:
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
   Terminal `recent_results` rows include participant-specific `motion`:
-  `{seat:[x,z], stand:[x,z], exit_clip, exit_s}` for a participant released
+  `{seat:[x,z], stand:[x,z], stand_yaw_deg, exit_clip, exit_s}` for a participant released
   from a place, otherwise `null` (including a participant kept seated).
   This persisted departure is identical to the cancel answer's `motion`.
   Clients play it once per execution id across state and cancel answers.
@@ -8215,10 +8233,10 @@ the figure only if that run is terminal there. Observers and NPCs are unchanged
 (`local_approach`, `prop_action_entry`).
 
 The `cancel` answer carries `motion` for a participant that was seated or
-lying when it ended: `{seat:[x,z], stand:[x,z], exit_clip, exit_s}` — the
+lying when it ended: `{seat:[x,z], stand:[x,z], stand_yaw_deg, exit_clip, exit_s}` — the
 stand-up its own client plays at once (`exit_clip` is the pose's exit
 transition to walking, else to standing; `stand` is where the server put the
-figure). `null` when the cancel moved nobody (e.g. a walk was stopped).
+figure; `stand_yaw_deg` is the persisted end heading in degrees). `null` when the cancel moved nobody (e.g. a walk was stopped).
 
 Prop-action entry bridges use the pose transition table described above:
 `walking -> @seat` covers every target pose whose catalog `group` is `seat`,

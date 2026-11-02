@@ -21,8 +21,8 @@ def slot_access(place: dict, slot: int, role: str, action: dict,
     if override is not None:
         return dict(override), ''
     from app.core.prop_action_engine import _entry_capability
-    from app.core.animation_clips import clip_travel_m, clip_ref_height_m
-    from app.core.room_stand import bridge_start_point
+    from app.core.animation_clips import clip_travel_m, clip_ref_height_m, clip_turn_deg
+    from app.core.room_stand import bridge_start_point, bridge_start_yaw
     from app.core.height import height_cm
     capability, reason = _entry_capability(entry_pose(action))
     if reason:
@@ -30,8 +30,8 @@ def slot_access(place: dict, slot: int, role: str, action: dict,
     kind, _ = capability
     yaw = float(place.get('facing') or 0)
     x, z = bridge_start_point(place['slots'][slot] if point is None else point, clip_travel_m(kind), yaw,
-                              height_cm(profile), clip_ref_height_m(kind))
-    return dict(x=x, z=z, yaw=yaw, y=place['floor_y']), ''
+                              height_cm(profile), clip_ref_height_m(kind), turn_deg=clip_turn_deg(kind))
+    return dict(x=x, z=z, yaw=bridge_start_yaw(yaw, clip_turn_deg(kind)), y=place['floor_y']), ''
 
 
 def compose_access(access: dict, placement: dict) -> dict:
