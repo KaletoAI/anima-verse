@@ -111,6 +111,9 @@ interface PlaceType {
   root_drop: number
   default: string
   needs_place: boolean
+  /** the solo pose a pose of this type goes into when it ends normally, unless
+   *  the pose names its own (`follow_pose`); "" = none */
+  follow?: string
   /** which layer the effective group comes from (server: `_store`) and, in
    *  the editable copy, which layer it is saved to (`store`) */
   _store?: Store
@@ -139,6 +142,12 @@ interface Entry {
   finale_animation?: string
   /** the finale a package derives when the field is empty (read-only) */
   finale_auto?: string
+  /** the solo pose the pose goes into when it ends normally — per clip role
+   *  for a pair pose; "" = what applies without it (`follow_auto`) */
+  follow_pose?: string | RoleFollow
+  /** what applies with the field empty: a package's answer, else the place
+   *  type's `follow` (read-only) */
+  follow_auto?: string | RoleFollow
   /** which layer the entry lives in: the tracked catalog file, or this
    *  world's own layer in its world.db for entries that must never be
    *  committed */
@@ -151,6 +160,16 @@ interface Entry {
 }
 
 type Store = 'shared' | 'world'
+
+/** A follow pose per clip role of a pair pose. */
+interface RoleFollow { a?: string; b?: string }
+
+/** The follow of one role ("" for a solo pose) out of either field shape. */
+function followOf(value: string | RoleFollow | undefined, role: '' | 'a' | 'b'): string {
+  if (!value) return ''
+  if (typeof value === 'string') return role ? '' : value
+  return role ? value[role] || '' : ''
+}
 
 interface CatalogData {
   entries: Entry[]
@@ -485,6 +504,13 @@ export function PosesTab() {
     setNewGroupKey('')
   }, [data.groups])
 
+  /** The poses a follow pose may name: solo ones only (a follow has no
+   *  partner to play the other half). */
+  const soloPoseKeys = useMemo(
+    () => data.entries.filter((p) => p.solo !== false).map((p) => p.key).sort(),
+    [data.entries],
+  )
+
   const list = useMemo(() => {
     const q = search.trim().toLowerCase()
     return data.entries.filter((p) => {
@@ -588,6 +614,9 @@ export function PosesTab() {
               solo: draft.solo,
               group: draft.group,
               finale_animation: draft.finale_animation || '',
+              follow_pose: draft.solo === false
+                ? { a: followOf(draft.follow_pose, 'a'), b: followOf(draft.follow_pose, 'b') }
+                : followOf(draft.follow_pose, ''),
               // Pair fields only: a solo pose occupies one place and never
               // turns, and the server drops them again when solo is set.
               ...(draft.solo
@@ -1080,6 +1109,24 @@ export function PosesTab() {
                             ))}
                           </select>
                         </Field>
+                        <Field
+                          label={t('Follow pose')}
+                          hint={t('The pose a figure goes into when a pose of this type ends normally, unless the pose names its own. Any solo pose, of any place type.')}
+                        >
+                          <select
+                            className="ga-input"
+                            value={g.follow || ''}
+                            onChange={(e) => patchGroup(key, { follow: e.target.value })}
+                          >
+                            <option value="">{t('— none —')}</option>
+                            {soloPoseKeys.map((k) => (
+                              <option key={k} value={k}>{k}</option>
+                            ))}
+                            {g.follow && !soloPoseKeys.includes(g.follow) ? (
+                              <option value={g.follow}>{g.follow} ({t('unknown')})</option>
+                            ) : null}
+                          </select>
+                        </Field>
                       </div>
                     )
                   })}
@@ -1551,6 +1598,37 @@ export function PosesTab() {
                           </option>
                         ) : null}
                       </select>
+                    </Field>
+                    <Field
+                      label={t('Follow pose')}
+                      hint={t('The pose a figure goes into when this one ends normally — finished, or ended from the HUD — instead of standing up: lying on after a scene in bed, catching breath after a dance. A pair pose names one per role. Left empty, a package or the place type decides (shown as “automatic”). Only solo poses can follow.')}
+                    >
+                      {(draft.solo === false ? (['a', 'b'] as const) : (['' as const])).map((role) => {
+                        const own = followOf(draft.follow_pose, role)
+                        const auto = followOf(draft.follow_auto, role)
+                        return (
+                          <label key={role || 'solo'} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {role ? <span style={{ minWidth: 52 }}>{t('Role {role}').replace('{role}', role.toUpperCase())}</span> : null}
+                            <select
+                              className="ga-input"
+                              value={own}
+                              onChange={(e) => upd('follow_pose', role
+                                ? { a: followOf(draft.follow_pose, 'a'), b: followOf(draft.follow_pose, 'b'), [role]: e.target.value }
+                                : e.target.value)}
+                            >
+                              <option value="">
+                                {auto ? t('— automatic: {pose} —').replace('{pose}', auto) : t('— none —')}
+                              </option>
+                              {soloPoseKeys.filter((k) => k !== draft.key).map((k) => (
+                                <option key={k} value={k}>{k}</option>
+                              ))}
+                              {own && !soloPoseKeys.includes(own) ? (
+                                <option value={own}>{own} ({t('unknown')})</option>
+                              ) : null}
+                            </select>
+                          </label>
+                        )
+                      })}
                     </Field>
                     <Field
                       label={t('Place type')}

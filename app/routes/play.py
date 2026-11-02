@@ -2393,6 +2393,17 @@ def play_self(user=Depends(get_current_user)):
     out["activity"] = get_effective_activity(avatar) or ""
     out["profile_image"] = get_character_profile_image(avatar) or ""
     out["expression_version"] = _expr_version(avatar)
+    # The HUD's "end" offer: where the free pose goes when it is finished
+    # (``POST /play/self/activity`` with ``finish``) — null without one.
+    try:
+        from app.core.pose_catalog import pose_label
+        from app.models.character import get_character_language
+        follow = _free_pose_follow(avatar)
+        out["follow"] = ({"pose_key": follow,
+                          "pose_label": pose_label(follow, get_character_language(avatar))}
+                         if follow else None)
+    except Exception as e:
+        logger.debug("play_self follow offer failed: %s", e)
     try:
         from app.routes.characters import get_status_effects_route
         s = get_status_effects_route(avatar)
@@ -4019,6 +4030,19 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             "place": (get_character_profile(avatar) or {}).get("place")}
 
 
+def _free_pose_follow(avatar: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The follow pose the avatar's FREE pose goes into when it is finished,
+    "" without one. A pair or a furniture action ends through its own path
+    (which follows on its own), so neither offers this."""
+    from app.core.pose_catalog import follow_pose_for
+    from app.core.prop_action_engine import has_semantic_action
+    from app.models.character import get_character_profile
+    profile = profile if profile is not None else (get_character_profile(avatar) or {})
+    if profile.get("interaction") or has_semantic_action(avatar):
+        return ""
+    return follow_pose_for(profile.get("pose_key") or "")
+
+
 def _finish_into_follow(avatar: str) -> bool:
     """``{"activity": "", "finish": true}`` — the HUD's "end", not the first
     steering key: the avatar goes from its free pose into the pose's follow
@@ -4026,12 +4050,10 @@ def _finish_into_follow(avatar: str) -> bool:
     fits, else on any free place of the follow's type. False = no follow
     pose, or nowhere to take it — the caller clears the pose as before."""
     from app.core import places
-    from app.core.pose_catalog import follow_pose_for, group_of
+    from app.core.pose_catalog import group_of
     from app.models.character import get_character_profile, set_pose_intent
     profile = get_character_profile(avatar) or {}
-    if profile.get("interaction"):
-        return False
-    follow = follow_pose_for(profile.get("pose_key") or "")
+    follow = _free_pose_follow(avatar, profile)
     if not follow:
         return False
     seat = profile.get("place") if isinstance(profile.get("place"), dict) else {}

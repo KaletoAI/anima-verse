@@ -5,7 +5,9 @@
  * that has to play BETWEEN two poses (stand up before walking away), and how
  * much speed the body picks up while it plays. `"*"` is the wildcard — on the
  * TO side it makes an exit clip ("stand up, whatever comes next"), on the FROM
- * side an enter clip; the more precise rule wins.
+ * side an enter clip; the more precise rule wins. A rule leaving a PAIR pose
+ * may name one bridge per clip role (`{a, b}`): the two figures of a pair
+ * get up differently.
  *
  * Free bridges can live in the shared seed; licensed bridges stay in the
  * world layer. The whole effective list travels on every save: they are few,
@@ -20,11 +22,13 @@ import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 
-import type { ClipListing, PoseTransition as Transition } from './clipSets'
+import { bridgeKinds as kindsOf } from './clipSets'
+import type { ClipListing, PoseTransition as Transition, RoleKinds } from './clipSets'
 
-export interface PoseRef { key: string }
+export interface PoseRef { key: string; solo?: boolean }
 
 const TRANSITION_ANY = '*'
+const ROLES = ['a', 'b'] as const
 
 export function ClipTransitions({ poses, onSaved }: {
   poses: PoseRef[]
@@ -56,7 +60,7 @@ export function ClipTransitions({ poses, onSaved }: {
         const free = new Set(data.clips.filter((c) => c.library === 'free' && !c.role).map((c) => c.kind))
         setFreeKinds(free)
         const rules = (data.transitions || []).map((r) => ({
-          ...r, store: free.has(r.kind) ? r.store : 'world' as const,
+          ...r, store: kindsOf(r.kind).every((k) => free.has(k)) ? r.store : 'world' as const,
         }))
         setTransitions(rules)
         setDraft(rules)
@@ -71,6 +75,8 @@ export function ClipTransitions({ poses, onSaved }: {
   }, [])
 
   const poseKeys = useMemo(() => poses.map((p) => p.key).sort(), [poses])
+  const pairPoses = useMemo(() => new Set(poses.filter((p) => p.solo === false).map((p) => p.key)), [poses])
+  const allFree = useCallback((kind: Transition['kind']) => kindsOf(kind).every((k) => freeKinds.has(k)), [freeKinds])
 
   const dirty = useMemo(
     () => !!transitions && JSON.stringify(draft) !== JSON.stringify(transitions),
@@ -82,10 +88,12 @@ export function ClipTransitions({ poses, onSaved }: {
       if (j !== i) return r
       const next = { ...r, ...part }
       if (next.from !== 'walking' && next.to.startsWith('@')) next.to = TRANSITION_ANY
-      if (!freeKinds.has(next.kind)) next.store = 'world'
+      // A bridge per role exists only for a rule leaving a pair pose.
+      if (typeof next.kind !== 'string' && !pairPoses.has(next.from)) next.kind = kindsOf(next.kind)[0] || ''
+      if (!allFree(next.kind)) next.store = 'world'
       return next
     }))
-  }, [freeKinds])
+  }, [allFree, pairPoses])
 
   const removeRule = useCallback((i: number) => {
     setDraft((d) => d.filter((_, j) => j !== i))
@@ -108,7 +116,7 @@ export function ClipTransitions({ poses, onSaved }: {
       // write would only invite two editors to disagree about what it is.
       const res = await apiPut<{ transitions: Transition[] }>(
         '/assets/animation-clips/transitions',
-        { transitions: draft.filter((r) => r.from && r.to && r.kind).map(({ from, to, kind, accel, store }) => ({ from, to, kind, accel, store })) },
+        { transitions: draft.filter((r) => r.from && r.to && kindsOf(r.kind).length).map(({ from, to, kind, accel, store }) => ({ from, to, kind, accel, store })) },
       )
       setTransitions(res.transitions)
       setDraft(res.transitions)
@@ -208,16 +216,32 @@ export function ClipTransitions({ poses, onSaved }: {
                     </select>
                   </td>
                   <td>
-                    <select
-                      className="ga-input" style={{ maxWidth: 200 }}
-                      value={rule.kind} disabled={busy}
-                      onChange={(e) => patch(i, { kind: e.target.value })}
-                    >
-                      {kinds.includes(rule.kind) ? null : (
-                        <option value={rule.kind}>{`${rule.kind} (${t('missing')})`}</option>
-                      )}
-                      {kinds.map((k) => <option key={k} value={k}>{k}</option>)}
-                    </select>
+                    {typeof rule.kind === 'string' ? (
+                      <KindSelect value={rule.kind} kinds={kinds} disabled={busy}
+                        onChange={(kind) => patch(i, { kind })} />
+                    ) : ROLES.map((role) => {
+                      const perRole = rule.kind as RoleKinds
+                      return (
+                        <label key={role} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span>{role.toUpperCase()}</span>
+                          <KindSelect value={perRole[role] || ''} kinds={kinds} disabled={busy} allowNone
+                            onChange={(kind) => patch(i, { kind: { ...perRole, [role]: kind } })} />
+                        </label>
+                      )
+                    })}
+                    {pairPoses.has(rule.from) ? (
+                      <label className="ga-form-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                        title={t('The two figures of a pair get up differently: name a bridge for role A and one for role B. A role without one blends over.')}>
+                        <input type="checkbox" disabled={busy} checked={typeof rule.kind !== 'string'}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => patch(i, {
+                            kind: e.target.checked
+                              ? { a: kindsOf(rule.kind)[0] || '', b: kindsOf(rule.kind)[0] || '' }
+                              : kindsOf(rule.kind)[0] || '',
+                          })} />
+                        {t('one per role')}
+                      </label>
+                    ) : null}
                     <div className="ga-form-hint">
                       {t('local: {from_kind} → {to_kind} · public: {from_public_kind} → {to_public_kind}')
                         .replace('{from_kind}', rule.from_kind || '—')
@@ -233,10 +257,10 @@ export function ClipTransitions({ poses, onSaved }: {
                     <select className="ga-input" value={rule.store} disabled={busy}
                       aria-label={t('Store')}
                       onChange={(e) => patch(i, { store: e.target.value as Transition['store'] })}>
-                      <option value="shared" disabled={!freeKinds.has(rule.kind)}>{t('shared')}</option>
+                      <option value="shared" disabled={!allFree(rule.kind)}>{t('shared')}</option>
                       <option value="world">{t('world')}</option>
                     </select>
-                    {!freeKinds.has(rule.kind) ? (
+                    {!allFree(rule.kind) ? (
                       <div className="ga-form-hint">{t('Licensed bridge clips stay in this world.')}</div>
                     ) : null}
                   </td>
@@ -307,22 +331,51 @@ export function ClipTransitions({ poses, onSaved }: {
 
       {/* ── the bridge clip of the picked rule ── */}
       <section style={{ minWidth: 0, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
-        {!row || !row.kind ? (
+        {!row || !kindsOf(row.kind).length ? (
           <div className="ga-placeholder">{t('Pick a rule to see its bridge clip.')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div>
-              <h3 style={{ margin: '0 0 2px' }}>{row.kind}</h3>
+              <h3 style={{ margin: '0 0 2px' }}>{kindsOf(row.kind).join(' / ')}</h3>
               <div className="ga-form-hint">
                 <code>{row.from || TRANSITION_ANY}</code> → <code>{row.to || TRANSITION_ANY}</code>
               </div>
             </div>
             {/* The neutral set, like every other clip preview that is not
-                looking at one figure in particular. */}
-            <ClipPreview kind={row.kind} set="" height={360} />
+                looking at one figure in particular — one per role. */}
+            {typeof row.kind === 'string' ? (
+              <ClipPreview kind={row.kind} set="" height={360} />
+            ) : ROLES.filter((role) => (row.kind as RoleKinds)[role]).map((role) => (
+              <div key={role}>
+                <div className="ga-form-hint">{t('Role {role}').replace('{role}', role.toUpperCase())}</div>
+                <ClipPreview kind={(row.kind as RoleKinds)[role] || ''} set="" height={260} />
+              </div>
+            ))}
           </div>
         )}
       </section>
     </div>
+  )
+}
+
+/** One bridge clip: the solo kinds, a missing one kept visible, and — for a
+ *  role of a per-role rule — "none" (that role blends over). */
+function KindSelect({ value, kinds, disabled, allowNone, onChange }: {
+  value: string
+  kinds: string[]
+  disabled: boolean
+  allowNone?: boolean
+  onChange: (kind: string) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <select className="ga-input" style={{ maxWidth: 200 }} value={value} disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}>
+      {allowNone ? <option value="">{t('— none —')}</option> : null}
+      {!value || kinds.includes(value) ? null : (
+        <option value={value}>{`${value} (${t('missing')})`}</option>
+      )}
+      {kinds.map((k) => <option key={k} value={k}>{k}</option>)}
+    </select>
   )
 }

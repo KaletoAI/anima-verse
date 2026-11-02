@@ -772,7 +772,7 @@ def _validate_transitions(entries: Any, offset: int = 0,
                     f"rule {i + 1}: a bridge per role needs a pair pose as 'from'")
             kind = {r: validate_kind(k) for r, k in kind.items()}
         else:
-            kind = validate_kind(raw.get("kind"))
+            kind = validate_kind(kind)
         if solo is None:
             solo = _solo_kinds()
         for one in (kind.values() if isinstance(kind, dict) else [kind]):

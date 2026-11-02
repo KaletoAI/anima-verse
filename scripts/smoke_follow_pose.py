@@ -37,6 +37,9 @@ storage + instance, no server, no real world). Expected values, by hand:
     "moved" gives no follow.
 [8] FINISH. ``/play/self/activity`` with ``finish``: a free ``dancing``
     with follow ``kneeling`` goes into kneeling; without a follow it clears.
+    The HUD offer (``/play/self`` ``follow``, F3) names ``kneeling`` for the
+    free ``dancing`` and nothing once kneeling, and nothing while a furniture
+    action holds the avatar (it ends through its own path).
 [9] BRIDGE RULES FOR THE CLIENTS (F2). The clients play a pair half as
     ``<kind>__<role>`` and keep that as the clip they leave. A rule
     ``run-pair -> sitting`` with bridge ``run-up`` therefore reaches them as
@@ -281,8 +284,12 @@ class FollowPose(unittest.TestCase):
         name, target, pid = RUNS.setup_run()
         set_entry("dancing", follow_pose="kneeling")
         F.C.set_pose_intent(name, "dancing")
+        self.assertEqual(play._free_pose_follow(name), "kneeling")
+        with patch("app.core.prop_action_engine.has_semantic_action", lambda actor: True):
+            self.assertEqual(play._free_pose_follow(name), "")
         self.assertTrue(play._finish_into_follow(name))
         self.assertEqual(F.C.get_character_profile(name)["pose_key"], "kneeling")
+        self.assertEqual(play._free_pose_follow(name), "")
         self.assertFalse(play._finish_into_follow(name))      # kneeling has no follow
         set_entry("dancing", follow_pose=None)
 

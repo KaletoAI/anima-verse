@@ -2726,7 +2726,10 @@ Avatar setzt freie Körperposen und **raumgebundene Marker** über
 aufwachen — mit `"finish": true`, dem „Beenden“ des HUD, statt dessen in die
 Folge-Pose der Pose, wenn sie eine hat (`pose_catalog.follow_pose_for`); die
 Steuer-Taste sendet `finish` nie; `{"place_id", "pose"}` = ausdrücklich
-gewählter Raum-Marker).
+gewählter Raum-Marker). `GET /play/self` nennt das Ziel als
+`follow: {pose_key, pose_label}` (sonst `null`) — nur für eine FREIE Pose: ein
+Paar und eine Möbel-Aktion enden über ihren eigenen Weg und folgen dort
+selbst. Das HUD zeigt dann „Beenden → <Pose>“ (`SelfPanel`).
 Ein Prop-Marker wird hier mit `409 prop_action_required` abgelehnt.
 `GET /play/places` liefert weiterhin Raum-Marker als
 `{room_id, places: [{id,label,group,capacity,free,free_slots,poses:[{key,label}]}]}`.

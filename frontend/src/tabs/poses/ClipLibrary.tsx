@@ -47,7 +47,7 @@ import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiPatch, apiPost } from '../../lib/api'
-import { orderSets } from './clipSets'
+import { bridgeKinds, orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
 import { generatedBadge, isStudioClip } from './generatedClip'
@@ -191,9 +191,7 @@ export function ClipLibrary({
       ;(out[k] = out[k] || []).push(p.key)
     }
     for (const r of listing.transitions || []) {
-      const k = (r.kind || '').trim()
-      if (!k) continue
-      ;(out[k] = out[k] || []).push(`${r.from} → ${r.to}`)
+      for (const k of bridgeKinds(r.kind)) (out[k] = out[k] || []).push(`${r.from} → ${r.to}`)
     }
     return out
   }, [poses, listing.transitions])

@@ -42,6 +42,8 @@ interface SelfData {
   conditions: BoostCondition[]
   profile_image: string
   expression_version?: string
+  /** where the free pose goes when it is finished — null without a follow pose */
+  follow?: { pose_key: string; pose_label: string } | null
 }
 
 export function SelfPanel() {
@@ -139,6 +141,19 @@ export function SelfPanel() {
     await refresh()
     setBusy(false)
   }, [busy, activityDraft, refresh, t])
+
+  // "End" instead of a plain stop: the pose goes into its follow pose (lying
+  // on after the bed, catching breath after a dance); the server falls back
+  // to clearing it when the follow cannot be taken.
+  const finishActivity = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    setActivityNote('')
+    try { await apiPost('/play/self/activity', { activity: '', finish: true }) }
+    catch (e) { setActivityNote(e instanceof Error ? e.message : String(e)) }
+    await refresh()
+    setBusy(false)
+  }, [busy, refresh])
 
   if (!data || !data.avatar) {
     return <EmptyState icon="self" title={t('No active avatar')} />
@@ -252,6 +267,13 @@ export function SelfPanel() {
           <span style={{ color: '#d6b06a', fontSize: '0.76em' }}>{activityNote}</span>
         )}
       </label>
+      {data.follow && (
+        <button type="button" className="player-chip" disabled={busy} style={{ alignSelf: 'flex-start' }}
+          title={t('End the current pose and go into its follow pose')}
+          onClick={() => { void finishActivity() }}>
+          {t('End → {pose}').replace('{pose}', data.follow.pose_label || data.follow.pose_key)}
+        </button>
+      )}
     </div>
   )
 }
