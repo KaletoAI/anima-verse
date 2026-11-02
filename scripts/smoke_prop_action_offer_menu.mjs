@@ -13,12 +13,16 @@
  * b. That row reads "Sit:" then the pieces usable first, nearest first:
  *    "Wooden Stool · 1.2 m", "Wooden Stool · 3.0 m", "Bench · 0.5 m" (disabled,
  *    hover text reason:presence_not_met), then ✕. A click on stool B picks it.
- * c. "With Mia ▸ 2" opens a row "With Mia:" + "Cuddle", "Dance"; a click on
- *    "Dance" picks the rug with Mia. "With Ben ▸ 1" is disabled with the reason
- *    as hover text (the only action with Ben is blocked).
+ * c. "With Mia ▸ 2" opens a row "With Mia:" + "Cuddle ▸", "Dance ▸".
+ *    "Dance ▸" opens "Dance · Mia:" with "Rug · 1.0 m · Ask" and
+ *    "Rug · 1.0 m · Just do it"; only these pick the rug with Mia, carrying
+ *    consent "ask" and "react" respectively. "With Ben ▸ 1" is disabled with
+ *    the reason as hover text (the only action with Ben is blocked).
  * d. A menu that belongs to one partner (OthersPanel) shows that partner's actions as
- *    plain chips, no partner chip: partner Mia → "Cuddle", "Dance". The place
- *    menu (nameProps false) has no piece hover text.
+ *    action chips, no partner chip: partner Mia → "Cuddle ▸", "Dance ▸".
+ *    In a place menu (nameProps false), solo chips have no piece hover text
+ *    and a one-piece pair row offers just "Ask" and "Just do it".
+ * Design: 976efe70 (compact rows), a1c5af11 (per-request consent choices).
  */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -65,7 +69,7 @@ const offers = [
   offer('Dance', 'Rug', 'f', 1.0, { required_partner: true, available_targets: [{ partner: 'Mia', enabled: true, reason: '' }] }),
 ];
 let picks = [];
-const render = (props = {}) => { cursor = 0; return PropActionOffers({ offers, onPick: (o, p) => picks.push([o.placement_id, p]), ...props }) };
+const render = (props = {}) => { cursor = 0; return PropActionOffers({ offers, onPick: (o, p, consent) => picks.push([o.placement_id, p, consent]), ...props }) };
 // A rendered row: [label text, [[button text, disabled, hover text], ...]] — hints wrap their button.
 const rows = tree => tree.props.children.filter(Boolean).map(row => {
   const kids = nodes(row.props.children).filter(n => n.type === HoverHint || n.type === 'button' || n.type === 'span');
@@ -80,6 +84,7 @@ const rows = tree => tree.props.children.filter(Boolean).map(row => {
 const click = (tree, name) => {
   const button = rows(tree).flatMap(([, b]) => b).find(b => b[0] === name);
   assert.ok(button, `no button ${name}`);
+  assert.equal(button[1], false, `cannot click disabled button ${name}`);
   button[3].props.onClick();
 };
 
@@ -89,9 +94,9 @@ let [top] = rows(tree);
 assert.deepEqual(top[1].map(b => b[0]), ['Sit ▸', 'Read', 'With Mia ▸ 2', 'With Ben ▸ 1']);
 assert.equal(top[1][1][2], 'Armchair · 2.0 m');
 click(tree, 'Read');
-assert.deepEqual(picks, [['d', undefined]]);
+assert.deepEqual(picks, [['d', undefined, undefined]]);
 click(tree, 'Sit ▸');
-assert.deepEqual(picks, [['d', undefined]]);
+assert.deepEqual(picks, [['d', undefined, undefined]]);
 console.log('PASS a: one name-only chip per action, no select; a single piece starts at once');
 
 tree = render();
@@ -102,7 +107,7 @@ assert.deepEqual(all[1][1].map(b => [b[0], b[1], b[2]]), [
   ['Wooden Stool · 1.2 m', false, undefined], ['Wooden Stool · 3.0 m', false, undefined],
   ['Bench · 0.5 m', true, 'reason:presence_not_met'], ['✕', false, undefined]]);
 click(tree, 'Wooden Stool · 1.2 m');
-assert.deepEqual(picks.at(-1), ['b', undefined]);
+assert.deepEqual(picks.at(-1), ['b', undefined, undefined]);
 assert.equal(rows(render()).length, 1);
 console.log('PASS b: several pieces open a row, usable and nearest first, the blocked one inert');
 
@@ -112,15 +117,44 @@ assert.deepEqual(top[1][3].slice(1, 3), [true, 'reason:presence_not_met']);
 click(tree, 'With Mia ▸ 2');
 all = rows(render());
 assert.equal(all[1][0], 'With Mia:');
-assert.deepEqual(all[1][1].map(b => b[0]), ['Cuddle', 'Dance', '✕']);
-click(render(), 'Dance');
-assert.deepEqual(picks.at(-1), ['f', 'Mia']);
-console.log('PASS c: pair actions sit behind one chip per partner');
+assert.deepEqual(all[1][1].map(b => b[0]), ['Cuddle ▸', 'Dance ▸', '✕']);
+assert.equal(picks.length, 2, 'opening the partner row requests nothing');
+assert.equal(all[0][1][2][3].props['aria-expanded'], true);
+assert.equal(all[1][1][1][3].props['aria-expanded'], false);
+assert.equal(all[1][1][2][3].props['aria-label'], 'Close');
+click(render(), 'Dance ▸');
+all = rows(render());
+assert.equal(picks.length, 2, 'even a one-piece pair action must wait for a consent choice');
+assert.equal(all.length, 3);
+assert.equal(all[1][1][1][3].props['aria-expanded'], true);
+assert.equal(all[2][0], 'Dance · Mia:');
+assert.deepEqual(all[2][1].map(b => [b[0], b[1], b[2]]), [
+  ['Rug · 1.0 m · Ask', false, 'Ask Mia first'],
+  ['Rug · 1.0 m · Just do it', false, 'Start at once; Mia reacts and may push you away'],
+  ['✕', false, undefined],
+]);
+assert.equal(all[2][1][2][3].props['aria-label'], 'Close');
+click(render(), 'Rug · 1.0 m · Ask');
+assert.deepEqual(picks.at(-1), ['f', 'Mia', 'ask']);
+assert.equal(rows(render()).length, 2, 'picking closes the piece row');
+click(render(), 'Dance ▸');
+click(render(), 'Rug · 1.0 m · Just do it');
+assert.deepEqual(picks.at(-1), ['f', 'Mia', 'react']);
+assert.equal(picks.length, 4);
+console.log('PASS c: one chip per partner; pair actions open explicit Ask/Just do it choices');
 
 states = [];
 [top] = rows(render({ partner: 'Mia' }));
-assert.deepEqual(top[1].map(b => b[0]), ['Cuddle', 'Dance']);
+assert.deepEqual(top[1].map(b => b[0]), ['Cuddle ▸', 'Dance ▸']);
+click(render({ partner: 'Mia' }), 'Cuddle ▸');
+all = rows(render({ partner: 'Mia' }));
+assert.equal(all[1][0], 'Cuddle · Mia:');
+assert.deepEqual(all[1][1].map(b => b[0]), ['Sofa · 4.0 m · Ask', 'Sofa · 4.0 m · Just do it', '✕']);
 states = [];
-const place = PropActionOffers({ offers: [offer('Read', 'Armchair', 'd', 2.0)], nameProps: false, onPick() {} });
+const place = render({ offers: [offer('Read', 'Armchair', 'd', 2.0)], nameProps: false });
 assert.deepEqual(rows(place)[0][1].map(b => [b[0], b[2]]), [['Read', undefined]]);
+states = [];
+const placePair = { offers: [offers[5]], partner: 'Mia', nameProps: false };
+click(render(placePair), 'Dance ▸');
+assert.deepEqual(rows(render(placePair))[1][1].map(b => b[0]), ['Ask', 'Just do it', '✕']);
 console.log('PASS d: a partner\'s own menu lists that partner\'s actions; the place menu names no piece');

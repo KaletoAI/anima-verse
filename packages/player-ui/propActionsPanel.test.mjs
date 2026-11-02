@@ -2,6 +2,10 @@
 // Render the actual shared UI: blocked partners must remain visible, general
 // enabled offers must not enable a blocked exact partner, and consent/stop/wake
 // controls must follow the private DTO rather than an optimistic place field.
+// Expectations: 976efe70 groups pairs behind one chip per partner and wraps
+// each chip row; a1c5af11 makes pair action chips open consent choices even for
+// one piece. The partner card already supplies the name, so its chips name
+// only the action. 708a20dc adds finale hints; 270e6eb1 prepends standing chips.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -37,31 +41,40 @@ assert.equal(propActionReason('future_code', translate), 'Zurzeit nicht möglich
 assert.equal(propActionReason('constructor', translate), 'Zurzeit nicht möglich');
 const render = (Component, props) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(Component, props)));
 const target = { location_id: 'house', room_id: 'lounge', placement_id: 'sofa-2', variant_uid: 'green' };
-const offer = { action_id: 'rest', definition_revision: 'rev-7', placement_id: 'sofa-2', variant_uid: 'green', target, label: 'Rest', description: 'On the sofa', enabled: true, reason: '', required_partner: true, available_targets: [{ partner: 'Kira', enabled: false, reason: 'slot_occupied' }, { partner: 'Mira', enabled: true, reason: '' }], effects: [{ when: 'success', target: 'actor', stat: 'energy', amount: 5 }] };
+const offer = { action_id: 'rest', definition_revision: 'rev-7', placement_id: 'sofa-2', variant_uid: 'green', target, label: 'Rest', description: 'On the sofa', prop_label: 'Sofa', distance_m: 1.5, enabled: true, reason: '', required_partner: true, available_targets: [{ partner: 'Kira', enabled: false, reason: 'slot_occupied' }, { partner: 'Mira', enabled: true, reason: '' }], effects: [{ when: 'success', target: 'actor', stat: 'energy', amount: 5 }] };
 const markup = render(PropActionOffers, { offers: [offer], onPick() {} });
 const buttons = [...markup.matchAll(/<button\b[^>]*>[^<]*<\/button>/g)].map(match => match[0]);
 assert.equal(buttons.length, 2, 'one chip per exact partner target');
-assert.match(markup, />Rest · Kira<\/button>/);
-assert.match(markup, />Rest · Mira<\/button>/);
+assert.match(buttons[0], /disabled=""[^>]*aria-expanded="false"[^>]*>With Kira ▸ 1<\/button>/);
+assert.match(buttons[1], /aria-expanded="false"[^>]*>With Mira ▸ 1<\/button>/);
+assert.doesNotMatch(buttons[1], /disabled=/);
 assert.match(markup, /flex-wrap:wrap/);
-assert.doesNotMatch(markup, /flex-direction:column|<select/);
+assert.doesNotMatch(markup, /<select/);
 assert.doesNotMatch(markup, /2 people|1 person/);
 const textNodes = html => html.replace(/<[^>]*>/g, '');
 assert.doesNotMatch(textNodes(markup), /On the sofa|success|energy|occupied|Needs a partner/);
 assert.match(markup, /data-hint="This place is occupied"/);
 assert.doesNotMatch(markup, /title=/);
-assert.match(markup, /aria-disabled="true"/);
 const filtered = render(PropActionOffers, { offers: [offer], partner: 'Kira', onPick() {} });
-assert.match(filtered, /Kira/);
+assert.equal(textNodes(filtered), 'Rest ▸', 'a partner card names only the action, even when blocked');
 assert.doesNotMatch(filtered, /Mira/);
 assert.match(filtered, /disabled=""/);
+assert.match(filtered, /aria-disabled="true"/);
+assert.match(filtered, /aria-expanded="false"/);
 assert.match(filtered, /This place is occupied/);
+assert.doesNotMatch(textNodes(filtered), /occupied|slot_occupied/);
 assert.doesNotMatch(filtered, /<div[^>]*>slot_occupied<\/div>/);
 const available = render(PropActionOffers, { offers: [offer], partner: 'Mira', onPick() {} });
+assert.equal(textNodes(available), 'Rest ▸');
 assert.doesNotMatch(available, /disabled=""/);
+assert.doesNotMatch(available, /aria-disabled="true"/);
 const retainedOffers = render(PropActionOffers, { offers: [offer], partner: 'Kira', busy: true, onPick() {} });
 assert.match(retainedOffers, /disabled=""/);
 assert.match(retainedOffers, /This place is occupied/);
+const finale = render(PropActionOffers, { offers: [{ ...offer, finale: true }], partner: 'Kira', onPick() {} });
+assert.match(finale, /class="player-chip player-chip-finale"/);
+assert.match(finale, /data-hint="This place is occupied · With finale"/);
+assert.equal(textNodes(finale), 'Rest ▸', 'finale and refusal remain hints, not chip text');
 const solo = render(PropActionOffers, { offers: [{ ...offer, required_partner: false, enabled: false, reason: 'no_path', available_targets: [] }], onPick() {} });
 assert.doesNotMatch(solo, /1 person/);
 assert.match(solo, /data-hint="Not possible right now"/);
@@ -84,7 +97,8 @@ assert.match(row({ status: 'approaching', phase: 'entry' }, 'current'), /Enterin
 assert.match(row({ status: 'active' }, 'current'), /Active/);
 const authoredPhaseId = '65d1be74-2221-4c30-a5bf-d409d8297a71';
 const combinedPhase = row({ status: 'active', phase: authoredPhaseId, phase_label: 'Brew coffee' }, 'current');
-assert.equal(textNodes(combinedPhase), 'Rest · ActiveStop');
+// ad79c128 names the other participant in pair execution rows.
+assert.equal(textNodes(combinedPhase), 'Rest with Mira · ActiveStop');
 assert.doesNotMatch(combinedPhase, /65d1be74-2221-4c30-a5bf-d409d8297a71/);
 assert.doesNotMatch(row({ status: 'active', phase: authoredPhaseId, phase_label: '' }, 'current'), /65d1be74-2221-4c30-a5bf-d409d8297a71/);
 const sleep = row({ status: 'sleeping' }, 'current');
@@ -92,10 +106,10 @@ assert.match(sleep, /Sleeping/);
 assert.match(sleep, /Wake up/);
 assert.match(sleep, /Stop/);
 const declined = row({ status: 'cancelled', reason: 'consent_declined', can_respond: false, can_cancel: false }, 'result');
-assert.equal(textNodes(declined), 'Rest · Cancelled');
+assert.equal(textNodes(declined), 'Rest with Mira · Cancelled');
 assert.doesNotMatch(declined, /<button/);
 const result = row({ status: 'completed', can_respond: false, can_cancel: false, effects: { success: { energy: 5 } } }, 'result');
-assert.equal(textNodes(result), 'Rest · Completed');
+assert.equal(textNodes(result), 'Rest with Mira · Completed');
 assert.doesNotMatch(result, /Results|energy/);
 console.log('PASS semantic shared offers and private lifecycle components');
 
@@ -107,10 +121,20 @@ const hostedPanel = render(PropActionsPanel, {});
 assert.match(hostedPanel, /Furniture actions/);
 assert.match(hostedPanel, /Active/);
 assert.match(hostedPanel, /Stop/);
+assert.match(hostedPanel, /aria-label="Furniture actions"/);
+const leading = React.createElement('button', { type: 'button', className: 'player-chip' }, 'Hug');
+const withStanding = render(PropActionsPanel, { leading });
+assert.match(withStanding, /aria-label="Actions"/);
+assert.match(withStanding, /<strong>Actions<\/strong>/);
+assert.match(withStanding, />Hug<\/button>[\s\S]*>With Kira ▸ 1<\/button>/);
 // Finished runs are not listed (the storyteller narrates them): only results -> no panel at all.
 propApi.publishHostedPropActions({ offers: [], state: { incoming: [], outgoing: [], current: [],
   recent_results: [{ ...execution, status: 'completed', can_respond: false, can_cancel: false }] } });
 assert.equal(render(PropActionsPanel, {}), '', 'finished runs are not listed');
+const standingOnly = render(PropActionsPanel, { leading });
+assert.match(standingOnly, /aria-label="Actions"/);
+assert.match(standingOnly, />Hug<\/button>/);
+assert.doesNotMatch(standingOnly, /Completed/);
 propApi.publishHostedPropActions(null);
 assert.equal(render(PropActionsPanel, {}), '', 'reconnecting host clears old private snapshot');
 propApi.setPropActionHost(false);
