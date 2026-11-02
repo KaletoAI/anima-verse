@@ -110,7 +110,8 @@ public static class PairClip
 /// <param name="ElapsedS">GAME seconds into the interaction (NaN when the row lacks it)</param>
 /// <param name="ClipDurationS">the clip's own length (<c>clip_duration_s ?? 0</c>)</param>
 /// <param name="Rate">game seconds per real second (<c>rate ?? 0</c>)</param>
-public sealed record PairInteraction(string Id, string Kind, string Role, string Partner, PairAnchor Anchor, double ElapsedS,
+/// <param name="Members">role ("a".."e", clip order) → name of every participant, this figure included (G2b)</param>
+public sealed record PairInteraction(string Id, string Kind, string Role, IReadOnlyDictionary<string, string> Members, PairAnchor Anchor, double ElapsedS,
                                      double ClipDurationS, bool Loop, double Rate)
 {
     /// <summary>The clip half this figure plays: <c>&lt;kind&gt;__&lt;role&gt;</c>.</summary>

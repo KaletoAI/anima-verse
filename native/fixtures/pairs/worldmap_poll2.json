@@ -58,7 +58,7 @@
     "id": "hs1",
     "kind": "greeting-handshake",
     "role": "a",
-    "partner": "Ben Hand",
+    "members": {"a": "Ann Hand", "b": "Ben Hand"},
     "anchor": {
      "x": 20.0,
      "z": 40.0,
@@ -88,7 +88,7 @@
     "id": "hs1",
     "kind": "greeting-handshake",
     "role": "b",
-    "partner": "Ann Hand",
+    "members": {"a": "Ann Hand", "b": "Ben Hand"},
     "anchor": {
      "x": 20.0,
      "z": 40.0,
@@ -118,7 +118,7 @@
     "id": "hug1",
     "kind": "greeting-hug",
     "role": "a",
-    "partner": "Dee Seat",
+    "members": {"a": "Cy Seat", "b": "Dee Seat"},
     "anchor": {
      "x": 64.0,
      "z": 131.0,
@@ -148,7 +148,7 @@
     "id": "hug1",
     "kind": "greeting-hug",
     "role": "b",
-    "partner": "Cy Seat",
+    "members": {"a": "Cy Seat", "b": "Dee Seat"},
     "anchor": {
      "x": 64.0,
      "z": 131.0,
@@ -204,7 +204,7 @@
     "id": "cf1",
     "kind": "comforting",
     "role": "a",
-    "partner": "Fay Solo",
+    "members": {"a": "Eve Solo", "b": "Fay Solo"},
     "anchor": {
      "x": 30.5,
      "z": 40.0,
@@ -234,7 +234,7 @@
     "id": "cf1",
     "kind": "comforting",
     "role": "b",
-    "partner": "Eve Solo",
+    "members": {"a": "Eve Solo", "b": "Fay Solo"},
     "anchor": {
      "x": 30.5,
      "z": 40.0,

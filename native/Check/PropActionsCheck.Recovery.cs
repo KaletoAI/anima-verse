@@ -232,7 +232,7 @@ public static partial class PropActionsCheck
                     Is("failed cancellation retains motion and permits retry",ReferenceEquals(beforeCancel,mgr.OwnPropMotion) && steering.PropActionDriven && !offers.PropActions!.Paused);
                     source.CancelError=null;
                 }
-                var stalePair=Read("worldmap_active.json"); stalePair["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"old-pair","kind":"pair-pose","role":"b","partner":"fixture-npc","anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
+                var stalePair=Read("worldmap_active.json"); stalePair["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"old-pair","kind":"pair-pose","role":"b","members":{"a":"fixture-npc","b":"fixture-avatar"},"anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
                 stalePair["characters"]![0]!["interaction"]!["id"]="old-pair-"+clip;
                 mgr.ApplyPolled(JsonSerializer.SerializeToElement(stalePair)); Step(0); Is("cancel starts with authoritative pair present",avatar.Pair is not null);
                 int states=source.StateRequests,maps=source.WorldRequests;
@@ -282,7 +282,7 @@ public static partial class PropActionsCheck
 
             var raced=Motion("active-pair-before-state"); raced["entry"]!["pose_key"]="pair-pose"; raced["role"]="b";
             source.MapOverride=Read("worldmap_active.json"); source.MapOverride["characters"]![0]!["place"]!["slot"]=1;
-            source.MapOverride["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"valid-pair-before-state","kind":"pair-pose","role":"b","partner":"fixture-npc","anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
+            source.MapOverride["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"valid-pair-before-state","kind":"pair-pose","role":"b","members":{"a":"fixture-npc","b":"fixture-avatar"},"anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); source.StateOverride=RunState(raced);
             await offers.PropActions!.RefreshAsync(); Step(8); Is("early matching active pair survives delayed state plan",avatar.Pair?.Id=="valid-pair-before-state");
             // Task 96: same clip for action and finale must switch loop mode per figure, then restore it.
@@ -313,11 +313,11 @@ public static partial class PropActionsCheck
                 string tag=answered ? "state" : "timeout", pairId="pair-stop-"+tag;
                 var stopped=Motion(pairId); stopped["entry"]!["pose_key"]="pair-pose"; stopped["role"]="b";
                 var npcFigure=mgr.Figures["fixture-npc"];
-                JsonNode Half(string role,string partner)=>JsonNode.Parse("{\"id\":\""+pairId+"\",\"kind\":\"pair-pose\",\"role\":\""+role+"\",\"partner\":\""+partner
-                    +"\",\"anchor\":{\"x\":2,\"z\":0,\"yaw\":0,\"place_id\":\"prop-bench-56-seat56\"},\"elapsed_s\":0,\"clip_duration_s\":1,\"loop\":true,\"rate\":1}")!;
+                JsonNode Half(string role)=>JsonNode.Parse("{\"id\":\""+pairId+"\",\"kind\":\"pair-pose\",\"role\":\""+role
+                    +"\",\"members\":{\"a\":\"fixture-npc\",\"b\":\"fixture-avatar\"},\"anchor\":{\"x\":2,\"z\":0,\"yaw\":0,\"place_id\":\"prop-bench-56-seat56\"},\"elapsed_s\":0,\"clip_duration_s\":1,\"loop\":true,\"rate\":1}")!;
                 var both=Read("worldmap_active.json"); both["characters"]![0]!["place"]!["slot"]=1;
-                both["characters"]![0]!["interaction"]=Half("b","fixture-npc");
-                both["characters"]!.AsArray().First(c=>c!["name"]!.GetValue<string>()=="fixture-npc")!["interaction"]=Half("a","fixture-avatar");
+                both["characters"]![0]!["interaction"]=Half("b");
+                both["characters"]!.AsArray().First(c=>c!["name"]!.GetValue<string>()=="fixture-npc")!["interaction"]=Half("a");
                 source.MapOverride=both; mgr.ApplyPolled(JsonSerializer.SerializeToElement(both));
                 await Start(stopped); Step(8);
                 Is($"pair stop: both halves run {tag} (npc={npcFigure.Pair?.Id ?? "none"} avatar={avatar.Pair?.Id ?? "none"})",avatar.Pair?.Id==pairId && npcFigure.Pair?.Id==pairId);
@@ -375,7 +375,7 @@ public static partial class PropActionsCheck
             var paired=Read("worldmap_entry.json"); var npcRow=paired["characters"]![1]!;
             paired["characters"]![0]!["prop_action_entry"]=null; npcRow["prop_action_entry"]=null; npcRow["activity_animation"]="pair-pose";
             npcRow["place"]=JsonNode.Parse("""{"id":"prop-bench-56-seat56","slot":1,"x":2,"z":0,"facing":180,"room_id":"r-props"}""");
-            npcRow["interaction"]=JsonNode.Parse("""{"id":"npc-pair","kind":"pair-pose","role":"b","partner":"fixture-avatar","anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
+            npcRow["interaction"]=JsonNode.Parse("""{"id":"npc-pair","kind":"pair-pose","role":"b","members":{"a":"fixture-avatar","b":"fixture-npc"},"anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(paired)); Step(.1);
             Is($"NPC partner leaves the entry for its pair (entry={observer.PropEntry is not null} pending={observer.PropCommitPending})",observer.PropEntry is null && !observer.PropCommitPending && observer.Pair is not null);
             Is($"NPC partner plays its pair half (clip={observer.CurrentClip})",observer.CurrentClip=="pair-pose__b");

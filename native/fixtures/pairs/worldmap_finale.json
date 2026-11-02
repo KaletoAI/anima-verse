@@ -58,7 +58,7 @@
         "id": "hug1",
         "kind": "greeting-handshake",
         "role": "a",
-        "partner": "Dee Seat",
+        "members": {"a": "Cy Seat", "b": "Dee Seat"},
         "anchor": {
           "x": 64.0,
           "z": 131.0,
@@ -95,7 +95,7 @@
         "id": "hug1",
         "kind": "greeting-handshake",
         "role": "b",
-        "partner": "Cy Seat",
+        "members": {"a": "Cy Seat", "b": "Dee Seat"},
         "anchor": {
           "x": 64.0,
           "z": 131.0,

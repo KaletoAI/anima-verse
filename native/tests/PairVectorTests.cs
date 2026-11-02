@@ -240,7 +240,7 @@ public class PairPlayTests
 {
     private static PairInteraction Row(string id = "p1", double elapsed = 3, double rate = 1, bool loop = true, double dur = 2,
                                        string role = "a", double ax = 10, double az = 22, double yaw = 0)
-        => new(id, "greeting-hug", role, "B", new PairAnchor(ax, az, yaw, null), elapsed, dur, loop, rate);
+        => new(id, "greeting-hug", role, new Dictionary<string, string> { ["a"] = "A", ["b"] = "B" }, new PairAnchor(ax, az, yaw, null), elapsed, dur, loop, rate);
 
     [Fact]
     public void AdoptionTakesTheServerClockAndKeepsItBetweenPolls()
@@ -321,5 +321,30 @@ public class PairPlayTests
         Assert.Equal(-0.6, o.X, 12);
         Assert.Equal(0.6, o.Y, 12);
         Assert.Equal(0.2, o.Z, 12);
+    }
+}
+
+/// <summary>G2b: <c>interaction.members</c> (role → name, own figure included) replaces <c>partner</c>.</summary>
+public class PairMembersTests
+{
+    private static PairInteraction? Interaction(string members) =>
+        CharacterRow.ParseList(System.Text.Json.JsonDocument.Parse(
+            "{\"characters\":[{\"name\":\"Bob\",\"location_id\":\"l\",\"interaction\":{\"id\":\"p\",\"kind\":\"greeting-hug\",\"role\":\"b\","
+            + members + "\"anchor\":{\"x\":1,\"z\":2,\"yaw\":0}}}]}").RootElement).Single().Interaction;
+
+    [Fact]
+    public void MembersCarryEveryRoleIncludingTheOwnFigure()
+    {
+        var it = Interaction("\"members\":{\"a\":\"Ann\",\"b\":\"Bob\"},")!;
+        Assert.Equal(new Dictionary<string, string> { ["a"] = "Ann", ["b"] = "Bob" }, it.Members);
+        Assert.Equal("Ann", it.Members.Single(m => m.Key != it.Role).Value);
+    }
+
+    [Fact]
+    public void MissingOrMalformedMembersAreEmptyAndNonStringNamesDropped()
+    {
+        Assert.Empty(Interaction("")!.Members);
+        Assert.Empty(Interaction("\"members\":[\"Ann\"],")!.Members);
+        Assert.Equal(new Dictionary<string, string> { ["b"] = "Bob" }, Interaction("\"members\":{\"a\":7,\"b\":\"Bob\"},")!.Members);
     }
 }

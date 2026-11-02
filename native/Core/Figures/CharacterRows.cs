@@ -154,6 +154,16 @@ public sealed record CharacterRow(
         return result;
     }
 
+    /// <summary><c>interaction.members</c>: role → name, string values only; absent or malformed = empty.</summary>
+    private static IReadOnlyDictionary<string, string> ParseMembers(JsonElement it)
+    {
+        var members = new Dictionary<string, string>();
+        if (it.TryGetProperty("members", out var m) && m.ValueKind == JsonValueKind.Object)
+            foreach (var p in m.EnumerateObject())
+                if (p.Value.ValueKind == JsonValueKind.String) members[p.Name] = p.Value.GetString()!;
+        return members;
+    }
+
     private static FinaleBlock? ParseFinale(JsonElement c)
     {
         if (!c.TryGetProperty("finale", out var f) || f.ValueKind != JsonValueKind.Object) return null;
@@ -173,7 +183,7 @@ public sealed record CharacterRow(
         if (!it.TryGetProperty("anchor", out var a) || a.ValueKind != JsonValueKind.Object) return null;
         string? place = a.TryGetProperty("place_id", out var pid) && pid.ValueKind == JsonValueKind.String ? pid.GetString() : null;
         bool loop = it.TryGetProperty("loop", out var lp) && lp.ValueKind == JsonValueKind.True;
-        return new PairInteraction(Json.Str(it, "id"), Json.Str(it, "kind"), Json.Str(it, "role"), Json.Str(it, "partner"),
+        return new PairInteraction(Json.Str(it, "id"), Json.Str(it, "kind"), Json.Str(it, "role"), ParseMembers(it),
                                    new PairAnchor(Json.Num(a, "x"), Json.Num(a, "z"), Json.Num(a, "yaw"), place),
                                    Json.NumOrNull(it, "elapsed_s") ?? double.NaN, Json.NumOrNull(it, "clip_duration_s") ?? 0,
                                    loop, Json.NumOrNull(it, "rate") ?? 0);
