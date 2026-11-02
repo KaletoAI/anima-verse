@@ -200,6 +200,7 @@ public partial class Main
     private void TickEmbody()
     {
         using var hitch = AnimaNative.Ui.HitchLog.Time("Main.avatar controllers");
+        if (InPhoto) return;
         if (Leaving) { CancelPendingControl(); _avatarRooms?.SetActive(false); _playerSteering?.SetActive(false); return; }
         TryAutoTakeControl();
         SyncPlayerSteering();
@@ -225,6 +226,7 @@ public partial class Main
     /// <summary>Camera frame hook: own-body mode and view heading; the final skeleton hook places the lens again.</summary>
     private void PoseEmbody()
     {
+        if (InPhoto) return;
         var figure = Embodied ? AvatarFigure() : null;
         // Task 53: camera has its final third-person pose; first person and overview clear the shared corridor.
         OcclusionMaterials.Update(_camera?.GlobalPosition ?? Vector3.Zero, figure?.GlobalPosition,
@@ -290,6 +292,7 @@ public partial class Main
     /// <summary>Task 49: browser key names come from the shared camera key set; HUD-owned typing/overlay releases them.</summary>
     private void StepPlayerSteering(double dt)
     {
+        if (InPhoto) return;
         if (_playerSteering is null || _camera is null) return;
         _playerSteering.SetActive(Embodied && !Leaving);
         _playerSteering.MovementLocked = _hud?.HudOwned("movementLocked")?.GetValue<bool>() == true;

@@ -422,6 +422,7 @@ public partial class FigureManager : Node3D
     /// </summary>
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
+        if (PhotoMode && fig.CharacterName == AvatarName && !fresh) return;
         if (fig.CharacterName == AvatarName && OwnPropMotion is not null) return;
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
@@ -625,7 +626,9 @@ public partial class FigureManager : Node3D
         var faceTo = new Dictionary<Figure, Vec3>();
         for (int i = 0; i < all.Count; i++)
             if (NpcWalk.NeighbourFacing(positions[i], positions.Where((_, j) => j != i)) is { } c) faceTo[all[i]] = c;
-        foreach (var fig in all) StepFigure(fig, dt, faceTo.TryGetValue(fig, out var n) ? n : null, camDist);
+        foreach (var fig in all)
+            if (!PhotoMode || fig.CharacterName != AvatarName)
+                StepFigure(fig, dt, faceTo.TryGetValue(fig, out var n) ? n : null, camDist);
         AfterTick?.Invoke();
     }
 

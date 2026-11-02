@@ -8,6 +8,8 @@ namespace AnimaNative.Figures;
 /// <summary>Task 49 / E7-T4: npcs.ts player ownership; movement continues through the ordinary figure tick.</summary>
 public partial class FigureManager
 {
+    /// <summary>Only the avatar's placement and movement tick sleep; all other figures remain live.</summary>
+    public bool PhotoMode { get; set; }
     public string? PlayerDriven { get; private set; }
     private string? _playerAnimation;
     /// <summary>Task 50: keep the controlled identity while E6 owns its movement; suppression survives cached placement.</summary>

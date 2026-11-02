@@ -426,8 +426,11 @@ public partial class HudOverlay : CanvasLayer
         if (_state.TakePatch(force: true) is { } patch) Send(HudProtocol.State(patch));
     }
 
+    internal Action<string>? MessageProbe { get; set; }
+
     private void Send(string json)
     {
+        MessageProbe?.Invoke(json);
         using var hitch = AnimaNative.Ui.HitchLog.Time("HudOverlay.send");
         if (_cef is null || !_cef.HasBrowser || _phase != Phase.Hud) return;
         _cef.Emit(Channel, json);
@@ -592,7 +595,8 @@ public partial class HudOverlay : CanvasLayer
     public override void _Input(InputEvent e)
     {
         using var hitch = AnimaNative.Ui.HitchLog.Time("HudOverlay.input");
-        if (!_loaded || _cef is null || _rect is null) return;
+        if (ScenePhotoInput?.Invoke(e) == true) { Handled(); return; }
+        if (!Visible || !_loaded || _cef is null || _rect is null) return;
         switch (e)
         {
             case InputEventMouseMotion mm:
@@ -631,7 +635,7 @@ public partial class HudOverlay : CanvasLayer
             case InputEventKey k:
             {
                 // F11 is the window's (Main toggles full screen), never the page's — not even while it types.
-                if (k.Keycode == Key.F11) break;
+                if (k.Keycode is Key.F11 or Key.F2) break;
                 // Releases can lose Unicode/modifiers or arrive after the input blurred.
                 var textKey = k.PhysicalKeycode != Key.None ? k.PhysicalKeycode : k.Keycode;
                 if (!k.Pressed && _textKeys.Remove(textKey)) { Handled(); break; }

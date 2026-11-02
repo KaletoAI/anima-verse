@@ -204,6 +204,9 @@ public sealed class OverviewControl
     /// <summary>Forget every held key (the keyboard went to another surface; its key-ups will not arrive here).</summary>
     public void ReleaseKeys() => _keys.Clear();
 
+    /// <summary>Mode boundaries discard physical gestures whose release may go to another owner.</summary>
+    public void ReleaseGesture() { ReleaseKeys(); _orbiting = false; _moved = false; }
+
     // ---- the frame (engine.ts frame(), camera part) -----------------------------------------------
 
     /// <summary>

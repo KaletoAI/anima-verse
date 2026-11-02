@@ -11,6 +11,12 @@ public partial class HudOverlay
     /// <summary>Task 51: scene offers read by the same F/picker resolution as the HUD; callers never mutate this value.</summary>
     public JsonNode? SceneOwned(string field) => _state.Get(field);
     public Action? SceneEscape { get; set; }
+    /// <summary>Photo input precedes HUD Escape, including while the restored HUD waits for an upload.</summary>
+    public Func<InputEvent,bool>? ScenePhotoInput { get; set; }
+
+    public void OpenScreenshotPhoto(string id,string url,AnimaNative.Photo.PhotoView view)
+        => SendUi("openScreenshotPhoto",new JsonObject {
+            ["imageId"]=id,["imageUrl"]=url,["view"]=System.Text.Json.JsonSerializer.SerializeToNode(view) });
     /// <summary>Later entry wiring can explain a locked neighbour even when it publishes no visible offer.</summary>
     public Func<bool>? LockedEntry { get; set; }
 

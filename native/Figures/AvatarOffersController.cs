@@ -23,6 +23,7 @@ namespace AnimaNative.Embody;
 /// </summary>
 public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
 {
+    public bool Suspended { get; set; }
     private readonly FigureManager _figures;
     private readonly WorldBuilder _world;
     private readonly PlayerSteering _steering;
@@ -40,7 +41,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     private double _seatMapAt;
     private JsonElement? Map => _figures.LatestMap ?? _world.FirstMap;
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
-    private bool CanUse => _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
+    private bool CanUse => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
     private bool CanEnter => CanUse && !RoomRequestInFlight() && !_steering.PendingSnap && !_steering.SeatWritePending
         && !_steering.AvatarSeated && _steering.VerticalRide is null && _steering.WalkIn is null && _steering.Correction is null;
     public Func<bool> RoomRequestInFlight { get; set; }=()=>false;
@@ -113,6 +114,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     public Task? PendingPlaces { get; private set; }
     private void MapApplied(JsonElement map,double polledAt)
     {
+        if (Suspended) return;
         if(FigureGround.PollIsStale(polledAt,_position.OwnSeatChangeAt)) return;
         ClearHover();
         _seatMap=map.Clone(); _seatMapAt=polledAt;
@@ -121,6 +123,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     }
     public void Tick()
     {
+        if (Suspended) return;
         TickProps();
         if(_hud.Ui.MenuOpen || _hud.Ui.OverlayOpen || _hud.SceneOwned("placeMenu") is not null) ClearHover();
         if(!_active || _disposed) return;

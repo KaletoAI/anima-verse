@@ -34,6 +34,7 @@ public partial class Main : Node3D
         if (_hud is null) return;
         var hud = _hud;
         _camera!.KeysBlocked = () => IsInstanceValid(hud) && hud.KeysToHud;
+        hud.ScenePhotoInput = HandlePhotoInput;
         hud.Handlers.Clear();
         hud.Handlers["zoomTo"] = args => ZoomTo(args.Count > 0 ? args[0]?.GetValue<string>() : null);
         // The chat panel's box (HUD CSS px) → the camera's view shift (viewport px).

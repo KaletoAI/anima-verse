@@ -416,6 +416,24 @@ out of its way (the browser's view shift, as a Godot frustum offset).
 The status line top left reports what was loaded; per-location
 failures are logged to the console (`[native] …`).
 
+Photo mode (Task 95): **F2** enters after boot, unless the HUD is typing. **F2/Esc**
+returns to the exact previous overview, follow or first-person camera. WASD flies
+in the view plane, Q/E moves down/up, mouse drag looks around, and the wheel
+changes speed exponentially (0.5–20 m/s, initially 4; Shift ×3). Flight uses real
+frame time capped at 0.1 s. The avatar holds; other figures and the world keep
+running. The open location and shown storey stay selected. HUD, labels, pins,
+markers, portraits and travel lines are hidden; a small English hint remains.
+
+**Space** captures a frame without the hint, encodes JPEG at quality 0.9 on a
+worker (longest side ≤2048), restores the camera/HUD, then uploads through the
+authenticated player upload and opens the shared screenshot photo dialog via
+bridge v4 `openScreenshotPhoto`. Repeated Space is ignored while busy. F2/Esc
+cancels a pending shot/upload silently; failures use the native HUD toast path.
+`--check photo` (also included in full `--check`) exercises production camera
+state, avatar/report guards, multipart JPEG, bridge handoff, failures and
+cancellation. Headless checks substitute only readback pixels at the actual
+render-frame boundary; they do not prove GPU screenshot pixels.
+
 ## Bench
 
 The same drive as the browser's `client3d/?bench=auto&goto=<loc>`: THE file

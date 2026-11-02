@@ -17,6 +17,7 @@ namespace AnimaNative.Embody;
 /// </summary>
 public sealed class AvatarPositionController : IDisposable
 {
+    public bool Suspended { get; set; }
     private readonly FigureManager _figures;
     private readonly WorldBuilder _world;
     private readonly PlayerSteering _steering;
@@ -67,7 +68,7 @@ public sealed class AvatarPositionController : IDisposable
     public string? OwnedPropJourney { get; private set; }
     public Func<bool>? PropMotionOwned { get; set; }
     public Func<string?,bool>? ManualPropWithdrawn { get; set; }
-    private bool CanReport => _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven
+    private bool CanReport => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven
         && !InPair && !Seated && !_steering.SeatWritePending && _readiness.PendingSnap is null && _steering.Correction is null;
 
     public AvatarPositionController(FigureManager figures, WorldBuilder world, PlayerSteering steering,
@@ -84,7 +85,7 @@ public sealed class AvatarPositionController : IDisposable
             return answer;
         }, _clock);
         Channel.CanReport = () => CanReport;
-        Channel.CanPrepareReport = () => _active && !_disposed && _readiness.PendingSnap is null && _steering.Correction is null;
+        Channel.CanPrepareReport = () => !Suspended && _active && !_disposed && _readiness.PendingSnap is null && _steering.Correction is null;
         Channel.Adopted += answer => SetRoom(Text(answer.Body,"location_id"), answer.RoomId);
         Channel.Refused += (point, home) => steering.RememberRefused(point, home ?? CurrentPoint());
         Channel.Corrected += CorrectTo;
@@ -126,6 +127,7 @@ public sealed class AvatarPositionController : IDisposable
 
     private void Applying(JsonElement root, double polledAt)
     {
+        if (Suspended) return;
         if (!_active) return;
         _figures.HoldAvatarPlacement = FigureGround.PollIsStale(polledAt, OwnStateChangedAt);
         if (_figures.HoldAvatarPlacement) return;
@@ -164,6 +166,7 @@ public sealed class AvatarPositionController : IDisposable
     }
     private void DriverChanged(DriverState before, DriverState after)
     {
+        if (Suspended) return;
         if (!_active || _disposed) return;
         if (after.Kind == DriverKind.SERVER) { ClearOwnedMovement(); _figures.SetServerDriven(true); }
         else if (before.Kind == DriverKind.SERVER)
@@ -184,6 +187,7 @@ public sealed class AvatarPositionController : IDisposable
     /// <summary>Walk at most 8 m for at most 3 s; farther corrections snap and invalidate the local plan.</summary>
     public void CorrectTo(P2 point)
     {
+        if (Suspended) return;
         if (!_active || Avatar is not { } f || _figures.OwnPropMotion is not null) return;
         OwnCorrectionAt = _clock();
         // Task 51: the authoritative correction takes ownership even while a stair/lift owns the steering branch.
@@ -203,6 +207,7 @@ public sealed class AvatarPositionController : IDisposable
 
     private void Applied(JsonElement root, double polledAt)
     {
+        if (Suspended) return;
         if (!_active || _steering.PropActionDriven || Channel.Driver.Kind == DriverKind.SERVER
             || FigureGround.PollIsStale(polledAt,OwnStateChangedAt) || _row is not { } row) return;
         if (row.TryGetProperty("travel",out var tr) && tr.ValueKind == JsonValueKind.Object && Channel.Suppressed(Text(tr,"journey_id"))) return;
@@ -226,6 +231,7 @@ public sealed class AvatarPositionController : IDisposable
     /// <summary>Runs before steering so a ready teleport releases the hold on the same frame.</summary>
     public void BeforeSteering()
     {
+        if (Suspended) return;
         using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarPosition.before steering");
         if (!_active || _readiness.PendingSnap is not { } snap || !Readiness.TrySnap(_world,snap)) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;
@@ -234,6 +240,7 @@ public sealed class AvatarPositionController : IDisposable
 
     private void AfterTick()
     {
+        if (Suspended) return;
         using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarPosition.after tick");
         if (!_active || CurrentPoint() is not { } p) return;
         bool moved = _lastPosition is { } last && double.Hypot(p.X-last.X,p.Z-last.Z) > .00001;

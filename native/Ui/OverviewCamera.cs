@@ -59,7 +59,7 @@ public partial class OverviewCamera : Camera3D
     public double? ZoomCap { get => Control.ZoomCap; set => Control.ZoomCap = value; }
     public double? ZoomFloor { get => Control.ZoomFloor; set => Control.ZoomFloor = value; }
     public double NearPitchDeg { get => Control.NearPitchDeg; set => Control.NearPitchDeg = value; }
-    public bool FirstPerson => Control.FirstPerson;
+    public bool FirstPerson => !Photo.Active && Control.FirstPerson;
     public event Action? ZoomCapped { add => Control.ZoomCapped += value; remove => Control.ZoomCapped -= value; }
     /// <summary>Task 48: pose hooks run after the camera zoom latch, before final first-person placement.</summary>
     public event Action? Posed;
@@ -83,6 +83,7 @@ public partial class OverviewCamera : Camera3D
     /// <summary>The boot framing (main.ts): world centre on the ground at the fit distance.</summary>
     public void FrameWorld(BoundsXZ? bounds, Func<double, double, double> groundY)
     {
+        if (Photo.Active) return;
         Control.FrameWorld(bounds, groundY);
         ApplyPose(Control.Pose());
     }
@@ -90,14 +91,17 @@ public partial class OverviewCamera : Camera3D
     /// <summary>Put the camera on <paramref name="target"/> at <paramref name="dist"/> at once.</summary>
     public void JumpTo(Vector3 target, double dist)
     {
+        if (Photo.Active) return;
         Control.JumpTo(new Vec3(target.X, target.Y, target.Z), dist);
         ApplyPose(Control.Pose());
     }
 
-    public void FlyTo(Vector3 point, double dist) => Control.FlyTo(new Vec3(point.X, point.Y, point.Z), dist);
+    public void FlyTo(Vector3 point, double dist)
+    { if (!Photo.Active) Control.FlyTo(new Vec3(point.X, point.Y, point.Z), dist); }
 
     /// <summary>The plaque's "Zoom to": fly to the figure root + 0.85 m at 4.5 m, no follow.</summary>
-    public void ZoomTo(Vector3 figureRoot) => Control.ZoomTo(new Vec3(figureRoot.X, figureRoot.Y, figureRoot.Z));
+    public void ZoomTo(Vector3 figureRoot)
+    { if (!Photo.Active) Control.ZoomTo(new Vec3(figureRoot.X, figureRoot.Y, figureRoot.Z)); }
 
     /// <summary>The HUD's chat panel in VIEWPORT px (main.ts <c>setChatBox</c> → <c>engine.obstruction</c>); null = closed.</summary>
     public void SetChatBox(HudRect? box) => _chatBox = box;
@@ -114,6 +118,7 @@ public partial class OverviewCamera : Camera3D
     /// <summary>One camera frame (public for the headless check, which drives it with fixed steps).</summary>
     public void Step(double delta)
     {
+        if (Photo.Active) { StepPhoto(delta); return; }
         ApplyPose(Control.Step(delta));
         Posed?.Invoke();
         RefreshFirstPerson();
@@ -211,6 +216,7 @@ public partial class OverviewCamera : Camera3D
 
     public override void _UnhandledInput(InputEvent e)
     {
+        if (Photo.Active) return;
         switch (e)
         {
             case InputEventMouseButton mb when mb.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown:
@@ -226,6 +232,9 @@ public partial class OverviewCamera : Camera3D
                 break;
             case InputEventMouseButton mb:
             {
+                // A photo drag released after Escape must never become a game click.
+                if (!mb.Pressed && _photoButtons.Remove(mb.ButtonIndex)) break;
+                if (mb.Pressed) _photoButtons.Remove(mb.ButtonIndex);
                 var at = mb.Position;
                 var button = ButtonOf(mb.ButtonIndex);
                 if (mb.Pressed)
@@ -254,7 +263,7 @@ public partial class OverviewCamera : Camera3D
     {
         if (what == NotificationWMMouseExit) Hovered?.Invoke(null);
         // The key-ups of a window that lost the focus never arrive.
-        if (what == NotificationApplicationFocusOut) Control.ReleaseKeys();
+        if (what == NotificationApplicationFocusOut) { Control.ReleaseKeys(); Photo.ReleaseKeys(); _photoDrag = false; }
     }
 
     private static PointerButton ButtonOf(MouseButton b) => b switch

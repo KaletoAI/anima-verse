@@ -69,23 +69,25 @@ public partial class HudInputProbe : HudOverlay
                 && browser.Keys[0] == (46, true));
             hud.Ui.Apply(new JsonObject { ["typing"] = true });
             browser.Keys.Clear();
-            foreach (var key in new[] { Key.Enter, Key.Backspace, Key.Delete, Key.Tab, Key.Left, Key.Home, Key.End, Key.Escape, Key.F2 })
+            foreach (var key in new[] { Key.Enter, Key.Backspace, Key.Delete, Key.Tab, Key.Left, Key.Home, Key.End, Key.Escape })
             { KeyEvent(key, 0, true); KeyEvent(key, 0, false); }
-            Is("editing and navigation remain on CEF", browser.Keys.Count == 18);
+            Is("editing and navigation remain on CEF", browser.Keys.Count == 16);
+            KeyEvent(Key.F2, 0, true); KeyEvent(Key.F2, 0, false);
+            Is("F2 stays with scene even while typing; Main owns its typing gate",browser.Keys.Count==16);
             foreach (var key in new[] { Key.A, Key.C, Key.V, Key.X, Key.Z })
             { KeyEvent(key, (uint)key, true, ctrl: true); KeyEvent(key, 0, false, ctrl: true); }
-            Is("Ctrl shortcuts remain on CEF", browser.Keys.Count == 28);
+            Is("Ctrl shortcuts remain on CEF", browser.Keys.Count == 26);
             KeyEvent(Key.Q, '@', true, ctrl: true, alt: true);
             KeyEvent(Key.Q, 0, false);
-            Is("AltGr text and release bypass CEF", browser.Keys.Count == 28 && browser.Messages.Count == 3);
+            Is("AltGr text and release bypass CEF", browser.Keys.Count == 26 && browser.Messages.Count == 3);
             KeyEvent(Key.F11, 0, true);
-            Is("F11 stays with window", browser.Keys.Count == 28);
+            Is("F11 stays with window", browser.Keys.Count == 26);
             hud.Ui.Apply(new JsonObject { ["textInput"] = false });
             KeyEvent(Key.Space, ' ', true); KeyEvent(Key.Space, 0, false);
-            Is("typing in a checkbox or select keeps CEF keys", browser.Keys.Count == 30 && browser.Messages.Count == 3);
+            Is("typing in a checkbox or select keeps CEF keys", browser.Keys.Count == 28 && browser.Messages.Count == 3);
             hud.Ui.Apply(new JsonObject { ["typing"] = false, ["overlayOpen"] = false });
             KeyEvent(Key.Period, '.', true);
-            Is("scene retains keys without HUD ownership", browser.Keys.Count == 30 && browser.Messages.Count == 3);
+            Is("scene retains keys without HUD ownership", browser.Keys.Count == 28 && browser.Messages.Count == 3);
             return n;
         }
         finally { hud.Free(); browser.Free(); rect.Free(); }

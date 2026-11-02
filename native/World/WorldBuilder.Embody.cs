@@ -14,9 +14,11 @@ namespace AnimaNative.World;
 /// <summary>Task 49 / E7-T4: main.ts walking lookups over the same mounted ground ladder used by NPCs.</summary>
 public sealed partial class WorldBuilder
 {
+    public bool PhotoMode { get; set; }
     /// <summary>Reveal the authoritative room before the avatar's first placement, like browser placeAvatarOnArrival.</summary>
     public bool PrepareAvatarArrival(JsonElement map)
     {
+        if (PhotoMode) return true;
         string name = Json.Str(map, "avatar");
         foreach (var row in Json.Arr(map, "characters"))
         {
@@ -42,6 +44,20 @@ public sealed partial class WorldBuilder
     private readonly Dictionary<(string Id, int Level), (LocationSlot Slot, ScenePayload Scene, TileFrame Frame, List<WallSegment> Segments)> _avatarWalls = new();
 
     public LocationSlot? FootprintAt(double x, double z) => TileAt(x,z)?.Slot;
+
+    /// <summary>Browser photoFloorY: shown-storey surface below the camera, room/corridor centre, terrain.</summary>
+    public double PhotoFloorY(Vector3 camera)
+    {
+        double x=camera.X, z=camera.Z, terrain=FigureGroundY(x,z);
+        if (FootprintAt(x,z) is not { Open:true } tile) return terrain;
+        var local=SceneView.WorldToTile(tile.Stands.Frame,x,z);
+        var floor=tile.Stands.BakedFloorAt(local.X,local.Z,s=>
+            tile.Stands.RoomLevels.TryGetValue(s.RoomId,out int level) && level==tile.LevelFilter);
+        if (floor is { } baked && baked<=camera.Y) return baked;
+        string? room=Ambience.RoomAtRects(tile.RoomRects,local.X,local.Z)
+            ?? Ambience.CorridorAtOutline(tile.Corridors,local.X,local.Z);
+        return room is not null && tile.Stands.RoomCenters.TryGetValue(room,out var centre) && centre.Y<=camera.Y ? centre.Y : terrain;
+    }
 
     /// <summary>Task 49: worldmap openings remain authoritative even when a scene has no authored walls.</summary>
     private static IEnumerable<P2> OpeningsAt(JsonElement? map, string id)

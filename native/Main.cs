@@ -226,6 +226,7 @@ public partial class Main : Node3D
     /// </summary>
     public override void _Input(InputEvent e)
     {
+        if (HandlePhotoInput(e)) return;
         if (e is not InputEventKey { Pressed: true, Echo: false, Keycode: Key.F11 }) return;
         GetViewport().SetInputAsHandled();
         if (DisplayServer.GetName() == "headless") return;
@@ -285,6 +286,7 @@ public partial class Main : Node3D
 
     public override void _ExitTree()
     {
+        _photo?.Cancel();
         _renderResolution?.Dispose();
         StopSoundtrack();
         DetachEmbody();
@@ -300,6 +302,7 @@ public partial class Main : Node3D
             _hud.Handlers.Clear();
             _hud.PageLoaded = null;
             _hud.Speak = null;
+            _hud.ScenePhotoInput = null;
         }
         _api?.Dispose();
     }
@@ -342,7 +345,7 @@ public partial class Main : Node3D
             TickVeil(delta);
         }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
-        if (_interactive && ControlBootReady && !_pendingTakeControl && !_pendingArrivalTakeControl
+        if (!InPhoto && _interactive && ControlBootReady && !_pendingTakeControl && !_pendingArrivalTakeControl
             && !Embodied && _openView.OpenId is { } open && _camera is not null)
         {
             var slot = _builder?.Slots.GetValueOrDefault(open);

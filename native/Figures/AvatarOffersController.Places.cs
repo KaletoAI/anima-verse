@@ -41,7 +41,7 @@ public sealed partial class AvatarOffersController
         try
         {
             using var doc=await _source.GetPlacesAsync();
-            if(!_active || _disposed || epoch!=_placesEpoch || generation<_offersAppliedGeneration || FigureGround.PollIsStale(askedAt,_position.OwnSeatChangeAt)
+            if(Suspended || !_active || _disposed || epoch!=_placesEpoch || generation<_offersAppliedGeneration || FigureGround.PollIsStale(askedAt,_position.OwnSeatChangeAt)
                 || Map is not { } current || Self(current) is not { } self || Text(self,"location_id")!=loc || Text(self,"room_id")!=room) return;
             _offersAppliedGeneration=generation;
             var root=doc.RootElement;

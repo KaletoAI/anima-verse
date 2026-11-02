@@ -48,7 +48,8 @@ public sealed class AvatarRoomsController : IDisposable
     public Action<string>? Log { get; set; }
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private LocationSlot? Tile => Avatar is { } f ? _world.FootprintAt(f.Position.X,f.Position.Z) : null;
-    private bool CanUse => _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
+    public bool Suspended { get; set; }
+    private bool CanUse => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
 
     public AvatarRoomsController(FigureManager figures,WorldBuilder world,PlayerSteering steering,IWorldSource source,HudOverlay hud,Func<double>? clock=null)
     {
@@ -112,6 +113,7 @@ public sealed class AvatarRoomsController : IDisposable
     /// <summary>Every-frame hysteresis and edge-triggered follow; offers sample at 1 Hz, like the browser.</summary>
     public void Tick()
     {
+        if (Suspended) return;
         using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarRoomsController");
         if(!_active || _disposed) { Channel.Idle(); return; }
         if(Avatar is not { } figure) { Channel.Idle(); ClearOffers(); return; }
