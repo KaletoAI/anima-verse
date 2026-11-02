@@ -18,6 +18,7 @@ public static class GraphicsCheck
         var vectors = JsonNode.Parse(File.ReadAllText(path))!["cases"]!.AsArray();
         JsonNode Prefs(GraphicsPrefs p) => JsonNode.Parse(GraphicsPrefs.Save(p))!;
         int count = HitchCheck.Run(host.GetViewport());
+        count += await HitchCheck.RunLiveAsync(host);
         DiagnosticsCheck.Run();
         var pacing = new System.Collections.Generic.List<string>();
         var oldVsync = DisplayServer.WindowGetVsyncMode();
@@ -118,8 +119,9 @@ public static class GraphicsCheck
         HitchLog.Armed = false;
         Require("hitch keeps prefix and adds GPU and scale", hitch is not null && hitch.StartsWith("hitch 133 ms: marked ")
             && hitch.Contains(" gc ") && hitch.Contains(" gpu ") && hitch.Contains(" ms, render scale ")
-            && hitch.Contains(" cpu ") && hitch.Contains(" render cpu "));
-        return $"graphics vectors={count} round_trips=36 bridge=36 viewport=auto/fixed/resize/root-window hitch=gpu/cpu/render-cpu/scale vsync=logged boot/cef=pass";
+            && hitch.Contains(" process ") && hitch.Contains(" physics ") && hitch.Contains(" continuations ")
+            && hitch.Contains(" render cpu ") && hitch.Contains(" rest "));
+        return $"graphics vectors={count} round_trips=36 bridge=36 viewport=auto/fixed/resize/root-window hitch=process/physics/continuations/render-cpu/gpu/rest/scale vsync=logged boot/cef=pass";
     }
 
     private static JsonNode Check(GraphicsPrefsCheck check) => check.Prefs is { } p

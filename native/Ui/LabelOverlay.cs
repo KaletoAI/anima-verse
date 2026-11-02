@@ -106,6 +106,7 @@ public partial class LabelOverlay : Control
 
     public override void _Draw()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("LabelOverlay.draw");
         var t0 = Stopwatch.GetTimestamp();
         var size = Camera is { } cam && IsInstanceValid(cam) ? cam.GetViewport().GetVisibleRect().Size : GetViewportRect().Size;
         var placed = Collect(size);

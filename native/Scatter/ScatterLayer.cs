@@ -140,6 +140,7 @@ public partial class ScatterLayer : Node3D
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("ScatterLayer");
         RefreshMask();
         var cam = GetViewport().GetCamera3D();
         if (cam is null) return;

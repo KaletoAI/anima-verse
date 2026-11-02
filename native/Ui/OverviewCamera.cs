@@ -106,6 +106,7 @@ public partial class OverviewCamera : Camera3D
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("OverviewCamera/OverviewControl");
         if (KeysBlocked?.Invoke() == true) Control.ReleaseKeys();
         Step(delta);
     }

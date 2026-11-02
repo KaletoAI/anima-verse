@@ -9,6 +9,7 @@ public partial class Main
 {
     private void TickAvatarRooms()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("Main.avatar rooms");
         if (_avatarRooms is not { } rooms || _hud is not { } hud) return;
         rooms.SetActive(Embodied && !Leaving);
         var locks = LockState.FromHud(hud.HudOwned("lockedRooms"), hud.HudOwned("lockedLoc"), null, "");

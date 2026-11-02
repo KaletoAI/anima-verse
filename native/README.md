@@ -249,10 +249,22 @@ repository working directory for its `repo:` references; normal play does not.
 
 Normal play requests adaptive V-sync (FIFO_RELAXED where supported); one
 `vsync: requested=Adaptive active=…` line records what the display server
-reports. Bench retains its own V-sync handling. Hitch lines and their 60 s
-summary include process CPU time (`Performance.TimeProcess`, ms) and viewport
-render CPU time beside GPU time. These monitors describe the preceding
-measured frame, as in bench results. At boot end, `boot machine:` logs logical
+reports. Bench retains its own V-sync handling. Hitch lines measure main-thread
+wall time between the first and last process/physics node callbacks using two
+priority probes (physics steps are summed per frame). They also report posted
+C# continuations with their three costliest names, viewport render CPU/GPU,
+`rest = frame − process − physics − render CPU`, slow named steps, GC, render
+scale and focus. Godot drains its C# continuation queue after rendering, outside
+the node probes: this time also remains in `rest`. Signal awaiters run inline
+at their signal site, in the enclosing phase or `rest`. These attributions can
+overlap; `rest` is logged without interpretation. Frame length is the wall
+interval between successive first probes, including waits and the scheduler.
+The 60 s summary covers hitch frames only: medians of frame/process/continuations/
+render CPU/GPU and the most frequent top step names (each name once per hitch).
+Detail lines retain their 300-line cap; summaries continue beyond it. Login and
+boot remain unarmed. `--check graphics` includes fixture-clock arithmetic,
+continuation names/order/exception checks and a live probe/scheduler check.
+The bench's separate CPU monitor is unchanged. At boot end, `boot machine:` logs logical
 CPUs, Linux one-minute load and available/total memory, plus this boot's
 process CPU time, wall time and CPU/wall ratio. Missing `/proc` fields are
 silently omitted; no new graphics setting is introduced.

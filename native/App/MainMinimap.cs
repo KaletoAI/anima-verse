@@ -10,6 +10,7 @@ public partial class Main
 
     private void TickMinimap(double dt)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("Main.minimap");
         if (_hud is null || _builder is null || _camera is null) return;
         if (_minimap.Tick(dt, Embodied && !Leaving, _builder, _figures, _camera.Yaw))
             _hud.SetMinimap(_minimap.State);

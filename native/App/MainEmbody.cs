@@ -199,6 +199,7 @@ public partial class Main
     /// <summary>Resume pending requests only after their gate changes; no async continuation can revive cancelled control.</summary>
     private void TickEmbody()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("Main.avatar controllers");
         if (Leaving) { CancelPendingControl(); _avatarRooms?.SetActive(false); _playerSteering?.SetActive(false); return; }
         TryAutoTakeControl();
         SyncPlayerSteering();

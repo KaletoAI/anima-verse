@@ -120,6 +120,7 @@ public partial class TerrainStreamer : Node
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("TerrainStreamer");
         ulong now = Time.GetTicksUsec();
         if (_lastUsec != 0)
         {

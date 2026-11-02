@@ -45,6 +45,7 @@ public partial class Main : Node3D
     /// <summary>main.ts' frame hook: <c>tickFogVeil(dt)</c>, then <c>setFogVeilCameraHeight(camera.y − target.y)</c>.</summary>
     private void TickVeil(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("Main.veil");
         if (_camera is null) return;
         VeilUniforms.Tick(delta);
         VeilUniforms.SetCameraHeight(_camera.GlobalPosition.Y - _camera.Target.Y);

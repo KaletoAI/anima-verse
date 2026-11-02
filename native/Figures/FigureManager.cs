@@ -553,6 +553,7 @@ public partial class FigureManager : Node3D
     /// <summary>The 1 Hz pass: re-place every figure from the cached rows (no model work — that is the poll's).</summary>
     public void TickPlacement()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("FigureManager.placement");
         if (_rows.Count == 0) return;
         foreach (var (name, plan) in Place())
             if (_figures.TryGetValue(name, out var fig)) ApplyPlan(fig, plan, false);
@@ -959,6 +960,7 @@ public partial class FigureManager : Node3D
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("FigureManager");
         if (!AutoTick) return;
         Tick(delta);
         _placeClock += delta;

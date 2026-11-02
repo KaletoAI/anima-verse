@@ -966,6 +966,7 @@ public sealed partial class WorldBuilder
     /// </summary>
     public void TickView(double dt, Vector3 camera)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("WorldBuilder.TickView");
         LocationSlot? open = null;
         LocationSlot? basement = null;
         foreach (var slot in _slots.Values)

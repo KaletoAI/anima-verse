@@ -57,6 +57,7 @@ public partial class LevelSwitchOverlay : Control
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("LevelSwitchOverlay");
         _placed = Layout(ViewSize());
         QueueRedraw();
         // cursor: pointer over a button (the box itself keeps the arrow, as the CSS has it).

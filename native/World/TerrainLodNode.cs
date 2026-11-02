@@ -336,6 +336,7 @@ public partial class TerrainLodNode : Node3D
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("TerrainLodNode");
         if (!AutoUpdate) return;
         var vp = GetViewport();
         var cam = vp?.GetCamera3D();

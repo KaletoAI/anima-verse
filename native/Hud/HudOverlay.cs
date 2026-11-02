@@ -216,6 +216,7 @@ public partial class HudOverlay : CanvasLayer
 
     public override void _Process(double delta)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("HudOverlay._Process");
         if (_storageDirty && Time.GetTicksMsec() >= _storageDueMs) FlushStorage();
     }
 
@@ -427,6 +428,7 @@ public partial class HudOverlay : CanvasLayer
 
     private void Send(string json)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("HudOverlay.send");
         if (_cef is null || !_cef.HasBrowser || _phase != Phase.Hud) return;
         _cef.Emit(Channel, json);
     }
@@ -439,6 +441,7 @@ public partial class HudOverlay : CanvasLayer
     /// </summary>
     public void hud_bridge(Variant data)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("HudOverlay.receive");
         var raw = data.VariantType == Variant.Type.String ? data.AsString() : Json.Stringify(data);
         var msg = HudProtocol.Parse(raw, out var reason);
         if (msg is null)
@@ -588,6 +591,7 @@ public partial class HudOverlay : CanvasLayer
 
     public override void _Input(InputEvent e)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("HudOverlay.input");
         if (!_loaded || _cef is null || _rect is null) return;
         switch (e)
         {

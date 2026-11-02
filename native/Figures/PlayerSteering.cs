@@ -106,6 +106,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     /// <summary>Task 49: ordering matches main.ts; held bridges suppress both goal and facing until the snap on release.</summary>
     public void Step(double dt, IReadOnlySet<string> keys, double yaw)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("PlayerSteering");
         _clock+=dt;
         if (!Active) { CancelRoute(); VerticalRide=WalkIn=Correction=null; return; }
         if (PendingSnap) { ToastLoading(); return; }

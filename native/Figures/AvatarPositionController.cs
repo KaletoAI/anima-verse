@@ -226,6 +226,7 @@ public sealed class AvatarPositionController : IDisposable
     /// <summary>Runs before steering so a ready teleport releases the hold on the same frame.</summary>
     public void BeforeSteering()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarPosition.before steering");
         if (!_active || _readiness.PendingSnap is not { } snap || !Readiness.TrySnap(_world,snap)) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;
         var p = new P2(snap.X,snap.Z); CorrectTo(p); FlyTo?.Invoke(GroundPoint(p));
@@ -233,6 +234,7 @@ public sealed class AvatarPositionController : IDisposable
 
     private void AfterTick()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarPosition.after tick");
         if (!_active || CurrentPoint() is not { } p) return;
         bool moved = _lastPosition is { } last && double.Hypot(p.X-last.X,p.Z-last.Z) > .00001;
         _lastPosition = p;

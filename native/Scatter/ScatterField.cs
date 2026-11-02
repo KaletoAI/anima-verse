@@ -632,6 +632,7 @@ public partial class ScatterField : Node3D
     /// <summary>One LOD pass (<c>tickScatterLod</c>): the camera, its forward direction and lens.</summary>
     public void Tick(double camX, double camY, double camZ, double fwdX, double fwdZ, double vFovDeg, double aspect)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("ScatterField.tick");
         _lodCam = (camX, camY, camZ);
         _cone = ScatterLod.ViewCone(fwdX, fwdZ, ScatterLod.HorizontalFovRad(vFovDeg, aspect));
         foreach (var a in _areas)

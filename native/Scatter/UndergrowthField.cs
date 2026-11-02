@@ -439,6 +439,7 @@ public partial class UndergrowthField : Node3D
 
     public void Tick(double camX, double camY, double camZ)
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("UndergrowthField.tick");
         _lodCam = (camX, camY, camZ);
         foreach (var layers in _cells.Values)
             foreach (var l in layers) BinLayer(l, _lodCam.Value);

@@ -112,6 +112,7 @@ public sealed class AvatarRoomsController : IDisposable
     /// <summary>Every-frame hysteresis and edge-triggered follow; offers sample at 1 Hz, like the browser.</summary>
     public void Tick()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarRoomsController");
         if(!_active || _disposed) { Channel.Idle(); return; }
         if(Avatar is not { } figure) { Channel.Idle(); ClearOffers(); return; }
         var tile=Tile; var room=tile is null ? null : Room(tile);

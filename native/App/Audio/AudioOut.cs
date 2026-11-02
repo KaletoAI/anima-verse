@@ -92,6 +92,7 @@ public partial class AudioOut : Node
     public override void _Process(double delta) => Tick();
     public void Tick()
     {
+        using var hitch = AnimaNative.Ui.HitchLog.Time("AudioOut.tick");
         if (_closed || _loader is null) return;
         _loader.Pump(); ApplyVolumes(); Music.Tick(); Ambient.Tick(); Speech.Tick();
     }
