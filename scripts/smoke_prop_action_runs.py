@@ -301,9 +301,12 @@ class Runs(unittest.TestCase):
         profile["place"] = dict(id=occupied["id"], slot=0, room_id=target["room_id"])
         F.C.save_character_profile(available, profile)
         blocked = prop_actions.offers(name)
-        self.assertTrue(all(not row["enabled"] for row in blocked), blocked)
-        self.assertTrue(all(entry["reason"] == "no_free_slot" for row in blocked
-                            for entry in row["available_targets"] if entry["partner"] != asleep), blocked)
+        # The sitter blocks everyone else's pair; with the sitter as partner
+        # the seat is its own to give up, like the actor's (_plan).
+        for row in blocked:
+            verdicts = {entry["partner"]: (entry["enabled"], entry["reason"]) for entry in row["available_targets"]}
+            self.assertEqual(verdicts, {partner: (False, "no_free_slot"), available: (True, ""),
+                                        asleep: (False, "participant_asleep")}, row)
         profile.pop("place")
         F.C.save_character_profile(available, profile)
         doc["actions"][0]["enabled"] = False

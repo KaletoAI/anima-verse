@@ -19,8 +19,12 @@ Hand-derived expectations (contract docs/schnittstellen-3d.md, "Own motion"):
   clip's own length in real seconds;
 - after activation the profile place is (anchor.place_id, anchor.slot) and
   the position is anchor (x, z) — one seat point, no second computation;
-- a seat switch with exit clip run-exit (1 s, 2 m travel): departure =
+- a seat switch to another piece (a second placement "other-device" of the
+  prop at (4, 5)) with exit clip run-exit (1 s, 2 m travel): departure =
   {seat: the held seat, stand: waypoint 2, exit_clip run-exit, exit_s 1.0};
+  a switch on the SAME piece ("rest-2") begins in place: status active,
+  motion null, no journey, the place on the same piece and the position its
+  anchor (fails on a1c5af11: "approaching" with a departure);
 - cancel while seated: motion = {seat: before, stand: where the server put
   the figure, exit_clip run-exit, exit_s 1.0}; cancel while walking: null.
 """
@@ -129,8 +133,26 @@ class MotionPlan(unittest.TestCase):
         first = player.post('/play/prop-actions/request', json=API.payload(target)).json()
         self.assertEqual(until_active(first['execution_id'])['status'], 'active')
         seat = F.C.get_character_pos(name)
+        # Same piece: in place.
         prop_actions.invalidate_offers_cache()
-        second = player.post('/play/prop-actions/request', json=API.payload(dict(target, action_id='rest-2'))).json()
+        here = player.post('/play/prop-actions/request', json=API.payload(dict(target, action_id='rest-2'))).json()
+        self.assertEqual((here['status'], here['motion']), ('active', None), here)
+        profile = F.C.get_character_profile(name)
+        self.assertIsNone(profile.get('journey'))
+        self.assertEqual(profile['place']['execution_id'], here['execution_id'])
+        anchor = R.get(here['execution_id'])['data']['plans']['actor']['entry_anchor']
+        pos = F.C.get_character_pos(name)
+        self.assertEqual((pos['x'], pos['z']), (anchor['x'], anchor['z']))
+        seat = pos
+        # Another piece: stand up from the seat and walk.
+        location = F.W.get_location_by_id(target['location_id'])
+        room = next(room for room in location['rooms'] if room['id'] == target['room_id'])
+        room['layout']['props'].append(dict(id='other-device', prop_id=pid, at=[4, 5], yaw=0))
+        F.W.upsert_location(location, sync_world=True)
+        F.places.invalidate()
+        prop_actions.invalidate_offers_cache()
+        second = player.post('/play/prop-actions/request',
+                             json=API.payload(dict(target, placement_id='other-device'))).json()
         self.assertEqual(second['status'], 'approaching', second)
         motion = second['motion']
         journey = F.C.get_character_profile(name)['journey']

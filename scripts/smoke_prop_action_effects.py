@@ -431,13 +431,17 @@ class Effects(unittest.TestCase):
         self.assertEqual(R.get(first)['status'], 'awaiting_consent')
         self.assertFalse(R.claims(first))
         self.assertTrue(R.claims(second))
-        self.assertEqual(A.respond(partner, first, True)['reason'], 'participant_claimed')
-        self.assertTrue(R.claims(second))
+        # Saying yes to the other question as well is a switch: the run the
+        # two already share ends, the newly accepted one walks.
+        self.assertEqual(A.respond(partner, first, True)['status'], 'approaching')
+        self.assertEqual(R.get(second)['status'], 'cancelled')
+        self.assertFalse(R.claims(second))
+        self.assertTrue(R.claims(first))
         S.tick(30)
         S.tick(2)
-        self.assertEqual(R.get(second)['status'], 'active')
-        self.assertEqual(F.C.get_character_profile(name)['place']['id'], 'other-device/body')
-        self.assertEqual(F.C.get_character_profile(partner)['place']['execution_id'], second)
+        self.assertEqual(R.get(first)['status'], 'active')
+        self.assertEqual(F.C.get_character_profile(name)['place']['id'], 'device/body')
+        self.assertEqual(F.C.get_character_profile(partner)['place']['execution_id'], first)
 
     def test_explicit_decision_runs_outside_locks_and_uses_real_response(self):
         from app.core.decision import Answer, Decision

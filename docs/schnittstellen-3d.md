@@ -8121,7 +8121,18 @@ Player routes require the authenticated user's current authorized avatar:
   `react` starts at once and the partner reacts and may push it away — every pair
   action offers both, the requester chooses. A request naming the run the actor
   already takes part in (same action, piece and pair) answers that run with
-  `already: true` instead of refusing it as `participant_claimed`.
+  `already: true` instead of refusing it as `participant_claimed`; an open
+  invitation asked again is answered the same way.
+  Switching: a run of the actor's own, and for a pair the partner's run that
+  involves nobody else (sitting alone, or the pair action the two share), is
+  ended by the new request instead of blocking it — their seats count as free
+  in offers and planning. `ask` ends nothing before the partner's "yes" (a "no"
+  keeps them running); `react` and solo requests end them at once. When every
+  participant is already active on the very piece, the new run begins in place:
+  no walk, no entry clip — the answer is `active` with `motion: null`, and the
+  seat or pair arrives with the next worldmap row. An open invitation survives
+  a position, pose or journey change of either person; the "yes" checks and
+  plans everything anew.
   Extra payload fields are rejected; nonces are scoped to actor and exact input.
   The declared player skill gate checks current skill-block rules and configured
   cost shortfalls for a truly new execution. Only its creator charges the accepted,
