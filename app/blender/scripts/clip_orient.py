@@ -22,6 +22,10 @@ out_dir=…)``:
              tilt_deg       tip the standing figure head-forward/down (0)
              roll_deg       tip it to its right (0)
              height_cm      lift after the turn (0)
+             slot_shift_cm  {slot: [x, y, z]} — a translation of ONE file
+                            of the run in the clip frame, BEFORE the turn:
+                            the partner offset of a pair's B half (only
+                            that slot moves, the other keeps its place)
              fps            the library's frame rate (default 30)
              anchor_frame   0-based index into the take whose root position is
                             reported as well — a pair's sidecar anchor, so the
@@ -41,8 +45,12 @@ origin of that frame is therefore the point on the FLOOR the clip is placed
 by, and the rigid transform turns about exactly it::
 
     R = Ry(yaw) · Rx(tilt) · Rz(roll)          (roll first, then tilt, then yaw)
-    p' = R · p + (0, height_cm, 0)
+    p' = R · (p + s) + (0, height_cm, 0)
     rot' = R · rot
+
+where ``s`` is the slot's own ``slot_shift_cm`` (zero for every other slot).
+The shift comes FIRST so it lives in the frame the dials turn — the admin
+preview moves the B figure inside its turned clip frame, the same order.
 
 The three matrices are Blender's own ``Matrix.Rotation(a, 3, axis)``, so the
 signs are the ones every other surface here already uses:
@@ -212,11 +220,19 @@ def _process(slot: str, src: str, root_name: str, args: dict):
     R3 = rotation(yaw, tilt, roll)
     R4 = R3.to_4x4()
     lift = Vector((0.0, height, 0.0))
-    planned = {f: {n: _moved(M, R4, lift) for n, M in before[f].items()}
+    shift = Vector([float(v) for v in ((p.get("slot_shift_cm") or {}).get(slot)
+                                       or (0.0, 0.0, 0.0))][:3])
+
+    def shifted(M):
+        S = M.copy()
+        S.translation = S.translation + shift
+        return S
+
+    planned = {f: {n: _moved(shifted(M), R4, lift) for n, M in before[f].items()}
                for f in frames}
 
     def point(v):
-        return R3 @ v + lift
+        return R3 @ (v + shift) + lift
 
     anchor = int(p.get("anchor_frame", 0) or 0)
     anchor = max(0, min(anchor, len(frames) - 1))
@@ -258,6 +274,7 @@ def _process(slot: str, src: str, root_name: str, args: dict):
     data = {
         "frames": len(frames), "fps": fps, "dry_run": dry,
         "yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll, "height_cm": height,
+        "shift_cm": [round(v, 4) for v in shift],
         "root_bone": root_name,
         "root_before": xyz(before[frames[0]][root_name]),
         "root_after": xyz(after[frames[0]][root_name]),

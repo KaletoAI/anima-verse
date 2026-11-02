@@ -139,7 +139,7 @@ export interface PlayWindow { start: number; end: number }
 
 export function ClipPreview({ kind = '', set = '', height = 300, urls, window: win, speed = 1,
   group, rootDrop = 0, yawOffset = 0, onYawOffset,
-  importYaw, importTilt, importRoll, importHeightM, footprint = '', bust }:
+  importYaw, importTilt, importRoll, importHeightM, partnerShiftM, footprint = '', bust }:
   { kind?: string
     /** which figure set to play the kind from — empty picks the neutral clip
      *  (and falls back to any set, the way the viewers do) */
@@ -170,6 +170,10 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     importTilt?: number
     importRoll?: number
     importHeightM?: number
+    /** Draft partner offset of a pair's B half, `[side, up, forward]` metres
+     *  in the clip frame (+X its left, +Z forward) — moved INSIDE the turned
+     *  frame, the order `clip_orient.py` bakes it in (shift, then turn). */
+    partnerShiftM?: [number, number, number]
     /** place type whose CALIBRATION BOX is drawn as the reference to turn
      *  against — the bed a sleeper has to line up with, in the measurements of
      *  the place type, its top the marked surface. It stands outside the clip
@@ -213,6 +217,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   importRollRef.current = importRoll || 0
   const importHeightRef = useRef(importHeightM)
   importHeightRef.current = importHeightM
+  const partnerShiftRef = useRef(partnerShiftM)
+  partnerShiftRef.current = partnerShiftM
   const dialled = importYaw !== undefined || importTilt !== undefined
     || importRoll !== undefined || importHeightM !== undefined
   const box = markerBox(group)
@@ -376,7 +382,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
 
         // ── figures + clips ──
         const fbx = new FBXLoader()
-        const players: Array<{ root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number }> = []
+        const players: Array<{ role: 'a' | 'b' | ''; root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number }> = []
         const hipsOf = (root: Object3D): Object3D | null => {
           let found: Object3D | null = null
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
@@ -444,7 +450,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           root.add(sprite)
           const mixer = new THREE.AnimationMixer(inst)
           mixer.clipAction(inplace).play()
-          players.push({ root, mixer, path, duration: clip.duration, hipsBindY,
+          players.push({ role, root, mixer, path, duration: clip.duration, hipsBindY,
             heightM: clipHeightOffsetM(heightOffsets, seat ? group : (footprint || group), FIGURE_H) })
         }
         if (disposed) return
@@ -489,6 +495,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             // place, so this preview walks the root along the path itself).
             // A standing clip yields 0 and the figure stays where it binds.
             p.root.position.set(r.x, -clipHipsDrop(p.hipsBindY, r.y, standRefM), r.z)
+            const shift = p.role === 'b' ? partnerShiftRef.current : undefined
+            if (shift) p.root.position.add(heightShift.set(shift[0], shift[1], shift[2]))
             if (importHeightRef.current === undefined && p.heightM) {
               heightShift.set(0, p.heightM, 0).applyQuaternion(inverseFrame)
               p.root.position.add(heightShift)

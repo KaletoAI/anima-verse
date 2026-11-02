@@ -238,9 +238,11 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     """Turns an already imported clip — the import's orientation dial,
     applied to the FILE.
 
-    Body ``{yaw_deg?, tilt_deg?, roll_deg?}``, at least one of them non-zero:
-    the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)`` about the origin of
-    the clip frame on the floor. Surface heights use the PATCH route's
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?}``, at least
+    one of them non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)``
+    about the origin of the clip frame on the floor. ``partner_shift_cm`` is
+    ``[side, up, forward]`` centimetres (clip frame, −100..100) that move a
+    PAIR's B half against its A half before the turn; a solo clip answers 400. Surface heights use the PATCH route's
     ``height_offsets_cm`` instead. Both halves of a pair are turned in ONE
     Blender run, the sidecar's angles add up and a
     pair's root geometry is re-measured on the written file. Needs Blender
@@ -262,16 +264,23 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise HTTPException(status_code=400, detail=f"{field} must be a number")
         dials[field] = float(raw)
-    if not any(abs(v) > 1e-9 for v in dials.values()):
+    shift = body.get("partner_shift_cm")
+    if shift is not None:
+        if (not isinstance(shift, list) or len(shift) != 3
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in shift)):
+            raise HTTPException(status_code=400,
+                                detail="partner_shift_cm must be [side, up, forward] numbers")
+        shift = [float(v) for v in shift]
+    if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()))):
         raise HTTPException(
             status_code=400,
-            detail="one of yaw_deg, tilt_deg, roll_deg must be non-zero")
+            detail="one of yaw_deg, tilt_deg, roll_deg, partner_shift_cm must be non-zero")
     if not blender_runner.is_available():
         raise HTTPException(status_code=503,
                             detail="Blender is not available on this server")
     started = time.monotonic()
     try:
-        clips = orient_clip(library, rel, **dials)
+        clips = orient_clip(library, rel, **dials, partner_shift_cm=shift)
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}

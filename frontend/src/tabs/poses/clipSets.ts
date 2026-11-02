@@ -41,13 +41,16 @@ export interface ApiClipRow {
   height_offsets_cm?: ClipHeightOffsetsCm
   /** What the FILE already carries: the import's orientation dial plus every
    *  later "Apply orientation" (`geometry.yaw_deg` / `tilt_deg` / `roll_deg`
-   *  in degrees, `floor_shift_cm` in centimetres). A field the sidecar never
-   *  wrote is absent — an unturned clip carries no angle at all. */
+   *  in degrees, `floor_shift_cm` in centimetres, a pair's
+   *  `partner_shift_cm` = B's [side, up, forward] offset in centimetres). A
+   *  field the sidecar never wrote is absent — an unturned clip carries no
+   *  angle at all. */
   orientation?: {
     yaw_deg?: number | null
     tilt_deg?: number | null
     roll_deg?: number | null
     floor_shift_cm?: number | null
+    partner_shift_cm?: [number, number, number] | null
   }
   /** How the import treated the root's travel (`geometry.root_motion` of the
    *  sidecar): the mode plus the travel it baked, `[x, z]` in metres of the

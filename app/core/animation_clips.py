@@ -52,7 +52,7 @@ import threading
 import time
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from app.core.http_files import atomic_replace, content_version
@@ -1063,7 +1063,7 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # every later ``orient_clip``. The library UI shows it beside the
         # dials so an angle is added to a known state, not to a guess.
         "orientation": {k: geometry.get(k) for k in
-                        ORIENT_ANGLES + ("floor_shift_cm",)},
+                        ORIENT_ANGLES + ("floor_shift_cm", "partner_shift_cm")},
         # How the import treated the root's travel, and where the clip ends
         # up (clip frame, metres) — None for a pair or a clip without block.
         "root_motion": ({"mode": rm["mode"], "travel_m": rm.get("travel_m")}
@@ -1584,7 +1584,8 @@ def _bump_angle(geometry: Dict[str, Any], field: str, delta: float) -> None:
 @_library_writer
 def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 tilt_deg: float = 0.0, roll_deg: float = 0.0,
-                height_cm: float = 0.0) -> List[Dict[str, Any]]:
+                height_cm: float = 0.0,
+                partner_shift_cm: Optional[Sequence[float]] = None) -> List[Dict[str, Any]]:
     """Turns and lifts a clip IN THE FILE — the import dial, after the fact.
 
     ``yaw_deg`` / ``tilt_deg`` / ``roll_deg`` are the rigid rotation
@@ -1602,7 +1603,14 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     RE-MEASURED on the written file instead of being predicted, because that
     root path is what the clients read.
 
-    All four dials at 0 is a no-op (no Blender start). Returns the touched
+    ``partner_shift_cm`` is ``[side, up, forward]`` in the clip frame (+X =
+    the clip's left, +Y up, +Z forward), centimetres: it moves the B half of
+    a PAIR against the A half — the import's ``offset_b_m``, after the fact,
+    for a pack whose halves turn out misaligned. It is applied before the
+    turn (``clip_orient.py``), so it lives in the frame the dials turn, and
+    adds up in ``geometry.partner_shift_cm``. A solo clip refuses it.
+
+    All dials at 0 is a no-op (no Blender start). Returns the touched
     clips as listing views.
     """
     from app.blender import runner
@@ -1612,13 +1620,18 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         raise ClipNotFound(f"{rel} does not exist in the {library} library")
     yaw, tilt, roll = float(yaw_deg or 0.0), float(tilt_deg or 0.0), float(roll_deg or 0.0)
     height = float(height_cm or 0.0)
+    shift = [float(v) for v in (partner_shift_cm or (0.0, 0.0, 0.0))]
+    if len(shift) != 3 or not all(math.isfinite(v) and abs(v) <= 100 for v in shift):
+        raise ClipLibraryError("partner_shift_cm must be three numbers from -100 to 100")
     kind, _role = parse_clip_role(path.name)
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
-    if not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height)):
+    if not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift)):
         return [_view_of(path, cset, library)]               # nothing dialled
 
     partner = _pair_partner(path)
+    if partner is None and any(abs(v) > 1e-9 for v in shift):
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair has a partner to move")
     sidecar = _orient_sidecar(path, kind, partner is not None)
     if not sidecar.is_file():
         raise ClipLibraryError(
@@ -1639,11 +1652,15 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     slots = {f"src_{i}": p for i, p in enumerate(targets)}
     inputs: Dict[str, Path] = {"rig": get_rig_file()}
     inputs.update(slots)
+    # Only the B half moves; the addressed file may be either half.
+    shifted = {slot: shift for slot, target in slots.items()
+               if any(abs(v) > 1e-9 for v in shift) and _split_stem(target.stem)[1] == "b"}
     with tempfile.TemporaryDirectory(prefix="clip-orient-") as tmp:
         res = runner.run("clip_orient", inputs=inputs, params={
             "yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
             "height_cm": height, "fps": int(meta.get("fps") or 30),
             "anchor_frame": int(geometry.get("anchor_frame") or 0),
+            "slot_shift_cm": shifted,
         }, out_dir=Path(tmp), timeout_s=900)
         if not res["ok"]:
             raise ClipLibraryError(str(res.get("error") or "the Blender run failed"))
@@ -1676,6 +1693,13 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     if abs(height) > 1e-9:
         geometry["floor_shift_cm"] = round(
             float(geometry.get("floor_shift_cm") or 0.0) + height, 2)
+    if shifted:
+        total = [round(float(a) + b, 1) for a, b in
+                 zip(geometry.get("partner_shift_cm") or (0.0, 0.0, 0.0), shift)]
+        if any(abs(v) >= 0.05 for v in total):
+            geometry["partner_shift_cm"] = total
+        else:
+            geometry.pop("partner_shift_cm", None)
     # A solo clip's travel is a direction in the clip frame — it turns with
     # the file (a lift moves nothing horizontal).
     rm = geometry.get("root_motion")
@@ -1705,9 +1729,9 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
 
     reload_clip_caches()
     logger.info("clip oriented: %s%s (%s) yaw %+.1f tilt %+.1f roll %+.1f "
-                "height %+.1f cm -> %s; lowest point now %s cm",
+                "height %+.1f cm partner %s cm -> %s; lowest point now %s cm",
                 f"{cset}/" if cset else "", kind, library, yaw, tilt, roll,
-                height, ", ".join(p.name for p in targets),
+                height, shift if shifted else "-", ", ".join(p.name for p in targets),
                 (data.get("src_0") or {}).get("floor_min_cm_after"))
     return [_view_of(p, cset, library) for p in targets]
 

@@ -29,14 +29,15 @@
  * and offers "Replace", which repeats the same call with `overwrite` and lets
  * the incoming file take the place of the one lying there.
  *
- * Under the preview sit the ORIENTATION dials: turn, tilt and roll.
+ * Under the preview sit the ORIENTATION dials: turn, tilt and roll — and for
+ * a pair the PARTNER B offset (forward / side / up), baked the same way.
  * "Apply orientation" BAKES these angles into the file. Height corrections
  * are saved separately per surface type in the sidecar, never in the FBX.
  * The import's own dial is gone by then and most mocap sources with it, so
  * this is the only way a clip that lies across the bed gets straightened.
  *
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
- *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?}
+ *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useMemo, useState } from 'react'
@@ -155,6 +156,8 @@ export function ClipLibrary({
   const [yawDeg, setYawDeg] = useState(0)
   const [tiltDeg, setTiltDeg] = useState(0)
   const [rollDeg, setRollDeg] = useState(0)
+  // A pair's B half against A: [side, up, forward] centimetres, baked like the angles.
+  const [partnerShift, setPartnerShift] = useState<[number, number, number]>([0, 0, 0])
   const [heightDraft, setHeightDraft] = useState<ClipHeightOffsetsCm>({})
   const [heightBusy, setHeightBusy] = useState(false)
   // Empty selects the ground height and draws only the grid.
@@ -261,6 +264,7 @@ export function ClipLibrary({
     setYawDeg(0)
     setTiltDeg(0)
     setRollDeg(0)
+    setPartnerShift([0, 0, 0])
     setHeightDraft({})
     setOrientError('')
     setOrientSeconds(null)
@@ -295,7 +299,9 @@ export function ClipLibrary({
   const heightDirty = Object.entries(heightDraft).some(
     ([group, cm]) => cm !== (orientTarget?.height_offsets_cm?.[group as keyof ClipHeightOffsetsCm] ?? 0),
   )
-  const orientDirty = !!(yawDeg || tiltDeg || rollDeg)
+  const isPairTarget = orientTarget?.role === 'a'
+  const shiftDirty = isPairTarget && partnerShift.some((v) => v !== 0)
+  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty
   // The baked angles live in the sidecar, so a clip without one has nowhere to
   // put them — the block says so instead of earning a 400 after Apply.
   const heightLocked = orientBusy || heightBusy
@@ -308,11 +314,13 @@ export function ClipLibrary({
     try {
       const res = await apiPost<{ seconds?: number }>(`${clipPath(orientTarget)}/orient`, {
         yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
+        ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
       })
       setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
       setYawDeg(0)
       setTiltDeg(0)
       setRollDeg(0)
+      setPartnerShift([0, 0, 0])
       // The file keeps its URL, so the preview has to be rebuilt AND the
       // clip re-fetched — `seq` does both (component key + cache buster).
       setSeq((n) => n + 1)
@@ -323,7 +331,7 @@ export function ClipLibrary({
     } finally {
       setOrientBusy(false)
     }
-  }, [onReload, orientBusy, orientDirty, orientTarget, rollDeg, tiltDeg, yawDeg])
+  }, [onReload, orientBusy, orientDirty, orientTarget, partnerShift, rollDeg, shiftDirty, tiltDeg, yawDeg])
 
   const saveHeights = useCallback(async () => {
     if (!orientTarget || heightBusy || !heightDirty) return
@@ -352,6 +360,9 @@ export function ClipLibrary({
       o.tilt_deg ? `${t('tilt')} ${o.tilt_deg}°` : '',
       o.roll_deg ? `${t('roll')} ${o.roll_deg}°` : '',
       typeof o.floor_shift_cm === 'number' ? `${t('floor shift')} ${o.floor_shift_cm} cm` : '',
+      o.partner_shift_cm
+        ? `${t('partner B forward / side / up')} ${o.partner_shift_cm[2]} / ${o.partner_shift_cm[0]} / ${o.partner_shift_cm[1]} cm`
+        : '',
     ].filter(Boolean)
     return parts.length ? parts.join(' · ') : t('nothing turned yet')
   }, [orientTarget, t])
@@ -863,6 +874,9 @@ export function ClipLibrary({
                   importTilt={tiltDeg}
                   importRoll={rollDeg}
                   importHeightM={heightCm / 100}
+                  partnerShiftM={isPairTarget
+                    ? [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100]
+                    : undefined}
                   footprint={footprint}
                   rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
                   bust={seq}
@@ -956,6 +970,31 @@ export function ClipLibrary({
                         style={{ display: 'flex', flex: '1 1 200px' }}
                       />
                     </div>
+                    {isPairTarget ? (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}
+                        title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
+                        {([['Partner B forward', 2], ['Partner B side', 0], ['Partner B up', 1]] as const).map(([label, axis]) => (
+                          <SliderInput
+                            key={label}
+                            label={t(label)}
+                            unit="cm"
+                            min={-50}
+                            max={50}
+                            step={1}
+                            value={partnerShift[axis]}
+                            onChange={(cm) => setPartnerShift((prev) => {
+                              const next: [number, number, number] = [prev[0], prev[1], prev[2]]
+                              next[axis] = cm
+                              return next
+                            })}
+                            disabled={orientLocked}
+                            sliderWidth="auto"
+                            sliderStyle={{ flex: 1, minWidth: 70 }}
+                            style={{ display: 'flex', flex: '1 1 200px' }}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         <span className="ga-hint">{t('Turn against')}</span>
