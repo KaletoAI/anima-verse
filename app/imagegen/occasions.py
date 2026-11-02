@@ -132,6 +132,10 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                        "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
                        "style_use_cases": [], "covers": "Poses tab: generate animation",
                        "requires_chain": True, **_WORLD},
+    "pose_transition": {"label": "3D animation — transition clip", "media": "animation",
+        "category": "motion2transition", "requires_chain": True,
+        "covers": "Poses tab: generate transition", "rig": "",
+        "needs_ref_slot": False, "style_use_cases": [], **_WORLD},
 }
 
 MESH_OCCASIONS_BY_RIG: Dict[str, Tuple[str, ...]] = {

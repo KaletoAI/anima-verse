@@ -1136,6 +1136,73 @@ class ImageService:
             out.update(routed)
         return out
 
+    def transition_backends(self) -> List[Dict[str, Any]]:
+        """The models the Poses dialog offers: every backend of the
+        ``pose_transition`` chain, in chain order, with its live state."""
+        from app.imagegen.routing import chain_candidates
+        return [{"name": b.name, "available": bool(b.available) and not b.in_cooldown(),
+                 "motion_meta": dict(getattr(b, "motion_meta", {}) or {})}
+                for b, _pos, _spec in chain_candidates("pose_transition", pool=self.pool)]
+
+    def resolve_transition_backend(self, name: str = ""):
+        """The ``Route`` one transition job runs on. Empty = Auto (the
+        routed chain); a name = exactly that backend, which must be a usable
+        member of the ``pose_transition`` chain — no fallback to Auto
+        (``ValueError`` with the reason)."""
+        from app.imagegen.routing import Route, chain_candidates, resolve_image_route
+        name = (name or "").strip()
+        if not name:
+            return resolve_image_route("pose_transition", probe=True, pool=self.pool)
+        for b, pos, spec in chain_candidates("pose_transition", pool=self.pool):
+            if b.name != name:
+                continue
+            if b.in_cooldown() or not (b.available or b.check_availability()):
+                raise ValueError(f"animation backend '{name}' is unavailable right now")
+            return Route("pose_transition", b, pos, spec, spec, pos, [])
+        raise ValueError(f"'{name}' is not an animation backend of the pose_transition chain")
+
+    @staticmethod
+    def _transition_variants(blobs):
+        import json
+        values = [json.loads(b) for b in blobs]
+        for value in values:
+            if "bvh" in value:
+                value["bvh"] = value["bvh"].encode("utf-8")
+        return values
+
+    def generate_motion_transition(self, files, params_json, *, route, should_cancel=None,
+                                   on_job_id=None, label="", hub_stage=None):
+        """Run once on the backend channel, or collect the recorded hub job."""
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            return {"variants": self._transition_variants(attached["blobs"]),
+                    "backend": attached.get("backend", ""), "job_id": attached.get("job_id", "")}
+        if route is None:
+            raise ValueError("a transition run needs a route")
+        backend = route.backend
+        params = {"files": files, "params_json": params_json, "should_cancel": should_cancel,
+                  "on_job_id": (lambda jid: on_job_id(jid, backend.name)) if on_job_id else None}
+        if hub_stage is not None:
+            from app.imagegen.routing import route_meta
+            params["hub_stage"] = hub_stage
+            hub_stage.note_route(route_meta(route), backend.name)
+        def operation(bb):
+            def generate():
+                if should_cancel and should_cancel():
+                    return {"cancelled": GenerationCancelled("cancelled before submission")}
+                try:
+                    blobs = bb.generate("", "", params, log_meta=None)
+                except GenerationCancelled as exc:
+                    return {"cancelled": exc}
+                return {"variants": self._transition_variants(blobs),
+                        "backend": bb.name, "job_id": bb.last_job_id}
+            return self.run_on_backend_channel(bb, generate, task_type="pose_transition",
+                                               label=label or backend.name)
+        result, _used = self.run_on_backend(backend, operation)
+        if "cancelled" in result:
+            raise result["cancelled"]
+        return result
+
     def animation_backends(self) -> List[Dict[str, Any]]:
         """The models the Poses dialog offers: every backend of the
         ``pose_animation`` chain, in chain order, with its live state."""

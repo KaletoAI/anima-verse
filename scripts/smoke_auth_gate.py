@@ -475,6 +475,21 @@ with tempfile.TemporaryDirectory() as clip_dir:
     check("candidate clip served beyond index 3", (response.status_code, response.content,
           cand.call_args.args), (200, b"Kaydara FBX Binary  ", ("task_ab12", 4)))
 print()
+# Transition endpoints are protected by their per-route admin dependency.
+for method, path in (
+        ("POST", "/poses/transition-jobs/generate"),
+        ("GET", "/poses/transition-jobs"),
+        ("GET", "/poses/transition-jobs/backends"),
+        ("GET", "/poses/transition-jobs/affected-rule?start=sitting&target=walking"),
+        ("GET", "/poses/transition-jobs/task_ab12/candidates/0/clip.fbx"),
+        ("POST", "/poses/transition-jobs/task_ab12/choose"),
+        ("POST", "/poses/transition-jobs/task_ab12/discard"),
+        ("POST", "/poses/transition-jobs/task_ab12/dismiss")):
+    check(f"transition player refused {path}",
+          pose_client.request(method, path, headers={"x-test-user": "user"}).status_code, 403)
+    check(f"transition anonymous refused {path}",
+          pose_client.request(method, path).status_code, 401)
+
 print("B) character filter (SEC-6)")
 sens = auth_dependency._is_sensitive_character_path
 chars = auth_dependency._extract_characters_from_path

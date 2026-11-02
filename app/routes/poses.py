@@ -405,6 +405,93 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
+# Fixed transition paths precede the dynamic pose-key routes.
+@router.post("/transition-jobs/generate", status_code=202)
+async def generate_transition(request: Request, _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core import pose_transition
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    try:
+        return await asyncio.to_thread(pose_transition.submit, **body)
+    except (ValueError, TypeError, pose_transition.clips.ClipLibraryError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/transition-jobs")
+async def transition_jobs(limit: int = 20, _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core import pose_transition
+    return {"jobs": await asyncio.to_thread(pose_transition.recent_jobs, max(1, min(limit, 100)))}
+
+
+@router.get("/transition-jobs/backends")
+async def transition_backends(_: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.imagegen.service import get_image_service
+    return {"backends": await asyncio.to_thread(get_image_service().transition_backends)}
+
+
+@router.get("/transition-jobs/affected-rule")
+async def transition_affected_rule(start: str, target: str, _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core import pose_transition
+    return await asyncio.to_thread(pose_transition.affected_rule, start, target)
+
+
+@router.get("/transition-jobs/{task_id}/candidates/{index}/clip.fbx")
+async def transition_candidate(task_id: str, index: int, _: Dict[str, Any] = Depends(require_admin)):
+    from fastapi.responses import FileResponse
+    from app.core import pose_transition
+    try:
+        return FileResponse(pose_transition.candidate_clip(task_id, index), media_type="application/octet-stream")
+    except pose_transition.ChoiceError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+@router.post("/transition-jobs/{task_id}/choose")
+async def choose_transition(task_id: str, request: Request, _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core import pose_transition
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "invalid JSON body") from exc
+    if not isinstance(body, dict) or not {"index", "kind", "expected_old_kind"} <= body.keys():
+        raise HTTPException(400, "index, kind and expected_old_kind required")
+    try:
+        return await asyncio.to_thread(pose_transition.choose, task_id, body["index"],
+                                      kind=body["kind"], expected_old_kind=body["expected_old_kind"])
+    except pose_transition.ChoiceError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    except (ValueError, pose_transition.clips.ClipLibraryError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/transition-jobs/{task_id}/discard")
+async def discard_transition(task_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core import pose_transition
+    try:
+        return await asyncio.to_thread(pose_transition.discard, task_id)
+    except pose_transition.ChoiceError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+@router.post("/transition-jobs/{task_id}/dismiss")
+async def dismiss_transition(task_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core import pose_transition
+    try:
+        return await asyncio.to_thread(pose_transition.dismiss, task_id)
+    except pose_transition.ChoiceError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
 # Fixed animation paths must precede the /{key} routes.
 @router.post("/animations/generate", status_code=202)
 async def generate_animation(request: Request,

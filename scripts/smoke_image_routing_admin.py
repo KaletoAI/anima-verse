@@ -153,7 +153,7 @@ check("V11 mesh kind", (k["media"], k.get("rig")), ("mesh", None))
 k = routing.describe_config_backend({"name": "V", "api_type": "openai_video"})
 check("V11 video kind", (k["media"], k["ref_slot_count"]), ("video", 1))
 
-check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 25)
+check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 26)
 SEEN = {}
 
 

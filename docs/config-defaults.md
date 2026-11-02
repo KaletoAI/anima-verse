@@ -183,6 +183,16 @@ Poses-Dialog bietet „Auto (Routing)" (erster nutzbarer Ketteneintrag) oder ein
 (ohne Ersatz) und 1 bis `max_variants` Varianten (Default 3). Kein Default-Eintrag: ohne Kette bleibt die
 Funktion im Poses-Tab mit klarer Meldung aus.
 
+**Motion transitions** (`api_type: openai_motion_transition`, category `motion2transition`, occasion
+`pose_transition`) use a required routing chain and the async AI-Hub alias `motion-motionbricks`.
+Inputs are library BVHs, with an optional guide (off by default); 1–4 variants, default 3.
+The backend entry supplies `api_url`, `api_key`, `model`, `mesh_endpoint`, `max_variants`, `license`,
+`credit`, `model_revision`, `timeout`, `poll_interval`, `max_wait` and `max_queue_wait`.
+No seed or captions are sent. Candidates warn on `hop_cm > 2`, either foot sliding over 3 cm,
+final root error over 5 cm or yaw error over 5 degrees; foot-lock drift over 1.5 cm rejects a candidate.
+A choice publishes to the selected set: all conditioning clips free means the free library;
+any licensed input (including a guide) means the licensed library and world transition rule.
+
 Der **Hauptschalter** `image_generation.enabled` („Media generation enabled",
 Admin-Sektion „Media Generation") wird NICHT in eine Env-Variable gebrückt: er
 wird live gelesen (`app/imagegen/base.py::media_generation_enabled`). Aus ist

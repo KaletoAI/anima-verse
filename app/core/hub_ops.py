@@ -112,7 +112,7 @@ def register_builtin_kinds() -> None:
     never depends on which routers happened to be imported first."""
     import importlib
     for module in ("app.core.model3d", "app.core.props", "app.core.location_model3d",
-                   "app.core.pose_animation", "app.skills.animate", "app.routes.instagram",
+                   "app.core.pose_animation", "app.core.pose_transition", "app.skills.animate", "app.routes.instagram",
                    "app.skills.video_generation_skill"):
         try:
             importlib.import_module(module)

@@ -10,6 +10,7 @@ from app.imagegen.backends.localai_video import LocalAIVideoBackend
 from app.imagegen.backends.openai_chat import OpenAIChatImageBackend
 from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend
 from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
+from app.imagegen.backends.openai_motion_transition import OpenAIMotionTransitionBackend
 from app.imagegen.backends.openai_mesh_animation import OpenAIMeshAnimationBackend
 from app.imagegen.backends.openai_video import OpenAIVideoBackend
 from app.imagegen.backends.together import TogetherBackend
@@ -18,6 +19,7 @@ from app.imagegen.backends.together_video import TogetherVideoBackend
 # Registry of available backend types. MEDIA_TYPE on each class ("image",
 # "video", "mesh" or "animation") keeps the media kinds apart in the BackendPool.
 BACKEND_REGISTRY = {
+    "openai_motion_transition": OpenAIMotionTransitionBackend,
     "local_upscale": LocalUpscaleBackend,
     "openai_upscale": OpenAIUpscaleBackend,
     "a1111": A1111Backend,

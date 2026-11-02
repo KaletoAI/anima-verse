@@ -154,7 +154,7 @@ def part_a():
                     "scene_view", "location", "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
                     "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "upscale", "face_retexture", "mesh_object",
-                    "mesh_building", "pose_animation"]
+                    "mesh_building", "pose_animation", "pose_transition"]
     check("A1 the 25 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
@@ -175,7 +175,7 @@ def part_a():
            "mesh_object": "none", "mesh_building": "none"})
     check("A4 categories",
           sorted({occ.get_occasion(i)["category"] for i in expected_ids}),
-          ["face_retexture", "img2mesh", "mesh2anim", "mesh2rig", "render", "upscale"])
+          ["face_retexture", "img2mesh", "mesh2anim", "mesh2rig", "motion2transition", "render", "upscale"])
     check("A4 mesh category",
           {occ.get_occasion(i)["category"] for i in expected_ids if media[i] == "mesh"},
           {"face_retexture", "img2mesh", "mesh2rig"})

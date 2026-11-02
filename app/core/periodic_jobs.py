@@ -399,6 +399,15 @@ def _sub_glb_delivery_cache():
         logger.debug("glb_delivery_cache sub error: %s", e)
 
 
+def _sub_pose_transition_candidates():
+    """Remove transition candidates left undecided for seven SYSTEM days."""
+    try:
+        from app.core.pose_transition import sweep_candidates
+        sweep_candidates()
+    except Exception as exc:
+        logger.debug("pose_transition_candidates sub error: %s", exc)
+
+
 def _sub_pose_animation_candidates():
     """Remove generated pose-animation variants nobody chose within 7 days.
 
@@ -591,6 +600,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_door_models,               86400,                 "door_models"),
     (_sub_glb_delivery_cache,        86400,                 "glb_delivery_cache"),
     (_sub_chat_retention,            86400,                 "chat_retention"),
+    (_sub_pose_transition_candidates, 86400,                "pose_transition_candidates"),
     (_sub_pose_animation_candidates, 86400,                 "pose_animation_candidates"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),

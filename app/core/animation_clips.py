@@ -659,45 +659,46 @@ def resolve_pose_transition(from_pose: Any, to_pose: Any) -> Optional[Dict[str, 
 def save_transitions(entries: Any,
                      path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Validate both stores before writing the shared seed and whole world layer."""
-    if not isinstance(entries, list):
-        raise ClipLibraryError("a list of {from, to, kind} is expected")
-    shared, world = [], []
-    seen = {"shared": set(), "world": set()}
-    solo = _solo_kinds()
-    free = {e["kind"] for root, source in get_animation_clips_dirs()
-            if source == "free" and root.exists()
-            for e in _scan_library(root, source) if not e["role"]}
-    # Validate each row with its original position for useful editor errors.
-    for i, raw in enumerate(entries):
-        rule = _validate_transitions([raw], offset=i, solo=solo)[0]
-        store = raw.get("store", "shared")
-        if store not in ("shared", "world"):
-            raise ClipLibraryError(f"rule {i + 1}: store must be shared or world")
-        if store == "shared" and rule["kind"] not in free:
-            raise ClipLibraryError(
-                f"rule {i + 1}: bridge clip {rule['kind']} is licensed — it belongs to the world layer")
-        layer = shared if store == "shared" else world
-        pair = (rule["from"], rule["to"])
-        if pair in seen[store]:
-            raise ClipLibraryError(
-                f"rule {i + 1}: '{rule['from']}' to '{rule['to']}' is already ruled")
-        seen[store].add(pair)
-        layer.append(rule)
-    # The editor sends the EFFECTIVE list, where a world rule hides the shared
-    # rule of its pair. That hidden shared rule is not being deleted — keep it
-    # in the seed (in its place), or every save would strip it from the repo.
-    for rule in load_shared_transitions(path):
-        pair = (rule["from"], rule["to"])
-        if pair in seen["world"] and pair not in seen["shared"]:
-            seen["shared"].add(pair)
-            shared.append(rule)
-    order = {(r["from"], r["to"]): n for n, r in enumerate(load_shared_transitions(path))}
-    shared.sort(key=lambda r: order.get((r["from"], r["to"]), len(order)))
-    _write_world_transitions(world)
-    _write_transitions(shared, path)
-    result = load_transitions(path)
-    notify_library_changed()
-    return result
+    with keyed_lock("clip_library", "write"):
+        if not isinstance(entries, list):
+            raise ClipLibraryError("a list of {from, to, kind} is expected")
+        shared, world = [], []
+        seen = {"shared": set(), "world": set()}
+        solo = _solo_kinds()
+        free = {e["kind"] for root, source in get_animation_clips_dirs()
+                if source == "free" and root.exists()
+                for e in _scan_library(root, source) if not e["role"]}
+        # Validate each row with its original position for useful editor errors.
+        for i, raw in enumerate(entries):
+            rule = _validate_transitions([raw], offset=i, solo=solo)[0]
+            store = raw.get("store", "shared")
+            if store not in ("shared", "world"):
+                raise ClipLibraryError(f"rule {i + 1}: store must be shared or world")
+            if store == "shared" and rule["kind"] not in free:
+                raise ClipLibraryError(
+                    f"rule {i + 1}: bridge clip {rule['kind']} is licensed — it belongs to the world layer")
+            layer = shared if store == "shared" else world
+            pair = (rule["from"], rule["to"])
+            if pair in seen[store]:
+                raise ClipLibraryError(
+                    f"rule {i + 1}: '{rule['from']}' to '{rule['to']}' is already ruled")
+            seen[store].add(pair)
+            layer.append(rule)
+        # The editor sends the EFFECTIVE list, where a world rule hides the shared
+        # rule of its pair. That hidden shared rule is not being deleted — keep it
+        # in the seed (in its place), or every save would strip it from the repo.
+        for rule in load_shared_transitions(path):
+            pair = (rule["from"], rule["to"])
+            if pair in seen["world"] and pair not in seen["shared"]:
+                seen["shared"].add(pair)
+                shared.append(rule)
+        order = {(r["from"], r["to"]): n for n, r in enumerate(load_shared_transitions(path))}
+        shared.sort(key=lambda r: order.get((r["from"], r["to"]), len(order)))
+        _write_world_transitions(world)
+        _write_transitions(shared, path)
+        result = load_transitions(path)
+        notify_library_changed()
+        return result
 
 
 def _validate_transitions(entries: Any, offset: int = 0,
