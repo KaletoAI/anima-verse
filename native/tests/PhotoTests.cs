@@ -11,6 +11,35 @@ public class PhotoTests
     // Same hand derivation as smoke_photo_view.mjs: vertical FOV 90°, aspect 2,
     // z=-10 gives x edges ±20 and y edges ±10. Height 3-1=2; depth sqrt(500).
     [Fact]
+    public void SelectionFreezesControlsAndUsesOriginalPixels()
+    {
+        var c=new PhotoControl(); c.Enter(new(0,2,0),0,0); c.Key("w",true); c.SetSelecting(true);
+        c.Key("w",true);c.Look(100,50);c.Wheel(-100);c.Step(.1);
+        Assert.Equal(new Vec3(0,2,0),c.Position);Assert.Equal(0,c.Yaw);Assert.Equal(0,c.Pitch);Assert.Equal(4,c.Speed);
+        c.SetSelecting(false);c.Step(.1);Assert.Equal(new Vec3(0,2,0),c.Position);
+        Assert.Equal(new PhotoRect(0,0,800,400),PhotoControl.SelectionRect(100,50,500,250,100,50,800,450,1600,900));
+        Assert.Equal(new PhotoRect(0,0,800,400),PhotoControl.SelectionRect(500,250,-20,-20,100,50,800,450,1600,900));
+        Assert.Equal(new PhotoRect(0,0,1600,900),PhotoControl.ShotRect(new(40,40,63,500),1600,900));
+        Assert.Equal(new PhotoRect(0,0,64,64),PhotoControl.ShotRect(new(0,0,64,64),1600,900));
+    }
+
+    [Fact]
+    public void CropMatchesBrowserHandNumbers()
+    {
+        var view=new PhotoView(new PhotoVisible[] {new("centre",.5,.5,10),new("left",0,.5,22.360679774997898),
+            new("right",1,.5,10),new("top",.5,0,10),new("bottom",.5,1,10)},new(0,2,90));
+        Assert.Equal(view,view.Crop(new(0,0,1200,600),1200,600));
+        var crop=view.Crop(new(0,150,600,300),1200,600);
+        Assert.Equal(new[]{"centre","left"},crop.visible.Select(v=>v.name));
+        Assert.Equal(1,crop.visible[0].screen_x,9); Assert.Equal(.5,crop.visible[0].screen_y,9);
+        Assert.Equal(0,crop.visible[1].screen_x,9); Assert.Equal(22.360679774997898,crop.visible[1].depth_m,9);
+        Assert.Equal(53.13010235415598,crop.camera.fov_deg,9); Assert.Equal(2,crop.camera.height_m);
+        Assert.Equal(33.690067525979785,view.Crop(new(0,0,1200,200),1200,600).camera.pitch_deg,9);
+        Assert.Equal(3.690067525979785,(view with { camera=new(-30,2,90) }).Crop(new(0,0,1200,200),1200,600).camera.pitch_deg,9);
+        Assert.Equal(20.704811054635428,(view with { camera=new(30,2,90) }).Crop(new(600,0,600,600),1200,600).camera.pitch_deg,9);
+    }
+
+    [Fact]
     public void FramingMatchesBrowserEdgesAndExclusions()
     {
         var subjects = new[] {

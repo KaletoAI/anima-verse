@@ -95,6 +95,19 @@ assert.deepEqual(flight.camera.position.toArray(), [0,1.8,-.2]);
 emit('keyup',{key:'q'}); emit('keydown',{key:'e'}); emit('keydown',{key:'Shift'}); flight.frame();
 assert.ok(Math.abs(flight.camera.position.y - 2.4) < 1e-10);
 flight.leavePhotoMode();
+// Selection freezes the rendered view and disables look/flight, while frame hooks keep ticking.
+flight.enterPhotoMode();flight.setPhotoSelecting(true);
+const frozenPos=flight.camera.position.clone(), frozenRotation=flight.camera.quaternion.clone();
+let worldTicks=0;flight.frameHooks.push(()=>worldTicks++);
+const renders=order.filter(v=>v==='render').length;
+emit('pointerdown',{button:0,pointerId:1,clientX:0,clientY:0});emit('pointermove',{clientX:120,clientY:60});
+emit('keydown',{key:'w'});flight.frame();
+assert.ok(flight.camera.position.equals(frozenPos));assert.ok(flight.camera.quaternion.equals(frozenRotation));
+assert.equal(worldTicks,1);assert.equal(order.filter(v=>v==='render').length,renders);
+flight.setPhotoSelecting(false);flight.frame();assert.ok(flight.camera.position.equals(frozenPos),'selection keys do not stick');
+let latePick=0;flight.pickLocation=()=>null;flight.onPick=()=>latePick++;
+flight.leavePhotoMode();emit('pointerup',{button:0,clientX:20,clientY:20});
+assert.equal(latePick,0,'selection release after leaving cannot pick/walk');
 // Interior view state and height sampling stay independent of flight position.
 const floorTile={loc:{id:'place'},levelFilter:1,roomLevels:new Map([['room',1]]),roomCenters:new Map([['room',{y:3}]])};
 const floor=await mainFunction('photoFloorY',{tileAt:()=>floorTile,groundY:()=>1,openLocationId:'place',
@@ -129,43 +142,79 @@ const big = { width: 4096, height: 2160 };
 const scaled = await encodePhotoCanvas(big, () => output = { width:0,height:0, getContext: () => ({drawImage(source,x,y,w,h) { assert.equal(source,big); assert.deepEqual([x,y,w,h],[0,0,2048,1080]); }}), toBlob(fn,type,q) { assert.equal(type,'image/jpeg'); assert.equal(q,.9); fn(jpeg); } });
 assert.equal(scaled,jpeg); assert.deepEqual([output.width,output.height],[2048,1080]);
 await assert.rejects(encodePhotoCanvas({width:10,height:10,toBlob(fn){fn(null);}}), /capture/i);
+// Crop at native resolution before downscale; never stretch a small selection.
+for (const [rect,dimensions] of [[{x:700,y:100,width:800,height:400},[800,400]],
+  [{x:700,y:100,width:3000,height:1500},[2048,1024]]]) {
+  let drawn;
+  const source={width:4096,height:2160};
+  const result=await encodePhotoCanvas(source,()=>output={width:0,height:0,
+    getContext:()=>({drawImage(...args){drawn=args;}}),toBlob(fn){fn(jpeg);}},rect);
+  assert.equal(result,jpeg);assert.deepEqual([output.width,output.height],dimensions);
+  assert.deepEqual(drawn,[source,rect.x,rect.y,rect.width,rect.height,0,0,...dimensions]);
+}
 // Real main steering hook returns before any position report or route movement.
 const steering = await mainFunction('engine.addFrameHook:manualInput', { engine:{photoMode:true} });
 steering(.05);
-let active = false, hudHidden = false, uploads = 0, errors = 0, hints = [];
-let resolveCapture;
-const engine = { get photoMode(){return active;}, photoSpeed:4,
-  enterPhotoMode(){active=true;}, leavePhotoMode(){active=false;},
-  capturePhotoFrame(){return new Promise(r => {resolveCapture=r;});} };
-const controller = createPhotoMode({engine, view:()=>({}),
-  hideHud:()=>{hudHidden=true; return ()=>{hudHidden=false;};},
-  hint:(s)=>hints.push(s), upload:async()=>{assert.equal(active,false);assert.equal(hudHidden,false);uploads++;},
-  error:()=>errors++ });
-const key = (key, extra={}) => ({key,preventDefault(){},stopImmediatePropagation(){},...extra});
+// Controller selection is exposed in the hint model; the React island owns pointer input.
+let active=false,hudHidden=false,uploads=0,errors=0,hints=[],resolveCapture,rejectCapture,freeze;
+const view={visible:[{name:'left',screen_x:0,screen_y:.5,depth_m:10}],camera:{pitch_deg:0,height_m:2,fov_deg:90}};
+let uploadedView;
+const engine={get photoMode(){return active;},photoSpeed:4,selecting:false,
+  enterPhotoMode(){active=true;},leavePhotoMode(){active=false;},
+  setPhotoSelecting(value){this.selecting=value;},
+  capturePhotoFrame(getView,select){freeze=select;return new Promise((r,j)=>{resolveCapture=r;rejectCapture=j;});}};
+const frozenCanvas={width:1600,height:900,getContext:()=>({drawImage(){}}),toBlob(fn){fn(jpeg);}};
+globalThis.document={createElement:()=>frozenCanvas};
+const controller=createPhotoMode({engine,view:()=>view,
+  hideHud:()=>{hudHidden=true;return()=>{hudHidden=false;};},hint:s=>hints.push(s),
+  upload:async(blob,v)=>{assert.equal(active,false);assert.equal(hudHidden,false);assert.equal(blob,jpeg);uploads++;uploadedView=v;},error:()=>errors++});
+const key=(key,extra={})=>({key,preventDefault(){},stopImmediatePropagation(){},...extra});
+const settle=()=>new Promise(r=>setImmediate(r));
+async function frozen(){try {const frame=await freeze(frozenCanvas,view);resolveCapture(frame);} catch(e) {rejectCapture(e);} await settle();}
 assert.equal(controller.keydown(key('F2',{target:{closest:()=>true}}),false),false);
-assert.equal(active,false);
-assert.equal(controller.keydown(key('F2'),true),false, 'mirrored iframe typing');
-controller.keydown(key('F2'),false); assert.equal(active,true);assert.equal(hudHidden,true);
-controller.keydown(key('F2',{repeat:true}),false);assert.equal(active,true);
-controller.keydown(key(' '),false); controller.keydown(key(' '),false);
-assert.equal(hints.at(-1).capturing,true);
-resolveCapture({jpeg,view:{visible:[]}});
-await new Promise(r=>setImmediate(r));assert.equal(uploads,1);assert.equal(active,false);
-controller.keydown(key('F2'),false); controller.keydown(key('Escape'),false);
-assert.equal(active,false);assert.equal(hudHidden,false);
-// Failed upload stays out of photo mode and reports the error.
-const failed = createPhotoMode({engine,view:()=>({}), hideHud:()=>()=>{},hint:()=>{}, upload:async()=>{throw Error('403');},error:()=>errors++});
-failed.keydown(key('F2'),false); failed.keydown(key(' '),false); resolveCapture({jpeg,view:{}});
-await new Promise(r=>setImmediate(r));assert.equal(active,false);assert.equal(errors,1);
+assert.equal(controller.keydown(key('F2'),true),false);
+controller.keydown(key('F2'),false);controller.keydown(key('F2',{repeat:true}),false);assert.equal(active,true);
+controller.keydown(key(' '),false);assert.equal(engine.selecting,true,'Space starts selection');
+const selecting=frozen();await settle();assert.equal(uploads,0,'freezing never uploads');
+assert.equal(typeof hints.at(-1).capturing,'object');
+hints.at(-1).capturing.choose({x:0,y:0,width:800,height:900});await selecting;
+assert.equal(uploads,1);assert.equal(uploadedView.visible[0].screen_x,0);
+controller.keydown(key('F2'),false);controller.keydown(key(' '),false);
+const second=frozen();await settle();controller.keydown(key(' '),false);await second;
+assert.equal(uploads,2);assert.deepEqual(uploadedView,view,'second Space selects full frame');
+controller.keydown(key('F2'),false);controller.keydown(key(' '),false);
+const cancelledCapture=frozen();await settle();controller.keydown(key('Escape'),false);await cancelledCapture;
+assert.equal(active,true,'Escape selection returns to flying');assert.equal(engine.selecting,false);
+controller.keydown(key('Escape'),false);assert.equal(active,false);assert.equal(hudHidden,false);assert.equal(errors,0);
+// Small drags and clicks count as whole frame in original device pixels.
+const {photoSelectionRect,photoShotRect}=loaded;
+assert.deepEqual(photoSelectionRect({x:100,y:50},{x:500,y:250},{left:100,top:50,width:800,height:450},1600,900),{x:0,y:0,width:800,height:400});
+assert.deepEqual(photoSelectionRect({x:500,y:250},{x:-20,y:-20},{left:100,top:50,width:800,height:450},1600,900),{x:0,y:0,width:800,height:400});
+assert.deepEqual(photoShotRect({x:40,y:40,width:63,height:500},1600,900),{x:0,y:0,width:1600,height:900});
+assert.deepEqual(photoShotRect({x:0,y:0,width:64,height:64},1600,900),{x:0,y:0,width:64,height:64});
 const ring=new THREE.Object3D(), line=new THREE.Object3D();
 manager.walkTargetRing=ring; held.travelLine=line;
 assert.deepEqual(manager.photoOverlays(),[ring,line]);
-// A cancelled pending render rejects quietly, rather than displaying an error toast.
-const cancelled=createPhotoMode({engine:{...engine,get photoMode(){return active;},capturePhotoFrame:async()=>{throw Error('Photo capture cancelled');}},view:()=>({}),hideHud:()=>()=>{},hint:()=>{},upload:async()=>{uploads++;},error:()=>errors++});
-cancelled.keydown(key('F2'),false);cancelled.keydown(key(' '),false);cancelled.keydown(key('Escape'),false);
-await new Promise(r=>setImmediate(r));assert.equal(errors,1);
-// Escape during encoding cancels this shot; a late callback must not open a dialog.
-controller.keydown(key('F2'),false); controller.keydown(key(' '),false);
-controller.keydown(key('Escape'),false); resolveCapture({jpeg,view:{}});
-await new Promise(r=>setImmediate(r)); assert.equal(uploads,1); assert.equal(errors,1);
-console.log('PASS photo mode: restoration, input isolation, capture ordering, JPEG bounds, typing, repeat, hand-off and errors');
+// Leaving before the render resolves must ignore a late frame without uploading.
+controller.keydown(key('F2'),false);controller.keydown(key(' '),false);
+controller.keydown(key('F2'),false);assert.equal(active,true,'F2 selection returns to flying');
+resolveCapture({jpeg,view});await settle();assert.equal(uploads,2);assert.equal(errors,0);
+controller.keydown(key('Escape'),false);
+// Restore and report capture/encoding/upload errors; repeated Space cannot duplicate a handoff.
+for (const failure of ['capture','encode','upload']) {
+  let failedHints=[],failedError=0,failedUpload=0;
+  const failedEngine={...engine,get photoMode(){return active;},
+    capturePhotoFrame:async(getView,select)=>{
+      if(failure==='capture')throw Error('capture');
+      return select(frozenCanvas,view);
+    }};
+  const originalToBlob=frozenCanvas.toBlob;
+  if(failure==='encode')frozenCanvas.toBlob=fn=>fn(null);
+  const failed=createPhotoMode({engine:failedEngine,view:()=>view,hideHud:()=>()=>{},hint:s=>failedHints.push(s),
+    upload:async()=>{failedUpload++;if(failure==='upload')throw Error('403');},error:()=>failedError++});
+  failed.keydown(key('F2'),false);failed.keydown(key(' '),false);await settle();
+  if(failure!=='capture') {failed.keydown(key(' '),false);failed.keydown(key(' ',{repeat:true}),false);await settle();}
+  assert.equal(active,false);assert.equal(failedError,1);assert.equal(failedUpload,failure==='upload'?1:0);
+  frozenCanvas.toBlob=originalToBlob;
+}
+console.log('PASS photo mode: restoration, input isolation, capture ordering, selection, device pixels, click, small drag and cancellation');

@@ -46,7 +46,7 @@ public static class PhotoCheck
         using var transport=new UploadFixture();
         using var api=new AnimaApi("http://fixture.invalid",transport); api.AdoptSession("fixture-session");
         var photo=new PhotoMode { Camera=cam, Markers=()=>extraMarkers,
-            View=()=>PhotoView.Build(new(0,3,0),new(0,0,-1),new(1,0,0),new(0,1,0),90,2,.2,100,[new("Tess Vale",new(0,3,-10))],1),
+            View=()=>PhotoView.Build(new(0,3,0),new(0,0,-1),new(1,0,0),new(0,1,0),90,2,.2,100,[new("Tess Vale",new(0,3,-10)),new("outside",new(-18,3,-10)),new("edge",new(-10,3,-10))],1),
             Upload=async (bytes,ct)=> { Is("restore before upload", !cam.Photo.Active && visibleLayer.Visible && !hiddenLayer.Visible); return await api.UploadPhotoAsync(bytes,ct); },
             Screenshot=hud.OpenScreenshotPhoto, Toast=message=>hud.SendUi("toast",message,true), Log=shotLogs.Add,
             Readback=()=> {
@@ -181,17 +181,18 @@ public static class PhotoCheck
                 && shot["args"]![0]!["view"]!["visible"]![0]!["screen_x"]!.GetValue<double>()==.5);
 
             messages.Clear(); transport.Paths.Clear(); transport.Fail=true;
-            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); await Settle(photo.Pending);
+            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); photo.HandleInput(KeyEvent(Key.Space),false); await Settle(photo.Pending);
             Is("upload failure toasts once after restore", !photo.Active && visibleLayer.Visible && messages.Count(m=>m["name"]!.GetValue<string>()=="toast")==1
                 && messages.All(m=>m["name"]!.GetValue<string>()!="openScreenshotPhoto"));
 
             messages.Clear(); transport.Paths.Clear(); transport.Fail=false;
             photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); photo.HandleInput(KeyEvent(Key.Escape),false);
             await Settle(photo.Pending);
-            Is("capture cancellation is silent",transport.Paths.Count==0 && messages.Count==0 && !photo.Active);
+            Is("capture cancellation is silent",transport.Paths.Count==0 && messages.Count==0 && photo.Active && !photo.Selecting);
+            photo.HandleInput(KeyEvent(Key.Escape),false);
 
             transport.Hold=new TaskCompletionSource();
-            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false);
+            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); photo.HandleInput(KeyEvent(Key.Space),false);
             ulong deadline=Time.GetTicksMsec()+10000;
             while (transport.Paths.Count==0 && Time.GetTicksMsec()<deadline)
             {
@@ -205,15 +206,65 @@ public static class PhotoCheck
             messages.Clear(); transport.Paths.Clear(); transport.Hold=null;
             var readback=photo.Readback;
             photo.Readback=()=>throw new InvalidOperationException("fixture capture failure");
-            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); await Settle(photo.Pending);
+            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); photo.HandleInput(KeyEvent(Key.Space),false); await Settle(photo.Pending);
             Is("capture error restores and toasts",!photo.Active && visibleLayer.Visible && transport.Paths.Count==0
                 && messages.Count(m=>m["name"]!.GetValue<string>()=="toast")==1);
             messages.Clear();
             photo.Readback=()=> { photo.Cancel(); return Image.CreateEmpty(10,10,false,Image.Format.Rgb8); };
-            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); await Settle(photo.Pending);
+            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false); photo.HandleInput(KeyEvent(Key.Space),false); await Settle(photo.Pending);
             Is("cancel during readback/encoding is silent",!photo.Active && transport.Paths.Count==0 && messages.Count==0);
             photo.Readback=readback;
             Is("one metric line per requested shot",shotLogs.Count==6 && shotLogs.All(line=>line.Contains("bytes, visible=") && line.Contains("upload=")));
+
+            messages.Clear(); transport.Paths.Clear();
+            photo.Enter(); photo.HandleInput(KeyEvent(Key.Space),false);
+            await SettleSelection();
+            Is("Space freezes without upload",photo.Selecting && photo.Busy && transport.Paths.Count==0);
+            var frozen=cam.Transform;var display=photo.GetViewport().GetVisibleRect().Size;
+            photo.HandleInput(KeyEvent(Key.W),false);
+            photo.HandleInput(new InputEventMouseButton { ButtonIndex=MouseButton.Left,Pressed=true,Position=display*.25f },false);
+            photo.HandleInput(new InputEventMouseMotion { Position=display*.75f,Relative=display*.5f },false);
+            cam.Step(.1);Is("selection blocks look and flight",cam.Transform==frozen);
+            // Display size is renderer-dependent; original pixels are 3000x1500. Central half => 1500x750.
+            transport.ExpectedWidth=1500;transport.ExpectedHeight=750;
+            photo.HandleInput(new InputEventMouseButton { ButtonIndex=MouseButton.Left,Pressed=false,Position=display*.75f },false);
+            await Settle(photo.Pending);
+            Is($"crop JPEG native resolution (actual {transport.ActualWidth}x{transport.ActualHeight}, display {photo.GetViewport().GetVisibleRect().Size})",transport.ValidJpeg && transport.Paths.Count==1);
+            var cropView=messages.Single(m=>m["name"]!.GetValue<string>()=="openScreenshotPhoto")["args"]![0]!["view"]!;
+            Is("crop view excludes outside",cropView["visible"]!.AsArray().Select(v=>v!["name"]!.GetValue<string>()).SequenceEqual(new[]{"Tess Vale","edge"}));
+            Is("crop view normalized and camera adjusted",Math.Abs(cropView["visible"]![1]!["screen_x"]!.GetValue<double>())<1e-9
+                && Math.Abs(cropView["camera"]!["fov_deg"]!.GetValue<double>()-53.13010235415598)<1e-9);
+
+            foreach (var size in new[]{Vector2.Zero,new Vector2(display.X*.01f,display.Y*.4f)})
+            {
+                messages.Clear();transport.Paths.Clear();transport.ExpectedWidth=2048;transport.ExpectedHeight=1024;
+                photo.Enter();photo.HandleInput(KeyEvent(Key.Space),false);await SettleSelection();
+                photo.HandleInput(new InputEventMouseButton { ButtonIndex=MouseButton.Left,Pressed=true,Position=display*.1f },false);
+                photo.HandleInput(new InputEventMouseButton { ButtonIndex=MouseButton.Left,Pressed=false,Position=display*.1f+size },false);
+                await Settle(photo.Pending);Is("click/small drag whole JPEG",transport.ValidJpeg && transport.Paths.Count==1);
+            }
+            foreach (var key in new[]{Key.Escape,Key.F2})
+            {
+                messages.Clear();transport.Paths.Clear();
+                photo.Enter();photo.HandleInput(KeyEvent(Key.Space),false);await SettleSelection();
+                photo.HandleInput(key==Key.Escape?KeyEvent(Key.Escape):KeyEvent(Key.F2),false);await Settle(photo.Pending);
+                Is("selection cancel returns to flying",photo.Active && !photo.Selecting && !photo.Busy && transport.Paths.Count==0 && messages.Count==0);
+                photo.HandleInput(KeyEvent(Key.Space),false);await SettleSelection();
+                photo.HandleInput(new InputEventMouseButton { ButtonIndex=MouseButton.Left,Pressed=true,Position=display*.1f },false);
+                photo.HandleInput(KeyEvent(Key.Escape),false);await Settle(photo.Pending);
+                photo.HandleInput(KeyEvent(Key.Escape),false);Is("second Escape leaves",!photo.Active);
+                int picks=0;void Pick(Vector2 _) => picks++;
+                cam.Clicked+=Pick;cam._UnhandledInput(new InputEventMouseButton { ButtonIndex=MouseButton.Left,Pressed=false });cam.Clicked-=Pick;
+                Is("late selection release never picks",picks==0);
+            }
+
+            async Task SettleSelection()
+            {
+                ulong until=Time.GetTicksMsec()+10000;
+                while (!photo.SelectionReady && Time.GetTicksMsec()<until)
+                { RenderingServer.ForceDraw();await host.ToSignal(host.GetTree(),SceneTree.SignalName.ProcessFrame); }
+                Is("selection ready deadline",photo.SelectionReady);
+            }
 
             // Real HUD input precedence even without CEF: Escape cannot fall through to exitEmbodied.
             int exits=0; hud.Handlers["exitEmbodied"]=_=>exits++; hud.SetState("mode","embodied");
@@ -257,6 +308,7 @@ public static class PhotoCheck
     {
         public List<string> Paths { get; } = new();
         public bool Fail, ValidJpeg;
+        public int ExpectedWidth=2048,ExpectedHeight=1024,ActualWidth,ActualHeight;
         public TaskCompletionSource? Hold;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
         {
@@ -269,7 +321,8 @@ public static class PhotoCheck
             ValidJpeg=file.Headers.ContentDisposition!.Name!.Trim('"')=="file"
                 && file.Headers.ContentDisposition.FileName!.Trim('"')=="photo.jpg"
                 && file.Headers.ContentType!.MediaType=="image/jpeg" && bytes[0]==255 && bytes[1]==216
-                && decoded.LoadJpgFromBuffer(bytes)==Error.Ok && decoded.GetWidth()==2048 && decoded.GetHeight()==1024;
+                && decoded.LoadJpgFromBuffer(bytes)==Error.Ok && decoded.GetWidth()==ExpectedWidth && decoded.GetHeight()==ExpectedHeight;
+            ActualWidth=decoded.GetWidth();ActualHeight=decoded.GetHeight();
             if (Hold is not null) await Hold.Task.WaitAsync(ct);
             return new(Fail?HttpStatusCode.RequestEntityTooLarge:HttpStatusCode.OK) {
                 Content=new StringContent(Fail?"{\"detail\":\"fixture upload limit\"}":"{\"image_id\":\"fixture/id\"}") };

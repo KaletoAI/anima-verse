@@ -36,6 +36,7 @@ public partial class OverviewCamera
 
     private void StepPhoto(double delta)
     {
+        if (Photo.Selecting) return;
         Photo.Step(delta);
         var p=Photo.Position;
         GlobalPosition=new((float)p.X,(float)p.Y,(float)p.Z);
@@ -44,6 +45,14 @@ public partial class OverviewCamera
 
     public void PhotoInput(InputEvent input)
     {
+        if (Photo.Selecting)
+        {
+            // Selection presses still belong to photo mode after its overlay
+            // disappears, so a late release must not reach the world picker.
+            if (input is InputEventMouseButton b)
+            { if (b.Pressed) _photoButtons.Add(b.ButtonIndex); else _photoButtons.Remove(b.ButtonIndex); }
+            return;
+        }
         switch (input)
         {
             case InputEventKey key:
@@ -59,5 +68,10 @@ public partial class OverviewCamera
             case InputEventMouseMotion m when _photoDrag:
                 Photo.Look(m.Relative.X,m.Relative.Y); break;
         }
+    }
+
+    public void SetPhotoSelecting(bool value)
+    {
+        Photo.SetSelecting(value); _photoDrag=false;
     }
 }

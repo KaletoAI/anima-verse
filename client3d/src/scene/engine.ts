@@ -1,4 +1,4 @@
-import { encodePhotoCanvas, type PhotoFrame } from '../game/photoMode';
+import { encodePhotoCanvas, type PhotoFrame, type PhotoCapture } from '../game/photoMode';
 import type { PhotoView } from '@anima/player-ui';
 import { effectiveRenderScale, type RenderScale } from '../game/prefs';
 import { gameHourLights } from './skyLight';
@@ -131,7 +131,8 @@ export class Engine {
   private photoYaw = 0;
   private photoPitch = 0;
   private flySpeed = 4;
-  private photoCapture?: { view: () => PhotoView; resolve: (frame: PhotoFrame) => void; reject: (error: unknown) => void };
+  private photoCapture?: { view: () => PhotoView; capture?: PhotoCapture; resolve: (frame: PhotoFrame) => void; reject: (error: unknown) => void };
+  photoSelecting = false;
   /** Re-evaluated at render time so newly streamed pins are hidden too. */
   photoOverlays?: () => Iterable<THREE.Object3D>;
   get photoMode(): boolean { return !!this.photoCamera; }
@@ -152,6 +153,7 @@ export class Engine {
 
   leavePhotoMode() {
     if (!this.photoCamera) return;
+    this.setPhotoSelecting(false);
     this.camera = this.photoCamera;
     this.photoCamera = null;
     this.keys.clear(); this.photoKeys.clear(); this.orbiting = false;
@@ -159,12 +161,25 @@ export class Engine {
     capture?.reject(new Error('Photo capture cancelled'));
   }
 
-  capturePhotoFrame(view: () => PhotoView): Promise<PhotoFrame> {
+  setPhotoSelecting(selecting: boolean) {
+    this.photoSelecting = selecting;
+    // The selection overlay owns its press. Keep a late release from becoming
+    // a world pick if Escape removes that overlay before the button comes up.
+    if (selecting) this.photoGesture = true;
+    this.photoKeys.clear(); this.orbiting = false;
+    if (!selecting) {
+      const capture = this.photoCapture; this.photoCapture = undefined;
+      capture?.reject(new Error('Photo capture cancelled'));
+    }
+  }
+
+  capturePhotoFrame(view: () => PhotoView, capture?: PhotoCapture): Promise<PhotoFrame> {
     if (!this.photoMode || this.photoCapture) return Promise.reject(new Error('Photo capture unavailable'));
-    return new Promise((resolve, reject) => { this.photoCapture = { view, resolve, reject }; });
+    return new Promise((resolve, reject) => { this.photoCapture = { view, capture, resolve, reject }; });
   }
 
   private movePhotoCamera(dt: number) {
+    if (this.photoSelecting) return;
     const forward = this.camera.getWorldDirection(SCRATCH.fwd);
     const right = SCRATCH.right.set(Math.cos(this.photoYaw), 0, -Math.sin(this.photoYaw));
     const move = SCRATCH.off.set(0, 0, 0);
@@ -179,6 +194,7 @@ export class Engine {
   }
 
   private renderScene() {
+    if (this.photoSelecting && !this.photoCapture) return;
     const hidden: Array<[THREE.Object3D, boolean]> = [];
     if (this.photoMode) for (const object of this.photoOverlays?.() ?? []) {
       hidden.push([object, object.visible]); object.visible = false;
@@ -189,7 +205,9 @@ export class Engine {
       if (capture) {
         // No await or event-loop boundary between render, view and canvas copy.
         const view = capture.view();
-        encodePhotoCanvas(this.renderer.domElement).then(jpeg => capture.resolve({ jpeg, view }), capture.reject);
+        const result = capture.capture ? capture.capture(this.renderer.domElement, view)
+          : encodePhotoCanvas(this.renderer.domElement).then(jpeg => ({ jpeg, view }));
+        result.then(capture.resolve, capture.reject);
       }
     } catch (error) {
       if (capture) capture.reject(error);
@@ -538,6 +556,7 @@ export class Engine {
 
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (this.photoSelecting) return;
       if (this.photoMode) {
         this.flySpeed = THREE.MathUtils.clamp(this.photoSpeed * Math.exp(-e.deltaY * .0012), .5, 20);
         return;
@@ -559,6 +578,7 @@ export class Engine {
     }, { passive: false });
 
     el.addEventListener('pointerdown', (e) => {
+      if (this.photoSelecting) return;
       // Every mode uses the same orbit gesture; a short left release still picks.
       const orbit = e.button === 0 || e.button === 1 || e.button === 2;
       if (orbit) {
@@ -577,6 +597,7 @@ export class Engine {
       if (e.button === 1) e.preventDefault();
     });
     el.addEventListener('pointermove', (e) => {
+      if (this.photoSelecting) return;
       this.pointerAt = { x: e.clientX, y: e.clientY };
       this.pointerSeq += 1;
       if (this.orbiting) {
@@ -621,7 +642,7 @@ export class Engine {
     // HUD chat TEXTAREA also panned the camera (w/a/s/d) and turned it (q/e).
     window.addEventListener('keydown', (e) => {
       if (isTypingTarget(e)) return;
-      if (this.photoMode) { this.photoKeys.add(e.key.toLowerCase()); return; }
+      if (this.photoMode) { if (!this.photoSelecting) this.photoKeys.add(e.key.toLowerCase()); return; }
       this.keys.add(e.key.toLowerCase());
       if (e.key.toLowerCase() === 'q') this.targetYaw += Math.PI / 4;
       if (e.key.toLowerCase() === 'e') this.targetYaw -= Math.PI / 4;
