@@ -137,6 +137,8 @@ interface Entry {
   /** closing clip one participant plays once inside the running action
    *  (`finale` of the worldmap row) — a pair kind for a pair pose */
   finale_animation?: string
+  /** the finale a package derives when the field is empty (read-only) */
+  finale_auto?: string
   /** which layer the entry lives in: the tracked catalog file, or this
    *  world's own layer in its world.db for entries that must never be
    *  committed */
@@ -1528,14 +1530,18 @@ export function PosesTab() {
                     ) : null}
                     <Field
                       label={t('Finale clip')}
-                      hint={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. A pair pose needs a pair clip, a solo pose a solo clip. Offers with a finale are marked in the HUD.')}
+                      hint={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. A pair pose needs a pair clip, a solo pose a solo clip. Left empty, a package may assign one by its naming rule (shown as “automatic”). Offers with a finale are marked in the HUD.')}
                     >
                       <select
                         className="ga-input"
                         value={draft.finale_animation || ''}
                         onChange={(e) => upd('finale_animation', e.target.value)}
                       >
-                        <option value="">{t('— none —')}</option>
+                        <option value="">
+                          {draft.finale_auto
+                            ? t('— automatic: {kind} —').replace('{kind}', draft.finale_auto)
+                            : t('— none —')}
+                        </option>
                         {data.kinds
                           .filter((k) => !!data.pair_kinds?.includes(k) === (draft.solo === false))
                           .map((k) => <option key={k} value={k}>{k}</option>)}

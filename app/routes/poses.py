@@ -27,6 +27,7 @@ from fastapi import Path as PathParam
 
 from app.core import expression_pose_maps as epm
 from app.core import pose_catalog
+from app.core import prop_action_engine as _finale_engine
 from app.core.auth_dependency import require_admin
 from app.core.pose_catalog_edit import (
     CatalogEditError, after_write, alias_owner, catalog_txn, read_store,
@@ -319,6 +320,10 @@ def list_entries(axis: str = Query("pose"),
             row["places"] = pose_catalog.pose_places(key)
             row["yaw_offset"] = pose_catalog.pose_yaw_offset(key)
             row["finale_animation"] = entry.get("finale_animation", "")
+            # What applies without an explicit field (a package's convention,
+            # shape-checked); the editor shows it in place of "none".
+            row["finale_auto"] = (_finale_engine.finale_kind(key)
+                                  if not row["finale_animation"] else "")
             # Whether POST /poses/{key}/rename accepts this key — the editor
             # hides the button for the keys the server code names literally.
             row["renamable"] = key not in CODE_NAMED_POSE_KEYS

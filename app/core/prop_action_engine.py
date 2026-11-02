@@ -906,14 +906,15 @@ _finales_mutex = Lock()
 
 
 def finale_kind(pose_key: str, name: str = "", *, profile=None) -> str:
-    """The finale clip kind ``pose_key`` names, "" when it names none or the
-    clip is missing in the shape the pose needs: a pair pose needs a complete
-    pair, a solo pose a solo clip — for ``name``'s own figure when given (its
-    set chain, as ``animated_for``)."""
+    """The finale clip kind of ``pose_key``: its catalog ``finale_animation``,
+    else what a package derives for it (``auto_finale``). "" when there is
+    none or the clip is missing in the shape the pose needs: a pair pose needs
+    a complete pair, a solo pose a solo clip — for ``name``'s own figure when
+    given (its set chain, as ``animated_for``)."""
     from app.core.animation_clips import pair_kinds
     from app.core.pose_catalog import get_catalog
     entry = get_catalog("pose").get(pose_key or "") or {}
-    kind = entry.get("finale_animation") or ""
+    kind = entry.get("finale_animation") or auto_finale(pose_key, entry)
     if not kind:
         return ""
     if not entry.get("solo", True):
@@ -921,6 +922,27 @@ def finale_kind(pose_key: str, name: str = "", *, profile=None) -> str:
     if kind in pair_kinds():
         return ""
     return kind if _solo_finale_clip(kind, name, profile) else ""
+
+
+def auto_finale(pose_key: str, entry: dict | None = None) -> str:
+    """The finale kind a package derives for a pose without an explicit one
+    (provider ``pose.finale_animation(pose_key, animation, solo) -> kind``,
+    e.g. a naming convention on the pose's own clip); "" without a provider
+    or an answer. Unchecked — ``finale_kind`` checks the clip's shape."""
+    from app.core.hooks import get_provider
+    provider = get_provider("pose.finale_animation")
+    if provider is None:
+        return ""
+    if entry is None:
+        from app.core.pose_catalog import get_catalog
+        entry = get_catalog("pose").get(pose_key or "") or {}
+    try:
+        kind = provider(pose_key=pose_key or "", animation=entry.get("animation") or "",
+                        solo=bool(entry.get("solo", True)))
+    except Exception as e:
+        logger.debug("finale provider failed for %s: %s", pose_key, e)
+        return ""
+    return kind.strip().lower() if isinstance(kind, str) else ""
 
 
 def _solo_finale_clip(kind, name, profile):

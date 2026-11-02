@@ -804,11 +804,12 @@ entscheidet ein Paket (Payload `finale`, schnittstellen-3d.md § A8c). Den Takt 
 
 | Funktion | Semantik |
 |---|---|
-| `finale_kind(pose_key, name='', *, profile=None) -> str` | Das Abschluss-Kind der Pose, "" ohne eines oder wenn der Clip in der nötigen Form fehlt (Paar-Pose: vollständiges Paar; Solo-Pose: Solo-Clip — für `name`s Figur, wenn gegeben) |
+| `auto_finale(pose_key, entry=None) -> str` | Was der Provider `pose.finale_animation` (Kwargs `pose_key`, `animation`, `solo`; Antwort: ein Clip-Kind) für eine Pose ohne eigenes `finale_animation` ableitet (z. B. eine Namensregel des Pakets); ungeprüft, "" ohne Provider |
+| `finale_kind(pose_key, name='', *, profile=None) -> str` | Das Abschluss-Kind der Pose (Katalogfeld, sonst `auto_finale`), "" ohne eines oder wenn der Clip in der nötigen Form fehlt (Paar-Pose: vollständiges Paar; Solo-Pose: Solo-Clip — für `name`s Figur, wenn gegeben) |
 | `begin_finale(execution_id, name) -> dict` | Startet `name`s Abschluss in der laufenden Aktion: `{ok, reason}`; `reason` ∈ `not_active`, `not_participant`, `no_finale`, `finale_playing`, `invalid`. Nur `name` spielt ihn, der Partner bleibt in seinem Clip. Benachrichtigt die Teilnehmer; `prop_action.finale_started` nach allen Sperren. Nimmt die Sperre des Laufs — nie mit einer Profil-Sperre aufrufen |
 | `finale_for(name) -> dict \| None` | Der laufende Abschluss `{kind, role, elapsed_s, duration_s}` oder None |
 
-Provider `prop_action.meters(execution_id, members, pose_key) -> [{name, value, label}]`: die Füllstände
+Provider `prop_action.meters` (Kwargs `execution_id`, `members`, `pose_key`; Antwort: `[{name, value, label}]`): die Füllstände
 einer laufenden Aktion für die HUD-Zeile (`GET /play/prop-actions/state` → `meters`); `value` wird auf
 0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`.
 

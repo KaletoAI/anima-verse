@@ -44,6 +44,12 @@ EXPECTATIONS, DERIVED BY HAND
 [7] SOLO. The pose action on `sitting` (finale `run-end`): `begin_finale`
     -> ok, block {kind run-end, role None, duration_s 0.8}; the offer of the
     action carries `finale` true, and false once the pose names no finale.
+[8] AUTOMATIC. Without the catalog field a provider `pose.finale_animation`
+    answering "<animation>-end" makes `run-pair` (animation run-pair) close
+    with `run-pair-end` (a pair: accepted) and `sitting` (animation sit, solo)
+    with `sit-end` (no such clip: ""). An explicit field wins over the
+    provider; a provider answering a solo kind for the pair pose gives "".
+    Without a provider: "".
 """
 import json
 import sys
@@ -210,8 +216,37 @@ class Finale(RUNS.Runs):
         self.assertFalse(offer["finale"])
 
 
+class Automatic(RUNS.Runs):
+    def test_8_provider_derives_the_finale(self):
+        RUNS.authored_pair()
+        finale_clips()
+        set_finale("run-pair", "")
+        set_finale("sitting", "")
+        catalog = pose_catalog.get_catalog("pose")
+        self.assertEqual(catalog["run-pair"]["animation"], "run-pair")
+        calls = []
+
+        def provider(pose_key, animation, solo):
+            calls.append((pose_key, animation, solo))
+            return f"{animation}-end"
+        self.assertEqual(A.finale_kind("run-pair"), "")
+        hooks.register_provider("pose.finale_animation", provider)
+        try:
+            self.assertEqual(A.finale_kind("run-pair"), "run-pair-end")
+            self.assertIn(("run-pair", "run-pair", False), calls)
+            self.assertEqual(A.finale_kind("sitting"), "")
+            set_finale("run-pair", "run-end")
+            self.assertEqual(A.finale_kind("run-pair"), "")
+            set_finale("run-pair", "")
+            hooks.register_provider("pose.finale_animation", lambda **kw: "run-end")
+            self.assertEqual(A.finale_kind("run-pair"), "")
+        finally:
+            hooks._providers.pop("pose.finale_animation", None)
+
+
 if __name__ == "__main__":
     # Only the finale cases — the inherited regression suite runs in its own smoke.
-    suite = unittest.TestSuite(Finale(m) for m in sorted(Finale.__dict__) if m.startswith("test_"))
+    suite = unittest.TestSuite([Finale(m) for m in sorted(Finale.__dict__) if m.startswith("test_")]
+                               + [Automatic("test_8_provider_derives_the_finale")])
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)

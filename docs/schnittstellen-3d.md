@@ -2744,7 +2744,8 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
 ## A8c. Abschluss-Clip einer laufenden Aktion (`finale`)
 
 Eine Pose darf im Katalog einen **Abschluss-Clip** nennen (`finale_animation`, Clip-Kind): bei einer
-Paar-Pose ein vollständiges Paar (§ A8a), bei einer Solo-Pose ein Solo-Clip. WANN er spielt, entscheidet
+Paar-Pose ein vollständiges Paar (§ A8a), bei einer Solo-Pose ein Solo-Clip. Ohne das Feld darf ein Paket
+einen ableiten (Provider `pose.finale_animation`). WANN er spielt, entscheidet
 nicht der Client und nicht der Kern, sondern ein Paket über `prop_action_engine.begin_finale(execution_id,
 name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt dann
 
