@@ -246,6 +246,9 @@ def lifecycle(pt, root):
         return {'library': library, 'duration_s': 4}
     def imported(kind, src, rest, *, out_dir, **kw):
         assert kw['root_motion'] == 'foot_lock' and kw['loop_s'] is None
+        # A SOMA result has no reference pose on its rig: reference.fbx (Mixamo) was refused
+        # as 'unknown rig' on the first live job (2026-11-02).
+        assert rest is None
         if src.parent.name == 'cand_1':
             raise ValueError('foot_lock left a planted foot moving 1.60 cm')
         out_dir.mkdir(parents=True)

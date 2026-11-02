@@ -1196,17 +1196,23 @@ def _prepare_job(kind, paths_in, take_specs, names, rest_path, rest_spec, *,
     return inputs, params
 
 
-def import_source(kind: str, src: Path, rest: Path, *, out_dir: Path,
+def import_source(kind: str, src: Path, rest: Optional[Path], *, out_dir: Path,
                   loop_s: Optional[float], root_motion: str = "strip",
                   fps: int = 30, timeout_s: int = 900,
                   source_extra: Optional[Dict] = None) -> Dict[str, Any]:
-    """Import a staged solo source with canonical rest, without cache reloads."""
+    """Import a staged solo source without cache reloads. ``rest`` is a
+    reference pose on the SOURCE's rig; ``None`` imports without one, like an
+    inbox import with no reference pose (a SOMA BVH from MotionBricks)."""
     kind = cmu_import.validate_kind(kind)
     root_motion = cmu_import.validate_root_motion(root_motion, loop_s)
-    src, rest, out = Path(src), Path(rest), Path(out_dir)
-    family, take_spec = _prepare_source(src, 0)
+    src, out = Path(src), Path(out_dir)
+    rest = Path(rest) if rest is not None else None
+    # A BVH holds exactly one motion and Blender names its action after the
+    # file, not after the probe's take name — select it like the inbox does
+    # (no take), which skips the name check that refused every BVH.
+    family, take_spec = _prepare_source(src, None if src.suffix.lower() == ".bvh" else 0)
     take_specs = [take_spec]
-    rest_spec = _prepare_rest(rest, None, family, allow_multiple=True)
+    rest_spec = _prepare_rest(rest, None, family, allow_multiple=True) if rest is not None else {}
     inputs, params = _prepare_job(
         kind, [src], take_specs, [src.name], rest, rest_spec,
         fps=fps, root_motion=root_motion, loop_s=loop_s)

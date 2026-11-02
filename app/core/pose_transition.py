@@ -276,7 +276,8 @@ def _build(tid, op, progress, route):
             candidate['metrics'] = {k: report_metrics.get(k) for k in (
                 'hop_cm', 'flight_cm', 'foot_slide_cm', 'final_root_error_cm', 'final_yaw_error_deg')}
             candidate['warnings'] = report_warnings(report)
-            clip = import_source(kind, src, paths.get_rig_file(), out_dir=directory / 'clip',
+            # MotionBricks answers on SOMA; the importer maps that family itself, no reference pose.
+            clip = import_source(kind, src, None, out_dir=directory / 'clip',
                                  loop_s=None, root_motion='foot_lock', source_extra=dict(source, params=params))
             meta = clip['meta']
             meta.update(license=inputs['meta']['license'], credit=inputs['meta']['credit'])
