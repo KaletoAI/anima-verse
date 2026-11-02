@@ -187,6 +187,7 @@ public static class EmbodyWalkCheck
             library.AddAnimation(idle,standClip); library.AddAnimation(walking,walkClip); library.AddAnimation("get-up",bridgeClip); library.AddAnimation("stop",stopClip);
             player.AddAnimationLibrary("",library);
             fig.SetBody(body,true,null,player,new[] {idle,walking,"get-up","stop"},bodyHeight:1.7);
+            Is("replacement body clears previous clip-plan callbacks",fig.RefreshClipKinds is null && fig.FitClip is null);
             fig.BaseScale=1;
             fig.Clock=()=>manager.Clock;
             fig.Transitions=new[] { new ClipTransition(idle,walking,"get-up",0) };

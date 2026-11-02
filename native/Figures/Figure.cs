@@ -247,9 +247,12 @@ public partial class Figure : Node3D
     /// <param name="bindBox">the body's bind box in the root frame, scaled, BEFORE that anchoring (the browser's
     /// <c>findLegChains(inst, box)</c> box); null = no mesh (no leg chains).</param>
     /// <param name="bodyHeight">the model's height in metres (<c>model.height</c> = raw height × scale): the gait's bob.</param>
+    /// <param name="fitClip">This body's lazy fitter; null for a body with only its player's own animations.</param>
+    /// <param name="refreshClipKinds">This body's current template plan, including reloaded kinds.</param>
     public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player,
                         IReadOnlyList<string>? clipKinds = null, V3? bindOffset = null, GaitBox? bindBox = null,
-                        double bodyHeight = 0)
+                        double bodyHeight = 0, Func<string, bool>? fitClip = null,
+                        Func<IReadOnlyList<string>>? refreshClipKinds = null)
     {
         Secondary?.Release();
         Secondary = null;
@@ -264,6 +267,10 @@ public partial class Figure : Node3D
         IsGlb = isGlb;
         Skeleton = skeleton;
         Player = player;
+        // Bind the plan to the new body BEFORE UpdateClip can consult it.
+        _invalidatedClips.Clear();
+        FitClip = fitClip;
+        RefreshClipKinds = refreshClipKinds;
         _loopTwins = null;   // the twins belonged to the old player
         _clipKinds = player is null ? Array.Empty<string>() : clipKinds ?? Array.Empty<string>();
         CurrentKind = CurrentClip = "";
@@ -347,7 +354,12 @@ public partial class Figure : Node3D
     public string Activity { get; set; } = "";
 
     /// <summary>The action kinds of the bound library, in action order (<c>[...this.actions.keys()]</c>).</summary>
-    public IReadOnlyList<string> ClipKinds => _clipKinds;
+    public IReadOnlyList<string> ClipKinds => RefreshClipKinds?.Invoke() ?? _clipKinds;
+    public Func<IReadOnlyList<string>>? RefreshClipKinds { get; set; }
+    private readonly HashSet<string> _invalidatedClips = new(StringComparer.Ordinal);
+
+    /// <summary>Invalidate only actions whose source changed; retain their current playback.</summary>
+    public void InvalidateClips(IEnumerable<string> actions) => _invalidatedClips.UnionWith(actions);
     private IReadOnlyList<string> _clipKinds = Array.Empty<string>();
 
     /// <summary>The kind last asked for (<c>currentKind</c>), the action that plays it (<c>""</c> = bind pose) and its pace.</summary>
@@ -455,7 +467,7 @@ public partial class Figure : Node3D
     public double GroundOffsetM(string kind) => (ExtrasOf(kind)?.GroundOffset ?? 0) * BaseScale;
 
     /// <summary>The rig HAS the action (the plan) — whether or not it is fitted yet; the choice of clips and bridges reads this.</summary>
-    private bool HasAction(string kind) => Player is not null && _clipKinds.Contains(kind);
+    private bool HasAction(string kind) => Player is not null && ClipKinds.Contains(kind);
 
     /// <summary>
     /// The action is in the player's library — fitted now if it was not yet and the mode fits at once; false while a lazy
@@ -464,9 +476,28 @@ public partial class Figure : Node3D
     public bool EnsureClip(string action)
     {
         if (Player is not { } p) return false;
-        if (p.HasAnimation(action)) return true;
-        if (!_clipKinds.Contains(action) || FitClip is not { } fit) return false;
-        return fit(action) && p.HasAnimation(action);
+        if (p.HasAnimation(action) && (!_invalidatedClips.Contains(action) || action == CurrentClip)) return true;
+        if (!ClipKinds.Contains(action)) return false;
+        if (FitClip is { } fit)
+        {
+            bool ready = fit(action) && p.HasAnimation(action);
+            if (ready) _invalidatedClips.Remove(action);
+            return ready;
+        }
+        return p.HasAnimation(action);
+    }
+
+    /// <summary>Install a future play's animation; the current action is retained until its playback ends.</summary>
+    public bool InstallClip(string action, Animation animation)
+    {
+        if (Player is not { } player) return false;
+        if (action == CurrentClip && player.IsPlaying()) return true;
+        var library = player.GetAnimationLibrary("");
+        if (library.HasAnimation(action) && library.GetAnimation(action) == animation) return true;
+        if (_loopTwins is { } twins && twins.HasAnimation(action)) twins.RemoveAnimation(action);
+        if (library.HasAnimation(action)) library.RemoveAnimation(action);
+        library.AddAnimation(action, animation);
+        return true;
     }
 
     /// <summary>The rig has the action but it is still being fitted (lazy).</summary>
@@ -495,6 +526,7 @@ public partial class Figure : Node3D
             SetHeightCorrection(CurrentClip, "ground");
             return;
         }
+        if (RefreshClipKinds is { } refresh) _clipKinds = refresh();
         PendingBridgeAccel = null;
         var rule = FigureClips.Transition(CurrentKind, kind, Transitions);
         var via = rule?.Kind ?? "";
@@ -513,7 +545,8 @@ public partial class Figure : Node3D
             return;
         }
         double sinkM = terrainClip && double.IsFinite(sink) && sink > 0 ? sink : 0;
-        if (!_bridgeResume && kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink)
+        if (!_bridgeResume && kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink
+            && (_clipKinds.Contains(CurrentClip) || _clipKinds.Count == 0))
         {
             SetHeightCorrection(CurrentClip, surfaceGroup);
             return;
@@ -612,7 +645,7 @@ public partial class Figure : Node3D
     /// </summary>
     public bool PlayPair(string clipName, double t, bool frozen, bool loop, string? surfaceGroup = null)
     {
-        if (Player is not { } p || !HasAction(clipName)) return false;
+        if (Player is not { } p || !HasAction(clipName) || !EnsureClip(clipName)) return false;
         ReleaseBridge();
         SetClipDrop(0);
         SetHeightCorrection(clipName, surfaceGroup);

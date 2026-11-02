@@ -119,6 +119,36 @@ public partial class FigureManager : Node3D
     /// </summary>
     public Func<string, double, double, double?>? RoomStandAt { get; set; }
 
+    private bool _clipsStopped;
+
+    /// <summary>Refresh plans, never replace the body or a running bridge.</summary>
+    public async Task ReloadClipsAsync()
+    {
+        var diff = await Clips.ReloadAsync();
+        if (_clipsStopped || !diff.RevisionChanged) return;
+        var templates = _templates.Values.ToArray();
+        foreach (var task in templates) { try { await task; } catch { } }
+        var all = templates.Where(t => t.IsCompletedSuccessfully).Select(t => t.Result)
+            .Concat(_pool.Select(p => p.Template)).Distinct().ToArray();
+        foreach (var t in all)
+        {
+            if (t.Lazy is not { } lazy) continue;
+            var own = t.Kinds.Except(lazy.Actions).ToArray();
+            var invalidated = await lazy.ReloadAsync(Clips.ClipsFor(t.Sets), own);
+            if (_clipsStopped) return;
+            t.Kinds = own.Concat(lazy.Actions).ToArray();
+            foreach (var figure in _figures.Values)
+                if (ReferenceEquals(figure.ClipKinds, t.Kinds)) figure.InvalidateClips(invalidated);
+        }
+        foreach (var fig in _figures.Values)
+        {
+            fig.Poses = Clips.Poses;
+            fig.Transitions = Clips.Transitions;
+        }
+        string revision = Clips.Revision;
+        _log($"[clips] reload revision={revision[..Math.Min(8, revision.Length)]} added={diff.AddedKinds.Count} changed={diff.ChangedUrls.Count} transitions={diff.TransitionsChanged.ToString().ToLowerInvariant()}");
+    }
+
     public ClipLibrary Clips { get; }
     public FigureStats Stats { get; } = new();
     public IReadOnlyDictionary<string, Figure> Figures => _figures;
@@ -140,7 +170,7 @@ public partial class FigureManager : Node3D
         public (V3 Min, V3 Max)? BindBox { get; init; }
         public AnimationLibrary? Library { get; init; }
         /// <summary>The action kinds of the library (planned: own takes, then the library actions), in action order (the figure's fallback is the first).</summary>
-        public IReadOnlyList<string> Kinds { get; init; } = Array.Empty<string>();
+        public IReadOnlyList<string> Kinds { get; set; } = Array.Empty<string>();
         /// <summary>Library kind → the set its file came from (the set chain's decision).</summary>
         public IReadOnlyDictionary<string, string> ClipSets { get; init; } = new Dictionary<string, string>();
         /// <summary>Tracks and keys of every library clip that binds on this rig (the plan — what an eager fit holds).</summary>
@@ -202,7 +232,7 @@ public partial class FigureManager : Node3D
     }
 
     /// <summary>One frame later (inside the tree), else at once.</summary>
-    private async Task NextFrame()
+    internal async Task NextFrame()
     {
         if (IsInstanceValid(this) && IsInsideTree()) await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
     }
@@ -1032,6 +1062,7 @@ public partial class FigureManager : Node3D
     /// <summary>Templates live outside the tree (their meshes/skeletons are only duplicated): free them here.</summary>
     public override void _ExitTree()
     {
+        _clipsStopped = true;
         foreach (var task in _templates.Values)
         {
             if (!task.IsCompletedSuccessfully) continue;
@@ -1856,7 +1887,11 @@ public partial class FigureManager : Node3D
             // pose and a bridge's root motion are computed in the same frame.
             player = new AnimationPlayer { Name = "Anim", CallbackModeProcess = AnimationMixer.AnimationCallbackModeProcess.Manual };
             inst.AddChild(player);   // root_node ".." = the model root the track paths start from
-            player.AddAnimationLibrary("", t.Library);
+            // Each player retains its current animation across a source reload.
+            var snapshot = new AnimationLibrary();
+            foreach (var action in t.Library.GetAnimationList())
+                snapshot.AddAnimation(action, t.Library.GetAnimation(action));
+            player.AddAnimationLibrary("", snapshot);
         }
         fig.BoundTracks = t.BoundTracks;
         fig.UnboundClips = t.Unbound;
@@ -1864,7 +1899,12 @@ public partial class FigureManager : Node3D
         fig.ClipKeys = t.Keys;
         fig.ClipBytesOf = () => t.ClipBytes;
         // A clip of the plan that is not fitted yet is asked for here (Task 35b) — set before SetBody plays the first one.
-        fig.FitClip = t.Lazy is { } lazy ? lazy.Request : null;
+        Func<string, bool>? fitClip = t.Lazy is { } lazy ? action =>
+        {
+            if (!lazy.Request(action)) return false;
+            return t.Library is not null && t.Library.HasAnimation(action)
+                && fig.InstallClip(action, t.Library.GetAnimation(action));
+        } : null;
         fig.Poses = Clips.Poses;
         fig.Transitions = Clips.Transitions;
         fig.Extras = t.Extras;
@@ -1878,7 +1918,7 @@ public partial class FigureManager : Node3D
         V3? bind = t.BindBox is { } bb ? FigureBind.Offset(bb.Min, bb.Max, scale) : null;
         GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
-                    box, t.RawHeight * scale);
+                    box, t.RawHeight * scale, fitClip: fitClip, refreshClipKinds: () => t.Kinds);
         LongestInstantiateMs = Math.Max(LongestInstantiateMs, dupWatch.Elapsed.TotalMilliseconds);
     }
 

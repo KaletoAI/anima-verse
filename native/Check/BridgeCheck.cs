@@ -120,6 +120,16 @@ public static class BridgeCheck
             }
             mgr.Tick(Dt);                                                                                   // F1
             Expect("B2 Mia opens get-up-chair", mia.Bridging && mia.CurrentKind == "get-up-chair", mia.CurrentKind);
+            // ReloadKeepsRunningBridge: the new table only governs the NEXT transition start.
+            var previousTransitions = mia.Transitions;
+            var runningAnimation = mia.Player!.GetAnimation(mia.CurrentClip);
+            double runningTime = mia.ClipTime;
+            mia.Transitions = Array.Empty<ClipTransition>();
+            mia.Play("idle");
+            Expect("ReloadKeepsRunningBridge", mia.Bridging && mia.CurrentKind == "get-up-chair"
+                && mia.Player.GetAnimation(mia.CurrentClip) == runningAnimation && mia.ClipTime == runningTime,
+                $"{mia.CurrentKind} {mia.ClipTime}");
+            mia.Transitions = previousTransitions;
             Expect("B2 Bea opens get-up-bed", bea.Bridging && bea.CurrentKind == "get-up-bed", bea.CurrentKind);
             Expect("B2 a holding bridge holds the facing and the height", mia.HoldsFacing && mia.HoldsHeight && mia.PaceLimit == 0,
                    $"facing {mia.HoldsFacing} height {mia.HoldsHeight} pace {mia.PaceLimit}");

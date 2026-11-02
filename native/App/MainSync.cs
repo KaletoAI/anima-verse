@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Figures;
 using AnimaNative.Overview;
 using AnimaNative.Scene;
 using AnimaNative.Sync;
@@ -23,6 +24,9 @@ public partial class Main : Node3D
     /// wakes it early on <c>presence</c>/<c>world</c> and makes a resync drop what was in flight. The location details
     /// re-sync every 120 s and whenever a poll names another revision.
     /// </summary>
+    private ClipReloadQueue? _clipReload;
+    private IDisposable? _clipSubscription;
+
     private void StartSync()
     {
         if (_builder?.FirstMap is { } firstMap)
@@ -35,6 +39,11 @@ public partial class Main : Node3D
         {
             _hub = new SyncStream(url => new HttpEventSource(api.OpenEventStreamAsync, url, Log), _timers);
             var hub = _hub;
+            var figures = _figures;
+            _clipReload = new ClipReloadQueue(_timers,
+                () => figures?.ReloadClipsAsync() ?? Task.CompletedTask,
+                e => Log($"[clips] reload failed: {e.Message}"));
+            _clipSubscription = hub.OnTopics(new[] { "clips" }, _clipReload.Push);
             bool wasConnected = false;
             int seenGen = 0;
             hub.OnState(() =>
@@ -74,6 +83,10 @@ public partial class Main : Node3D
     /// <summary>Back to the title, a lost session, the scene going: no poll, no stream, no timer survives.</summary>
     private void StopSync()
     {
+        _clipSubscription?.Dispose();
+        _clipSubscription = null;
+        _clipReload?.Dispose();
+        _clipReload = null;
         _builder?.StopResidency();
         _pollSub?.Dispose();
         _pollSub = null;

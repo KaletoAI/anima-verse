@@ -79,6 +79,8 @@ public static partial class PropActionsCheck
             figure.FinishPropEntry("idle"); for(int frame=0;frame<35;frame++) figure.UpdateFigure(1.0/30);
             var library=figure.Player.GetAnimationLibrary(""); var installed=library.GetAnimation("laying");
             library.RemoveAnimation("laying"); library.AddAnimation("laying",hold);
+            if(!figure.EnsureClip("laying") || library.GetAnimation("laying")!=hold)
+                throw new InvalidOperationException("EnsureClip replaced an existing animation without a clips invalidation");
             figure.FinishPropEntry("laying"); for(int frame=0;frame<35;frame++) figure.UpdateFigure(1.0/30); double compatibleAxis=Axis();
             figure.FinishPropEntry("idle"); for(int frame=0;frame<35;frame++) figure.UpdateFigure(1.0/30);
             bool compatible=Diff(installedAxis,compatibleAxis)<4;

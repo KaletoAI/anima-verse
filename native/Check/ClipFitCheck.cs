@@ -45,11 +45,57 @@ public static class ClipFitCheck
     public static async Task<string> RunAsync(Node3D host, string fixtures)
     {
         HeightCorrections(host);
+        ReloadPlayback(host);
         var bridges = await BridgesAsync(host, fixtures);
         var pairs = await PairsAsync(host, fixtures);
         var report = $"clips C1..C7 ok ({bridges}; {pairs})";
         GD.Print($"[check-clips] {report}");
         return report;
+    }
+
+    /// <summary>A reload refreshes future plays only; repeated ticks never restart a completed one-shot.</summary>
+    private static void ReloadPlayback(Node3D host)
+    {
+        var figure = new Figure("ClipReloadCheck");
+        host.AddChild(figure);
+        try
+        {
+            var body = new Node3D();
+            var player = new AnimationPlayer();
+            body.AddChild(player);
+            var library = new AnimationLibrary();
+            var original = new Animation { Length = 0.1 };
+            var replacement = new Animation { Length = 0.2 };
+            library.AddAnimation("idle", new Animation { Length = 1, LoopMode = Animation.LoopModeEnum.Linear });
+            library.AddAnimation("wave", original);
+            player.AddAnimationLibrary("", library);
+            var actions = new List<string> { "idle", "wave" };
+            int fits = 0;
+            figure.SetBody(body, true, null, player, actions, fitClip: action =>
+            {
+                fits++;
+                return figure.InstallClip(action, replacement);
+            });
+            figure.Play("wave");
+            Expect("reload keeps existing animation without calling fitter", fits == 0, fits.ToString());
+            figure.InvalidateClips(new[] { "wave" });
+            Expect("reload keeps running clip", figure.EnsureClip("wave")
+                && library.GetAnimation("wave") == original && fits == 0, fits.ToString());
+            figure.UpdateFigure(0.2);
+            Expect("one-shot has ended", !player.IsPlaying(), player.IsPlaying().ToString());
+            double endedAt = player.CurrentAnimationPosition;
+            for (int tick = 0; tick < 3; tick++) figure.Play("wave");
+            Expect("reload does not restart finished one-shot on repeated Play", !player.IsPlaying()
+                && player.CurrentAnimationPosition == endedAt && fits == 0, fits.ToString());
+            figure.Play("idle");
+            figure.Play("wave");
+            Expect("reload fits exactly the invalidated future play", fits == 1
+                && library.GetAnimation("wave") == replacement && figure.CurrentClip == "wave", fits.ToString());
+            actions.Remove("wave");
+            figure.Play("wave");
+            Expect("removed playing kind falls back", figure.CurrentClip == "idle", figure.CurrentClip);
+        }
+        finally { figure.Free(); }
     }
 
     /// <summary>

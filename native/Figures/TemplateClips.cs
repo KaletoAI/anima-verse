@@ -141,7 +141,7 @@ public sealed class TemplateClips
 
     /// <param name="candidates">the set chain's clips (<see cref="ClipLibrary.ClipsFor"/>), in order.</param>
     /// <param name="ownKinds">the file's own takes (lower-cased): they win their kind, the library fills the rest.</param>
-    public async Task PlanAsync(IReadOnlyList<ClipSource> candidates, IReadOnlyCollection<string> ownKinds)
+    public async Task PlanAsync(IReadOnlyList<ClipSource> candidates, IReadOnlyCollection<string> ownKinds, bool reloading = false)
     {
         // Which candidates bind (the fit's own loop, counting only — on a worker), in candidate order.
         var (rig, fixes, standRef, rigKnown, probe, skins) = (_rig, _fixes, _standRef, _rigKnown, _probe, _skins!);
@@ -158,7 +158,7 @@ public sealed class TemplateClips
         {
             counts = cachedCounts;
             _bindMinY = saved.BindMinY;
-            _sampled = await Task.Run(() => ClipGround.SampledSkins(skins));
+            if (!reloading) _sampled = await Task.Run(() => ClipGround.SampledSkins(skins));
             if (_mgr.ClipFit == ClipFitMode.Lazy) _skins = null;
             PlannedClips = saved.Clips; PlannedTracks = saved.Tracks; PlannedKeys = saved.Keys;
             ClipSets = saved.Sets;
@@ -183,11 +183,11 @@ public sealed class TemplateClips
                 {
                     var count = ClipLibrary.Compute(c, rig, fixes, standRef, rigKnown, countOnly: true);
                     return new PlannedCount(count.Binds, count.TrackCount, count.Keys);
-                }).ToArray(), ClipGround.BindMinY(probe, skins), AnimaNative.Cache.DerivedKeys.FitCodeVersion);
+                }).ToArray(), reloading ? _bindMinY : ClipGround.BindMinY(probe, skins), AnimaNative.Cache.DerivedKeys.FitCodeVersion);
             });
             counts = plan.Counts;
             _bindMinY = plan.BindMinY;
-            _sampled = await Task.Run(() => ClipGround.SampledSkins(skins));
+            if (!reloading) _sampled = await Task.Run(() => ClipGround.SampledSkins(skins));
             if (Cache is not null) { Cache.Plans++; Cache.FitMs += planWatch.Elapsed.TotalMilliseconds; }
         }
         if (_mgr.ClipFit == ClipFitMode.Lazy) _skins = null;
@@ -237,6 +237,28 @@ public sealed class TemplateClips
             await Cache!.WriteJson(planKey, new PlanData(counts, _bindMinY, AnimaNative.Cache.DerivedKeys.FitCodeVersion,
                 actionBindings, sets, PlannedClips, PlannedTracks, PlannedKeys));
         }
+    }
+
+    /// <summary>Rebuild bindings while retaining fits whose exact source object is unchanged.
+    /// Old animations remain owned until template disposal, including ones still used by a player.</summary>
+    public async Task<IReadOnlyList<string>> ReloadAsync(IReadOnlyList<ClipSource> candidates, IReadOnlyCollection<string> ownKinds)
+    {
+        while (Busy && !_dead) await _mgr.NextFrame();
+        if (_dead) return Array.Empty<string>();
+        var previous = new Dictionary<string, ClipSource>(_clipOf, StringComparer.Ordinal);
+        _clipOf.Clear();
+        _actionsOf.Clear();
+        _skins ??= _sampled;
+        await PlanAsync(candidates, ownKinds, reloading: true);
+        var invalidated = previous.Keys.Where(action => !_clipOf.TryGetValue(action, out var next)
+            || !ReferenceEquals(previous[action], next)).ToArray();
+        foreach (var action in invalidated)
+            if (Library.HasAnimation(action)) Library.RemoveAnimation(action);
+        // An unchanged source can acquire a new synonym after another kind disappears.
+        foreach (var source in _actionsOf.Keys)
+            if (_fits.TryGetValue(source, out var fit) && fit.IsCompletedSuccessfully && fit.Result is { } anim)
+                AddActions(source, anim);
+        return invalidated;
     }
 
     /// <summary>Godot's <c>AnimationLibrary::is_valid_animation_name</c>: not empty, none of <c>/ : , [</c>.</summary>

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.World;
@@ -138,8 +139,13 @@ public sealed class ClipLibrary
     public ClipSource? Clip(string kind, string set = "")
         => Index.BySet.TryGetValue(kind, out var bySet) && bySet.TryGetValue(set, out var c) ? c : null;
 
+    private JsonObject _lastListing = new();
+    private readonly List<Animation> _retiredSources = new();
+    private bool _released;
+
     public void Parse(JsonElement root)
     {
+        _lastListing = JsonNode.Parse(root.GetRawText())!.AsObject();
         PolicyDigest = AnimaNative.Cache.DerivedKeys.Of(
             root.TryGetProperty("movement_poses", out var poses) ? poses.GetRawText() : "",
             root.TryGetProperty("transition_clips", out var transitions) ? transitions.GetRawText() : "");
@@ -272,6 +278,61 @@ public sealed class ClipLibrary
         _log($"clips: {Entries.Count} listed, {ClipsLoaded} imported, {ClipsFailed} failed, {Index.Kinds.Count} kinds "
              + $"(download/cache-read {DownloadMs:0} ms, import {ImportMs:0} ms, cached {Cache?.CachedMs ?? 0:0} ms); one-shot: {(oneShots.Count > 0 ? string.Join(", ", oneShots) : "none")}");
     }
+
+    /// <summary>Fetch on a worker; import and publish on the captured engine context.</summary>
+    public async Task<ClipListingDiff> ReloadAsync()
+    {
+        await WaitClipsAsync();
+        var listing = await Task.Run(async () =>
+        {
+            using var doc = await _source.GetAnimationClipsAsync();
+            return doc.RootElement.Clone();
+        });
+        if (_released) throw new OperationCanceledException();
+        var diff = ClipListingDiff.Compare(_lastListing, JsonNode.Parse(listing.GetRawText())!.AsObject());
+        if (!diff.RevisionChanged) return diff;
+        // Stage in a separate library: a failed download must leave the live listing retryable.
+        var staged = new ClipLibrary(_source, _log, Cache) { NextFrame = NextFrame };
+        staged.Parse(listing);
+        var results = new List<ClipSource?>();
+        var created = new List<Animation>();
+        bool applied = false;
+        try
+        {
+            foreach (var entry in staged.Entries)
+            {
+                var previous = Entries.FirstOrDefault(e => e == entry);
+                var existing = previous is not null ? Clip(entry.Kind, entry.Set) : null;
+                if (existing is not null && existing.Url == entry.Url) { results.Add(existing); continue; }
+                var input = await Task.Run(async () =>
+                {
+                    var bytes = await _source.GetBytesAsync(entry.Url);
+                    var identity = Cache is not null ? await Cache.IdentityAsync(entry.Url, bytes) : null;
+                    return (bytes, identity);
+                });
+                if (_released) throw new OperationCanceledException();
+                var imported = Import(input.bytes, entry) with { CacheIdentity = input.identity };
+                created.Add(imported.Anim);
+                results.Add(imported);
+                if (NextFrame is { } next) await next();
+            }
+            if (_released) throw new OperationCanceledException();
+            var nextIndex = ClipLibraryRules.CommitInListOrder(staged.Entries, results, new CommitOps());
+            _retiredSources.AddRange(Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim));
+            _retiredSources.AddRange(created);
+            Index = nextIndex;
+            Parse(listing);
+            applied = true;
+            return diff;
+        }
+        finally
+        {
+            if (!applied)
+                foreach (var anim in created) anim.Dispose();
+        }
+    }
+
+    public string Revision => (string?)_lastListing["revision"] ?? "";
 
     /// <summary>The commit operations of the browser's library: rename to the kind, carry the file's flags.</summary>
     private sealed class CommitOps : IClipCommitOps<ClipSource>
@@ -659,9 +720,10 @@ public sealed class ClipLibrary
     /// <summary>Release the imported animations (Godot resources held from C#).</summary>
     public void Release()
     {
-        foreach (var bySet in Index.BySet.Values)
-        foreach (var clip in bySet.Values)
-            if (GodotObject.IsInstanceValid(clip.Anim)) clip.Anim.Dispose();
+        _released = true;
+        foreach (var anim in Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim).Concat(_retiredSources).Distinct())
+            if (GodotObject.IsInstanceValid(anim)) anim.Dispose();
+        _retiredSources.Clear();
         Index = new ClipIndex<ClipSource>();
     }
 
