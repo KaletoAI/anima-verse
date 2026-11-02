@@ -670,6 +670,40 @@ class Runs(unittest.TestCase):
         result = request(name, target)
         self.assertEqual(result["status"], "approaching", result)
 
+    def test_policy_presence_asks_the_participation_providers(self):
+        # plan-intim-privatsphaere.md P2: presence "policy" leaves the decision
+        # to ``participation.check``. Without a provider it is allowed; a
+        # provider's reason code reaches request and the offer check as it is,
+        # and the offer check asks with offer=True.
+        from app.core.hooks import register_provider, unregister_owned_providers
+        name, target, pid = setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc["actions"][0]["presence"] = "policy"
+        pose = doc["actions"][0].get("pose_key") or ""
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        F.actor(target["location_id"])
+        self.assertIn(A.check(name, {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")},
+                              target["action_id"], target["definition_revision"])["reason"],
+                      ("",), "no provider = allowed")
+        calls = []
+
+        def refuse(kind, key, members, location_id, room_id, *, offer=False):
+            calls.append((kind, key, list(members), location_id, room_id, offer))
+            return {"reason": "privacy", "message": "not with others present"}
+        register_provider("participation.check", refuse, owner="smoke-policy", multiple=True)
+        try:
+            checked = A.check(name, {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")},
+                              target["action_id"], target["definition_revision"], offer=True)
+            self.assertEqual(checked["reason"], "privacy")
+            self.assertEqual(calls[-1], ("prop_action", pose, [name], target["location_id"],
+                                         target["room_id"], True))
+            self.assertEqual(request(name, target)["reason"], "privacy")
+            self.assertEqual(calls[-1][-1], False, "a start asks with offer=False")
+            self.assertFalse(R.claims())
+        finally:
+            unregister_owned_providers("smoke-policy")
+
     def test_effective_requirement_is_rechecked_during_approach(self):
         name, target, pid = setup_run()
         from app.core import prompt_filters

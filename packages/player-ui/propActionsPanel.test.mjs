@@ -140,6 +140,12 @@ assert.equal(render(PropActionsPanel, {}), '', 'reconnecting host clears old pri
 propApi.setPropActionHost(false);
 console.log('PASS hosted prop panel snapshot through actual usePropActions hook');
 
+// Reasons a package answers through ``participation.check`` (presence "policy").
+for (const code of ['privacy']) {
+  assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
+  assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
+}
+
 // Collect literal runtime reasons, excluding author-validation issue codes.
 for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_action_access.py']) {
   const source = readFileSync(new URL(`../../app/core/${file}`, import.meta.url), 'utf8');

@@ -50,6 +50,9 @@ const REASONS: Record<string, string> = {
   journey_already_active: "A participant is already travelling",
   interaction_active: "A participant is already in another interaction",
   presence_not_met: "The people in the room do not meet this action's requirements",
+  // A package's participation rule (``participation.check``): the
+  // characters' own privacy setting does not allow the people present.
+  privacy: "Not with others here — someone involved keeps this private",
   slot_claim_lost: "The reserved place is no longer available",
   approach_target_changed: "The furniture access changed; try again",
   access_position_lost: "A participant moved away from the furniture access",

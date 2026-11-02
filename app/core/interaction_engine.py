@@ -241,10 +241,13 @@ def partner_poses() -> List[Tuple[str, str]]:
 
 # ------------------------------------------------------------------ pairing
 
-def check_can_pair(actor: str, partner: str) -> str:
+def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
     """Why ``actor`` and ``partner`` cannot pair up right now — "" when they
     can. The checks that do NOT depend on a pose or on the exact metres:
     two different, awake, present, unoccupied characters in one room.
+    With ``pose_key`` the packages are asked as well whether THIS pose may
+    happen here and now (``participation.check``, kind ``"pose"`` — e.g.
+    not in front of others); their English message is the reason.
 
     Shared by the invitation (asked before anyone is troubled with a
     question) and by ``start_interaction`` (asked again on acceptance,
@@ -273,9 +276,10 @@ def check_can_pair(actor: str, partner: str) -> str:
     if loc_a != loc_b:
         return f"{partner} is not here"
     if loc_a:
-        if (get_character_current_room(actor) or "") != (get_character_current_room(partner) or ""):
+        room = get_character_current_room(actor) or ""
+        if room != (get_character_current_room(partner) or ""):
             return f"{partner} is in another room"
-        return ""
+        return _pose_participation(actor, partner, pose_key, loc_a, room)
     # Both stand in the OPEN, where "" == "" would otherwise make two figures
     # a kilometre apart count as being in one room. Out there the only
     # measure is the metre: a rough reach, generous enough that the question
@@ -286,7 +290,18 @@ def check_can_pair(actor: str, partner: str) -> str:
         return f"{partner} is not here"
     if math.dist((pa["x"], pa["z"]), (pb["x"], pb["z"])) > OPEN_FIELD_REACH_M:
         return f"{partner} is too far away"
-    return ""
+    return _pose_participation(actor, partner, pose_key, "", "")
+
+
+def _pose_participation(actor: str, partner: str, pose_key: str,
+                        location_id: str, room_id: str) -> str:
+    """The package verdict on one free pair pose ("" = allowed, or no pose)."""
+    if not pose_key:
+        return ""
+    from app.core import participation
+    refused = participation.check("pose", pose_key.strip().lower(), [actor, partner],
+                                  location_id, room_id)
+    return refused.get("message", "")
 
 
 # ------------------------------------------------------------------ writing
@@ -513,7 +528,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # The pose-independent side of "can these two pair up" — one definition,
     # asked here and by the invitation. Checked AFTER the clip: a pose with no
     # pair animation is the more useful answer than "he is asleep".
-    blocked = check_can_pair(actor, partner)
+    # A prop run (``_reserved``) asked its furniture presence rule already.
+    blocked = check_can_pair(actor, partner, "" if _reserved else pose_key)
     if blocked:
         raise ValueError(blocked)
 
@@ -1334,7 +1350,7 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
                  "{invitee} does not feel like {pose} with {inviter} right now.",
                  inviter=inv["inviter"], invitee=inv["invitee"], pose_key=inv["pose_key"])
         return {**out, "status": "declined"}
-    blocked = check_can_pair(inv["inviter"], inv["invitee"])
+    blocked = check_can_pair(inv["inviter"], inv["invitee"], inv["pose_key"])
     if blocked:
         _fail_invite(inv, blocked)
         return {**out, "status": "cannot", "reason": blocked}

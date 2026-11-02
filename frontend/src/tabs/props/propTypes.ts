@@ -763,7 +763,7 @@ export interface ActionDefinition {
   ability: 'pose' | 'combined' | 'sleep' | 'pair'
   pose_key: string
   participants: 1 | 2
-  presence: 'any' | 'alone' | 'others' | 'participants_only'
+  presence: 'any' | 'alone' | 'others' | 'participants_only' | 'policy'
   interrupt_on_presence_change: boolean
   phases: { id: string; label: string; duration_game_s: number; pose_key: string }[]
   requirements: ActionRequirement[]

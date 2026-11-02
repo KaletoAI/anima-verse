@@ -320,10 +320,11 @@ def animated_for(name, definition, *, profile=None) -> bool:
     return True
 
 
-def _validate(run, *, conn=None, require_claims=False, presence=True, _query=None, replaces=()):
+def _validate(run, *, conn=None, require_claims=False, presence=True, _query=None, replaces=(),
+              offer=False):
     """``replaces``: the live runs of the two people this request ends first
     (``_replaced_runs``) — their claims, journeys and interactions do not
-    count as busy."""
+    count as busy. ``offer``: a menu asks, not a start (``participation``)."""
     replaces = _refs(replaces)
     query = _query if _query is not None else places._GeometryQuery()
     definition, reason = _definition(run["target"], run["action_id"], run["definition_revision"], _query=query)
@@ -370,7 +371,18 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         present = {n for n, _ in places._present(run["target"]["location_id"], run["target"]["room_id"])
                    if n in members or is_humanoid(n, profile=query.profile(n))}
         rule = definition["presence"]
-        if ((rule == "alone" and present != {run["actor"]}) or
+        if rule == "policy":
+            # The characters decide, not the furniture: packages answer
+            # (``participation.check``); none registered = allowed. Their
+            # reason code reaches start, accept and the offer menu as it is.
+            from app.core import participation
+            refused = participation.check(
+                "prop_action", str(definition.get("pose_key") or ""),
+                [n for n in (run["actor"], run.get("partner")) if n],
+                run["target"]["location_id"], run["target"]["room_id"], offer=offer)
+            if refused:
+                return refused["reason"]
+        elif ((rule == "alone" and present != {run["actor"]}) or
                 (rule == "others" and not present - {run["actor"]}) or
                 (rule == "participants_only" and present != members)):
             return "presence_not_met"
@@ -1990,7 +2002,8 @@ def _notify(run):
     _after_locks(lambda: avatars(names, ("self", "scene")))
 
 
-def check(actor: str, target: dict, action_id: str, revision: str, partner: str = "", *, _query=None, include_plans: bool = False) -> dict:
+def check(actor: str, target: dict, action_id: str, revision: str, partner: str = "", *, _query=None, include_plans: bool = False,
+          offer: bool = False) -> dict:
     """Read-only preflight; optional admin diagnostics reuse the actual successful plans."""
     if (not isinstance(target, dict) or set(target) != set(_TARGET)
             or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
@@ -2014,7 +2027,8 @@ def check(actor: str, target: dict, action_id: str, revision: str, partner: str 
     # Never build a route for an already refused offer.
     # The two's own running actions are ended by the request, not a block.
     replaces = _replaced_runs(actor, partner, target, action_id)
-    reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query, replaces=replaces)
+    reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query, replaces=replaces,
+                                                                 offer=offer)
     if not reason:
         plans, reason = _plan(run, conn=store.db.get_connection(), _query=query, replaces=replaces)
     result = dict(enabled=not reason, reason=reason)

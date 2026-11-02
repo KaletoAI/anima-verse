@@ -205,7 +205,7 @@ class InteractSkill(PluginSkill):
                 # Nothing to refuse — never turn a "no" into a fresh proposal
                 # of the very thing that was refused.
                 return ToolRefusal(f"{partner} has not asked {actor} for anything.")
-            blocked = IE.check_can_pair(actor, partner)
+            blocked = IE.check_can_pair(actor, partner, key)
             if blocked:
                 return ToolRefusal(f"Cannot: {blocked}")
             invite_id = IE.create_invite(actor, partner, key)

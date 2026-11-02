@@ -102,6 +102,7 @@ export function PropActionsPanel({ workspace, onIssue }: { workspace: PropWorksp
           <ActionReference value={action.presence} label={t('Who may be in the room')} path={`${path}.presence`} options={[
             { value: 'any', label: t('Anyone') }, { value: 'alone', label: t('Only alone') },
             { value: 'others', label: t('At least one other person') }, { value: 'participants_only', label: t('Only the participants') },
+            { value: 'policy', label: t("The characters' own settings") },
           ]} onChange={presence => patch({ presence: presence as ActionDefinition['presence'] })} />
         </section>
         <p className="ga-hint">{t('Applies to:')} {binding?.marker_ids.length || 0} {t('places on this variant')}{binding?.marker_ids.length ? ` (${Object.entries((shownVariant?.markers || []).filter(marker => binding.marker_ids.includes(marker.id || '')).reduce<Record<string, number>>((counts, marker) => { counts[marker.group] = (counts[marker.group] || 0) + 1; return counts }, {})).map(([group, count]) => `${group} x${count}`).join(', ')})` : ''}</p>

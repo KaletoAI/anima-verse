@@ -127,6 +127,7 @@ const REASONS: Record<string, string> = {
   entry_transition_mismatch: "The measured entry transition does not connect access and body anchor.",
   entry_transition_blocked: "Geometry blocks entry from access to body anchor.",
   presence_not_met: "The presence rule is not met in the actual room. Sleeping people also count as present.",
+  privacy: "A participant's privacy setting (a character field, possibly overridden by a state) does not allow the people in this room.",
   participant_asleep: "A participant is sleeping and unavailable for this action.",
   target_not_in_actor_room: "All participants must already be in this placement's room.",
   stale_definition: "The saved definition changed. Refresh placements and check again; the draft is retained.",

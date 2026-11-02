@@ -201,7 +201,7 @@ def shared_activity_request(owner: str, target: str, action: Any, request_id: st
     if status["status"] != "not_found":
         return status
     normalized = shared_activity_validate(owner, target, action)
-    blocked = IE.check_can_pair(owner, target)
+    blocked = IE.check_can_pair(owner, target, normalized["pose_key"])
     if blocked:
         return _result("blocked", request_id, blocked)
     if IE.create_invite(owner, target, normalized["pose_key"], request_id=request_id) != request_id:

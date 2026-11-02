@@ -982,6 +982,11 @@ So bleibt eine Aktion, die nicht ins öffentliche Repo gehört, im Paket — ist
 nicht aktiv, ist sie weg (Löschtest). Namen stehen im Paket (`name_<lang>`), nie in
 `shared/languages/*.json`.
 
+Wer bei einer Aktion anwesend sein darf, kann statt des Möbels die Figuren
+entscheiden: `presence: "policy"` fragt den Provider-Haken `participation.check`
+(Referenz: `docs/skill-core-api.md`). Ohne registrierten Provider ist die Aktion
+erlaubt. Derselbe Haken prüft freie Paar-Posen bei Einladung, Antwort und Start.
+
 ## Skill-Klasse
 
 ```python

@@ -154,7 +154,7 @@ def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = 
         pair = ability == 'pair'
         if type(action.get('participants')) is not int or action.get('participants') != (2 if pair else 1):
             issue(p + '.participants', 'unsupported_combination', 'Pair actions require two participants; others one')
-        if action.get('presence') not in ('any', 'alone', 'others', 'participants_only'):
+        if action.get('presence') not in ('any', 'alone', 'others', 'participants_only', 'policy'):
             issue(p + '.presence', 'invalid_presence', 'Unknown presence policy')
         phases = rows(action.get('phases'), p + '.phases')
         identities(phases, p + '.phases')
@@ -431,13 +431,14 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             targets = []
             if pair:
                 for partner in present:
-                    checked = engine.check(actor, target, action["id"], revision, partner, _query=query)
+                    checked = engine.check(actor, target, action["id"], revision, partner, _query=query,
+                                           offer=True)
                     targets.append(dict(partner=partner, **checked))
                 checked = next((t for t in targets if t["enabled"]), None)
                 if checked is None:
                     checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
             else:
-                checked = engine.check(actor, target, action["id"], revision, _query=query)
+                checked = engine.check(actor, target, action["id"], revision, _query=query, offer=True)
             result.append(dict(action_id=action["id"], definition_revision=revision,
                                placement_id=target["placement_id"], variant_uid=target["variant_uid"],
                                prop_label=localized(document, "name", lang) or pid,

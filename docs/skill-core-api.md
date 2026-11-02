@@ -827,6 +827,32 @@ geloggt und übersprungen. Ein Prop schließt eine Paket-Aktion mit
 `exclude_actions: [id]` auf Dokument-Ebene aus, ein Platz mit dem
 `exclude_actions` seines Markers; beides darf IDs eines gerade inaktiven Pakets nennen.
 
+## Teilnahme und Anwesende — capability `participation.check` ✅
+
+Who may take part, and in front of whom, can be decided by the characters
+instead of the furniture (plan-intim-privatsphaere.md, part B). A package
+registers `register_provider("participation.check", fn, owner="<package id>",
+multiple=True)`, called as
+`fn(kind, key, members, location_id, room_id, *, offer=False)`:
+
+- `kind` `"prop_action"` — a furniture action whose `presence` is `"policy"`
+  (the core skips its own presence rule then); `key` is the action's `pose_key`.
+- `kind` `"pose"` — a free pair pose: `interaction_engine.check_can_pair(actor,
+  partner, pose_key)` asks at the invitation, the answer and `start_interaction`.
+- `members` — every participant, initiator first; `location_id`/`room_id` the
+  room (both `""` out in the open); `offer=True` when a menu asks, not a start.
+
+Answer `""` (not this package's business, or allowed) or
+`{"reason": <code>, "message": <English sentence>}`. The first refusal in
+registration order wins; a raising provider is logged and skipped. The furniture
+path returns the code as the run's reason (a new code needs a player text in
+`packages/player-ui/src/propActionReasons.ts`), the pose path the message.
+
+| Function | Semantics |
+|---|---|
+| `app.core.participation.check(kind, key, members, location_id, room_id, *, offer=False) -> dict` | `{}` or the first refusal `{reason, message}` (a refusal without message carries its code as message) |
+| `app.core.participation.onlookers(members, location_id, room_id) -> list[str]` | The PEOPLE besides `members` who are there: the room inside a location, everyone within earshot of a member in the open (`perception.addressable_for`); not humanoid = nobody. Sorted |
+
 ## Abschluss-Clip einer laufenden Aktion — `app.core.prop_action_engine` ✅
 
 Eine Pose kann im Katalog einen Abschluss-Clip nennen (`finale_animation`); WANN ihn eine Person spielt,
