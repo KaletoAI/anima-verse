@@ -216,6 +216,30 @@ bad = []
 for p in sorted(list(pathlib.Path("app").rglob("*.py")) + list(pathlib.Path("plugins").rglob("*.py"))):
     bad += unstamped_pos_writes(p.read_text(encoding="utf-8"), str(p))
 check("lint pos origin columns", bad, [])
+# A furniture run APPROACHING owns the avatar (A15 row 1a, 2026-11-03: an
+# NPC's consent started the run between two state polls, the client's next
+# report cancelled it with "position"). A run row holding demo's person claim
+# with status approaching, avatar at (40, 40), report (40.5, 40) -> 200
+# {ok: false, server_owned: true}, the stored point stays (40, 40); the run
+# gone -> the same report is written.
+from app.core import prop_action_store as runs
+set_character_pos("demo", 40.0, 40.0)
+before = get_avatar_sync_snapshot("demo")["pos"]
+with transaction() as conn:
+    conn.execute(
+        "INSERT INTO prop_action_runs (execution_id, actor, partner, request_fingerprint, action_id, "
+        "definition_revision, status, target, definition, data, created_at, updated_at) "
+        "VALUES ('run1', 'demo', 'npc_other', 'f', 'a', 'r', 'approaching', '{}', '{}', '{}', 't', 't')")
+    conn.execute("INSERT INTO prop_action_claims VALUES (?, 'run1', 'person', ?)",
+                 (runs.person_key("demo"), json.dumps({"name": "demo"})))
+moved = dict(x=before["x"] + 0.5, z=before["z"])
+check("approach owns the avatar", report(dict(moved)), {"ok": False, "server_owned": True})
+check("approach point unchanged", get_avatar_sync_snapshot("demo")["pos"], before)
+with transaction() as conn:
+    conn.execute("DELETE FROM prop_action_runs WHERE execution_id='run1'")  # claims cascade
+check("without the run the report lands", report(dict(moved)).get("ok"), True)
+check("landed point", get_avatar_sync_snapshot("demo")["pos"], moved)
+
 print(f"Position origin: {len(failures)} failures")
 _tmp.cleanup()
 raise SystemExit(bool(failures))

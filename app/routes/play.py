@@ -1028,6 +1028,19 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "message": t("You are part of a party and your leader takes you "
                          "along — you cannot move on your own.", lang)})
 
+    # A furniture run that has the avatar APPROACHING (the walk and the entry)
+    # moves the figure itself: a report in that window is a client that has
+    # not yet seen the run — an NPC's consent starts it between two state
+    # polls — not the player walking off, which goes through the run's own
+    # cancel. Taken as "nothing written", like the throttle; writing it would
+    # cancel the run (reason "position") before the pose ever started
+    # (2026-11-03).
+    from app.core import prop_action_store as _runs
+    _held = _runs.held(_runs.person_key(avatar))
+    _run = _runs.get(_held) if _held else None
+    if _run and _run["status"] == "approaching":
+        return {"ok": False, "server_owned": True}
+
     try:
         x, z = float(body.get("x")), float(body.get("z"))
     except (TypeError, ValueError, OverflowError):

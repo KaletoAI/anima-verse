@@ -4322,6 +4322,7 @@ auseinanderstehen):
 |---|---|---|
 | 0 | **Überholt** — eine andere Meldung DESSELBEN Avatars steckt schon im Handler. Der Server wartet nie darauf (das würde pro Meldung einen Threadpool-Worker parken und der Punkt wäre bis dahin ohnehin alt); STILL verworfen wie die Drossel, die nächste Meldung ≤ 250 ms später trägt einen frischeren Punkt | 200 `{ok: false, superseded: true}` |
 | 1 | Party-**Follower** besitzt keine eigene Bewegung | 403 `party_follower` |
+| 1a | **Möbel-Lauf in Annäherung** — der Avatar ist Mitglied eines Laufs mit `status: "approaching"` (Weg UND Einstieg): die Figur bewegt der Server. Eine Meldung in diesem Fenster kommt von einem Client, der den Lauf noch nicht kennt (die Zusage eines NPC startet ihn zwischen zwei Zustandsabfragen); STILL verworfen, kein Fehler-Toast, keine Korrektur. Wer weggehen will, bricht den Lauf über dessen eigenen Abbruch ab | 200 `{ok: false, server_owned: true}` |
 | 2 | `x`/`z` sind endliche Zahlen | 400 |
 | 3 | **Nachzügler** — `seq` nicht neuer als die letzte akzeptierte Meldung; STILL verworfen, kein Fehler-Toast, keine Korrektur | 200 `{ok: false, stale: true}` |
 | 4 | **Drossel** ~4 Meldungen/s — Überschuss wird STILL verworfen, kein Fehler-Toast | 200 `{ok: false, throttled: true}` |
