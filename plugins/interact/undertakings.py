@@ -87,7 +87,8 @@ def _live_pair(owner: str, target: str, pose_key: str, interaction_id: str) -> b
         interaction = IE.get_interaction(name)
         if not interaction or interaction.get("id") != interaction_id:
             return False
-        if interaction.get("partner") != partner or interaction.get("pose_key") != pose_key:
+        if (set(IE.members_of(interaction).values()) != {name, partner}
+                or interaction.get("pose_key") != pose_key):
             return False
     return True
 
@@ -98,7 +99,8 @@ def _owned_pair_id(owner: str, target: str, pose_key: str, request_id: str) -> s
     partner = IE.get_interaction(target)
     if (actor and partner and actor.get("invite_id") == partner.get("invite_id") == request_id
             and actor.get("id") == partner.get("id")
-            and actor.get("partner") == target and partner.get("partner") == owner
+            and IE.members_of(actor) == IE.members_of(partner)
+            and set(IE.members_of(actor).values()) == {owner, target}
             and actor.get("pose_key") == partner.get("pose_key") == pose_key):
         return str(actor["id"])
     return ""
@@ -122,7 +124,8 @@ def _owned_end(owner, target, pose_key, request_id, recorded_id):
             or (recorded_id and recorded_id != first["interaction_id"])):
         return None
     for result, partner in ((first, target), (second, owner)):
-        if (result.get("invite_id") != request_id or result.get("partner") != partner
+        if (result.get("invite_id") != request_id
+                or partner not in (result.get("members") or {}).values()
                 or result.get("pose_key") != pose_key):
             return None
     if first.get("reason") != second.get("reason"):

@@ -134,7 +134,7 @@ async def scenario(frozen, accepted, blocked=""):
             if accepted:
                 a, b = ie.get_interaction("Ann"), ie.get_interaction("Bob")
                 assert a and b and a["id"] == b["id"]
-                assert a["partner"] == "Bob" and b["partner"] == "Ann"
+                assert a["members"] == b["members"] and set(a["members"].values()) == {"Ann", "Bob"}
                 assert ie.get_invite(invite)["status"] == "accepted"
                 assert {a["role"], b["role"]} == {"a", "b"}
             else:

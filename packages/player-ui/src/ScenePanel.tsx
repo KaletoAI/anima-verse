@@ -15,6 +15,7 @@
  * image-generation dialog of the 📷 flow, which belongs to the game-admin UI —
  * the host slots it in via the `photoDialog` prop.
  */
+import { othersIn, type InteractionMembers } from './interactionMembers'
 import { respondPair } from './pairInteractions'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent,
@@ -118,7 +119,8 @@ export interface SceneData {
   interaction_approaching?: {
     invite_id: string; partner: string; pose_key: string; pose_label?: string; walking: boolean
   } | null
-  interaction?: { partner: string; pose_key: string; pose_label?: string } | null
+  /** The running interaction; `members` includes the avatar. */
+  interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string } | null
   rooms: RoomInfo[]
   travel?: TravelInfo | null
   /** GONE since E3 Task 5 — the grid compass they described does not exist
@@ -713,7 +715,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
                   🤝 {t('{pose} with {name}.')
                     .replace('{pose}', data.interaction.pose_label || data.interaction.pose_key)
-                    .replace('{name}', data.interaction.partner)}
+                    .replace('{name}', othersIn(data.interaction.members, data.avatar).join(', '))}
                 </span>
                 <button onClick={handleInteractEnd} className="player-chip">
                   {t('Stop')}

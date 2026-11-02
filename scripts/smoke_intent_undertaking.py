@@ -54,13 +54,13 @@ def accept_activity(intent):
 def complete_after_real_end():
     a, b, intent = undertaking()
     assert F.P.resolve_pending_invite(F.invite_id(intent), True)["status"] == "accepted"
-    assert IE.get_interaction(a)["partner"] == b, "legacy temporary Together did not start"
+    assert IE.partner_of(IE.get_interaction(a), a) == b, "legacy temporary Together did not start"
     accept_activity(intent)
     row = F.I.get_intent(intent["id"])
     assert row["status"] == "active", "arrival prematurely completed the undertaking"
     assert all(F.C.get_character_current_room(n) == "cellar" for n in (a, b))
     inter = IE.get_interaction(a)
-    assert inter and inter["partner"] == b and inter["pose_key"] == "embracing"
+    assert inter and IE.partner_of(inter, a) == b and inter["pose_key"] == "embracing"
     for _ in range(3):
         F.T.reconcile(intent["id"], request=False)
     assert IE.get_interaction(a)["id"] == inter["id"], "reconciliation restarted the pair"
@@ -288,7 +288,7 @@ def answer_claim_beats_withdrawal():
     with patch.object(IE, "get_invite", answer_after_read):
         assert not IE.cancel_invite(request_id), "withdrawal reported success after answer claimed the row"
     assert original(request_id)["status"] == "accepted"
-    assert IE.get_interaction(a)["partner"] == b
+    assert IE.partner_of(IE.get_interaction(a), a) == b
     IE.end_interaction(a)
     assert F.I.get_intent(intent["id"])["status"] == "done"
 

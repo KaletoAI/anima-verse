@@ -559,7 +559,7 @@ async function main() {
       const pairRows = [];
       for (let f = 0; f < FPS * 15; f++) {
         if (pairAtS && pairFrame < 0 && bridgeFrame >= 0 && (bridgeFrame + 1) * DT >= pairAtS - 1e-9) {
-          pair = { id: 'p1', kind: PAIR_CLIP.split('__')[0], role: 'a', partner: 'nobody',
+          pair = { id: 'p1', kind: PAIR_CLIP.split('__')[0], role: 'a', members: { a: name, b: 'nobody' },
             anchor: { x: standPoint.x, z: standPoint.z, yaw: YAW + Math.PI, place_id: null },
             started_at_game: 'Y0001-D001T00:00:00', elapsed_s: 0, rate: 1,
             clip_duration_s: raw[PAIR_CLIP].duration, loop: false };
@@ -738,7 +738,7 @@ async function main() {
         owner.position.set(0, FLOOR, 0);
         for (let i = 0; i < 2 * FPS; i++) mgr.tick(DT, 10);
         mgr.update([{ char: { name, activity: '', activity_animation: 'idle' }, pos: new THREE.Vector3(0, FLOOR, 0),
-          interaction: { id: 'c1', kind: PAIR_CLIP.split('__')[0], role: 'a', partner: 'nobody',
+          interaction: { id: 'c1', kind: PAIR_CLIP.split('__')[0], role: 'a', members: { a: name, b: 'nobody' },
             anchor: { x: 0, z: 0, yaw: YAW + Math.PI, place_id: null }, started_at_game: 'Y0001-D001T00:00:00',
             elapsed_s: 0, rate: 1, clip_duration_s: raw[PAIR_CLIP].duration, loop: false } }]);
         let foot = Infinity;

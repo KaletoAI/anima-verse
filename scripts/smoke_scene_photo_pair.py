@@ -7,7 +7,7 @@ an empty room stream ``prepare_scene_photo`` takes its deterministic
 fallback branch, which is exactly the branch whose wording this checks.
 
 The interaction records are stamped onto the profiles the way
-``interaction_engine.start_interaction`` writes them (id/kind/role/partner/
+``interaction_engine.start_interaction`` writes them (id/kind/role/members/
 pose_key/started_at_game). No clip library is needed: the photo path reads
 the record, never the clip.
 
@@ -98,10 +98,10 @@ for _n in ("Ann", "Bob", "Cid"):
 
 def pair(a: str, b: str, pose: str) -> None:
     """Stamp the record start_interaction writes, on both halves."""
-    for name, role, other in ((a, "a", b), (b, "b", a)):
+    for name, role in ((a, "a"), (b, "b")):
         prof = get_character_profile(name) or {}
         prof["interaction"] = {"id": "smoke", "kind": pose, "role": role,
-                               "partner": other, "pose_key": pose,
+                               "members": {"a": a, "b": b}, "pose_key": pose,
                                "started_at_game": "Y0001-D001T00:00:00"}
         save_character_profile(name, prof)
 

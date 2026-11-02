@@ -152,7 +152,7 @@ test('card renders standing poses first in the furniture chip row and submits th
 });
 
 test('busy character keeps standing poses visible, disabled, with native-safe hints', async () => {
-  const card = await mount({ interaction: { partner: 'Mira', pose_key: 'dance' } });
+  const card = await mount({ interaction: { members: { a: 'Kira', b: 'Mira' }, pose_key: 'dance' } });
   try {
     const html = card.draw();
     const row = actionRow();
@@ -164,7 +164,7 @@ test('busy character keeps standing poses visible, disabled, with native-safe hi
 });
 
 test('avatar partner keeps Stop first in the combined row and ends the interaction', async () => {
-  const card = await mount({ interaction: { partner: 'Player', pose_key: 'hug' } });
+  const card = await mount({ interaction: { members: { a: 'Player', b: 'Kira' }, pose_key: 'hug' } });
   try {
     card.draw();
     const chips = buttons(actionRow());
@@ -195,7 +195,7 @@ test('empty choices render no section, while furniture-only and self headings st
 });
 
 test('Stop remains available without any standing poses or furniture offers', async () => {
-  const card = await mount({ pairPoses: [], offers: [], interaction: { partner: 'Player', pose_key: 'hug' } });
+  const card = await mount({ pairPoses: [], offers: [], interaction: { members: { a: 'Player', b: 'Kira' }, pose_key: 'hug' } });
   try {
     assert.match(card.draw(), /<section aria-label="Actions"/);
     assert.ok(nodes.some(node => node.type === 'button' && text(node) === 'Stop'));

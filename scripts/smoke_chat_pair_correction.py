@@ -199,7 +199,7 @@ def scenario(label, correction, *, mode="rp_first", available=True, tool_llm=Tru
     a, b = ie.get_interaction("Ann"), ie.get_interaction("Bob")
     if paired:
         assert a and b and a["id"] == b["id"], f"{label}: rejected pair action was never repaired"
-        assert a["partner"] == "Bob" and b["partner"] == "Ann"
+        assert a["members"] == b["members"] and set(a["members"].values()) == {"Ann", "Bob"}
         assert a["pose_key"] == b["pose_key"] == "embracing"
         assert not feedback, (label, feedback)
     else:

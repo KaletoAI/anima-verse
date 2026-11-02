@@ -329,11 +329,11 @@ def behaviour(case):
     elif case == "partial_interaction_end":
         # NEU: A's committed removal changes X; B's rejected removal changes no Y.
         from app.core import interaction_engine
-        for name, partner in (("a", "b"), ("b", "a")):
+        for name in ("a", "b"):
             profile = ch.get_character_profile(name)
-            profile["interaction"] = {"id": "demo-pair", "partner": partner,
+            profile["interaction"] = {"id": "demo-pair", "members": {"a": "a", "b": "b"},
                                       "kind": "demo", "pose_key": "demo-pose",
-                                      "role": "actor", "started_at_game": "demo-time"}
+                                      "role": name, "started_at_game": "demo-time"}
             assert ch.save_character_profile(name, profile)
         drain(conns)
         save = ch.save_character_profile

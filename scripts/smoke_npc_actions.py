@@ -407,8 +407,8 @@ save_character_current_location(D, LOC_ID)
 force_set_status(D, room="taproom")
 isolate(D)
 _p = get_character_profile(D)
-_p["interaction"] = {"id": "i1", "kind": "handshake", "role": "actor",
-                     "partner": "Halvard",
+_p["interaction"] = {"id": "i1", "kind": "handshake", "role": "a",
+                     "members": {"a": D, "b": "Halvard"},
                      "started_at_game": game_time().canonical()}
 save_character_profile(D, _p)
 check("mid-interaction is not", npc_actions.candidates(), [])

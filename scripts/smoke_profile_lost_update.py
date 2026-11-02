@@ -257,13 +257,13 @@ def main():
         ``clear_pose_intent`` branch (no room, no places lookup needed), and
         ``place`` is None so nobody is stood up from a seat that is not there.
         """
-        for name, other, role in ((a, b, "a"), (b, a, "b")):
+        for name, role in ((a, "a"), (b, "b")):
             save_character_profile(name, {
                 "character_name": name, "template": "human-default",
                 "default_outfit": "", "place": None,
                 "pose_key": "hugging", "pose_flavor": "",
                 "interaction": {"id": inter_id, "kind": "hug", "role": role,
-                                "partner": other, "pose_key": "hugging",
+                                "members": {"a": a, "b": b}, "pose_key": "hugging",
                                 "anchor": {"x": 0.0, "z": 0.0, "yaw": 0.0,
                                            "place_id": None},
                                 "started_at_game": "Y0001-D001T12:00:00",

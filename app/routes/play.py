@@ -381,7 +381,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
                          else _app["invitee"]),
              "walking": _IE.walker_of(_app) == avatar} if _app else None)
         _run = _IE.get_interaction(avatar)
-        interaction = ({"partner": _run["partner"], "pose_key": _run["pose_key"],
+        interaction = ({"members": _IE.members_of(_run), "pose_key": _run["pose_key"],
                         "pose_label": pose_label(_run["pose_key"], lang)}
                        if _run else None)
     except Exception as _ie:
@@ -2518,11 +2518,11 @@ def _state_block(name: str, lang: str = "en") -> dict:
     except Exception:
         pass
     try:
-        from app.core.interaction_engine import get_interaction
+        from app.core.interaction_engine import get_interaction, members_of
         from app.core.pose_catalog import pose_label
         run = get_interaction(name)
         if run:
-            blk["interaction"] = {"partner": run["partner"],
+            blk["interaction"] = {"members": members_of(run),
                                   "pose_key": run["pose_key"],
                                   "pose_label": pose_label(run["pose_key"], lang)}
     except Exception:

@@ -2287,8 +2287,9 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
             # (both stand up with the interaction). The authoritative check
             # is assign's, under the lock.
             from app.core import places
+            from app.core.interaction_engine import members_of
             if not places.can_take(character_name, key, prefer,
-                                   ignore=(character_name, str(inter.get("partner") or ""))):
+                                   ignore=(character_name, *members_of(inter).values())):
                 raise places.PlaceUnavailable(f"{prefer} has no free slot")
         # A new pose mid-interaction releases both partners (the engine
         # re-reads and saves the profiles itself).

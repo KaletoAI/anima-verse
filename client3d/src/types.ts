@@ -332,8 +332,10 @@ export interface NameBadge {
 export interface MapInteraction {
   id: string;
   kind: string;
-  role: 'a' | 'b';
-  partner: string;
+  /** this figure's own clip role */
+  role: 'a' | 'b' | 'c' | 'd' | 'e';
+  /** every role -> its character, this figure included (G2b) */
+  members: Record<string, string>;
   anchor: {
     x: number; z: number; yaw: number;
     /** The PLACE (marker id in the pair's room) the anchor sits on — the

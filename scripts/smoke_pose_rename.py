@@ -142,7 +142,7 @@ try:
     p = ch.get_character_profile("demo_b")
     p["pose_key"] = "sitting"
     p["outfit_description"] = "a red coat"
-    p["interaction"] = {"id": "x", "pose_key": "reading", "role": "b", "partner": "demo"}
+    p["interaction"] = {"id": "x", "pose_key": "reading", "role": "b", "members": {"a": "demo", "b": "demo_b"}}
     assert ch.save_character_profile("demo_b", p)
 
     def outfits(name):

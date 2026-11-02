@@ -9,7 +9,8 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
         "invite_id": "…",             # optional question that consented to this pair
         "kind": "greeting-handshake", # the pair clip kind
         "role": "a" | "b",            # which half this character plays
-        "partner": "<character>",
+        "members": {"a": "<character>", "b": "<character>"},  # every role -> its
+                                      # character, this one included (a..e)
         "pose_key": "greeting handshake",  # the catalog key that named the clip
         "anchor": {"x": 12.3, "z": -4.5, "yaw": 1.57,    # world metres / rad
                    "place_id": "sofa/s"},                # the PLACE it sits on, or None
@@ -106,7 +107,8 @@ def stale_against_pair(character_name: str,
         return ""
     from app.core.pose_catalog import pose_label
     return (f"{character_name} began {pose_label(inter['pose_key'], 'en')} with "
-            f"{inter['partner']} after this decision was made; that keeps going. "
+            f"{join_names(others_of(inter, character_name))} after this decision was made; "
+            f"that keeps going. "
             f"Do not change {character_name}'s activity or leave in this turn.")
 
 
@@ -132,7 +134,14 @@ OPEN_FIELD_REACH_M = 40.0
 
 @contextmanager
 def pair_profile_locks(a: str, b: str):
-    """Both partners' profile locks, ALWAYS in sorted-name order.
+    """Both partners' profile locks — :func:`profile_locks` for two names."""
+    with profile_locks(a, b):
+        yield
+
+
+@contextmanager
+def profile_locks(*names: str):
+    """Every named character's profile lock, ALWAYS in sorted-name order.
 
     A pair write touches TWO ``profile_json`` blobs, and each save rewrites
     the whole blob — so both halves have to be read and written under their
@@ -152,11 +161,12 @@ def pair_profile_locks(a: str, b: str):
     Same name twice (never a real pair) is harmless: the re-entrant lock is
     simply taken twice.
     """
+    from contextlib import ExitStack
     from app.core.keyed_lock import keyed_lock
-    first, second = sorted((str(a or ""), str(b or "")))
-    with keyed_lock("character_profile", first):
-        with keyed_lock("character_profile", second):
-            yield
+    with ExitStack() as stack:
+        for name in sorted(str(n or "") for n in names):
+            stack.enter_context(keyed_lock("character_profile", name))
+        yield
 
 
 # ------------------------------------------------------------------ reading
@@ -169,10 +179,77 @@ def get_interaction(character_name: str,
     inter = prof.get("interaction")
     if not isinstance(inter, dict):
         return None
-    if not all(inter.get(k) for k in ("id", "kind", "role", "partner",
-                                      "started_at_game")):
+    if not all(inter.get(k) for k in ("id", "kind", "role", "started_at_game")):
+        return None
+    members = inter.get("members")
+    if not isinstance(members, dict) or members.get(inter["role"]) != character_name \
+            or len(members) < 2:
         return None
     return inter
+
+
+def members_of(inter: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """``{role: name}`` of an interaction blob, in role order (a..e)."""
+    members = (inter or {}).get("members")
+    if not isinstance(members, dict):
+        return {}
+    return {role: str(members[role]) for role in sorted(members) if members.get(role)}
+
+
+def others_of(inter: Optional[Dict[str, Any]], name: str) -> List[str]:
+    """Everyone in the interaction but ``name``, in role order."""
+    return [n for n in members_of(inter).values() if n != name]
+
+
+def partner_of(inter: Optional[Dict[str, Any]], name: str) -> str:
+    """The other one of a PAIR ("" when there is none). Group-aware callers
+    use :func:`others_of`."""
+    others = others_of(inter, name)
+    return others[0] if others else ""
+
+
+def join_names(names: List[str]) -> str:
+    """"A", "A and B", "A, B and C" — the English list a prompt reads."""
+    names = [n for n in names if n]
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def migrate_members_once() -> int:
+    """Boot migration (2026-11-03, plan-gruppen-animationen.md G2b): the
+    profile's ``interaction.partner`` becomes ``interaction.members`` ``{role:
+    name}`` — the own role plus the partner on the other half of the pair.
+    A ``last_interaction_result`` still naming a ``partner`` carries no role
+    to rebuild it from; it is bookkeeping of an end already past and is
+    dropped. Only profiles still in the old shape are written, so it runs
+    once in effect. Returns the profiles rewritten."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (get_character_profile, list_available_characters,
+                                      save_character_profile)
+    changed = 0
+    for name in list_available_characters(include_pooled=True):
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            inter = profile.get("interaction")
+            result = profile.get("last_interaction_result")
+            touched = False
+            if isinstance(inter, dict) and "partner" in inter:
+                role = inter.get("role")
+                other = "b" if role == "a" else "a"
+                partner = inter.pop("partner")
+                if role in ("a", "b") and partner:
+                    inter["members"] = dict(sorted({role: name, other: str(partner)}.items()))
+                touched = True
+            if isinstance(result, dict) and "partner" in result:
+                profile.pop("last_interaction_result", None)
+                touched = True
+            if touched:
+                if save_character_profile(name, profile):
+                    changed += 1
+                else:
+                    logger.warning("interaction members migration: %s not saved", name)
+    return changed
 
 
 def interaction_state(inter: Dict[str, Any], now_game: GameTime) -> Dict[str, Any]:
@@ -197,7 +274,7 @@ def payload_for(character_name: str, profile: Dict[str, Any],
         "id": inter["id"],
         "kind": inter["kind"],
         "role": inter["role"],
-        "partner": inter["partner"],
+        "members": members_of(inter),
         "anchor": dict(inter.get("anchor") or {}),
         "started_at_game": inter["started_at_game"],
         "elapsed_s": st["elapsed_s"],
@@ -633,7 +710,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             # Re-read: assign_pair just wrote the place into both profiles.
             prof = profiles[name] = get_character_profile(name) or {}
             prof["interaction"] = {
-                "id": inter_id, "kind": kind, "role": role, "partner": other,
+                "id": inter_id, "kind": kind, "role": role, "members": {"a": who_a, "b": who_b},
                 "pose_key": pose_key, "anchor": anchor,
                 "started_at_game": started, "started_at_sys": started_sys,
                 "clip_duration_s": round(clip_duration, 3), "loop": loop,
@@ -724,8 +801,10 @@ def end_interaction(character_name: str, reason: str = "ended", *,
     inter = get_interaction(character_name)
     if not inter or (interaction_id and inter["id"] != interaction_id):
         return False
-    partner = inter["partner"]
-    # BOTH profiles under BOTH locks, in sorted-name order (DATA-3). The
+    members = members_of(inter)
+    names = list(dict.fromkeys(members.values()))
+    partner = partner_of(inter, character_name)
+    # EVERY profile under its lock, in sorted-name order (DATA-3). The
     # standing-up that follows is collected here and run AFTERWARDS:
     # ``clear_pose_intent`` and ``room_stand.stand_up`` write the profile
     # themselves and reach the places-lock, which comes BEFORE
@@ -736,8 +815,8 @@ def end_interaction(character_name: str, reason: str = "ended", *,
     saved_names: list[str] = []
     ended_invite_id = ""
     location_id = room_id = ""
-    with pair_profile_locks(character_name, partner):
-        for name in (character_name, partner):
+    with profile_locks(*names):
+        for name in names:
             p = get_character_profile(name) or {}
             if name == character_name:
                 location_id = p.get("current_location") or ""
@@ -745,7 +824,7 @@ def end_interaction(character_name: str, reason: str = "ended", *,
             cur = p.get("interaction")
             if interaction_id and name == character_name and not (
                     isinstance(cur, dict) and cur.get("id") == interaction_id
-                    and cur.get("partner") == partner):
+                    and members_of(cur) == members):
                 return False
             if not (isinstance(cur, dict) and cur.get("id") == inter["id"]):
                 continue
@@ -754,7 +833,7 @@ def end_interaction(character_name: str, reason: str = "ended", *,
             p.pop("interaction", None)
             p["last_interaction_result"] = dict(
                 interaction_id=cur["id"], invite_id=cur.get("invite_id", ""),
-                partner=cur["partner"], pose_key=cur["pose_key"], reason=reason,
+                members=members_of(cur), pose_key=cur["pose_key"], reason=reason,
                 started_at_game=cur["started_at_game"], ended_at_game=game_time().canonical())
             same_pose = (p.get("pose_key") or "") == inter.get("pose_key")
             follow = (follow_pose_for(cur["pose_key"], cur.get("role", ""))
@@ -1009,8 +1088,8 @@ def _sweep_invites() -> None:
             if (actor and partner
                     and actor.get("invite_id") == partner.get("invite_id") == inv["invite_id"]
                     and actor["id"] == partner["id"]
-                    and actor["partner"] == inv["invitee"]
-                    and partner["partner"] == inv["inviter"]
+                    and members_of(actor) == members_of(partner)
+                    and set(members_of(actor).values()) == {inv["inviter"], inv["invitee"]}
                     and actor.get("pose_key") == partner.get("pose_key") == inv["pose_key"]):
                 continue
             stored_tx_2 = False
@@ -1579,7 +1658,7 @@ def describe(character_name: str,
     if not inter:
         return ""
     pose = str(inter.get("pose_key") or inter.get("kind") or "").strip()
-    partner = str(inter.get("partner") or "").strip()
+    others = join_names(others_of(inter, character_name))
     if not pose:
         return ""
-    return f"{pose} with {partner}" if partner else pose
+    return f"{pose} with {others}" if others else pose

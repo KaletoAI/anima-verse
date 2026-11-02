@@ -36,7 +36,8 @@ Hand-derived expectations:
       moment, so the game-state positions become Ann (10, 21.7) and
       Bob (10, 22.3) — the pair faces each other 0.6 m apart along +Z.
 
-  [3] Both profiles carry the same interaction id, roles a/b, the partner,
+  [3] Both profiles carry the same interaction id, roles a/b, the same
+      members {a: Ann, b: Bob} (the worldmap row too),
       ``clip_duration_s`` = 2.0 from the sidecar and the pinned start stamp;
       both poses are "embracing".
 
@@ -349,7 +350,13 @@ ia = ie.get_interaction("Ann")
 ib = ie.get_interaction("Bob")
 check("same id on both", ia and ib and ia["id"] == ib["id"])
 check("roles a/b", ia["role"] == "a" and ib["role"] == "b")
-check("partners cross-linked", ia["partner"] == "Bob" and ib["partner"] == "Ann")
+check("members on both", ia["members"] == ib["members"] == {"a": "Ann", "b": "Bob"}
+      and "partner" not in ia, str(ia.get("members")))
+_row = ie.payload_for("Bob", get_character_profile("Bob"), START)
+check("worldmap row carries members, no partner",
+      _row["members"] == {"a": "Ann", "b": "Bob"} and _row["role"] == "b" and "partner" not in _row, str(_row))
+check("others_of / describe", ie.others_of(ib, "Bob") == ["Ann"]
+      and ie.describe("Bob").endswith("with Ann"), ie.describe("Bob"))
 check("clip length from the sidecar",
       ia["clip_duration_s"] == 2.0 and ib["clip_duration_s"] == 2.0)
 check("no clock end is written", "duration_s" not in ia and "duration_s" not in ib)
@@ -1074,7 +1081,12 @@ with patch("app.models.account.get_active_character", return_value="Bob"):
     with patch.object(play_routes, "_present_characters", return_value=["Ann"]):
         _cards = play_routes.play_others(user={"role": "admin"})["characters"]
 check("[13] Others card uses viewer language", _cards[0]["interaction"].get("pose_label") == "Umarmen")
+check("[13] scene and Others card carry members", scene_for("Bob")["interaction"].get("members")
+      == _cards[0]["interaction"].get("members") == {"a": "Ann", "b": "Bob"}
+      and "partner" not in _cards[0]["interaction"], str(_cards[0]["interaction"]))
 ie.end_interaction("Ann", reason="smoke")
+check("[13] the result names the members", get_character_profile("Ann")["last_interaction_result"].get("members")
+      == {"a": "Ann", "b": "Bob"})
 
 # ── [14] a decision older than the pair ─────────────────────────────────
 print("\n[14] a turn that began before the pair cannot end it")

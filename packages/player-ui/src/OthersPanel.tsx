@@ -3,6 +3,7 @@
  * counterpart to Self. The cards flow responsively side by side or stacked
  * (flex-wrap, depending on the window width). Source: GET /play/others.
  */
+import { isMember, othersIn, type InteractionMembers } from './interactionMembers'
 import { invitePair } from './pairInteractions'
 import { StatFill } from './StatBoost'
 import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
@@ -40,9 +41,9 @@ interface CharState {
   place_phrase?: string
   in_party?: boolean
   relation?: Relation | null
-  /** The running pair interaction, or null — a two-person pose says nothing
-   *  without the partner it is shared with. */
-  interaction?: { partner: string; pose_key: string; pose_label?: string } | null
+  /** The running interaction, or null — a two-person pose says nothing
+   *  without the people it is shared with. `members` includes `name`. */
+  interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string } | null
 }
 interface Others { avatar: string; characters: CharState[] }
 interface PairPose { key: string; kind: string; label: string }
@@ -59,7 +60,7 @@ function whereabouts(c: CharState, t: (s: string) => string): string {
   const place = (c.place_phrase || '').trim().toLowerCase()
   const doing = c.interaction
     ? t('{pose} with {name}').replace('{pose}', c.interaction.pose_label || c.interaction.pose_key)
-      .replace('{name}', c.interaction.partner)
+      .replace('{name}', othersIn(c.interaction.members, c.name).join(', '))
     : c.activity
   return [doing, place].filter(Boolean).join(', ')
 }
@@ -213,12 +214,12 @@ export function OthersPanel() {
             </div>
           )}
           <StatBars c={c} />
-          <PropActionsPanel partner={c.name} leading={c.interaction?.partner === data.avatar || pairPoses.length > 0 ? <>
-            {c.interaction?.partner === data.avatar && (
+          <PropActionsPanel partner={c.name} leading={isMember(c.interaction?.members, data.avatar) || pairPoses.length > 0 ? <>
+            {isMember(c.interaction?.members, data.avatar) && (
               <button type="button" onClick={stop} className="player-chip">{t('Stop')}</button>
             )}
             {pairPoses.map((pose) => {
-              const busy = !!c.interaction && c.interaction.partner !== data.avatar
+              const busy = !!c.interaction && !isMember(c.interaction.members, data.avatar)
               const off = busy || !!pairBlocked
               return <HoverHint key={pose.key} text={busy ? t('Busy with someone else') : (pairBlocked || undefined)}>
                 <button type="button" className="player-chip" disabled={off}

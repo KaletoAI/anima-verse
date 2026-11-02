@@ -40,7 +40,8 @@ Deliberate limits of the rule (so the result is honest rather than clever):
   * The lock KEY is not compared — only the namespace ``"character_profile"``.
     A keyed lock on the wrong key would be a different (much rarer) bug and
     proving the key is the character would need type inference.
-  * ``interaction_engine.pair_profile_locks(a, b)`` counts as the lock too.
+  * ``interaction_engine.pair_profile_locks(a, b)`` and
+    ``interaction_engine.profile_locks(*names)`` count as the lock too.
     It IS that lock, twice: a pair write touches BOTH partners' blobs, and
     the helper takes ``keyed_lock("character_profile", …)`` for each of them
     in sorted-name order (the one fixed order that keeps two threads ending
@@ -63,7 +64,7 @@ READ = "get_character_profile"
 WRITE = "save_character_profile"
 LOCK_NS = "character_profile"
 #: Helpers that ARE ``keyed_lock(LOCK_NS, …)`` — see the docstring.
-LOCK_HELPERS = ("pair_profile_locks",)
+LOCK_HELPERS = ("pair_profile_locks", "profile_locks")
 
 #: ``<path>::<function>`` sites this check accepts WITHOUT the lock, each with
 #: the reason it is safe (or who owns the fix). Anything not listed fails.

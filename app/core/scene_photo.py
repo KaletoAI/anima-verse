@@ -122,14 +122,14 @@ def _pairs_among(names: List[str]) -> List[tuple]:
     (``expression_regen`` skips partner poses for exactly that reason). Here
     both are in the frame on purpose, so the event is named once.
     """
-    from app.core.interaction_engine import get_interaction
+    from app.core.interaction_engine import get_interaction, partner_of
     seen = set()
     out: List[tuple] = []
     for name in names:
         inter = get_interaction(name)
         if not inter:
             continue
-        partner = str(inter.get("partner") or "")
+        partner = partner_of(inter, name)
         if partner not in names:
             continue
         pair = tuple(sorted((name, partner)))

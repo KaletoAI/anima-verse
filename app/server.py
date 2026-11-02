@@ -75,6 +75,12 @@ try:
 except Exception as _coe:
     logger.warning("catalog overlay migration failed: %s", _coe)
 
+# Boot migration (2026-11-03): a running interaction names its members, not a partner.
+from app.core.interaction_engine import migrate_members_once
+_im = migrate_members_once()
+if _im:
+    logger.info("Interactions: %d profiles moved from partner to members", _im)
+
 # Boot migration (2026-11-02): pose field solo -> participants in the world layer.
 from app.core.pose_catalog import migrate_participants_once
 _pm = migrate_participants_once()

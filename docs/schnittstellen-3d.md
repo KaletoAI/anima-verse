@@ -2730,12 +2730,19 @@ Bild (s. u.).
 
 ```json
 "interaction": {
-  "id": "049b7a009533", "kind": "handshake", "role": "a", "partner": "Bob",
+  "id": "049b7a009533", "kind": "handshake", "role": "a",
+  "members": {"a": "Ann", "b": "Bob"},
   "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
   "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "rate": 1.0
 }
 ```
+`members` = Rolle → Name ALLER Beteiligten, die eigene Figur eingeschlossen
+(Rollen `a`..`e` in Clip-Reihenfolge; seit G2b, plan-gruppen-animationen.md —
+ein Feld `partner` gibt es nicht mehr). Bei einem Paar ist der Partner der Wert
+der anderen Rolle; ab den Gruppen-Läufen (G2c) können es 3–5 Rollen sein.
+`/play/scene` → `interaction` und `/play/others` → `characters[].interaction`
+tragen dieselben `members` neben `pose_key`/`pose_label`.
 `null`, wenn keine läuft (auch unter Nebel ausgedünnt). `elapsed_s` ist die
 verstrichene SPIELzeit zum Payload-Zeitpunkt, `rate` Spielsekunden pro
 Realsekunde (0 = Freeze), `clip_duration_s` die eigene Länge des Clips aus
