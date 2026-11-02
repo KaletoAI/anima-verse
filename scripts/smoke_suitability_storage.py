@@ -2,6 +2,7 @@
 
 Hand-derived from the binding spec: three repeats must retain three complete
 answers (including >600 characters), reasoning, usage, duration and stop reason.
+Nineteen reasoning characters estimate round(19/3.5) = 5 tokens.
 Shared JSON must contain none of those answers. One missing-image case causes
 zero invokes and adds zero to the score denominator. A subsequent infrastructure
 failure must still save local evidence, but must not replace a quality result.
@@ -27,6 +28,7 @@ from scripts.suitability_offline_rescore import rescore
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         paths.init(tmp)
+        paths.init_instance(Path(tmp) / "instance")
         from app.core import model_suitability as suit, model_capabilities as caps
         root = Path(tmp)
         cases = curated_cases()
@@ -51,8 +53,9 @@ def main():
             stored = shared['suitability']['fake::demo']['tested_suitability']
             # The Speed column reads these from the saved record.
             assert stored['total_runs'] == 4 and stored['truncated_runs'] == 0
-            assert stored['thinking_runs'] == 3 and stored['reasoning_tokens_median'] is None
-            assert stored['checks'][0]['reasoning_tokens'] == [None, None, None]
+            assert stored['thinking_runs'] == 3 and stored['reasoning_tokens_median'] == 5
+            assert stored['reasoning_tokens_estimated'] is True
+            assert stored['checks'][0]['reasoning_tokens'] == [5, 5, 5]
             assert stored['checks'][0]['truncated_runs'] == 0
             assert 'speed_ok' in stored and 'max_turn_seconds' in stored, sorted(stored)
             assert long_answer not in caps_path.read_text() and 'synthetic reasoning' not in caps_path.read_text()

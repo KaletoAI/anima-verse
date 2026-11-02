@@ -258,7 +258,7 @@ function testBadge(caps) {
     const verdict = caps.tested_verdict || result.verdict || '';
     const vision = result.vision || {};
     const speed = result.speed || {};
-    const visionText = vision.rate == null ? 'not tested' : Math.round(vision.rate * 100) + '%';
+    const visionText = result.vision === 'not_supported' ? 'no image input' : vision.rate == null ? 'not tested' : Math.round(vision.rate * 100) + '%';
     const tooltip = 'Tools ' + (result.tool || '-') + ' · Helpers ' + (result.helper || '-')
         + ' · Vision ' + visionText + '\n'
         + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s, reasoning median ' + ((speed[g] || {}).reasoning_tokens_median ?? '-') + ' tokens').join(' · ')
@@ -534,7 +534,7 @@ function suitSettingsText(settings) {
     const temps = settings.temperature || {};
     return 'Temperatures: tools ' + (temps.tools ?? '—') + ' / helpers ' + (temps.helpers ?? '—')
         + ' / vision ' + (temps.vision ?? '—') + ' · Max tokens: ' + (settings.max_tokens ?? '—')
-        + ' · Thinking: ' + (typeof settings.thinking === 'boolean' ? (settings.thinking ? 'on' : 'off')
+        + ' · Thinking: ' + (settings.thinking_max ? ['tools', 'helpers', 'vision'].map(group => group + ' ' + (settings.thinking_max[group] ? 'thinking up to ' + settings.thinking_max[group] : 'off')).join(', ') : typeof settings.thinking === 'boolean' ? (settings.thinking ? 'on' : 'off')
             : ['tools', 'helpers', 'vision'].map(group => group + ' ' + (settings.thinking?.[group]
                 ? 'on' + (settings.thinking_budget?.[group] != null ? ' (budget ' + settings.thinking_budget[group] + ')' : '')
                 : 'off')).join(', '));
@@ -633,17 +633,13 @@ function suitPrefill() {
     document.getElementById('suitMaxTokens').value = chosen.max_tokens ?? 900;
     document.getElementById('suitChatTemplate').value = chosen.chat_template || '';
     ['Tools', 'Helpers', 'Vision'].forEach(group => {
-        document.getElementById('suitThinking' + group).value = chosen.thinking === 'on' ? 'on' : 'off';
-        document.getElementById('suitBudget' + group).value = chosen.thinking === 'on' ? (chosen.thinking_budget ?? '') : '';
-        suitThinkingChanged(group);
+        document.getElementById('suitThinkingMax' + group).value = chosen.thinking === 'on' && chosen.thinking_budget > 0
+            ? Math.min(3000, Math.ceil(chosen.thinking_budget / 300) * 300) : 0;
     });
     document.getElementById('suitExtraParams').value = JSON.stringify(chosen.extra_params || {}, null, 2);
     suitValidateExtraParams();
     // Selection is a one-time copy and is never sent with a test request.
     document.getElementById('suitPrefill').value = '';
-}
-function suitThinkingChanged(group) {
-    document.getElementById('suitBudget' + group).disabled = document.getElementById('suitThinking' + group).value !== 'on';
 }
 function suitFinite(value) {
     if (typeof value === 'number') return Number.isFinite(value);
@@ -691,12 +687,8 @@ async function suitStart() {
         repetition_penalty: penalty === '' ? null : Number(penalty),
         max_tokens: Number(document.getElementById('suitMaxTokens').value),
         chat_template: document.getElementById('suitChatTemplate').value,
-        thinking: Object.fromEntries(['Tools', 'Helpers', 'Vision'].map(group =>
-            [group.toLowerCase(), document.getElementById('suitThinking' + group).value === 'on'])),
-        thinking_budget: Object.fromEntries(['Tools', 'Helpers', 'Vision'].map(group => {
-            const value = document.getElementById('suitBudget' + group).value;
-            return [group.toLowerCase(), value === '' ? null : Number(value)];
-        })), extra_params: extraParams,
+        thinking_max: Object.fromEntries(['Tools', 'Helpers', 'Vision'].map(group =>
+            [group.toLowerCase(), Number(document.getElementById('suitThinkingMax' + group).value)])), extra_params: extraParams,
     };
     document.getElementById('suitStartBtn').disabled = true;
     status.textContent = 'Starting…';
@@ -749,6 +741,79 @@ async function suitDeleteOld(button) {
     } finally { button.disabled = false; }
 }
 
+let suitApplyModel = '';
+let suitApplyData = null;
+function suitRecommendedText(recommended) {
+    return recommended?.thinking ? 'thinking on · budget ' + recommended.thinking_budget : 'thinking off';
+}
+function suitThinkingSummary(summary) {
+    const notices = {
+        thinking_ineffective: 'thinking had no effect — the server may not enable it for this model',
+        budget_unenforceable: 'the model keeps thinking after the budget; budgeted thinking falls back to off',
+    };
+    return Object.entries(summary.thinking || {}).map(([group, result]) => '<div>' + esc(group)
+        + ': Off ' + esc(result.score_off) + (result.score_at_budget != null ? ' · at ' + esc(result.candidate_budget) + ' ' + esc(result.score_at_budget) : '')
+        + ' → recommended: ' + esc(suitRecommendedText(result.recommended)) + '</div>'
+        + (notices[result.stopped] ? '<div class="suit-warn">' + esc(notices[result.stopped]) + '</div>' : '')).join('')
+        + (summary.vision === 'not_supported' ? '<div class="suit-warn">Vision: no image input</div>' : '');
+}
+function suitApplyClose() {
+    document.getElementById('suitApplyDialog').hidden = true;
+    suitApplyData = null;
+}
+async function suitApplyOpen() {
+    const dialog = document.getElementById('suitApplyDialog');
+    dialog.hidden = false;
+    dialog.textContent = 'Loading settings…';
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/apply?model=' + encodeURIComponent(suitApplyModel));
+        if (!response.ok) throw new Error(await response.text());
+        suitApplyData = await response.json();
+        dialog.innerHTML = '<h3>Apply to game</h3><p>Choose routing entries for the tested settings. New entries have no tasks; assign them on the Tasks page.</p>'
+            + ['tools', 'helpers', 'vision'].map(group => {
+                const result = suitApplyData.thinking?.[group];
+                const available = !!result && result.score_off !== '0/0' && !(group === 'vision' && suitApplyData.vision === 'not_supported');
+                const settings = suitApplyData.settings || {};
+                return '<section><h4>' + esc(group[0].toUpperCase() + group.slice(1)) + '</h4><p>'
+                    + esc(available ? suitRecommendedText(result.recommended) : 'No result') + '</p><pre>'
+                    + esc(JSON.stringify({temperature: settings.temperature?.[group], max_tokens: settings.max_tokens,
+                        repetition_penalty: settings.repetition_penalty, chat_template: settings.chat_template, extra_params: settings.extra_params}, null, 2))
+                    + '</pre><label>Target<select id="suitApplyTarget' + group + '" onchange="suitApplyWarning(\'' + group + '\')">'
+                    + '<option value="skip"' + (!available ? ' selected' : '') + '>Skip</option>'
+                    + (available ? '<option value="new" selected>New entry</option>' + suitApplyData.entries.map(entry => '<option value="' + esc(entry.index) + '">'
+                        + esc(entry.name + ' · ' + ((entry.groups || []).join(', ') || 'no tasks')) + '</option>').join('') : '')
+                    + '</select></label><div class="suit-warn" id="suitApplyWarning' + group + '"></div></section>';
+            }).join('') + '<p id="suitApplyStatus" role="status"></p><button type="button" class="btn" onclick="suitApplySave(this)">Apply settings</button> '
+            + '<button type="button" class="btn" onclick="suitApplyClose()">Cancel</button>';
+    } catch (error) {
+        dialog.innerHTML = '<p>' + esc(error.message) + '</p><button type="button" class="btn" onclick="suitApplyClose()">Close</button>';
+    }
+}
+function suitApplyWarning(group) {
+    const selected = document.getElementById('suitApplyTarget' + group).value;
+    const entry = suitApplyData.entries.find(item => String(item.index) === selected);
+    document.getElementById('suitApplyWarning' + group).textContent = entry?.warnings?.[group] || '';
+}
+async function suitApplySave(button) {
+    const status = document.getElementById('suitApplyStatus');
+    const groups = Object.fromEntries(['tools', 'helpers', 'vision'].map(group => {
+        const target = document.getElementById('suitApplyTarget' + group).value;
+        return [group, ['skip', 'new'].includes(target) ? {target} : {target: 'entry', index: Number(target)}];
+    }));
+    button.disabled = true;
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/apply', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({model: suitApplyData.model, base_revision: suitApplyData.revision, groups})});
+        if (response.status === 409) throw new Error('Settings changed meanwhile — reload');
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
+        suitApplyData.revision = result.revision;
+        status.textContent = 'Applied to ' + result.entries.length + ' routing entries. Assign tasks on the Tasks page as needed.';
+        loadData();
+    } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+}
+
 function suitRenderJob(job) {
     const status = document.getElementById('suitDetailStatus');
     document.getElementById('suitDetail').hidden = false;
@@ -759,6 +824,8 @@ function suitRenderJob(job) {
     // Starting another model is allowed while the current job waits or runs.
     document.getElementById('suitStartBtn').disabled = false;
     const summary = job.summary || {};
+    suitApplyModel = job.model || summary.model || '';
+    document.getElementById('suitApplyButton').hidden = !(job.status === 'done' && summary.thinking && suitApplyModel && !summary.infra && summary.saved !== false && job.apply_available !== false);
     let checks = summary.checks || job.checks || [];
     if (job.status === 'done') {
         if (!suitCurrent(summary)) { status.textContent = ''; prog.innerHTML = ''; return; }
@@ -767,23 +834,23 @@ function suitRenderJob(job) {
         const limit = job.max_turn_seconds == null ? 20 : job.max_turn_seconds;
         const number = value => value == null ? 'not tested' : String(value);
         status.innerHTML = '<b>' + esc(job.model || summary.model || '') + '</b> · Finished'
-            + suitWarning({...summary, settings}, settings)
+            + suitWarning({...summary, settings}, settings) + suitThinkingSummary(summary)
             + '<div>Tools: ' + esc(summary.tool || 'not tested')
             + ' · Helpers: ' + esc(summary.helper || 'not tested')
-            + ' · Vision: ' + esc(vision.verdict === 'not_tested' || vision.rate == null ? 'not tested' : (vision.rate * 100).toFixed(1) + '%') + '</div>'
+            + ' · Vision: ' + esc(summary.vision === 'not_supported' ? 'no image input' : vision.verdict === 'not_tested' || vision.rate == null ? 'not tested' : (vision.rate * 100).toFixed(1) + '%') + '</div>'
             + '<div>Concurrency: ' + esc(number(summary.concurrency))
             + (summary.live_play ? ' · measured under live play' : '') + '</div>'
             + '<div>' + ['tools', 'helpers', 'vision'].map(group => {
                 const measured = speed[group] || {};
                 return esc(group) + ': median ' + esc(number(measured.median_latency_s)) + ' s · '
-                    + esc(number(measured.tok_s)) + ' tok/s · reasoning median ' + esc(number(measured.reasoning_tokens_median)) + ' tokens';
+                    + esc(number(measured.tok_s)) + ' tok/s · reasoning median ' + esc(number(measured.reasoning_tokens_median)) + ' tokens' + (measured.reasoning_tokens_estimated ? ' (includes estimates)' : '');
             }).join(' | ') + '</div>'
             + '<div>Projected non-RP time per thought turn: ' + esc(number(summary.projected_turn_s))
             + ' s / maximum ' + esc(limit) + ' s</div>'
             + '<div>Suitable as the single helper model: <b>' + esc(summary.verdict || 'not tested') + '</b></div>'
             + (summary.saved === false || summary.infra ? '<div>Quality result not saved; inspect diagnostics.</div>' : '')
             + (summary.curated_only ? '<div>Curated cases only; no logged cases.</div>' : '');
-        checks = checks.filter(check => check.ok === false);
+        if (!summary.thinking) checks = checks.filter(check => check.ok === false);
         if (!checks.length) { prog.innerHTML = '<div>No failing cases.</div>'; return; }
     } else if (job.status === 'running') {
         status.textContent = 'Running ' + (job.model || '')
@@ -797,20 +864,30 @@ function suitRenderJob(job) {
         const prompt = check.prompt || {};
         const runs = check.runs || [];
         const cut = check.truncated_runs ?? (check.run_checks || []).filter(r => r.truncated).length;
+        const hasRecommendation = Object.prototype.hasOwnProperty.call(check, 'recommended_ok');
+        const outcome = hasRecommendation ? check.recommended_ok : check.ok;
+        const recommended = summary.thinking?.[check.group]?.recommended;
+        const recommendedSetting = recommended?.thinking ? 'budget ' + recommended.thinking_budget : 'off';
         return '<div class="suit-case"><b>' + esc(check.ok === false ? 'Failed' : check.ok ? 'Passed' : 'Excluded')
             + (cut ? ' · cut off ' + cut + '/' + (check.run_checks || runs).length : '')
             + (check.budget_hits > 0 ? ' · budget hit ' + check.budget_hits + '/' + (check.run_checks || runs).length : '')
             + ' · ' + esc(check.group || '') + ' · ' + esc(check.task || check.label || check.id || '') + '</b>'
             + '<div>' + esc(check.detail || '') + '</div>'
-            + (check.ok === false ? '<details><summary>Prompt (system + user)</summary><h4>System</h4><pre>'
+            + (Array.isArray(check.stages) ? '<div>' + esc(check.stage === 0 ? 'passed without thinking' : check.stage != null ? 'passed at ' + check.stage : 'failed up to ' + Math.max(0, ...check.stages.map(stage => stage.budget))) + '</div>' : '')
+            + (hasRecommendation ? '<div>At recommended setting (' + esc(recommendedSetting) + '): ' + (outcome === false ? 'failed' : outcome ? 'passed' : 'excluded') + '</div>' : '')
+            + (check.verification ? '<div>Verification at ' + esc(check.verification.budget) + ': ' + (check.verification.ok ? 'passed' : 'failed') + '</div>' : '')
+            + (check.ok === false || outcome === false ? '<details><summary>Prompt (system + user)</summary><h4>System</h4><pre>'
                 + esc(prompt.system || 'Prompt unavailable') + '</pre><h4>User</h4><pre>' + esc(prompt.user || '')
-                + '</pre></details><details open><summary>Model answer(s)</summary>'
+                + '</pre></details><details open><summary>' + (hasRecommendation ? 'Deciding-stage answer(s)' : 'Model answer(s)') + '</summary>'
                 + (runs.length ? runs.map((run, index) => '<h4>Run ' + (index + 1) + '</h4><pre>'
                     + esc(run.content || run.error || (run.finish_reason === 'length' ? '' : '(empty answer)'))
                     + esc(run.finish_reason === 'length' ? (run.content ? '\n' : '') + '(cut off at the token limit'
                         + ((run.usage || {}).reasoning_tokens != null ? ' - ' + run.usage.reasoning_tokens + ' reasoning tokens' : '') + ')'
-                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + (run.budget_hit ? ' (thinking capped at the budget, answer continued)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
-                + '</details>' : '') + '</div>';
+                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + (run.budget_hit ? ' (thinking capped at the budget, answer continued)' : '') + (run.reasoning_tokens_estimated ? ' (reasoning tokens estimated)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
+                + '</details>' : '')
+            + (hasRecommendation && outcome !== check.ok ? '<details open><summary>Recommended-setting answer(s)</summary>'
+                + ((check.recommended_runs || []).length ? check.recommended_runs.map((run, index) => '<h4>Run ' + (index + 1) + '</h4><pre>'
+                    + esc(run.content || run.error || '(empty answer)') + '</pre>').join('') : '<p>Raw answer unavailable.</p>') + '</details>' : '') + '</div>';
     }).join('');
 }
 async function suitPoll() {

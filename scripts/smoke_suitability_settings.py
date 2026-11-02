@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Explicit suitability settings. Usage: .venv/bin/python scripts/smoke_suitability_settings.py
 
-Hand-derived: old boolean thinking and budgets 0/32001 are rejected; tools/vision
-receive thinking on with budgets 200/40, helpers off with no budget. All three
-return reasoning text, so three thinking runs, one leak and two budget hits.
-Reported reasoning counts 200/0/missing give group medians 200/0/None. Three cases in tools/helpers/vision invoke clients at 0.1/0.5/0.3.
-A configured entry at 0.9 contributes nothing. One provider instance creates three
-clients. The exact settings survive summary persistence. Unknown keys, non-finite
-numbers, temperatures outside [0,2], penalties outside [0,1.5], token counts outside
-[0,200000], non-integer budgets and non-object extra parameters yield HTTP 400.
+Hand-derived: thinking_max accepts 0 and every 300-token step through 3000;
+250, 3300, booleans, missing groups and both old keys are rejected. Three
+passing cases only run off; their reasoning is three leaks, no budget hits.
+Seven reasoning characters estimate two tokens; reported counts remain intact.
+One provider creates three clients at 0.1/0.5/0.3, isolated from routing.
 An unknown explicit provider never falls back to another provider.
 A provider switched off in the config (not loaded, no channel) is still
 reachable for the test: provider_for_test builds it from its entry (type
@@ -28,13 +25,13 @@ from app.core import paths
 
 with tempfile.TemporaryDirectory() as directory:
     paths.init(directory)
+    paths.init_instance(Path(directory) / "instance")
     from app.core import model_suitability as suit, model_capabilities as caps
     from app.routes.admin_settings import _llm_suitability_test_start_sync as start
     from fastapi import HTTPException
     settings = dict(temperature=dict(tools=.1, helpers=.5, vision=.3),
                     repetition_penalty=1.03, max_tokens=900, chat_template='template',
-                    thinking=dict(tools=True, helpers=False, vision=True),
-                    thinking_budget=dict(tools=200, helpers=None, vision=40), extra_params={'nested': {'test': True}})
+                    thinking_max=dict(tools=600, helpers=0, vision=300), extra_params={'nested': {'test': True}})
     with patch.object(suit, 'enqueue_test', return_value={'job_id': 'fake'}) as enqueue:
         start(None, dict(provider='P', model='M', settings=settings, concurrency=3))
         assert enqueue.call_args.kwargs['settings'] == settings
@@ -64,9 +61,17 @@ with tempfile.TemporaryDirectory() as directory:
             else:
                 raise AssertionError(f'Accepted removed key {key}')
     defaults = suit.validate_settings({})
-    assert defaults['thinking'] == dict(tools=False, helpers=False, vision=False)
-    assert defaults['thinking_budget'] == dict(tools=None, helpers=None, vision=None)
-    assert suit.validate_settings({'thinking_budget': dict(tools=1, helpers=32000, vision=None)})['thinking_budget']['helpers'] == 32000
+    assert defaults['thinking_max'] == dict(tools=0, helpers=0, vision=0)
+    for budget in range(0, 3001, 300):
+        assert suit.validate_settings({'thinking_max': dict.fromkeys(('tools', 'helpers', 'vision'), budget)})['thinking_max']['tools'] == budget
+    for values in (dict(tools=250, helpers=0, vision=0), dict(tools=3300, helpers=0, vision=0),
+                   dict(tools=True, helpers=0, vision=0), dict(tools=300)):
+        try:
+            suit.validate_settings({'thinking_max': values})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(values)
     image = Path(directory) / 'image.png'
     image.write_bytes(b'fake image')
     cases = [dict(id=g, group=g, task=t, system=g, user='ping', fmt='text',
@@ -78,7 +83,7 @@ with tempfile.TemporaryDirectory() as directory:
         clients.append(copy.deepcopy(kwargs))
         def invoke(messages):
             invoked.append((messages[0]['content'], kwargs['temperature']))
-            return SimpleNamespace(content='ok', reasoning='R', budget_hit=kwargs['thinking'],
+            return SimpleNamespace(content='NONE' if kwargs['temperature'] == .1 else 'ok', reasoning='R', budget_hit=kwargs['thinking'],
                                    usage={} if kwargs['temperature'] == .3 else {'reasoning_tokens': 0 if kwargs['temperature'] == .5 else 200})
         return SimpleNamespace(invoke=invoke)
     from app.core import llm_router
@@ -102,11 +107,12 @@ with tempfile.TemporaryDirectory() as directory:
         events = list(suit.iter_suitability_results('P::M', settings=settings))
         summary = events[-1]['summary']
         assert summary['settings'] == settings
-        assert summary['budget_hits'] == 2 and summary['thinking_runs'] == 3 and summary['thinking_leak_runs'] == 1
+        assert summary['budget_hits'] == 0 and summary['thinking_runs'] == 3 and summary['thinking_leak_runs'] == 3
         assert summary['speed']['tools']['reasoning_tokens_median'] == 200
         assert summary['speed']['helpers']['reasoning_tokens_median'] == 0
-        assert summary['speed']['vision']['reasoning_tokens_median'] is None
-        assert all(run['budget_hit'] == settings['thinking'][event['group']]
+        assert summary['speed']['vision']['reasoning_tokens_median'] == 0
+        assert summary['speed']['vision']['reasoning_tokens_estimated'] is True
+        assert all(run['budget_hit'] is False
                    for event in events if event['type'] == 'check' for run in event['runs'])
         assert sorted(invoked) == [('helpers', .5), ('tools', .1), ('vision', .3)], invoked
         assert len(clients) == 3 and all(c['temperature'] != .9 for c in clients)
@@ -115,14 +121,14 @@ with tempfile.TemporaryDirectory() as directory:
                    and c['extra_params'] == settings['extra_params'] for c in clients)
         for c in clients:
             group = next(g for g, temp in settings['temperature'].items() if temp == c['temperature'])
-            assert c['thinking'] == settings['thinking'][group]
-            assert c['thinking_budget'] == settings['thinking_budget'][group]
+            assert c['thinking'] is False
+            assert c['thinking_budget'] is None
         assert create.call_count == 1 and 'routing_entry' not in create.call_args.kwargs
         stored = caps.get_all_suitability()['p::m']['tested_suitability']
         assert stored['settings'] == settings
-        assert stored['budget_hits'] == 2 and stored['thinking_leak_runs'] == 1 and stored['thinking_runs'] == 3
+        assert stored['budget_hits'] == 0 and stored['thinking_leak_runs'] == 3 and stored['thinking_runs'] == 3
         assert stored['speed'] == summary['speed']
-        assert sum(c['budget_hits'] for c in stored['checks']) == 2
+        assert sum(c['budget_hits'] for c in stored['checks']) == 0
         assert all('runs' not in c and 'reasoning' not in c for c in stored['checks'])
         caps.invalidate_cache()
     with patch.object(llm_router, 'get_provider_manager', return_value=SimpleNamespace(

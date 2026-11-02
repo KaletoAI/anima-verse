@@ -86,7 +86,8 @@ def model_capabilities_data() -> Dict[str, Any]:
             # A vision answer in the last test beats the provider's claim
             # (DX10-02 lists qwen3.5-9b-heretic-v2-nvfp4 as text-only, yet it
             # answers images); a stored Yes/No beats both.
-            vision_rate = (((sd or {}).get("tested_suitability") or {}).get("vision") or {}).get("rate")
+            vision_result = ((sd or {}).get("tested_suitability") or {}).get("vision")
+            vision_rate = vision_result.get("rate") if isinstance(vision_result, dict) else None
             tested_vision = caps.get("vision") is None and bool(vision_rate)
             if tested_vision:
                 caps["vision"] = True
@@ -124,7 +125,8 @@ def model_capabilities_data() -> Dict[str, Any]:
         if not name:
             continue
         caps = dict(get_model_capabilities(full))
-        vision_rate = (((sd.get("tested_suitability") or {}).get("vision")) or {}).get("rate")
+        vision_result = (sd.get("tested_suitability") or {}).get("vision")
+        vision_rate = vision_result.get("rate") if isinstance(vision_result, dict) else None
         reported = {}
         if caps.get("vision") is None and vision_rate:
             caps["vision"] = True
@@ -233,18 +235,15 @@ def _build_models_html() -> str:
             <label>Prefill from LLM entry<select id="suitPrefill" onchange="suitPrefill()"><option value="">Choose an entry…</option></select></label>
             <div class="suit-group-row"><strong>Tools</strong>
                 <label>Temperature<input id="suitTempTools" type="number" min="0" max="2" step="0.1" value="0.1"></label>
-                <label>Thinking<select id="suitThinkingTools" onchange="suitThinkingChanged('Tools')"><option value="off">Off</option><option value="on">On</option></select></label>
-                <label>Budget<input id="suitBudgetTools" type="number" min="1" max="32000" step="1" placeholder="unlimited" disabled></label>
+                <label>Thinking up to<select id="suitThinkingMaxTools"><option value="0">Off</option><option value="300">300</option><option value="600">600</option><option value="900">900</option><option value="1200">1200</option><option value="1500">1500</option><option value="1800">1800</option><option value="2100">2100</option><option value="2400">2400</option><option value="2700">2700</option><option value="3000">3000</option></select></label>
             </div>
             <div class="suit-group-row"><strong>Helpers</strong>
                 <label>Temperature<input id="suitTempHelpers" type="number" min="0" max="2" step="0.1" value="0.5"></label>
-                <label>Thinking<select id="suitThinkingHelpers" onchange="suitThinkingChanged('Helpers')"><option value="off">Off</option><option value="on">On</option></select></label>
-                <label>Budget<input id="suitBudgetHelpers" type="number" min="1" max="32000" step="1" placeholder="unlimited" disabled></label>
+                <label>Thinking up to<select id="suitThinkingMaxHelpers"><option value="0">Off</option><option value="300">300</option><option value="600">600</option><option value="900">900</option><option value="1200">1200</option><option value="1500">1500</option><option value="1800">1800</option><option value="2100">2100</option><option value="2400">2400</option><option value="2700">2700</option><option value="3000">3000</option></select></label>
             </div>
             <div class="suit-group-row"><strong>Vision</strong>
                 <label>Temperature<input id="suitTempVision" type="number" min="0" max="2" step="0.1" value="0.3"></label>
-                <label>Thinking<select id="suitThinkingVision" onchange="suitThinkingChanged('Vision')"><option value="off">Off</option><option value="on">On</option></select></label>
-                <label>Budget<input id="suitBudgetVision" type="number" min="1" max="32000" step="1" placeholder="unlimited" disabled></label>
+                <label>Thinking up to<select id="suitThinkingMaxVision"><option value="0">Off</option><option value="300">300</option><option value="600">600</option><option value="900">900</option><option value="1200">1200</option><option value="1500">1500</option><option value="1800">1800</option><option value="2100">2100</option><option value="2400">2400</option><option value="2700">2700</option><option value="3000">3000</option></select></label>
             </div>
             <label>Repetition penalty<input id="suitPenalty" type="number" min="0" max="1.5" step="0.01" placeholder="not sent"></label>
             <label>Max tokens<input id="suitMaxTokens" type="number" min="0" max="200000" step="1" value="900"></label>
@@ -266,6 +265,8 @@ def _build_models_html() -> str:
     <h2>Results</h2>
     <div id="suitDetail" hidden>
         <div id="suitDetailStatus" role="status"></div>
+        <button type="button" class="btn" id="suitApplyButton" hidden onclick="suitApplyOpen()">Apply to game…</button>
+        <div id="suitApplyDialog" class="suit-apply-dialog" role="dialog" aria-modal="true" aria-label="Apply to game" hidden></div>
         <div id="suitSettings"></div>
         <div id="suitProgress"></div>
     </div>

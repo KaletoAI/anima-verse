@@ -6,6 +6,8 @@ Hand expectations: an under-budget answer costs one call; a length cutoff costs
 Content, parser reasoning and echoed tags all yield exactly {"a":1}. A partial
 {"a" plus :1} must concatenate once. Unsupported continuation costs three calls
 initially and one on the next invocation, both fallback answers thinking off.
+Length continuations also fall back and flag both calls unenforceable. Gemma
+prefill is exactly <|channel>thought\nR<channel|>; echoed tags extract the answer.
 """
 import copy
 import sys
@@ -67,12 +69,14 @@ def main():
     assert client.invoke('ping').usage == dict(prompt_tokens=2, completion_tokens=3)
     rejected422 = Rejected('unsupported continuation')
     rejected422.status_code = 422
-    for failure in (Rejected('unsupported continuation'), rejected422, response('')):
+    for failure in (Rejected('unsupported continuation'), rejected422, response(''), response('more reasoning', finish='length')):
         llm._NO_CONTINUE.clear()
         client, calls = client_for([response('', 'R', 'length'), failure, response('ok'), response('next')])
         with patch.object(llm.logger, 'warning') as warning:
-            assert client.invoke('ping').content == 'ok'
-            assert client.invoke('ping').content == 'next'
+            first = client.invoke('ping')
+            second = client.invoke('ping')
+            assert first.content == 'ok' and first.budget_unenforceable
+            assert second.content == 'next' and second.budget_unenforceable
             assert warning.call_count == 1
         assert len(calls) == 4 and (client.base_url, client.model) in llm._NO_CONTINUE
         assert all(c['extra_body']['chat_template_kwargs']['enable_thinking'] is False for c in calls[2:])
@@ -84,6 +88,14 @@ def main():
     for kw in (dict(thinking=False), dict(thinking_budget=None)):
         client, calls = client_for([response('ok')], **kw)
         assert client.invoke('ping').content == 'ok' and len(calls) == 1 and calls[0]['max_tokens'] == 900
+    for raw, echoed in ((False, False), (False, True), (True, False), (True, True)):
+        llm._NO_CONTINUE.clear()
+        client, calls = client_for([response('<|channel>thought\nR' if raw else '',
+                                            None if raw else 'R', 'length'),
+                                   response('<|channel>thought\nR<channel|>{"a":1}' if echoed else '{"a":1}')])
+        client.model = 'Gemma-4-26B'
+        assert client.invoke('ping').content == '{"a":1}'
+        assert calls[1]['messages'][-1]['content'] == '<|channel>thought\nR<channel|>'
     from app.core.llm_router import _instance_for
     provider = NS(type='openai', api_base='http://fake/v1', api_key='k', timeout=60)
     for mode, expected in [('on', True), ('off', False), ('task', False)]:

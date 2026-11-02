@@ -8,6 +8,7 @@ unreviewed log candidate is never sent. Thought/state/facts
 medians 6+4+5 = 15 seconds: passes 20, fails 10. One passing vision case
 out of three is below 70%. Running and unfrozen means live play. A JPEG
 case sends one image; a missing file sends zero requests; WEBP keeps its MIME.
+Image request errors mean unsupported vision; generic 503/429 remain outages.
 All storage is temporary and provider calls are fake.
 """
 import copy
@@ -25,6 +26,7 @@ from app.core import paths
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         paths.init(tmp)
+        paths.init_instance(Path(tmp) / "instance")
         from app.core import model_suitability as suit
         from app.core.suitability_scoring import curated_cases
         from scripts.smoke_suitability_semantics import ANSWERS
@@ -130,24 +132,26 @@ def main():
             assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
             assert result["checks"][1]["invalid_input"] == "missing_input"
             print("[6] Vision sends one JPEG image; missing image sends nothing OK")
-            # A text-only model's server refuses the image with 400: the case
-            # fails as the model's answer and the result is still saved; a 503
-            # stays an outage that saves nothing (granite-switch-4.1-8b).
+            # Image-specific request errors exclude unsupported vision, even
+            # when llama.cpp reports 500. Generic 503/429 remain infrastructure.
             class StatusError(Exception):
                 def __init__(self, status, message):
                     super().__init__(message)
                     self.status_code = status
-            for status, infra in ((400, False), (503, True), (429, True)):
+            for status in (400, 500, 503):
                 refuse = StatusError(status, f"Error code: {status} - At most 0 image(s) may be provided")
                 with patch.object(client, "invoke", side_effect=refuse):
                     result = run([vision])
-                check = result["checks"][0]
-                assert check["infra"] is infra and result["infra"] is infra, (status, check)
-                assert check["ok"] is (None if infra else False), (status, check)
+                assert result["vision"] == "not_supported" and result["score"] == "0/0"
+                assert result["checks"][0]["ok"] is False and result["infra"] is False
+            for status in (503, 429):
+                with patch.object(client, "invoke", side_effect=StatusError(status, 'provider busy')):
+                    result = run([vision])
+                assert result["infra"] is True and result["checks"][0]["ok"] is None
             plain = Exception("Error code: 400 - {'error': {'message': 'At most 0 image(s)'}}")
             with patch.object(client, "invoke", side_effect=plain):
-                assert run([vision])["checks"][0]["ok"] is False
-            print("[6b] A 4xx refusal fails the case and saves; 5xx/429 stay infra OK")
+                assert run([vision])["vision"] == "not_supported"
+            print("[6b] Image refusals exclude vision; generic 503/429 remain infra OK")
             from app.core.vision_message import image_user_content
             webp = Path(tmp) / "sample.webp"
             webp.write_bytes(b"webp payload")

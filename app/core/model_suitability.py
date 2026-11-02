@@ -18,6 +18,11 @@ Helper threshold remains 70% and is explicitly format-only. Individual dimension
 and every repetition remain visible even when an aggregate says mixed. Historical
 records are archived unchanged before a future result replaces the latest view.
 
+Thinking: each case starts off and can escalate in 300-token stages. A group
+candidate is verified as one fixed setting; ties prefer off. Deciding-stage
+checks remain separate from recommended-setting scores and timing. Group stops
+and estimated reasoning counts remain visible in the stored evidence.
+
 Queue: unfinished requests persist in the instance-wide suitability_queue.json,
 shared by all worlds. Restarted jobs load as interrupted and require explicit
 resume (repeating a running test from the start) or discard; finished jobs live
@@ -276,8 +281,7 @@ def validate_settings(settings: dict) -> dict:
     from app.core.llm_router import parse_extra_params
     defaults = {"temperature": {"tools": 0.1, "helpers": 0.5, "vision": 0.3},
                 "repetition_penalty": None, "max_tokens": 900, "chat_template": "",
-                "thinking": dict.fromkeys(("tools", "helpers", "vision"), False),
-                "thinking_budget": dict.fromkeys(("tools", "helpers", "vision")), "extra_params": {}}
+                "thinking_max": dict.fromkeys(("tools", "helpers", "vision"), 0), "extra_params": {}}
     if not isinstance(settings, dict) or settings.keys() - defaults.keys():
         raise ValueError("settings must be an object with known keys only")
     result = {**defaults, **deepcopy(settings)}
@@ -297,13 +301,10 @@ def validate_settings(settings: dict) -> dict:
     if not isinstance(result["chat_template"], str):
         raise ValueError("chat_template must be text")
     groups = {"tools", "helpers", "vision"}
-    thinking = result["thinking"]
-    if not isinstance(thinking, dict) or set(thinking) != groups or not all(isinstance(v, bool) for v in thinking.values()):
-        raise ValueError("thinking must contain tools, helpers and vision booleans")
-    budgets = result["thinking_budget"]
+    budgets = result["thinking_max"]
     if (not isinstance(budgets, dict) or set(budgets) != groups
-            or not all(v is None or (type(v) is int and 1 <= v <= 32000) for v in budgets.values())):
-        raise ValueError("thinking_budget must contain tools, helpers and vision integers from 1 to 32000 or null")
+            or not all(type(v) is int and 0 <= v <= 3000 and v % 300 == 0 for v in budgets.values())):
+        raise ValueError("thinking_max must contain tools, helpers and vision: 0 or multiples of 300 through 3000")
     if not isinstance(result["extra_params"], dict):
         raise ValueError("extra_params must be a JSON object")
     result["extra_params"] = parse_extra_params(result["extra_params"])
@@ -336,12 +337,21 @@ def iter_suitability_results(
     if not inst.available:
         yield {"type": "error", "message": f"Provider '{inst.provider_name}' is not available"}
         return
+    clients = {}
+    clients_lock = threading.Lock()
+
+    def client_for(group, budget):
+        with clients_lock:
+            key = (group, budget)
+            if key not in clients:
+                clients[key] = inst.create_llm(
+                    temperature=settings["temperature"][group], thinking=bool(budget),
+                    thinking_budget=budget or None,
+                    **{k: v for k, v in settings.items() if k not in ("temperature", "thinking_max")})
+            return clients[key]
     try:
-        clients = {group: inst.create_llm(
-            temperature=temperature, thinking=settings["thinking"][group],
-            thinking_budget=settings["thinking_budget"][group],
-            **{k: v for k, v in settings.items() if k not in ("temperature", "thinking", "thinking_budget")})
-            for group, temperature in settings["temperature"].items()}
+        for group in settings["temperature"]:
+            client_for(group, 0)
     except Exception as e:
         yield {"type": "error", "message": f"client init failed: {e}"}
         return
@@ -365,21 +375,27 @@ def iter_suitability_results(
     live_play = bool(get_agent_loop().status()["running"] and not is_world_frozen())
     cases = [prepare_case(case) for case in cases]
 
-    def ask(case):
+    def ask(case, budget):
         """Return full local response metadata, duration and token count."""
         t0 = time.monotonic()
         user = case["user"]
         if case["group"] == "vision":
             user = image_user_content(user, ROOT / case["image"])
-        resp = clients[case["group"]].invoke([
+        resp = client_for(case["group"], budget).invoke([
             {"role": "system", "content": case["system"]},
             {"role": "user", "content": user},
         ])
         dt = time.monotonic() - t0
-        usage = getattr(resp, "usage", None) or {}
+        usage = dict(getattr(resp, "usage", None) or {})
+        reasoning = getattr(resp, "reasoning", None)
+        estimated = usage.get("reasoning_tokens") is None and bool((reasoning or "").strip())
+        if estimated:
+            usage["reasoning_tokens"] = round(len(reasoning) / 3.5)
         ctok = int(usage.get("completion_tokens") or 0)
         raw = {"content": getattr(resp, "content", "") or "",
-               "reasoning": getattr(resp, "reasoning", None),
+               "reasoning": reasoning,
+               "reasoning_tokens_estimated": estimated,
+               "budget_unenforceable": bool(getattr(resp, "budget_unenforceable", False)),
                "budget_hit": bool(getattr(resp, "budget_hit", False)),
                "finish_reason": getattr(resp, "finish_reason", None),
                "usage": usage, "duration_s": dt}
@@ -387,7 +403,7 @@ def iter_suitability_results(
 
     yield {"type": "start", "model": model_full, "total": len(cases)}
 
-    def attempt(case):
+    def attempt(case, budget):
         if cancel_event is not None and cancel_event.is_set():
             return None
         attempt_start = time.monotonic()
@@ -398,79 +414,196 @@ def iter_suitability_results(
                 raw, dt, ctok = {"content": "", "reasoning": None, "finish_reason": None,
                                  "budget_hit": False, "usage": {}, "duration_s": 0}, 0, 0
             else:
-                raw, dt, ctok = ask(case)
+                raw, dt, ctok = ask(case, budget)
             evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
         except Exception as exc:
             missing = (case["group"] == "vision" and isinstance(exc, FileNotFoundError)
                        and not (ROOT / case["image"]).is_file())
             # A request the server refuses for this model (400 "at most 0
             # images" from a text-only model) is the model's answer: the case
-            # fails. Only an outage (connection, timeout, 5xx, 429) is infra.
-            rejected = _rejected_by_model(exc)
+            # fails. Image-specific errors (including llama.cpp 500s) identify
+            # unsupported vision; generic outages and load errors stay infra.
+            vision_rejected = (case["group"] == "vision" and not missing and
+                               (_rejected_by_model(exc)
+                                or any(word in str(exc).lower() for word in ("image", "vision", "multimodal"))))
+            rejected = vision_rejected or _rejected_by_model(exc)
             evidence = (score_case(case, "") if rejected
                         else score_case(case, "", infra_error=not missing))
             dt, ctok = time.monotonic() - attempt_start, 0
             raw = {"content": "", "reasoning": None, "finish_reason": None,
-                   "budget_hit": False, "usage": {}, "duration_s": dt, "error": str(exc)}
+                   "budget_hit": False, "usage": {}, "duration_s": dt, "error": str(exc),
+                   "vision_request_error": vision_rejected}
         return evidence, raw, dt, ctok
 
-    results: List[Dict[str, Any]] = []
+    def record(case, attempts):
+        dimensions = [a[0] for a in attempts]
+        outputs = [a[1] for a in attempts]
+        durs = [a[2] for a in attempts]
+        toks = [a[3] for a in attempts]
+        runs = [(d["ok"], d["hallucinated"], d["detail"]) for d in dimensions]
+        repeats = len(attempts)
+        # Quality needs a strict majority; every invented tool counts.
+        npass = sum(1 for r in runs if r[0])
+        need = (repeats // 2) + 1
+        ok = npass >= need if all(r[0] is not None for r in runs) else None
+        hall = any(r[1] for r in runs)
+        infra = any(r.get("infra") for r in dimensions)
+        # Take detail and output from the first failure, otherwise the first run.
+        rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
+        detail = runs[rep_idx][2]
+        if repeats > 1:
+            detail = f"{npass}/{repeats} runs ok — {detail}"
+        # Speed: mean duration of valid runs plus tokens per second.
+        valid_durs = [d for d in durs if d > 0]
+        avg_dt = round(sum(valid_durs) / len(valid_durs), 2) if valid_durs else 0.0
+        tot_tok = sum(toks)
+        tps = round(tot_tok / sum(valid_durs), 1) if valid_durs and tot_tok else 0.0
+        rec = {"id": case["id"], "group": case["group"], "task": case.get("task"), "label": case["label"], "category": case["category"],
+               "ok": ok, "hallucinated": bool(hall), "detail": detail,
+               "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
+               "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
+               "runs": outputs,
+               "budget_hits": sum(bool(r.get("budget_hit")) for r in outputs),
+               "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
+               "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
+               "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
+               "run_checks": dimensions}
+        rec["invalid_input"] = rec["dimensions"]["invalid_input"]
+        rec["prompt"] = {"system": case.get("system", ""), "user": case.get("user", "")}
+        return rec
+
+    def stage_info(rec, budget):
+        return {"budget": budget, "ok": rec["ok"], "duration_s": rec["duration_s"],
+                "reasoning_tokens": rec["reasoning_tokens"], "budget_hits": rec["budget_hits"]}
+
+    def stop_reason(rec):
+        if any(run.get("budget_unenforceable") for run in rec["runs"]):
+            return "budget_unenforceable"
+        if not any((run.get("reasoning") or "").strip() or
+                   (run.get("usage") or {}).get("reasoning_tokens", 0) for run in rec["runs"]):
+            return "thinking_ineffective"
+        return None
+
+    results = []
+    off = {}
+    stage_records = {}
+    recommended_records = []
+    thinking = {}
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        pending = [[pool.submit(attempt, case) for _ in range(int(case.get("repeats", 1)) or 1)]
+        def run_stage(case, budget):
+            futures = [pool.submit(attempt, case, budget) for _ in range(int(case.get("repeats", 1)) or 1)]
+            attempts = [future.result() for future in futures]
+            if any(a is None for a in attempts):
+                return None
+            rec = record(case, attempts)
+            stage_records[(case["id"], budget)] = rec
+            return rec
+
+        # Submit all off runs together to preserve provider-level concurrency.
+        pending = [[pool.submit(attempt, case, 0) for _ in range(int(case.get("repeats", 1)) or 1)]
                    for case in cases]
         for idx, case in enumerate(cases):
+            attempts = [f.result() for f in pending[idx]]
             if cancel_event is not None and cancel_event.is_set():
                 return
-            attempts = [future.result() for future in pending[idx]]
-            if cancel_event is not None and cancel_event.is_set():
-                return
-            live_play = live_play or bool(get_agent_loop().status()["running"] and not is_world_frozen())
-            dimensions = [a[0] for a in attempts]
-            outputs = [a[1] for a in attempts]
-            durs = [a[2] for a in attempts]
-            toks = [a[3] for a in attempts]
-            runs = [(d["ok"], d["hallucinated"], d["detail"]) for d in dimensions]
-            repeats = len(attempts)
-            # Quality needs a strict majority; every invented tool counts.
-            npass = sum(1 for r in runs if r[0])
-            need = (repeats // 2) + 1
-            ok = npass >= need if all(r[0] is not None for r in runs) else None
-            hall = any(r[1] for r in runs)
-            infra = any(r.get("infra") for r in dimensions)
-            # Take detail and output from the first failure, otherwise the first run.
-            rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
-            detail = runs[rep_idx][2]
-            if repeats > 1:
-                detail = f"{npass}/{repeats} runs ok — {detail}"
-            # Speed: mean duration of valid runs plus tokens per second.
-            valid_durs = [d for d in durs if d > 0]
-            avg_dt = round(sum(valid_durs) / len(valid_durs), 2) if valid_durs else 0.0
-            tot_tok = sum(toks)
-            tps = round(tot_tok / sum(valid_durs), 1) if valid_durs and tot_tok else 0.0
-            rec = {"id": case["id"], "group": case["group"], "task": case.get("task"), "label": case["label"], "category": case["category"],
-                   "ok": ok, "hallucinated": bool(hall), "detail": detail,
-                   "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
-                   "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
-                   "runs": outputs,
-                   "budget_hits": sum(bool(r.get("budget_hit")) for r in outputs),
-                   "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
-                   "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
-                   "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
-                   "run_checks": dimensions}
-            rec["invalid_input"] = rec["dimensions"]["invalid_input"]
-            results.append(rec)
-            yield {"type": "check", "index": idx, **{k: rec[k] for k in
-                   ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                    "infra", "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits")},
-                   "prompt": {"system": case.get("system", ""), "user": case.get("user", "")},
-                   "runs": outputs}
+            rec = record(case, attempts)
+            off[case["id"]] = rec
+            stage_records[(case["id"], 0)] = rec
+
+        for group in ("tools", "helpers", "vision"):
+            group_cases = [c for c in cases if c["group"] == group]
+            stopped = None
+            # A model may decide per case whether it thinks (Nanbeige does):
+            # no reasoning stops only that case; the group counts as
+            # "thinking_ineffective" when no escalated case thought at all.
+            escalated = thought = 0
+            group_results = []
+            unsupported = bool(group_cases) and all(
+                run.get("vision_request_error") for c in group_cases for run in off[c["id"]]["runs"])
+            for case in group_cases:
+                rec = off[case["id"]]
+                stages = [stage_info(rec, 0)]
+                passed_stage = 0 if rec["ok"] else None
+                if (not unsupported and rec["ok"] is False and not rec["infra"]
+                        and stopped != "budget_unenforceable"):
+                    for budget in range(300, settings["thinking_max"][group] + 1, 300):
+                        rec = run_stage(case, budget)
+                        if rec is None:
+                            return
+                        stages.append(stage_info(rec, budget))
+                        reason = stop_reason(rec)
+                        escalated += budget == 300
+                        thought += budget == 300 and reason != "thinking_ineffective"
+                        if reason == "budget_unenforceable":
+                            stopped = reason
+                        if rec["ok"]:
+                            passed_stage = budget
+                        if rec["ok"] or reason or rec["ok"] is None or rec["infra"]:
+                            break
+                rec = {**rec, "stage": passed_stage, "stages": stages}
+                group_results.append(rec)
+            if stopped is None and escalated and not thought:
+                stopped = "thinking_ineffective"
+            candidate = max((r["stage"] for r in group_results if r["stage"] is not None), default=None)
+            verified = {}
+            if candidate and stopped != "budget_unenforceable":
+                for case, rec in zip(group_cases, group_results):
+                    if rec["stage"] == candidate:
+                        verified[case["id"]] = rec
+                    elif rec["stage"] is not None:
+                        check = run_stage(case, candidate)
+                        if check is None:
+                            return
+                        rec["verification"] = stage_info(check, candidate)
+                        verified[case["id"]] = check
+                        if stop_reason(check) == "budget_unenforceable":
+                            stopped = "budget_unenforceable"
+                        if stopped == "budget_unenforceable":
+                            break
+            eligible = [r for r in group_results if off[r["id"]]["ok"] is not None]
+            score_off = sum(bool(off[r["id"]]["ok"]) for r in eligible)
+            score_budget = sum(bool(r["ok"]) for r in verified.values())
+            use_budget = bool(candidate and stopped != "budget_unenforceable" and score_budget > score_off)
+            selected = []
+            for rec in group_results:
+                chosen = (verified.get(rec["id"]) or stage_records.get((rec["id"], candidate))) if use_budget else off[rec["id"]]
+                if chosen is None:
+                    # Invalid fixtures stay excluded. After an early stop, failed
+                    # cases untried at C add no pass and no fabricated speed sample.
+                    chosen = {**off[rec["id"]], "runs": [], "duration_s": 0,
+                              "tok_s": 0, "tok": 0, "dur_total": 0}
+                selected.append({**chosen, "recommended_budget": candidate if use_budget else 0})
+                rec["recommended_budget"] = candidate if use_budget else 0
+                rec["recommended_ok"] = chosen["ok"]
+                rec["recommended_runs"] = chosen["runs"]
+                results.append(rec)
+                yield {"type": "check", "index": len(results) - 1, **rec}
+            durations = [run["duration_s"] for r in selected for run in r["runs"]
+                         if run.get("duration_s", 0) > 0 and not run.get("error")]
+            if group_cases and not unsupported:
+                thinking[group] = {"score_off": f"{score_off}/{len(eligible)}",
+                    "score_at_budget": f"{score_budget}/{len(eligible)}" if candidate and stopped != "budget_unenforceable" else None,
+                    "candidate_budget": candidate,
+                    "recommended": {"thinking": use_budget, "thinking_budget": candidate if use_budget else None},
+                    "stopped": stopped,
+                    "median_latency_s_recommended": round(median(durations), 2) if durations else None}
+            if not unsupported:
+                recommended_records.extend(selected)
 
     # Cancellation and final persistence must be atomic with job completion.
     with _JOBS_LOCK:
         if cancel_event is not None and cancel_event.is_set():
             return
-        summary = _summarize(model_full, results, settings=settings)
-        summary.update(concurrency=concurrency, live_play=live_play,
+        summary = _summarize(model_full, recommended_records, settings=settings)
+        summary["checks"] = results
+        summary["thinking"] = thinking
+        summary["infra"] = any(r["infra"] for r in stage_records.values())
+        if any(c["group"] == "vision" for c in cases) and not any(r["group"] == "vision" for r in recommended_records):
+            summary["vision"] = "not_supported"
+            # Unsupported image input does not disqualify a text model.
+            if summary["verdict"] == "no — vision":
+                summary["verdict"] = "yes" if summary["speed_ok"] else "no — speed"
+        summary.update(concurrency=concurrency, live_play=live_play or bool(get_agent_loop().status()["running"] and not is_world_frozen()),
                        curated_only=bool(data.get("curated_only")))
         summary.update(settings=settings, scorer_version=SCORER_VERSION,
                        fixture_version=data.get("fixture_version") or fixture_version(cases))
@@ -514,6 +647,7 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
                             for record in results if group_of(record) == group for run in record.get("runs", [])]
         reasoning_counts = [n for n in reasoning_counts if n is not None]
         speed[group] = {"reasoning_tokens_median": median(reasoning_counts) if reasoning_counts else None,
+                        "reasoning_tokens_estimated": any(run.get("reasoning_tokens_estimated", False) for r in results if group_of(r) == group for run in r.get("runs", [])),
                         "median_latency_s": round(median(durations), 2) if durations else None,
                         "tok_s": round(tokens / sum(durations), 1) if durations else None}
     task_medians = []
@@ -539,7 +673,8 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
         "budget_hits": sum(bool(run.get("budget_hit")) for run in all_runs),
         "thinking_leak_runs": sum(
             (((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0 or bool((run.get("reasoning") or "").strip()))
-            for record in results if not ((settings or {}).get("thinking") or {}).get(group_of(record), False)
+            for record in results if not (record.get("recommended_budget") if "recommended_budget" in record else
+                                      ((settings or {}).get("thinking") or {}).get(group_of(record), False))
             for run in record.get("runs", [])),
         "total_runs": len(all_runs),
         "truncated_runs": sum(run.get("finish_reason") == "length" for run in all_runs),
@@ -547,6 +682,9 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
         "failed_by_truncation": failed_by_truncation,
         "thinking_runs": sum(((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0 or bool((run.get("reasoning") or "").strip()) for run in all_runs),
         "reasoning_tokens_median": median(positive_tokens) if positive_tokens else None,
+        "reasoning_tokens_estimated": any(run.get("reasoning_tokens_estimated", False) and
+                                          ((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0
+                                          for run in all_runs),
         "model": model_full,
         "date": utc_now().date().isoformat(),
         "score": f"{passed}/{len(eligible)}",
@@ -571,20 +709,23 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
 def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, Any]]) -> bool:
     """Persist results only when no infrastructure errors occurred:
     provider outages and timeouts do not say anything about model quality."""
-    from app.core.model_capabilities import save_raw_outputs, save_suitability
+    from app.core.model_capabilities import save_raw_outputs, save_suitability, get_suitability_outputs
     # Stored checks: verdict, detail and timing only. The raw answer goes into
     # the local sidecar file — the test replays REAL logged prompts, so it
     # quotes the world's characters and plot and must not reach the shared,
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits")} for r in results]
+                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits", "stage", "stages", "verification",
+                       "recommended_budget", "recommended_ok")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
-                   "cases": {r["id"]: r.get("runs", []) for r in results}}
+                   "cases": {r["id"]: r.get("runs", []) for r in results},
+                   "recommended_cases": {r["id"]: r.get("recommended_runs", []) for r in results}}
     # Preserve diagnostics even when infrastructure prevents a quality record.
     try:
         save_raw_outputs(model_full, raw_outputs)
+        summary["diagnostic_run_id"] = get_suitability_outputs(model_full).get("run_id")
     except Exception as exc:
         logger.error("Failed to persist local suitability diagnostics: %s", exc)
         return False
@@ -611,7 +752,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
-                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "reasoning_tokens_median")},
+                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
             "checks": stored_checks,
         },
     }

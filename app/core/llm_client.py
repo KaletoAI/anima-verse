@@ -117,6 +117,7 @@ class LLMResponse:
     finish_reason: Optional[str] = None
     reasoning: Optional[str] = None
     budget_hit: bool = False
+    budget_unenforceable: bool = False
 
 
 @dataclass
@@ -200,11 +201,11 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
 
 # Thought tags of the budget forcing in LLMClient.invoke: Qwen-family,
 # SenseNova, Nanbeige, Groot and DeepSeek think in these; a model with a
-# different thought format (Gemma 4) should get no budget.
+# different thought format (Gemma 4) uses its channel markers.
 THINK_OPEN = "<think>\n"
 THINK_CLOSE = "\n</think>\n\n"
 # (base_url, model) pairs that could not continue a capped thought (400/422
-# or an empty answer); their budgeted calls run without thinking from then on.
+# or an empty/length-limited answer); budgeted calls then run without thinking.
 _NO_CONTINUE: set = set()
 # (base_url, model) pairs whose server refused ``stream_options``. The OpenAI
 # SDK only sends the final usage chunk on request, and a strict or older
@@ -411,7 +412,9 @@ class LLMClient:
             # Fallback overrides explicit extra_params enabling thinking.
             if key not in _NO_CHAT_TEMPLATE_KWARGS:
                 kwargs.setdefault("extra_body", {}).setdefault("chat_template_kwargs", {})["enable_thinking"] = False
-            return self._request(msgs, kwargs)
+            response = self._request(msgs, kwargs)
+            response.budget_unenforceable = True
+            return response
 
         if key in _NO_CONTINUE:
             return plain()
@@ -422,22 +425,25 @@ class LLMClient:
         first = self._request(msgs, kwargs, warn_cutoff=False)
         if first.finish_reason != "length":
             return first
+        thought_open, thought_close = (("<|channel>thought\n", "<channel|>")
+                                      if _is_gemma_model(self.model) else (THINK_OPEN, THINK_CLOSE))
+        close_marker = thought_close.strip()
         partial = first.content
-        if not first.reasoning and partial.startswith("<think>") and "</think>" not in partial:
-            prefill = partial.rstrip() + THINK_CLOSE
-            first.reasoning = partial[len("<think>"):].strip()
+        if not first.reasoning and partial.startswith(thought_open) and close_marker not in partial:
+            prefill = partial.rstrip() + thought_close
+            first.reasoning = partial[len(thought_open):].strip()
             partial = ""
         else:
-            prefill = THINK_OPEN + (first.reasoning or "").strip() + THINK_CLOSE + partial
+            prefill = thought_open + (first.reasoning or "").strip() + thought_close + partial
         kwargs = self._build_kwargs()
         kwargs.setdefault("extra_body", {}).update(continue_final_message=True, add_generation_prompt=False)
         try:
-            final = self._request(msgs + [{"role": "assistant", "content": prefill}], kwargs)
+            final = self._request(msgs + [{"role": "assistant", "content": prefill}], kwargs, warn_cutoff=False)
             answer = final.content or final.reasoning or ""
-            if "</think>" in answer:
-                answer = answer.rsplit("</think>", 1)[1]
+            if close_marker in answer:
+                answer = answer.rsplit(close_marker, 1)[1]
             answer = answer.lstrip()
-            if not answer.strip():
+            if final.finish_reason == "length" or not answer.strip():
                 final = None
             elif partial and not answer.startswith(partial):
                 answer = partial + answer
@@ -458,7 +464,8 @@ class LLMClient:
             for name, count in (final.usage or {}).items():
                 usage[name] = usage.get(name, 0) + count
         return LLMResponse(content=answer, usage=usage, finish_reason=final.finish_reason,
-                           reasoning=first.reasoning, budget_hit=True)
+                           reasoning=first.reasoning, budget_hit=True,
+                           budget_unenforceable=final.budget_unenforceable)
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async streaming generator (for the streaming.py agent loop).

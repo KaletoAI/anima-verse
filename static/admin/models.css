@@ -160,3 +160,8 @@ tr:hover { background: #161b22; }
 .suit-interrupted-notice { display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px; padding:10px; border:1px solid #b88634; border-radius:6px; background:#332916; color:#e3b85f; }
 .suit-interrupted-notice[hidden] { display:none; }
 .suit-interrupted { color:#bda36c; }
+
+.suit-apply-dialog { margin: 16px 0; padding: 20px; border: 1px solid #58677a; border-radius: 8px; background: #161b22; }
+.suit-apply-dialog section { padding: 10px 0; border-bottom: 1px solid #30363d; }
+.suit-apply-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.suit-apply-dialog select { max-width: 100%; }

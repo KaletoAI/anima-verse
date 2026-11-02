@@ -1751,7 +1751,7 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
     from app.core.model_capabilities import get_all_suitability, get_suitability_outputs
     if job_id.startswith("saved:"):
         model = job_id[6:]
-        record = get_all_suitability().get(model)
+        record = get_all_suitability().get(model.lower())
         summary = dict(record.get("tested_suitability", {})) if record else {}
         job = {"job_id": job_id, "model": model, "status": "done", "summary": summary} if record else None
     else:
@@ -1762,6 +1762,10 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
     from copy import deepcopy
     job = deepcopy(job)
     summary = job.get("summary") or {}
+    latest = (get_all_suitability().get(job.get("model", "").lower()) or {}).get("tested_suitability") or {}
+    job["apply_available"] = bool(
+        summary.get("thinking") and summary.get("diagnostic_run_id")
+        and summary.get("diagnostic_run_id") == latest.get("diagnostic_run_id"))
     job["max_turn_seconds"] = config.get("model_test.max_turn_seconds", 20)
     fixture = load_cases(auto_build=False)
     cases = {case["id"]: case for case in fixture.get("cases", [])}
@@ -1774,7 +1778,7 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
     raw = diagnostics.get("cases", {}) if matches and job_id.startswith("saved:") else {}
     checks = summary.get("checks", job.get("checks", []))
     for check in checks:
-        if check.get("ok") is False:
+        if check.get("ok") is False or "stages" in check:
             case = cases.get(check.get("id"), {}) if fixture_matches else {}
             if "prompt" not in check:
                 check["prompt"] = (diagnostics.get("prompts", {}).get(check.get("id")) if matches else None) or {
@@ -1782,6 +1786,9 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
             check["prompt_source"] = "local test fixtures"
             if "runs" not in check:
                 check["runs"] = raw.get(check.get("id"), [])
+            if "stages" in check and "recommended_runs" not in check:
+                check["recommended_runs"] = (diagnostics.get("recommended_cases", {}).get(check.get("id"), [])
+                                             if matches else [])
     return job
 
 
@@ -2249,3 +2256,126 @@ def _build_llm_stats_html() -> str:
 </html>'''
 
 
+
+
+_SUITABILITY_GROUPS = ('tools', 'helpers', 'vision')
+
+
+def _suitability_apply_result(model):
+    from copy import deepcopy
+    from app.core.model_capabilities import get_all_suitability
+    if not isinstance(model, str) or '::' not in model:
+        raise HTTPException(400, 'model must include provider::model')
+    record = get_all_suitability().get(model.lower()) or {}
+    summary = record.get('tested_suitability') or {}
+    if not isinstance(summary.get('thinking'), dict) or not summary.get('settings'):
+        raise HTTPException(400, 'The latest result has no thinking recommendation')
+    return deepcopy(summary)
+
+
+def _suitability_entry_groups(entry):
+    from app.core.llm_tasks import TASK_TYPES
+    categories = {'tool': 'tools', 'helper': 'helpers', 'image': 'vision'}
+    present = {categories.get((TASK_TYPES.get(task.get('task') if isinstance(task, dict) else task) or {}).get('category'))
+               for task in entry.get('tasks', [])}
+    return [group for group in _SUITABILITY_GROUPS if group in present]
+
+
+@router.get('/settings/llm-suitability-test/apply')
+def llm_suitability_apply_preview(model: str, user=Depends(require_admin)):
+    """Preview the latest stored result and eligible routing destinations."""
+    summary = _suitability_apply_result(model)
+    provider, model_name = model.split('::', 1)
+    with config._LOCK:
+        revision = config_admin.issue_revision(config_scope.INSTANCE)
+        routing = config_admin.layer_view(config_scope.INSTANCE).get('llm_routing', [])
+        entries = []
+        for index, entry in enumerate(routing):
+            if entry.get('provider') != provider or entry.get('model') != model_name:
+                continue
+            groups = _suitability_entry_groups(entry)
+            entries.append({'index': index, 'name': entry.get('name') or model_name,
+                            'groups': groups, 'warnings': {
+                                group: ('This entry also serves tasks in ' + ', '.join(g for g in groups if g != group) + '.')
+                                for group in _SUITABILITY_GROUPS if any(g != group for g in groups)}})
+    return {'model': model, 'revision': revision, 'entries': entries,
+            'settings': summary['settings'], 'thinking': summary['thinking'],
+            'vision': summary.get('vision')}
+
+
+@router.post('/settings/llm-suitability-test/apply')
+async def llm_suitability_apply(request: Request, user=Depends(require_admin)):
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, 'body must be valid JSON') from exc
+    return await asyncio.to_thread(_llm_suitability_apply_sync, body)
+
+
+def _llm_suitability_apply_sync(body):
+    from copy import deepcopy
+    if not isinstance(body, dict) or set(body) != {'model', 'base_revision', 'groups'}:
+        raise HTTPException(400, 'body must contain model, base_revision and groups')
+    revision = _require_revision(body['base_revision'])
+    summary = _suitability_apply_result(body['model'])
+    groups = body['groups']
+    if not isinstance(groups, dict) or set(groups) - set(_SUITABILITY_GROUPS):
+        raise HTTPException(400, 'groups must contain known groups only')
+    provider, model_name = body['model'].split('::', 1)
+    changed = []
+    targets = set()
+    with config._LOCK:
+        if revision != config_admin.layer_revision(config_scope.INSTANCE):
+            raise HTTPException(409, {'code': 'stale', 'message': 'Settings changed meanwhile — reload'})
+        current = config_admin.layer_part(config_scope.INSTANCE)
+        merged = deepcopy(current)
+        routing = merged.setdefault('llm_routing', [])
+        for group, choice in groups.items():
+            if not isinstance(choice, dict) or choice.get('target') not in ('skip', 'new', 'entry'):
+                raise HTTPException(400, 'invalid target')
+            target = choice['target']
+            if set(choice) != ({'target', 'index'} if target == 'entry' else {'target'}):
+                raise HTTPException(400, 'unknown target fields')
+            if target == 'skip':
+                continue
+            recommendation = (summary['thinking'].get(group) or {}).get('recommended')
+            if (not recommendation
+                    or (summary['thinking'].get(group) or {}).get('score_off') == '0/0'
+                    or (group == 'vision' and summary.get('vision') == 'not_supported')):
+                raise HTTPException(400, 'No result for ' + group)
+            if target == 'new':
+                index = len(routing)
+                entry = {'name': model_name + ' · ' + group.title(), 'provider': provider,
+                         'model': model_name, 'enabled': True, 'tasks': []}
+                defaults = {'llm_routing': [entry]}
+                config_admin.apply_schema_defaults(defaults, config_scope.schema_for(config_scope.INSTANCE))
+                routing.append(entry)
+            else:
+                index = choice.get('index')
+                if type(index) is not int or not 0 <= index < len(routing):
+                    raise HTTPException(400, 'invalid entry index')
+                if index in targets:
+                    raise HTTPException(400, 'Choose a different entry for each group')
+                entry = routing[index]
+                if entry.get('provider') != provider or entry.get('model') != model_name:
+                    raise HTTPException(400, 'entry provider/model does not match')
+            targets.add(index)
+            settings = summary['settings']
+            entry.update(thinking='on' if recommendation['thinking'] else 'off',
+                         thinking_budget=recommendation['thinking_budget'],
+                         temperature=settings['temperature'][group])
+            entry.update({key: deepcopy(settings[key]) for key in
+                          ('max_tokens', 'repetition_penalty', 'chat_template', 'extra_params')})
+            changed.append({'group': group, 'index': index, 'entry': deepcopy(entry)})
+        error = _validate_llm_routing(routing)
+        if error:
+            raise HTTPException(400, error)
+        try:
+            result = config_admin._persist_layer(config_scope.INSTANCE, merged, current)
+        except config_admin.LayerSaveError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except config.ConfigWriteRefused as exc:
+            raise HTTPException(409, str(exc)) from exc
+    result['reloaded'] = config_admin.apply_section_reloads(result['changed_sections'], config_scope.INSTANCE)
+    result['entries'] = changed
+    return result

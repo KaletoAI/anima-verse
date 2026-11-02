@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Task 12 UI contract. Usage: .venv/bin/python scripts/smoke_suitability_ui.py
 
-Suitability 1–4 are obsolete; 5 and later survive.
+Suitability 1–4 are obsolete; 5 and later survive. A budget of 200 rounds
+up to 300; 3300 caps at 3000. A stage-600 pass stays visible, and an
+unsupported vision result displays no image input instead of a percentage.
 Hand-derived UI expectations: entries for thought/extraction/image_analysis on one
 model at 0.1/0.5/0.3 copy those three temperatures, regardless of the chosen entry.
 Without a vision assignment its prior 0.7 stays. One running and one queued A job
@@ -23,6 +25,7 @@ from app.core import paths
 
 with tempfile.TemporaryDirectory() as directory:
     paths.init(directory)
+    paths.init_instance(Path(directory) / "instance")
     from app.core import model_capabilities as caps
     from app.routes import admin_settings as routes
     target = Path(directory) / "caps.json"
@@ -117,7 +120,7 @@ with tempfile.TemporaryDirectory() as directory:
     suits = {"p::seen-images": {"tested_suitability": {"scorer_version": "suitability-5", "vision": {"rate": 1.0}}},
              # A disabled/offline provider lists no models; its saved result still gets a row.
              "off::tested-elsewhere": {"tested_score": "9/16", "tested_suitability": {
-                 "scorer_version": "suitability-5", "model": "Off::tested-elsewhere", "vision": {"rate": 0.0}}}}
+                 "scorer_version": "suitability-5", "model": "Off::tested-elsewhere", "vision": "not_supported"}}}
     manager = SimpleNamespace(list_all_models=lambda: listed)
     with patch.object(admin_routes, "get_provider_manager", return_value=manager), patch.object(
             admin_routes, "get_all_suitability", return_value=suits), patch.object(
@@ -207,19 +210,17 @@ el('suitPrefill').value='1';ctx.suitPrefill();
 assert.strictEqual(el('suitProvider').value,'P');assert.strictEqual(el('suitModel').value,'M');
 assert.strictEqual(el('suitTempTools').value,0.1);assert.strictEqual(el('suitTempHelpers').value,0.5);assert.strictEqual(el('suitTempVision').value,0.3);
 assert.strictEqual(el('suitPenalty').value,1.03);assert.strictEqual(el('suitMaxTokens').value,1200);
-assert.strictEqual(el('suitChatTemplate').value,'<template>');for (const group of ['Tools','Helpers','Vision']) { assert.strictEqual(el('suitThinking'+group).value,'on'); assert.strictEqual(el('suitBudget'+group).value,200); assert.strictEqual(el('suitBudget'+group).disabled,false); }
+assert.strictEqual(el('suitChatTemplate').value,'<template>');for (const group of ['Tools','Helpers','Vision']) { assert.strictEqual(el('suitThinkingMax'+group).value,300); }
 assert.strictEqual(JSON.parse(el('suitExtraParams').value).nested.test,true);
 assert.strictEqual(el('suitPrefill').value,'');
 entries[1].max_tokens=2000;assert.strictEqual(el('suitMaxTokens').value,1200);
 for (const mode of ['off','task']) {
     entries[1].thinking=mode;el('suitPrefill').value='1';ctx.suitPrefill();
     for (const group of ['Tools','Helpers','Vision']) {
-        assert.strictEqual(el('suitThinking'+group).value,'off');
-        assert.strictEqual(el('suitBudget'+group).disabled,true);
+        assert.strictEqual(el('suitThinkingMax'+group).value,0);
     }
 }
-el('suitThinkingTools').value='on';ctx.suitThinkingChanged('Tools');
-assert.strictEqual(el('suitBudgetTools').disabled,false);
+entries[1].thinking='on';entries[1].thinking_budget=3300;el('suitPrefill').value='1';ctx.suitPrefill();assert.strictEqual(el('suitThinkingMaxTools').value,3000);
 
 assert.strictEqual(ctx.suitQueueSummary([{model:'A::one',status:'running'},{model:'A::two',status:'queued'},{model:'B::one',status:'running'}]),'A: 1 running, 1 waiting · B: 1 running');
 assert.strictEqual(ctx.suitQueueSummary([]),'Queue empty');
@@ -235,12 +236,35 @@ assert(settingsBadge.includes('Temperatures: tools 0.1'));
 assert(settingsBadge.includes('repetition_penalty') && settingsBadge.includes('&lt;template&gt;'));
 el('suitProvider').value='P'; el('suitModel').value='M'; el('suitConcurrency').value='2';
 el('suitTempTools').value='0.1';el('suitTempHelpers').value='0.5';el('suitTempVision').value='0.3';
-el('suitMaxTokens').value='900';for (const group of ['Tools','Helpers','Vision']) { el('suitThinking'+group).value='off'; el('suitBudget'+group).value=''; }el('suitExtraParams').value='{}';
+el('suitMaxTokens').value='900';for (const group of ['Tools','Helpers','Vision']) { el('suitThinkingMax'+group).value='0'; }el('suitExtraParams').value='{}';
 ctx.suitPoll=()=>{}; ctx.suitJobsRefresh=()=>{};
-ctx.fetch=async (url,options)=>{const body=JSON.parse(options.body);assert.strictEqual(body.concurrency,2);assert.strictEqual(JSON.stringify(body.settings.temperature),JSON.stringify({tools:0.1,helpers:0.5,vision:0.3}));assert.strictEqual(JSON.stringify(body.settings.thinking),JSON.stringify({tools:false,helpers:false,vision:false}));assert.strictEqual(JSON.stringify(body.settings.thinking_budget),JSON.stringify({tools:null,helpers:null,vision:null}));assert.strictEqual(Object.keys(body).sort().join(','),'concurrency,model,provider,settings');return {ok:true,json:async()=>({job_id:'one'})};};
+ctx.fetch=async (url,options)=>{const body=JSON.parse(options.body);assert.strictEqual(body.concurrency,2);assert.strictEqual(JSON.stringify(body.settings.temperature),JSON.stringify({tools:0.1,helpers:0.5,vision:0.3}));assert.strictEqual(JSON.stringify(body.settings.thinking_max),JSON.stringify({tools:0,helpers:0,vision:0}));assert(!('thinking' in body.settings));assert(!('thinking_budget' in body.settings));assert.strictEqual(Object.keys(body).sort().join(','),'concurrency,model,provider,settings');return {ok:true,json:async()=>({job_id:'one'})};};
 assert.strictEqual(ctx.suitSettingsText({thinking:{tools:true,helpers:false,vision:false},thinking_budget:{tools:200}}).includes('Thinking: tools on (budget 200), helpers off, vision off'),true);
 assert.strictEqual(ctx.suitThinkingText({thinking_runs:3,thinking_leak_runs:0,settings:{thinking:{tools:true}}}), '');
 assert(ctx.suitThinkingText({thinking_runs:3,thinking_leak_runs:1,settings:{thinking:{tools:true}}}).includes('although thinking was off'));
+assert(ctx.suitSettingsText({thinking_max:{tools:600,helpers:0,vision:900}}).includes('tools thinking up to 600'));
+ctx.suitRenderJob({status:'done',model:'P::M',summary:{scorer_version:'suitability-5',vision:'not_supported',thinking:{tools:{score_off:'1/3',score_at_budget:'1/3',candidate_budget:600,recommended:{thinking:false,thinking_budget:null},stopped:'thinking_ineffective'}},checks:[{id:'X',ok:true,stage:600,stages:[{budget:0},{budget:300},{budget:600}]},{id:'Y',ok:false,stage:null,stages:[{budget:0},{budget:900}]}]}});
+assert(el('suitProgress').innerHTML.includes('passed at 600'));
+assert(el('suitProgress').innerHTML.includes('failed up to 900'));
+assert(el('suitDetailStatus').innerHTML.includes('Off 1/3 · at 600 1/3'));
+assert(el('suitDetailStatus').innerHTML.includes('thinking had no effect'));
+assert(el('suitDetailStatus').innerHTML.includes('no image input'));
+assert(el('suitApplyButton').hidden === false);
+assert(ctx.suitThinkingSummary({thinking:{tools:{score_off:'0/1',stopped:'budget_unenforceable'}}}).includes('the model keeps thinking after the budget'));
+ctx.suitRenderJob({status:'done',apply_available:false,model:'P::M',summary:{scorer_version:'suitability-5',thinking:{},checks:[{ok:true,stage:0,stages:[{budget:0}]}]}});
+assert(el('suitProgress').innerHTML.includes('passed without thinking'));assert.strictEqual(el('suitApplyButton').hidden,true);
+// A stage pass remains a pass even when the fixed recommended setting fails.
+ctx.suitRenderJob({status:'done',model:'P::M',summary:{scorer_version:'suitability-5',thinking:{tools:{recommended:{thinking:false,thinking_budget:null}}},checks:[{id:'tie-X',group:'tools',ok:true,stage:600,stages:[{budget:0},{budget:600}],recommended_ok:false,runs:[{content:'deciding pass'}],recommended_runs:[{content:'<off failure>'}]}]}});
+assert(el('suitProgress').innerHTML.includes('<b>Passed · tools · tie-X</b>'));
+assert(el('suitProgress').innerHTML.includes('At recommended setting (off): failed'));
+assert(el('suitProgress').innerHTML.includes('&lt;off failure&gt;'));
+ctx.suitRenderJob({status:'done',model:'P::M',summary:{scorer_version:'suitability-5',thinking:{tools:{recommended:{thinking:true,thinking_budget:600}}},checks:[{id:'verification-Y',group:'tools',ok:true,stage:0,stages:[{budget:0}],recommended_ok:false,verification:{budget:600,ok:false},runs:[{content:'deciding pass'}],recommended_runs:[{content:'<verification failure>'}]}]}});
+assert(el('suitProgress').innerHTML.includes('<b>Passed · tools · verification-Y</b>'));
+assert(el('suitProgress').innerHTML.includes('passed without thinking'));
+assert(el('suitProgress').innerHTML.includes('At recommended setting (budget 600): failed'));
+assert(el('suitProgress').innerHTML.includes('Recommended-setting answer(s)'));
+assert(el('suitProgress').innerHTML.includes('&lt;verification failure&gt;'));
+
 ctx.suitStart().then(()=>{assert(!el('suitStatus').textContent.startsWith('Error:')); console.log('Suitability UI prefill, queue summary, settings detail, escaping and explicit POST OK');});
 """], check=True)
 
@@ -287,4 +311,30 @@ ctx.fetch=async()=>({ok:true,json:async()=>({jobs:interrupted})});
     console.log('Suitability interrupted header, rows, inline confirmation and recovery POST OK');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
+"""], check=True)
+
+# Hand-derived dialog contract: unsupported vision skips, a mixed entry warns,
+# and an outdated revision is shown without reporting a successful save.
+subprocess.run(["node", "-e", r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const elements=new Map();const el=id=>{if(!elements.has(id))elements.set(id,{value:'',innerHTML:'',textContent:''});return elements.get(id);};
+const ctx={document:{getElementById:el},setTimeout:()=>0,clearTimeout:()=>{},console};vm.createContext(ctx);
+vm.runInContext(fs.readFileSync('static/admin/models.js','utf8').replace(/loadData\(\);\s*suitInit\(\);\s*$/,''),ctx);
+(async()=>{
+ vm.runInContext("suitApplyModel='P::<M>'",ctx);
+ const data={model:'P::<M>',revision:'r1',vision:'not_supported',settings:{temperature:{tools:0.1},max_tokens:900,chat_template:'<template>',extra_params:{x:'<y>'}},thinking:{tools:{score_off:'1/2',recommended:{thinking:true,thinking_budget:600}},helpers:{score_off:'0/0',recommended:{thinking:false,thinking_budget:null}}},entries:[{index:2,name:'<mixed>',groups:['tools','helpers'],warnings:{tools:'Also changes helpers'}}]};
+ ctx.fetch=async url=>{assert(url.includes('apply?model=P%3A%3A%3CM%3E'));return {ok:true,json:async()=>data};};
+ await ctx.suitApplyOpen();
+ assert(el('suitApplyDialog').innerHTML.includes('&lt;mixed&gt;'));
+ assert(el('suitApplyDialog').innerHTML.includes('&lt;template&gt;'));
+ assert(el('suitApplyDialog').innerHTML.includes('budget 600'));
+ assert(el('suitApplyDialog').innerHTML.includes('value="skip" selected'));
+ el('suitApplyTargettools').value='2';ctx.suitApplyWarning('tools');assert.strictEqual(el('suitApplyWarningtools').textContent,'Also changes helpers');
+ el('suitApplyTargethelpers').value='new';el('suitApplyTargetvision').value='skip';
+ ctx.fetch=async(url,options)=>{const body=JSON.parse(options.body);assert.deepStrictEqual(body,{model:'P::<M>',base_revision:'r1',groups:{tools:{target:'entry',index:2},helpers:{target:'new'},vision:{target:'skip'}}});return {status:409};};
+ const button={};await ctx.suitApplySave(button);assert.strictEqual(el('suitApplyStatus').textContent,'Settings changed meanwhile — reload');assert.strictEqual(button.disabled,false);
+ ctx.loadData=()=>{};ctx.fetch=async()=>({ok:true,json:async()=>({revision:'r2',entries:[{},{}]})});await ctx.suitApplySave(button);assert(el('suitApplyStatus').textContent.includes('Applied to 2'));
+ ctx.suitApplyClose();assert.strictEqual(el('suitApplyDialog').hidden,true);
+ console.log('Suitability apply dialog targets, warning, escaping, stale revision and save OK');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 """], check=True)

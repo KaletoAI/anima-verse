@@ -276,6 +276,11 @@ check("user POST suitability delete-old",
       status("POST", "/admin/settings/llm-suitability-test/delete-old", "user"), 403)
 check("anon POST suitability delete-old",
       status("POST", "/admin/settings/llm-suitability-test/delete-old"), 401)
+# Applying recommendations changes instance routing; preview and writes are admin-only.
+for method in ("GET", "POST"):
+    url = "/admin/settings/llm-suitability-test/apply"
+    check("anon " + method + " suitability apply", status(method, url), 401)
+    check("user " + method + " suitability apply", status(method, url, "user"), 403)
 # Queue recovery changes provider activity, so only administrators may POST.
 # Hand-derived: anonymous=401, player=403, admin=200 for both endpoints.
 for action in ("resume", "discard-interrupted"):
