@@ -33,13 +33,14 @@ def catalog_entry(anim) -> Dict:
     c = anim.catalog
     entry = {"prompt": str(c.prompt).strip(),
              "synonyms": [s.strip().lower() for s in c.synonyms if str(s).strip()],
-             "animation": anim.kind, "group": c.group, "solo": not _is_pair(anim)}
+             "animation": anim.kind, "group": c.group}
     if str(c.label_de).strip():
         entry["label_de"] = str(c.label_de).strip()
     if _is_pair(anim):
-        # The pair takes one place of two slots; clip +X lies along the
-        # facing of a marker (docs/schnittstellen-3d.md § A8a).
-        entry.update(places=2, yaw_offset=0)
+        # The pair takes two people and one place of two slots; clip +X lies
+        # along the facing of a marker (docs/schnittstellen-3d.md § A8a). A
+        # solo entry stores no ``participants`` (1 is the default).
+        entry.update(participants=2, places=2, yaw_offset=0)
     return entry
 
 
@@ -49,9 +50,9 @@ def repointed_entry(anim, existing: Dict) -> Dict:
     otherwise kept, its synonyms first and the new ones appended."""
     new = catalog_entry(anim)
     merged = json.loads(json.dumps(existing))
-    if new["solo"]:
-        merged.pop("places", None)
-        merged.pop("yaw_offset", None)
+    if "participants" not in new:
+        for field in ("participants", "places", "yaw_offset"):
+            merged.pop(field, None)
     syn = list(merged.get("synonyms") or [])
     merged.update({k: v for k, v in new.items() if k != "synonyms"})
     merged["synonyms"] = syn + [s for s in new["synonyms"] if s not in syn]

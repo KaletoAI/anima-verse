@@ -3,7 +3,7 @@ import type { PoseGroupSpec } from '../world/placeTypes'
 
 export interface ActionPresentation {
   key: string; label?: string; label_de?: string; group?: string
-  solo?: boolean; animation?: string; places?: number; yaw_offset?: number
+  participants?: number; animation?: string; places?: number; yaw_offset?: number
 }
 export interface ActionCatalog {
   status: 'loading' | 'ready' | 'error'
@@ -34,8 +34,8 @@ export function createRequirement(catalog: ActionCatalog): ActionRequirement | n
 /** Select only real catalog capabilities, including complete two-clip pairs. */
 export function presentations(catalog: ActionCatalog, ability: ActionDefinition['ability']) {
   return catalog.poses.filter(pose => ability === 'pair'
-    ? pose.solo === false && catalog.pairKinds.includes(pose.animation || '')
-    : pose.solo !== false && catalog.kinds.includes(pose.animation || '')
+    ? pose.participants === 2 && catalog.pairKinds.includes(pose.animation || '')
+    : (pose.participants ?? 1) === 1 && catalog.kinds.includes(pose.animation || '')
       && (ability !== 'sleep' || pose.group === 'lie'))
 }
 

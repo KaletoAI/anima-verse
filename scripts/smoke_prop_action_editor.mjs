@@ -55,7 +55,7 @@ const action = { id: 'rest', name: 'Rest', description: '', enabled: true,
 const catalog = { status: 'ready', stats: ['energy'], conditions: [], groups: {},
   poses: [{ key: 'lie', group: 'lie', animation: 'lie' },
     { key: 'sit', group: 'seat', animation: 'sit' },
-    { key: 'pair', group: 'lie', animation: 'duo', solo: false }],
+    { key: 'pair', group: 'lie', animation: 'duo', participants: 2 }],
   kinds: ['lie', 'sit'], pairKinds: ['duo'] };
 let patch;
 const workspace = { t: value => value, actions: [action], shownVariant: { uid: 'v', markers: [

@@ -1,6 +1,6 @@
 import type { ClipListing } from './clipSets'
 
-export interface TransitionPose { key: string; animation: string; solo: boolean; group?: string }
+export interface TransitionPose { key: string; animation: string; participants: number; group?: string }
 
 const isFbx = (url: string) => /\.fbx(?:\?|$)/i.test(url)
 const poseKind = (poses: TransitionPose[], pose: string) =>
@@ -14,7 +14,7 @@ export function transitionClip(poses: TransitionPose[], listing: ClipListing, po
 
 export function transitionOptions(poses: TransitionPose[], listing: ClipListing) {
   return [{ pose: 'walking', role: '' }, ...poses.filter((p) => p.animation && p.key !== 'walking').flatMap((p) => {
-    const roles = p.solo ? [''] : [...new Set(listing.clips.filter((c) => c.kind === p.animation && c.role
+    const roles = p.participants === 1 ? [''] : [...new Set(listing.clips.filter((c) => c.kind === p.animation && c.role
       && isFbx(c.url)).map((c) => c.role!))].sort()
     return roles.map((role) => ({ pose: p.key, role }))
   })]

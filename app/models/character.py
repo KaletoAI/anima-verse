@@ -2219,7 +2219,7 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     the character up from the seat its current pose needs.
 
     Raises ``PairPoseWithoutPartner`` when the text resolves to a two-person
-    key (catalog ``solo: false``) and no running interaction names that key:
+    key (catalog ``participants`` >= 2) and no running interaction names that key:
     such a pose on a single profile is an invalid state, and the caller is
     meant to redirect to the pair verb instead of writing it.
 

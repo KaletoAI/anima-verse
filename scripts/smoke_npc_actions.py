@@ -146,7 +146,7 @@ Hand-derived expectations, case by case:
           stripped sentence becomes the display text ("Wischt die Theke
           ab."); the return carries `pose`.
         - an unknown key ("juggling"), a missing field, or a PAIR key
-          ("shaking hands", `solo: false` — no partner to bind) all fall back
+          ("shaking hands", `participants: 2` — no partner to bind) all fall back
           to today's path: the stripped sentence goes through
           `set_pose_intent`, which (embedding stubbed to None) resolves by
           alias equality and lands on the default `standing`. The activity is

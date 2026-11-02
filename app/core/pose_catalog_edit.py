@@ -179,8 +179,8 @@ def apply_generated_entry(*, mode: str, animation: str, key: str,
                 stores.append("world")
             for target in stores:
                 data = shared if target == "shared" else world
-                if not data["entries"][key].get("solo", True):
-                    raise CatalogEditError(400, "pair poses cannot get a generated animation")
+                if int(data["entries"][key].get("participants") or 1) != 1:
+                    raise CatalogEditError(400, "multi-person poses cannot get a generated animation")
             for target in stores:
                 data = shared if target == "shared" else world
                 data["entries"][key]["animation"] = animation
@@ -217,7 +217,7 @@ def apply_generated_entry(*, mode: str, animation: str, key: str,
                 shared["groups"][group]["default"] = key
             shared["entries"][key] = {
                 "prompt": prompt, "synonyms": synonyms, "animation": animation,
-                "solo": True, "group": group}
+                "group": group}
             write_store(axis, shared)
             stores = ["shared"]
             if mode == "candidate":

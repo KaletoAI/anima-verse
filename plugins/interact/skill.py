@@ -3,7 +3,7 @@
 ``InteractWith`` proposes a PAIR animation clip
 (``app/core/interaction_engine.py``) to a present partner: the action text is
 resolved against the pose catalog like any pose, and only a catalog pose that
-is marked ``solo: false`` AND whose ``animation`` is a complete pair clip
+takes two people (``participants: 2``) AND whose ``animation`` is a complete pair clip
 (``<kind>__a`` + ``<kind>__b``) qualifies. The partner name is matched exactly
 (case-insensitive) — never by first name or substring.
 

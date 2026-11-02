@@ -45,7 +45,7 @@ from animation-studio/rig_rest.json.
     "umarmen-demo"), where the working tree adds a LOCAL synonym
     "local-extra" to "demo-owner" (never committed):
     - the library holds demo-hug__a.fbx, demo-hug__b.fbx, demo-hug.json;
-    - HEAD's entry "hug-demo" = solo false, places 2, yaw_offset 0,
+    - HEAD's entry "hug-demo" = participants 2, places 2, yaw_offset 0,
       animation "demo-hug", label_de "Umarmung (Demo)";
     - HEAD's "demo-owner" = ["trösten-demo"] (no "local-extra"); the
       working tree's "demo-owner" keeps "local-extra" and lost
@@ -227,8 +227,8 @@ try:
             FAIL.append(f"[5] {name} missing in the library")
     head = json.loads(git("show", f"HEAD:{CAT_REL}"))["entries"]
     e = head.get("hug-demo") or {}
-    if (e.get("solo"), e.get("places"), e.get("yaw_offset"), e.get("animation"),
-            e.get("label_de")) != (False, 2, 0, "demo-hug", "Umarmung (Demo)"):
+    if (e.get("participants"), e.get("places"), e.get("yaw_offset"), e.get("animation"),
+            e.get("label_de")) != (2, 2, 0, "demo-hug", "Umarmung (Demo)"):
         FAIL.append(f"[5] HEAD entry {e}")
     if head["demo-owner"]["synonyms"] != [x for x in shipped if x != "umarmen-demo"]:
         FAIL.append(f"[5] HEAD demo-owner {head['demo-owner']['synonyms']}")

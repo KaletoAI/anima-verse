@@ -19,7 +19,7 @@ from app.core.log import get_logger
 logger = get_logger("pose_catalog")
 
 class PairPoseWithoutPartner(ValueError):
-    """A two-person pose (catalog ``solo: false``) was set on a character that
+    """A multi-person pose (catalog ``participants`` >= 2) was set on a character that
     is not bound to a running pair interaction.
 
     Such a pose describes what TWO people do; written on one profile alone it
@@ -268,6 +268,42 @@ def replace_world_groups(groups: Dict[str, dict]) -> None:
     _replace_world_rows("pose", "group", groups)
 
 
+def migrate_participants_once() -> int:
+    """Boot migration (2026-11-02, plan-gruppen-animationen.md G2a): the pose
+    field ``solo`` becomes ``participants`` in the WORLD layer — ``solo:
+    false`` is a pair (``participants: 2``), ``solo: true`` the default 1 and
+    stores nothing. Only rows still carrying ``solo`` are touched, so it runs
+    once in effect. Returns the rows rewritten."""
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now_iso
+    now = utc_now_iso()
+    changed = 0
+    with transaction() as conn:
+        rows = conn.execute(
+            f"SELECT key, doc FROM {WORLD_TABLE} WHERE axis='pose' AND kind='entry'").fetchall()
+        for key, raw in rows:
+            try:
+                doc = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(doc, dict) or "solo" not in doc:
+                continue
+            out = {}
+            for field, value in doc.items():
+                if field != "solo":
+                    out[field] = value
+                elif value is False and "participants" not in doc:
+                    out["participants"] = 2
+            conn.execute(
+                f"UPDATE {WORLD_TABLE} SET doc=?, updated_at=? "
+                "WHERE axis='pose' AND kind='entry' AND key=?",
+                (json.dumps(out, ensure_ascii=False), now, key))
+            changed += 1
+    if changed:
+        reload_catalogs()
+    return changed
+
+
 def migrate_catalog_overlay_once() -> Dict[str, int]:
     """One-time boot migration (2026-09-08): the gitignored overlay file of
     each axis (``<axis>_catalog.local.json``, the per-installation layer of
@@ -338,12 +374,15 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
             origin[key] = store
     out: Dict[str, dict] = {}
     for key, entry in entries.items():
-        solo = bool(entry.get("solo", True))
+        participants = _participants(entry)
+        solo = participants == 1
         norm = {
             "prompt": str(entry.get("prompt") or ""),
             "synonyms": [str(s).strip().lower() for s in (entry.get("synonyms") or []) if str(s).strip()],
             "animation": str(entry.get("animation") or ""),
-            "solo": solo,
+            # How many people the pose takes: 1 = solo, 2 = a pair, 3..5 a
+            # group (plan-gruppen-animationen.md G2a).
+            "participants": participants,
             "_default": bool(entry.get("_default", False)),
             "_store": origin.get(key, "shared"),
             "label": str(entry.get("label") or key.replace("_", " ").title()),
@@ -356,11 +395,12 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
             # Place types are POSE vocabulary — an expression has no place.
             # plan-posen-plaetze.md § 3.2: the PLACE TYPE the pose needs.
             norm["group"] = str(entry.get("group") or "").strip().lower()
-            # pair poses only: slots of the anchor marker the pair consumes,
-            # and how the clip frame (+X = A->B) turns against the marker
-            # facing. A solo pose occupies exactly one place and never turns.
-            norm["places"] = (1 if solo
-                              else max(1, min(2, int(entry.get("places") or 2))))
+            # multi-person poses only: slots of the anchor marker the group
+            # consumes (1..participants, default one each), and how the clip
+            # frame (+X = A->B) turns against the marker facing. A solo pose
+            # occupies exactly one place and never turns.
+            norm["places"] = (1 if solo else
+                              max(1, min(participants, int(entry.get("places") or participants))))
             norm["yaw_offset"] = (0.0 if solo
                                   else float(entry.get("yaw_offset") or 0.0))
             norm["_stray_pair_fields"] = solo and ("places" in entry
@@ -370,18 +410,35 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
             # kind for a pair pose, a solo kind for a solo one.
             norm["finale_animation"] = str(entry.get("finale_animation") or "").strip().lower()
             # The solo pose a participant goes into after a NORMAL end
-            # (follow_pose_for): one key, or a pair's ``{a, b}`` per clip role.
+            # (follow_pose_for): one key, or ``{a, b, …}`` per clip role.
             norm["follow_pose"] = normalize_follow(entry.get("follow_pose"))
         out[str(key).strip().lower()] = norm
     return out
 
 
+#: the most people one pose takes (clip roles a..e)
+MAX_PARTICIPANTS = 5
+#: clip roles in order — role ``a`` is the first participant's
+ROLES = ("a", "b", "c", "d", "e")
+
+
+def _participants(entry: dict) -> int:
+    """The stored ``participants`` of an entry, 1..MAX_PARTICIPANTS (1 when
+    missing or invalid)."""
+    try:
+        n = int(entry.get("participants") or 1)
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(MAX_PARTICIPANTS, n))
+
+
 def normalize_follow(raw) -> Any:
-    """``follow_pose`` as stored: a key ("" = none) or ``{a, b}`` per clip
-    role, both trimmed and lower case; a per-role map with no key left is ""."""
+    """``follow_pose`` as stored: a key ("" = none) or ``{a, b, …}`` per clip
+    role, all trimmed and lower case; a per-role map with no key left is ""."""
     if isinstance(raw, dict):
-        roles = {role: str(raw.get(role) or "").strip().lower() for role in ("a", "b")}
-        return roles if any(roles.values()) else ""
+        roles = {role: str(raw.get(role) or "").strip().lower() for role in ROLES}
+        roles = {role: key for role, key in roles.items() if key}
+        return roles or ""
     return str(raw or "").strip().lower()
 
 
@@ -411,7 +468,7 @@ def follow_pose_for(pose_key: str, role: str = "", *, use_provider: bool = True)
     if not follow:
         follow = (get_groups().get(group) or {}).get("follow", "")
     target = get_catalog("pose").get(follow)
-    if follow == key or not target or not target.get("solo", True):
+    if follow == key or not target or target.get("participants", 1) != 1:
         return ""
     return follow
 
@@ -636,16 +693,22 @@ def poses_in_group(group: str) -> List[str]:
     return keys
 
 
+def pose_participants(pose_key: str) -> int:
+    """How many people the pose takes (1 for an unknown key)."""
+    entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
+    return int(entry.get("participants") or 1)
+
+
 def pose_places(pose_key: str) -> int:
     """Marker slots the pose consumes: 1 for a solo pose, else its ``places``."""
     entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
-    return 1 if entry.get("solo", True) else int(entry.get("places") or 2)
+    return int(entry.get("places") or 1)
 
 
 def pose_yaw_offset(pose_key: str) -> float:
-    """Degrees the pair clip's frame turns against the marker facing (0 solo)."""
+    """Degrees the group clip's frame turns against the marker facing (0 solo)."""
     entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
-    return 0.0 if entry.get("solo", True) else float(entry.get("yaw_offset") or 0.0)
+    return float(entry.get("yaw_offset") or 0.0)
 
 
 def validate_catalog(axis: str) -> List[str]:
@@ -663,26 +726,28 @@ def validate_catalog(axis: str) -> List[str]:
         return problems
     seen: Dict[str, str] = {}
     defaults = 0
-    pairs: set = set()
+    counts: Dict[str, int] = {}
     if axis == "pose":
         try:
-            from app.core.animation_clips import pair_kinds
-            pairs = set(pair_kinds())
+            from app.core.animation_clips import role_counts
+            counts = role_counts()
         except Exception:
-            pairs = set()
+            counts = {}
     for key, entry in catalog.items():
         if not entry["prompt"]:
             problems.append(f"{axis}/{key}: empty prompt")
         if axis == "pose" and not entry["animation"]:
             problems.append(f"{axis}/{key}: missing animation kind")
         finale = entry.get("finale_animation") or ""
-        if axis == "pose" and finale and pairs and (finale in pairs) == entry["solo"]:
+        people = entry["participants"]
+        if axis == "pose" and finale and counts and counts.get(finale, 1) != people:
             problems.append(f"{axis}/{key}: finale '{finale}' must be a "
-                            f"{'solo' if entry['solo'] else 'pair'} animation like the pose")
-        if axis == "pose" and entry["animation"] in pairs and entry["solo"]:
-            # A pair clip has no solo half — the pose needs a partner.
-            problems.append(f"{axis}/{key}: '{entry['animation']}' is a pair "
-                            f"animation, the pose must not be solo")
+                            f"{people}-person animation like the pose")
+        if axis == "pose" and entry["animation"] in counts and counts[entry["animation"]] != people:
+            # A group clip has one half per role — the pose takes that many.
+            problems.append(f"{axis}/{key}: '{entry['animation']}' is a "
+                            f"{counts[entry['animation']]}-person animation, the pose "
+                            f"takes {people}")
         if entry["_default"]:
             defaults += 1
         for alias in [key] + entry["synonyms"]:
@@ -707,7 +772,7 @@ def validate_catalog(axis: str) -> List[str]:
             if entry.get("group", "") not in groups:
                 problems.append(f"{axis}/{key}: unknown place type '{entry.get('group', '')}'")
             if entry.get("_stray_pair_fields"):
-                problems.append(f"{axis}/{key}: places/yaw_offset only make sense on a pair pose")
+                problems.append(f"{axis}/{key}: places/yaw_offset only make sense on a multi-person pose")
         problems += _follow_problems(catalog, groups)
     return problems
 
@@ -719,7 +784,7 @@ def _follow_problems(catalog: Dict[str, dict], groups: Dict[str, dict]) -> List[
     problems: List[str] = []
 
     def bad(name: str) -> bool:
-        return name not in catalog or not catalog[name].get("solo", True)
+        return name not in catalog or catalog[name].get("participants", 1) != 1
 
     for g, spec in groups.items():
         follow = spec.get("follow", "")
@@ -727,8 +792,10 @@ def _follow_problems(catalog: Dict[str, dict], groups: Dict[str, dict]) -> List[
             problems.append(f"pose group '{g}': follow '{follow}' is not a solo pose")
     for key, entry in catalog.items():
         field = entry.get("follow_pose") or ""
-        if isinstance(field, dict) and entry.get("solo", True):
-            problems.append(f"pose/{key}: a per-role follow pose only makes sense on a pair pose")
+        if isinstance(field, dict) and entry.get("participants", 1) == 1:
+            problems.append(f"pose/{key}: a per-role follow pose only makes sense on a multi-person pose")
+        elif isinstance(field, dict) and any(role not in ROLES[:entry["participants"]] for role in field):
+            problems.append(f"pose/{key}: follow pose for a role the pose does not have")
         for follow in (field.values() if isinstance(field, dict) else [field]):
             if follow and bad(follow):
                 problems.append(f"pose/{key}: follow pose '{follow}' is not a solo pose")

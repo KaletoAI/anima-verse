@@ -143,7 +143,7 @@ def main():
             prepare.assert_not_called()
             service.generate_mesh_animation.assert_not_called()
             cancel.assert_called_once_with(original, "j1")
-            with patch.object(pa.pose_catalog, "get_catalog", return_value={"hug": {"solo": False}}):
+            with patch.object(pa.pose_catalog, "get_catalog", return_value={"hug": {"participants": 2}}):
                 try:
                     pa.submit("entry", key="hug")
                 except ValueError:

@@ -37,11 +37,11 @@ with tempfile.TemporaryDirectory(prefix="pose-labels-") as tmp:
 
     def create(key, **fields):
         return _create_entry_sync({}, dict(key=key, prompt=key, animation="standing",
-                                          solo=False, places=2, yaw_offset=0, group="stand", store="world", **fields))
+                                          participants=2, places=2, yaw_offset=0, group="stand", store="world", **fields))
 
     create("waltzing", label_de="  Walzertanzen  ")
     _create_entry_sync({}, dict(key="bowing", prompt="bowing", animation="standing",
-                               solo=True, group="stand", store="world"))
+                               participants=1, group="stand", store="world"))
     create("twirling", label=" twirling around ")
     assert pose_label("waltzing", "de") == "Walzertanzen"
     assert pose_label("waltzing", "en") == "waltzing"
@@ -93,11 +93,11 @@ with tempfile.TemporaryDirectory(prefix="pose-labels-") as tmp:
     ), patch("app.models.account.get_active_character", return_value="demo"), patch(
         "app.models.character.get_character_language", return_value="de"
     ):
-        assert play_interact_options(user={}) == {
-            "poses": [{"key": "waltzing", "kind": "standing", "label": "Walzertanzen"}]}
+        got = play_interact_options(user={})
+        assert got["poses"] == [{"key": "waltzing", "kind": "standing", "label": "Walzertanzen"}], got
     print("PASS: pose label lookup, editor storage, validation, list flags and localized options", flush=True)
     import json
     shipped = json.loads(pose_catalog.catalog_path("pose").read_text())["entries"]
-    assert all(e.get("label_de", "").strip() for e in shipped.values() if not e.get("solo", True)), \
+    assert all(e.get("label_de", "").strip() for e in shipped.values() if e.get("participants", 1) > 1), \
         "Every shipped pair pose must have label_de (controller supplies shipped labels)"
     print("PASS: every shipped pair pose has label_de")

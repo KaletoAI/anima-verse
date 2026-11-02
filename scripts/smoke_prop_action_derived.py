@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='prop-derived-') as root:
     from app.core.prop_action_migration import normalize_import
     from app.core import props
     poses = {'sit': {'group': 'seat'}, 'nap': {'group': 'lie'},
-             'duo': {'group': 'lie', 'solo': False}, 'cook': {'group': 'stand'}}
+             'duo': {'group': 'lie', 'participants': 2}, 'cook': {'group': 'stand'}}
     catalogs = dict(poses=poses, groups={g: {'default': k} for g, k in
                     [('seat', 'sit'), ('lie', 'nap'), ('stand', 'cook')]}, stats=set(), conditions=set())
     actions = [dict(id=i, name=i, description='', enabled=True, ability=a, pose_key=p,

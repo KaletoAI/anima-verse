@@ -145,8 +145,8 @@ Hand-derived expectations:
       (1, −3) — the pair's anchor. release_pair clears both; s2 is no
       occupancy.
       Catalog variant (written for this stage, restored after): "lapsitting"
-      (seat, solo false, places 1, yaw_offset 90) and "dancing" (stand,
-      solo false, places 2). Cid takes s1 (prefer). assign_pair(Ann, Bob,
+      (seat, participants 2, places 1, yaw_offset 90) and "dancing" (stand,
+      participants 2, places 2). Cid takes s1 (prefer). assign_pair(Ann, Bob,
       "lapsitting") needs ONE slot: s2 4.53 m beats s3 5.70 m → s2,
       yaw = 0 − 90 + 90 = 0.0; after both setters free_slots(s2) == [1]
       and _taken_count == 1. Dan takes s3/0 (prefer). Eve at (1.3, −2.5)
@@ -270,7 +270,7 @@ def pair_pose(a: str, b: str, key: str) -> None:
     """Write the pair pose on both partners the way the interaction engine
     does: the interaction record FIRST, the pose after it.
 
-    ``set_pose_intent`` refuses a two-person key (catalog ``solo: false``) on
+    ``set_pose_intent`` refuses a two-person key (catalog ``participants: 2``) on
     a character that is not bound to an interaction naming that key — a pair
     pose on a lone profile has no partner and no anchor. The engine binds the
     pair before it sets the pose; this helper mirrors exactly that order, so
@@ -320,7 +320,7 @@ pose_catalog.catalog_path = (
                 "reading": {"prompt": "p", "animation": "sit", "group": "seat"},
                 "sleeping": {"prompt": "p", "animation": "laying", "group": "lie"},
                 "cuddling": {"prompt": "p", "animation": "cuddle", "group": "seat",
-                             "solo": False, "places": 2, "yaw_offset": 0}}}), encoding="utf-8")
+                             "participants": 2, "places": 2, "yaw_offset": 0}}}), encoding="utf-8")
 pose_catalog.reload_catalogs()
 
 HOUSE = add_location(name="Smoke House", description="places smoke",
@@ -755,9 +755,9 @@ check("release_pair clears both",
 BASE_CATALOG = json.loads((CAT / "pose_catalog.json").read_text())
 _variant = json.loads(json.dumps(BASE_CATALOG))
 _variant["entries"]["lapsitting"] = {"prompt": "p", "animation": "cuddle", "group": "seat",
-                                     "solo": False, "places": 1, "yaw_offset": 90}
+                                     "participants": 2, "places": 1, "yaw_offset": 90}
 _variant["entries"]["dancing"] = {"prompt": "p", "animation": "dance", "group": "stand",
-                                  "solo": False, "places": 2, "yaw_offset": 0}
+                                  "participants": 2, "places": 2, "yaw_offset": 0}
 (CAT / "pose_catalog.json").write_text(json.dumps(_variant), encoding="utf-8")
 pose_catalog.reload_catalogs()
 places.invalidate()

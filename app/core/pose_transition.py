@@ -44,7 +44,7 @@ def pose_clip(pose, cset, role=''):
     entry = pose_catalog.get_catalog('pose').get('standing' if pose == 'walking' else pose)
     if not entry:
         raise ValueError('unknown pose')
-    if not isinstance(role, str) or (role != '' if entry.get('solo', True) else role not in clips.pose_roles(pose)):
+    if not isinstance(role, str) or (role != '' if entry.get('participants', 1) == 1 else role not in clips.pose_roles(pose)):
         raise ValueError('invalid pose role')
     kind = entry.get('animation')
     if not kind:

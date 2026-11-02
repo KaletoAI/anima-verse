@@ -61,8 +61,8 @@ EXPECTATIONS, DERIVED BY HAND
     -> ok, block {kind run-end, role None, duration_s 0.8}; the offer of the
     action carries `finale` true, and false once the pose names no finale.
 [8] AUTOMATIC. Without the catalog field a provider `pose.finale_animation`
-    answering "<animation>-end" makes `run-pair` (animation run-pair) close
-    with `run-pair-end` (a pair: accepted) and `sitting` (animation sit, solo)
+    answering "<animation>-end" (asked with participants 2) makes `run-pair`
+    (animation run-pair) close with `run-pair-end` (a pair: accepted) and `sitting` (animation sit, solo)
     with `sit-end` (no such clip: ""). An explicit field wins over the
     provider; a provider answering a solo kind for the pair pose gives "".
     Without a provider: "".
@@ -318,14 +318,14 @@ class Automatic(RUNS.Runs):
         self.assertEqual(catalog["run-pair"]["animation"], "run-pair")
         calls = []
 
-        def provider(pose_key, animation, solo):
-            calls.append((pose_key, animation, solo))
+        def provider(pose_key, animation, participants):
+            calls.append((pose_key, animation, participants))
             return f"{animation}-end"
         self.assertEqual(A.finale_kind("run-pair"), "")
         hooks.register_provider("pose.finale_animation", provider)
         try:
             self.assertEqual(A.finale_kind("run-pair"), "run-pair-end")
-            self.assertIn(("run-pair", "run-pair", False), calls)
+            self.assertIn(("run-pair", "run-pair", 2), calls)
             self.assertEqual(A.finale_kind("sitting"), "")
             set_finale("run-pair", "run-end")
             self.assertEqual(A.finale_kind("run-pair"), "")

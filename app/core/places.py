@@ -471,7 +471,7 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     if not group or not loc or not room:
         release(name)
         return None
-    if not entry.get("solo", True):
+    if entry.get("participants", 1) != 1:
         profile = get_character_profile(name) or {}
         current = profile.get("place") if isinstance(profile.get("place"), dict) else None
         if current and current.get("slot") == PAIR_SLOT \
@@ -615,7 +615,7 @@ def seat_missing(name: str, pose_key: str) -> bool:
     from app.core.pose_catalog import get_catalog, needs_place
     entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
     group = entry.get("group", "")
-    if not group or not entry.get("solo", True) or not needs_place(group):
+    if not group or entry.get("participants", 1) != 1 or not needs_place(group):
         return False
     return group not in free_seat_groups(name)
 
@@ -636,7 +636,7 @@ def clear_placeless_poses() -> List[str]:
         profile = get_character_profile(name) or {}
         entry = catalog.get((profile.get("pose_key") or "").strip().lower()) or {}
         group = entry.get("group", "")
-        if (not group or not entry.get("solo", True) or not needs_place(group)
+        if (not group or entry.get("participants", 1) != 1 or not needs_place(group)
                 or profile.get("interaction") or place_of(name, profile) is not None
                 or has_semantic_action(name)):
             continue
@@ -770,6 +770,12 @@ def resolve_place(name: str, pl: Any, *, profile=None, _places=None) -> Optional
 
 # ── what the LLM is told ────────────────────────────────────────────────
 _OFFER_MAX_LINES = 12
+
+
+def _company(participants: int) -> str:
+    """How the offer marks a pose that needs others: "with partner" for a
+    pair, "with N others" for a group."""
+    return "with partner" if participants == 2 else f"with {participants - 1} others"
 _ANYWHERE_MAX = 8             # poses on the "Anywhere here" line, defaults first
 #: The preposition a prompt puts before a held place, per group — a group
 #: nobody listed here (an admin-made place type) reads "at the". What is
@@ -823,10 +829,10 @@ def _group_lines(location_id: str, room_id: str,
         poses = []
         for k in poses_in_group(row["group"]):
             e = cat[k]
-            if e["solo"]:
+            if e["participants"] == 1:
                 poses.append(k)
             elif row["max_free"] >= e["places"]:
-                poses.append(f"{k} (with partner)")
+                poses.append(f"{k} ({_company(e['participants'])})")
             else:
                 continue
             covered.add(k)
@@ -877,7 +883,7 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
         if len(lines) > _OFFER_MAX_LINES:
             out.append(f"…and {len(lines) - _OFFER_MAX_LINES} more")
     cat = activity_catalog()
-    anywhere = [k if cat[k]["solo"] else f"{k} (with partner)"
+    anywhere = [k if cat[k]["participants"] == 1 else f"{k} ({_company(cat[k]['participants'])})"
                 for k in poses_without_place() if k not in covered]
     if anywhere:
         line = "Anywhere here: " + ", ".join(anywhere[:_ANYWHERE_MAX])

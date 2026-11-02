@@ -244,7 +244,7 @@ def _definition(target, action_id, revision, *, _query=None):
     keys = [p["pose_key"] for p in action["phases"]] if action["ability"] == "combined" else [action["pose_key"]]
     if any(key not in catalog for key in keys):
         return None, "unknown_pose"
-    if any(bool(catalog[key].get("solo", True)) != (action["participants"] == 1) for key in keys):
+    if any(catalog[key].get("participants", 1) != action["participants"] for key in keys):
         return None, "unsupported_pose_capability"
     if action["ability"] == "sleep" and catalog[action["pose_key"]].get("group") != "lie":
         return None, "sleep_requires_lying_place"
@@ -925,25 +925,28 @@ _finales_mutex = Lock()
 def finale_kind(pose_key: str, name: str = "", *, profile=None) -> str:
     """The finale clip kind of ``pose_key``: its catalog ``finale_animation``,
     else what a package derives for it (``auto_finale``). "" when there is
-    none or the clip is missing in the shape the pose needs: a pair pose needs
-    a complete pair, a solo pose a solo clip — for ``name``'s own figure when
-    given (its set chain, as ``animated_for``)."""
-    from app.core.animation_clips import pair_kinds
+    none or the clip is missing in the shape the pose needs: a multi-person
+    pose needs a complete clip with one role per participant, a solo pose a
+    solo clip — for ``name``'s own figure when given (its set chain, as
+    ``animated_for``)."""
+    from app.core.animation_clips import role_counts
     from app.core.pose_catalog import get_catalog
     entry = get_catalog("pose").get(pose_key or "") or {}
     kind = entry.get("finale_animation") or auto_finale(pose_key, entry)
     if not kind:
         return ""
-    if not entry.get("solo", True):
-        return kind if kind in pair_kinds() else ""
-    if kind in pair_kinds():
+    people = entry.get("participants", 1)
+    roles = role_counts().get(kind, 1)
+    if people != 1:
+        return kind if roles == people else ""
+    if roles != 1:
         return ""
     return kind if _solo_finale_clip(kind, name, profile) else ""
 
 
 def auto_finale(pose_key: str, entry: dict | None = None) -> str:
     """The finale kind a package derives for a pose without an explicit one
-    (provider ``pose.finale_animation(pose_key, animation, solo) -> kind``,
+    (provider ``pose.finale_animation(pose_key, animation, participants) -> kind``,
     e.g. a naming convention on the pose's own clip); "" without a provider
     or an answer. Unchecked — ``finale_kind`` checks the clip's shape."""
     from app.core.hooks import get_provider
@@ -955,7 +958,7 @@ def auto_finale(pose_key: str, entry: dict | None = None) -> str:
         entry = get_catalog("pose").get(pose_key or "") or {}
     try:
         kind = provider(pose_key=pose_key or "", animation=entry.get("animation") or "",
-                        solo=bool(entry.get("solo", True)))
+                        participants=int(entry.get("participants") or 1))
     except Exception as e:
         logger.debug("finale provider failed for %s: %s", pose_key, e)
         return ""

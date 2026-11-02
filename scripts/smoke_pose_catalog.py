@@ -178,7 +178,7 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
 - approve-as-entry is a pose creation, so it obeys the same rule: without
   `group` -> 400 "place type missing or unknown", with `group: "stand"` the
   written entry carries it and validate_catalog stays empty. Approving a PAIR
-  candidate (`solo: false`, places 1, yaw_offset 90) stores both fields, the
+  candidate (`participants: 2`, places 1, yaw_offset 90) stores both fields, the
   same way create does.
 - end to end, the block can GROW: writing a `bench` type with no poses and an
   empty default succeeds and validates, the first pose may then name `bench`,
@@ -507,7 +507,7 @@ try:
         asyncio.run(approve_candidate(_Req({
             "axis": "pose", "raw_text": "kneading dough", "key": "kneading",
             "prompt": "leaning over a table, pressing dough with both hands",
-            "animation": "idle", "solo": True, "group": "stand",
+            "animation": "idle", "participants": 1, "group": "stand",
             "synonyms": ["Baking bread", " rolling dough ", ""],
         }), _={}))
         _new = _entries()["kneading"]
@@ -515,7 +515,7 @@ try:
         # candidate text appended once, the key itself never a synonym
         assert _new["synonyms"] == ["baking bread", "rolling dough",
                                     "kneading dough"], _new["synonyms"]
-        assert _new["animation"] == "idle" and _new["solo"] is True, _new
+        assert _new["animation"] == "idle" and "participants" not in _new, _new
         assert _new["group"] == "stand", _new
         assert "kneading dough" not in {c["raw_text"] for c in list_candidates("pose")}
         # the freshly approved aliases resolve now — that is the point of it
@@ -867,7 +867,7 @@ try:
         poses_route._approve_candidate_sync({}, {
             "axis": "pose", "raw_text": "leaning on each other",
             "key": "leaning together", "prompt": "two figures leaning together",
-            "animation": "idle", "group": "stand", "solo": False,
+            "animation": "idle", "group": "stand", "participants": 2,
             "places": 1, "yaw_offset": 90})
         _lean = _doc()["entries"]["leaning together"]
         check("the approved pair keeps places/yaw_offset",

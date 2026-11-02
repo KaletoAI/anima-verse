@@ -87,8 +87,8 @@ def resolve_pose_animation(pose_key: str) -> str:
 
 
 def is_partner_activity(pose_key: str) -> bool:
-    """True if the pose is tagged ``"solo": false`` — an interaction between
-    two people (kissing, embracing).
+    """True if the pose takes more than one person (catalog ``participants``
+    >= 2) — an interaction (kissing, embracing).
 
     The image pipeline injects exactly ONE character, so the model duplicates
     the subject to satisfy the "two people" implication of the pose prompt
@@ -98,7 +98,7 @@ def is_partner_activity(pose_key: str) -> bool:
     entry = get_catalog("pose").get((pose_key or "").strip().lower())
     if not entry:
         return False
-    return not entry.get("solo", True)
+    return entry.get("participants", 1) >= 2
 
 
 # ---------------------------------------------------------------------------

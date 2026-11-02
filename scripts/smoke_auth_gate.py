@@ -382,13 +382,13 @@ with patch("app.core.pose_animation.recent_jobs", return_value=[]) as recent_job
         check(f"valid jobs limit {query!r}", response.status_code, 200)
         recent_jobs.assert_called_with(expected)
 pose_catalog.replace_world_entries("pose", {
-    "smoke_pair": {"prompt": "two people hugging", "solo": False,
+    "smoke_pair": {"prompt": "two people hugging", "participants": 2,
                    "group": "stand", "animation": "hug", "places": 1}})
 response = pose_client.post("/poses/animations/generate", headers=admin_headers,
                             json={"mode": "entry", "key": "smoke_pair"})
 check("pair entry rejected", response.status_code, 400)
 check("pair rejection reason", response.json().get("detail"),
-      "pair poses cannot get a generated animation")
+      "multi-person poses cannot get a generated animation")
 # Submission normally starts workers; keep the real persistence but prevent
 # this standalone smoke from running generation or racing the pending check.
 with patch("app.core.task_queue.TaskQueue.start"):

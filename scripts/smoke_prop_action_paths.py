@@ -138,7 +138,7 @@ def pose_clips():
     directory.mkdir(exist_ok=True)
     for entry in get_catalog("pose").values():
         kind = str(entry.get("animation") or "")
-        if not kind or "/" in kind or not entry.get("solo", True):
+        if not kind or "/" in kind or entry.get("participants", 1) != 1:
             continue
         if not (directory / f"{kind}.fbx").exists():
             (directory / f"{kind}.fbx").write_bytes(b"private deterministic pose fixture")

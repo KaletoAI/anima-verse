@@ -20,14 +20,14 @@ try {
   const { propActionCheckDocument, resolveCheckIssue } = require(join(dir, 'propActionChecks.js'));
   const { emptyFields, queueFields, applyVariantDraft } = require(join(dir, 'pendingFields.js'));
   const catalog = { status: 'ready', stats: ['energy'], conditions: [{ name: 'alert', label: 'Alert' }],
-    poses: [{ key: 'driving', group: 'seat', solo: true, animation: 'driving' },
-      { key: 'sitting', group: 'seat', solo: true, animation: 'sit' },
-      { key: 'lying', group: 'lie', solo: true, animation: 'lie' },
-      { key: 'preparing_food', group: 'stand', solo: true, animation: 'cooking' },
-      { key: 'having_a_drink', group: 'stand', solo: true, animation: 'drinking' },
-      { key: 'unavailable_coffee', group: 'stand', solo: true, animation: 'making-coffee' },
-      { key: 'embracing', group: 'seat', solo: false, animation: 'embrace' },
-      { key: 'fake_pair', group: 'seat', solo: false, animation: 'missing_pair' }],
+    poses: [{ key: 'driving', group: 'seat', participants: 1, animation: 'driving' },
+      { key: 'sitting', group: 'seat', participants: 1, animation: 'sit' },
+      { key: 'lying', group: 'lie', participants: 1, animation: 'lie' },
+      { key: 'preparing_food', group: 'stand', participants: 1, animation: 'cooking' },
+      { key: 'having_a_drink', group: 'stand', participants: 1, animation: 'drinking' },
+      { key: 'unavailable_coffee', group: 'stand', participants: 1, animation: 'making-coffee' },
+      { key: 'embracing', group: 'seat', participants: 2, animation: 'embrace' },
+      { key: 'fake_pair', group: 'seat', participants: 2, animation: 'missing_pair' }],
     kinds: ['driving', 'sit', 'lie', 'cooking', 'drinking'], pairKinds: ['embrace'], groups: {} };
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
   const webcrypto = require('node:crypto').webcrypto;

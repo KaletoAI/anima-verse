@@ -128,22 +128,24 @@ interface Entry {
   label_de_missing?: boolean
   synonyms: string[]
   animation: string
-  solo: boolean
+  /** how many people the pose takes: 1 = solo, 2 = a pair, 3..5 a group */
+  participants: number
   is_default?: boolean
   axis?: Axis
   /** place fields — pose axis only, an expression has no place */
   group?: string
-  /** slots of the anchor marker a PAIR pose consumes (solo poses: always 1) */
-  places?: 1 | 2
-  /** degrees the pair clip's frame turns against the marker facing */
+  /** slots of the anchor marker a multi-person pose consumes, 1..participants
+   *  (solo poses: always 1) */
+  places?: number
+  /** degrees the group clip's frame turns against the marker facing */
   yaw_offset?: number
   /** closing clip one participant plays once inside the running action
-   *  (`finale` of the worldmap row) — a pair kind for a pair pose */
+   *  (`finale` of the worldmap row) — a clip with one role per participant */
   finale_animation?: string
   /** the finale a package derives when the field is empty (read-only) */
   finale_auto?: string
   /** the solo pose the pose goes into when it ends normally — per clip role
-   *  for a pair pose; "" = what applies without it (`follow_auto`) */
+   *  for a multi-person pose; "" = what applies without it (`follow_auto`) */
   follow_pose?: string | RoleFollow
   /** what applies with the field empty: a package's answer, else the place
    *  type's `follow` (read-only) */
@@ -161,14 +163,25 @@ interface Entry {
 
 type Store = 'shared' | 'world'
 
-/** A follow pose per clip role of a pair pose. */
-interface RoleFollow { a?: string; b?: string }
+/** Clip roles in order — role `a` is the first participant's. */
+const ROLES = ['a', 'b', 'c', 'd', 'e'] as const
+type Role = typeof ROLES[number]
+/** The most people one pose takes (one clip role each). */
+const MAX_PARTICIPANTS = ROLES.length
+
+/** A follow pose per clip role of a multi-person pose. */
+type RoleFollow = Partial<Record<Role, string>>
 
 /** The follow of one role ("" for a solo pose) out of either field shape. */
-function followOf(value: string | RoleFollow | undefined, role: '' | 'a' | 'b'): string {
+function followOf(value: string | RoleFollow | undefined, role: '' | Role): string {
   if (!value) return ''
   if (typeof value === 'string') return role ? '' : value
   return role ? value[role] || '' : ''
+}
+
+/** The roles a pose of `participants` people has ([''] for a solo pose). */
+function rolesFor(participants: number): ('' | Role)[] {
+  return participants > 1 ? [...ROLES.slice(0, participants)] : ['']
 }
 
 interface CatalogData {
@@ -176,6 +189,9 @@ interface CatalogData {
   kinds: string[]
   /** kinds that exist as a PAIR clip (two halves) — two-person poses */
   pair_kinds?: string[]
+  /** every multi-person kind with its role count: a pose on it takes that
+   *  many participants */
+  role_counts?: Record<string, number>
   /** Per pair kind: how far apart the two figures stand at the anchor moment,
    *  in metres, measured by the clip importer. A MARKER SLOT is 0.6 m wide,
    *  so this says how many slots the two bodies span — but not how much floor
@@ -202,12 +218,12 @@ const SLOT_WIDTH_M = 0.6
  *  together than one slot fit on one. Only a suggestion — a dance sweeps far
  *  more floor than the distance between its dancers (salsa measures 0.39 m
  *  and still wants two slots), so the author has the last word. */
-function suggestedPlaces(span: number | undefined): 1 | 2 | undefined {
+function suggestedPlaces(span: number | undefined): number | undefined {
   if (typeof span !== 'number') return undefined
   return span <= SLOT_WIDTH_M ? 1 : 2
 }
 
-const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true,
+const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', participants: 1,
   group: '', store: 'shared', label: '', label_de: '' }
 
 /** Figure height the root drop is read back against — the reference figure of
@@ -413,7 +429,7 @@ export function PosesTab() {
     const preset = { initialHint: asked.hint, initialModel: asked.backend,
       initialVariants: asked.variants }
     if (asked.mode === 'entry') {
-      const entry = data.entries.find((item) => item.key === asked.key && item.solo !== false)
+      const entry = data.entries.find((item) => item.key === asked.key && item.participants === 1)
       return entry ? { mode: 'entry', entryKey: entry.key, prompt: entry.prompt, ...preset } : null
     }
     if (asked.mode === 'candidate') {
@@ -507,7 +523,7 @@ export function PosesTab() {
   /** The poses a follow pose may name: solo ones only (a follow has no
    *  partner to play the other half). */
   const soloPoseKeys = useMemo(
-    () => data.entries.filter((p) => p.solo !== false).map((p) => p.key).sort(),
+    () => data.entries.filter((p) => p.participants === 1).map((p) => p.key).sort(),
     [data.entries],
   )
 
@@ -590,12 +606,13 @@ export function PosesTab() {
       toast(t('A place type is required for poses'), 'error')
       return
     }
-    // A pair pose has no sensible default slot count. It used to fall back to
-    // 2 silently, which is how every pair pose in the catalog ended up
+    // A multi-person pose has no sensible default slot count. It used to fall
+    // back to 2 silently, which is how every pair pose in the catalog ended up
     // claiming two slots — including the ones whose bodies lie 6 cm apart and
     // fit on any single bed.
-    if (isPose && draft.solo === false && draft.places !== 1 && draft.places !== 2) {
-      toast(t('Choose how many marker slots this pair pose uses'), 'error')
+    const people = draft.participants || 1
+    if (isPose && people > 1 && !(draft.places && draft.places >= 1 && draft.places <= people)) {
+      toast(t('Choose how many marker slots this pose uses'), 'error')
       return
     }
     try {
@@ -611,17 +628,17 @@ export function PosesTab() {
         ...(isPose
           ? {
               animation: draft.animation,
-              solo: draft.solo,
+              participants: people,
               group: draft.group,
               finale_animation: draft.finale_animation || '',
-              follow_pose: draft.solo === false
-                ? { a: followOf(draft.follow_pose, 'a'), b: followOf(draft.follow_pose, 'b') }
+              follow_pose: people > 1
+                ? Object.fromEntries(ROLES.slice(0, people).map((r) => [r, followOf(draft.follow_pose, r)]))
                 : followOf(draft.follow_pose, ''),
-              // Pair fields only: a solo pose occupies one place and never
-              // turns, and the server drops them again when solo is set.
-              ...(draft.solo
-                ? {}
-                : { places: draft.places, yaw_offset: draft.yaw_offset ?? 0 }),
+              // Group fields only: a solo pose occupies one place and never
+              // turns, and the server drops them for one participant.
+              ...(people > 1
+                ? { places: draft.places, yaw_offset: draft.yaw_offset ?? 0 }
+                : {}),
             }
           : {}),
       }
@@ -1230,9 +1247,9 @@ export function PosesTab() {
                       </span>
                     ) : null}
                   </span>
-                  {isPose && data.pair_kinds?.includes(p.animation) ? (
-                    <span className="ga-source" title={t('Pair animation — needs a partner')}>
-                      {t('pair')}
+                  {isPose && p.participants > 1 ? (
+                    <span className="ga-source" title={t('Takes {n} people').replace('{n}', String(p.participants))}>
+                      {p.participants === 2 ? t('pair') : t('group of {n}').replace('{n}', String(p.participants))}
                     </span>
                   ) : null}
                   {isPose && p.label_de_missing ? (
@@ -1499,17 +1516,22 @@ export function PosesTab() {
 
                 {isPose ? (
                   <Field
-                    label={t('Solo')}
-                    hint={t('Off = the pose needs a second person (kissing, embracing). Those keys are skipped when a single-character image is rendered.')}
+                    label={t('Participants')}
+                    hint={t('How many people the pose takes: 1 = alone, 2 = a pair (kissing, embracing), 3 to 5 = a group, started only through a furniture action. A multi-person pose is skipped when a single-character image is rendered. A clip with roles sets it.')}
                   >
-                    <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <input
-                        type="checkbox"
-                        checked={draft.solo !== false}
-                        onChange={(e) => upd('solo', e.target.checked)}
-                      />
-                      <span>{t('Works with one character alone')}</span>
-                    </label>
+                    <input
+                      className="ga-input"
+                      type="number"
+                      min={1}
+                      max={MAX_PARTICIPANTS}
+                      step={1}
+                      value={draft.participants || 1}
+                      onChange={(e) => {
+                        const n = Math.max(1, Math.min(MAX_PARTICIPANTS, Math.round(Number(e.target.value) || 1)))
+                        setDraft((d) => (d ? { ...d, participants: n,
+                          places: d.places && d.places > n ? n : d.places } : d))
+                      }}
+                    />
                   </Field>
                 ) : null}
 
@@ -1525,15 +1547,19 @@ export function PosesTab() {
                         value={draft.animation}
                         onChange={(e) => {
                           const kind = e.target.value
-                          // a pair clip has no solo half: the pose becomes a two-person one
+                          // a clip with roles has no solo half: the pose takes one
+                          // participant per role
                           setDraft((d) => (d ? { ...d, animation: kind,
-                            solo: data.pair_kinds?.includes(kind) ? false : d.solo } : d))
+                            participants: data.role_counts?.[kind] ?? d.participants } : d))
                         }}
                       >
                         <option value="">{t('— pick a kind —')}</option>
                         {data.kinds.map((k) => (
                           <option key={k} value={k}>
-                            {data.pair_kinds?.includes(k) ? `${k} — ${t('pair')}` : k}
+                            {(data.role_counts?.[k] ?? 1) === 2 ? `${k} — ${t('pair')}`
+                              : (data.role_counts?.[k] ?? 1) > 2
+                                ? `${k} — ${t('group of {n}').replace('{n}', String(data.role_counts?.[k]))}`
+                                : k}
                           </option>
                         ))}
                         {/* keep an animation whose clip has since been removed */}
@@ -1543,7 +1569,7 @@ export function PosesTab() {
                           </option>
                         ) : null}
                       </select>
-                      {draft.solo !== false && (approveOf || !isNew) ? (
+                      {(draft.participants || 1) === 1 && (approveOf || !isNew) ? (
                         <button type="button" className="ga-btn ga-btn-sm"
                           disabled={animationJobs.some((job) => job.key === draft.key && activeJob(job))}
                           onClick={() => {
@@ -1570,14 +1596,15 @@ export function PosesTab() {
                         })()}
                       </div>
                     ) : null}
-                    {data.pair_kinds?.includes(draft.animation) ? (
+                    {(data.role_counts?.[draft.animation] ?? 1) > 1 ? (
                       <div className="ga-form-hint">
-                        {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
+                        {t('Clip with {n} roles: {n} figures play it together at one anchor — this pose takes {n} participants.')
+                          .split('{n}').join(String(data.role_counts?.[draft.animation]))}
                       </div>
                     ) : null}
                     <Field
                       label={t('Finale clip')}
-                      hint={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. A pair pose needs a pair clip, a solo pose a solo clip. Left empty, a package may assign one by its naming rule (shown as “automatic”). Offers with a finale are marked in the HUD.')}
+                      hint={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. It needs as many roles as the pose has participants, a solo pose a solo clip. Left empty, a package may assign one by its naming rule (shown as “automatic”). Offers with a finale are marked in the HUD.')}
                     >
                       <select
                         className="ga-input"
@@ -1590,7 +1617,7 @@ export function PosesTab() {
                             : t('— none —')}
                         </option>
                         {data.kinds
-                          .filter((k) => !!data.pair_kinds?.includes(k) === (draft.solo === false))
+                          .filter((k) => (data.role_counts?.[k] ?? 1) === (draft.participants || 1))
                           .map((k) => <option key={k} value={k}>{k}</option>)}
                         {draft.finale_animation && !data.kinds.includes(draft.finale_animation) ? (
                           <option value={draft.finale_animation}>
@@ -1601,9 +1628,9 @@ export function PosesTab() {
                     </Field>
                     <Field
                       label={t('Follow pose')}
-                      hint={t('The pose a figure goes into when this one ends normally — finished, or ended from the HUD — instead of standing up: lying on after a scene in bed, catching breath after a dance. A pair pose names one per role. Left empty, a package or the place type decides (shown as “automatic”). Only solo poses can follow.')}
+                      hint={t('The pose a figure goes into when this one ends normally — finished, or ended from the HUD — instead of standing up: lying on after a scene in bed, catching breath after a dance. A multi-person pose names one per role. Left empty, a package or the place type decides (shown as “automatic”). Only solo poses can follow.')}
                     >
-                      {(draft.solo === false ? (['a', 'b'] as const) : (['' as const])).map((role) => {
+                      {rolesFor(draft.participants || 1).map((role) => {
                         const own = followOf(draft.follow_pose, role)
                         const auto = followOf(draft.follow_auto, role)
                         return (
@@ -1613,7 +1640,8 @@ export function PosesTab() {
                               className="ga-input"
                               value={own}
                               onChange={(e) => upd('follow_pose', role
-                                ? { a: followOf(draft.follow_pose, 'a'), b: followOf(draft.follow_pose, 'b'), [role]: e.target.value }
+                                ? { ...Object.fromEntries(ROLES.slice(0, draft.participants || 1)
+                                    .map((r) => [r, followOf(draft.follow_pose, r)])), [role]: e.target.value }
                                 : e.target.value)}
                             >
                               <option value="">
@@ -1654,21 +1682,21 @@ export function PosesTab() {
                       </select>
                     </Field>
 
-                    {draft.solo === false ? (
+                    {(draft.participants || 1) > 1 ? (
                       <div className="ga-form-row">
                         <Field
                           label={t('Places')}
                           hint={(() => {
                             const span = data.pair_spans?.[draft.animation]
                             if (typeof span !== 'number') {
-                              return t('How many slots of the anchor marker the pair uses. A slot is 0.60 m — one body width.')
+                              return t('How many slots of the anchor marker the group uses. A slot is 0.60 m — one body width.')
                             }
                             return t('The clip measures {span} m between the two figures; a slot is 0.60 m. That is the space they STAND in, not the floor the pose sweeps — a dance needs two slots however close the dancers are.')
                               .replace('{span}', span.toFixed(2))
                           })()}
                         >
                           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                            {([1, 2] as const).map((n) => (
+                            {Array.from({ length: draft.participants || 1 }, (_, i) => i + 1).map((n) => (
                               <label
                                 key={n}
                                 style={{ display: 'flex', gap: 4, alignItems: 'center' }}
@@ -1687,9 +1715,9 @@ export function PosesTab() {
                                 )}
                               </label>
                             ))}
-                            {draft.places !== 1 && draft.places !== 2 && (
+                            {!(draft.places && draft.places >= 1 && draft.places <= (draft.participants || 1)) && (
                               <span style={{ color: '#d6b06a', fontSize: '0.82em' }}>
-                                {t('Please choose — a pair pose has no sensible default.')}
+                                {t('Please choose — a multi-person pose has no sensible default.')}
                               </span>
                             )}
                           </div>
@@ -1732,7 +1760,7 @@ export function PosesTab() {
                         group={draft.group}
                         rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
                         yawOffset={draft.yaw_offset ?? 0}
-                        onYawOffset={draft.solo === false
+                        onYawOffset={(draft.participants || 1) > 1
                           ? (deg) => upd('yaw_offset', deg)
                           : undefined}
                       />

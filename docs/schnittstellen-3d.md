@@ -2693,7 +2693,7 @@ headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
 
 **Zustand (Server).** `app/core/interaction_engine.py` bindet zwei Charaktere an
 ein Paar: Profil-Dict `interaction` auf BEIDEN, reine Funktion der SPIELZEIT wie
-`journey` (Freeze friert die Geste ein). Auslöser: Katalog-Pose mit `solo:false`,
+`journey` (Freeze friert die Geste ein). Auslöser: Katalog-Pose mit `participants: 2`,
 deren `animation` ein vollständiges Paar ist (Verb `InteractWith`, Plugin
 `plugins/interact`). **Anker:** Hat der Raum einen freien Platz der Gruppe der
 Paar-Pose (plan-posen-plaetze.md § 4) mit ≥ `places` freien Slots, ist der

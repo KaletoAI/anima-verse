@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 CATALOG = {"sitting": {"group": "seat"}, "lying": {"group": "lie"},
            "kneeling": {"group": "ground"}, "leaning": {"group": "stand"},
-           "kissing": {"solo": False}}
+           "kissing": {"participants": 2}}
 
 
 def run_of(ability, pose="sitting", phase="", partner=""):

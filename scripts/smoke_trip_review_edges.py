@@ -88,7 +88,7 @@ CATALOG.write_text(json.dumps({
     "groups": {"stand": {"label": "Standing", "default": "standing", "needs_place": False}},
     "entries": {"standing": {"prompt": "standing", "group": "stand", "_default": True},
                 "embracing": {"prompt": "two people hugging", "group": "stand", "animation": "hug",
-                              "solo": False, "places": 2}}}))
+                              "participants": 2, "places": 2}}}))
 original_catalog = pose_catalog.catalog_path
 pose_catalog.catalog_path = lambda axis: CATALOG if axis == "pose" else original_catalog(axis)
 pose_catalog.reload_catalogs()

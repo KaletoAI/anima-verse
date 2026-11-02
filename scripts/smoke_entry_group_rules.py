@@ -76,7 +76,7 @@ class EntryGroups(unittest.TestCase):
 
     def test_pair_catalog_group(self):
         with patch('app.core.pose_catalog.get_catalog', return_value={
-                'pair-seat': dict(group='seat', solo=False)}):
+                'pair-seat': dict(group='seat', participants=2)}):
             self.assertEqual(_entry_capability('pair-seat')[0][0], 'kinda')
 
     def test_existing_wildcard_wins_before_group(self):

@@ -286,7 +286,7 @@ pose_catalog.catalog_path = (
         "lying": {"prompt": "p", "animation": "laying", "group": "lie"},
         "sleeping": {"prompt": "p", "animation": "laying", "group": "lie"},
         "chatting": {"prompt": "p", "animation": "idle", "group": "stand",
-                     "solo": False, "places": 2, "yaw_offset": 0},
+                     "participants": 2, "places": 2, "yaw_offset": 0},
     }}), encoding="utf-8")
 pose_catalog.reload_catalogs()
 

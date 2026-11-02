@@ -30,9 +30,9 @@ def main():
         private = Path(tmp) / "pose_catalog.json"
         private.write_bytes(before_real)
         entries = {
-            "standing": {"prompt": "standing", "synonyms": [], "animation": "standing", "solo": True, "group": "stand", "_default": True},
-            "waving": {"prompt": "waving", "synonyms": ["winken"], "animation": "waving", "solo": True, "group": "stand"},
-            "hug": {"prompt": "hug", "synonyms": [], "animation": "hug", "solo": False, "group": "stand", "places": 2, "yaw_offset": 0}}
+            "standing": {"prompt": "standing", "synonyms": [], "animation": "standing", "participants": 1, "group": "stand", "_default": True},
+            "waving": {"prompt": "waving", "synonyms": ["winken"], "animation": "waving", "participants": 1, "group": "stand"},
+            "hug": {"prompt": "hug", "synonyms": [], "animation": "hug", "participants": 2, "group": "stand", "places": 2, "yaw_offset": 0}}
         private.write_text(json.dumps({"groups": {
             "stand": {"label": "Stand", "default": "standing", "needs_place": False},
             "seat": {"label": "Seat", "default": "", "needs_place": True}}, "entries": entries}))
@@ -47,7 +47,7 @@ def main():
             except CatalogEditError as error:
                 assert error.status == status
                 if kwargs["key"] == "hug":
-                    assert error.detail == "pair poses cannot get a generated animation"
+                    assert error.detail == "multi-person poses cannot get a generated animation"
             else:
                 raise AssertionError("Expected refusal")
             assert private.read_bytes() == before
@@ -61,7 +61,7 @@ def main():
             assert pc.world_entries("pose")["waving"]["animation"] == "waving-u"
             refused(400, mode="entry", key="hug")
             world = pc.world_entries("pose")
-            world["hug"] = dict(entries["hug"], solo=True, animation="solo-world")
+            world["hug"] = dict(entries["hug"], participants=1, animation="solo-world")
             pc.replace_world_entries("pose", world)
             pc.reload_catalogs()
             before_world_hug = pc.world_entries("pose")["hug"]
@@ -71,7 +71,7 @@ def main():
             pc.replace_world_entries("pose", world)
             pc.reload_catalogs()
             assert apply(mode="free", animation="sweeping-u", key="sweeping", entry={"prompt": "sweeping", "group": "seat"})["stores"] == ["shared"]
-            assert document()["entries"]["sweeping"]["solo"] is True
+            assert "participants" not in document()["entries"]["sweeping"]
             assert document()["groups"]["seat"]["default"] == "sweeping"
             assert "_default" not in document()["entries"]["sweeping"]
             apply(mode="free", animation="dusting-u", key="dusting", entry={"prompt": "dusting", "group": "stand", "synonyms": ["winken"]})

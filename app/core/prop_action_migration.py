@@ -138,7 +138,7 @@ def normalize_import(document: dict, *, catalogs: dict | None = None) -> dict:
         for group, definition in sorted(groups.items()):
             key = definition.get('default')
             pose = catalog.get(key, {})
-            if not pose.get('solo', True) or pose.get('group') != group:
+            if pose.get('participants', 1) != 1 or pose.get('group') != group:
                 continue
             matches = [(variant, [m for m in variant.get('markers', [])
                                   if isinstance(m, dict) and m.get('group') == pose['group']])

@@ -64,7 +64,7 @@ try:
     pc._embed_cache[("expression", "smoke-model")] = {"y": [1.0]}
     doc = json.loads(cat.read_text(encoding="utf-8"))
     doc["entries"]["smoke-extern"] = {"prompt": "p", "synonyms": [], "animation": "idle",
-                                      "group": "stand", "solo": True}
+                                      "group": "stand", "participants": 1}
     cat.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     if "smoke-extern" not in pc.get_catalog("pose"):
         FAIL.append("[2] external edit not seen")
@@ -102,7 +102,7 @@ try:
             edited["done"] = True
             doc["entries"]["smoke-late"] = {"prompt": "p", "synonyms": [],
                                             "animation": "idle", "group": "stand",
-                                            "solo": True}
+                                            "participants": 1}
             cat.write_text(json.dumps(doc, ensure_ascii=False, indent=2),
                            encoding="utf-8")
             pc.get_catalog("pose")          # a reader notices the edit -> drop

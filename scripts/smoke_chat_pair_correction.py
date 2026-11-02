@@ -66,9 +66,9 @@ CATALOG.write_text(json.dumps({
                "seat": {"label": "Seat", "default": "cuddling", "needs_place": True}},
     "entries": {"standing": {"prompt": "standing", "group": "stand", "_default": True},
                 "embracing": {"prompt": "two people hugging", "group": "stand",
-                              "animation": "hug", "solo": False, "places": 2},
+                              "animation": "hug", "participants": 2, "places": 2},
                 "cuddling": {"prompt": "two people cuddling", "group": "stand",
-                             "animation": "broken", "solo": False, "places": 2}}}))
+                             "animation": "broken", "participants": 2, "places": 2}}}))
 _original_catalog_path = pose_catalog.catalog_path
 pose_catalog.catalog_path = lambda axis: CATALOG if axis == "pose" else _original_catalog_path(axis)
 pose_catalog.reload_catalogs()

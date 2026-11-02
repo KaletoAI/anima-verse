@@ -4142,7 +4142,7 @@ def _play_places_sync() -> Dict[str, Any]:
     for p in places.room_places(loc, room):
         free = places.free_slots(p, occ.get(p["id"], []))
         poses = ([] if p.get("source") == "prop" else
-                 [k for k in poses_in_group(p["group"]) if catalog.get(k, {}).get("solo", True)])
+                 [k for k in poses_in_group(p["group"]) if catalog.get(k, {}).get("participants", 1) == 1])
         out.append({"id": p["id"], "label": p["label"], "group": p["group"],
                     "capacity": p["capacity"], "free": len(free), "free_slots": free,
                     "poses": [{"key": k, "label": k} for k in poses]})

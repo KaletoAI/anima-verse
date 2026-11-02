@@ -19,7 +19,7 @@ try {
   const { composePropConfigurationResult, samePropConfigurationSnapshot,
     isCurrentPropConfigurationRequest, resolveCheckIssue } = require(join(dir, 'propActionChecks.js'));
   const catalog = { status: 'ready', stats: ['energy'], conditions: [], groups: {},
-    poses: [{ key: 'sitting', group: 'seat', solo: true, animation: 'sit' }],
+    poses: [{ key: 'sitting', group: 'seat', participants: 1, animation: 'sit' }],
     kinds: ['sit'], pairKinds: [] };
   const action = { id: 'rest', name: 'Rest', description: '', enabled: true,
     ability: 'pose', pose_key: '', participants: 1, presence: 'any',

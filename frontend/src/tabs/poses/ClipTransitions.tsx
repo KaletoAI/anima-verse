@@ -25,7 +25,7 @@ import { apiGet, apiPut } from '../../lib/api'
 import { bridgeKinds as kindsOf } from './clipSets'
 import type { ClipListing, PoseTransition as Transition, RoleKinds } from './clipSets'
 
-export interface PoseRef { key: string; solo?: boolean; animation?: string }
+export interface PoseRef { key: string; participants?: number; animation?: string }
 
 const TRANSITION_ANY = '*'
 
@@ -77,7 +77,7 @@ export function ClipTransitions({ poses, onSaved }: {
   }, [])
 
   const poseKeys = useMemo(() => poses.map((p) => p.key).sort(), [poses])
-  const pairPoses = useMemo(() => new Set(poses.filter((p) => p.solo === false).map((p) => p.key)), [poses])
+  const pairPoses = useMemo(() => new Set(poses.filter((p) => (p.participants ?? 1) > 1).map((p) => p.key)), [poses])
   const rolesOf = useCallback((rule: Transition) => {
     const of = (key: string) => clipRoles[poses.find((p) => p.key === key)?.animation || ''] || []
     const a = of(rule.from); const b = of(rule.to)

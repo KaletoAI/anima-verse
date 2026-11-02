@@ -75,6 +75,12 @@ try:
 except Exception as _coe:
     logger.warning("catalog overlay migration failed: %s", _coe)
 
+# Boot migration (2026-11-02): pose field solo -> participants in the world layer.
+from app.core.pose_catalog import migrate_participants_once
+_pm = migrate_participants_once()
+if _pm:
+    logger.info("Pose catalog: %d world entries moved from solo to participants", _pm)
+
 from app.core.expression_sets_migration import migrate_catalog_metadata
 migrate_catalog_metadata()
 

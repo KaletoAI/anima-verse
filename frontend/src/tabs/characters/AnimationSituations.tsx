@@ -28,7 +28,7 @@ interface ActivityPose {
   key: string
   label?: string
   label_de?: string
-  solo: boolean
+  participants: number
   movement?: boolean
 }
 
@@ -80,7 +80,7 @@ export function AnimationSituations({ character, onPlay }: {
       if (alive) setClips(result.clips || [])
     }).catch((e: Error) => { if (alive) setError(e.message) })
     apiGet<{ entries: ActivityPose[] }>('/poses').then((result) => {
-      if (alive) setPoses(result.entries.filter((row) => row.solo && !row.movement)
+      if (alive) setPoses(result.entries.filter((row) => row.participants === 1 && !row.movement)
         .sort((a, b) => a.key.localeCompare(b.key)))
     }).catch((e: Error) => { if (alive) setError(e.message) })
     return () => { alive = false }
@@ -164,7 +164,7 @@ export function AnimationSituations({ character, onPlay }: {
     {activityLoading ? <div className="ga-hint">{t('Loading…')}</div> : null}
     {activityError ? <div className="ga-field-warn" role="alert">{activityError}</div> : null}
     {activity ? <table className="ga-sched-table">
-      {headings}<tbody>{rowView(activity, poseLabel(poses.find((row) => row.key === pose) || { key: pose, solo: true }))}</tbody>
+      {headings}<tbody>{rowView(activity, poseLabel(poses.find((row) => row.key === pose) || { key: pose, participants: 1 }))}</tbody>
     </table> : null}
   </div>
 }

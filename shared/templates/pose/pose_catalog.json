@@ -48,8 +48,7 @@
       ],
       "_default": true,
       "animation": "idle",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "sitting": {
       "label": "sitting",
@@ -69,8 +68,7 @@
         "auf der bank sitzen"
       ],
       "animation": "sit",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "reading": {
       "label": "reading",
@@ -89,8 +87,7 @@
         "reading a book"
       ],
       "animation": "reading",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "cooking": {
       "label": "cooking",
@@ -111,8 +108,7 @@
         "stirring a pot"
       ],
       "animation": "cooking",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "sleeping": {
       "label": "sleeping",
@@ -129,8 +125,7 @@
         "eingeschlafen"
       ],
       "animation": "sleeping-side",
-      "group": "lie",
-      "solo": true
+      "group": "lie"
     },
     "walking": {
       "label": "walking",
@@ -151,7 +146,6 @@
         "walking along"
       ],
       "animation": "walk",
-      "solo": true,
       "group": "stand"
     },
     "running": {
@@ -173,8 +167,7 @@
         "jogging along"
       ],
       "animation": "run",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "dancing": {
       "label": "dancing",
@@ -209,8 +202,7 @@
         "eating a meal"
       ],
       "animation": "eating",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "drinking": {
       "label": "drinking",
@@ -260,8 +252,7 @@
         "working on a laptop"
       ],
       "animation": "typing",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "exercising": {
       "label": "exercising",
@@ -285,8 +276,7 @@
         "squats"
       ],
       "animation": "exercising",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "meditating": {
       "label": "meditating",
@@ -305,8 +295,7 @@
         "sitting cross-legged"
       ],
       "animation": "meditating",
-      "group": "ground",
-      "solo": true
+      "group": "ground"
     },
     "painting": {
       "label": "painting",
@@ -326,8 +315,7 @@
         "at the easel"
       ],
       "animation": "painting",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "gaming": {
       "label": "gaming",
@@ -347,8 +335,7 @@
         "console gaming"
       ],
       "animation": "gaming",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "cleaning": {
       "label": "tidying up",
@@ -368,8 +355,7 @@
         "staub wischen"
       ],
       "animation": "cleaning-up",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "gardening": {
       "label": "gardening",
@@ -392,8 +378,7 @@
         "kneeling in the garden"
       ],
       "animation": "gardening",
-      "group": "ground",
-      "solo": true
+      "group": "ground"
     },
     "shopping": {
       "label": "shopping",
@@ -432,8 +417,7 @@
         "taking it easy"
       ],
       "animation": "relaxing",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "studying": {
       "label": "studying",
@@ -453,8 +437,7 @@
         "doing homework"
       ],
       "animation": "studying",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "singing": {
       "label": "singing",
@@ -473,8 +456,7 @@
         "performing a song"
       ],
       "animation": "singing",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "playing": {
       "label": "fooling around",
@@ -492,8 +474,7 @@
         "goofing around"
       ],
       "animation": "playing",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "talking": {
       "label": "talking",
@@ -523,8 +504,7 @@
         "gesturing while talking"
       ],
       "animation": "talking",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "showering": {
       "label": "showering",
@@ -557,8 +537,7 @@
         "in the bathtub"
       ],
       "animation": "bathing",
-      "group": "ground",
-      "solo": true
+      "group": "ground"
     },
     "yoga": {
       "label": "doing yoga",
@@ -590,8 +569,7 @@
         "discussing at a table"
       ],
       "animation": "meeting",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "presenting": {
       "label": "presenting",
@@ -610,8 +588,7 @@
         "giving a presentation"
       ],
       "animation": "presenting",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "driving": {
       "label": "driving",
@@ -629,8 +606,7 @@
         "driving a car"
       ],
       "animation": "driving",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "photography": {
       "label": "taking photos",
@@ -657,7 +633,6 @@
         "photographing"
       ],
       "animation": "photographing",
-      "solo": true,
       "group": "stand"
     },
     "watching_tv": {
@@ -700,8 +675,7 @@
         "lost in thought"
       ],
       "animation": "thinking",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "waiting": {
       "label": "waiting",
@@ -716,8 +690,7 @@
         "geduldig warten"
       ],
       "animation": "waiting",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "kneeling": {
       "label": "kneeling",
@@ -738,8 +711,7 @@
         "on one's knees"
       ],
       "animation": "kneeling",
-      "group": "ground",
-      "solo": true
+      "group": "ground"
     },
     "celebrating": {
       "label": "celebrating",
@@ -779,8 +751,7 @@
         "at the coffee machine"
       ],
       "animation": "making-coffee",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "serving": {
       "label": "serving",
@@ -800,8 +771,7 @@
         "waiting tables"
       ],
       "animation": "serving",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "monitoring": {
       "label": "monitoring screens",
@@ -820,8 +790,7 @@
         "monitoring screens"
       ],
       "animation": "monitoring",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "flirting": {
       "label": "flirting",
@@ -839,8 +808,7 @@
         "playing with the hair"
       ],
       "animation": "flirting",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "filming": {
       "label": "filming",
@@ -880,8 +848,7 @@
         "putting on a top"
       ],
       "animation": "changing-clothes",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "freshening_up": {
       "label": "freshening up",
@@ -901,8 +868,7 @@
         "checking the mirror"
       ],
       "animation": "freshening-up",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "lying": {
       "label": "lying down",
@@ -945,8 +911,7 @@
         "doing the dishes"
       ],
       "animation": "washing-dishes",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "holding_knife": {
       "label": "chopping vegetables",
@@ -963,8 +928,7 @@
         "cutting vegetables"
       ],
       "animation": "chopping",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "recovering": {
       "label": "catching breath",
@@ -981,8 +945,7 @@
         "durchschnaufen"
       ],
       "animation": "recovering",
-      "group": "seat",
-      "solo": true
+      "group": "seat"
     },
     "shooting": {
       "label": "aiming a gun",
@@ -999,8 +962,7 @@
         "aiming a gun"
       ],
       "animation": "shooting",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "commanding_attention": {
       "label": "commanding attention",
@@ -1018,8 +980,7 @@
         "taking charge"
       ],
       "animation": "commanding",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "dancing together": {
       "label": "salsa dancing",
@@ -1038,7 +999,7 @@
         "dancing salsa together"
       ],
       "animation": "dancing-together",
-      "solo": false,
+      "participants": 2,
       "group": "stand",
       "places": 2,
       "yaw_offset": 0
@@ -1062,7 +1023,7 @@
         "jemandem trost spenden"
       ],
       "animation": "comforting",
-      "solo": false,
+      "participants": 2,
       "group": "stand",
       "places": 2,
       "yaw_offset": 0
@@ -1081,7 +1042,6 @@
         "oberfläche abwischen"
       ],
       "animation": "cleaning-table",
-      "solo": true,
       "group": "stand"
     },
     "leaning": {
@@ -1099,7 +1059,6 @@
         "leaning against doorframe"
       ],
       "animation": "leaning",
-      "solo": true,
       "group": "stand"
     },
     "lounging": {
@@ -1119,7 +1078,6 @@
         "slouching"
       ],
       "animation": "lounging",
-      "solo": true,
       "group": "seat"
     },
     "using_phone": {
@@ -1136,7 +1094,6 @@
         "texting"
       ],
       "animation": "using_phone",
-      "solo": true,
       "group": "stand"
     },
     "sitting at table": {
@@ -1152,7 +1109,6 @@
         "am tisch sitzen"
       ],
       "animation": "sitting-at-the-table",
-      "solo": true,
       "group": "seat"
     },
     "taking-off-tshirt": {
@@ -1165,7 +1121,6 @@
         "changing clothes"
       ],
       "animation": "taking-off-tshirt",
-      "solo": true,
       "group": "stand"
     },
     "forehead-wiping": {
@@ -1182,7 +1137,6 @@
         "face wipe"
       ],
       "animation": "forehead-wiping",
-      "solo": true,
       "group": "stand"
     },
     "face-washing": {
@@ -1199,7 +1153,6 @@
         "face care"
       ],
       "animation": "face-washing",
-      "solo": true,
       "group": "stand"
     },
     "hugging": {
@@ -1224,7 +1177,7 @@
       ],
       "animation": "greeting-hug",
       "group": "stand",
-      "solo": false,
+      "participants": 2,
       "places": 2,
       "yaw_offset": 0
     },
@@ -1249,7 +1202,7 @@
       ],
       "animation": "kissing",
       "group": "stand",
-      "solo": false,
+      "participants": 2,
       "places": 2,
       "yaw_offset": 0
     },
@@ -1274,7 +1227,7 @@
       ],
       "animation": "greeting-handshake",
       "group": "stand",
-      "solo": false,
+      "participants": 2,
       "places": 2,
       "yaw_offset": 0
     },
@@ -1297,8 +1250,7 @@
         "on the phone"
       ],
       "animation": "phone-call",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "digging": {
       "label": "digging",
@@ -1314,8 +1266,7 @@
         "shoveling"
       ],
       "animation": "digging",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "cleaning windows": {
       "label": "cleaning windows",
@@ -1330,8 +1281,7 @@
         "wiping windows"
       ],
       "animation": "cleaning-window",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "sleeping on back": {
       "label": "sleeping on the back",
@@ -1344,8 +1294,7 @@
         "sleeping on back"
       ],
       "animation": "sleeping-back",
-      "group": "lie",
-      "solo": true
+      "group": "lie"
     },
     "picking up": {
       "label": "picking something up",
@@ -1360,8 +1309,7 @@
         "picking up"
       ],
       "animation": "picking-up",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "crawling_rest": {
       "label": "resting on all fours",
@@ -1374,8 +1322,7 @@
         "resting on hands and knees"
       ],
       "animation": "crawl-rest",
-      "group": "ground",
-      "solo": true
+      "group": "ground"
     },
     "crawling": {
       "label": "crawling",
@@ -1389,8 +1336,7 @@
         "crawling on hands and knees"
       ],
       "animation": "crawl",
-      "group": "ground",
-      "solo": true
+      "group": "ground"
     },
     "swimming": {
       "label": "swimming",
@@ -1406,8 +1352,7 @@
         "swimming gleitet langsam auf den südweltler zu"
       ],
       "animation": "breast-stroke",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "treading_water": {
       "label": "treading water",
@@ -1420,8 +1365,7 @@
         "staying afloat"
       ],
       "animation": "treading-water",
-      "group": "stand",
-      "solo": true
+      "group": "stand"
     },
     "catching breath": {
       "prompt": "standing bent forward, out of breath, hands braced on the thighs above the knees, flushed face, breathing hard",
@@ -1434,7 +1378,6 @@
       ],
       "animation": "catch-breath",
       "group": "stand",
-      "solo": true,
       "label_de": "Durchatmen"
     }
   }

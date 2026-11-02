@@ -10,7 +10,7 @@ committed) is the target; the clip library is its shared/models/clips.
 By hand:
 [1] publish("demo-bow") with key "bowing": the FBX + sidecar sit in the
     temp library, the working-tree catalog has entries["bowing"] with
-    animation "demo-bow", group "stand", solo true, synonyms lowercased.
+    animation "demo-bow", group "stand", no participants (solo), synonyms lowercased.
 [2] kind "demo-bow" again, a LICENSED "clash.fbx" present and kind "clash"
     -> StudioError before anything is written (library listing unchanged).
 [3] key "sitting" (an existing key) or a synonym owned by another entry
@@ -138,8 +138,8 @@ try:
     if not (lib / "demo-bow.fbx").is_file() or not (lib / "demo-bow.json").is_file():
         FAIL.append("[1] clip files missing")
     e = json.loads((REPO / CAT_REL).read_text())["entries"].get("bowing") or {}
-    if (e.get("animation"), e.get("group"), e.get("solo"), e.get("synonyms")) != \
-            ("demo-bow", "stand", True, ["verbeugen", "sich verbeugen"]):
+    if (e.get("animation"), e.get("group"), e.get("participants"), e.get("synonyms")) != \
+            ("demo-bow", "stand", None, ["verbeugen", "sich verbeugen"]):
         FAIL.append(f"[1] entry {e}")
     # [2]
     (REPO / "shared/models/clips-licensed/clash.fbx").write_bytes(b"x")
@@ -192,7 +192,7 @@ try:
     def racing_validate(axis):
         d = json.loads((REPO / CAT_REL).read_text())
         d["entries"]["foreign-race"] = {"prompt": "p", "synonyms": [], "animation": "idle",
-                                        "group": "stand", "solo": True}
+                                        "group": "stand", "participants": 1}
         (REPO / CAT_REL).write_text(json.dumps(d, ensure_ascii=False, indent=2))
         return ["forced"]
     pc.validate_catalog = racing_validate
@@ -237,7 +237,7 @@ try:
     pc.reload_catalogs()
     doc = json.loads((REPO / CAT_REL).read_text())
     doc["entries"]["local-only"] = {"prompt": "p", "synonyms": [], "animation": "idle",
-                                    "group": "stand", "solo": True}
+                                    "group": "stand", "participants": 1}
     (REPO / CAT_REL).write_text(json.dumps(doc, ensure_ascii=False, indent=2))
     pc.reload_catalogs()
     fake_build("demo-wave", "waving-demo", ["winken demo"])
@@ -343,7 +343,7 @@ try:
     r12 = P.publish("demo-sit", repo=REPO, commit=False)
     e12 = json.loads((REPO / CAT_REL).read_text())["entries"]["sitting"]
     want = {**old, "prompt": "Bowing politely", "animation": "demo-sit", "group": "seat",
-            "solo": True, "synonyms": old["synonyms"] + ["hinhocken"]}
+            "synonyms": old["synonyms"] + ["hinhocken"]}
     if e12 != want:
         FAIL.append(f"[12] entry {e12} != {want}")
     users = sorted(k for k, v in shipped.items() if v.get("animation") == old["animation"]

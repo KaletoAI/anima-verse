@@ -95,8 +95,24 @@ def _validated_store(raw: Any, fallback: str) -> str:
     return value
 
 
-def _places(raw: Any) -> int:
-    """Marker slots a PAIR pose consumes — 1 or 2, and it must be SAID.
+def _participants(raw: Any) -> int:
+    """How many people a pose takes: 1 (solo, the default) up to
+    ``pose_catalog.MAX_PARTICIPANTS`` — one clip role each."""
+    if raw is None or raw == "":
+        return 1
+    top = pose_catalog.MAX_PARTICIPANTS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    if isinstance(raw, bool) or not 1 <= value <= top:
+        raise HTTPException(status_code=400, detail=f"participants must be 1..{top}")
+    return value
+
+
+def _places(raw: Any, participants: int) -> int:
+    """Marker slots a multi-person pose consumes — 1 up to one per
+    participant, and it must be SAID.
 
     There is no sensible default: two bodies 6 cm apart fit on one slot, two
     dancers sweeping the floor need two, and the difference is not something
@@ -108,11 +124,34 @@ def _places(raw: Any) -> int:
     if raw is None or raw == "":
         raise HTTPException(
             status_code=400,
-            detail="places is required for a pair pose (1 or 2)")
+            detail=f"places is required for a multi-person pose (1..{participants})")
     try:
-        return 2 if int(raw) >= 2 else 1
+        value = int(raw)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="places must be 1 or 2")
+        value = 0
+    if isinstance(raw, bool) or not 1 <= value <= participants:
+        raise HTTPException(status_code=400, detail=f"places must be 1..{participants}")
+    return value
+
+
+def _set_participants(entry: Dict[str, Any], participants: int, body: Any, *,
+                      require_places: bool) -> None:
+    """Write ``participants`` and the fields only a multi-person pose has.
+    A solo pose stores none of them (1 is the default) — leaving the group
+    fields behind would be a stray the catalog reports. ``require_places``:
+    a create or approval must SAY the slot count; an update keeps the stored
+    one when the body leaves it out (clamped to the new head count)."""
+    if participants == 1:
+        for field in ("participants", "places", "yaw_offset"):
+            entry.pop(field, None)
+        return
+    entry["participants"] = participants
+    if require_places or "places" in body:
+        entry["places"] = _places(body.get("places"), participants)
+    else:
+        entry["places"] = min(participants, int(entry.get("places") or participants))
+    if require_places or "yaw_offset" in body:
+        entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
 
 
 def _finale_animation(raw: Any) -> str:
@@ -129,13 +168,14 @@ def _finale_animation(raw: Any) -> str:
 
 def _follow_pose(raw: Any) -> Any:
     """A pose's optional follow pose (``pose_catalog.follow_pose_for``): a
-    pose key, or ``{a, b}`` per clip role of a pair; "" clears it. Whether
-    the keys name solo poses is the catalog check's (``validate_catalog``)."""
+    pose key, or ``{a, b, …}`` per clip role of a multi-person pose; ""
+    clears it. Whether the keys name solo poses, and whether the pose has
+    those roles, is the catalog check's (``validate_catalog``)."""
     if isinstance(raw, dict):
-        if set(raw) - {"a", "b"} or any(v is not None and not isinstance(v, str) for v in raw.values()):
-            raise HTTPException(status_code=400, detail="follow_pose must be a pose key or {a, b}")
+        if set(raw) - set(pose_catalog.ROLES) or any(v is not None and not isinstance(v, str) for v in raw.values()):
+            raise HTTPException(status_code=400, detail="follow_pose must be a pose key or {a, b, …}")
     elif raw is not None and not isinstance(raw, str):
-        raise HTTPException(status_code=400, detail="follow_pose must be a pose key or {a, b}")
+        raise HTTPException(status_code=400, detail="follow_pose must be a pose key or {a, b, …}")
     return pose_catalog.normalize_follow(raw)
 
 
@@ -312,7 +352,7 @@ def list_entries(axis: str = Query("pose"),
             "prompt": entry.get("prompt", ""),
             "synonyms": entry.get("synonyms", []) or [],
             "animation": entry.get("animation", "") or "",
-            "solo": bool(entry.get("solo", True)),
+            "participants": int(entry.get("participants") or 1),
             "is_default": bool(entry.get("_default")),
             "axis": axis,
             # Which file this entry lives in. The editor writes it back where
@@ -329,7 +369,7 @@ def list_entries(axis: str = Query("pose"),
         if axis == "pose":
             row["label"] = entry.get("label", "")
             row["label_de"] = entry.get("label_de", "")
-            row["label_de_missing"] = not row["solo"] and not row["label_de"]
+            row["label_de_missing"] = row["participants"] > 1 and not row["label_de"]
             # Place fields are POSE vocabulary — an expression has no place.
             # Read through the ACCESSORS, never off the entry: a solo pose has
             # no stored places/yaw_offset, and a raw `.get(..., 2)` would tell
@@ -343,17 +383,18 @@ def list_entries(axis: str = Query("pose"),
             row["finale_auto"] = (_finale_engine.finale_kind(key)
                                   if not row["finale_animation"] else "")
             # The follow pose: the stored field, and what applies without it
-            # (provider or place type) — per clip role for a pair.
+            # (provider or place type) — per clip role for a multi-person pose.
             row["follow_pose"] = entry.get("follow_pose", "")
             row["follow_auto"] = ("" if row["follow_pose"] else
-                                  pose_catalog.follow_pose_for(key) if row["solo"] else
-                                  {r: pose_catalog.follow_pose_for(key, r) for r in ("a", "b")})
+                                  pose_catalog.follow_pose_for(key) if row["participants"] == 1 else
+                                  {r: pose_catalog.follow_pose_for(key, r)
+                                   for r in pose_catalog.ROLES[:row["participants"]]})
             # Whether POST /poses/{key}/rename accepts this key — the editor
             # hides the button for the keys the server code names literally.
             row["renamable"] = key not in CODE_NAMED_POSE_KEYS
         out.append(row)
     out.sort(key=lambda p: p["key"])
-    from app.core.animation_clips import clip_meta, pair_kinds
+    from app.core.animation_clips import clip_meta, pair_kinds, role_counts
     _pairs = pair_kinds() if axis == "pose" else []
     # How far apart the two figures stand at the anchor moment, per pair kind
     # — the clip's own measurement (`geometry.root_distance_m`). The editor
@@ -370,9 +411,11 @@ def list_entries(axis: str = Query("pose"),
     return {
         "entries": out,
         "kinds": epm.available_animation_kinds() if axis == "pose" else [],
-        # Kinds that exist as a PAIR clip (two halves, § A8a): such a pose is
-        # a two-person one and has to carry solo: false.
+        # Kinds that exist as a PAIR clip (two halves, § A8a), and every
+        # multi-person kind with its role count: a pose on such a clip takes
+        # exactly that many participants.
         "pair_kinds": _pairs,
+        "role_counts": role_counts() if axis == "pose" else {},
         "pair_spans": _spans,
         "groups": pose_catalog.get_groups() if axis == "pose" else expression_groups,
         "problems": pose_catalog.validate_catalog(axis),
@@ -419,11 +462,9 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
             if axis == "pose":
                 entry.update({field: value for field, value in labels.items() if value})
                 entry["animation"] = animation
-                entry["solo"] = bool(body.get("solo", True))
                 entry["group"] = group
-                if not entry["solo"]:
-                    entry["places"] = _places(body.get("places"))
-                    entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
+                _set_participants(entry, _participants(body.get("participants")), body,
+                                  require_places=True)
                 finale = _finale_animation(body.get("finale_animation"))
                 if finale:
                     entry["finale_animation"] = finale
@@ -656,7 +697,7 @@ async def dismiss_animation(task_id: str = PathParam(..., pattern=_TASK_ID_PATTE
 @router.put("/{key}")
 async def update_entry(key: str, request: Request, axis: str = Query("pose"),
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Updates prompt / synonyms / animation / solo of a catalog entry."""
+    """Updates prompt / synonyms / animation / participants of a catalog entry."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_update_entry_sync, key, axis, _, body)
@@ -702,14 +743,15 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                 if not anim:
                     raise HTTPException(status_code=400, detail="animation missing")
                 entry["animation"] = anim
-            if "solo" in body and axis == "pose":
-                entry["solo"] = bool(body["solo"])
             if "group" in body and axis == "pose":
                 entry["group"] = validate_group(body["group"])
-            if "places" in body and axis == "pose":
-                entry["places"] = _places(body["places"])
-            if "yaw_offset" in body and axis == "pose":
-                entry["yaw_offset"] = _yaw_offset(body["yaw_offset"])
+            if axis == "pose" and ({"participants", "places", "yaw_offset"} & set(body)):
+                people = (_participants(body["participants"]) if "participants" in body
+                          else int(entry.get("participants") or 1))
+                # A pose that just BECAME multi-person must say its slot count.
+                _set_participants(entry, people, body,
+                                  require_places=int(entry.get("participants") or 1) == 1
+                                  and people > 1 and "places" not in entry)
             if "finale_animation" in body and axis == "pose":
                 finale = _finale_animation(body["finale_animation"])
                 if finale:
@@ -722,11 +764,6 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                     entry["follow_pose"] = follow
                 else:
                     entry.pop("follow_pose", None)
-            if axis == "pose" and entry.get("solo", True):
-                # A solo pose occupies exactly one place and never turns — leaving
-                # the pair fields behind would be a stray the catalog reports.
-                entry.pop("places", None)
-                entry.pop("yaw_offset", None)
             if store == was:
                 data["entries"][key] = entry
                 write_store(axis, data, store)
@@ -971,14 +1008,12 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                 entry = {"prompt": prompt, "synonyms": synonyms}
                 if axis == "pose":
                     entry["animation"] = animation
-                    entry["solo"] = bool(body.get("solo", True))
                     entry["group"] = group
-                    if not entry["solo"]:
-                        # Same as create: a pair pose carries its own slot count
-                        # and clip rotation — dropping them here would silently
-                        # approve every pair candidate as "2 places, 0°".
-                        entry["places"] = _places(body.get("places"))
-                        entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
+                    # Same as create: a multi-person pose carries its own slot
+                    # count and clip rotation — dropping them here would
+                    # silently approve every group candidate with defaults.
+                    _set_participants(entry, _participants(body.get("participants")), body,
+                                      require_places=True)
                 data["entries"][key] = entry
 
             write_store(axis, data, store)

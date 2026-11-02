@@ -832,7 +832,7 @@ def pose_roles(pose: str) -> Tuple[str, ...]:
     """The roles present for a multi-person pose's clip across library sets."""
     from app.core.pose_catalog import get_catalog
     entry = get_catalog("pose").get(pose) or {}
-    if entry.get("solo", True):
+    if entry.get("participants", 1) == 1:
         return ()
     kind = str(entry.get("animation") or "")
     if not kind:
@@ -886,7 +886,7 @@ def _leaving_kinds(rules: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str
             except Exception:
                 finale = ""
         own = [entry["animation"]] + ([finale] if finale and finale != entry["animation"] else [])
-        if entry.get("solo", True):
+        if entry.get("participants", 1) == 1:
             if finale:
                 out[key] = [(kind, "") for kind in own]
         else:

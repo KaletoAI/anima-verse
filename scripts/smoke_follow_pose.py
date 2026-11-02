@@ -157,7 +157,7 @@ class FollowPose(unittest.TestCase):
         set_entry("kneeling", follow_pose={"a": "sitting"})
         set_entry("dancing", follow_pose="run-pair")
         problems = pose_catalog.validate_catalog("pose")
-        self.assertIn("pose/kneeling: a per-role follow pose only makes sense on a pair pose", problems)
+        self.assertIn("pose/kneeling: a per-role follow pose only makes sense on a multi-person pose", problems)
         self.assertIn("pose/dancing: follow pose 'run-pair' is not a solo pose", problems)
         set_entry("dancing", follow_pose=None)
         set_entry("kneeling", follow_pose=None)
@@ -246,7 +246,7 @@ class FollowPose(unittest.TestCase):
         from app.core import interaction_engine as IE
         name, target, pid = RUNS.setup_run()
         partner = F.actor(target["location_id"], at=(1.6, 5))
-        set_entry("free-pair", solo=False, animation="free-pair", group="stand", places=2,
+        set_entry("free-pair", participants=2, animation="free-pair", group="stand", places=2,
                   prompt="Two people dancing", follow_pose="kneeling")
         directory = F.ROOT / "clips"
         for role in ("a", "b"):

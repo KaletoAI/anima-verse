@@ -42,7 +42,7 @@ def main():
         init_schema()
         catalog = root / "catalog.json"
         catalog.write_text(json.dumps({"groups": {"stand": {"default": "waving", "needs_place": False}},
-            "entries": {"waving": {"prompt": "waving", "solo": True, "group": "stand", "animation": "waving"}}}))
+            "entries": {"waving": {"prompt": "waving", "participants": 1, "group": "stand", "animation": "waving"}}}))
         original_path = pc.catalog_path
         pc.catalog_path = lambda axis: catalog if axis == "pose" else original_path(axis)
         pc.reload_catalogs()

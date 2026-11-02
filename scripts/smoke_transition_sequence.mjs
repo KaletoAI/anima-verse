@@ -38,8 +38,8 @@ try {
   assert.equal(roots[2].yaw, Math.PI)
   await build({ entryPoints: ['frontend/src/tabs/poses/transitionSelection.ts'], bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'selection.mjs') })
   const { transitionClip, transitionOptions, transitionSets } = await import(join(dir, 'selection.mjs'))
-  const poses = [{ key: 'standing', animation: 'idle', solo: true }, { key: 'hug', animation: 'hug', solo: false },
-    { key: 'crowd', animation: 'crowd', solo: false }]
+  const poses = [{ key: 'standing', animation: 'idle', participants: 1 }, { key: 'hug', animation: 'hug', participants: 2 },
+    { key: 'crowd', animation: 'crowd', participants: 5 }]
   const listing = { clips: [
     { kind: 'idle', role: '', set: '', url: 'idle.fbx' },
     { kind: 'hug', role: 'a', set: 'female', url: 'female-a.fbx' },

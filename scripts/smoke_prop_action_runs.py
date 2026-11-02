@@ -73,7 +73,7 @@ def authored_pair():
     name, target, pid = setup_run()
     partner = F.actor(target["location_id"], at=(2, 5))
     entries = pose_catalog.world_entries("pose")
-    entries["run-pair"] = dict(solo=False, animation="run-pair", group="seat", places=2,
+    entries["run-pair"] = dict(participants=2, animation="run-pair", group="seat", places=2,
                                yaw_offset=90, prompt="Two people sharing a seat")
     pose_catalog.replace_world_entries("pose", entries)
     pose_catalog.reload_catalogs()

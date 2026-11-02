@@ -32,15 +32,15 @@ from app.core.content_io import export_prop_to_zip, import_prop_from_zip
 
 UID_A = "11111111-1111-4111-8111-111111111111"
 UID_B = "22222222-2222-4222-8222-222222222222"
-CATALOG = {"sleeping": {"group": "lie", "solo": True, "label": "Sleeping"},
-           "sitting": {"group": "sit", "solo": True, "label": "Sitting"},
-           "embrace": {"group": "lie", "solo": False, "label": "Embrace"},
-           "standing": {"group": "stand", "solo": True},
-           "kneeling": {"group": "ground", "solo": True},
-           "swimming": {"group": "stand", "solo": True},
-           "treading_water": {"group": "stand", "solo": True},
-           "crawling": {"group": "ground", "solo": True},
-           "crawling_rest": {"group": "ground", "solo": True}}
+CATALOG = {"sleeping": {"group": "lie", "participants": 1, "label": "Sleeping"},
+           "sitting": {"group": "sit", "participants": 1, "label": "Sitting"},
+           "embrace": {"group": "lie", "participants": 2, "label": "Embrace"},
+           "standing": {"group": "stand", "participants": 1},
+           "kneeling": {"group": "ground", "participants": 1},
+           "swimming": {"group": "stand", "participants": 1},
+           "treading_water": {"group": "stand", "participants": 1},
+           "crawling": {"group": "ground", "participants": 1},
+           "crawling_rest": {"group": "ground", "participants": 1}}
 GROUPS = {key: {"label": key.title(), "default": default, "root_drop": 0,
                 "needs_place": True}
           for key, default in (("lie", "sleeping"), ("sit", "sitting"),
@@ -167,7 +167,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(normalized['model_variants'][0]['markers'][0]['access'], {'actor': point})
 
     def test_legacy_defaults_only_and_no_default_means_no_action(self):
-        catalogs = dict(poses={**CATALOG, 'resting': {'group': 'lie', 'solo': True}},
+        catalogs = dict(poses={**CATALOG, 'resting': {'group': 'lie', 'participants': 1}},
                         groups=GROUPS, stats=set(), conditions=set())
         normalized = normalize_import(legacy(), catalogs=catalogs)
         self.assertEqual([a['pose_key'] for a in normalized['actions']], ['sleeping'])
@@ -314,8 +314,8 @@ class MigrationTests(unittest.TestCase):
         connection = sqlite3.connect(database)
         connection.execute(f"CREATE TABLE {WORLD_TABLE}(axis,kind,key,doc)")
         connection.executemany(f"INSERT INTO {WORLD_TABLE} VALUES(?,?,?,?)", [
-            ("pose", "entry", "sleeping", json.dumps({"solo": False, "group": "lie"})),
-            ("pose", "entry", "world-rest", json.dumps({"solo": True, "group": "lie", "label": "World rest"})),
+            ("pose", "entry", "sleeping", json.dumps({"participants": 2, "group": "lie"})),
+            ("pose", "entry", "world-rest", json.dumps({"participants": 1, "group": "lie", "label": "World rest"})),
             ("pose", "group", "lie", json.dumps({**GROUPS["lie"], "default": "world-rest"}))])
         connection.execute("CREATE TABLE prompt_filters(id,enabled)")
         connection.execute("INSERT INTO prompt_filters VALUES('fixture-state',0)")

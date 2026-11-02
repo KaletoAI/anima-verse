@@ -36,10 +36,11 @@ export interface PoseEntryLite {
   group?: string
   /** Animation-clip kind the pose plays. */
   animation?: string
-  solo?: boolean
-  /** Marker slots a PAIR pose consumes (1 or 2). */
+  /** How many people the pose takes (1 = solo, the default). */
+  participants?: number
+  /** Marker slots a multi-person pose consumes (1..participants). */
   places?: number
-  /** Degrees the pair clip's frame turns against the marker facing. */
+  /** Degrees the group clip's frame turns against the marker facing. */
   yaw_offset?: number
 }
 

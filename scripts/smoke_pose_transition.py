@@ -79,9 +79,9 @@ def role_checks(pt, root):
     the entire shared row. Neutral B must win over a set containing only A.
     """
     from app.core import animation_clips as ac, pose_catalog as pc, clip_bvh_export as ex
-    catalog = {'standing': {'animation': 'idle', 'solo': True},
-               'hug': {'animation': 'hug', 'solo': False},
-               'crowd': {'animation': 'crowd', 'solo': False}}
+    catalog = {'standing': {'animation': 'idle', 'participants': 1},
+               'hug': {'animation': 'hug', 'participants': 2},
+               'crowd': {'animation': 'crowd', 'participants': 2}}
     entries = [dict(kind=k, role=r, set=cs, path=root / f'{k}{r}.fbx',
                     rel=f'{k}{r}.fbx', source='free')
                for k, roles, cs in [('idle', [''], ''), ('hug', ['a'], 'female'),
@@ -170,9 +170,9 @@ def role_choice_checks(pt, root):
     for stem in ('idle', 'old-a', 'old-b', 'hug__a', 'hug__b',
                  'crowd__a', 'crowd__b', 'crowd__c', 'crowd__d', 'crowd__e'):
         (free / f'{stem}.fbx').write_bytes(b'role fixture')
-    catalog = {'standing': {'animation': 'idle', 'solo': True},
-               'hug': {'animation': 'hug', 'solo': False},
-               'crowd': {'animation': 'crowd', 'solo': False}}
+    catalog = {'standing': {'animation': 'idle', 'participants': 1},
+               'hug': {'animation': 'hug', 'participants': 2},
+               'crowd': {'animation': 'crowd', 'participants': 2}}
     transitions = root / 'role-transitions.json'
     tq = pt.get_task_queue()
     with patch.object(pc, 'get_catalog', return_value=catalog), \
@@ -219,8 +219,8 @@ def lifecycle(pt, root):
     catalog = root / 'catalog.json'
     catalog.write_text(json.dumps({'groups': {'stand': {'default': 'standing', 'needs_place': False},
         'seat': {'default': 'sitting', 'needs_place': True}}, 'entries': {
-        'standing': {'solo': True, 'group': 'stand', 'animation': 'idle', 'prompt': 'standing'},
-        'sitting': {'solo': True, 'group': 'seat', 'animation': 'sit', 'prompt': 'sitting'}}}))
+        'standing': {'participants': 1, 'group': 'stand', 'animation': 'idle', 'prompt': 'standing'},
+        'sitting': {'participants': 1, 'group': 'seat', 'animation': 'sit', 'prompt': 'sitting'}}}))
     free, licensed = clips.library_root('free'), clips.library_root('licensed')
     free.mkdir(parents=True, exist_ok=True)
     licensed.mkdir(parents=True, exist_ok=True)

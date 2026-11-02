@@ -307,7 +307,7 @@ force_set_status(A, room="taproom")
 
 # … and a pair proposal in such a turn binds nothing either. No pair clip
 # lives in the throwaway ANIMATION_CLIPS_DIR, so the catalog offers no pair
-# pose of its own: "shaking hands" is a real catalog key (``solo: false``)
+# pose of its own: "shaking hands" is a real catalog key (``participants: 2``)
 # and ``handshake`` is the clip it names.
 _real_partner_poses = interaction_engine.partner_poses
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]

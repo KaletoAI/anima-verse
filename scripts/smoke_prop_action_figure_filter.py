@@ -34,8 +34,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 
-CATALOG = {"kneeling": {"animation": "kneel-a", "solo": True}, "sitting": {"animation": "sit", "solo": True},
-           "resting": {"animation": "rest-b", "solo": True}, "blank": {"animation": "", "solo": True}}
+CATALOG = {"kneeling": {"animation": "kneel-a", "participants": 1}, "sitting": {"animation": "sit", "participants": 1},
+           "resting": {"animation": "rest-b", "participants": 1}, "blank": {"animation": "", "participants": 1}}
 
 
 def pure():

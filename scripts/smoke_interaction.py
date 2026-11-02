@@ -17,15 +17,15 @@ without the boundary nobody would stand IN the plaza and the room's places
 could never be found), both characters inside it and in the same room
 "square"; "cellar" and "elsewhere" are its other rooms, the targets of the
 room-change blocks (a room outside the current location is never stored). Game clock pinned (factor 0). Catalog (private copy): "standing"
-(group stand), "embracing" (solo false, group stand, places 2, yaw_offset 0,
-animation "hug"), "cuddling" (solo false, group SEAT, animation "hug"),
+(group stand), "embracing" (participants 2, group stand, places 2, yaw_offset 0,
+animation "hug"), "cuddling" (participants 2, group SEAT, animation "hug"),
 "kissing" (no clip pair), "swaying" (loop clip). Blocks [1]–[8] run with a
 room WITHOUT markers, so a pair meets at the midpoint; [9] adds the markers.
 
 Hand-derived expectations:
 
   [1] Clip discovery: ``hug__a.fbx`` + ``hug__b.fbx`` + ``hug.json`` make the
-      pair kind "hug"; the catalog pose "embracing" (solo: false, animation
+      pair kind "hug"; the catalog pose "embracing" (participants 2, animation
       "hug") is a partner pose, "standing" is not.
 
   [2] Geometry: Ann stands at (10, 20), Bob at (10, 24) — Bob is 4 m away
@@ -50,7 +50,7 @@ Hand-derived expectations:
       490 m away elsewhere is refused, a solo pose ("standing") is refused,
       an already-bound character is refused.
 
-  [5a] ``set_pose_intent`` refuses a two-person key (catalog ``solo: false``)
+  [5a] ``set_pose_intent`` refuses a two-person key (catalog ``participants: 2``)
       on a character that no interaction of that key binds: a pair pose on a
       lone profile has no partner and no anchor. "embracing" on the unbound
       Eve raises ``PairPoseWithoutPartner("embracing")`` and writes nothing,
@@ -275,12 +275,12 @@ pose_catalog.catalog_path = _smoke_catalog_path
     "standing": {"prompt": "standing", "synonyms": [], "animation": "idle", "_default": True,
                  "group": "stand"},
     "embracing": {"prompt": "two people hugging", "synonyms": ["hug"],
-                  "animation": "hug", "solo": False, "group": "stand", "places": 2,
+                  "animation": "hug", "participants": 2, "group": "stand", "places": 2,
                   "yaw_offset": 0},
     "cuddling": {"prompt": "cuddling on a seat", "synonyms": [], "animation": "hug",
-                 "solo": False, "group": "seat", "places": 2, "yaw_offset": 0},
-    "kissing": {"prompt": "kissing", "synonyms": [], "animation": "kiss", "solo": False},
-    "swaying": {"prompt": "swaying together", "synonyms": [], "animation": "sway", "solo": False, "group": "stand"},
+                 "participants": 2, "group": "seat", "places": 2, "yaw_offset": 0},
+    "kissing": {"prompt": "kissing", "synonyms": [], "animation": "kiss", "participants": 2},
+    "swaying": {"prompt": "swaying together", "synonyms": [], "animation": "sway", "participants": 2, "group": "stand"},
 }}), encoding="utf-8")
 pose_catalog.reload_catalogs()
 
@@ -813,7 +813,7 @@ with keyed_lock("character_profile", "Bob"):
 with catalog_txn("pose"):
     _catalog = read_store("pose", "world")
     _catalog.setdefault("entries", {})["embracing"] = {
-        "prompt": "two people hugging", "animation": "hug", "solo": False,
+        "prompt": "two people hugging", "animation": "hug", "participants": 2,
         "group": "stand", "places": 2, "label_de": "Umarmen"}
     write_store("pose", _catalog, "world")
 pose_catalog.reload_catalogs()

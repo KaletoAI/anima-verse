@@ -85,8 +85,8 @@ def submit(mode: str, *, key: str = "", raw_text: str = "", text: str = "",
         entry = pose_catalog.get_catalog("pose").get(key)
         if entry is None:
             raise ValueError("Entry not found")
-        if not entry.get("solo", True):
-            raise ValueError("pair poses cannot get a generated animation")
+        if entry.get("participants", 1) != 1:
+            raise ValueError("multi-person poses cannot get a generated animation")
         if not _allowed_group(entry.get("group", "")):
             raise ValueError("unsupported place type")
     return get_task_queue().submit(TASK_TYPE,
@@ -350,7 +350,7 @@ def _handle(payload):
     existing = None
     if mode == "entry":
         existing = pose_catalog.get_catalog("pose").get(key)
-        if existing is None or not existing.get("solo", True):
+        if existing is None or existing.get("participants", 1) != 1:
             raise ValueError("entry missing or not solo")
         existing = dict(existing, key=key)
     motion_text = payload.get("raw_text", "") if mode == "candidate" else payload.get("text", "")

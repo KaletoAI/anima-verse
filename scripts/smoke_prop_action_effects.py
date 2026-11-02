@@ -203,7 +203,7 @@ class Effects(unittest.TestCase):
         from app.core import interaction_engine as interactions
         name, partner, target, _ = S.authored_pair()
         entries = S.pose_catalog.world_entries('pose')
-        entries['effects-free-pair'] = dict(solo=False, animation='run-pair', group='stand',
+        entries['effects-free-pair'] = dict(participants=2, animation='run-pair', group='stand',
                                            places=2, prompt='Free pair fixture')
         S.pose_catalog.replace_world_entries('pose', entries)
         S.pose_catalog.reload_catalogs()
