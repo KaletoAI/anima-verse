@@ -126,6 +126,7 @@ public partial class Main : Node3D
     private static bool _windowApplied;
     private static bool _cacheStartupPrepared;
     private static bool _diskCacheEnabled = true;
+    private static bool _vsyncLogged;
 
     /// <summary>The bench anchor of the current world (S2 drives its path relative to it).</summary>
     public AnchorInfo? Anchor { get; private set; }
@@ -168,6 +169,11 @@ public partial class Main : Node3D
             GetTree().Quit(code);
             return;
         }
+        if (!_vsyncLogged)
+        {
+            ConfigureVsync(_options.Bench, Log);
+            _vsyncLogged = true;
+        }
         ApplyWindowSize();
         BuildStage();
         if (_options.CheckBench)
@@ -189,6 +195,14 @@ public partial class Main : Node3D
         ApplyStoredFullscreen(launch.Fullscreen);
         _windowApplied = true;
         StartSession(launch);
+    }
+
+    /// <summary>Task 91: normal play tolerates a late frame; bench keeps its own V-sync policy.</summary>
+    internal static void ConfigureVsync(bool bench, Action<string> log)
+    {
+        if (!bench && DisplayServer.GetName() != "headless")
+            DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Adaptive);
+        log($"vsync: requested={(bench ? "bench-owned" : "Adaptive")} active={DisplayServer.WindowGetVsyncMode()} display={DisplayServer.GetName()}");
     }
 
     /// <summary>

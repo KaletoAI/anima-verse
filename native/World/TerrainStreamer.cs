@@ -118,7 +118,6 @@ public partial class TerrainStreamer : Node
         _ = Stream.StartStatsFill();
     }
 
-    private double _dbgPause;
     public override void _Process(double delta)
     {
         ulong now = Time.GetTicksUsec();
@@ -127,9 +126,6 @@ public partial class TerrainStreamer : Node
             double ms = (now - _lastUsec) / 1000.0;
             bool active = Active;
             Probe.Frame(ms, active);
-            var dbgPause = GC.GetTotalPauseDuration().TotalMilliseconds;
-            if (ms > 20 && Probe.Frames > 0) GD.Print($"[DBGPROBE] frame={Engine.GetProcessFrames()} ms={ms:0.0} active={active} gcpause={dbgPause - _dbgPause:0.0} gc0={GC.CollectionCount(0)} gc1={GC.CollectionCount(1)} gc2={GC.CollectionCount(2)}");
-            _dbgPause = dbgPause;
             Session.Frame(ms, active);
         }
         _lastUsec = now;

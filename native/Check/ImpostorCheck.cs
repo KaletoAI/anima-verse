@@ -29,6 +29,7 @@ public static class ImpostorCheck
 
     public static async Task RunAsync(Node3D world, FixtureSource source, WorldHeight height)
     {
+        await ImpostorDiskCheck.RunAsync(world, source);
         void Need(string what, bool yes) { if (!yes) throw new InvalidOperationException("impostor: " + what); }
         var wideFrame = ScatterLod.ImpostorFrame(1, 10)!.Value;
         var bakeCamera = ImpostorBaker.CameraForBake(1, 10, 0.5, wideFrame);

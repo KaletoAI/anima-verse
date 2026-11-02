@@ -19,6 +19,7 @@ public static class HitchCheck
             if(lines.Count!=1 || !lines[0].Contains("render scale 0.70")) throw new InvalidOperationException("hitch effective viewport scale");
             if(!lines[0].Contains("focus no") && !lines[0].Contains("focus yes")) throw new InvalidOperationException("hitch missing window focus");
             if(!lines[0].Contains("visible no") && !lines[0].Contains("visible yes")) throw new InvalidOperationException("hitch missing drawable visibility");
+            if(!lines[0].Contains(" cpu ") || !lines[0].Contains(" render cpu ")) throw new InvalidOperationException("hitch missing process/render CPU times");
             viewport.Scaling3DScale=1;
             HitchLog.EndFrame(100,lines.Add);
             if(!lines[1].Contains("render scale 1.00")) throw new InvalidOperationException("hitch follows effective resize scale");
@@ -27,6 +28,7 @@ public static class HitchCheck
             now=60000; HitchLog.EndFrame(16,lines.Add);
             if(lines.Count!=301 || !lines[300].StartsWith($"hitches 60 s: n=350, unfocused={(DisplayServer.WindowIsFocused() ? 0 : 350)},")
                 || !lines[300].Contains("p50 frame 100 ms, p50 gpu 0 ms")) throw new InvalidOperationException("hitch summary beyond detail cap");
+            if(!lines[300].Contains("p50 cpu ") || !lines[300].Contains("p50 render cpu ")) throw new InvalidOperationException("hitch summary missing CPU times");
             for(int i=0;i<4;i++) HitchLog.EndFrame(200,lines.Add);
             now=120000; HitchLog.EndFrame(16,lines.Add);
             if(lines.Count!=302 || !lines[301].StartsWith("hitches 60 s: n=4,") || !lines[301].Contains("p50 frame 200 ms")) throw new InvalidOperationException("hitch second window reset");

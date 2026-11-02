@@ -247,6 +247,16 @@ repository working directory for its `repo:` references; normal play does not.
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --user=demo --goto=LOCATION
 ```
 
+Normal play requests adaptive V-sync (FIFO_RELAXED where supported); one
+`vsync: requested=Adaptive active=…` line records what the display server
+reports. Bench retains its own V-sync handling. Hitch lines and their 60 s
+summary include process CPU time (`Performance.TimeProcess`, ms) and viewport
+render CPU time beside GPU time. These monitors describe the preceding
+measured frame, as in bench results. At boot end, `boot machine:` logs logical
+CPUs, Linux one-minute load and available/total memory, plus this boot's
+process CPU time, wall time and CPU/wall ratio. Missing `/proc` fields are
+silently omitted; no new graphics setting is introduced.
+
 **The launcher.** The client starts on its login screen: server address, user,
 password. The server field takes the address the way one types it —
 `192.168.8.244:8000` becomes `http://192.168.8.244:8000` (scheme added when
@@ -1155,8 +1165,22 @@ browser's ground does not read it either (§ A9: the row carries the prop facts)
   ug_mount_ms= discarded=` (last/largest). On the real world: worker 85–145 ms,
   mount ≤ 3 ms per 64 m step (was 100–160 ms of one frame).
 
-Not drawn (this favours Godot): the impostor billboards beyond 120 m
-(`impostors.ts`), the `along`/`edge`/`center` rows (counted, logged as
+Far impostors (Tasks 38/91) use a 128² RGBA8 midday bake and its full mip chain.
+Finished bakes share the client disk cache's 4 GiB budget, LRU and Clear cache
+action. Keys include the model URL's content version (`v=`), texture size and
+`ImpostorDiskCache.BakeCodeVersion` (bump for any bake change). URLs without a
+content version remain session-only. A disk hit uploads the finished image
+without loading a GLB, rendering or reading back. A miss uses the global
+RenderingDevice's asynchronous readback on the render thread; mip generation
+and raw serialization run on a worker. One viewport bakes at a time, and the
+session cache retains 256 released bakes (~21.3 MiB of pixels). The per-bake
+log reports the main-thread readback request time. `--check scatter` checks
+disk identity, restart, corruption, shared clear/limit/LRU; with a Vulkan
+display it also compares a fixture's async RGBA8 and mips bit for bit against
+the old `GetImage()` path and measures the request (< 5 ms). Headless runs
+explicitly report that GPU proof as skipped.
+
+Not drawn (this favours Godot): the `along`/`edge`/`center` rows (counted, logged as
 `skipped`), the camera corridor fade. Different but cost-neutral: the
 `aligned` yaw uses the angle without the surface axis; the undergrowth's layer
 mask gate is the geometric "topmost painted area" test.
@@ -1252,9 +1276,12 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   profile per process, removed after CEF shuts down. This also isolates cookies when the Chrome runtime uses
   a disk profile despite the incognito setting. Reusing the same token skips browser logout; a different
   token retains the guarded cleanup of an unfinished back-to-title. Each handoff logs its outcome.
-  HUD settings are kept by Godot, independently of the profile. CEF has no DevTools port; its log (incl. the page's console
-  at "info") is `user://cef/debug.log` (Linux:
-  `~/.local/share/godot/app_userdata/Anima Native/cef/debug.log`). "Back to
+  HUD settings are kept by Godot, independently of the profile. CEF has no DevTools port; its log keeps warnings and
+  errors (including the bridge's `console.warn`) while suppressing per-message info logs.
+  Editor runs use `user://cef/debug.log`; unpacked exports use `<binary>/logs/cef-debug.log`.
+  A read-only export/AppImage falls back to `user://cef/debug.log` (Linux:
+  `~/.local/share/godot/app_userdata/Anima Native/cef/debug.log`). Before CEF starts,
+  a log larger than 20 MiB moves to `.1`, replacing the previous backup. "Back to
   title" in the menu logs out through the HUD page (CEF drops its cookie),
   then Godot returns to its login screen (see "Start" → "Back to the title").
 

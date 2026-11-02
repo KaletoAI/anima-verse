@@ -176,6 +176,7 @@ public partial class HudOverlay : CanvasLayer
         _cef.Runtime.Name = "GdCEF";
         AddChild(_cef.Runtime);
         var dir = ProjectSettings.GlobalizePath("user://cef");
+        var logFile = CefLogFile(dir);
         _cefProfile = System.IO.Directory.CreateTempSubdirectory("anima-cef-").FullName;
         var config = new Godot.Collections.Dictionary
         {
@@ -186,10 +187,9 @@ public partial class HudOverlay : CanvasLayer
             ["root_cache_path"] = _cefProfile,
             ["cache_path"] = _cefProfile + "/cache",
             ["persist_session_cookies"] = false,
-            // Console messages of the page (the bridge's own warnings) land here at "info";
-            // next to the exported binary (run.sh's logs/) so the build host can read them.
-            ["log_file"] = CefLogFile(dir),
-            ["log_severity"] = "info",
+            // Keep page warnings/errors, but suppress gdCEF's per-emit info logging.
+            ["log_file"] = logFile,
+            ["log_severity"] = CefLogging.Severity,
             ["locale"] = "en-US",
             // No DevTools port: it would let any local process read the session.
             ["remote_debugging_port"] = 0,
@@ -198,10 +198,10 @@ public partial class HudOverlay : CanvasLayer
         if (!_cef.Initialize(config))
         {
             _failed = true;
-            Log($"hud: CEF failed to initialise ({_cef.RuntimeError.Trim()}) — running without the HUD; CEF log {dir}/debug.log");
+            Log($"hud: CEF failed to initialise ({_cef.RuntimeError.Trim()}) — running without the HUD; CEF log {logFile}");
             return;
         }
-        Log($"hud: CEF initialised (fresh profile {_cefProfile}, log {dir}/debug.log)");
+        Log($"hud: CEF initialised (fresh profile {_cefProfile}, log {logFile}, severity {CefLogging.Severity})");
     }
 
     public override void _ExitTree()
@@ -703,10 +703,6 @@ public partial class HudOverlay : CanvasLayer
     /// </summary>
     private static string CefLogFile(string userDir)
     {
-        if (OS.HasFeature("editor")) return userDir + "/debug.log";
-        var logs = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(OS.GetExecutablePath()) ?? ".", "logs");
-        try { System.IO.Directory.CreateDirectory(logs); }
-        catch (System.Exception) { return userDir + "/debug.log"; }
-        return System.IO.Path.Combine(logs, "cef-debug.log");
+        return CefLogging.Prepare(userDir, System.IO.Path.GetDirectoryName(OS.GetExecutablePath()) ?? ".", OS.HasFeature("editor"));
     }
 }

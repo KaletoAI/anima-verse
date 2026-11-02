@@ -18,6 +18,16 @@ public static class GraphicsCheck
         var vectors = JsonNode.Parse(File.ReadAllText(path))!["cases"]!.AsArray();
         JsonNode Prefs(GraphicsPrefs p) => JsonNode.Parse(GraphicsPrefs.Save(p))!;
         int count = HitchCheck.Run(host.GetViewport());
+        DiagnosticsCheck.Run();
+        var pacing = new System.Collections.Generic.List<string>();
+        var oldVsync = DisplayServer.WindowGetVsyncMode();
+        Main.ConfigureVsync(true, pacing.Add);
+        Require("bench owns its V-sync policy", DisplayServer.WindowGetVsyncMode() == oldVsync);
+        Main.ConfigureVsync(false, pacing.Add);
+        Require("active V-sync mode logged", pacing.Count == 2 && pacing[1].Contains($"active={DisplayServer.WindowGetVsyncMode()}"));
+        if (DisplayServer.GetName() != "headless")
+            Require("normal play requests adaptive", pacing[1].Contains("requested=Adaptive"));
+        DisplayServer.WindowSetVsyncMode(oldVsync);
         foreach (var c in vectors)
         {
             var a = c!["args"]!.AsArray();
@@ -107,8 +117,9 @@ public static class GraphicsCheck
         HitchLog.EndFrame(133, line => hitch = line);
         HitchLog.Armed = false;
         Require("hitch keeps prefix and adds GPU and scale", hitch is not null && hitch.StartsWith("hitch 133 ms: marked ")
-            && hitch.Contains(" gc ") && hitch.Contains(" gpu ") && hitch.Contains(" ms, render scale "));
-        return $"graphics vectors={count} round_trips=36 bridge=36 viewport=auto/fixed/resize/root-window hitch=gpu/scale";
+            && hitch.Contains(" gc ") && hitch.Contains(" gpu ") && hitch.Contains(" ms, render scale ")
+            && hitch.Contains(" cpu ") && hitch.Contains(" render cpu "));
+        return $"graphics vectors={count} round_trips=36 bridge=36 viewport=auto/fixed/resize/root-window hitch=gpu/cpu/render-cpu/scale vsync=logged boot/cef=pass";
     }
 
     private static JsonNode Check(GraphicsPrefsCheck check) => check.Prefs is { } p

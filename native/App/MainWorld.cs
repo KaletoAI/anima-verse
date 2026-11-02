@@ -31,6 +31,7 @@ public partial class Main : Node3D
     {
         SetStatus("Loading world…");
         var boot = _boot = new BootTracker(() => Time.GetTicksMsec());
+        var diagnostics = new BootDiagnostics();
         boot.Changed += PublishBoot;
         PublishBoot();
         try
@@ -206,6 +207,7 @@ public partial class Main : Node3D
             boot.SetNote(null);
             boot.Report("arrival");
             Log("boot stages: " + boot.Describe());
+            Log(diagnostics.Read());
 
             if (_options.Fly is { } fly && !_options.Bench) await FlyAsync(fly.Distance, fly.HeadingDeg);
             if (_options.Offline is not null && !_options.Bench)
@@ -290,7 +292,6 @@ public partial class Main : Node3D
         {
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             ulong now = Time.GetTicksUsec();
-            if ((now - last) / 1e3 > 20) Log($"[DBGFRAME] t={t:0.000} ms={(now - last) / 1e3:0.0} gc0={GC.CollectionCount(0)} gc1={GC.CollectionCount(1)} gc2={GC.CollectionCount(2)}");
             t += (now - last) / 1e6;
             last = now;
             double d = Math.Min(distance, FlySpeedMps * t);
