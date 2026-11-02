@@ -2694,7 +2694,10 @@ Sitz-Heuristik zurück). Das SSE-Ereignis `activity_changed` trägt dasselbe Pro
 `place` (`{id, slot, room_id}` oder `null`) neben `activity`/`animation`; der
 Avatar setzt freie Körperposen und **raumgebundene Marker** über
 `POST /play/self/activity` (`{"activity": ""}` = Pose/Platz löschen und echt
-aufwachen; `{"place_id", "pose"}` = ausdrücklich gewählter Raum-Marker).
+aufwachen — mit `"finish": true`, dem „Beenden“ des HUD, statt dessen in die
+Folge-Pose der Pose, wenn sie eine hat (`pose_catalog.follow_pose_for`); die
+Steuer-Taste sendet `finish` nie; `{"place_id", "pose"}` = ausdrücklich
+gewählter Raum-Marker).
 Ein Prop-Marker wird hier mit `409 prop_action_required` abgelehnt.
 `GET /play/places` liefert weiterhin Raum-Marker als
 `{room_id, places: [{id,label,group,capacity,free,free_slots,poses:[{key,label}]}]}`.

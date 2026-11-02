@@ -758,7 +758,7 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 | `resolve_invite(invite_id, accept) -> Dict` | Answer an invitation. `status` `cannot` ends an accepted yes as `failed` with its saved reason |
 | `get_invite(invite_id)` / `cancel_invite(invite_id) -> bool` / `clear_invites_for(character)` | Read/close invitations. Cancellation conditionally claims only a pending/approaching row; an answer that already claimed it wins. A live pair's accepted invitation survives housekeeping |
 | `last_answer_of(inviter) -> Optional[dict]` / `dismiss_answer(invite_id, inviter) -> bool` | Read the newest fresh own declined/failed answer (`invite_id`, `invitee`, `pose_key`, `status`, `reason`); dismiss only an own declined/failed row as cancelled |
-| `end_interaction(character_name, reason='ended', *, interaction_id='') -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended |
+| `end_interaction(character_name, reason='ended', *, interaction_id='', keep_places=()) -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended. After a normal end (`reason` `ended`/`avatar`/`cancelled`) a free pair's partners take their follow pose (`follow_pose_for`); `keep_places` (furniture pairs only) names partners whose place the ending run keeps for theirs |
 | `pair_profile_locks(a, b)` | Der EINZIGE sanktionierte Weg, zwei Profil-Locks zu halten (sortierte Namensreihenfolge, siehe „Sperren") |
 
 The core emits `interaction.invited` for the question and
@@ -814,6 +814,18 @@ Provider `prop_action.meters` (Kwargs `execution_id`, `members`, `pose_key`; Ant
 einer laufenden Aktion für die HUD-Zeile (`GET /play/prop-actions/state` → `meters`); `value` wird auf
 0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`. Optional `holdable`/`held` (nur
 echtes `True` zählt): das HUD bietet der eigenen Zeile dann einen Zurückhalten-Schalter an (`hold_meter`).
+
+## Folge-Pose nach dem Ende — `app.core.pose_catalog` ✅
+
+Nach dem NORMALEN Ende einer Pose oder Aktion (ein Teilnehmer beendet sie, ihre Phasen sind durch, ein
+Abschluss beendet sie) nimmt eine Person ihre Folge-Pose ein, statt aufzustehen: am Möbel über eine
+Solo-Aktion desselben Stücks mit dieser Pose (ohne Weg, auf dem nächsten freien Slot), sonst über
+`set_pose_intent` auf dem bisherigen Raumplatz. Ein Ortswechsel, Loslaufen, eine andere Aktion, Schlaf oder
+ein Fehler sind kein normales Ende. Ein NPC steht nach 20 Spielminuten von selbst auf, der Avatar bleibt.
+
+| Funktion | Semantik |
+|---|---|
+| `follow_pose_for(pose_key, role='', *, use_provider=True) -> str` | Die Folge-Pose: Katalogfeld `follow_pose` (ein Key oder `{a, b}` je Clip-Rolle einer Paar-Pose), sonst der Provider `pose.follow_pose` (Kwargs `pose_key`, `role`, `group`; Antwort: ein Pose-Key), sonst das `follow` der Platzgruppe (shared: `seat` → `sitting`, `lie` → `lying`). "" = keine; nie die Pose selbst und nie eine Paar-Pose — jedes Stoppen wendet genau EINE Stufe an |
 
 ## Pose — `app.models.character` ✅ (set_pose-Paket)
 

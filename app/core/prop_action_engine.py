@@ -390,9 +390,12 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
                 return "placement_not_found"
             taken = places.occupancy(run["target"]["location_id"], run["target"]["room_id"],
                                      _places=inventory).get(place["id"], [])
-            if anchor["slot"] not in places.free_slots(place, [(n, s) for n, s in taken
-                    if n not in profiles and n != "@prop:" + run["execution_id"]]):
-                return "slot_occupied"
+            others = [(n, s) for n, s in taken if n not in profiles and n != "@prop:" + run["execution_id"]]
+            if anchor["slot"] not in places.free_slots(place, others):
+                stale = _left_behind(run)
+                if not stale or anchor["slot"] not in places.free_slots(
+                        place, [t for t in others if t[0] not in stale]):
+                    return "slot_occupied"
             binding = next((b for b in place.get("action_bindings", [])
                             if b["action_id"] == run["action_id"]), None)
             if not binding or not binding.get("supported") or binding.get("validation") != "local_valid":
@@ -1125,7 +1128,7 @@ def _group_line(lines, run):
     return lines.get((get_catalog("pose").get(_held_pose(run)) or {}).get("group"), "")
 
 
-def _narrate_finish(run, before, status, reason, keep_seated):
+def _narrate_finish(run, before, status, reason, kept):
     """The line for a run that has just ended, from the status it had."""
     pair = run["definition"]["ability"] == "pair"
     if reason == "consent_declined":
@@ -1136,8 +1139,8 @@ def _narrate_finish(run, before, status, reason, keep_seated):
                  inviter=run["actor"], invitee=run["partner"])
     elif before in ("active", "sleeping"):
         # A pair ends through end_interaction, which tells the room itself;
-        # a seat kept for the actor's next place is no getting up.
-        if pair or keep_seated == run["actor"]:
+        # a seat kept for the actor's next place or follow pose is no getting up.
+        if pair or run["actor"] in kept:
             return
         if run["definition"]["ability"] == "sleep" and reason == "awake":
             _narrate(run, "{actor} wakes up and gets up from the {prop}.")
@@ -1150,7 +1153,10 @@ def _narrate_finish(run, before, status, reason, keep_seated):
 
 
 @_internal_mutation()
-def _finish(run, status, reason, *, keep_seated=""):
+def _finish(run, status, reason, *, keep_seated="", follow=False):
+    """``follow``: a NORMAL end (a participant stops it, its phases are
+    through) — whoever has a follow pose with an action of it on the same
+    piece stays and switches into that (_follow_up) instead of standing up."""
     # State readers share this lock: terminal status and departure cleanup
     # become visible together, including server-side endings.
     with _lock(run["execution_id"]):
@@ -1170,36 +1176,33 @@ def _finish(run, status, reason, *, keep_seated=""):
             phases.append("active")
         if status == "completed" and reason == "phases_completed":
             phases.append("success")
+        follows = (_follow_targets(run) if follow and status == "completed" and before == "active" else {})
+        kept = set(follows) | ({keep_seated} if keep_seated else set())
         run.update(status=status, reason=reason)
         run["data"]["cleanup_pending"] = True
         _end_finales(run["execution_id"])
         _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
         if before == "active":
             _emit_lifecycle("prop_action.ended", run, status=status, reason=reason)
-        _cleanup(run, keep_seated=keep_seated)
-        _narrate_finish(run, before, status, reason, keep_seated)
+        _cleanup(run, keep=kept)
+        if follows:
+            _follow_up(run, follows)
+        _narrate_finish(run, before, status, reason, kept)
         return _result(run)
 
 
 @_internal_mutation()
-def _cleanup(run, keep_seated=""):
-    """``keep_seated``: a member whose place stays for the departure of the
-    run replacing this one (_replace); everyone else stands up here."""
+def _cleanup(run, keep=()):
+    """``keep``: members whose place stays — for the departure of the run
+    replacing this one (_replace) or for their follow pose (_follow_up);
+    everyone else stands up here."""
     reason = run["reason"]
     for role, name in _members(run):
         jid = run["data"]["journey_ids"].get(name)
         if jid:
             travel.cancel_journey(name, journey_id=jid, execution_kind="prop_action", execution_ref=run["execution_id"], reason=reason)
-        if name != keep_seated:
-            pose = C.get_effective_pose_key(name)
-            before = C.get_character_pos(name)
-            place = (C.get_character_profile(name) or {}).get("place") or {}
-            held = place.get("execution_id") == run["execution_id"]
-            released = C.release_prop_action_state(name, run["execution_id"])
-            after = C.get_character_pos(name)
-            if released and held and before and after:
-                after["yaw"] = C.get_avatar_sync_snapshot(name)["yaw"]
-                run["data"].setdefault("exit_motions", {})[name] = _exit_motion(pose, before, after)
+        if name not in keep:
+            _stand_up(run, name)
     # Pair interaction cleanup can release both members itself. Capture and
     # release every owned place first, while its original pose still exists.
     for _role, name in _members(run):
@@ -1207,8 +1210,136 @@ def _cleanup(run, keep_seated=""):
         inter = profile.get("interaction") or {}
         if inter.get("execution_ref") == run["execution_id"]:
             from app.core.interaction_engine import end_interaction
-            end_interaction(name, reason=reason, interaction_id=inter["id"])
+            end_interaction(name, reason=reason, interaction_id=inter["id"], keep_places=keep)
     store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
+
+
+def _stand_up(run, name):
+    """Release ``name``'s place of ``run``, recording the departure the
+    client plays (``exit_motions``) when it really got up from it."""
+    pose = C.get_effective_pose_key(name)
+    before = C.get_character_pos(name)
+    place = (C.get_character_profile(name) or {}).get("place") or {}
+    held = place.get("execution_id") == run["execution_id"]
+    released = C.release_prop_action_state(name, run["execution_id"])
+    after = C.get_character_pos(name)
+    if released and held and before and after:
+        after["yaw"] = C.get_avatar_sync_snapshot(name)["yaw"]
+        run["data"].setdefault("exit_motions", {})[name] = _exit_motion(pose, before, after)
+
+
+#: How long an NPC stays in its follow pose (game seconds) before it gets up
+#: by itself; the player's avatar stays until it is stopped.
+FOLLOW_NPC_LIMIT_S = 20 * 60
+
+
+def _ended_pose(run, name):
+    """``(pose, clip role)`` ``name`` held when ``run`` ended: the last phase
+    of a combined action; the clip role only for a pair."""
+    definition = run["definition"]
+    if definition["ability"] == "combined":
+        return definition["phases"][-1]["pose_key"], ""
+    roles = run["data"].get("clip_roles") or {}
+    role = next((r for r, n in roles.items() if n == name), "") if definition["ability"] == "pair" else ""
+    return definition["pose_key"], role
+
+
+def _follow_targets(run):
+    """``{name: action}``: who of ``run`` goes into a follow pose
+    (``pose_catalog.follow_pose_for``) and through which solo action of the
+    SAME piece — one holding exactly that pose, else one of its place type
+    (the furniture_for_pose order). Nobody without such an action."""
+    from app.core.pose_catalog import follow_pose_for, group_of
+    if run["definition"]["ability"] not in ("pose", "pair", "combined"):
+        return {}
+    query = places._GeometryQuery()
+    target = run["target"]
+    piece = next((p for p in query.room_places(target["location_id"], target["room_id"])
+                  if p.get("placement_id") == target["placement_id"]
+                  and p.get("variant_uid") == target["variant_uid"]), None)
+    if not piece:
+        return {}
+    actions = [a for a in query.prop_document(piece["prop_id"]).get("actions") or []
+               if a.get("enabled") and a.get("ability") == "pose" and a.get("participants") == 1]
+    out = {}
+    for _role, name in _members(run):
+        follow = follow_pose_for(*_ended_pose(run, name))
+        if not follow:
+            continue
+        action = (next((a for a in actions if a.get("pose_key") == follow), None)
+                  or next((a for a in actions if group_of(a.get("pose_key") or "") == group_of(follow)), None))
+        if action:
+            out[name] = action
+    return out
+
+
+def _follow_order(run, follows):
+    """Who chooses a place first: the one nearest to a free slot of its
+    follow's place type on the piece — on a single armchair after a shared
+    pair seat, the role nearer to it keeps sitting."""
+    from app.core.pose_catalog import group_of
+    target = run["target"]
+    inventory = places.room_places(target["location_id"], target["room_id"])
+
+    def distance(name):
+        pos = C.get_character_pos(name)
+        group = group_of(follows[name].get("pose_key") or "")
+        slots = [s for p in inventory if p.get("placement_id") == target["placement_id"]
+                 and p.get("group") == group for s in p["slots"]]
+        return min((math.dist((pos["x"], pos["z"]), (s[0], s[1])) for s in slots), default=math.inf) if pos else math.inf
+    return sorted(follows, key=lambda n: (distance(n), n))
+
+
+def _follow_up(run, follows):
+    """Switch every member of the ended ``run`` named in ``follows`` into its
+    follow action on the same piece, without walking (_settle_in_place) and
+    claiming the nearest free slot of its place type. Whoever gets none (the
+    piece is full, the action refuses) stands up as everyone else did."""
+    from app.models.account import get_all_avatars
+    avatars = set(get_all_avatars())
+    revision = None
+    for name in _follow_order(run, follows):
+        action = follows[name]
+        try:
+            target = run["target"]
+            query = places._GeometryQuery()
+            piece = next(p for p in query.room_places(target["location_id"], target["room_id"])
+                         if p.get("placement_id") == target["placement_id"]
+                         and p.get("variant_uid") == target["variant_uid"])
+            revision = props._document_revision(query.prop_document(piece["prop_id"]))
+            definition, reason = _definition(target, action["id"], revision, _query=query)
+            result = _refused(reason) if reason else None
+            if not reason:
+                now = game_time().canonical()
+                fingerprint = store.encode([target, action["id"], revision, "", "follow", run["execution_id"]])
+                follow = dict(execution_id=uuid.uuid4().hex, actor=name, partner="", request_id=None,
+                              request_fingerprint=fingerprint, action_id=action["id"],
+                              definition_revision=revision, status="approaching", phase="", reason="",
+                              target=dict(target), definition=definition,
+                              data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
+                                        last_game=now, elapsed=0.0, consent_elapsed=0.0,
+                                        follow_of=run["execution_id"],
+                                        **({} if name in avatars else {"follow_limit_s": FOLLOW_NPC_LIMIT_S})))
+                result, _created = _admit(follow, fingerprint, replaces=(run["execution_id"],), direct=True)
+        except Exception:
+            logger.exception("Follow pose for %s after %s failed", name, run["execution_id"])
+            result = _refused("follow_error")
+        if result.get("status") in ("refused", "failed", "cancelled"):
+            logger.info("%s gets no follow pose after %s: %s", name, run["execution_id"], result.get("reason"))
+            _stand_up(run, name)
+    store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
+
+
+def _left_behind(run):
+    """Members of the run ``run`` follows on whose place that run still
+    holds: switching one after the other, the second sits on its old seat
+    (a pair's whole place) while the first already takes its new slot."""
+    ref = run["data"].get("follow_of")
+    old = store.get(ref) if ref else None
+    if not old:
+        return set()
+    return {n for _, n in _members(old)
+            if ((C.get_character_profile(n) or {}).get("place") or {}).get("execution_id") == ref}
 
 
 def cancel_with_motion(actor: str, execution_id: str) -> dict:
@@ -1253,7 +1384,8 @@ def cancel(actor: str, execution_id: str) -> dict:
             _book_reaction(run, False, -1, False)
             return _finish(run, "cancelled", "partner_resisted")
         normal = run["status"] == "active" and run["definition"]["ability"] in ("pose", "pair")
-        return _finish(run, "completed" if normal else "cancelled", "ended" if normal else "cancelled")
+        return _finish(run, "completed" if normal else "cancelled", "ended" if normal else "cancelled",
+                       follow=normal)
 
 
 def _replaceable(actor, target, action_id):
@@ -1783,6 +1915,11 @@ def advance(now: GameTime) -> int:
                     _finish(run, "completed", "awake")
                     continue
             elif run["status"] == "active":
+                limit = data.get("follow_limit_s")
+                if limit and data.get("active_game_s", 0) >= limit:
+                    # An NPC's follow pose runs out; it gets up (no further step).
+                    _finish(run, "completed", "follow_elapsed")
+                    continue
                 if run["definition"]["ability"] == "combined":
                     phases = run["definition"]["phases"]
                     index = next(i for i, p in enumerate(phases) if p["id"] == run["phase"])
@@ -1791,7 +1928,7 @@ def advance(now: GameTime) -> int:
                         data["phase_elapsed"] -= phases[index]["duration_game_s"]
                         index += 1
                         if index == len(phases):
-                            _finish(run, "completed", "phases_completed")
+                            _finish(run, "completed", "phases_completed", follow=True)
                             break
                         run["phase"] = phases[index]["id"]
                         # Pose and phase/effect progress commit together below.

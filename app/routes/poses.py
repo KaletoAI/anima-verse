@@ -127,6 +127,18 @@ def _finale_animation(raw: Any) -> str:
     return value
 
 
+def _follow_pose(raw: Any) -> Any:
+    """A pose's optional follow pose (``pose_catalog.follow_pose_for``): a
+    pose key, or ``{a, b}`` per clip role of a pair; "" clears it. Whether
+    the keys name solo poses is the catalog check's (``validate_catalog``)."""
+    if isinstance(raw, dict):
+        if set(raw) - {"a", "b"} or any(v is not None and not isinstance(v, str) for v in raw.values()):
+            raise HTTPException(status_code=400, detail="follow_pose must be a pose key or {a, b}")
+    elif raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="follow_pose must be a pose key or {a, b}")
+    return pose_catalog.normalize_follow(raw)
+
+
 def _yaw_offset(raw: Any) -> float:
     """Degrees the pair clip's frame turns against the marker facing."""
     try:
@@ -154,10 +166,16 @@ def _normalize_group(raw: Any) -> Dict[str, Any]:
         drop = round(max(0.0, min(1.0, float(raw.get("root_drop") or 0.0))), 3)
     except (TypeError, ValueError):
         drop = 0.0
-    return {"label": str(raw.get("label") or "").strip(),
-            "root_drop": drop,
-            "default": str(raw.get("default") or "").strip().lower(),
-            "needs_place": bool(raw.get("needs_place", True))}
+    group = {"label": str(raw.get("label") or "").strip(),
+             "root_drop": drop,
+             "default": str(raw.get("default") or "").strip().lower(),
+             "needs_place": bool(raw.get("needs_place", True))}
+    # The follow pose of the group's poses (pose_catalog.follow_pose_for),
+    # stored only when there is one.
+    follow = str(raw.get("follow") or "").strip().lower()
+    if follow:
+        group["follow"] = follow
+    return group
 
 
 def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[str]:
@@ -324,6 +342,12 @@ def list_entries(axis: str = Query("pose"),
             # shape-checked); the editor shows it in place of "none".
             row["finale_auto"] = (_finale_engine.finale_kind(key)
                                   if not row["finale_animation"] else "")
+            # The follow pose: the stored field, and what applies without it
+            # (provider or place type) — per clip role for a pair.
+            row["follow_pose"] = entry.get("follow_pose", "")
+            row["follow_auto"] = ("" if row["follow_pose"] else
+                                  pose_catalog.follow_pose_for(key) if row["solo"] else
+                                  {r: pose_catalog.follow_pose_for(key, r) for r in ("a", "b")})
             # Whether POST /poses/{key}/rename accepts this key — the editor
             # hides the button for the keys the server code names literally.
             row["renamable"] = key not in CODE_NAMED_POSE_KEYS
@@ -403,6 +427,9 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                 finale = _finale_animation(body.get("finale_animation"))
                 if finale:
                     entry["finale_animation"] = finale
+                follow = _follow_pose(body.get("follow_pose"))
+                if follow:
+                    entry["follow_pose"] = follow
             data["entries"][key] = entry
             write_store(axis, data, store)
         return {"status": "success", "key": key, "axis": axis, "store": store}
@@ -681,6 +708,12 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                     entry["finale_animation"] = finale
                 else:
                     entry.pop("finale_animation", None)
+            if "follow_pose" in body and axis == "pose":
+                follow = _follow_pose(body["follow_pose"])
+                if follow:
+                    entry["follow_pose"] = follow
+                else:
+                    entry.pop("follow_pose", None)
             if axis == "pose" and entry.get("solo", True):
                 # A solo pose occupies exactly one place and never turns — leaving
                 # the pair fields behind would be a stray the catalog reports.

@@ -11,7 +11,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.core.movement import MOVEMENT_ONLY_POSES
 from app.core.log import get_logger
@@ -369,8 +369,51 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
             # the pose's own loop (prop_action_engine.begin_finale) — a pair
             # kind for a pair pose, a solo kind for a solo one.
             norm["finale_animation"] = str(entry.get("finale_animation") or "").strip().lower()
+            # The solo pose a participant goes into after a NORMAL end
+            # (follow_pose_for): one key, or a pair's ``{a, b}`` per clip role.
+            norm["follow_pose"] = normalize_follow(entry.get("follow_pose"))
         out[str(key).strip().lower()] = norm
     return out
+
+
+def normalize_follow(raw) -> Any:
+    """``follow_pose`` as stored: a key ("" = none) or ``{a, b}`` per clip
+    role, both trimmed and lower case; a per-role map with no key left is ""."""
+    if isinstance(raw, dict):
+        roles = {role: str(raw.get(role) or "").strip().lower() for role in ("a", "b")}
+        return roles if any(roles.values()) else ""
+    return str(raw or "").strip().lower()
+
+
+def follow_pose_for(pose_key: str, role: str = "", *, use_provider: bool = True) -> str:
+    """The solo pose a participant takes after a NORMAL end of ``pose_key``
+    (plan-folge-pose.md): the catalog field ``follow_pose`` (per clip role
+    ``role`` for a pair), else the provider ``pose.follow_pose(pose_key,
+    role, group) -> key``, else the place type's ``follow``. "" = none — and
+    a pose never follows itself, so stopping the follow pose stands up: every
+    stop applies exactly ONE step."""
+    key = (pose_key or "").strip().lower()
+    entry = get_catalog("pose").get(key)
+    if not entry:
+        return ""
+    field = entry.get("follow_pose") or ""
+    follow = (field.get(role, "") if isinstance(field, dict) else field)
+    group = entry.get("group", "")
+    if not follow and use_provider:
+        from app.core.hooks import get_provider
+        provider = get_provider("pose.follow_pose")
+        if provider:
+            try:
+                follow = str(provider(pose_key=key, role=role, group=group) or "").strip().lower()
+            except Exception:
+                logger.exception("pose.follow_pose provider failed for %s", key)
+                follow = ""
+    if not follow:
+        follow = (get_groups().get(group) or {}).get("follow", "")
+    target = get_catalog("pose").get(follow)
+    if follow == key or not target or not target.get("solo", True):
+        return ""
+    return follow
 
 
 def pose_label(key: str, lang: str = "en") -> str:
@@ -492,6 +535,9 @@ def _load_groups(*, world: Optional[Dict[str, dict]] = None) -> Dict[str, dict]:
                   # A place type normally demands a marker — only a group
                   # that says otherwise gets by without one.
                   "needs_place": bool(spec.get("needs_place", True)),
+                  # The follow pose of the group's poses that name none
+                  # themselves (follow_pose_for), "" = stand up.
+                  "follow": str(spec.get("follow") or "").strip().lower(),
                   # Which layer the effective group comes from, so the editor
                   # writes it back there (the entries carry the same key).
                   "_store": origin.get(key, "shared")}
@@ -662,6 +708,44 @@ def validate_catalog(axis: str) -> List[str]:
                 problems.append(f"{axis}/{key}: unknown place type '{entry.get('group', '')}'")
             if entry.get("_stray_pair_fields"):
                 problems.append(f"{axis}/{key}: places/yaw_offset only make sense on a pair pose")
+        problems += _follow_problems(catalog, groups)
+    return problems
+
+
+def _follow_problems(catalog: Dict[str, dict], groups: Dict[str, dict]) -> List[str]:
+    """Follow poses that name no solo pose, a per-role map on a solo pose,
+    and chains that come back round (A -> B -> A would never stand up). The
+    provider is a package's runtime answer and is not part of the check."""
+    problems: List[str] = []
+
+    def bad(name: str) -> bool:
+        return name not in catalog or not catalog[name].get("solo", True)
+
+    for g, spec in groups.items():
+        follow = spec.get("follow", "")
+        if follow and bad(follow):
+            problems.append(f"pose group '{g}': follow '{follow}' is not a solo pose")
+    for key, entry in catalog.items():
+        field = entry.get("follow_pose") or ""
+        if isinstance(field, dict) and entry.get("solo", True):
+            problems.append(f"pose/{key}: a per-role follow pose only makes sense on a pair pose")
+        for follow in (field.values() if isinstance(field, dict) else [field]):
+            if follow and bad(follow):
+                problems.append(f"pose/{key}: follow pose '{follow}' is not a solo pose")
+    reported: set = set()
+    for start in catalog:
+        seen = [start]
+        while True:
+            nxt = follow_pose_for(seen[-1], use_provider=False)
+            if not nxt:
+                break
+            if nxt in seen:
+                loop = seen[seen.index(nxt):]
+                if not reported & set(loop):
+                    reported |= set(loop)
+                    problems.append("pose: follow poses run in a circle: " + " -> ".join(loop + [nxt]))
+                break
+            seen.append(nxt)
     return problems
 
 

@@ -554,6 +554,13 @@ def _sub_prop_action_runs():
         engine.advance(game_time())
 
 
+def _sub_follow_pose_expiry():
+    """An NPC's follow pose after a free pair runs out (plan-folge-pose.md);
+    the furniture follow runs out in the run ticker above."""
+    from app.core.interaction_engine import expire_follow_poses
+    expire_follow_poses()
+
+
 # The action tick lives in its own module (candidate selection, prompt, LLM
 # turn, validation, application) and brings its own error handling — this file
 # only schedules it. The 60 s below are the CHECK frequency; the real rhythm is
@@ -577,6 +584,7 @@ from app.core.improvements.engine import periodic_tick as _sub_improvements  # n
 _SUB_TASKS: List[tuple] = [
     # (func,                         min_interval_s,        label)
     (_sub_prop_action_runs,          0,                     "prop_action_runs"),
+    (_sub_follow_pose_expiry,        60,                    "follow_pose_expiry"),
     (_sub_status_tick,               60,                    "status_tick"),
     (_sub_flag_lifecycle,            60,                    "flag_lifecycle"),
     (_sub_force_rules,               0,                     "force_rules"),

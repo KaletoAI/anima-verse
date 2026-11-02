@@ -3950,7 +3950,8 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
 
     Three shapes: ``{"activity": "<text>"}`` sets the pose (the setter seats
     the avatar on SOME free place of the group), ``{"activity": ""}`` clears
-    pose and place, ``{"place_id", "pose"}`` insists on the clicked place —
+    pose and place (with ``"finish": true`` — the HUD's "end" — it goes into
+    the pose's follow pose instead, when there is one), ``{"place_id", "pose"}`` insists on the clicked place —
     400 unknown pose / pose not of the place's group, 404 no such place in
     the avatar's room, 409 place taken. Answer ``{"ok", "activity", "place"}``.
     """
@@ -4010,10 +4011,42 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             set_pose_intent(avatar, activity)
         except PairPoseWithoutPartner:
             raise HTTPException(status_code=409, detail="pair_pose")
+    elif body.get("finish") and _finish_into_follow(avatar):
+        activity = (get_character_profile(avatar) or {}).get("pose_key") or ""
     else:
         clear_pose_intent(avatar)
     return {"ok": True, "activity": activity,
             "place": (get_character_profile(avatar) or {}).get("place")}
+
+
+def _finish_into_follow(avatar: str) -> bool:
+    """``{"activity": "", "finish": true}`` — the HUD's "end", not the first
+    steering key: the avatar goes from its free pose into the pose's follow
+    pose (``pose_catalog.follow_pose_for``) on the place it holds when that
+    fits, else on any free place of the follow's type. False = no follow
+    pose, or nowhere to take it — the caller clears the pose as before."""
+    from app.core import places
+    from app.core.pose_catalog import follow_pose_for, group_of
+    from app.models.character import get_character_profile, set_pose_intent
+    profile = get_character_profile(avatar) or {}
+    if profile.get("interaction"):
+        return False
+    follow = follow_pose_for(profile.get("pose_key") or "")
+    if not follow:
+        return False
+    seat = profile.get("place") if isinstance(profile.get("place"), dict) else {}
+    loc, room = places.where(avatar, profile=profile)
+    held = next((p for p in places.room_places(loc, room) if p["id"] == seat.get("id")), None)
+    try:
+        if held and held.get("group") == group_of(follow) and held.get("source") != "prop":
+            try:
+                if set_pose_intent(avatar, follow, prefer=held["id"]):
+                    return True
+            except places.PlaceUnavailable:
+                pass
+        return bool(set_pose_intent(avatar, follow))
+    except places.PlaceUnavailable:
+        return False
 
 
 @router.get("/play/places")

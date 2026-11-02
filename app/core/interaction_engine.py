@@ -684,7 +684,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
 
 
 def end_interaction(character_name: str, reason: str = "ended", *,
-                    interaction_id: str = "") -> bool:
+                    interaction_id: str = "", keep_places: Iterable[str] = ()) -> bool:
     """Clears the interaction on the character AND the partner. True when
     there was one.
 
@@ -697,7 +697,10 @@ def end_interaction(character_name: str, reason: str = "ended", *,
 
     ``interaction_id`` restricts an owned cancellation to that exact running
     pair; its identity is checked again under the removal locks.
+    ``keep_places`` (furniture pairs): names whose place the ending run keeps
+    for their follow pose (``prop_action_engine._follow_up``) — not released.
     """
+    from app.core.pose_catalog import follow_pose_for
     from app.core.room_stand import stand_up
     from app.core.state_events import publish
     from app.models.character import (clear_pose_intent, get_character_profile,
@@ -738,28 +741,42 @@ def end_interaction(character_name: str, reason: str = "ended", *,
                 partner=cur["partner"], pose_key=cur["pose_key"], reason=reason,
                 started_at_game=cur["started_at_game"], ended_at_game=game_time().canonical())
             same_pose = (p.get("pose_key") or "") == inter.get("pose_key")
-            if not same_pose:
+            follow = (follow_pose_for(cur["pose_key"], cur.get("role", ""))
+                      if reason in FOLLOW_REASONS and same_pose and cur.get("execution_kind") != "prop_action"
+                      else "")
+            seat = p.get("place") if isinstance(p.get("place"), dict) else None
+            if not same_pose or follow:
                 # The pair seat goes with the interaction; with the pair pose
-                # still on, clear_pose_intent below stands the character up.
+                # still on, clear_pose_intent below stands the character up —
+                # unless it takes its follow pose (_take_follow) from here.
                 p["place"] = None
             if save_character_profile(name, p):
                 saved_names.append(name)
             else:
                 cleared = False
-            stand.append((name, same_pose))
+            stand.append((name, same_pose, follow, seat))
     if inter.get("execution_kind") == "prop_action":
+        keep = set(keep_places)
         from app.core.keyed_lock import _after_locks
         def owned_ended():
             from app.models.character import release_prop_action_state
-            for name, _same_pose in stand:
-                release_prop_action_state(name, inter["execution_ref"])
+            for name, *_rest in stand:
+                if name not in keep:
+                    release_prop_action_state(name, inter["execution_ref"])
             from app.core.prop_action_engine import interrupt_after_locks
             interrupt_after_locks(character_name, "interaction_" + reason, execution_id=inter["execution_ref"])
         _after_locks(owned_ended)
     else:
-        for name, same_pose in stand:
-            if same_pose:
+        # Who stands up goes first: a seat it still holds is free then for
+        # the other's follow pose.
+        for name, same_pose, follow, seat in sorted(stand, key=lambda row: bool(row[2])):
+            if follow and _take_follow(name, follow, seat, inter["pose_key"]):
+                continue
+            if same_pose and not follow:
                 clear_pose_intent(name)
+            elif follow:
+                clear_pose_intent(name)
+                stand_up(name, from_place=seat, from_pose_key=inter["pose_key"])
             else:
                 stand_up(name)
     publish("interaction_ended", character_name, partner=partner,
@@ -779,6 +796,93 @@ def end_interaction(character_name: str, reason: str = "ended", *,
              interaction_id=inter["id"], invite_id=ended_invite_id, reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)
     return True
+
+
+#: Endings after which a partner takes its follow pose (plan-folge-pose.md):
+#: the avatar's "end" in the HUD, an NPC's own cancel, the default "ended".
+#: A move, a new pose, sleep, a journey or a deletion is no normal end.
+FOLLOW_REASONS = frozenset(("avatar", "cancelled", "ended"))
+
+
+def _take_follow(name: str, follow: str, seat: Optional[Dict[str, Any]], pair_pose: str) -> bool:
+    """Put ``name`` into its follow pose after a free pair: on the room place
+    the pair held when the follow's place type matches (``prefer``), else on
+    any free place of that type in the room. False = it got none (the pose
+    needs a place and the room has no free one) — the caller stands it up."""
+    from app.core import places
+    from app.core.pose_catalog import group_of
+    from app.models.character import set_pose_intent
+    prefer = ""
+    if seat:
+        loc, room = places.where(name)
+        held = next((p for p in places.room_places(loc, room) if p["id"] == seat.get("id")), None)
+        if held and held.get("group") == group_of(follow) and held.get("source") != "prop":
+            prefer = held["id"]
+    try:
+        taken = False
+        if prefer:
+            try:
+                taken = bool(set_pose_intent(name, follow, prefer=prefer))
+            except places.PlaceUnavailable:
+                pass
+        taken = taken or bool(set_pose_intent(name, follow))
+    except Exception:
+        logger.exception("follow pose %r for %s after %s failed", follow, name, pair_pose)
+        return False
+    if taken:
+        _limit_follow(name, follow)
+    return taken
+
+
+def _limit_follow(name: str, follow: str) -> None:
+    """An NPC gets up from its follow pose by itself after
+    ``prop_action_engine.FOLLOW_NPC_LIMIT_S`` game seconds
+    (:func:`expire_follow_poses`); the player's avatar stays until stopped."""
+    from app.core.keyed_lock import keyed_lock
+    from app.core.prop_action_engine import FOLLOW_NPC_LIMIT_S
+    from app.models.account import get_all_avatars
+    from app.models.character import get_character_profile, save_character_profile
+    if name in set(get_all_avatars()):
+        return
+    until = (game_time() + GameDuration.of(seconds=FOLLOW_NPC_LIMIT_S)).canonical()
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        profile["follow_pose_until"] = dict(pose_key=follow, until_game=until)
+        save_character_profile(name, profile)
+
+
+def expire_follow_poses() -> int:
+    """Periodic: clear the follow pose of every NPC whose time in it is up
+    (:func:`_limit_follow`). A pose that changed meanwhile only drops the
+    stale mark. Returns how many got up."""
+    from app.core.db import get_connection
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (clear_pose_intent, get_character_profile,
+                                      save_character_profile)
+    now = game_time()
+    ended = 0
+    # One query for the whole cast — almost always nobody carries the mark.
+    names = [row[0] for row in get_connection().execute(
+        "SELECT name FROM characters WHERE json_extract(profile_json,'$.follow_pose_until') IS NOT NULL")]
+    for name in names:
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            mark = profile.get("follow_pose_until")
+            if not isinstance(mark, dict):
+                continue
+            current = (profile.get("pose_key") or "") == mark.get("pose_key")
+            try:
+                due = now >= GameTime.parse(str(mark.get("until_game") or ""))
+            except ValueError:
+                due = True
+            if current and not due:
+                continue
+            profile.pop("follow_pose_until", None)
+            save_character_profile(name, profile)
+        if current:
+            clear_pose_intent(name)
+            ended += 1
+    return ended
 
 
 def _remember_pair(character_name: str, partner: str, inter: Dict[str, Any],
