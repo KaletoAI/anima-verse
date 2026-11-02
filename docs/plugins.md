@@ -234,6 +234,15 @@ plus `apply_to`-Selektor:
 Felder aus den Templates — paketeigene Stats gehören damit dem Paket (R2). Ein
 unlesbares Fragment wird geloggt und übersprungen, das Paket lädt trotzdem.
 
+**Von Zuständen überschreibbar (`"state_override": true`).** Ein `select`-Feld, das im
+Profil liegt (kein `store`), darf von einem Zustand überschrieben werden: Game-Admin →
+Zustände → „Field overrides“ (neben „Stat boosts“) setzt `field_overrides: {key: value}`
+am Zustand. Wirksam ist der Wert des zuletzt begonnenen aktiven Zustands
+(`app.core.field_overrides.effective_field`). Der Prompt rendert diesen wirksamen Wert,
+die Charakter-Ansicht zeigt ihn neben dem gespeicherten. Weil ein Zustand den Wert von
+Zug zu Zug ändern kann, gehört zu so einem Feld `"prompt_volatile": true`. Ein anders
+gebautes Feld mit dem Schlüssel wird mit einer Warnung ignoriert.
+
 ### Body-Slots (Spezies-Pakete)
 
 Der Body-Slot-Core (`app/core/body_slots.py`) führt die Deklarationen aus — kein

@@ -87,6 +87,7 @@ def _load_world(*, strict: bool = False) -> List[Dict[str, Any]]:
                 "enabled": bool(r[5]),
                 "meta": meta,
                 "stat_boosts": meta.get("stat_boosts", {}),
+                "field_overrides": meta.get("field_overrides", {}),
                 "icon": r[7] or "",
                 "image_modifier": r[8] or "",
                 "bone_pose": bone_pose if isinstance(bone_pose, dict) else {},
@@ -145,6 +146,7 @@ def load_filters(*, strict: bool = False) -> List[Dict[str, Any]]:
                 fid = (entry.get("id") or "").strip()
                 if fid:
                     entry.setdefault("stat_boosts", {})
+                    entry.setdefault("field_overrides", {})
                     by_id[fid] = entry
             _snapshot = list(by_id.values())
             _snapshot_key = key

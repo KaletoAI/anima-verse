@@ -235,6 +235,10 @@ export function TemplateTab({
   const [profile, setProfile] = useState<Record<string, unknown>>({})
   const [config, setConfig] = useState<Record<string, unknown>>({})
   const [status, setStatus] = useState<Record<string, unknown>>({})
+  /** fields an active STATE overrides right now (template `state_override`):
+   *  the control keeps the stored value, the note beside it says what is in
+   *  effect and which state set it */
+  const [overrides, setOverrides] = useState<Record<string, { value: string; label: string; icon?: string }>>({})
   const [savingKey, setSavingKey] = useState('')
   const [loaded, setLoaded] = useState(false)
 
@@ -243,10 +247,12 @@ export function TemplateTab({
     setLoaded(false)
     try {
       const [pr, cf] = await Promise.all([
-        apiGet<{ profile: Record<string, unknown> }>(`/characters/${encodeURIComponent(character)}/profile`),
+        apiGet<{ profile: Record<string, unknown>; field_overrides?: Record<string, { value: string; label: string; icon?: string }> }>(
+          `/characters/${encodeURIComponent(character)}/profile`),
         apiGet<{ config: Record<string, unknown> }>(`/characters/${encodeURIComponent(character)}/config`),
       ])
       setProfile(pr.profile || {})
+      setOverrides(pr.field_overrides || {})
       setConfig(cf.config || {})
       const hasStat = sections.some((s) => (s.fields || []).some((f) => f.store === 'status_effects'))
       if (hasStat) {
@@ -389,6 +395,19 @@ export function TemplateTab({
         onCommit={(v) => commit(f, v)}
       />
     )
+    const ov = overrides[f.key]
+    const ovOption = ov ? (f.options || []).find((o) => typeof o !== 'string'
+      && String(o.value ?? o.id ?? '') === ov.value) : undefined
+    const ovText = ov
+      ? (ovOption && typeof ovOption !== 'string'
+        ? tmplText(ovOption as { [k: string]: unknown }, 'label', lang) || ov.value
+        : ov.value)
+      : ''
+    const overrideNote = ov ? (
+      <div className="ga-form-hint" title={t('An active state overrides this field; the stored value applies again when the state ends.')}>
+        {t('now')}: <strong>{ovText}</strong> ({t('state')}: {ov.icon ? `${ov.icon} ` : ''}{ov.label})
+      </div>
+    ) : null
     // Side by side (avatar panel): prompt + chips + preview left, image right.
     if (imageBeside && isPrompt && imagePreview) {
       return (
@@ -408,6 +427,7 @@ export function TemplateTab({
       <div key={fkey}>
         <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
           {input}
+          {overrideNote}
         </Field>
         {imagePreview ? <FieldImage character={character} kind={imagePreview} /> : null}
       </div>

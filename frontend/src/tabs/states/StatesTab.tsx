@@ -26,6 +26,8 @@ interface PromptFilter {
   prompt_modifier?: string
   image_modifier?: string
   stat_boosts?: Record<string, number>
+  /** character fields this state sets while active (template `state_override`) */
+  field_overrides?: Record<string, string>
   bone_pose?: BonePose
   enabled?: boolean
   source?: string
@@ -39,7 +41,16 @@ interface FiltersData {
   filters: PromptFilter[]
   block_keys: string[]
   stat_keys: string[]
+  /** the character fields a state may override, with their options */
+  override_fields?: OverrideField[]
   condition_hint?: string
+}
+
+interface OverrideField {
+  key: string
+  label: string
+  label_de?: string
+  options: { value: string; label: string; label_de?: string }[]
 }
 
 interface DraftState extends Required<Omit<PromptFilter, 'source' | 'warnings' | 'masked_fields'>> {
@@ -59,6 +70,7 @@ const EMPTY_DRAFT: DraftState = {
   image_modifier: '',
   bone_pose: {},
   stat_boosts: {},
+  field_overrides: {},
   enabled: true,
   originalId: '',
   source: '',
@@ -77,6 +89,7 @@ function asDraft(f: PromptFilter): DraftState {
     image_modifier: f.image_modifier || '',
     bone_pose: structuredClone(f.bone_pose || {}),
     stat_boosts: { ...(f.stat_boosts || {}) },
+    field_overrides: { ...(f.field_overrides || {}) },
     enabled: f.enabled !== false,
     originalId: f.id,
     source: f.source || '',
@@ -198,6 +211,7 @@ function StatesPane() {
         image_modifier: draft.image_modifier,
         bone_pose: bonePose,
         stat_boosts: draft.stat_boosts,
+        field_overrides: draft.field_overrides,
         enabled: draft.enabled,
       })
       toast(t('Saved'))
@@ -377,6 +391,7 @@ function StatesPane() {
               draft={draft}
               blockKeys={data.block_keys || []}
               statKeys={data.stat_keys || []}
+              overrideFields={data.override_fields || []}
               onUpdate={updateDraft}
               onToggleBlock={toggleBlock}
             />
@@ -393,12 +408,15 @@ interface DraftFormProps {
   draft: DraftState
   blockKeys: string[]
   statKeys: string[]
+  overrideFields: OverrideField[]
   onUpdate: <K extends keyof DraftState>(key: K, value: DraftState[K]) => void
   onToggleBlock: (block: string) => void
 }
 
-function DraftForm({ draft, blockKeys, statKeys, onUpdate, onToggleBlock }: DraftFormProps) {
-  const { t } = useI18n()
+function DraftForm({ draft, blockKeys, statKeys, overrideFields, onUpdate, onToggleBlock }: DraftFormProps) {
+  const { t, lang } = useI18n()
+  const fieldLabel = (f: { label: string; label_de?: string }) =>
+    (lang === 'de' && f.label_de) || f.label
   const [groups, setGroups] = useState<MotionGroup[]>([])
   const [groupsError, setGroupsError] = useState(false)
   useEffect(() => {
@@ -525,6 +543,54 @@ function DraftForm({ draft, blockKeys, statKeys, onUpdate, onToggleBlock }: Draf
             const key = statKeys.find(key => !(key in draft.stat_boosts))
             if (key) onUpdate('stat_boosts', { ...draft.stat_boosts, [key]: 0 })
           }}>{t('Add')}</button>
+      </Field>
+
+      <Field label={t('Field overrides')}
+        hint={t('Character settings this state replaces while it is active. The stored value applies again when the state ends; with several such states the one started last wins.')}>
+        {overrideFields.length === 0 ? (
+          <span className="ga-form-hint">{t('No character field can be overridden — a template field opts in with "state_override".')}</span>
+        ) : null}
+        {Object.entries(draft.field_overrides).map(([key, value]) => {
+          const field = overrideFields.find(f => f.key === key)
+          return (
+            <div key={key} className="ga-form-row">
+              <select className="ga-input" aria-label={t('Field')} value={key}
+                onChange={e => {
+                  const next = { ...draft.field_overrides }
+                  delete next[key]
+                  const nf = overrideFields.find(f => f.key === e.target.value)
+                  next[e.target.value] = nf?.options[0]?.value || ''
+                  onUpdate('field_overrides', next)
+                }}>
+                {field ? null : <option value={key}>{key}</option>}
+                {overrideFields.map(f => (
+                  <option key={f.key} value={f.key}
+                    disabled={f.key !== key && f.key in draft.field_overrides}>{fieldLabel(f)}</option>
+                ))}
+              </select>
+              <select className="ga-input" aria-label={t('Value')} value={value}
+                onChange={e => onUpdate('field_overrides', { ...draft.field_overrides, [key]: e.target.value })}>
+                {field && !field.options.some(o => o.value === value) ? <option value={value}>{value}</option> : null}
+                {(field?.options || []).map(o => (
+                  <option key={o.value} value={o.value}>{fieldLabel(o)}</option>
+                ))}
+              </select>
+              <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
+                const next = { ...draft.field_overrides }
+                delete next[key]
+                onUpdate('field_overrides', next)
+              }}>{t('Remove')}</button>
+            </div>
+          )
+        })}
+        {overrideFields.length > 0 ? (
+          <button type="button" className="ga-btn ga-btn-sm"
+            disabled={!overrideFields.some(f => !(f.key in draft.field_overrides))}
+            onClick={() => {
+              const f = overrideFields.find(f => !(f.key in draft.field_overrides))
+              if (f) onUpdate('field_overrides', { ...draft.field_overrides, [f.key]: f.options[0]?.value || '' })
+            }}>{t('Add')}</button>
+        ) : null}
       </Field>
 
       <Field label={t('Drop blocks')} hint={t('Click to toggle which prompt blocks are removed when this filter matches.')}>

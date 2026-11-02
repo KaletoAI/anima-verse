@@ -165,6 +165,19 @@ A state never fires on a stat the character does not have (inside
 `app.core.activity_engine.missing_stats_fail()` a missing stat is "not met"); rule
 conditions keep "missing counts as 100".
 
+## Field overrides — `app.core.field_overrides` ✅
+
+A template field with `"state_override": true` (a `select` stored in the profile, see
+`docs/plugins.md` → Character-Template-Fragmente) can be overridden by a state's
+`field_overrides`. Packages read such a field ONLY through these calls, never as
+`profile[key]` — the stored value is not what is in effect while a state sets it.
+
+| Function | Semantics |
+|---|---|
+| `effective_field(profile, key, *, strict=False)` | `(value, source)`: the override of the latest-started active state, else the stored value, else the template default. `source` is the override info `{value, state, label, icon}` or `None`. A key that is no overridable field yields the stored value. |
+| `active_overrides(profile, *, strict=False, fields=None)` | `{key: {value, state, label, icon}}` for every field some active state overrides. Ties on the start go to the alphabetically first state id; a value the field no longer offers is ignored. |
+| `app.core.stat_boosts.active_states(profile, *, now=None, strict=False)` | Yields `(state, entry, remaining_hours)` for every enabled, unexpired state carried as a tag in `active_conditions` — the one loop stat boosts and field overrides both read. Expression-triggered states are not listed. |
+
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
 | Function / value | Semantics |
@@ -626,7 +639,8 @@ remain unchanged; strict mode propagates actual read/decoding failures.
 | `app.models.inventory` | `app.models.inventory.get_item(item_id, *, strict=False)`, `app.models.inventory.get_shared_item(item_id, *, strict=False)`, `app.models.inventory.resolve_item_id(token, *, strict=False)`, `app.models.inventory.has_item(character_name, item_id, *, strict=False)`, `app.models.inventory.get_room_items(location_id, room_id, *, strict=False)` |
 | `app.models.world` | `app.models.world.get_location_by_id(location_id, *, strict=False)`, `app.models.world.list_locations(*, strict=False)`, `app.models.world.get_world_setting(key, default="", *, strict=False)`, `app.models.world.is_world_frozen(*, strict=False)` |
 | `app.core.prompt_filters` | `app.core.prompt_filters.load_filters(*, strict=False)` |
-| `app.core.stat_boosts` | `app.core.stat_boosts.effective_stat(profile, key, *, strict=False)`, `app.core.stat_boosts.active_boosts(profile, *, now=None, strict=False)` |
+| `app.core.stat_boosts` | `app.core.stat_boosts.effective_stat(profile, key, *, strict=False)`, `app.core.stat_boosts.active_boosts(profile, *, now=None, strict=False)`, `app.core.stat_boosts.active_states(profile, *, now=None, strict=False)` |
+| `app.core.field_overrides` | `app.core.field_overrides.effective_field(profile, key, *, strict=False)`, `app.core.field_overrides.active_overrides(profile, *, strict=False, fields=None)` |
 | `app.core.motion_item_cache` | `app.core.motion_item_cache.item_snapshot(*, strict=False)`, `app.core.motion_item_cache.passive_bonus_snapshot(*, strict=False)` |
 | `app.core.timeutils` | `app.core.timeutils.game_time(*, strict=False)`, `app.core.timeutils.game_time_exact(*, strict=False)` |
 

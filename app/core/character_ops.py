@@ -1279,7 +1279,12 @@ def build_profile_payload(character_name: str) -> Dict[str, Any]:
                     profile["current_room"] = room["name"]
         except Exception:
             pass
-    return {"character": character_name, "profile": profile}
+    # Fields an active state overrides right now — the editor shows the stored
+    # value as the control and the one in effect next to it.
+    from app.core.field_overrides import active_overrides
+    overrides = active_overrides(profile)
+    return {"character": character_name, "profile": profile,
+            "field_overrides": overrides}
 
 
 def _lifetime_fields(profile: Dict[str, Any],

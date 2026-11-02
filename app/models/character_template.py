@@ -145,8 +145,10 @@ _template_cache_lock = __import__("threading").RLock()
 def clear_template_cache() -> None:
     """Invalidate the template cache — called after save_template() and
     after plugin (re)discovery."""
+    global _override_fields_cache
     with _template_cache_lock:
         _template_cache.clear()
+        _override_fields_cache = None
 
 
 def fragment_applies(frag: Dict[str, Any], template_name: str,
@@ -399,6 +401,73 @@ def get_all_template_fields(template: Dict[str, Any]) -> List[Dict[str, Any]]:
     return fields
 
 
+def _select_options(field: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The options of a ``select`` field as ``{value, label, label_de}``;
+    an option is a plain string or ``{value|id, label?, label_de?}``."""
+    out = []
+    for o in field.get("options") or []:
+        if isinstance(o, str):
+            o = {"value": o}
+        v = o.get("value") if o.get("value") is not None else o.get("id")
+        if v is None or str(v) == "":
+            continue
+        out.append({"value": str(v), "label": str(o.get("label") or v),
+                    "label_de": str(o.get("label_de") or "")})
+    return out
+
+
+_warned_override_fields: set = set()
+#: ``(templates dir, fields)`` — rebuilt after ``clear_template_cache``
+_override_fields_cache = None
+
+
+def state_override_fields() -> List[Dict[str, Any]]:
+    """Every character field a STATE may override, over all templates.
+
+    A template field opts in with ``"state_override": true``. Only a
+    ``select`` stored in the profile qualifies: the state editor offers its
+    options and the save validates against them, and the effective value is
+    read from the profile (``field_overrides.effective_field``). Any other
+    field so marked is skipped with one warning. First template wins on a key
+    that two templates define. Package fragments are included — they are
+    merged into the templates by ``get_template``. Cached until the next
+    ``clear_template_cache``; every call hands out a copy.
+    """
+    global _override_fields_cache
+    tdir = str(get_templates_dir())
+    with _template_cache_lock:
+        cached = _override_fields_cache
+    if cached is not None and cached[0] == tdir:
+        return copy.deepcopy(cached[1])
+    out: Dict[str, Dict[str, Any]] = {}
+    # Every template file, not just the selectable ones (``list_templates``
+    # hides those) — a field may live in a template nobody picks by hand.
+    for path in sorted(get_templates_dir().glob("*.json")):
+        tmpl = get_template(path.stem) or {}
+        for field in get_all_template_fields(tmpl):
+            key = field.get("key")
+            if not key or not field.get("state_override") or key in out:
+                continue
+            options = _select_options(field)
+            if field.get("type") != "select" or field.get("store") or not options:
+                if key not in _warned_override_fields:
+                    _warned_override_fields.add(key)
+                    logger.warning("Template field %r: state_override needs a select "
+                                   "with options stored in the profile — ignored", key)
+                continue
+            out[key] = {
+                "key": key,
+                "label": field.get("label") or key,
+                "label_de": field.get("label_de") or "",
+                "default": field.get("default"),
+                "options": options,
+            }
+    fields = list(out.values())
+    with _template_cache_lock:
+        _override_fields_cache = (tdir, fields)
+    return copy.deepcopy(fields)
+
+
 import re
 
 
@@ -507,6 +576,11 @@ def build_prompt_section(
         elif field.get("store") == "status_effects":
             from app.core.stat_boosts import effective_stat
             value = effective_stat(data, key)
+        elif field.get("state_override"):
+            # An active state may override the stored value — the prompt
+            # renders what is in effect, never the stored value under it.
+            from app.core.field_overrides import effective_field
+            value = effective_field(data, key)[0]
         else:
             value = data.get(key)
 

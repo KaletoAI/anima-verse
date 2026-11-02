@@ -218,8 +218,25 @@ def _prompt_filter_block_keys() -> List[str]:
     return list(_PROMPT_FILTER_BLOCK_KEYS)
 
 
+def _validate_field_overrides(raw: Any) -> Dict[str, str]:
+    """``{key: value}`` of a state's field overrides, checked against the
+    overridable template fields and their options — 400 otherwise."""
+    from app.models.character_template import state_override_fields
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="field_overrides must be an object {field: value}")
+    fields = {f["key"]: {o["value"] for o in f["options"]} for f in state_override_fields()}
+    for key, value in raw.items():
+        if key not in fields:
+            raise HTTPException(status_code=400, detail=f"field_overrides: {key!r} is no overridable field")
+        if not isinstance(value, str) or value not in fields[key]:
+            raise HTTPException(status_code=400,
+                                detail=f"field_overrides: {value!r} is no option of {key!r}")
+    return dict(raw)
+
+
 _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
-                           "prompt_modifier", "image_modifier", "bone_pose", "stat_boosts")
+                           "prompt_modifier", "image_modifier", "bone_pose", "stat_boosts",
+                           "field_overrides")
 
 
 @router.get("/prompt-filters/data")
@@ -288,9 +305,13 @@ def prompt_filters_data(user=Depends(require_admin)):
         _flags = ["is_sleeping"]
     _flags_line = ", ".join(_flags[:8])
 
+    from app.models.character_template import state_override_fields
     return {
         "filters": out,
         "stat_keys": _keys,
+        # Character fields a state may override (template ``state_override``),
+        # with their options — the "Field overrides" editor offers exactly these.
+        "override_fields": state_override_fields(),
         "block_keys": _prompt_filter_block_keys(),
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "
@@ -592,6 +613,7 @@ def _prompt_filters_save_sync(user, body: Any):
         for key, amount in stat_boosts.items()
     ):
         raise HTTPException(status_code=400, detail="stat_boosts must map known stats to integers from -200 to 200")
+    field_overrides = _validate_field_overrides(body.get("field_overrides", {}))
     enabled = bool(body.get("enabled", True))
 
     if not fid:
@@ -608,6 +630,7 @@ def _prompt_filters_save_sync(user, body: Any):
         row = conn.execute("SELECT meta FROM prompt_filters WHERE id=?", (fid,)).fetchone()
         meta = _json.loads(row[0] or "{}") if row else {}
         meta["stat_boosts"] = stat_boosts
+        meta["field_overrides"] = field_overrides
         conn.execute("""
             INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                         prompt_modifier, enabled, meta,
@@ -754,7 +777,9 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                     _json.dumps(drops if isinstance(drops, list) else [], ensure_ascii=False),
                     (clean.get("prompt_modifier") or "").strip(),
                     1 if clean.get("enabled", True) else 0,
-                    _json.dumps({"stat_boosts": clean.get("stat_boosts") or {}}, ensure_ascii=False),
+                    _json.dumps({"stat_boosts": clean.get("stat_boosts") or {},
+                                 "field_overrides": clean.get("field_overrides") or {}},
+                                ensure_ascii=False),
                     (clean.get("icon") or "").strip(),
                     (clean.get("image_modifier") or "").strip(),
                     _json.dumps(clean.get("bone_pose") or {}, ensure_ascii=False),

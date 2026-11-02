@@ -27,17 +27,22 @@ def _item_boosts(profile: dict, *, strict: bool = False) -> dict[str, list[dict]
     return result
 
 
-def active_boosts(profile: dict, *, now: GameTime | None = None,
-                  strict: bool = False) -> dict[str, list[dict]]:
-    """Collect passive item boosts and enabled, unexpired active conditions.
+def active_states(profile: dict, *, now: GameTime | None = None,
+                  strict: bool = False):
+    """Yield ``(state, entry, remaining_hours)`` for every enabled, unexpired
+    condition the profile carries in ``active_conditions``.
 
-    Expiry matches condition cleanup: strictly beyond the duration expires;
-    an unreadable start remains active. No expression-triggered state boosts.
+    ``state`` is the state definition (``prompt_filters``), ``entry`` the
+    profile's condition row. Expiry matches condition cleanup: strictly beyond
+    the duration expires; an unreadable start remains active. A state that
+    fires only through its ``condition`` expression is not listed — what a
+    state CHANGES (stat boosts, field overrides) needs the tag on the profile.
+    The one loop both stat boosts and ``field_overrides`` read, so the two can
+    never disagree about which states are active.
     """
-    result = _item_boosts(profile, strict=strict)
     conditions = profile.get('active_conditions') or []
     if not conditions:
-        return result
+        return
     from app.core.prompt_filters import load_filters
     definitions = {f['id'].strip().lower(): f for f in load_filters(strict=strict)
                    if f.get('enabled', True)}
@@ -47,7 +52,7 @@ def active_boosts(profile: dict, *, now: GameTime | None = None,
         if not isinstance(entry, dict):
             continue
         state = definitions.get((entry.get('name') or '').strip().lower())
-        if not state or not state.get('stat_boosts'):
+        if not state:
             continue
         duration = entry.get('duration_hours', 0)
         remaining = 0.0
@@ -62,7 +67,16 @@ def active_boosts(profile: dict, *, now: GameTime | None = None,
                     remaining = max(0.0, float(duration))
                 except (ValueError, TypeError):
                     pass
-        for key, amount in state['stat_boosts'].items():
+        yield state, entry, remaining
+
+
+def active_boosts(profile: dict, *, now: GameTime | None = None,
+                  strict: bool = False) -> dict[str, list[dict]]:
+    """Collect passive item boosts and the boosts of the active states
+    (``active_states``). No expression-triggered state boosts."""
+    result = _item_boosts(profile, strict=strict)
+    for state, _entry, remaining in active_states(profile, now=now, strict=strict):
+        for key, amount in (state.get('stat_boosts') or {}).items():
             result.setdefault(key, []).append({
                 'condition': state['id'], 'label': state.get('label') or state['id'],
                 'amount': amount, 'remaining_hours': remaining})
