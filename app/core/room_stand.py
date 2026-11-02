@@ -191,6 +191,28 @@ def pick_stand(polygon: Sequence[Sequence[float]],
     return best[1] if best else None
 
 
+def _inside_fallback(location_id: str, room_id: str, here: Point) -> Optional[Point]:
+    """When the room offers no FREE standing point: a point that at least lies
+    INSIDE it, if the character's current point does not. A full or tiny room
+    must not leave the character drawn in the room next door while its
+    ``current_room`` names this one — so the room's interior point
+    (:func:`_interior_ref`), even if it overlaps furniture or a neighbour.
+    None for a room without a hull and for a point already inside."""
+    try:
+        geo = room_geometry(location_id, room_id)
+    except Exception as e:                 # a broken layout must not break a move
+        logger.warning("room_stand: geometry failed for %s/%s: %s",
+                       location_id, room_id, e)
+        return None
+    if geo is None or fg.point_in_poly(here, geo[0]):
+        return None
+    point = _interior_ref(geo[0])
+    logger.info("room_stand: no free standing point in %s/%s — (%.2f, %.2f) lies "
+                "outside the room, using its interior point (%.2f, %.2f)",
+                location_id, room_id, here[0], here[1], point[0], point[1])
+    return point
+
+
 # ------------------------------------------------------------------ the loader
 
 
@@ -566,6 +588,8 @@ def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,
                                  furniture_r=ACCESS_BODY_R_M)
     else:
         point = free_stand_point(loc, room, here, exclude=name)
+    if point is None:
+        point = _inside_fallback(loc, room, here)
     # An unchanged point still needs a write when standing hands off a
     # heading. Otherwise compare with the current position, since the clip
     # endpoint is not where the character is yet.

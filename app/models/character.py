@@ -4341,13 +4341,7 @@ def wake_from_offmap(character_name: str) -> bool:
     # function: it writes the profile directly (pose reset, return markers) and
     # must NOT fire the setter's location-change machinery (compliance, party
     # drag, history, journey abort) for what is only a return from sleep.
-    # A return location that is unplaced has no centre — both columns stay NULL.
-    from app.models.world import get_location_by_id as _glbi
-    _rloc = _glbi(return_loc) or {}
-    _rx, _rz = _rloc.get("pos_x"), _rloc.get("pos_z")
-    _write_character_pos(character_name,
-                         float(_rx) if _rx is not None else None,
-                         float(_rz) if _rz is not None else None)
+    _place_on_return(character_name, return_loc, return_room)
     # AV3D-3: bypass path — publish the reappearance explicitly.
     try:
         from app.core.state_events import publish as _publish_state
@@ -4363,6 +4357,27 @@ def wake_from_offmap(character_name: str) -> bool:
         "Offmap-Wake: %s -> zurueck nach %s/%s",
         character_name, return_loc, return_room or "-")
     return True
+
+
+def _place_on_return(character_name: str, location_id: str, room_id: str) -> None:
+    """The metre point of a character put back on the map by a direct profile
+    write (waking from the off-map sleep, appearing on takeover): the centre
+    of ``location_id`` — an unplaced location has none, both columns go NULL —
+    and then, with a room, the free standing point IN that room. The centre
+    alone lies in whichever room the plan puts there (a bathroom upstairs),
+    not in the room the character returns to."""
+    from app.models.world import get_location_by_id
+    loc = get_location_by_id(location_id) or {}
+    x, z = loc.get("pos_x"), loc.get("pos_z")
+    _write_character_pos(character_name,
+                         float(x) if x is not None else None,
+                         float(z) if z is not None else None)
+    if room_id and x is not None and z is not None:
+        try:
+            from app.core.room_stand import stand_up
+            stand_up(character_name)
+        except Exception as e:
+            logger.debug("return stand point failed for %s: %s", character_name, e)
 
 
 def appear_in_world(character_name: str) -> bool:
@@ -4409,6 +4424,8 @@ def appear_in_world(character_name: str) -> bool:
         profile.pop("_offmap_return_location", None)
         profile.pop("_offmap_return_room", None)
         stored = save_character_profile(character_name, profile)
+    if stored:
+        _place_on_return(character_name, loc_id, room_id or "")
     # AV3D-3: bypass path — publish the placement explicitly.
     try:
         from app.core.state_events import publish as _publish_state

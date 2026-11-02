@@ -1114,7 +1114,17 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
   ist (die Tür), statt auf den Ortsmittelpunkt gezogen zu werden — sonst
   stellte sich jeder Ankömmling in die Raummitte. Mehrfaches Fragen kostet
   nichts: ein bereits freier Punkt kommt unverändert zurück. Findet die Regel keinen freien Punkt (winziger oder voll
-  möblierter Raum), bleibt die Position unverändert. **Der Etagen-Flur
+  möblierter Raum), bleibt die Position unverändert, solange sie in der Raumhülle
+  liegt; liegt sie außerhalb, setzt der Server den Innenpunkt des Raums
+  (Flächenschwerpunkt, beim L-Raum der Rasterpunkt mit dem größten Wandabstand),
+  auch wenn der Möbel oder Mitbewohner überlappt (2026-11-02,
+  `room_stand._inside_fallback`): eine Figur steht nie im Nachbarraum, während
+  `room_id` diesen Raum nennt. Zu den Schreibwegen gehören auch das **Aufwachen
+  aus dem Off-Map-Schlaf** und das **Erscheinen bei der Übernahme**
+  (`appear_in_world`): Beide setzen erst die Location-Mitte, dann den Stehpunkt
+  im Rückkehr- bzw. Ankunftsraum (`character._place_on_return`). Vorher stand dort
+  die Location-Mitte, also in dem Raum, den der Grundriss dorthin legt.
+  **Der Etagen-Flur
   (§ A13c) hat keine eigene Hülle** und bekommt deshalb keinen Stehpunkt: dort
   zeichnet ein Client die Figur auf den Flur-Anker der Etage (`corridors[].anchor`,
   ebenfalls vom Server gerechnet), nicht auf `pos`. Der Hof (`__ground__`) ist
@@ -5727,6 +5737,7 @@ sie produziert.
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
 | `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **11** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
 | `scripts/smoke_room_stand.py` | der freie Stehplatz (§ A1.4): die vier Konstanten, der L-Raum mit `near` im Ausschnitt, der um 30° gedrehte Tisch bei 0,20 m und 0,40 m, zwei Mitbewohner in 0,50 m durch die ganze Gleichstands-Leiter, die Türzone einer 1,0-m-Tür, und der Raum, in dem niemand stehen kann |
+| `scripts/smoke_room_return_point.py` | der Stehpunkt im Rückkehrraum (§ A1.4): Aufwachen und Erscheinen landen im Gästezimmer statt auf der Location-Mitte im Bad, der Raum ohne freien Punkt bekommt seinen Innenpunkt, ein Punkt in der Hülle bleibt |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
