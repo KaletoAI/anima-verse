@@ -5741,6 +5741,7 @@ sie produziert.
 | `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **11** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
 | `scripts/smoke_room_stand.py` | der freie Stehplatz (§ A1.4): die vier Konstanten, der L-Raum mit `near` im Ausschnitt, der um 30° gedrehte Tisch bei 0,20 m und 0,40 m, zwei Mitbewohner in 0,50 m durch die ganze Gleichstands-Leiter, die Türzone einer 1,0-m-Tür, und der Raum, in dem niemand stehen kann |
 | `scripts/smoke_room_return_point.py` | der Stehpunkt im Rückkehrraum (§ A1.4): Aufwachen und Erscheinen landen im Gästezimmer statt auf der Location-Mitte im Bad, der Raum ohne freien Punkt bekommt seinen Innenpunkt, ein Punkt in der Hülle bleibt |
+| `scripts/smoke_room_writers.py` | jeder Schreiber von `current_room` (AST über `app/` und `plugins/`) steht mit Begründung in der Liste, wo die Figur danach steht — ein neuer Schreiber ohne Eintrag schlägt fehl, ein verschwundener Eintrag ebenso |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
