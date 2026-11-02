@@ -14,9 +14,13 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
+import { PhotoReadyActions } from './ShowPhotoButton'
 
 interface NoticeEvent { id: string; category: string; text: string }
-interface NoticeItem { id: number; kind: string; body: string }
+interface NoticeItem {
+  id: string; kind: string; body: string
+  photo?: { photo_id: string; status: 'ready' | 'failed'; filename?: string; url?: string }
+}
 interface ForceWarning {
   rule_id: string; rule_name: string; message: string
   go_to: string; go_to_location_id: string; go_to_room_id: string; set_activity: string
@@ -32,7 +36,7 @@ interface Notices {
 
 const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warning: null, notifications: [], unread_count: 0 }
 
-export function NoticeBanner() {
+export function NoticeBanner({ onOpenGallery }: { onOpenGallery?: () => void } = {}) {
   const { t } = useI18n()
   const [n, setN] = useState<Notices>(EMPTY)
   const { data } = usePoll<Notices>(
@@ -42,7 +46,7 @@ export function NoticeBanner() {
   // optimistically until the next poll (same net behavior as before).
   useEffect(() => { if (data) setN(data) }, [data])
 
-  const dismiss = useCallback(async (id: number) => {
+  const dismiss = useCallback(async (id: string) => {
     try { await apiPost(`/notifications/${id}/read`, {}) } catch { /* ignore */ }
     setN((prev) => ({ ...prev, notifications: prev.notifications.filter((x) => x.id !== id) }))
   }, [])
@@ -114,9 +118,15 @@ export function NoticeBanner() {
             </div>
           ))}
           {n.notifications.map((it) => (
-            <div key={it.id} className="player-notice" style={row('#78aaff')}>
-              <span>🔔</span>
+            <div key={it.id} className="player-notice"
+              role={it.photo?.status === 'failed' ? 'alert' : 'status'}
+              style={row(it.photo?.status === 'failed' ? '#e05656' : '#78aaff')}>
+              <span>{it.photo ? '📷' : '🔔'}</span>
               <span style={{ flex: 1 }}>{it.body}</span>
+              {it.photo?.status === 'ready' && it.photo.filename && (
+                <PhotoReadyActions filename={it.photo.filename} onOpenGallery={onOpenGallery}
+                  onShown={() => dismiss(it.id)} />
+              )}
               <button onClick={() => dismiss(it.id)} title={t('Mark as read')}
                 style={{ border: 'none', background: 'transparent', color: 'inherit',
                          cursor: 'pointer', opacity: 0.7, fontSize: '1.1em', lineHeight: 1 }}>×</button>

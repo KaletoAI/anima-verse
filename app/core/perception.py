@@ -567,7 +567,9 @@ def prompt_place(character_name: str, location_id: str) -> Tuple[str, bool]:
 def announce_action(character_name: str, text: str,
                     source: str = "direct_action",
                     perception_meta: Optional[Dict[str, Any]] = None,
-                    react: bool = True) -> None:
+                    react: bool = True, *,
+                    location_id: Optional[str] = None,
+                    room_id: Optional[str] = None) -> None:
     """UNIFIED flow for DIRECT (UI-triggered) actions — outfit change, scene
     photo, and whatever comes next. Same pattern the spell path uses in
     /play/say (user directive 2026-07-07: one mechanism, not per-feature
@@ -577,18 +579,21 @@ def announce_action(character_name: str, text: str,
     2. Room reactions via the agent loop (present characters get a chime
        opportunity and may react — or SKIP).
 
-    Location/room come from the acting character (the storyteller has no own
-    position), and out in the open so does the POINT — ``anchor`` below. An
-    EMPTY location is the wilderness, not a missing value: the action still
-    happened and the people standing around the character still react to it,
+    Location/room default to the acting character; deferred photo completion
+    can retain the shutter's scope explicitly. The storyteller has no own
+    position, and out in the open the character also supplies the POINT —
+    ``anchor`` below. An EMPTY location is the wilderness, not a missing value:
+    the action still happened and the people standing around the character still react to it,
     so the old early return here is gone (E6).
 
     Best-effort — never raises into the calling route."""
     try:
         from app.models.character import (get_character_current_location,
                                           get_character_current_room)
-        loc = get_character_current_location(character_name) or ""
-        room = get_character_current_room(character_name) or ""
+        loc = (get_character_current_location(character_name) or ""
+               if location_id is None else location_id)
+        room = (get_character_current_room(character_name) or ""
+                if room_id is None else room_id)
         record_utterance(speaker=STORYTELLER_SPEAKER, content=text,
                          volume=VOLUME_NORMAL, location_id=loc,
                          room_id=room, source=source,

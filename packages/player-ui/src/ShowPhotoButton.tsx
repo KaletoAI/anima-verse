@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useRef, useState } from 'react'
 import { apiPost } from './api'
 import { useI18n } from './I18nProvider'
 import { useToast } from './Toast'
@@ -34,31 +33,17 @@ export function ShowPhotoButton({ filename, onShown }: {
   </button>
 }
 
-/** Keep the result actionable even when the host automatically hides idle chat. */
-export function PhotoSavedDialog({ filename, onClose, onShown }: {
+/** Result actions live in the persistent, non-modal HUD notice. */
+export function PhotoReadyActions({ filename, onOpenGallery, onShown }: {
   filename: string
-  onClose: () => void
+  onOpenGallery?: () => void
   onShown?: () => void | Promise<void>
 }) {
   const { t } = useI18n()
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', key)
-    return () => window.removeEventListener('keydown', key)
-  }, [onClose])
-  return createPortal(<div className="ga-modal-backdrop" onMouseDown={onClose}>
-    <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Scene photo')}
-      style={{ maxWidth: 420 }} onMouseDown={event => event.stopPropagation()}>
-      <div className="ga-modal-body">
-        <p>{t('Photo saved to your gallery.')}</p>
-        <div className="player-photo-actions">
-          <ShowPhotoButton filename={filename} onShown={async () => {
-            onClose()
-            await onShown?.()
-          }} />
-          <button type="button" className="ga-btn" onClick={onClose} autoFocus>{t('Close')}</button>
-        </div>
-      </div>
-    </div>
-  </div>, document.body)
+  return <span className="player-photo-actions">
+    <ShowPhotoButton filename={filename} onShown={onShown} />
+    {onOpenGallery && <button type="button" className="ga-btn" onClick={onOpenGallery}>
+      {t('Open gallery')}
+    </button>}
+  </span>
 }

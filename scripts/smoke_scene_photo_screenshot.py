@@ -20,6 +20,7 @@ import io
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -141,7 +142,7 @@ backend = Backend()
 class Service:
     enabled = True
     pool = None
-    def _wait_for_explicit_backend(self, name): return backend
+    def _wait_for_explicit_backend(self, name, **kwargs): return backend
     def _get_instance_config(self, character, b): return {}
     def run_on_backend_channel(self, b, fn, **kw): return fn()
     def run_on_backend(self, b, op, **kw): return op(b), b
@@ -216,6 +217,9 @@ async def route_checks():
 
     with patch("app.models.account.get_active_character", return_value="Ann"), \
          patch.object(play, "_player_action_gate", return_value=SimpleNamespace(SKILL_ID="camera")), \
+         patch("app.models.character.get_character_current_location", return_value="room-loc"), \
+         patch("app.models.character.get_character_current_room", return_value="salon"), \
+         patch("app.core.room_entry.characters_in_room", return_value=["Ann", "Bob"]), \
          patch.object(scene_photo, "prepare_scene_photo", return_value=framed), \
          patch.object(service, "get_image_service", return_value=Service()), \
          patch("app.core.perception.announce_action") as announce, \
@@ -223,8 +227,44 @@ async def route_checks():
         payload = {"prompt": "The reference image gives only composition, camera angle and poses; its 3D/CGI look must not be copied.\nThe reference image gives only composition, camera angle and poses; its 3D/CGI look must not be copied.",
                    "reference_image_id": image_id, "backend": "Fake", "pose_check": False,
                    "negative_prompt": "CGI, cgi, soft focus, 3d render, CGI", "character_names": [], "use_room": False}
-        response = await play.play_scene_photo(await json_request(payload), user={"id": "uploader"})
-        assert response["ok"]
+        entered, released, finished = threading.Event(), threading.Event(), threading.Event()
+        original_generate = backend.generate
+        def held_backend(*args, **kwargs):
+            entered.set()
+            if not released.wait(5):
+                raise RuntimeError("test backend was not released")
+            try:
+                return original_generate(*args, **kwargs)
+            finally:
+                finished.set()
+        with patch.object(backend, "generate", side_effect=held_backend):
+            try:
+                response = await play.play_scene_photo(await json_request(payload), user={"id": "uploader"})
+                assert response.status_code == 202
+                for _ in range(300):
+                    if entered.is_set():
+                        break
+                    await asyncio.sleep(.01)
+                assert entered.is_set() and not finished.is_set(), "POST must return while the real pipeline's backend is held"
+                charge.assert_not_called()
+            finally:
+                released.set()
+            for _ in range(300):
+                if finished.is_set():
+                    break
+                await asyncio.sleep(.01)
+            assert finished.is_set()
+        assert response.status_code == 202
+        from app.core import scene_photo_jobs
+        import json
+        photo_id = json.loads(response.body)["photo_id"]
+        for _ in range(500):
+            with scene_photo_jobs._lock:
+                running = photo_id in scene_photo_jobs._workers
+            if not running:
+                break
+            await asyncio.sleep(.01)
+        assert not running, "photo worker did not finish"
         charge.assert_called_once_with("Ann", "camera")
         prompt, negative, params = calls[-1]
         assert prompt.count("composition, camera angle and poses") == 1

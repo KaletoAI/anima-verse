@@ -2946,6 +2946,7 @@
     "Enter a prompt.": "Gib einen Prompt ein.",
     "Use source image as reference": "Quellbild als Referenz verwenden",
     "Length in seconds (empty = backend default)": "Länge in Sekunden (leer = Backend-Standard)",
+    "Invalid photo request": "Ungültige Fotoanfrage",
     "Rendering photo…": "Foto wird gerendert…",
     "Photo ready": "Foto fertig",
     "Open gallery": "Galerie öffnen",

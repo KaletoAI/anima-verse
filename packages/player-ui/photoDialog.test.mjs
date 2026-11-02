@@ -38,6 +38,7 @@ const props = { prompt: 'Friends by the window', subjects: ['Bob'], available: [
 const render = extra => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(PlayerPhotoDialog, { ...props, ...extra })));
 const ordinary = render({});
 assert.match(ordinary, /Secretly/);
+assert.match(render({ error: 'Invalid photo request' }), /role="alert">Invalid photo request/);
 assert.doesNotMatch(ordinary, /<img|The screenshot sets/);
 const screenshot = render({ referenceImageId: 'abc.jpg', referenceImageUrl: '/chat/me/upload-image/abc.jpg' });
 assert.match(screenshot, /src="\/chat\/me\/upload-image\/abc.jpg"/);
@@ -105,16 +106,16 @@ for (const extra of [{}, { referenceImageId: 'abc.jpg' }]) {
   assert.equal(submitted.secret, true);
 }
 const { ToastProvider } = load(resolve('packages/player-ui/src/Toast.tsx'));
-const { ShowPhotoButton, PhotoSavedDialog } = load(resolve('packages/player-ui/src/ShowPhotoButton.tsx'));
-let closed = false;
+const { ShowPhotoButton, PhotoReadyActions } = load(resolve('packages/player-ui/src/ShowPhotoButton.tsx'));
+let opened = false;
 const resultMarkup = renderToStaticMarkup(React.createElement(I18nProvider, null,
-  React.createElement(ToastProvider, null, React.createElement(PhotoSavedDialog,
-    { filename: 'own-photo.png', onClose: () => { closed = true; } }))));
-assert.match(resultMarkup, /ga-modal-backdrop/);
-assert.match(resultMarkup, /role="dialog"/);
+  React.createElement(ToastProvider, null, React.createElement(PhotoReadyActions,
+    { filename: 'own-photo.png', onOpenGallery: () => { opened = true; } }))));
+assert.doesNotMatch(resultMarkup, /ga-modal-backdrop/);
+assert.doesNotMatch(resultMarkup, /role="dialog"/);
 assert.match(resultMarkup, /Show in chat/);
-findButton(portal, 'Close').props.onClick();
-assert.equal(closed, true);
+nodes.findLast(node => node.type === 'button' && node.props.children === 'Open gallery').props.onClick();
+assert.equal(opened, true);
 let posted;
 globalThis.fetch = async (url, options) => {
   posted = { url, body: JSON.parse(options.body), credentials: options.credentials };

@@ -188,10 +188,24 @@ class SecretPhotos(unittest.TestCase):
     def test_route_secret_validation_and_success_only_charging(self):
         from app.routes import play
         skill = SimpleNamespace(SKILL_ID="test-photo")
-        with patch.object(play, "_player_action_gate", return_value=skill) as gate, \
+        from app.core import scene_photo_jobs
+        def completed(response):
+            self.assertEqual(response.status_code, 202)
+            accepted = json.loads(response.body)
+            with scene_photo_jobs._lock:
+                worker = scene_photo_jobs._workers.get(accepted["photo_id"])
+            if worker:
+                worker.join(5)
+                self.assertFalse(worker.is_alive())
+            from app.models.notifications import get_notifications
+            return next(n["metadata"] for n in get_notifications(character_whitelist=["Ann"])
+                        if n["metadata"].get("photo_id") == accepted["photo_id"])
+        with patch("app.imagegen.service.get_image_service", return_value=SimpleNamespace(enabled=True)), \
+             patch("app.imagegen.routing.resolve_image_route"), \
+             patch.object(play, "_player_action_gate", return_value=skill) as gate, \
              patch("app.core.skill_gate.charge") as charge:
-            result = asyncio.run(play.play_scene_photo(request({"secret": True}), user={"id": "u1"}))
-            self.assertTrue(result["ok"])
+            result = completed(asyncio.run(play.play_scene_photo(request({"secret": True}), user={"id": "u1"})))
+            self.assertEqual(result["status"], "ready")
             self.assertTrue(character.get_single_image_meta("Ann", result["filename"])["secret"])
             charge.assert_called_once_with("Ann", "test-photo")
             gate.assert_called_with("Ann", "scene_photo")
@@ -201,8 +215,8 @@ class SecretPhotos(unittest.TestCase):
                 self.assertEqual(err.exception.status_code, 422)
             charge.reset_mock()
             with patch("app.skills.image_regenerate.regenerate_image", return_value=(False, "", "")):
-                with self.assertRaises(HTTPException):
-                    asyncio.run(play.play_scene_photo(request({"secret": True}), user={"id": "u1"}))
+                failed = completed(asyncio.run(play.play_scene_photo(request({"secret": True}), user={"id": "u1"})))
+                self.assertEqual(failed["status"], "failed")
             charge.assert_not_called()
             with patch.object(play, "_player_action_gate", side_effect=AssertionError("show charged a skill")):
                 self.assertTrue(asyncio.run(play.play_say(

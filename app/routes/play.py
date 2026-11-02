@@ -1455,53 +1455,25 @@ async def play_scene_photo_prepare(request: Request, user=Depends(get_current_us
     return result
 
 
-@router.post("/play/scene-photo")
+@router.post("/play/scene-photo", status_code=202)
 async def play_scene_photo(request: Request, user=Depends(get_current_user)):
-    """📷 step 2: renders the photo into the avatar's gallery. Body may
-    carry dialog overrides (prompt, backend, loras, negative_prompt,
-    character_names, use_room, pose_check, secret) — without them the one-click
-    defaults run.
-    Public photos announce the action; secret photos roll for discovery."""
+    """Validate and take the photo now; render and notify in the background."""
     import asyncio
+    from fastapi.responses import JSONResponse
     from app.models.account import get_active_character
-    from app.core.scene_photo import take_scene_photo
+    from app.core.scene_photo_jobs import validate_request, accept_photo
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=404, detail="no active avatar")
     skill = _player_action_gate(avatar, "scene_photo")
     try:
         body = await request.json()
-    except Exception:
-        body = {}
-    body = body if isinstance(body, dict) else {}
-    secret = body.get("secret", False)
-    if not isinstance(secret, bool):
-        raise HTTPException(status_code=422, detail="secret must be a boolean")
-    from app.core.lora_library import LoraNotAllowedError
-    from app.imagegen.pose_check import parse_override
-    try:
-        result = await asyncio.to_thread(
-            take_scene_photo, avatar,
-            str(body.get("prompt") or ""),
-            str(body.get("backend") or ""),
-            body.get("loras"),
-            str(body.get("negative_prompt") or ""),
-            body.get("character_names"),
-            bool(body.get("use_room", True)),
-            parse_override(body.get("pose_check")),
-            reference_image_id=str(body.get("reference_image_id") or ""),
-            user_id=user["id"], secret=secret)
-    except LoraNotAllowedError as e:
-        # An explicitly picked LoRA the library does not associate with the
-        # picked backend: the user's own choice, said verbatim.
-        raise HTTPException(status_code=400, detail=str(e))
-    if not result.get("ok"):
-        raise HTTPException(status_code=502,
-                            detail=result.get("error", "photo failed"))
-    if skill is not None:
-        from app.core.skill_gate import charge
-        charge(avatar, skill.SKILL_ID)
-    return result
+    except Exception as exc:
+        raise HTTPException(422, "Invalid photo request") from exc
+    options = validate_request(body)
+    accepted = await asyncio.to_thread(accept_photo, avatar, options, user["id"],
+                                     skill.SKILL_ID if skill is not None else None)
+    return JSONResponse(accepted, status_code=202)
 
 
 @router.post("/play/scene-render")
@@ -2014,7 +1986,7 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                                 detail=res.get("reason") or res.get("status"))
         return {"ok": True, "status": res["status"], "partner": partner,
                 "pose": pose}
-    blocked = IE.check_can_pair(avatar, partner)
+    blocked = IE.check_can_pair(avatar, partner, pose)
     if blocked:
         raise HTTPException(status_code=409, detail=blocked)
     # create_invite emits ``interaction.invited``; the package that owns the
@@ -2672,7 +2644,9 @@ def play_notices(user=Depends(get_current_user)):
         # _row_to_notification supplies content/type/character, not
         # body/kind/title; the wrong fields leave banners empty.
         out["notifications"] = [{"id": n.get("id"), "kind": n.get("type", ""),
-                                 "body": n.get("content", "")}
+                                 "body": n.get("content", ""),
+                                 **({"photo": n.get("metadata", {})}
+                                    if n.get("type") == "scene_photo" else {})}
                                 for n in items]
         out["unread_count"] = get_unread_count(character_whitelist=[avatar])
     except Exception as ex:

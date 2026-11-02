@@ -88,4 +88,5 @@ def reveal_photo(photographer: str, filename: str) -> list[str]:
         return []  # An empty room query would mean the entire location.
     return [name for name in characters_in_room(loc, room)
             if name != photographer and name in subjects and not is_character_sleeping(name)
-            and discover_photo(photographer, filename, subjects, name, loc, room, shown=True)]
+            and discover_photo(photographer, meta.get("photo_id") or filename, subjects,
+                               name, loc, room, shown=True)]

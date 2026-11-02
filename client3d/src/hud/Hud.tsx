@@ -1078,7 +1078,7 @@ export function Hud({ avatar, username, role }: {
           <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
         </div>
       </div>
-      <div className="hud-notices"><NoticeBanner /></div>
+      <div className="hud-notices"><NoticeBanner onOpenGallery={() => setOpen(o => ({ ...o, gallery: true }))} /></div>
       {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
         <span className="ovb-name">{game.openView}</span>

@@ -22,7 +22,6 @@ import { useCallback, useEffect, useRef, useState,
 import { useI18n } from './I18nProvider'
 import { ApiError, apiPost, apiUpload } from './api'
 import { useToast } from './Toast'
-import { PhotoSavedDialog } from './ShowPhotoButton'
 import { ChatGalleryPicker } from './ChatGalleryPicker'
 import { GiftPicker, type GiftResult } from './GiftPicker'
 import { SceneView, type SceneLine } from './SceneView'
@@ -168,6 +167,8 @@ export interface ScenePhotoSubmit {
 /** What the host needs to render its image-generation dialog for the 📷 flow:
  * the prepared prompt plus the two callbacks that continue/abort the flow. */
 export interface PhotoDialogControl {
+  /** Up-front validation failures stay visible for retry. */
+  error?: string
   referenceImageUrl?: string
   referenceImageId?: string
   /** Prompt distilled by `/play/scene-photo/prepare` (editable in the dialog). */
@@ -378,11 +379,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   const photoCost = Object.entries(data?.capability_costs?.[photoSkill] || {})
     .map(([stat, amount]) => `${amount} ${stat}`).join(', ')
   const [photoBusy, setPhotoBusy] = useState(false)
-  const [savedPhoto, setSavedPhoto] = useState<string | null>(null)
+  const [photoError, setPhotoError] = useState('')
   const [photoDlg, setPhotoDlg] = useState<PhotoDlgInfo | null>(draft.photoDlg)
   draft.photoDlg = photoDlg  // write-through, like the composer state above
   const takePhoto = useCallback(async (screenshot?: ScreenshotPhoto) => {
     if (photoBusy) return
+    setPhotoError('')
     setPhotoBusy(true)
     try {
       const d = await apiPost<{ ok?: boolean; prompt?: string; subjects?: string[]; present?: string[] }>(
@@ -417,8 +419,9 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
 
   const submitPhoto = useCallback(async (payload: ScenePhotoSubmit) => {
     setPhotoBusy(true)
+    setPhotoError('')
     try {
-      const d = await apiPost<{ ok?: boolean; filename?: string; discovered_by?: string[] }>('/play/scene-photo', {
+      const d = await apiPost<{ status: string; photo_id: string; discovered_by?: string[] }>('/play/scene-photo', {
         prompt: payload.prompt,
         secret: payload.secret === true,
         ...(payload.reference_image_id ? { reference_image_id: payload.reference_image_id } : {}),
@@ -429,18 +432,18 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         use_room: payload.use_room !== false,
         ...(typeof payload.pose_check === 'boolean' ? { pose_check: payload.pose_check } : {}),
       })
-      if (d?.ok) {
+      if (d?.status === 'accepted') {
         setPhotoDlg(null)
-        setSavedPhoto(d.filename || null)
+        draft.photoDlg = null
         const noticed = d.discovered_by?.length
           ? t('{names} noticed!').replace('{names}', d.discovered_by.join(', ')) : ''
-        toast([t('Photo saved to your gallery.'), noticed].filter(Boolean).join(' '), 'success')
+        toast([t('Rendering photo…'), noticed].filter(Boolean).join(' '), 'info')
         await refreshScene()
       } else {
-        toast(t('Photo failed.'), 'error')
+        setPhotoError(t('Photo failed.'))
       }
     } catch (e) {
-      toast((e as Error).message || t('Photo failed.'), 'error')
+      setPhotoError(t((e as Error).message || 'Photo failed.'))
     } finally {
       setPhotoBusy(false)
     }
@@ -594,8 +597,6 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   return (
     <>
       <div className="player-scene-body">
-        {savedPhoto && <PhotoSavedDialog filename={savedPhoto}
-          onClose={() => setSavedPhoto(null)} onShown={refreshScene} />}
         <ScenesRecap />
         {transcriptAside
           ? (
@@ -836,8 +837,9 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         referenceImageId: photoDlg.screenshot?.imageId,
         referenceImageUrl: photoDlg.screenshot?.imageUrl,
         avatar,
+        error: photoError,
         onSubmit: submitPhoto,
-        onClose: () => setPhotoDlg(null),
+        onClose: () => { setPhotoDlg(null); setPhotoError('') },
       })}
       {giftOpen && (
         <GiftPicker

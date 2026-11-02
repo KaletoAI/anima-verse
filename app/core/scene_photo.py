@@ -140,31 +140,36 @@ def _pairs_among(names: List[str]) -> List[tuple]:
     return out
 
 
-def prepare_scene_photo(avatar: str, view: Optional[dict] = None) -> Dict[str, Any]:
+def prepare_scene_photo(avatar: str, view: Optional[dict] = None, *,
+                        snapshot: Optional[dict] = None) -> Dict[str, Any]:
     """Builds the photo prompt (chat-context distillation + person
     descriptions) WITHOUT generating — feeds the image-gen dialog."""
     from app.models.character import (get_character_current_location,
                                       get_character_current_room)
     from app.core.room_entry import characters_in_room
 
-    loc = get_character_current_location(avatar) or ""
-    room = get_character_current_room(avatar) or ""
-    if not loc:
-        return {"ok": False, "error": "Avatar has no location."}
-
-    present = [c for c in (characters_in_room(loc, room) or [])
-               if c != avatar]
-    # The photographer stays behind the camera — unless they are part of
-    # what there is to photograph. In a running pair the avatar is a
-    # participant, and a photo of the moment that leaves out one half of it
-    # is the wrong photo. The template flips to its selfie wording on its
-    # own once the photographer is among the subjects.
-    from app.core.interaction_engine import get_interaction
-    if present and get_interaction(avatar):
-        subjects = present + [avatar]
+    if snapshot is not None:
+        loc, room = snapshot["location"], snapshot["room"]
+        present, subjects = snapshot["present"], snapshot["subjects"]
     else:
-        # Alone in the room -> selfie.
-        subjects = present or [avatar]
+        loc = get_character_current_location(avatar) or ""
+        room = get_character_current_room(avatar) or ""
+        if not loc:
+            return {"ok": False, "error": "Avatar has no location."}
+
+        present = [c for c in (characters_in_room(loc, room) or [])
+                   if c != avatar]
+        # The photographer stays behind the camera — unless they are part of
+        # what there is to photograph. In a running pair the avatar is a
+        # participant, and a photo of the moment that leaves out one half of it
+        # is the wrong photo. The template flips to its selfie wording on its
+        # own once the photographer is among the subjects.
+        from app.core.interaction_engine import get_interaction
+        if present and get_interaction(avatar):
+            subjects = present + [avatar]
+        else:
+            # Alone in the room -> selfie.
+            subjects = present or [avatar]
     framing = ""
     if view is not None:
         parsed_view = PhotoView.model_validate(view)
@@ -181,7 +186,8 @@ def prepare_scene_photo(avatar: str, view: Optional[dict] = None) -> Dict[str, A
         framing = _view_framing(parsed_view, visible)
     pairs = _pairs_among(subjects)
 
-    transcript = _room_transcript(avatar, loc, room)
+    transcript = (snapshot["transcript"] if snapshot is not None
+                  else _room_transcript(avatar, loc, room))
 
     # Prompt distillation via LLM; deterministic fallback from state poses.
     prompt = ""
@@ -257,30 +263,37 @@ def take_scene_photo(avatar: str,
                      reference_image_id: str = "",
                      user_id: str = "",
                      secret: bool = False,
-                     rng: Optional[Callable[[], float]] = None) -> Dict[str, Any]:
+                     rng: Optional[Callable[[], float]] = None,
+                     snapshot: Optional[dict] = None) -> Dict[str, Any]:
     """Synchronous — the caller (route) runs it in a worker thread.
 
     Without overrides it prepares everything itself (one-click path);
     the image-gen dialog passes prompt/backend/LoRAs/negative explicitly."""
-    source_path = ""
-    if reference_image_id:
-        from app.core.chat_ops import resolve_owned_chat_upload_path
-        source_path = str(resolve_owned_chat_upload_path(reference_image_id, user_id))
-    prep = prepare_scene_photo(avatar)
-    if not prep.get("ok"):
-        return prep
-    loc, room = prep["location"], prep["room"]
-    subjects = (list(character_names) if character_names or (source_path and character_names == [])
-                else prep["subjects"])
-    from app.core.room_entry import characters_in_room
-    from app.core.scene_photo_watch import discovery_chance, discover_photo
-    present = list(dict.fromkeys(characters_in_room(loc, room) or []))
-    subjects = list(dict.fromkeys(n for n in subjects if n in present))
-    # Snapshot attention at the shutter, before potentially slow generation.
-    chances = [(n, discovery_chance(n, depicted=n in subjects)) for n in present
-               if n != avatar] if secret and room else []
-    if not prompt:
-        prompt = prep["prompt"]
+    if snapshot is not None:
+        source_path = snapshot["source_path"]
+        loc, room, subjects = snapshot["location"], snapshot["room"], snapshot["subjects"]
+        if not prompt:
+            prompt = prepare_scene_photo(avatar, snapshot=snapshot)["prompt"]
+    else:
+        source_path = ""
+        if reference_image_id:
+            from app.core.chat_ops import resolve_owned_chat_upload_path
+            source_path = str(resolve_owned_chat_upload_path(reference_image_id, user_id))
+        prep = prepare_scene_photo(avatar)
+        if not prep.get("ok"):
+            return prep
+        loc, room = prep["location"], prep["room"]
+        subjects = (list(character_names) if character_names or (source_path and character_names == [])
+                    else prep["subjects"])
+        from app.core.room_entry import characters_in_room
+        from app.core.scene_photo_watch import discovery_chance, discover_photo
+        present = list(dict.fromkeys(characters_in_room(loc, room) or []))
+        subjects = list(dict.fromkeys(n for n in subjects if n in present))
+        # Snapshot attention at the shutter, before potentially slow generation.
+        chances = [(n, discovery_chance(n, depicted=n in subjects)) for n in present
+                   if n != avatar] if secret and room else []
+        if not prompt:
+            prompt = prep["prompt"]
 
     if source_path:
         prompt = prompt.replace(_SCREENSHOT_SENTENCE, "").strip()
@@ -328,7 +341,8 @@ def take_scene_photo(avatar: str,
     filename = Path(actual_path).name
     from app.models.character import add_character_image_metadata
     add_character_image_metadata(avatar, filename, {
-        "scene_photo": True, "secret": secret, "photo_subjects": subjects})
+        "scene_photo": True, "secret": secret, "photo_subjects": subjects,
+        **({"photo_id": snapshot["photo_id"]} if snapshot is not None else {})})
     if reference_image_id:
         from app.core.chat_ops import delete_screenshot_upload
         try:
@@ -336,13 +350,14 @@ def take_scene_photo(avatar: str,
         except OSError as exc:
             # The generated gallery image is already safe; daily cleanup can retry.
             logger.warning("scene photo input cleanup failed: %s", exc)
-    discovered_by = []
-    if secret:
+    discovered_by = list(snapshot["discovered_by"]) if snapshot is not None else []
+    if secret and snapshot is None:
         roll = rng if rng is not None else random.random
         for watcher, chance in chances:
             if chance > 0 and roll() < chance and discover_photo(
                     avatar, filename, subjects, watcher, loc, room):
                 discovered_by.append(watcher)
+    if secret:
         return {"ok": True, "filename": filename, "character": avatar,
                 "url": f"/characters/{avatar}/images/{filename}",
                 "prompt": final_prompt, "discovered_by": discovered_by}
@@ -375,7 +390,8 @@ def take_scene_photo(avatar: str,
             actor=avatar, others=", ".join(_others))
     announce_action(avatar, _line, source="scene_photo",
                     perception_meta={"image_url":
-                                     f"/characters/{avatar}/images/{filename}"})
+                                     f"/characters/{avatar}/images/{filename}"},
+                    **({"location_id": loc, "room_id": room} if snapshot is not None else {}))
 
     return {"ok": True, "filename": filename, "character": avatar,
             "url": f"/characters/{avatar}/images/{filename}",

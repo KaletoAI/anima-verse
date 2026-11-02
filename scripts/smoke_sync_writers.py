@@ -100,6 +100,8 @@ DELEGATED = {
     "app/core/model3d.py": {"_checkpoint_mesh": "_publish_signature"},
 }
 
+DELEGATED["app/core/scene_photo_jobs.py"] = {"_render": "create_notification"}
+
 DELEGATED.update({
     "app/models/notifications.py": {"mark_read": "_mutate_notification", "delete_notification": "_mutate_notification"},
     "app/models/instagram.py": {"create_post": "save_feed"},
