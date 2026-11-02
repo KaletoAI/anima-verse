@@ -115,7 +115,7 @@ function reportFixture() {
     manualPropGate: { pending: false, withdrawn: () => false }, pollIsStale: (asked, corrected) => asked < corrected,
     performance: { now: () => 100 }, THREE: { Vector3: class { constructor(x,y,z) { Object.assign(this,{x,y,z}); } } },
     groundY: () => 0, tileAt: () => null, roomFloorY: () => null, clearSnap() {}, cancelRoute() {},
-    npcs: { yawOf: () => 0, propEntryUnavailable: () => false, hasOwnMotion: () => false, setServerDriven: (...args) => effects.push(['drive', ...args]), positionOf: () => ({x:3,z:0}) },
+    npcs: { inInteraction: () => false, yawOf: () => 0, propEntryUnavailable: () => false, hasOwnMotion: () => false, setServerDriven: (...args) => effects.push(['drive', ...args]), positionOf: () => ({x:3,z:0}) },
     api: { ApiError, isAuthError: () => false, postPos: (...args) => new Promise((resolve,reject) => sent.push({args,resolve,reject})) },
     adoptReport: () => effects.push('adopt'), rememberRefused: () => effects.push('refused'),
     getGameState: () => ({mode:'embodied'}),
@@ -126,7 +126,7 @@ function reportFixture() {
   const code = `
     let avatarDrive = {kind:'PLAYER'}, avatarCancelled = NO_CANCEL, answerFloor = 0;
     let posSeq = 7, pendingReport = null, posInFlight = false, posDirty = false;
-    let pendingSnap = null, reportedPos = null, reportedYaw = null, lastReportAt = 0, ownCorrectionAt = 0;
+    let pendingSnap = null, reportedPos = null, reportedYaw = null, lastReportAt = 0, ownCorrectionAt = 0, ownRoomChangeAt = 0, avatarBodyRoom;
     let avatarLocalPos = null, localPos = {x:3,z:0};
     let avatarSeated = false, ownSeatChangeAt = 0, verticalRide = null;
     const POS_SNAP_M = 0.1, CORRECT_WALK_M = 100, hiddenChars = new Set(), shownPlacement = new Map(), residency = new Map(), mapStamp = 0;

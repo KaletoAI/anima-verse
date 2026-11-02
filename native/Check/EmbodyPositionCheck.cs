@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using AnimaNative.Overview;
+using AnimaNative.Scene;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -183,6 +186,58 @@ public static class EmbodyPositionCheck
             for(int i=0;i<50;i++) Frame(d);
             Is("pair interaction no report",channel.Seq==before);
             fig.Pair=null;
+            // The shared hand oracle includes overlapping storeys and a retained own origin.
+            controller.Dispose(); controller=null;
+            using var roomFixture=JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures,"placement","avatar_rooms.json")));
+            var roomRoot=roomFixture.RootElement;
+            static Vec3 V(JsonElement p) => new(p.GetProperty("x").GetDouble(),p.GetProperty("y").GetDouble(),p.GetProperty("z").GetDouble());
+            var st=hall.Stands;
+            st.Frame=new(V(roomRoot.GetProperty("center")),roomRoot.GetProperty("yaw").GetDouble());
+            st.Surfaces.Clear(); st.RoomCenters.Clear(); st.RoomLevels.Clear(); st.RoomFloors.Clear();
+            foreach(var room in roomRoot.GetProperty("rooms").EnumerateObject())
+            {
+                var centre=V(room.Value.GetProperty("center"));
+                st.RoomCenters[room.Name]=centre;
+                st.RoomLevels[room.Name]=room.Value.GetProperty("level").GetInt32();
+                st.RoomFloors.Add(new(room.Name,new RoomFloor {
+                    Hull=room.Value.GetProperty("hull").EnumerateArray().Select(p=>new P2(p[0].GetDouble(),p[1].GetDouble())).ToArray(),
+                    Declared=centre.Y-.01 }));
+            }
+            foreach(var c in roomRoot.GetProperty("cases").EnumerateArray())
+            foreach(bool ready in new[]{true,false})
+            {
+                now+=100;
+                var body=new Vector3((float)st.Frame.Center.X,.01f,(float)st.Frame.Center.Z);
+                manager.SnapPlayerTo(fig.CharacterName,body);
+                steering.Correction=null; steering.VerticalRide=null;
+                channel=new((p,_)=>Task.FromResult(Answer("{\"ok\":true,\"location_id\":\"loc-hall\",\"room_id\":\"lower\"}")),()=>now,"room-fixture");
+                controller=new(manager,builder,steering,source,()=>now,channel); controller.SetActive(true);
+                // Establish an actual sent origin, not a fabricated seq that OwnEcho would reject.
+                channel.Tick(new(body.X,body.Z),true);
+                controller.AdoptRoom(c.TryGetProperty("bodyRoom",out var ownRoom) ? ownRoom.GetString()! : "lower"); now+=1;
+                var lines=new List<string>(); controller.Log=lines.Add;
+                hall.Ready=ready;
+                if(c.GetProperty("ride").GetBoolean()) steering.VerticalRide=new(body+Vector3.Up*3,100);
+                await Poll(row=> {
+                    row["location_id"]="loc-hall"; row["room_id"]=c.GetProperty("room").GetString();
+                    row["pos"]=c.TryGetProperty("pos",out var point) ? JsonNode.Parse(point.GetRawText()) : new JsonObject{["x"]=body.X,["z"]=body.Z}; row["place"]=null; row["travel"]=null;
+                    row["pos_origin"]=c.GetProperty("echo").GetBoolean() ? new JsonObject{["session"]=channel.Session,["seq"]=channel.Seq} : null;
+                });
+                bool correct=c.GetProperty("correct").GetBoolean();
+                Is("shared room hold "+c.GetProperty("label"),(controller.PendingSnap is not null) == (correct && !ready));
+                if(correct && !ready) {
+                    Is("shared room held body",fig.Position.DistanceTo(body)<.0001);
+                    Is("shared room teleport pin",builder.StreamPins.GetValueOrDefault("teleport")=="loc-hall");
+                    hall.Ready=true; controller.BeforeSteering();
+                    Is("shared room releases pin",!builder.StreamPins.ContainsKey("teleport"));
+                }
+                var expected=correct ? V(c.GetProperty("expected")) : new Vec3(body.X,body.Y,body.Z);
+                Near("shared room X",fig.Position.X,expected.X); Near("shared room Y",fig.Position.Y,expected.Y); Near("shared room Z",fig.Position.Z,expected.Z);
+                Is("shared room snaps without walk",steering.Correction is null);
+                Is("shared room one transition log",lines.Count(l=>l.Contains(" -> room="))==(correct ? 1 : 0));
+                controller.Dispose(); controller=null;
+            }
+            steering.VerticalRide=null;
             steering.SetActive(false);
             return $"position={n} P1-P6=ok cadence=330ms final=1 refusal=walk/4s teleport=hold/snap echo=ignored driver=SERVER/CANCELLING/PLAYER";
         }

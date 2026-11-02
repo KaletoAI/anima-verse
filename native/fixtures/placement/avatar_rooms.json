@@ -1,0 +1,19 @@
+{
+  "note": "Hand oracle: frame (-1640,0,-639.75), yaw=0. Rooms lower/upper have identical [-4,4]^2 hulls, levels 0/1, flat standing Y=.01/3.01. Body (-1640,.01,-639.75) is inside BOTH hulls; equal XZ cannot hide the 3 m rise. Side room level 0 spans local x=[4,8]; stale row point at local (0,0) falls back to its centre (6,0). A ride owns its body; an inside same-storey point is ordinary lag, even without an echo. Origins do not change the geometric answer.",
+  "center": {"x": -1640, "y": 0, "z": -639.75}, "yaw": 0,
+  "rooms": {
+    "lower": {"level": 0, "center": {"x": -1640, "y": 0.01, "z": -639.75}, "hull": [[-4, -4], [4, -4], [4, 4], [-4, 4]]},
+    "upper": {"level": 1, "center": {"x": -1640, "y": 3.01, "z": -639.75}, "hull": [[-4, -4], [4, -4], [4, 4], [-4, 4]]},
+    "side": {"level": 0, "center": {"x": -1634, "y": 0.01, "z": -639.75}, "hull": [[4, -4], [8, -4], [8, 4], [4, 4]]}
+  },
+  "cases": [
+    {"label": "party drag upstairs with own echo", "room": "upper", "ride": false, "echo": true, "correct": true, "expected": {"x": -1640, "y": 3.01, "z": -639.75}},
+    {"label": "party drag upstairs without echo", "room": "upper", "ride": false, "echo": false, "correct": true, "expected": {"x": -1640, "y": 3.01, "z": -639.75}},
+    {"label": "own stair ride owns body", "room": "upper", "ride": true, "echo": true, "correct": false},
+    {"label": "same storey inside is ordinary lag", "room": "lower", "ride": false, "echo": false, "correct": false},
+    {"label": "same storey inside own echo", "room": "lower", "ride": false, "echo": true, "correct": false},
+    {"label": "same storey stale point outside new hull", "room": "side", "ride": false, "echo": true, "correct": true, "expected": {"x": -1634, "y": 0.01, "z": -639.75}},
+    {"label": "same storey relocation keeps valid row point", "room": "side", "ride": false, "echo": true, "correct": true, "pos": {"x": -1635, "z": -639.75}, "expected": {"x": -1635, "y": 0.01, "z": -639.75}},
+    {"label": "own adopted same-storey room is not fought", "room": "side", "bodyRoom": "side", "ride": false, "echo": true, "correct": false}
+  ]
+}

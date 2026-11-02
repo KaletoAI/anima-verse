@@ -10,7 +10,10 @@ public interface IReadinessDeps
     void Pin(string id, string owner);
     void Release(string id, string owner);
 }
-public sealed record PendingSnap(double X, double Z, string Id);
+public sealed record PendingSnap(double X, double Z, string Id)
+{
+    public Figures.AvatarRoomCorrection? RoomCorrection { get; init; }
+}
 public sealed record ResidentReadiness(string Ring, bool Ready);
 public sealed class ReadinessState
 {

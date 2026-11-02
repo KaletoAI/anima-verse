@@ -185,9 +185,7 @@ public static class NpcPlacement
                     {
                         var local = SceneView.WorldToTile(tile.Frame, at.X, at.Z);
                         // The row's room owns the footprint on its storey; a floor-height lookup is not containment.
-                        if (double.IsFinite(at.X) && double.IsFinite(at.Z)
-                            && tile.RoomFloors.TryGetValue(inRoom, out var floor)
-                            && SceneView.PolygonDistance(local.X, local.Z, floor.Hull) <= 0.3)
+                        if (AvatarRoomPlacement.Inside(tile, inRoom, at))
                         {
                             branch = "pos";
                             pos = new Vec3(at.X, ctx.RoomStandY(inRoom, local.X, local.Z) ?? centre.Y, at.Z);

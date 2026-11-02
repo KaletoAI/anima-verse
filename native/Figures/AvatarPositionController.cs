@@ -25,6 +25,7 @@ public sealed class AvatarPositionController : IDisposable
     private readonly ReadinessState _readiness = new();
     private JsonElement? _row;
     private P2? _lastPosition;
+    private string? _bodyRoom;
     private bool _active, _disposed, _propRelease;
     public PositionChannel Channel { get; }
     public double OwnCorrectionAt { get; private set; }
@@ -48,6 +49,7 @@ public sealed class AvatarPositionController : IDisposable
         _ownRoomChangeAt = _clock();
         Channel.DiscardPendingAnswers();
         SetRoom(LocationId, room);
+        _bodyRoom = room;
     }
     public Action<string>? Toast { get; set; }
     public Action<Vector3>? FlyTo { get; set; }
@@ -86,7 +88,11 @@ public sealed class AvatarPositionController : IDisposable
         }, _clock);
         Channel.CanReport = () => CanReport;
         Channel.CanPrepareReport = () => !Suspended && _active && !_disposed && _readiness.PendingSnap is null && _steering.Correction is null;
-        Channel.Adopted += answer => SetRoom(Text(answer.Body,"location_id"), answer.RoomId);
+        Channel.Adopted += answer => {
+            string location = Text(answer.Body,"location_id");
+            if (LocationId != location || RoomId != answer.RoomId) _ownRoomChangeAt = _clock();
+            SetRoom(location, answer.RoomId); _bodyRoom = answer.RoomId;
+        };
         Channel.Refused += (point, home) => steering.RememberRefused(point, home ?? CurrentPoint());
         Channel.Corrected += CorrectTo;
         Channel.Toast += message => Toast?.Invoke(message);
@@ -102,6 +108,7 @@ public sealed class AvatarPositionController : IDisposable
     {
         if (_active == active) return;
         _active = active; _lastPosition = CurrentPoint();
+        if (active) _bodyRoom = RoomId.Length > 0 ? RoomId : _figures.ShownRoom(_figures.AvatarName);
         if (!active)
         {
             Channel.DiscardPendingAnswers();
@@ -185,7 +192,9 @@ public sealed class AvatarPositionController : IDisposable
     }
 
     /// <summary>Walk at most 8 m for at most 3 s; farther corrections snap and invalidate the local plan.</summary>
-    public void CorrectTo(P2 point)
+    public void CorrectTo(P2 point) => CorrectTo(point, null);
+
+    private void CorrectTo(P2 point, AvatarRoomCorrection? roomCorrection)
     {
         if (Suspended) return;
         if (!_active || Avatar is not { } f || _figures.OwnPropMotion is not null) return;
@@ -193,9 +202,10 @@ public sealed class AvatarPositionController : IDisposable
         // Task 51: the authoritative correction takes ownership even while a stair/lift owns the steering branch.
         _steering.VerticalRide = null; _figures.SetStairRide(f.CharacterName, null);
         _world.ClearPlayerApproach(); _steering.CancelRoute(); _steering.WalkIn = null;
-        var goal = GroundPoint(point);
-        Log?.Invoke($"[spawn] correction from={f.Position} to={goal} room={RoomId} mode={(double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM ? "snap" : "walk")}");
-        if (double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM)
+        var goal = roomCorrection is {} move ? new Vector3((float)move.Point.X,(float)move.Point.Y,(float)move.Point.Z) : GroundPoint(point);
+        if (roomCorrection is not null) _bodyRoom = roomCorrection.Room;
+        Log?.Invoke($"[spawn] correction from={f.Position} to={goal} room={RoomId} {roomCorrection?.Transition} mode={(roomCorrection is not null || double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM ? "snap" : "walk")}");
+        if (roomCorrection is not null || double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM)
         { _figures.SnapPlayerTo(f.CharacterName,goal); _steering.Correction = null; }
         else
         {
@@ -208,24 +218,31 @@ public sealed class AvatarPositionController : IDisposable
     private void Applied(JsonElement root, double polledAt)
     {
         if (Suspended) return;
-        if (!_active || _steering.PropActionDriven || Channel.Driver.Kind == DriverKind.SERVER
+        if (!_active || _steering.PropActionDriven || _figures.OwnPropMotion is not null || Channel.Driver.Kind == DriverKind.SERVER
             || FigureGround.PollIsStale(polledAt,OwnStateChangedAt) || _row is not { } row) return;
         if (row.TryGetProperty("travel",out var tr) && tr.ValueKind == JsonValueKind.Object && Channel.Suppressed(Text(tr,"journey_id"))) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;
         if (Seated || InPair || Channel.InFlight || _steering.WalkIn is not null || _steering.VerticalRide is not null
-            || _steering.Correction is not null || CurrentPoint() is not { } at || Point(row) is not { } p || Channel.OwnEcho(Origin(row))) return;
+            || _steering.Correction is not null || CurrentPoint() is not { } at || Point(row) is not { } p) return;
+        AvatarRoomCorrection? roomCorrection = null;
+        if (Avatar is {} body && _world.Slots.TryGetValue(LocationId,out var slot))
+            roomCorrection = AvatarRoomPlacement.Correction(slot.PlacementView(),new(body.Position.X,body.Position.Y,body.Position.Z),
+                RoomId,p,slot.Stands.RoomStandY,bodyRoom:_bodyRoom);
+        if (roomCorrection is null && Channel.OwnEcho(Origin(row))) return;
+        if (roomCorrection is {} move) p = new(move.Point.X,move.Point.Z);
         double distance = double.Hypot(p.X-at.X,p.Z-at.Z);
-        if (distance <= PositionChannel.SnapM) return;
-        if (distance > PositionChannel.CorrectWalkM && _world.PlaceAt(p.X,p.Z) is { } id && !_world.IsReady(id))
+        if (roomCorrection is null && distance <= PositionChannel.SnapM) return;
+        var destination = roomCorrection is not null ? LocationId : _world.PlaceAt(p.X,p.Z);
+        if ((roomCorrection is not null || distance > PositionChannel.CorrectWalkM) && destination is { Length: > 0 } id && !_world.IsReady(id))
         {
             _world.ClearPlayerApproach();
-            Readiness.HoldSnap(_world,_readiness,new(p.X,p.Z,id));
+            Readiness.HoldSnap(_world,_readiness,new(p.X,p.Z,id) { RoomCorrection = roomCorrection });
             _steering.PendingSnap = true; _steering.CancelRoute();
             if (Avatar is { } f) f.Target = f.Position;
             return;
         }
-        CorrectTo(p);
-        if (distance > PositionChannel.CorrectWalkM) FlyTo?.Invoke(GroundPoint(p));
+        CorrectTo(p,roomCorrection);
+        if (roomCorrection is not null || distance > PositionChannel.CorrectWalkM) FlyTo?.Invoke(Avatar?.Position ?? GroundPoint(p));
     }
 
     /// <summary>Runs before steering so a ready teleport releases the hold on the same frame.</summary>
@@ -233,9 +250,11 @@ public sealed class AvatarPositionController : IDisposable
     {
         if (Suspended) return;
         using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarPosition.before steering");
-        if (!_active || _readiness.PendingSnap is not { } snap || !Readiness.TrySnap(_world,snap)) return;
+        if (!_active || _figures.OwnPropMotion is not null || _steering.VerticalRide is not null || Seated || InPair || _steering.PropActionDriven
+            || Channel.Driver.Kind == DriverKind.SERVER || Channel.InFlight
+            || _readiness.PendingSnap is not { } snap || !Readiness.TrySnap(_world,snap)) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;
-        var p = new P2(snap.X,snap.Z); CorrectTo(p); FlyTo?.Invoke(GroundPoint(p));
+        var p = new P2(snap.X,snap.Z); CorrectTo(p,snap.RoomCorrection); FlyTo?.Invoke(Avatar?.Position ?? GroundPoint(p));
     }
 
     private void AfterTick()

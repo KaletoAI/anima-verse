@@ -6,7 +6,7 @@ let finishOld, reads = 0, invalidations = 0;
 let room = 'old';
 const published = [];
 const scope = await mainFunctions(['syncPlaceGlyphs', 'refreshRoomOffers', 'adoptReport', 'preserveOfferRoom'], {
-  avatarName: 'avatar', lastMap: map, roomOf: new Map(), propOffersRoomKey: null, ownOfferRoomChangeAt: 0,
+  avatarBodyRoom: undefined, ownRoomChangeAt: 0, avatarName: 'avatar', lastMap: map, roomOf: new Map(), propOffersRoomKey: null, ownOfferRoomChangeAt: 0,
   offersGeneration: 0, offersAppliedGeneration: 0, propStateEpoch: 0, ownSeatChangeAt: 0,
   placeOffers: [], placeOffersRoom: '', semanticOffers: [], semanticState: {}, propStateUncertain: false, manualPropRelease: false, mapPolledAt: 0,
   api: {

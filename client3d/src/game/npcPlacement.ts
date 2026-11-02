@@ -146,6 +146,42 @@ export function huddleOffset(isBuilding: boolean, width: number,
 
 const copy = (p: PlacementPoint): PlacementPoint => ({ x: p.x, y: p.y, z: p.z });
 
+/** The body's visible floor is independent of the row room and of position-origin echoes. */
+export interface AvatarRoomCorrection {
+  oldRoom: string; oldLevel: number; room: string; level: number; point: PlacementPoint;
+}
+export function insidePlacementRoom<M extends PlacementMarker>(tile: PlacementTile<M>, room: string,
+  point: { x: number; z: number }): boolean {
+  const p = worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, point.x, point.z);
+  return Number.isFinite(point.x) && Number.isFinite(point.z)
+    && polygonDistance(p.x, p.z, tile.roomFloors.get(room)?.hull) <= .3;
+}
+export function avatarRoomCorrection<M extends PlacementMarker>(tile: PlacementTile<M>, body: PlacementPoint,
+  room: string, rowPoint: { x: number; z: number },
+  floorY: (room: string, x: number, z: number) => number | null, ownRide = false, bodyRoom?: string): AvatarRoomCorrection | null {
+  const centre = tile.roomCenters.get(room), level = tile.roomLevels.get(room);
+  if (ownRide || !centre || level === undefined || !tile.roomFloors.has(room)) return null;
+  const local = worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, body.x, body.z);
+  let oldRoom: string | null = null, oldLevel = 0, best = Infinity, bestInside = false, inLocation = false;
+  // Height chooses the floor; containment only breaks ties between adjacent rooms on that floor.
+  for (const [id, c] of tile.roomCenters) {
+    const candidateLevel = tile.roomLevels.get(id);
+    if (candidateLevel === undefined) continue;
+    const distance = Math.abs(body.y - (floorY(id, local.x, local.z) ?? c.y));
+    const inside = insidePlacementRoom(tile, id, body);
+    inLocation ||= inside;
+    if (distance < best - 1e-6 || Math.abs(distance - best) <= 1e-6 && inside && !bestInside) {
+      oldRoom = id; oldLevel = candidateLevel; best = distance; bestInside = inside;
+    }
+  }
+  // A distant point with a stale room belongs to the ordinary teleport/readiness path.
+  if (!inLocation || oldRoom === null || oldLevel === level && (bodyRoom === room || insidePlacementRoom(tile, room, body))) return null;
+  const at = worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, rowPoint.x, rowPoint.z);
+  const point = insidePlacementRoom(tile, room, rowPoint)
+    ? { x: rowPoint.x, y: floorY(room, at.x, at.z) ?? centre.y, z: rowPoint.z } : copy(centre);
+  return { oldRoom: bodyRoom ?? oldRoom, oldLevel, room, level, point };
+}
+
 /** Session-owned deduplication, shared by NPC placement and the own avatar's arrival. */
 export class RoomPositionDiagnostics {
   private readonly seen = new Set<string>();
@@ -231,8 +267,7 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
           const local = worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, c.pos.x, c.pos.z);
           // Use this room's hull on its storey, with wall/door threshold tolerance.
           // A floor-height lookup also answers outside the footprint.
-          if (Number.isFinite(c.pos.x) && Number.isFinite(c.pos.z)
-            && polygonDistance(local.x, local.z, tile.roomFloors.get(inRoom)?.hull) <= 0.3) {
+          if (insidePlacementRoom(tile, inRoom, c.pos)) {
             branch = 'pos';
             pos = { x: c.pos.x, y: ctx.roomStandY(inRoom, local.x, local.z) ?? roomCenter.y, z: c.pos.z };
           } else ctx.stalePos?.(c.name, inRoom, c.pos);

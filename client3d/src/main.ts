@@ -94,7 +94,7 @@ import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
-import { placeAtLocation, RoomPositionDiagnostics } from './game/npcPlacement';
+import { placeAtLocation, RoomPositionDiagnostics, avatarRoomCorrection } from './game/npcPlacement';
 import { bootStatus } from './ui';
 import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
 import { connectSceneSide, pointInRects, postMessageTransport } from './hud/bridge';
@@ -1268,10 +1268,21 @@ async function startApp(username: string, role: string) {
 
   setInterval(() => {
     tickStreamRings();
-    if (pendingSnap && trySnap(readinessDeps, pendingSnap)) {
+    releasePendingSnap();
+    tickModelTiers();
+    if (getHudUiState().perfOn) measurePerfHeavy();
+  }, LOD_TICK_MS);
+
+  /** Release a held teleport only while the avatar still owns its free movement branch. */
+  function releasePendingSnap(): void {
+    if (pendingSnap && !verticalRide && !avatarSeated && !posInFlight && !npcs.inInteraction(avatarName)
+      && !npcs.hasOwnMotion(avatarName) && avatarDrive.kind !== 'SERVER' && trySnap(readinessDeps, pendingSnap)) {
       clearApproach(readinessDeps, readinessState);
       const snap = pendingSnap;
-      const p = new THREE.Vector3(snap.x, groundY(snap.x, snap.z), snap.z);
+      const p = snap.roomCorrection ? new THREE.Vector3(snap.roomCorrection.point.x, snap.roomCorrection.point.y, snap.roomCorrection.point.z)
+        : new THREE.Vector3(snap.x, groundY(snap.x, snap.z), snap.z);
+      if (snap.roomCorrection) avatarBodyRoom = snap.roomCorrection.room;
+      if (snap.roomCorrection) console.debug(`[pos] room correction room=${snap.roomCorrection.oldRoom} storey=${snap.roomCorrection.oldLevel} -> room=${snap.roomCorrection.room} storey=${snap.roomCorrection.level}`);
       ownCorrectionAt = performance.now();
       syncCounters.posCorr += 1;
       npcs.snapPlayerTo(avatarName, p);
@@ -1279,9 +1290,7 @@ async function startApp(username: string, role: string) {
       clearSnap(readinessDeps, readinessState);
       posDirty = true;
     }
-    tickModelTiers();
-    if (getHudUiState().perfOn) measurePerfHeavy();
-  }, LOD_TICK_MS);
+  }
 
   /** Threshold quads per location, one child group per storey. The group hangs
    *  in `tile.group` — TILE-LOCAL, exactly like the walls the gaps were cut
@@ -4040,11 +4049,15 @@ async function startApp(username: string, role: string) {
    *  the server's own word, up to three seconds before the poll repeats it,
    *  and without it the room walk would spend a whole poll judging the avatar
    *  against the place it just left. */
+  let avatarBodyRoom: string | undefined;
+  let ownRoomChangeAt = 0;
   function adoptReport(res: { location_id?: string; room_id?: string }): void {
     // An empty room_id is the location's GROUND, not a missing answer — it
     // must overwrite `roomOf` unconditionally, or the avatar keeps the room of
     // the location it just left.
+    if (roomOf.get(avatarName) !== (res.room_id ?? '')) ownRoomChangeAt = performance.now();
     roomOf.set(avatarName, res.room_id ?? '');
+    avatarBodyRoom = res.room_id ?? '';
     refreshRoomOffers(res.location_id, res.room_id ?? '');
   }
 
@@ -4070,13 +4083,13 @@ async function startApp(username: string, role: string) {
    * figure for that would read as a stutter); a far one is a hard put-back,
    * because it is not a correction at all but a move the player did not make.
    */
-  function correctTo(point: { x: number; z: number }): void {
+  function correctTo(point: { x: number; z: number }, roomTarget?: THREE.Vector3): void {
     ownCorrectionAt = performance.now();
     clearApproach(readinessDeps, readinessState);
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    const target = new THREE.Vector3(point.x, roomFloorY(tileAt(point.x, point.z), point.x, point.z) ?? groundY(point.x, point.z), point.z);
-    if (Math.hypot(point.x - pos.x, point.z - pos.z) > CORRECT_WALK_M) {
+    const target = roomTarget ?? new THREE.Vector3(point.x, roomFloorY(tileAt(point.x, point.z), point.x, point.z) ?? groundY(point.x, point.z), point.z);
+    if (roomTarget || Math.hypot(point.x - pos.x, point.z - pos.z) > CORRECT_WALK_M) {
       npcs.snapPlayerTo(avatarName, target);
       correction = null;
     } else {
@@ -4752,7 +4765,7 @@ async function startApp(username: string, role: string) {
     // figure back onto it for up to CORRECT_MS, swallowing the steering input
     // all the while (plan-aufstehen.md).
     if (pollIsStale(polledAt, ownSeatChangeAt)) return;
-    if (pollIsStale(polledAt, ownCorrectionAt)) return;
+    if (pollIsStale(polledAt, Math.max(ownCorrectionAt, ownRoomChangeAt))) return;
     const me = map.characters.find((c) => c.name === avatarName);
     // A poll still carrying the cancelled journey predates its cancellation.
     if (me?.travel && me.travel.journey_id === avatarCancelled) return;
@@ -4762,7 +4775,7 @@ async function startApp(username: string, role: string) {
     // that point (a pair's centre, a report that landed before the seat), and
     // a difference beyond POS_SNAP_M would walk the figure off the chair on
     // every poll. Nothing to reconcile while the place holds.
-    if (avatarSeated) return;
+    if (avatarSeated || npcs.inInteraction(avatarName)) return;
     // A report in flight would be compared against a payload that predates it.
     if (posInFlight || walkIn || verticalRide || correction) return;
     const pos = npcs.positionOf(avatarName);
@@ -4770,25 +4783,32 @@ async function startApp(username: string, role: string) {
     // No point in the payload = the server has no position for the avatar at
     // all (an unplaced location). Nothing to reconcile against.
     if (!me?.pos) return;
-    // Only the origin stamp can distinguish our own echo from a server move.
-    if (isOwnEcho(sentSeqs, posSession, me.pos_origin)) return;
-    const d = Math.hypot(me.pos.x - pos.x, me.pos.z - pos.z);
-    if (d <= POS_SNAP_M) return;
+    // A room-only server write can retain our origin and XZ. Compare the rendered body floor first.
+    const tile = residency.get(me.location_id ?? '')?.tile;
+    const roomMove = tile && me.room_id ? avatarRoomCorrection(tile, pos, me.room_id, me.pos,
+      (room, x, z) => roomStandY(tile, room, x, z), false, avatarBodyRoom) : null;
+    if (!roomMove && isOwnEcho(sentSeqs, posSession, me.pos_origin)) return;
+    const point = roomMove?.point ?? me.pos;
+    const d = Math.hypot(point.x - pos.x, point.z - pos.z);
+    if (!roomMove && d <= POS_SNAP_M) return;
     // `correctTo` moves the figure — walking the last few metres, jumping a
     // real teleport. The camera follows only in the second case: a jump across
     // the map must not leave the view behind, while a two-metre correction
     // would fly the camera for nothing.
-    const id = readinessDeps.placeAt(me.pos.x, me.pos.z);
-    if (d > CORRECT_WALK_M && id && !readinessDeps.isReady(id)) {
-      holdSnap(readinessDeps, readinessState, { ...me.pos, id });
+    const id = roomMove ? me.location_id : readinessDeps.placeAt(point.x, point.z);
+    if ((roomMove || d > CORRECT_WALK_M) && id && !readinessDeps.isReady(id)) {
+      holdSnap(readinessDeps, readinessState, { x: point.x, z: point.z, id, roomCorrection: roomMove ?? undefined });
       cancelRoute();
       npcs.setPlayerTarget(avatarName, pos.clone());
       return;
     }
     syncCounters.posCorr += 1;
-    correctTo(me.pos);
-    if (d > CORRECT_WALK_M) {
-      const p = new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z);
+    if (roomMove) avatarBodyRoom = roomMove.room;
+    if (roomMove) console.debug(`[pos] room correction room=${roomMove.oldRoom} storey=${roomMove.oldLevel} -> room=${roomMove.room} storey=${roomMove.level}`);
+    const target = roomMove ? new THREE.Vector3(point.x, roomMove.point.y, point.z) : undefined;
+    correctTo(point, target);
+    if (roomMove || d > CORRECT_WALK_M) {
+      const p = target ?? new THREE.Vector3(point.x, groundY(point.x, point.z), point.z);
       engine.flyTo(p, engine.targetDist);
     }
   }
@@ -5978,6 +5998,8 @@ async function startApp(username: string, role: string) {
     // before the poll repeats it. Without it the room walk would judge the
     // ride against the storey just left and ask the avatar back down.
     roomOf.set(avatarName, target);
+    avatarBodyRoom = target;
+    ownRoomChangeAt = performance.now();
     refreshRoomOffers(tile.loc.id, target);
     npcs.setPlayerTarget(avatarName, stop.clone());
     // From here the lift owns the figure until it stands at that point.
@@ -6108,6 +6130,8 @@ async function startApp(username: string, role: string) {
     // before the poll repeats it. Without it the room walk would judge the
     // climb against the storey just left and ask the avatar back down.
     roomOf.set(avatarName, target);
+    avatarBodyRoom = target;
+    ownRoomChangeAt = performance.now();
     refreshRoomOffers(tile.loc.id, target);
     const goal = new THREE.Vector3(dest.x, dest.y, dest.z);
     npcs.setPlayerTarget(avatarName, goal.clone());
@@ -6866,7 +6890,10 @@ async function startApp(username: string, role: string) {
     const yaw = own?.char.yaw;
     if (typeof yaw === 'number' && Number.isFinite(yaw))
       npcs.faceTowards(avatarName, Math.sin(yaw), Math.cos(yaw), true);
-    if (own) reportedYaw = positionYaw(npcs.yawOf(avatarName));
+    if (own) {
+      reportedYaw = positionYaw(npcs.yawOf(avatarName));
+      avatarBodyRoom = own.char.room_id ?? '';
+    }
   }
 
   // --- Arriving IN the avatar (finding B15) ---------------------------------

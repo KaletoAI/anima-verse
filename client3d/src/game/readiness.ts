@@ -6,7 +6,7 @@ export interface ReadinessDeps {
   pin(id: string, owner: ReadinessOwner): void;
   release(id: string, owner: ReadinessOwner): void;
 }
-export interface PendingSnap { x: number; z: number; id: string }
+export interface PendingSnap { x: number; z: number; id: string; roomCorrection?: import('./npcPlacement').AvatarRoomCorrection }
 export interface ReadinessState {
   approachPin: string | null;
   pendingSnap: PendingSnap | null;

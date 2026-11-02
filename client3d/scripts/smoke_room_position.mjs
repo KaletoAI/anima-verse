@@ -58,7 +58,7 @@ for (const c of fixture.cases) {
     awaitArrivalMount: async () => 'loc-inn', openLocationId: 'loc-inn',
     followAvatarStorey: (t, room) => { assert.equal(room, fixture.room); t.levelFilter = 0; },
     openable: () => true, applyTileFade() {}, applyLevelDisplay() {}, applyRoomVisibility() {}, refreshOpenBadge() {},
-    reportedYaw: 0, positionYaw: value => value,
+    avatarBodyRoom: undefined, reportedYaw: 0, positionYaw: value => value,
   });
   await run.placeAvatarOnArrival();
   near(rendered.pos, c.expected);
