@@ -372,6 +372,13 @@ def iter_suitability_results(
     except (TypeError, ValueError):
         provider_cap = concurrency
     concurrency = max(1, min(concurrency, provider_cap))
+    # The provider-wide parallel cap (one key across all models) binds too;
+    # the test bypasses the lanes that enforce it for play traffic.
+    provider_obj = getattr(inst, "_provider", None)
+    parallel_cap = getattr(provider_obj, "max_parallel_llm", 0) or 0
+    if type(parallel_cap) is int and parallel_cap > 0:
+        concurrency = min(concurrency, parallel_cap)
+    quota = getattr(provider_obj, "quota", None)
     # A model with fewer server slots than parallel test requests makes the
     # extra requests wait in the router, and that wait would count as answer
     # time (measured: a 1-slot SenseNova build at 3 parallel requests).
@@ -383,14 +390,31 @@ def iter_suitability_results(
 
     def ask(case, budget):
         """Return full local response metadata, duration and token count."""
-        t0 = time.monotonic()
         user = case["user"]
         if case["group"] == "vision":
             user = image_user_content(user, ROOT / case["image"])
-        resp = client_for(case["group"], budget).invoke([
-            {"role": "system", "content": case["system"]},
-            {"role": "user", "content": user},
-        ])
+        messages = [{"role": "system", "content": case["system"]},
+                    {"role": "user", "content": user}]
+        remote_limits = 0
+        while True:
+            # A full provider request quota is waited out here, never scored:
+            # the wait does not count as answer time and is no infra error.
+            _wait_for_quota(quota, cancel_event)
+            t0 = time.monotonic()
+            try:
+                resp = client_for(case["group"], budget).invoke(messages)
+                break
+            except Exception as exc:
+                from app.core.provider_quota import QuotaUnavailable, rate_limit_error
+                cause = rate_limit_error(exc) if quota is not None else None
+                if cause is None:
+                    raise
+                # QuotaUnavailable = play traffic took the slot first; a
+                # remote 429 already gated the quota until Retry-After.
+                if not isinstance(cause, QuotaUnavailable):
+                    remote_limits += 1
+                    if remote_limits > _MAX_REMOTE_RATE_LIMITS:
+                        raise
         dt = time.monotonic() - t0
         usage = dict(getattr(resp, "usage", None) or {})
         reasoning = getattr(resp, "reasoning", None)
@@ -423,6 +447,8 @@ def iter_suitability_results(
             else:
                 raw, dt, ctok = ask(case, budget)
             evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
+        except _QuotaWaitCancelled:
+            return None
         except Exception as exc:
             missing = (case["group"] == "vision" and isinstance(exc, FileNotFoundError)
                        and not (ROOT / case["image"]).is_file())
@@ -623,6 +649,29 @@ def iter_suitability_results(
                        fixture_version=data.get("fixture_version") or fixture_version(cases))
         summary["saved"] = _persist(model_full, summary, results)
         yield {"type": "done", "summary": summary}
+
+
+_MAX_REMOTE_RATE_LIMITS = 5
+
+
+class _QuotaWaitCancelled(Exception):
+    """The run was cancelled while a test request waited for the quota."""
+
+
+def _wait_for_quota(quota, cancel_event: Optional[threading.Event] = None,
+                    sleep=time.sleep) -> float:
+    """Sleep until the provider quota allows a send; return the seconds waited."""
+    waited = 0.0
+    while quota is not None:
+        wait = quota.wait_for_send()
+        if wait <= 0:
+            break
+        if cancel_event is not None and cancel_event.is_set():
+            raise _QuotaWaitCancelled()
+        step = min(wait, 1.0)
+        sleep(step)
+        waited += step
+    return waited
 
 
 def model_slots(provider, model: str) -> Optional[int]:
