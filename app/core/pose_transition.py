@@ -145,7 +145,7 @@ def _prepare(payload, folder):
         kind, used = pose_clip(payload[side + '_pose'], payload['cset'])
         path = folder / f'{side}.bvh'
         exports[side] = dict(export_clip_bvh(kind, used, path), kind=kind, set=used)
-        files['input_' + side + '_bvh'] = str(path)
+        files['input_' + side + '_bvh_path'] = str(path)
     duration = exports['start']['duration_s']
     meta = clips.clip_meta(exports['start']['kind'], exports['start']['set']) or {}
     loop = bool(meta.get('loop'))
@@ -162,7 +162,7 @@ def _prepare(payload, folder):
         exports['guide'] = export_clip_bvh(guide['kind'], guide['set'], path)
         if guide['time_s'] > exports['guide']['duration_s']:
             raise ValueError('guide time outside clip')
-        files['input_guide_bvh'] = str(path)
+        files['input_guide_bvh_path'] = str(path)
         guide = dict(time_s=guide['time_s'], rig='mixamo', num_poses=4,
                      hips_constrained=False, early_frames=10, **_placement(guide))
     spec = {'start': {'time_s': payload['start_time_s'], 'rig': 'mixamo'}, 'target': target,

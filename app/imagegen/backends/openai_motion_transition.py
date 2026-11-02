@@ -46,10 +46,10 @@ class OpenAIMotionTransitionBackend(OpenAIMeshAnimationBackend):
         if not 1 <= variants <= self.max_variants:
             raise ValueError('variants must be 1..4')
         files = params['files']
-        required = {'input_start_bvh', 'input_target_bvh'}
-        if not required <= files.keys() or set(files) - required - {'input_guide_bvh'}:
+        required = {'input_start_bvh_path', 'input_target_bvh_path'}
+        if not required <= files.keys() or set(files) - required - {'input_guide_bvh_path'}:
             raise ValueError('invalid transition file slots')
-        if bool(spec.get('guide')) != ('input_guide_bvh' in files):
+        if bool(spec.get('guide')) != ('input_guide_bvh_path' in files):
             raise ValueError('guide file and params must agree')
         if any(not b.startswith(b'HIERARCHY') or len(b) > 64 * 1024 * 1024 for b in files.values()):
             raise ValueError('invalid BVH input')

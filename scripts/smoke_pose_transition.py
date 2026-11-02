@@ -55,8 +55,8 @@ def main():
         spec = {'variants': [{'start_time_s': 1, 'max_tokens': 16}], 'guide': None}
         with patch('app.imagegen.backends.openai_motion_transition.submit_job', return_value='job') as submit, \
              patch.object(backend, '_collect', return_value=[]):
-            backend.generate_transition({'input_start_bvh': b'HIERARCHY start',
-                                         'input_target_bvh': b'HIERARCHY target'}, json.dumps(spec))
+            backend.generate_transition({'input_start_bvh_path': b'HIERARCHY start',
+                                         'input_target_bvh_path': b'HIERARCHY target'}, json.dumps(spec))
             payload = submit.call_args.args[2]
             assert payload['prompt'] == 'transition' and set(payload['params']) == {'input_params'}
             assert all(v.startswith('data:text/plain;base64,') for v in payload['files'].values())
@@ -114,7 +114,7 @@ def lifecycle(pt, root):
     count = {'fresh': 0, 'attach': 0}
     def generate(files, params_json, **kw):
         spec = json.loads(params_json)
-        assert set(files) == {'input_start_bvh', 'input_target_bvh'} | ({'input_guide_bvh'} if spec['guide'] else set())
+        assert set(files) == {'input_start_bvh_path', 'input_target_bvh_path'} | ({'input_guide_bvh_path'} if spec['guide'] else set())
         if spec['guide']:
             assert spec['guide']['num_poses'] == 4 and spec['guide']['early_frames'] == 10
             assert spec['guide']['hips_constrained'] is False
