@@ -28,6 +28,7 @@ import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation,
 // No new action or message kind, so this remains v4.
 // Task 87 adds opt-in text: native uses it only after textInput=true in a HUD patch.
 // Older pages omit the flag and keep CEF key input; older hosts ignore the extra field.
+// Task 93 adds a scene -> HUD ui name; no existing payload changes, so this remains v4.
 export const HUD_BRIDGE_VERSION = 4;
 type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =
@@ -55,7 +56,7 @@ const gameNames = ['pairFacing', 'infoAction', 'closeInfo', 'closeOpenView', 'pi
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
   'applyGraphicsPrefs', 'clearClientCache', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
-const uiNames = ['openChat', 'toast', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
+const uiNames = ['openChat', 'openScreenshotPhoto', 'toast', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
 function reject(msg: unknown): void { console.warn('[hud bridge] Dropped invalid message', msg); }
 function valid(msg: unknown): msg is ToHud | FromHud {
   return !!msg && typeof msg === 'object' && 'v' in msg && msg.v === HUD_BRIDGE_VERSION && 'kind' in msg;

@@ -55,6 +55,15 @@ let opened = 0;
 hud.uiActions.openChat = () => opened++;
 scene.uiActions.openChat();
 assert.equal(opened, 1);
+const screenshot = { imageId: '012345abcdef.jpg', imageUrl: '/chat/me/upload-image/012345abcdef.jpg',
+  view: { visible: [{ name: 'Bob', screen_x: .2, screen_y: .5, depth_m: 3 }],
+    camera: { pitch_deg: -30, height_m: 2, fov_deg: 70 } } };
+let receivedScreenshot;
+hud.uiActions.openScreenshotPhoto = value => { receivedScreenshot = value; };
+assert.equal(typeof scene.uiActions.openScreenshotPhoto, 'function', 'screenshot action is bridged');
+scene.uiActions.openScreenshotPhoto(screenshot);
+assert.deepEqual(receivedScreenshot, screenshot, 'screenshot and framing cross the UI wire');
+
 // HUD -> scene: ui state with hit rectangles, typing and menu flags
 hud.setHudUiState({ typing: true, menuOpen: true, hitRects: [{ x: 10, y: 20, w: 300, h: 200 }] });
 assert.deepEqual(scene.getHudUiState().hitRects, [{ x: 10, y: 20, w: 300, h: 200 }]);

@@ -85,6 +85,7 @@ public static class HudProtocol
     // v4 (Task 65): clientCache / clearClientCache and correlated speech / speech-done.
     // Task 79: renderScale is an additive graphics field with an auto fallback, on the existing action.
     // Task 87: additive scene -> HUD text, enabled only by a new page's textInput flag; older pages keep CEF keys.
+    // Task 93: additive screenshot-photo ui name, with the existing ui message shape.
     public const int Version = 4;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
@@ -97,7 +98,7 @@ public static class HudProtocol
     };
 
     /// <summary><c>uiNames</c> of bridge.ts — actions scene → HUD.</summary>
-    public static readonly string[] UiActions = { "openChat", "toast", "toggleMenu", "closeMenu" };
+    public static readonly string[] UiActions = { "openChat", "openScreenshotPhoto", "toast", "toggleMenu", "closeMenu" };
 
     /// <summary><c>HUD_OWNED_FIELDS</c> of bus.ts — the HUD writes these game-state fields, the scene only reads them.</summary>
     public static readonly string[] HudOwnedFields =

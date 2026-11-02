@@ -12,6 +12,8 @@ loop turn.
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field
+
 from app.core.log import get_logger
 from app.core.lora_library import LoraNotAllowedError
 from app.imagegen.base import MediaGenerationDisabled
@@ -20,6 +22,52 @@ logger = get_logger("scene_photo")
 
 # Cap for the transcript lines fed into the prompt distillation.
 _TRANSCRIPT_LINES = 12
+
+
+class PhotoVisible(BaseModel):
+    name: str = Field(max_length=200)
+    screen_x: float = Field(ge=0, le=1, allow_inf_nan=False)
+    screen_y: float = Field(ge=0, le=1, allow_inf_nan=False)
+    depth_m: float = Field(ge=0, allow_inf_nan=False)
+
+
+class PhotoCamera(BaseModel):
+    pitch_deg: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    height_m: float = Field(ge=0, allow_inf_nan=False)
+    fov_deg: float = Field(gt=0, lt=180, allow_inf_nan=False)
+
+
+class PhotoView(BaseModel):
+    visible: List[PhotoVisible] = Field(max_length=128)
+    camera: PhotoCamera
+
+
+_SCREENSHOT_SENTENCE = (
+    "The reference image gives only composition, camera angle and poses; "
+    "its 3D/CGI look must not be copied.")
+_SCREENSHOT_NEGATIVE = "3d render, cgi, video game screenshot, low poly, plastic skin, game engine"
+
+
+def _view_framing(view: PhotoView, visible: List[PhotoVisible]) -> str:
+    """Translate client geometry into framing, never into world facts."""
+    camera = view.camera
+    angle = ("from above" if camera.pitch_deg < -20 else
+             "from below" if camera.pitch_deg > 15 else "at eye level")
+    shot = "wide view" if camera.fov_deg >= 60 else "close view"
+    parts = [f"Camera {angle}, {shot}, {camera.height_m:g} m above ground."]
+    depths = [person.depth_m for person in visible]
+    nearest, farthest = (min(depths), max(depths)) if depths else (0, 0)
+    midpoint = (nearest + farthest) / 2
+    for person in visible:
+        side = ("left" if person.screen_x < 1 / 3 else
+                "right" if person.screen_x >= 2 / 3 else "centre")
+        layer = ""
+        if nearest != farthest:
+            layer = ", front" if person.depth_m < midpoint else ", back" if person.depth_m > midpoint else ""
+        parts.append(f"{person.name}: {side}{layer}.")
+    if not visible:
+        parts.append("No people in the frame.")
+    return " ".join(parts)
 
 
 def _room_transcript(avatar: str, loc: str, room: str) -> str:
@@ -89,7 +137,7 @@ def _pairs_among(names: List[str]) -> List[tuple]:
     return out
 
 
-def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
+def prepare_scene_photo(avatar: str, view: Optional[dict] = None) -> Dict[str, Any]:
     """Builds the photo prompt (chat-context distillation + person
     descriptions) WITHOUT generating — feeds the image-gen dialog."""
     from app.models.character import (get_character_current_location,
@@ -114,6 +162,20 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
     else:
         # Alone in the room -> selfie.
         subjects = present or [avatar]
+    framing = ""
+    if view is not None:
+        parsed_view = PhotoView.model_validate(view)
+        # The server owns presence; the client only owns framing.
+        allowed = set(present + [avatar])
+        seen = set()
+        visible = []
+        for person in parsed_view.visible:
+            if person.name in allowed and person.name not in seen:
+                seen.add(person.name)
+                visible.append(person)
+        subjects = [person.name for person in visible]
+        present = list(subjects)
+        framing = _view_framing(parsed_view, visible)
     pairs = _pairs_among(subjects)
 
     transcript = _room_transcript(avatar, loc, room)
@@ -130,7 +192,7 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
                 subjects=", ".join(subjects),
                 pairs="; ".join(f"{a} and {b} are {pose} together"
                                 for a, b, pose in pairs),
-                transcript=transcript)
+                transcript=transcript, framing=framing)
             resp = llm_call(task="image_prompt", system_prompt=sys_p,
                             user_prompt=user_p, agent_name=avatar)
             prompt = (getattr(resp, "content", "") or "").strip().strip('"')
@@ -150,7 +212,10 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
         prompt = ("Candid photograph of the current moment: "
                   + "; ".join(parts))
 
-    desc = _person_descriptions(subjects)
+    if framing:
+        prompt = f"{prompt}\n{framing}"
+
+    desc = _person_descriptions(subjects) if subjects else ""
     if desc:
         prompt = f"{prompt}\n{desc}"
 
@@ -174,19 +239,29 @@ def take_scene_photo(avatar: str,
                      negative_prompt: str = "",
                      character_names: Any = None,
                      use_room: bool = True,
-                     pose_check: Optional[bool] = None) -> Dict[str, Any]:
+                     pose_check: Optional[bool] = None,
+                     reference_image_id: str = "",
+                     user_id: str = "") -> Dict[str, Any]:
     """Synchronous — the caller (route) runs it in a worker thread.
 
     Without overrides it prepares everything itself (one-click path);
     the image-gen dialog passes prompt/backend/LoRAs/negative explicitly."""
+    source_path = ""
+    if reference_image_id:
+        from app.core.chat_ops import resolve_owned_chat_upload_path
+        source_path = str(resolve_owned_chat_upload_path(reference_image_id, user_id))
     prep = prepare_scene_photo(avatar)
     if not prep.get("ok"):
         return prep
     loc, room = prep["location"], prep["room"]
-    present = prep["present"]
-    subjects = list(character_names) if character_names else prep["subjects"]
+    subjects = (list(character_names) if character_names or (source_path and character_names == [])
+                else prep["subjects"])
     if not prompt:
         prompt = prep["prompt"]
+
+    if source_path:
+        prompt = prompt.replace(_SCREENSHOT_SENTENCE, "").strip()
+        prompt = f"{prompt}\n{_SCREENSHOT_SENTENCE}".strip()
 
     # Only a backend the user PICKED is explicit. The dialog's preselection
     # (prep["default_backend"]) is display only — the one-click photo runs on
@@ -213,7 +288,9 @@ def take_scene_photo(avatar: str,
             create_new=True,
             use_room=bool(use_room),
             occasion="photo",
-            pose_check=pose_check)
+            pose_check=pose_check,
+            **({"use_source_as_reference": True, "source_image_path": source_path,
+                "negative_prompt_extra": _SCREENSHOT_NEGATIVE} if source_path else {}))
     except (MediaGenerationDisabled, LoraNotAllowedError):
         # Refusals, not failed renders: the world's master switch (the route
         # maps it to a 409) and an explicitly picked LoRA the library does
@@ -241,7 +318,9 @@ def take_scene_photo(avatar: str,
     # deselected people, and in a pair the avatar photographs itself along
     # with its partner.
     _others = [n for n in subjects if n != avatar]
-    if not _others:
+    if not subjects:
+        _line = t("{actor} takes a photo of the surroundings.", _lang).format(actor=avatar)
+    elif not _others:
         _line = t("{actor} takes a selfie.", _lang).format(actor=avatar)
     elif avatar in subjects:
         _line = t("{actor} holds up the camera and takes a photo of "

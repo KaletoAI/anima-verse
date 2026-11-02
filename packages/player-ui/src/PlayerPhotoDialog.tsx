@@ -8,8 +8,7 @@
  * it fills the slot with THIS dialog: the same flow, reduced to what a player
  * decides in the moment.
  *
- * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has seven fields; this
- * dialog surfaces all of them:
+ * FIELD INVENTORY — editable `ScenePhotoSubmit` fields (ScenePanel.tsx):
  *   · `prompt`          → textarea, prefilled with the distilled `ctl.prompt`
  *                         plus the optional LLM "Improve prompt" / "Check pose"
  *                         row (`PromptImprover`, rewrites the textarea in place)
@@ -37,7 +36,7 @@
  *                         explicit backend gates the picks hard (400), Auto
  *                         drops one the routed backend does not know.
  * Nothing beyond those fields belongs here; image size and the reference-slot
- * budget are admin-dialog territory and are not part of this payload at all.
+ * budget are admin-dialog territory. A screenshot reference may be supplied by the host.
  *
  * "NOBODY" IS NOT EXPRESSIBLE YET. An empty `character_names` reaches the
  * backend as an empty list, and `app/core/scene_photo.py` treats that as "not
@@ -100,6 +99,8 @@ interface PlayerPhotoDialogProps extends PhotoDialogControl {
 
 export function PlayerPhotoDialog({
   prompt: initialPrompt,
+  referenceImageId,
+  referenceImageUrl,
   subjects,
   available,
   avatar,
@@ -193,6 +194,7 @@ export function PlayerPhotoDialog({
     const picked = loraOptions.length ? loraSlots.filter((s) => s.name) : []
     const payload: ScenePhotoSubmit = {
       prompt: prompt.trim(),
+      ...(referenceImageId ? { reference_image_id: referenceImageId } : {}),
       backend,
       loras: picked.length ? picked : null,
       character_names: selected,
@@ -205,7 +207,7 @@ export function PlayerPhotoDialog({
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, improving, pose.value, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
+  }, [busy, improving, pose.value, referenceImageId, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -254,6 +256,13 @@ export function PlayerPhotoDialog({
           <button className="ga-modal-close" onClick={onClose} disabled={busy}>×</button>
         </div>
         <div className="ga-modal-body">
+          {referenceImageUrl && <div style={{ marginBottom: 10 }}>
+            <img src={referenceImageUrl} alt={t('Screenshot reference')}
+              style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'contain' }} />
+            <div className="player-photo-hint">
+              {t('The screenshot sets composition and angle; the picture follows the photo style.')}
+            </div>
+          </div>}
           <label className="ga-field" style={{ marginBottom: 10 }}>
             <span className="ga-field-caption">{t('Prompt')}</span>
             {/* autoFocus: without it the focus stays on the 3D canvas behind

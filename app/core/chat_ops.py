@@ -57,7 +57,19 @@ async def save_chat_upload(request) -> Dict[str, Any]:
 
     image_id = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = _get_chat_upload_dir() / image_id
+    from app.core.auth_dependency import get_current_user_from_ctx
+    from app.core import db
+    user = get_current_user_from_ctx()
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
     dest.write_bytes(content)
+    try:
+        with db.transaction() as conn:
+            conn.execute("INSERT INTO chat_upload_owners (image_id, user_id) VALUES (?, ?)",
+                         (image_id, user["id"]))
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
 
     return {"image_id": image_id, "filename": file.filename}
 
@@ -97,4 +109,27 @@ def resolve_chat_upload_path(image_id: str) -> Path:
     path = _get_chat_upload_dir() / image_id
     if not path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
+    return path
+
+
+def resolve_owned_chat_upload_path(image_id: str, user_id: str) -> Path:
+    """Resolve a photo reference only if this authenticated user uploaded it.
+
+    Legacy uploads without a recorded owner cannot be used as photo references.
+    The user segment of the upload URL never establishes ownership.
+    """
+    import re
+    from app.core import db
+    if not re.fullmatch(r"[a-f0-9]{12}\.(?:png|jpe?g|webp|gif)", image_id):
+        raise HTTPException(status_code=404, detail="Image not found")
+    root = _get_chat_upload_dir().resolve()
+    path = (root / image_id).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    row = db.get_connection().execute(
+        "SELECT user_id FROM chat_upload_owners WHERE image_id = ?", (image_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if not user_id or row["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Image belongs to another user")
     return path

@@ -8,6 +8,9 @@
     }
   },
   "translations": {
+    "{actor} takes a photo of the surroundings.": "{actor} fotografiert die Umgebung.",
+    "Screenshot reference": "Screenshot als Referenz",
+    "The screenshot sets composition and angle; the picture follows the photo style.": "Der Screenshot bestimmt Bildaufbau und Blickwinkel; das Bild folgt dem Fotostil.",
     "Drop FBX or BVH files here": "FBX- oder BVH-Dateien hier ablegen",
     "Reset footprint from size": "Grundfläche aus Größe zurücksetzen",
     "Render resolution": "Render-Auflösung",

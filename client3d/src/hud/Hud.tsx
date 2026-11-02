@@ -33,7 +33,7 @@ import {
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
   CharacterFormHostContext, type CharacterFormHost, SCENE_ROW_ID_ATTR,
-  type SceneData, type SceneLine, type IconName,
+  type ScreenshotPhoto, type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
 import { ChatPortraits } from './ChatPortraits';
@@ -758,9 +758,21 @@ export function Hud({ avatar, username, role }: {
   // F does NOT pin the panel: pressing it means "talk to that one", not "keep
   // this window forever". While it matters, `talkTarget` holds the panel open
   // anyway, and typing does too — see the idle block below.
-  /** counts hails onto an ALREADY open chat; drives the flash below */
+  /** Counts hails onto an already open chat; drives the flash below. */
   const [chatHail, setChatHail] = useState(0);
   const [chatFlash, setChatFlash] = useState(false);
+  const [screenshotPhoto, setScreenshotPhoto] = useState<ScreenshotPhoto | null>(null);
+  const screenshotHandled = useCallback((shot: ScreenshotPhoto) => {
+    setScreenshotPhoto(pending => pending === shot ? null : pending);
+  }, []);
+  useEffect(() => {
+    uiActions.openScreenshotPhoto = shot => {
+      setScreenshotPhoto(shot);
+      setOpen(current => ({ ...current, chat: true }));
+      setChatHail(count => count + 1);
+    };
+    return () => { uiActions.openScreenshotPhoto = undefined; };
+  }, []);
   useEffect(() => {
     uiActions.openChat = () => {
       if (chatOpen.current) setChatHail((n) => n + 1);
@@ -881,7 +893,7 @@ export function Hud({ avatar, username, role }: {
   // talkTarget/elevatorOpen are standing offers that must not be answered by a
   // vanishing panel. A pinned panel is not this effect's business at all.
   useEffect(() => {
-    if (!open.chat || chatPinned) return;
+    if (!open.chat || chatPinned || screenshotPhoto) return;
     if (game.talkTarget || game.elevatorOpen) return;
     let timer = 0;
     function expire() {
@@ -897,7 +909,7 @@ export function Hud({ avatar, username, role }: {
     }
     timer = window.setTimeout(expire, CHAT_IDLE_MS);
     return () => window.clearTimeout(timer);
-  }, [open.chat, chatPinned, chatHail, game.talkTarget, game.elevatorOpen]);
+  }, [open.chat, chatPinned, chatHail, game.talkTarget, game.elevatorOpen, screenshotPhoto]);
 
   // --- Which row the picture column follows (2c, decision E4) --------------
   //
@@ -1191,7 +1203,8 @@ export function Hud({ avatar, username, role }: {
                 not this line's. */}
             <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
               hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
-              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />}
+              screenshotPhoto={screenshotPhoto} onScreenshotPhotoHandled={screenshotHandled}
+              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.referenceImageId || ctl.prompt} {...ctl} />}
               highlightedId={chatFocus} onRowHover={setHoveredRowId}
               transcriptAside={
                 <ChatPortraits names={portraitNames} versions={speakerVersions} />} />

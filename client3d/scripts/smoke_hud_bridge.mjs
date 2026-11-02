@@ -150,6 +150,15 @@ let opened = 0;
 hud.uiActions.openChat = () => opened++;
 scene.uiActions.openChat();
 assert.equal(opened, 1);
+const screenshot = { imageId: '012345abcdef.jpg', imageUrl: '/chat/me/upload-image/012345abcdef.jpg',
+  view: { visible: [{ name: 'Bob', screen_x: .2, screen_y: .5, depth_m: 3 }],
+    camera: { pitch_deg: -30, height_m: 2, fov_deg: 70 } } };
+let receivedScreenshot;
+hud.uiActions.openScreenshotPhoto = value => { receivedScreenshot = value; };
+assert.equal(typeof scene.uiActions.openScreenshotPhoto, 'function', 'screenshot action is bridged');
+scene.uiActions.openScreenshotPhoto(screenshot);
+assert.deepEqual(receivedScreenshot, screenshot, 'screenshot and framing cross the UI wire');
+
 scene.setBoot({ ...scene.getBoot(), state: { ...scene.getBoot().state, percent: 75 } });
 assert.equal(hud.getBoot().state.percent, 75);
 scene.setPerfStats(null);

@@ -73,6 +73,10 @@ def rooms_rebuild_needed(table_info) -> bool:
 
 
 SCHEMA_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS chat_upload_owners (
+        image_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS prop_action_runs (
         execution_id TEXT PRIMARY KEY,
         actor TEXT NOT NULL,

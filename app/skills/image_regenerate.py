@@ -164,7 +164,8 @@ def regenerate_image(character_name: str,
     occasion: str = "regenerate",
     source_file: str = "",
     pose_check: Optional[bool] = None,
-    keep_source_references: bool = False) -> Tuple[bool, str, str]:
+    keep_source_references: bool = False,
+    negative_prompt_extra: str = "") -> Tuple[bool, str, str]:
     """Renders an image again. ``create_new=True`` writes a new file next to
     the source instead of overwriting it.
 
@@ -196,6 +197,8 @@ def regenerate_image(character_name: str,
             reference unless the dialog picked another room
             (app/imagegen/source_refs.py). Persons the dialog adds resolve
             live. False for a NEW render (scene photo, portrait).
+        negative_prompt_extra: mandatory exclusions merged once with the selected
+            negative or use-case default, after each backend resolves its style.
 
     Returns:
         (success, final_prompt, actual_output_path) — final_prompt is the
@@ -255,6 +258,8 @@ def regenerate_image(character_name: str,
     # 4. Person detection (backend-independent) ALWAYS runs when
     # character_name is present — the external post-processing needs
     # appearances to resolve the persons.
+    screenshot_subjects = (occasion == "photo" and use_source_as_reference
+                           and character_names is not None)
     appearances: list = []
     if character_name:
         try:
@@ -265,7 +270,7 @@ def regenerate_image(character_name: str,
                 logger.info("Explicit character selection: %s", character_names)
             else:
                 _persons = _regen_builder_for_appearances.detect_persons(final_prompt)
-            if not _persons:
+            if not _persons and not screenshot_subjects:
                 _persons = _regen_builder_for_appearances.detect_persons("", character_names=[character_name])
             appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
         except Exception as _ape:
@@ -361,7 +366,7 @@ def regenerate_image(character_name: str,
                     persons = _regen_builder.detect_persons(final_prompt, character_names=character_names)
                 else:
                     persons = _regen_builder.detect_persons(final_prompt)
-                if not persons:
+                if not persons and not screenshot_subjects:
                     persons = _regen_builder.detect_persons("", character_names=[character_name])
                 _regen_pv = PromptVariables(persons=persons)
                 _regen_pv.ref_images = {}
@@ -459,6 +464,14 @@ def regenerate_image(character_name: str,
             gen_prompt = f"{_ucp['prompt_style']} {gen_prompt}"
         # Negative: the call's override wins, otherwise the use case's.
         gen_neg = negative or _ucp.get("prompt_negative", "")
+        if negative_prompt_extra:
+            # Preserve the selected negative (or the photo-style default),
+            # adding screenshot exclusions once, including on routed retries.
+            terms = [term.strip() for term in f"{gen_neg}, {negative_prompt_extra}".split(",") if term.strip()]
+            unique = {}
+            for term in terms:
+                unique.setdefault(term.casefold(), term)
+            gen_neg = ", ".join(unique.values())
         logger.info("Backend=%s, prompt (clean): %s...", b.name, final_prompt[:120])
         if gen_prompt != final_prompt:
             logger.info("Prompt (with affixes): %s...", gen_prompt[:120])
@@ -474,7 +487,7 @@ def regenerate_image(character_name: str,
                 priority=Priority.NORMAL)
         images, used = skill.run_on_backend(b, op=_op, character_name=character_name)
         return {"images": images, "backend": used, "params": params,
-                "negative": negative, "face_refs": face_refs}
+                "negative": gen_neg if negative_prompt_extra else negative, "face_refs": face_refs}
 
     logger.info("Output: %s", output_path)
 

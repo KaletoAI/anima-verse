@@ -19,7 +19,9 @@ a candid photograph of the CURRENT moment.
 Rules:
 - Exactly these people are in the frame: {{ subjects }} — no one else.
   {{ photographer }} is taking the photo{% if photographer in subjects %} (selfie — they ARE in the frame){% else %} and is NOT in the frame{% endif %}.
-- Derive each person's pose, expression and mood from the LAST lines of the
+{% if framing | default('') %}- The screenshot defines the frame: {{ framing }}
+  Only the listed visible people may appear, regardless of who speaks in the conversation.
+{% endif %}- Derive each person's pose, expression and mood from the LAST lines of the
   conversation — the photo captures what is happening RIGHT NOW.
 {% if pairs %}- These people are touching, holding or moving WITH each other right now:
   {{ pairs }}. Describe each of these as ONE shared action between the two —

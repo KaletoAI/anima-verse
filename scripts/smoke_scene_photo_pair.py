@@ -66,6 +66,9 @@ from app.models.character import (  # noqa: E402
     save_character_current_room, save_character_profile)
 from app.models.world import add_location, update_location_position  # noqa: E402
 
+# Room entry can write stream lines; this smoke always exercises the fallback.
+scene_photo._room_transcript = lambda *args: ""
+
 FAILURES = []
 
 
@@ -77,7 +80,8 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 # ── fixtures ────────────────────────────────────────────────────────────
 ROOM = add_location(name="Photo Room", description="scene photo smoke",
-                    rooms=[{"id": "salon", "name": "Salon"}])["id"]
+                    rooms=[{"id": "salon", "name": "Salon"},
+                           {"id": "elsewhere", "name": "Elsewhere"}])["id"]
 update_location_position(ROOM, 0.0, 0.0)
 
 

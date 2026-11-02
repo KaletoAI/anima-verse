@@ -132,11 +132,24 @@ export interface SceneData {
   capability_actions?: Record<string, string>
 }
 
+/** Camera framing shared by the browser screenshot and native HUD wire. */
+export interface PhotoView {
+  visible: Array<{ name: string; screen_x: number; screen_y: number; depth_m: number }>
+  camera: { pitch_deg: number; height_m: number; fov_deg: number }
+}
+
+export interface ScreenshotPhoto {
+  imageId: string
+  imageUrl: string
+  view: PhotoView
+}
+
 /** The fields of the host dialog's submit payload the scene-photo request uses.
  * Structurally a supertype of the game-admin dialog's own payload type, so the
  * host can hand `onSubmit` straight to it. */
 export interface ScenePhotoSubmit {
   prompt: string
+  reference_image_id?: string
   backend?: string
   loras?: unknown[] | null
   negative_prompt?: string
@@ -149,11 +162,13 @@ export interface ScenePhotoSubmit {
 /** What the host needs to render its image-generation dialog for the 📷 flow:
  * the prepared prompt plus the two callbacks that continue/abort the flow. */
 export interface PhotoDialogControl {
+  referenceImageUrl?: string
+  referenceImageId?: string
   /** Prompt distilled by `/play/scene-photo/prepare` (editable in the dialog). */
   prompt: string
   /** Characters the distiller recognised in the scene — pre-selected. */
   subjects: string[]
-  /** Everyone selectable as a subject: those present plus the avatar. */
+  /** Selectable subjects: visible people for a screenshot, otherwise present people plus the avatar. */
   available: string[]
   /** The active avatar — the character the "photo" routing resolves for. */
   avatar: string
@@ -185,6 +200,9 @@ export interface ScenePanelProps {
    * (`image_generation`), so a missing button is an existing UI state.
    */
   photoDialog?: (ctl: PhotoDialogControl) => ReactNode
+  /** A host screenshot waits here until the panel is mounted and prepared. */
+  screenshotPhoto?: ScreenshotPhoto | null
+  onScreenshotPhotoHandled?: (shot: ScreenshotPhoto) => void
   /**
    * Handed straight to `SceneView` — the panel decides nothing about them.
    * Both stay OPTIONAL, and both are inert when left out: no row is ever
@@ -214,7 +232,7 @@ export interface ScenePanelProps {
  * URL shown in the composer thumbnail. `uploading` gates send during upload. */
 type AttachInfo = { image_id?: string; image_url?: string; preview: string; uploading?: boolean }
 /** Prepared scene-photo dialog payload (from /play/scene-photo/prepare). */
-type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[] }
+type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[]; screenshot?: ScreenshotPhoto }
 
 // Module-level draft cache (same pattern as the Lightbox singleton): the host
 // unmounts this component whenever its panel closes (the HUD's chat panel
@@ -256,7 +274,7 @@ function resetDraft(avatar: string) {
 }
 
 export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, onEnterRoom,
-  photoDialog, highlightedId, onRowHover, transcriptAside }: ScenePanelProps) {
+  photoDialog, screenshotPhoto, onScreenshotPhotoHandled, highlightedId, onRowHover, transcriptAside }: ScenePanelProps) {
   const { t } = useI18n()
   useEffect(() => onPropActionChanged(() => { void refreshScene() }), [refreshScene])
   // Different avatar than the cached draft (incl. the '' of a fresh host
@@ -356,14 +374,14 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   const [photoBusy, setPhotoBusy] = useState(false)
   const [photoDlg, setPhotoDlg] = useState<PhotoDlgInfo | null>(draft.photoDlg)
   draft.photoDlg = photoDlg  // write-through, like the composer state above
-  const takePhoto = useCallback(async () => {
+  const takePhoto = useCallback(async (screenshot?: ScreenshotPhoto) => {
     if (photoBusy) return
     setPhotoBusy(true)
     try {
       const d = await apiPost<{ ok?: boolean; prompt?: string; subjects?: string[]; present?: string[] }>(
-        '/play/scene-photo/prepare', {})
+        '/play/scene-photo/prepare', screenshot ? { view: screenshot.view } : {})
       if (d?.ok) {
-        const dlg = { prompt: d.prompt || '', subjects: d.subjects || [], present: d.present || [] }
+        const dlg = { prompt: d.prompt || '', subjects: d.subjects || [], present: d.present || [], screenshot }
         setPhotoDlg(dlg)
         // Direct cache write. It covers ONLY the ordering "completion lands
         // while the panel is unmounted and no successor has mounted yet" —
@@ -383,12 +401,20 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
       setPhotoBusy(false)
     }
   }, [photoBusy, toast, t])
+  const preparingScreenshot = useRef<ScreenshotPhoto | null>(null)
+  useEffect(() => {
+    if (!screenshotPhoto || photoBusy || preparingScreenshot.current === screenshotPhoto) return
+    preparingScreenshot.current = screenshotPhoto
+    void takePhoto(screenshotPhoto).finally(() => onScreenshotPhotoHandled?.(screenshotPhoto))
+  }, [screenshotPhoto, photoBusy, takePhoto, onScreenshotPhotoHandled])
+
   const submitPhoto = useCallback(async (payload: ScenePhotoSubmit) => {
     setPhotoDlg(null)
     setPhotoBusy(true)
     try {
       const d = await apiPost<{ ok?: boolean }>('/play/scene-photo', {
         prompt: payload.prompt,
+        ...(payload.reference_image_id ? { reference_image_id: payload.reference_image_id } : {}),
         backend: payload.backend || '',
         loras: payload.loras || null,
         negative_prompt: payload.negative_prompt || '',
@@ -763,7 +789,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                   photoCost ? `${t('Cost')}: ${photoCost}` : ''].filter(Boolean).join(' — ')}
                 style={{ marginLeft: 12, ...(photoBlock ? { opacity: 0.45, cursor: 'default',
                   textDecoration: 'line-through', border: '1px solid var(--danger, #da3633)' } : {}) }}
-                onClick={takePhoto} disabled={photoBusy || !!photoBlock}>
+                onClick={() => void takePhoto()} disabled={photoBusy || !!photoBlock}>
                 {photoBusy ? '⌛' : '📷'}
               </button>
             )}
@@ -789,7 +815,10 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
       {photoDlg && photoDialog?.({
         prompt: photoDlg.prompt,
         subjects: photoDlg.subjects,
-        available: Array.from(new Set([...photoDlg.present, ...(avatar ? [avatar] : [])])),
+        available: photoDlg.screenshot ? photoDlg.present
+          : Array.from(new Set([...photoDlg.present, ...(avatar ? [avatar] : [])])),
+        referenceImageId: photoDlg.screenshot?.imageId,
+        referenceImageUrl: photoDlg.screenshot?.imageUrl,
         avatar,
         onSubmit: submitPhoto,
         onClose: () => setPhotoDlg(null),

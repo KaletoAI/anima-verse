@@ -1422,7 +1422,7 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/play/scene-photo/prepare")
-async def play_scene_photo_prepare(user=Depends(get_current_user)):
+async def play_scene_photo_prepare(request: Request, user=Depends(get_current_user)):
     """📷 step 1: distills the photo prompt from the recent room
     conversation (+ person descriptions) WITHOUT generating — feeds the
     image-gen dialog (model/LoRA/prompt selection)."""
@@ -1433,7 +1433,16 @@ async def play_scene_photo_prepare(user=Depends(get_current_user)):
     if not avatar:
         raise HTTPException(status_code=404, detail="no active avatar")
     skill = _player_action_gate(avatar, "scene_photo")
-    result = await asyncio.to_thread(prepare_scene_photo, avatar)
+    from pydantic import ValidationError
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    view = body.get("view") if isinstance(body, dict) else None
+    try:
+        result = await asyncio.to_thread(prepare_scene_photo, avatar, view=view)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="Invalid photo view")
     if not result.get("ok"):
         raise HTTPException(status_code=502,
                             detail=result.get("error", "prepare failed"))
@@ -1471,7 +1480,9 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
             str(body.get("negative_prompt") or ""),
             body.get("character_names"),
             bool(body.get("use_room", True)),
-            parse_override(body.get("pose_check")))
+            parse_override(body.get("pose_check")),
+            reference_image_id=str(body.get("reference_image_id") or ""),
+            user_id=user["id"])
     except LoraNotAllowedError as e:
         # An explicitly picked LoRA the library does not associate with the
         # picked backend: the user's own choice, said verbatim.

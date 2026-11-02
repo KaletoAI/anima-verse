@@ -1,3 +1,4 @@
+import type { ScreenshotPhoto } from '@anima/player-ui';
 /**
  * The ONE channel between the vanilla Three.js app and the React HUD island
  * (plan-3d-game stage 3, task 1).
@@ -195,6 +196,7 @@ export interface HudGameActions {
 /** React-side handlers the vanilla app calls (e.g. the F key opens the chat). */
 export interface HudUiActions {
   openChat?: () => void;
+  openScreenshotPhoto?: (shot: ScreenshotPhoto) => void;
   /** show a short message to the player (Hud.tsx wires the package toast) —
    *  the vanilla side renders no text of its own (E3-T3). ``translate`` marks
    *  an ENGLISH source string that still needs the HUD's i18n (a finding of

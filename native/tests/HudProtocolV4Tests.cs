@@ -12,6 +12,18 @@ namespace AnimaNative.Tests;
 public class HudProtocolV4Tests
 {
     [Fact]
+    public void ScreenshotPhotoPreservesTheViewOnTheUiWire()
+    {
+        var payload = System.Text.Json.Nodes.JsonNode.Parse("""{"imageId":"012345abcdef.jpg","imageUrl":"/chat/me/upload-image/012345abcdef.jpg","view":{"visible":[{"name":"Bob","screen_x":0.2,"screen_y":0.5,"depth_m":3}],"camera":{"pitch_deg":-30,"height_m":2,"fov_deg":70}}}""")!;
+        var wire = System.Text.Json.Nodes.JsonNode.Parse(HudProtocol.Ui("openScreenshotPhoto", payload))!;
+        Assert.Equal(4, wire["v"]!.GetValue<int>());
+        Assert.Equal("ui", wire["kind"]!.GetValue<string>());
+        Assert.Equal("openScreenshotPhoto", wire["name"]!.GetValue<string>());
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(payload, wire["args"]![0]));
+        Assert.Throws<System.ArgumentException>(() => HudProtocol.Ui("unknownScreenshotAction", payload));
+    }
+
+    [Fact]
     public void TextCapabilityIsOptionalAndResetWithThePage()
     {
         var ui = new HudUi();
