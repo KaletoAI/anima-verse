@@ -48,6 +48,9 @@ export interface PropActionOffer {
 export interface PropActionMeter {
   name: string
   value: number
+  /** fill rate in points per REAL second (0 = not filling, or a frozen world) —
+   *  the HUD carries `value` forward with it between two reads */
+  rate?: number
   label: string
   /** the person may hold this gauge back (`holdPropActionMeter`) / does so now */
   holdable?: boolean

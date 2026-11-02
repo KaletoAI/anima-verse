@@ -44,6 +44,14 @@ EXPECTATIONS, DERIVED BY HAND
     (members [actor, partner], pose run-pair, ability pair); cancelling it
     fires `prop_action.ended` once with status completed. A solo pose run
     fires both as well (ability pose).
+[11] RATE + BEAT. Game factor 2 (game s per real s). The provider answers
+    value 10 / rate 0.5 (points per GAME second) for the actor, 90 / 0.5
+    for the partner, rate "x" for nobody. Read 20 game seconds after the
+    run's last beat: actor 10 + 0.5·20 = 20.0, partner 90 + 10 = 100.0
+    (capped); both hand out rate 0.5·2 = 1.0 per REAL second. The beat:
+    due_in_game_s = 5 real s · 2 = 10 game s − 20 since = −10 (due). Without
+    the provider the active run waits on no clock (None); a frozen world
+    (factor 0) neither carries forward (value 10.0, rate 0.0) nor beats.
 [10] HOLD. Without a provider `hold_meter` -> unsupported; an outsider ->
     not_participant; with a provider answering True -> ok and the provider
     saw (run, partner, True); a row's holdable/held pass through as booleans.
@@ -74,6 +82,7 @@ F, A, R, clips, pose_catalog = RUNS.F, RUNS.A, RUNS.R, RUNS.clips, RUNS.pose_cat
 F.paths.init(F.ROOT / "world")
 from app.core import hooks, prop_actions as P                           # noqa: E402
 from app.core.timeutils import utc_now                                  # noqa: E402
+from app.core.game_time import GameDuration                             # noqa: E402
 
 T0 = utc_now()
 EVENTS = []
@@ -198,8 +207,29 @@ class Finale(RUNS.Runs):
             dict(name="junk", value="x")])
         try:
             row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == run["execution_id"])
-            self.assertEqual(row["meters"], [dict(name=name, value=100.0, label="x", holdable=False, held=False),
-                                             dict(name=partner, value=0.0, label="", holdable=False, held=False)])
+            self.assertEqual(row["meters"], [
+                dict(name=name, value=100.0, rate=0.0, label="x", holdable=False, held=False),
+                dict(name=partner, value=0.0, rate=0.0, label="", holdable=False, held=False)])
+        finally:
+            hooks._providers.pop("prop_action.meters", None)
+
+    def test_11_rate_and_beat(self):
+        name, partner, run = active_pair()
+        eid = run["execution_id"]
+        F.set_game_time(F.game_time() + GameDuration.of(seconds=20))
+        self.assertIsNone(A.due_in_game_s(F.game_time()))
+        hooks.register_provider("prop_action.meters", lambda execution_id, members, pose_key: [
+            dict(name=members[0], value=10, rate=0.5), dict(name=members[1], value=90, rate=0.5)])
+        try:
+            with patch.object(A, "game_speed_factor", lambda: 2.0):
+                row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
+                self.assertEqual([(m["name"], m["value"], m["rate"]) for m in row["meters"]],
+                                 [(name, 20.0, 1.0), (partner, 100.0, 1.0)])
+                self.assertAlmostEqual(A.due_in_game_s(F.game_time()), -10.0, places=6)
+            with patch.object(A, "game_speed_factor", lambda: 0.0):
+                row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
+                self.assertEqual([(m["value"], m["rate"]) for m in row["meters"]], [(10.0, 0.0), (90.0, 0.0)])
+                self.assertIsNone(A.due_in_game_s(F.game_time()))
         finally:
             hooks._providers.pop("prop_action.meters", None)
 

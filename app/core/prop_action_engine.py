@@ -1963,9 +1963,14 @@ def advance(now: GameTime) -> int:
     return advanced
 
 
+#: REAL seconds between two beats of a run that fills gauges (see due_in_game_s)
+METER_BEAT_REAL_S = 5.0
+
+
 def due_in_game_s(now: GameTime):
-    """Game seconds until a live run's next timed step — an entry clip or a
-    combined phase ending — or None when no run waits on the clock.
+    """Game seconds until a live run's next timed step — an entry clip, a
+    combined phase ending or the next gauge beat (METER_BEAT_REAL_S) — or
+    None when no run waits on the clock.
 
     The travel ticker beats on it (travel_engine._next_beat_s), so a sitter
     sits when the clip ends instead of on the next world-admin tick.
@@ -1980,14 +1985,21 @@ def due_in_game_s(now: GameTime):
             if _reaction_waited_s(data["reaction"]) >= REACTION_WAIT_S:
                 return 0.0
             continue
+        left = None
         if run["status"] == "approaching" and run["phase"] == "entry" and data.get("entries"):
             left = max(e["duration_game_s"] for e in data["entries"].values()) - data.get("entry_elapsed", 0.0)
         elif run["status"] == "active" and run["definition"]["ability"] == "combined":
             phase = next((p for p in run["definition"]["phases"] if p["id"] == run["phase"]), None)
-            if phase is None:
-                continue
-            left = phase["duration_game_s"] - data.get("phase_elapsed", 0.0)
-        else:
+            if phase is not None:
+                left = phase["duration_game_s"] - data.get("phase_elapsed", 0.0)
+        if (run["status"] == "active" and run["definition"]["ability"] != "sleep"
+                and game_speed_factor() > 0 and _meters(run)):
+            # A package fills gauges on the beat (``prop_action.active``): a
+            # beat every METER_BEAT_REAL_S keeps the finale on time, where the
+            # world-admin tick alone would let it wait up to a minute.
+            beat = METER_BEAT_REAL_S * game_speed_factor()
+            left = beat if left is None else min(left, beat)
+        if left is None:
             continue
         left -= max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
         soonest = left if soonest is None else min(soonest, left)
@@ -2108,6 +2120,13 @@ def _meters(run):
     except Exception as exc:
         logger.warning("prop_action.meters provider failed: %s", exc)
         return []
+    factor = game_speed_factor()
+    since = 0.0
+    if factor > 0:
+        try:
+            since = max(0.0, (game_time() - GameTime.parse(run["data"]["last_game"])).total_seconds)
+        except (KeyError, TypeError, ValueError):
+            since = 0.0
     out = []
     for row in rows or []:
         try:
@@ -2115,7 +2134,19 @@ def _meters(run):
         except (KeyError, TypeError, ValueError):
             continue
         if isinstance(row.get("name"), str) and math.isfinite(value):
-            out.append(dict(name=row["name"], value=round(min(100.0, max(0.0, value)), 1),
+            # ``rate`` = gauge points per GAME second. The stored value is as
+            # of the run's last beat: carried forward to now, and handed out
+            # per REAL second so a client fills the bar between two reads
+            # instead of jumping a whole beat at once (0 = frozen world).
+            try:
+                rate = max(0.0, float(row.get("rate") or 0.0))
+            except (TypeError, ValueError):
+                rate = 0.0
+            if not math.isfinite(rate):
+                rate = 0.0
+            value = min(100.0, max(0.0, value + rate * since))
+            out.append(dict(name=row["name"], value=round(value, 1),
+                            rate=round(rate * factor, 4),
                             label=str(row.get("label") or ""),
                             # ``hold_meter`` applies to this gauge / it is held now
                             holdable=row.get("holdable") is True, held=row.get("held") is True))

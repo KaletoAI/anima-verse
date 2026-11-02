@@ -721,7 +721,7 @@
   display: block;
   height: 100%;
   background: var(--finale, #c2507a);
-  transition: width 0.6s linear;
+  transition: width 0.25s linear;
 }
 
 .player-thinking-dots { display: inline-flex; gap: 3px; }

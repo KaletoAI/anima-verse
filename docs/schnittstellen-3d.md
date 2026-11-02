@@ -2848,7 +2848,9 @@ einmal sieht) und hält den Abschluss nur im Prozess (Neustart = weg); solange s
 Abschluss derselben Person ab.
 
 `GET /play/prop-actions/state` liefert pro laufender Zeile zusätzlich `has_finale` (die gehaltene Pose hat
-einen Abschluss-Clip) und `meters: [{name, value 0..100, label, holdable, held}]` (Füllstände eines Pakets,
+einen Abschluss-Clip) und `meters: [{name, value 0..100, rate, label, holdable, held}]` (Füllstände eines Pakets,
+`value` auf jetzt hochgerechnet, `rate` = Punkte pro echter Sekunde — das HUD lässt den Balken damit zwischen zwei
+Abrufen weiterlaufen, 0 = steht;
 Provider `prop_action.meters`; `holdable` = die Person kann ihren Füllstand per `POST /play/prop-actions/hold`
 `{execution_id, hold}` zurückhalten, `held` = sie tut es gerade — das HUD zeigt der eigenen Zeile den Schalter); ein Angebot trägt `finale` (die Pose der Aktion hat einen Abschluss-Clip) — das HUD
 markiert es.

@@ -873,9 +873,12 @@ entscheidet ein Paket (Payload `finale`, schnittstellen-3d.md § A8c). Den Takt 
 | `hold_meter(execution_id, name, hold) -> dict` | `name` hält den eigenen Füllstand zurück (oder lässt los): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `unsupported` (kein Paket nimmt es), `invalid`. Was Zurückhalten bedeutet, entscheidet der Provider `prop_action.meter_hold` (Kwargs `execution_id`, `name`, `hold`; Antwort `True` = übernommen). Route `POST /play/prop-actions/hold` für den Avatar des Spielers |
 | `finale_for(name) -> dict \| None` | Der Abschluss `{id, kind, role, elapsed_s, duration_s}` — bis 4 s nach Clipende (`FINALE_SHOW_S`) — oder None |
 
-Provider `prop_action.meters` (Kwargs `execution_id`, `members`, `pose_key`; Antwort: `[{name, value, label}]`): die Füllstände
+Provider `prop_action.meters` (Kwargs `execution_id`, `members`, `pose_key`; Antwort: `[{name, value, label, rate?}]`): die Füllstände
 einer laufenden Aktion für die HUD-Zeile (`GET /play/prop-actions/state` → `meters`); `value` wird auf
-0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`. Optional `holdable`/`held` (nur
+0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`. `rate` = Punkte pro SPIELsekunde
+(fehlt/ungültig = 0): der Kern rechnet `value` vom letzten Takt des Laufs bis jetzt hoch und gibt `rate` pro
+ECHTER Sekunde weiter (eingefrorene Welt = 0). Ein Lauf, der Füllstände hat, bekommt alle
+`METER_BEAT_REAL_S` (5 s) einen Takt (`due_in_game_s`), damit der Abschluss pünktlich kommt. Optional `holdable`/`held` (nur
 echtes `True` zählt): das HUD bietet der eigenen Zeile dann einen Zurückhalten-Schalter an (`hold_meter`).
 
 ## Folge-Pose nach dem Ende — `app.core.pose_catalog` ✅

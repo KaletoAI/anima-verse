@@ -1,11 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { apiPost } from './api'
 import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
 import { cancelPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction,
-  type PropActionConsent, type PropActionExecution, type PropActionOffer } from './propActions'
+  type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
 interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
 interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
@@ -139,6 +139,31 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
   </div>
 }
 
+/** How often a filling gauge is redrawn between two state reads. */
+const METER_TICK_MS = 250
+
+/**
+ * A gauge's value NOW: the server's value carried forward with its `rate`
+ * (points per real second) since that read arrived. The server beats only
+ * every few seconds; without this the bar jumps a whole beat at once.
+ */
+function useMeterValues(meters: PropActionMeter[] | undefined) {
+  const key = JSON.stringify((meters || []).map(m => [m.name, m.value, m.rate || 0]))
+  // When this read arrived, and the clock that redraws it — both set anew
+  // per read, so a pause in the redraw never turns into a jump.
+  const [clock, setClock] = useState({ key: '', at: 0, now: 0 })
+  const filling = (meters || []).some(m => (m.rate || 0) > 0 && m.value < 100)
+  useEffect(() => {
+    const at = Date.now()
+    setClock({ key, at, now: at })
+    if (!filling) return
+    const id = setInterval(() => setClock(c => ({ ...c, now: Date.now() })), METER_TICK_MS)
+    return () => clearInterval(id)
+  }, [key, filling])
+  const since = clock.key === key ? Math.max(0, clock.now - clock.at) / 1000 : 0
+  return (meter: PropActionMeter) => Math.max(0, Math.min(100, meter.value + (meter.rate || 0) * since))
+}
+
 export function PropActionExecutionRow({ run, kind, busy, perform }: {
   run: PropActionExecution
   kind: 'incoming' | 'outgoing' | 'current' | 'result'
@@ -146,6 +171,7 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
   perform: (operation: () => Promise<unknown>) => void
 }) {
   const { t } = useI18n()
+  const meterValue = useMeterValues(run.meters)
   const state = run.phase === 'entry' && run.status === 'approaching' ? 'Entering'
     : run.status === 'approaching' && run.own_role === 'actor' && run.reaction === 'pending' ? 'Waiting for reaction'
     : ({ awaiting_consent: 'Awaiting consent', approaching: 'Approaching', active: 'Active', sleeping: 'Sleeping',
@@ -166,7 +192,7 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
     {run.can_cancel && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(() => cancelPropAction(run.execution_id))}>{t(run.can_resist ? 'Push away' : kind === 'outgoing' ? 'Withdraw' : 'Stop')}</button>}
     {run.status === 'active' && run.meters?.map(meter => {
-      const value = Math.max(0, Math.min(100, meter.value))
+      const value = meterValue(meter)
       // Only the viewer's own gauge can be held back — the own side of the run.
       const own = (run.own_role === 'partner' ? run.partner : run.actor) === meter.name
       return <span key={`meter:${meter.name}`} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
