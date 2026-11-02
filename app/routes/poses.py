@@ -448,8 +448,12 @@ async def generate_transition(request: Request, _: Dict[str, Any] = Depends(requ
         raise HTTPException(400, "invalid JSON body") from exc
     if not isinstance(body, dict):
         raise HTTPException(400, "body must be a JSON object")
+    from app.imagegen.routing import NoRouteError
     try:
         return await asyncio.to_thread(pose_transition.submit, **body)
+    except NoRouteError as exc:
+        # A missing pose_transition chain is setup, not a server fault: say where to fix it.
+        raise HTTPException(409, str(exc)) from exc
     except (ValueError, TypeError, pose_transition.clips.ClipLibraryError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
