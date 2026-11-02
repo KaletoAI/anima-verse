@@ -2152,4 +2152,48 @@ function toast(msg, type) {
 }
 
 // Start
+// Another page (e.g. Apply to game on /admin/models) may have written the
+// instance config while this tab sat in the background. On return, take the
+// newer version when this page holds no unsaved edits; otherwise say so and
+// keep the edits (a save would then be refused as stale).
+let REFRESH_BUSY = false;
+async function refreshIfChangedElsewhere() {
+    if (REFRESH_BUSY || CONFIG_REVISION == null) return;
+    REFRESH_BUSY = true;
+    const mutation = MUTATION_REVISION;
+    const untouched = () => !DIRTY && !RESETS.size && MUTATION_REVISION === mutation;
+    try {
+        const resp = await fetch('/admin/settings/raw', { credentials: 'same-origin' });
+        const revision = resp.ok ? resp.headers.get('X-Config-Revision') : null;
+        if (!revision || revision === CONFIG_REVISION) return;
+        if (!untouched()) {
+            toast('Settings were changed on another page. Reload to see them; your unsaved edits here would be lost.', 'error');
+            return;
+        }
+        const data = await resp.json();
+        const originResp = await fetch('/admin/settings/origin', { credentials: 'same-origin' });
+        const origin = originResp.ok ? await originResp.json() : null;
+        if (!untouched()) return;  // an edit landed while loading
+        CONFIG = data;
+        CONFIG_REVISION = revision;
+        if (origin) OVERRIDES = new Set(origin.overrides || []);
+        for (const k of Object.keys(PROVIDERS_CACHE)) delete PROVIDERS_CACHE[k];
+        for (const k of Object.keys(IMAGEGEN_MODELS_CACHE)) delete IMAGEGEN_MODELS_CACHE[k];
+        const content = document.getElementById('content');
+        const top = content.scrollTop;
+        buildNav();
+        await renderSection(ACTIVE_SECTION, ACTIVE_PAGE);
+        content.scrollTop = top;
+        toast('Settings updated — they were changed on another page.', 'success');
+    } catch (e) {
+        // A failed check leaves the page as it was; the next return retries.
+    } finally {
+        REFRESH_BUSY = false;
+    }
+}
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshIfChangedElsewhere();
+});
+window.addEventListener('focus', refreshIfChangedElsewhere);
+
 init();
