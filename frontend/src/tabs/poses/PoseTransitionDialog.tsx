@@ -47,6 +47,16 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
   const guideClip = guideClips.find((c) => c.kind === guide.kind && (c.set || '') === request.cset)
     || guideClips.find((c) => c.kind === guide.kind)
   const options = ['walking', ...poses.filter((p) => p.solo && p.animation && p.key !== 'walking').map((p) => p.key)]
+  // Sets a pose's clip exists in; a pose resolves in the chosen set or, failing that, the neutral one.
+  const setsOf = (pose: string) => {
+    const kind = poses.find((p) => p.key === (pose === 'walking' ? 'standing' : pose))?.animation
+    return [...new Set(listing.clips.filter((c) => c.kind === kind && !c.role && /\.fbx(?:\?|$)/i.test(c.url))
+      .map((c) => c.set || ''))]
+  }
+  const elsewhere = (pose: string) => {
+    const sets = setsOf(pose)
+    return sets.includes(request.cset) || sets.includes('') ? '' : sets.map((set) => setLabel(set, t)).join(', ')
+  }
   const constrained = ['seat', 'ground', 'lie'].includes(poses.find((p) => p.key === request.target_pose)?.group || '')
   const numberField = (label: string, value: number, min: number, max: number, step: number, change: (v: number) => void) => (
     <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
@@ -89,9 +99,14 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
                 <label>{side === 'start' ? t('Start pose') : t('Target pose')}
                   <select className="ga-input" disabled={busy} value={request[poseField]} onChange={(e) =>
                     setRequest({ ...request, [poseField]: e.target.value, [timeField]: 0 })}>
-                    {options.map((pose) => <option key={pose} value={pose}>{pose}</option>)}
+                    {options.map((pose) => {
+                      const only = elsewhere(pose)
+                      return <option key={pose} value={pose} disabled={!!only}>
+                        {only ? `${pose} — ${t('only in set')} ${only}` : pose}</option>
+                    })}
                   </select></label>
-                {clip ? <ClipPreview urls={{ solo: clip.url }} height={190} /> : <p>{t('No resolved clip')}</p>}
+                {clip ? <ClipPreview urls={{ solo: clip.url }} height={190} /> : <p>{elsewhere(request[poseField])
+                  ? `${t('Not in this set — choose the set')}: ${elsewhere(request[poseField])}` : t('No resolved clip')}</p>}
                 {numberField(side === 'start' ? t('Start time (s)') : t('Target time (s)'), request[timeField],
                   0, clip?.duration_s || 0, 0.01, (value) => setRequest({ ...request, [timeField]: value }))}
               </div>
