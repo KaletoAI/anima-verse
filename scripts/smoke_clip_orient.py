@@ -133,6 +133,9 @@ cos 10 = 0.98481, sin 10 = 0.17365; cos 20 = 0.93969, sin 20 = 0.34202.
         Ry(90): x' =  75 . 0 + 10 . 1 =  10,  z' = -75 . 1 + 10 . 0 = -75
                                        -> start (0.100, -0.750) m
         A frame 1 (10, 40, 20) -> Ry(90) -> (20, -10) -> start (0.200, -0.100) m
+    A renderer-only whole-clip shift [25,-40] cm saves alongside these
+    measurements without changing them or rotating the calibration. A later
+    shift-only [-5,10] yields [20,-30], leaving both FBX files byte-identical.
 
 [12] A SOLO CLIP REFUSES THE PARTNER SHIFT (ClipLibraryError, file untouched).
 """
@@ -474,12 +477,23 @@ def main() -> int:
 
     print("\n[11] shift and turn together")
     fresh_pair("both")
-    ac.orient_clip("free", "both__a.fbx", yaw_deg=90.0, partner_shift_cm=[5.0, 0.0, -10.0])
-    roles = json.loads((FREE / "both.json").read_text(encoding="utf-8"))["geometry"].get("roles") or {}
+    ac.orient_clip("free", "both__a.fbx", yaw_deg=90.0,
+                   partner_shift_cm=[5.0, 0.0, -10.0], shift_cm=[25, -40])
+    geometry = json.loads((FREE / "both.json").read_text(encoding="utf-8"))["geometry"]
+    roles = geometry.get("roles") or {}
+    check_true("whole-clip shift stays in placement frame", geometry.get("shift_cm") == [25, -40], str(geometry))
     for role, w in (("a", [0.200, -0.100]), ("b", [0.100, -0.750])):
         got = (roles.get(role) or {}).get("start_xz_m") or [0.0, 0.0]
         check(f"{role}.start_xz_m x", got[0], w[0], TOL_M)
         check(f"{role}.start_xz_m z", got[1], w[1], TOL_M)
+
+    before = [(FREE / f"both__{role}.fbx").read_bytes() for role in ("a", "b")]
+    ac.orient_clip("free", "both__b.fbx", shift_cm=[-5, 10])
+    after = json.loads((FREE / "both.json").read_text(encoding="utf-8"))["geometry"]
+    check_true("shift-only after turn accumulates", after.get("shift_cm") == [20, -30], str(after))
+    check_true("shift-only keeps measured pair anchors", after.get("roles") == roles, str(after))
+    check_true("shift-only keeps both FBX files", before == [
+        (FREE / f"both__{role}.fbx").read_bytes() for role in ("a", "b")], "changed FBX")
 
     print("\n[12] a solo clip refuses the partner shift")
     was = (FREE / "turn.fbx").read_bytes()

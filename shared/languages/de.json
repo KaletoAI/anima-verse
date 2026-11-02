@@ -2374,7 +2374,6 @@
     "The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.": "Die Zeile zieht alle so viele SPIEL-Minuten eine neue Zufallsmischung — geparkte Autos, die morgen nicht dieselben sind. Leer = nie, die Platzierung bleibt, wie sie ist.",
     "never": "nie",
     "Orientation": "Ausrichtung",
-    "Apply orientation writes angles into the clip file. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.": "Ausrichtung anwenden schreibt die Winkel in die Clip-Datei. Flächenhöhen werden getrennt gespeichert und gelten auch im Spiel. Beide Hälften eines Paars bleiben zusammen.",
     "Turn the clip": "Clip drehen",
     "Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.": "Grad, um die sich der Clip um die Senkrechte dreht — der Import-Regler, nachträglich angewandt. Damit wird ein liegender Clip aufs Bett ausgerichtet.",
     "Tilt": "Neigen",
@@ -2390,7 +2389,7 @@
     "Applying…": "Wird angewendet…",
     "Reset dials": "Regler zurücksetzen",
     "written in": "geschrieben in",
-    "Already baked into the file": "Bereits in die Datei eingebacken",
+    "Saved orientation and shifts": "Gespeicherte Ausrichtung und Verschiebungen",
     "nothing turned yet": "noch nichts gedreht",
     "turn": "Drehung",
     "tilt": "Neigung",
@@ -3768,6 +3767,11 @@
     "awaiting_choice": "Wartet auf Auswahl",
     "published": "Veröffentlicht",
     "discarded": "Verworfen",
-    "Generate a new transition for the current rule.": "Erzeuge einen neuen Übergang für die aktuelle Regel."
+    "Generate a new transition for the current rule.": "Erzeuge einen neuen Übergang für die aktuelle Regel.",
+    "Shift sideways": "Seitlich verschieben",
+    "Shift forward": "Nach vorne verschieben",
+    "side / forward shift": "Verschiebung seitlich / vorwärts",
+    "Apply orientation writes angles into the clip file and saves horizontal shifts separately. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.": "Ausrichtung anwenden schreibt Winkel in die Clip-Datei und speichert horizontale Verschiebungen separat. Flächenhöhen werden separat gespeichert und gelten auch im Spiel. Beide Hälften eines Paares bleiben zusammen.",
+    "Moves the whole clip, including both pair halves. Positive sideways is the clip’s left (+X); positive forward is +Z. Applied horizontally at the place’s yaw, independently of turn, tilt and roll.": "Verschiebt den gesamten Clip einschließlich beider Paarhälften. Positiv seitlich ist links im Clip (+X), positiv vorwärts ist +Z. Wirkt horizontal mit der Platzausrichtung, unabhängig von Drehung, Neigung und Rollen."
   }
 }

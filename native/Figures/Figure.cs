@@ -230,7 +230,8 @@ public partial class Figure : Node3D
         var previous = Rotation;
         var rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), (float)Yaw, (float)(lean.Roll * Math.PI / 180));
         Rotation = rotation;
-        if (HeightCorrectionM != 0 && (previous.X != rotation.X || previous.Z != rotation.Z)) ApplyBody();
+        if ((HeightCorrectionM != 0 || HorizontalCorrection != default)
+            && (previous.X != rotation.X || previous.Z != rotation.Z)) ApplyBody();
     }
 
     /// <summary>Show or hide the figure for the placement (<c>npc.root.visible = !st.hidden</c>).</summary>
@@ -279,6 +280,7 @@ public partial class Figure : Node3D
         _sink = 0;
         Drop = 0;
         HeightCorrectionM = 0;
+        HorizontalCorrection = default;
         ResetBridges();
         var bind = bindOffset ?? V3.Zero;
         _travelBase = new P2(bind.X, bind.Z);
@@ -404,6 +406,7 @@ public partial class Figure : Node3D
     /// <summary>Calibration from the source behind each planned action, not the potentially shared Animation.</summary>
     public Func<string, ClipHeightOffsets>? HeightOffsetsOf { get; set; }
     public double HeightCorrectionM { get; private set; }
+    public ClipShift HorizontalCorrection { get; private set; }
     /// <summary>
     /// The clock bridges are timed by, seconds (the browser's <c>performance.now()</c>): the manager's accumulated frame
     /// time, so a headless check runs the same rules on simulated frames. Default: the engine's monotonic clock.
@@ -935,10 +938,11 @@ public partial class Figure : Node3D
 
     private void SetHeightCorrection(string clip, string? surfaceGroup)
     {
-        double correction = clip.Length > 0 && HeightOffsetsOf is { } offsets
-            ? offsets(clip).Metres(surfaceGroup, BodyHeight) : 0;
-        if (HeightCorrectionM == correction) return;
+        var calibration = clip.Length > 0 && HeightOffsetsOf is { } offsets ? offsets(clip) : default;
+        double correction = calibration.Metres(surfaceGroup, BodyHeight);
+        if (HeightCorrectionM == correction && HorizontalCorrection == calibration.Shift) return;
         HeightCorrectionM = correction;
+        HorizontalCorrection = calibration.Shift;
         ApplyBody();
     }
 
@@ -973,6 +977,13 @@ public partial class Figure : Node3D
             dx = vertical * Math.Sin(roll);
             dy = vertical * Math.Cos(roll);
             dz = -HeightCorrectionM * Math.Sin(tilt);
+        }
+        if (_procedural is null)
+        {
+            var horizontal = HorizontalCorrection.Local(Rotation.X, Rotation.Z);
+            dx += horizontal.X;
+            dy += horizontal.Y;
+            dz += horizontal.Z;
         }
         b.Position = new Vector3((float)(_travelBase.X + o.X + dx), (float)(y + dy), (float)(_travelBase.Z + o.Z + dz));
         if (_procedural is { } q) b.Scale = Vector3.One * (float)q.Scale;

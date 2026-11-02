@@ -51,6 +51,7 @@ public partial class Figure
         double yaw=PropActionMotion.Number(spec["access"]?["yaw"])*Math.PI/180;
         if(_turn is null) Yaw=TargetYaw=yaw;
         _lift=PropEntryLift=lift.Value;
+        HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default;
         SecondaryFrozen=PropActionMotion.Number(spec["game_seconds_per_real_second"])<=0;
         UpdateFigure(0); return true;
     }
@@ -88,7 +89,9 @@ public partial class Figure
             else fraction=Math.Clamp((PropHipsHeight(animation,hips,time)-first)/(last-first),0,1);
         } else if(Math.Abs(startLift)>1e-6) return false;
         _transition!.Time=time; player.SpeedScale=0; player.Seek(time,true);
-        _lift=startLift*(1-fraction); SecondaryFrozen=false; UpdateFigure(0); return true;
+        _lift=startLift*(1-fraction);
+        HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default;
+        SecondaryFrozen=false; UpdateFigure(0); return true;
     }
     /// <summary>Hand back the exit heading, discarding facing requests queued while the bridge owned the root.</summary>
     public void HandBackPropYaw(double yaw)

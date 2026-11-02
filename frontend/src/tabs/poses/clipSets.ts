@@ -51,6 +51,8 @@ export interface ApiClipRow {
     roll_deg?: number | null
     floor_shift_cm?: number | null
     partner_shift_cm?: [number, number, number] | null
+    /** Cumulative renderer-only [side, forward] centimetres. */
+    shift_cm?: [number, number] | null
   }
   /** How the import treated the root's travel (`geometry.root_motion` of the
    *  sidecar): the mode plus the travel it baked, `[x, z]` in metres of the

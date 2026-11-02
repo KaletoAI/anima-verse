@@ -58,6 +58,17 @@ export const FIGURE_HEIGHT_M = 1.7
 /** Absolute clip corrections for the 1.70 m reference figure, never baked into tracks. */
 export type ClipHeightOffsetsCm = Partial<Record<'ground' | 'seat' | 'lie', number>>
 
+/** Whole-clip [side, forward] centimetres: absolute distance, independent of figure height. */
+export type ClipShiftCm = readonly [number, number]
+
+/** Horizontal correction rotated by placement yaw, never by lean or baked angles. */
+export function clipShiftM(shift?: ClipShiftCm | null, yaw = 0): { x: number; z: number } {
+  const side = typeof shift?.[0] === 'number' && Number.isFinite(shift[0]) ? shift[0] / 100 : 0
+  const forward = typeof shift?.[1] === 'number' && Number.isFinite(shift[1]) ? shift[1] / 100 : 0
+  return { x: side * Math.cos(yaw) + forward * Math.sin(yaw),
+    z: -side * Math.sin(yaw) + forward * Math.cos(yaw) }
+}
+
 /** Standing, unknown and unmarked places all use the ground calibration. */
 export function clipHeightGroup(group?: string | null): 'ground' | 'seat' | 'lie' {
   return group === 'seat' || group === 'lie' ? group : 'ground'

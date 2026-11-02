@@ -2,6 +2,7 @@ export interface ClipSource {
   kind: string; set: string; url: string; loop?: boolean; rootMotion?: boolean;
   rootMotionMode?: string;
   heightOffsets?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
+  shift?: readonly [number, number] | null;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {

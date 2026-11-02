@@ -16,9 +16,9 @@ import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
-  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM,
+  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM,
 } from '@anima/scene-render';
-import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm } from '@anima/scene-render';
+import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -66,6 +66,12 @@ export const BASE_FIGURE_HEIGHT_M = 1.70;
  *  mid-stride. */
 const clipLoopFlags = new WeakMap<THREE.AnimationClip, boolean>();
 const clipHeightOffsets = new WeakMap<THREE.AnimationClip, ClipHeightOffsetsCm>();
+const clipShifts = new WeakMap<THREE.AnimationClip, ClipShiftCm>();
+
+/** Renderer-only horizontal correction of the exact selected source file. */
+export function setClipShift(clip: THREE.AnimationClip, shift: ClipShiftCm | null | undefined): void {
+  if (shift) clipShifts.set(clip, shift);
+}
 
 /** Attach the listing metadata to this exact selected file, before rig adaptation. */
 export function setClipHeightOffsets(clip: THREE.AnimationClip,
@@ -98,6 +104,8 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
     if (flag !== undefined) clipLoopFlags.set(c, flag);
     const heights = source && clipHeightOffsets.get(source);
     if (heights) clipHeightOffsets.set(c, heights);
+    const shift = source && clipShifts.get(source);
+    if (shift) clipShifts.set(c, shift);
   }
 }
 
@@ -946,13 +954,14 @@ export class FigureLibrary {
       // carries a travel in its hips track that the figure is to follow
       // (`Figure.update`); `strip` or no block plays in place as before.
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
-                             rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm }> =
+                             rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null }> =
         serverClips.map((c) => ({
           kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
           url: c.url, loop: c.loop,
           rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
           rootMotionMode: c.root_motion?.mode,
           heightOffsets: c.height_offsets_cm,
+          shift: c.orientation?.shift_cm,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1007,6 +1016,7 @@ export class FigureLibrary {
           setClipLoop(clip, source.loop);
           setClipRootMotion(clip, source.rootMotion, source.rootMotionMode);
           setClipHeightOffsets(clip, source.heightOffsets);
+          setClipShift(clip, source.shift);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1083,6 +1093,7 @@ export class FigureLibrary {
               setClipLoop(clip, source.loop);
               setClipRootMotion(clip, !!source.root_motion && source.root_motion.mode !== 'strip', source.root_motion?.mode);
               setClipHeightOffsets(clip, source.height_offsets_cm);
+              setClipShift(clip, source.orientation?.shift_cm);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
@@ -1595,6 +1606,8 @@ export class FigureLibrary {
           setClipRootMotion(c, clipRootMotionFlags.get(clip), clipKeepsFacing(clip) ? 'keep' : undefined);
           const heights = clipHeightOffsets.get(clip);
           if (heights) clipHeightOffsets.set(c, heights);
+          const shift = clipShifts.get(clip);
+          if (shift) clipShifts.set(c, shift);
           out.push(c);
           break;
         }
@@ -2014,6 +2027,7 @@ export class Figure {
    *  instance stands at `groundY − clipDrop + lift` (`applyHeight`). */
   private clipDrop = 0;
   private clipHeight = 0;
+  private clipShift: ClipShiftCm | undefined;
   /** World-up calibration expressed in the root's local frame. */
   private readonly heightCorrection = new THREE.Vector3();
   private readonly heightRotation = new THREE.Quaternion();
@@ -2529,8 +2543,10 @@ export class Figure {
 
   private setClipHeight(clip: THREE.AnimationClip | undefined, group: string) {
     const height = clipHeightOffsetM(clip && clipHeightOffsets.get(clip), group, this.height);
-    if (height === this.clipHeight) return;
+    const shift = clip && clipShifts.get(clip);
+    if (height === this.clipHeight && shift === this.clipShift) return;
     this.clipHeight = height;
+    this.clipShift = shift;
     this.applyHeight();
   }
 
@@ -2541,8 +2557,9 @@ export class Figure {
     if (!inst) return;
     inst.position.x -= this.heightCorrection.x;
     inst.position.z -= this.heightCorrection.z;
-    this.heightCorrection.set(0, this.clipHeight, 0);
-    if (this.clipHeight !== 0) {
+    const horizontal = clipShiftM(this.clipShift, this.root.rotation.y);
+    this.heightCorrection.set(horizontal.x, this.clipHeight, horizontal.z);
+    if (this.clipHeight !== 0 || this.clipShift) {
       this.root.getWorldQuaternion(this.heightRotation).invert();
       this.heightCorrection.applyQuaternion(this.heightRotation);
     }
@@ -2791,6 +2808,7 @@ export class Figure {
       support.sample.evaluate(action.time)[1], accessY, anchorY, rootOffset);
     if (lift === null) return false;
     this.lift = lift;
+    this.clipShift = clipShifts.get(action.getClip());
     this.applyHeight();
     this.propEntryUpdate.frozen = frozen;
     this.update(0, this.propEntryUpdate);
@@ -2820,7 +2838,7 @@ export class Figure {
     this.root.rotation.order = 'YXZ';
     this.root.rotation.x = THREE.MathUtils.degToRad(tilt);
     this.root.rotation.z = THREE.MathUtils.degToRad(roll);
-    if (this.clipHeight !== 0) this.applyHeight();
+    if (this.clipHeight !== 0 || this.clipShift) this.applyHeight();
   }
 
   /** true when there are no animation clips (e.g. an animal rig or a static

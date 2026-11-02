@@ -25,6 +25,8 @@ public sealed record ClipSourceEntry(string Kind, string Set, string Url, bool? 
 /// <summary>Absolute per-surface centimetre corrections for a 1.70 m figure; absent fields mean zero.</summary>
 public readonly record struct ClipHeightOffsets(double Ground = 0, double Seat = 0, double Lie = 0)
 {
+    /// <summary>Independent horizontal calibration carried by the existing per-source resolver.</summary>
+    public ClipShift Shift { get; init; }
     public static string Surface(string? group) => group is "seat" or "lie" ? group : "ground";
 
     public double Metres(string? group, double figureHeight)

@@ -24,7 +24,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Object3D } from 'three'
-import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM, pairYaw,
+import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM, clipShiftM, pairYaw,
   type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -96,6 +96,7 @@ function soloBox(group?: string): MarkerBox | undefined {
 interface ApiClip {
   kind: string; role?: string; set?: string; url: string
   height_offsets_cm?: ClipHeightOffsetsCm
+  orientation?: { shift_cm?: [number, number] | null }
 }
 
 /** Explicit clip URLs instead of a kind lookup — how the CMU catalog browser
@@ -139,7 +140,7 @@ export interface PlayWindow { start: number; end: number }
 
 export function ClipPreview({ kind = '', set = '', height = 300, urls, window: win, speed = 1,
   group, rootDrop = 0, yawOffset = 0, onYawOffset,
-  importYaw, importTilt, importRoll, importHeightM, partnerShiftM, footprint = '', bust }:
+  importYaw, importTilt, importRoll, importHeightM, partnerShiftM, shiftCm, footprint = '', bust }:
   { kind?: string
     /** which figure set to play the kind from — empty picks the neutral clip
      *  (and falls back to any set, the way the viewers do) */
@@ -174,6 +175,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
      *  in the clip frame (+X its left, +Z forward) — moved INSIDE the turned
      *  frame, the order `clip_orient.py` bakes it in (shift, then turn). */
     partnerShiftM?: [number, number, number]
+    /** Whole-clip shift draft, added to the saved calibration, in centimetres. */
+    shiftCm?: [number, number]
     /** place type whose CALIBRATION BOX is drawn as the reference to turn
      *  against — the bed a sleeper has to line up with, in the measurements of
      *  the place type, its top the marked surface. It stands outside the clip
@@ -217,6 +220,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   importRollRef.current = importRoll || 0
   const importHeightRef = useRef(importHeightM)
   importHeightRef.current = importHeightM
+  const shiftRef = useRef(shiftCm)
+  shiftRef.current = shiftCm
   const partnerShiftRef = useRef(partnerShiftM)
   partnerShiftRef.current = partnerShiftM
   const dialled = importYaw !== undefined || importTilt !== undefined
@@ -245,7 +250,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
-        let parts: Array<{ role: 'a' | 'b' | ''; url: string; heightOffsets?: ClipHeightOffsetsCm }> = []
+        let parts: Array<{ role: 'a' | 'b' | ''; url: string; heightOffsets?: ClipHeightOffsetsCm; shift?: [number, number] | null }> = []
         if (direct) {
           parts = urlA && urlB
             ? [{ role: 'a', url: urlA }, { role: 'b', url: urlB }]
@@ -267,7 +272,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           const isPair = !!(pick('a') && pick('b'))
           const part = (role: 'a' | 'b' | '') => {
             const clip = pick(role)!
-            return { role, url: bustUrl(clip.url), heightOffsets: clip.height_offsets_cm }
+            return { role, url: bustUrl(clip.url), heightOffsets: clip.height_offsets_cm, shift: clip.orientation?.shift_cm }
           }
           parts = isPair
             ? [part('a'), part('b')]
@@ -382,7 +387,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
 
         // ── figures + clips ──
         const fbx = new FBXLoader()
-        const players: Array<{ role: 'a' | 'b' | ''; root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number }> = []
+        const players: Array<{ role: 'a' | 'b' | ''; root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number; shift?: [number, number] | null }> = []
         const hipsOf = (root: Object3D): Object3D | null => {
           let found: Object3D | null = null
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
@@ -396,7 +401,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         // the figures play at their bind height.
         const standRefM = ((await standHipsRef()) || 0) / 100
         if (disposed) return
-        for (const { role, url, heightOffsets } of parts) {
+        for (const { role, url, heightOffsets, shift } of parts) {
           const obj = await fbx.loadAsync(url)
           const clip = obj.animations?.[0]
           if (!clip || disposed) return
@@ -450,7 +455,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           root.add(sprite)
           const mixer = new THREE.AnimationMixer(inst)
           mixer.clipAction(inplace).play()
-          players.push({ role, root, mixer, path, duration: clip.duration, hipsBindY,
+          players.push({ role, root, mixer, path, duration: clip.duration, hipsBindY, shift,
             heightM: clipHeightOffsetM(heightOffsets, seat ? group : (footprint || group), FIGURE_H) })
         }
         if (disposed) return
@@ -497,6 +502,12 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             p.root.position.set(r.x, -clipHipsDrop(p.hipsBindY, r.y, standRefM), r.z)
             const shift = p.role === 'b' ? partnerShiftRef.current : undefined
             if (shift) p.root.position.add(heightShift.set(shift[0], shift[1], shift[2]))
+            // Placement yaw rotates the saved shift; orientation draft angles
+            // are baked into the take and must not rotate its calibration.
+            const draft = shiftRef.current
+            const horizontal = clipShiftM([(p.shift?.[0] ?? 0) + (draft?.[0] ?? 0),
+              (p.shift?.[1] ?? 0) + (draft?.[1] ?? 0)], seat ? pairYaw(0, yawRef.current || 0) : 0)
+            p.root.position.add(heightShift.set(horizontal.x, 0, horizontal.z).applyQuaternion(inverseFrame))
             if (importHeightRef.current === undefined && p.heightM) {
               heightShift.set(0, p.heightM, 0).applyQuaternion(inverseFrame)
               p.root.position.add(heightShift)

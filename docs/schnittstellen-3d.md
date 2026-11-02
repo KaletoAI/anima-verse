@@ -10029,6 +10029,34 @@ Clip-/Set-Fallbacks und Paarhälften; sie ändern weder die FBX-Keyframes noch
 Bewegung und Brücken verwenden `ground`. Bibliothek, Prop-/Grundrissvorschau,
 Browser- und nativer Spielclient verwenden dieselbe Korrektur.
 
+**Horizontal clip calibration (Task 99, 2026-11-02).** The clip sidecar's
+`geometry.shift_cm: [side, forward]` stores a cumulative renderer-only correction
+in centimetres (+X = the clip's left, +Z = forward). Missing means `[0, 0]`.
+`POST /assets/animation-clips/{library}/{rel}/orient` accepts `shift_cm` as an
+increment, each component finite and within −200..200 cm per edit; the saved
+sum may exceed that range. An all-zero request is rejected. The clip listing
+exposes the saved sum as `orientation.shift_cm`. A shift-only edit needs no
+Blender and leaves FBX tracks and measured root/anchor geometry untouched.
+A pair writes its shared `<kind>.json` once; both halves use that correction,
+even when either half has its own sidecar. `partner_shift_cm` remains the
+independent baked adjustment of B against A.
+
+Both clients apply this exactly once to the visible body after placing its
+root: with placement yaw `a`, `s = side / 100`, `f = forward / 100`, the world
+correction is `(s cos(a) + f sin(a), 0, −s sin(a) + f cos(a))`. These are
+absolute metres, independent of figure height, tilt, roll, baked orientation
+angles, root-motion mode and surface group. Inverse root rotation converts
+this horizontal world correction into body-local coordinates; it must not
+become a vertical displacement on a leaned seat. The root/place anchor, pair
+separation and navigation position do not move. The selected file/set owns
+its correction, including fallbacks, both pair halves, bridges and the own
+avatar's B1 movement. Native calibration carries the independent shift beside
+surface heights through the existing per-source resolver and cache identity;
+shared bound animation keys never determine it. The admin clip preview adds
+the draft to the saved correction using the same maths. Shared numeric oracle:
+`shared/test-vectors/clip_shift.json` (`anima-test-vectors/1`), consumed by
+native Core, Godot and the browser smoke.
+
 Die Hüftgelenk-Werte vom Vormittag des 2026-09-08 (0,320 / 0,075) steckten den
 Sitzenden 0,131 m ins Polster und den Liegenden 0,122 m in die Matratze; die
 Erst-Werte dieses Nachtrags (0,314 / 0,051) waren gegen die Clip-Bibliothek vor

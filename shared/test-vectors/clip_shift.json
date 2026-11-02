@@ -1,0 +1,12 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "Task 99: x=side/100*cos(yaw)+forward/100*sin(yaw), z=-side/100*sin(yaw)+forward/100*cos(yaw); absolute metres independent of figure height",
+  "cases": [
+    {"shift_cm": [25, -40], "yaw_deg": 0, "world_m": [0.25, -0.4]},
+    {"shift_cm": [25, -40], "yaw_deg": 90, "world_m": [-0.4, -0.25]},
+    {"shift_cm": [25, -40], "yaw_deg": 180, "world_m": [-0.25, 0.4]},
+    {"shift_cm": [25, -40], "yaw_deg": 270, "world_m": [0.4, 0.25]},
+    {"shift_cm": [100, 100], "yaw_deg": 45, "world_m": [1.4142135623730951, 0]},
+    {"shift_cm": [0, 0], "yaw_deg": 35, "world_m": [0, 0]}
+  ]
+}

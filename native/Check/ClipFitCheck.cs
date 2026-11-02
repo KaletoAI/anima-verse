@@ -33,6 +33,7 @@ namespace AnimaNative.Check;
 ///      plays in phase with its partner;
 ///   C7 per-surface reference height corrections compose with bind/ground drop, follow the actual fallback clip,
 ///      update without restarting an action, and reset when entering an uncalibrated pair.
+///   C8 shared horizontal-shift vectors survive listing parsing, solo/movement/pair playback, lean and B1 entry/exit.
 /// </summary>
 public static class ClipFitCheck
 {
@@ -45,12 +46,97 @@ public static class ClipFitCheck
     public static async Task<string> RunAsync(Node3D host, string fixtures)
     {
         HeightCorrections(host);
+        HorizontalCorrections(host, fixtures);
         ReloadPlayback(host);
         var bridges = await BridgesAsync(host, fixtures);
         var pairs = await PairsAsync(host, fixtures);
-        var report = $"clips C1..C7 ok ({bridges}; {pairs})";
+        var report = $"clips C1..C8 ok ({bridges}; {pairs})";
         GD.Print($"[check-clips] {report}");
         return report;
+    }
+
+    /// <summary>Shared shift vectors on real body nodes: solo, avatar motion, pairs and lean.</summary>
+    private static void HorizontalCorrections(Node3D host, string fixtures)
+    {
+        var figure = new Figure("HorizontalCorrectionCheck");
+        host.AddChild(figure);
+        try
+        {
+            var body = new Node3D();
+            var skeleton = new Skeleton3D { Name = "Rig" };
+            body.AddChild(skeleton);
+            skeleton.AddBone("Hips");
+            skeleton.SetBoneRest(0, new Transform3D(Basis.Identity, new Vector3(0, 1, 0)));
+            var player = new AnimationPlayer();
+            body.AddChild(player);
+            var library = new AnimationLibrary();
+            foreach (var kind in new[] { "idle", "pair__a", "pair__b", "plain" })
+                library.AddAnimation(kind, new Animation { Length = 1, LoopMode = Animation.LoopModeEnum.Linear });
+            var entry = new Animation { Length = 1 };
+            int hips = entry.AddTrack(Animation.TrackType.Position3D);
+            entry.TrackSetPath(hips, "Rig:Hips");
+            entry.PositionTrackInsertKey(hips, 0, new Vector3(0, 1, 0));
+            entry.PositionTrackInsertKey(hips, 1, new Vector3(0, .5f, 0));
+            var exit = new Animation { Length = 1 };
+            hips = exit.AddTrack(Animation.TrackType.Position3D);
+            exit.TrackSetPath(hips, "Rig:Hips");
+            exit.PositionTrackInsertKey(hips, 0, new Vector3(0, .5f, 0));
+            exit.PositionTrackInsertKey(hips, 1, new Vector3(0, 1, 0));
+            library.AddAnimation("entry", entry);
+            library.AddAnimation("exit", exit);
+            figure.Extras = new Dictionary<Animation, ClipExtras> {
+                [entry] = new() { Path = new RootPath(new float[] { 0, 1 }, new float[] { 0, 0, 0, 0 }) },
+                [exit] = new() { Path = new RootPath(new float[] { 0, 1 }, new float[] { 0, 0, 0, 0 }) } };
+            player.AddAnimationLibrary("", library);
+            figure.SetBody(body, true, skeleton, player, new[] { "idle", "pair__a", "pair__b", "plain", "entry", "exit" }, bodyHeight: 0.85);
+            figure.Position = new Vector3(3, 2, 5);
+            using var vectors = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+                ProjectSettings.GlobalizePath("res://"), "../shared/test-vectors/clip_shift.json")));
+            var sources = new ClipLibrary(new FixtureSource(Path.Combine(fixtures, "pairs"), fixtures), _ => { });
+            foreach (var v in vectors.RootElement.GetProperty("cases").EnumerateArray())
+            {
+                var shift = ClipShift.Parse(v.GetProperty("shift_cm"));
+                using var listing = JsonDocument.Parse("{\"clips\":[{\"kind\":\"idle\",\"url\":\"/unused.fbx\",\"orientation\":{\"shift_cm\":"
+                    + v.GetProperty("shift_cm").GetRawText() + "}}]}");
+                sources.Parse(listing.RootElement);
+                Expect("C8 listing keeps source calibration", sources.Entries[0].HeightOffsets.Shift == shift, shift.ToString());
+                var world = v.GetProperty("world_m");
+                var expected = new Vector3((float)world[0].GetDouble(), 0, (float)world[1].GetDouble());
+                figure.HeightOffsetsOf = action => action == "plain" ? default : sources.Entries[0].HeightOffsets;
+                foreach (var lean in new[] { (0.0, 0.0), (90.0, 0.0), (0.0, 90.0), (35.0, -20.0) })
+                {
+                    figure.Lean = lean;
+                    double yaw = v.GetProperty("yaw_deg").GetDouble() * Math.PI / 180;
+                    figure.FaceTowards(new Vector3((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw)), snap: true);
+                    foreach (var mode in new[] { "solo", "moving", "a", "b" })
+                    {
+                        if (mode is "a" or "b") figure.PlayPair($"pair__{mode}", 0, false, true, "lie");
+                        else figure.Play("idle", mode == "moving", 0, "seat");
+                        for (int i = 0; i < 4; i++)
+                        {
+                            figure.ApplyRotation();
+                            var delta = body.GlobalPosition - figure.GlobalPosition;
+                            Expect("C8 horizontal correction: " + mode, (delta - expected).Length() < 1e-5, $"{delta} != {expected}");
+                        }
+                    }
+                }
+            }
+            figure.Lean = null;
+            figure.ApplyRotation();
+            figure.Play("plain");
+            Expect("C8 switching clears correction", body.Position.Length() < 1e-6, body.Position.ToString());
+            figure.FaceTowards(new Vector3(0, 0, 1), snap: true);
+            figure.HeightOffsetsOf = action => new ClipHeightOffsets {
+                Shift = action == "exit" ? new ClipShift(-10, 20) : new ClipShift(25, -40) };
+            var spec = System.Text.Json.Nodes.JsonNode.Parse("{\"kind\":\"entry\",\"height_cm\":170,\"access\":{\"y\":0,\"yaw\":0},\"anchor\":{\"y\":0.5},\"root_offset\":0}")!.AsObject();
+            Expect("C8 B1 entry plays", figure.PlayPropEntry(spec, 0), "entry refused");
+            var correction = body.GlobalPosition - figure.GlobalPosition;
+            Expect("C8 B1 entry keeps shift", Math.Abs(correction.X - .25) < 1e-5 && Math.Abs(correction.Z + .4) < 1e-5, correction.ToString());
+            Expect("C8 B1 exit plays", figure.PlayOwnPropDeparture("exit", 0, 0), "exit refused");
+            correction = body.GlobalPosition - figure.GlobalPosition;
+            Expect("C8 B1 exit replaces shift", Math.Abs(correction.X + .1) < 1e-5 && Math.Abs(correction.Z - .2) < 1e-5, correction.ToString());
+        }
+        finally { figure.Free(); }
     }
 
     /// <summary>A reload refreshes future plays only; repeated ticks never restart a completed one-shot.</summary>

@@ -127,7 +127,8 @@ export { pickVariant, pickModelVariant } from './types'
 
 export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureRootY,
   hipsTrackMedian, rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM } from './figure'
-export type { ClipHeightOffsetsCm } from './figure'
+export { clipShiftM } from './figure'
+export type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
 
 export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'
 export type { XZ } from './placeGeometry'

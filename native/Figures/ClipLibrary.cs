@@ -165,7 +165,11 @@ public sealed class ClipLibrary
             Entries.Add(new ClipSourceEntry(role.Length > 0 ? $"{kind}__{role}" : kind, Json.Str(c, "set"), url, loop, rootMotion)
             {
                 KeepFacing = rootMotion && rm.TryGetProperty("mode", out var facingMode) && facingMode.ValueKind == JsonValueKind.String && facingMode.GetString() == "keep",
-                HeightOffsets = c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default,
+                HeightOffsets = (c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default) with
+                {
+                    Shift = c.TryGetProperty("orientation", out var orientation) && orientation.ValueKind == JsonValueKind.Object
+                        && orientation.TryGetProperty("shift_cm", out var horizontal) ? ClipShift.Parse(horizontal) : default,
+                },
             });
         }
         Poses = FigureClips.ResolveMovementPoses(root.TryGetProperty("movement_poses", out var mp) ? mp : null);

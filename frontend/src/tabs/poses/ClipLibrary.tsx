@@ -32,12 +32,12 @@
  * Under the preview sit the ORIENTATION dials: turn, tilt and roll — and for
  * a pair the PARTNER B offset (forward / side / up), baked the same way.
  * "Apply orientation" BAKES these angles into the file. Height corrections
- * are saved separately per surface type in the sidecar, never in the FBX.
+ * and whole-clip horizontal shifts are saved in the sidecar, never in the FBX.
  * The import's own dial is gone by then and most mocap sources with it, so
  * this is the only way a clip that lies across the bed gets straightened.
  *
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
- *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?}
+ *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useMemo, useState } from 'react'
@@ -158,6 +158,7 @@ export function ClipLibrary({
   const [rollDeg, setRollDeg] = useState(0)
   // A pair's B half against A: [side, up, forward] centimetres, baked like the angles.
   const [partnerShift, setPartnerShift] = useState<[number, number, number]>([0, 0, 0])
+  const [clipShift, setClipShift] = useState<[number, number]>([0, 0])
   const [heightDraft, setHeightDraft] = useState<ClipHeightOffsetsCm>({})
   const [heightBusy, setHeightBusy] = useState(false)
   // Empty selects the ground height and draws only the grid.
@@ -263,6 +264,7 @@ export function ClipLibrary({
     setTiltDeg(0)
     setRollDeg(0)
     setPartnerShift([0, 0, 0])
+    setClipShift([0, 0])
     setHeightDraft({})
     setOrientError('')
     setOrientSeconds(null)
@@ -299,7 +301,8 @@ export function ClipLibrary({
   )
   const isPairTarget = orientTarget?.role === 'a'
   const shiftDirty = isPairTarget && partnerShift.some((v) => v !== 0)
-  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty
+  const clipShiftDirty = clipShift.some((v) => v !== 0)
+  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || clipShiftDirty
   // The baked angles live in the sidecar, so a clip without one has nowhere to
   // put them — the block says so instead of earning a 400 after Apply.
   const heightLocked = orientBusy || heightBusy
@@ -313,12 +316,14 @@ export function ClipLibrary({
       const res = await apiPost<{ seconds?: number }>(`${clipPath(orientTarget)}/orient`, {
         yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
         ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
+        ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
       })
       setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
       setYawDeg(0)
       setTiltDeg(0)
       setRollDeg(0)
       setPartnerShift([0, 0, 0])
+      setClipShift([0, 0])
       // The file keeps its URL, so the preview has to be rebuilt AND the
       // clip re-fetched — `seq` does both (component key + cache buster).
       setSeq((n) => n + 1)
@@ -329,7 +334,7 @@ export function ClipLibrary({
     } finally {
       setOrientBusy(false)
     }
-  }, [onReload, orientBusy, orientDirty, orientTarget, partnerShift, rollDeg, shiftDirty, tiltDeg, yawDeg])
+  }, [clipShift, clipShiftDirty, onReload, orientBusy, orientDirty, orientTarget, partnerShift, rollDeg, shiftDirty, tiltDeg, yawDeg])
 
   const saveHeights = useCallback(async () => {
     if (!orientTarget || heightBusy || !heightDirty) return
@@ -348,9 +353,8 @@ export function ClipLibrary({
     }
   }, [heightBusy, heightDirty, heightDraft, onReload, orientTarget])
 
-  /** What the FILE already carries — the import's dial plus every earlier
-   *  apply. A new angle is added to this, not to zero, so it is named. */
-  const bakedNote = useMemo(() => {
+  /** Saved angles and calibration, including every earlier apply. */
+  const savedNote = useMemo(() => {
     const o = orientTarget?.orientation
     if (!o) return ''
     const parts = [
@@ -358,6 +362,7 @@ export function ClipLibrary({
       o.tilt_deg ? `${t('tilt')} ${o.tilt_deg}°` : '',
       o.roll_deg ? `${t('roll')} ${o.roll_deg}°` : '',
       typeof o.floor_shift_cm === 'number' ? `${t('floor shift')} ${o.floor_shift_cm} cm` : '',
+      o.shift_cm?.some((v) => v !== 0) ? `${t('side / forward shift')} ${o.shift_cm[0]} / ${o.shift_cm[1]} cm` : '',
       o.partner_shift_cm
         ? `${t('partner B forward / side / up')} ${o.partner_shift_cm[2]} / ${o.partner_shift_cm[0]} / ${o.partner_shift_cm[1]} cm`
         : '',
@@ -872,6 +877,7 @@ export function ClipLibrary({
                   importTilt={tiltDeg}
                   importRoll={rollDeg}
                   importHeightM={heightCm / 100}
+                  shiftCm={clipShift}
                   partnerShiftM={isPairTarget
                     ? [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100]
                     : undefined}
@@ -898,7 +904,7 @@ export function ClipLibrary({
                     <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
                       <strong>{t('Orientation')}</strong>
                       <span className="ga-hint">
-                        {t('Apply orientation writes angles into the clip file. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.')}
+                        {t('Apply orientation writes angles into the clip file and saves horizontal shifts separately. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.')}
                       </span>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -968,6 +974,26 @@ export function ClipLibrary({
                         style={{ display: 'flex', flex: '1 1 200px' }}
                       />
                     </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      {([['Shift sideways', 0], ['Shift forward', 1]] as const).map(([label, axis]) => (
+                        <SliderInput
+                          key={label}
+                          label={t(label)}
+                          unit="cm"
+                          title={t('Moves the whole clip, including both pair halves. Positive sideways is the clip’s left (+X); positive forward is +Z. Applied horizontally at the place’s yaw, independently of turn, tilt and roll.')}
+                          min={-200}
+                          max={200}
+                          step={5}
+                          fineStep={1}
+                          value={clipShift[axis]}
+                          onChange={(cm) => setClipShift((prev) => axis === 0 ? [cm, prev[1]] : [prev[0], cm])}
+                          disabled={orientLocked}
+                          sliderWidth="auto"
+                          sliderStyle={{ flex: 1, minWidth: 70 }}
+                          style={{ display: 'flex', flex: '1 1 200px' }}
+                        />
+                      ))}
+                    </div>
                     {isPairTarget ? (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}
                         title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
@@ -1032,7 +1058,7 @@ export function ClipLibrary({
                     <div className="ga-form-hint">
                       {orientTarget.has_sidecar === false
                         ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
-                        : `${t('Already baked into the file')}: ${bakedNote}`}
+                        : `${t('Saved orientation and shifts')}: ${savedNote}`}
                     </div>
                     {orientError ? (
                       <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>

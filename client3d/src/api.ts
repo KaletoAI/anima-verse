@@ -572,6 +572,7 @@ export interface ApiClip {
    *  set (§ A8); missing = the listing predates it, which counts as a loop. */
   loop?: boolean;
   height_offsets_cm?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
+  orientation?: { shift_cm?: [number, number] | null };
   /** How the import treated the root's travel (the sidecar's
    *  `geometry.root_motion`): `strip` plays in place, `keep`/`foot_lock`
    *  carry the figure along `travel_m` (clip frame: +Z forward, +X the
