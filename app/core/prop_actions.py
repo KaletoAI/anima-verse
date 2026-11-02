@@ -448,7 +448,12 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
                                available_targets=targets, effects=action.get("effects", []),
                                # The body pose the action holds (ability "pose" only).
-                               pose_key=(action.get("pose_key") or "") if action.get("ability") == "pose" else ""))
+                               pose_key=(action.get("pose_key") or "") if action.get("ability") == "pose" else "",
+                               # Its pose closes with a finale clip — the HUD marks it.
+                               finale=any(engine.finale_kind(key) for key in
+                                          ([ph.get("pose_key") for ph in action.get("phases") or []]
+                                           if action.get("ability") == "combined"
+                                           else [action.get("pose_key")]) if isinstance(key, str))))
     # Capture the entire key before reading; a concurrent mutation must never
     # publish an older snapshot under a newer version. Lazy readers can write,
     # so recheck before publishing as well.

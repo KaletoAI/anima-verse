@@ -579,6 +579,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.discovery import get_discovery_range_m
+    from app.core import prop_action_engine as _finale_engine
     from app.core.exploration import explored_sig, point_explored, seen_cells
     from app.core.backdrop import get_backdrop
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
@@ -1035,6 +1036,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # client's seat heuristic).
             "interaction": _interaction_payload(name, _prof, _now_game,
                                                 _factor),
+            # A closing clip this person plays once inside its running
+            # action (§ A8c): the half, how far it is, then back to the
+            # action's own clip. Null almost always.
+            "finale": _finale_engine.finale_for(name),
             # The place the server seated the character on (plan-posen-
             # plaetze.md § 4): the slot's metre point, so a client draws the
             # figure THERE and never picks a seat itself; null when it holds

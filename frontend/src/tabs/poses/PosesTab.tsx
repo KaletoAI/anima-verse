@@ -132,6 +132,9 @@ interface Entry {
   places?: 1 | 2
   /** degrees the pair clip's frame turns against the marker facing */
   yaw_offset?: number
+  /** closing clip one participant plays once inside the running action
+   *  (`finale` of the worldmap row) — a pair kind for a pair pose */
+  finale_animation?: string
   /** which layer the entry lives in: the tracked catalog file, or this
    *  world's own layer in its world.db for entries that must never be
    *  committed */
@@ -551,6 +554,7 @@ export function PosesTab() {
               animation: draft.animation,
               solo: draft.solo,
               group: draft.group,
+              finale_animation: draft.finale_animation || '',
               // Pair fields only: a solo pose occupies one place and never
               // turns, and the server drops them again when solo is set.
               ...(draft.solo
@@ -1471,6 +1475,26 @@ export function PosesTab() {
                         {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
                       </div>
                     ) : null}
+                    <Field
+                      label={t('Finale clip')}
+                      hint={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. A pair pose needs a pair clip, a solo pose a solo clip. Offers with a finale are marked in the HUD.')}
+                    >
+                      <select
+                        className="ga-input"
+                        value={draft.finale_animation || ''}
+                        onChange={(e) => upd('finale_animation', e.target.value)}
+                      >
+                        <option value="">{t('— none —')}</option>
+                        {data.kinds
+                          .filter((k) => !!data.pair_kinds?.includes(k) === (draft.solo === false))
+                          .map((k) => <option key={k} value={k}>{k}</option>)}
+                        {draft.finale_animation && !data.kinds.includes(draft.finale_animation) ? (
+                          <option value={draft.finale_animation}>
+                            {draft.finale_animation} ({t('no clip')})
+                          </option>
+                        ) : null}
+                      </select>
+                    </Field>
                     <Field
                       label={t('Place type')}
                       hint={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}

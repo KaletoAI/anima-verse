@@ -2403,6 +2403,8 @@
     "Partner B side": "Partner B seitlich",
     "Partner B up": "Partner B hoch",
     "Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.": "Verschiebt Partner B gegenüber Partner A in der Clip-Datei — der Import-Versatz, nachträglich. Vor ist die Vorwärtsachse des Clips, seitlich positiv ist seine linke Seite.",
+    "Finale clip": "Abschluss-Clip",
+    "Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. A pair pose needs a pair clip, a solo pose a solo clip. Offers with a finale are marked in the HUD.": "Optionaler Abschluss-Clip: Eine beteiligte Person spielt ihn einmal innerhalb der laufenden Aktion und kehrt dann in den Clip der Pose zurück. Eine Paar-Pose braucht einen Paar-Clip, eine Solo-Pose einen Solo-Clip. Angebote mit Abschluss werden im HUD markiert.",
     "Too many failed login attempts. Try again later.": "Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
     "Username and password required": "Benutzername und Passwort erforderlich",
     "Not authenticated": "Nicht angemeldet",

@@ -889,6 +889,143 @@ def _held_pose(run):
     return definition["pose_key"]
 
 
+# ---------------------------------------------------------------- finale
+#
+# A FINALE is one participant's closing clip inside a running action: the
+# pose names it (catalog ``finale_animation``), a package decides WHEN
+# (``begin_finale``), the person plays it once and goes back to the action's
+# loop while the partner plays on untouched. It is an animation, so it runs
+# on the SYSTEM clock like every clip (a frozen world still finishes it), and
+# it lives in this process only: lost on a restart, it was a second long.
+
+#: Seconds past the clip's own length before ``advance`` drops a finale — a
+#: late tick must never cut it short, the payload already says how far it is.
+FINALE_GRACE_S = 0.5
+_finales = {}
+_finales_mutex = Lock()
+
+
+def finale_kind(pose_key: str, name: str = "", *, profile=None) -> str:
+    """The finale clip kind ``pose_key`` names, "" when it names none or the
+    clip is missing in the shape the pose needs: a pair pose needs a complete
+    pair, a solo pose a solo clip — for ``name``'s own figure when given (its
+    set chain, as ``animated_for``)."""
+    from app.core.animation_clips import pair_kinds
+    from app.core.pose_catalog import get_catalog
+    entry = get_catalog("pose").get(pose_key or "") or {}
+    kind = entry.get("finale_animation") or ""
+    if not kind:
+        return ""
+    if not entry.get("solo", True):
+        return kind if kind in pair_kinds() else ""
+    if kind in pair_kinds():
+        return ""
+    return kind if _solo_finale_clip(kind, name, profile) else ""
+
+
+def _solo_finale_clip(kind, name, profile):
+    """``{set, ...}`` of the solo clip ``name`` would play (any set without a
+    name), None when there is none."""
+    from app.core.animation_clips import clip_entries
+    if not name:
+        return next(({"set": e["set"]} for e in clip_entries() if e["kind"] == kind and not e["role"]), None)
+    from app.core.animation_sets import resolve_sets
+    from app.core.movement import clip_file_for
+    return clip_file_for(kind, resolve_sets(name, profile), free_only=False)
+
+
+def _finale_duration_s(kind, role, name):
+    """The clip's own length in seconds — the half this person plays."""
+    from app.core.animation_clips import clip_entries, clip_meta
+    if role:
+        entry = next((e for e in clip_entries() if e["kind"] == kind and e["role"] == role), None)
+        meta = clip_meta(kind, entry["set"]) if entry else None
+    else:
+        found = _solo_finale_clip(kind, name, None)
+        meta = clip_meta(kind, found["set"]) if found else None
+    try:
+        duration = float((meta or {}).get("duration_s") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return duration if math.isfinite(duration) and duration > 0 else 0.0
+
+
+def begin_finale(execution_id: str, name: str) -> dict:
+    """Starts ``name``'s finale in its running action — ``{ok, reason}``.
+
+    Refused: a run that is not active (or sleeps), a name that is no
+    participant, a held pose without a usable finale clip, and a finale of
+    that person still playing. Everyone in the run is told to refresh; the
+    ``prop_action.finale_started`` event fires after every lock is released.
+    """
+    from app.core.keyed_lock import _after_locks
+    from app.core.hooks import emit
+    if not isinstance(execution_id, str) or not isinstance(name, str):
+        return dict(ok=False, reason="invalid")
+    with _lock(execution_id):
+        run = store.get(execution_id)
+        if run is None or run["status"] != "active" or run["definition"]["ability"] == "sleep":
+            return dict(ok=False, reason="not_active")
+        if name not in [member for _, member in _members(run)]:
+            return dict(ok=False, reason="not_participant")
+        pose = _held_pose(run)
+        kind = finale_kind(pose, name)
+        if not kind:
+            return dict(ok=False, reason="no_finale")
+        role = (next((r for r, member in run["data"].get("clip_roles", {}).items() if member == name), "")
+                if run["partner"] else "")
+        duration = _finale_duration_s(kind, role, name)
+        if duration <= 0:
+            return dict(ok=False, reason="no_finale")
+        with _finales_mutex:
+            if _finale_live(_finales.get(name)):
+                return dict(ok=False, reason="finale_playing")
+            _finales[name] = dict(execution_id=execution_id, kind=kind, role=role or None,
+                                  pose_key=pose, started=utc_now(), duration_s=duration)
+        _notify(run)
+    _after_locks(lambda: emit("prop_action.finale_started", execution_id=execution_id,
+                              name=name, kind=kind, pose_key=pose))
+    return dict(ok=True, reason="")
+
+
+def _finale_live(finale) -> bool:
+    return bool(finale) and ((utc_now() - finale["started"]).total_seconds()
+                             < finale["duration_s"] + FINALE_GRACE_S)
+
+
+def finale_for(name: str) -> dict | None:
+    """The worldmap row's ``finale`` block of ``name`` while one plays:
+    ``{kind, role, elapsed_s, duration_s}`` — the half (``role`` a/b, None
+    for a solo clip) to play once from ``elapsed_s`` (SYSTEM seconds), then
+    back to the action's own clip."""
+    with _finales_mutex:
+        finale = _finales.get(name)
+        if not finale:
+            return None
+        elapsed = (utc_now() - finale["started"]).total_seconds()
+        if elapsed >= finale["duration_s"]:
+            return None
+        return dict(kind=finale["kind"], role=finale["role"],
+                    elapsed_s=round(max(0.0, elapsed), 3), duration_s=round(finale["duration_s"], 3))
+
+
+def _end_finales(execution_id=None, *, expired_only=False):
+    """Drops finales of one run (its end) or every expired one; the
+    ``prop_action.finale_done`` events fire after the locks."""
+    from app.core.keyed_lock import _after_locks
+    from app.core.hooks import emit
+    with _finales_mutex:
+        done = [(name, f) for name, f in _finales.items()
+                if (execution_id is None or f["execution_id"] == execution_id)
+                and not (expired_only and _finale_live(f))]
+        for name, _f in done:
+            _finales.pop(name, None)
+    for name, finale in done:
+        _after_locks(lambda name=name, finale=finale: emit(
+            "prop_action.finale_done", execution_id=finale["execution_id"], name=name,
+            kind=finale["kind"], pose_key=finale["pose_key"]))
+
+
 def _narrate(run, key, *, literal=False, **fmt):
     """One storyteller line in the run's room, in the actor's language, after
     every lock is released. The room has to SEE a figure sit down or get up —
@@ -974,6 +1111,7 @@ def _finish(run, status, reason, *, keep_seated=""):
             phases.append("success")
         run.update(status=status, reason=reason)
         run["data"]["cleanup_pending"] = True
+        _end_finales(run["execution_id"])
         _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
         _cleanup(run, keep_seated=keep_seated)
         _narrate_finish(run, before, status, reason, keep_seated)
@@ -1484,8 +1622,16 @@ def _resume_sleep(run):
 
 
 def advance(now: GameTime) -> int:
+    """One scheduler step over every live run. Besides the run lifecycle it
+    drops expired finales and, after every lock, fires
+    ``prop_action.active(execution_id, members, pose_key, delta_game_s)`` for
+    each run that spent online game time active — the beat a package counts
+    on (a frozen world and offline time give none)."""
+    from app.core.keyed_lock import _after_locks
+    from app.core.hooks import emit
     register_owner()
     advanced = 0
+    beats = []
     for pending in store.pending_cleanup():
         with _lock(pending["execution_id"]):
             _cleanup(pending)
@@ -1590,9 +1736,16 @@ def advance(now: GameTime) -> int:
                     phase = next(p for p in run["definition"]["phases"] if p["id"] == run["phase"])
                     runtime = {run["actor"]: {"pose_key": phase["pose_key"]}}
                 _commit(run, ("active",), runtime=runtime, now=now)
+                if delta > 0:
+                    beats.append(dict(execution_id=run["execution_id"],
+                                      members=[name for _, name in _members(run)],
+                                      pose_key=_held_pose(run), delta_game_s=delta))
             elif run["status"] not in store.TERMINAL:
                 _save(run)
             advanced += 1
+    _end_finales(expired_only=True)
+    for beat in beats:
+        _after_locks(lambda beat=beat: emit("prop_action.active", **beat))
     return advanced
 
 
@@ -1708,7 +1861,12 @@ def state_for(actor: str) -> dict:
                    partner_consent=("react" if _reacts(run) else "ask") if run["partner"] else "",
                    reaction=(run["data"].get("reaction") or {}).get("state", ""),
                    can_resist=(not terminal and actor == run["partner"] and _reacts(run)
-                               and run["status"] == "approaching"))
+                               and run["status"] == "approaching"),
+                   # The held pose closes with a finale clip, and the gauges a
+                   # package fills toward it (``prop_action.meters`` provider:
+                   # ``[{name, value 0..100, label}]`` per participant).
+                   has_finale=bool(finale_kind(_held_pose(run))),
+                   meters=_meters(run) if not terminal and not pending else [])
         if terminal:
             row["motion"] = run["data"].get("exit_motions", {}).get(actor)
             row["effects"] = run["data"].get("effect_results", {})
@@ -1719,6 +1877,31 @@ def state_for(actor: str) -> dict:
             row["motion"] = motion_for(actor, run)
             result["current"].append(row)
     return result
+
+
+def _meters(run):
+    """The gauges of a running action, from the package that keeps them;
+    [] without one or when it fails (a gauge never breaks the HUD row)."""
+    from app.core.hooks import get_provider
+    provider = get_provider("prop_action.meters")
+    if provider is None:
+        return []
+    try:
+        rows = provider(execution_id=run["execution_id"], members=[name for _, name in _members(run)],
+                        pose_key=_held_pose(run))
+    except Exception as exc:
+        logger.warning("prop_action.meters provider failed: %s", exc)
+        return []
+    out = []
+    for row in rows or []:
+        try:
+            value = float(row["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(row.get("name"), str) and math.isfinite(value):
+            out.append(dict(name=row["name"], value=round(min(100.0, max(0.0, value)), 1),
+                            label=str(row.get("label") or "")))
+    return out
 
 
 def _reaction_request(partner):

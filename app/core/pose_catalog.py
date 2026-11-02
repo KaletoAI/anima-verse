@@ -365,6 +365,10 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
                                   else float(entry.get("yaw_offset") or 0.0))
             norm["_stray_pair_fields"] = solo and ("places" in entry
                                                    or "yaw_offset" in entry)
+            # The closing clip a participant plays once before going back to
+            # the pose's own loop (prop_action_engine.begin_finale) — a pair
+            # kind for a pair pose, a solo kind for a solo one.
+            norm["finale_animation"] = str(entry.get("finale_animation") or "").strip().lower()
         out[str(key).strip().lower()] = norm
     return out
 
@@ -625,6 +629,10 @@ def validate_catalog(axis: str) -> List[str]:
             problems.append(f"{axis}/{key}: empty prompt")
         if axis == "pose" and not entry["animation"]:
             problems.append(f"{axis}/{key}: missing animation kind")
+        finale = entry.get("finale_animation") or ""
+        if axis == "pose" and finale and pairs and (finale in pairs) == entry["solo"]:
+            problems.append(f"{axis}/{key}: finale '{finale}' must be a "
+                            f"{'solo' if entry['solo'] else 'pair'} animation like the pose")
         if axis == "pose" and entry["animation"] in pairs and entry["solo"]:
             # A pair clip has no solo half — the pose needs a partner.
             problems.append(f"{axis}/{key}: '{entry['animation']}' is a pair "

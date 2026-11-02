@@ -1074,7 +1074,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
-`interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
+`interaction` (§ A8a), `finale` (§ A8c), `place` (§ A8a), `avatar_url`,
 **`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`.
 
 | Feld | Typ | Bedeutung |
@@ -2740,6 +2740,29 @@ Bekannte Grenze des Piloten: Handkontakt ist nicht garantiert — die Proportion
 des Mixamo-Skeletts sind nicht die der Schauspieler (Handschlag: Hände ~25 cm
 statt 11 cm auseinander); Körpergrößen-Unterschiede (`height_cm`) skalieren die
 Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
+
+## A8c. Abschluss-Clip einer laufenden Aktion (`finale`)
+
+Eine Pose darf im Katalog einen **Abschluss-Clip** nennen (`finale_animation`, Clip-Kind): bei einer
+Paar-Pose ein vollständiges Paar (§ A8a), bei einer Solo-Pose ein Solo-Clip. WANN er spielt, entscheidet
+nicht der Client und nicht der Kern, sondern ein Paket über `prop_action_engine.begin_finale(execution_id,
+name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt dann
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `finale` | `{kind, role, elapsed_s, duration_s}` \| `null` | `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`/`b`, `null` bei Solo); `elapsed_s` = wie weit er läuft, `duration_s` = Cliplänge, beides **Systemsekunden** (Animation läuft in Echtzeit wie jeder Clip, auch in einer eingefrorenen Welt) |
+
+Der Client spielt die Hälfte `role` des Paars `kind` (bzw. den Solo-Clip, aufgelöst über die Set-Kette der
+Figur) **einmal** ab `elapsed_s` am Anker der laufenden Aktion (`interaction.anchor` bzw. `place`) und kehrt
+danach in den Clip der Aktion zurück, dessen Phase aus `interaction.elapsed_s` unverändert weiterläuft. Der
+Partner bleibt in seiner Schleife — der Abschluss gehört nur einer Person. Steht das Feld nicht (mehr) da,
+endet ein noch laufender Abschluss sofort. Der Server hält den Abschluss nur im Prozess (Neustart = weg) und
+entfernt ihn nach `duration_s` + 0,5 s oder mit dem Ende der Aktion.
+
+`GET /play/prop-actions/state` liefert pro laufender Zeile zusätzlich `has_finale` (die gehaltene Pose hat
+einen Abschluss-Clip) und `meters: [{name, value 0..100, label}]` (Füllstände eines Pakets, Provider
+`prop_action.meters`); ein Angebot trägt `finale` (die Pose der Aktion hat einen Abschluss-Clip) — das HUD
+markiert es.
 
 ## A9. Terrain & Oberflächen (AV3D-13 v2)
 

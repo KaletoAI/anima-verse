@@ -114,6 +114,18 @@ def _places(raw: Any) -> int:
         raise HTTPException(status_code=400, detail="places must be 1 or 2")
 
 
+def _finale_animation(raw: Any) -> str:
+    """A pose's optional closing clip kind — "" clears it. The catalog check
+    (``validate_catalog``) reports a kind of the wrong shape; a missing file
+    simply offers no finale."""
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="finale_animation must be a clip kind")
+    value = (raw or "").strip().lower()
+    if len(value) > 120 or any(c in value for c in "/\\"):
+        raise HTTPException(status_code=400, detail="finale_animation must be a clip kind")
+    return value
+
+
 def _yaw_offset(raw: Any) -> float:
     """Degrees the pair clip's frame turns against the marker facing."""
     try:
@@ -306,6 +318,7 @@ def list_entries(axis: str = Query("pose"),
             row["group"] = entry.get("group", "")
             row["places"] = pose_catalog.pose_places(key)
             row["yaw_offset"] = pose_catalog.pose_yaw_offset(key)
+            row["finale_animation"] = entry.get("finale_animation", "")
             # Whether POST /poses/{key}/rename accepts this key — the editor
             # hides the button for the keys the server code names literally.
             row["renamable"] = key not in CODE_NAMED_POSE_KEYS
@@ -382,6 +395,9 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                 if not entry["solo"]:
                     entry["places"] = _places(body.get("places"))
                     entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
+                finale = _finale_animation(body.get("finale_animation"))
+                if finale:
+                    entry["finale_animation"] = finale
             data["entries"][key] = entry
             write_store(axis, data, store)
         return {"status": "success", "key": key, "axis": axis, "store": store}
@@ -567,6 +583,12 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                 entry["places"] = _places(body["places"])
             if "yaw_offset" in body and axis == "pose":
                 entry["yaw_offset"] = _yaw_offset(body["yaw_offset"])
+            if "finale_animation" in body and axis == "pose":
+                finale = _finale_animation(body["finale_animation"])
+                if finale:
+                    entry["finale_animation"] = finale
+                else:
+                    entry.pop("finale_animation", None)
             if axis == "pose" and entry.get("solo", True):
                 # A solo pose occupies exactly one place and never turns — leaving
                 # the pair fields behind would be a stray the catalog reports.
