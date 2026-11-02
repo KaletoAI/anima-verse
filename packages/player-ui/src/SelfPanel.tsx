@@ -135,7 +135,7 @@ export function SelfPanel() {
     try { await apiPost('/play/self/activity', { activity: activityDraft.trim() }) }
     catch (e) {
       if (e instanceof ApiError && e.detail === 'pair_pose') {
-        setActivityNote(t('That takes two — ask them with “Together…” on their card.'))
+        setActivityNote(t('That takes two — use the action chips on their card.'))
       }
     }
     await refresh()

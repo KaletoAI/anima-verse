@@ -7,12 +7,12 @@ import { invitePair } from './pairInteractions'
 import { StatFill } from './StatBoost'
 import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
+import { HoverHint } from './HoverHint'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
 import { PropActionsPanel } from './PropActionsPanel'
@@ -136,77 +136,6 @@ function StatBars({ c }: { c: CharState }) {
   )
 }
 
-/** The "do something together" popover of ONE card.
- *
- *  Rendered into document.body: the panel lives in a scrolling host panel,
- *  where an absolutely positioned child is clipped away. Anchored to the
- *  button that opened it.
- */
-function PairMenu({ anchorEl, poses, onPick, onClose, t }: {
-  anchorEl: HTMLElement
-  poses: PairPose[]
-  onPick: (key: string) => void
-  onClose: () => void
-  t: (s: string) => string
-}) {
-  const box = useRef<HTMLDivElement | null>(null)
-  // Follows the button rather than freezing where it was opened: the panel
-  // is inside a resizable grid item, and a menu pinned to a stale rectangle
-  // drifts away from the card it belongs to.
-  const [rect, setRect] = useState<DOMRect>(() => anchorEl.getBoundingClientRect())
-  useEffect(() => {
-    const reposition = () => setRect(anchorEl.getBoundingClientRect())
-    const away = (e: Event) => {
-      // A scroll INSIDE the menu is not a scroll away from it — the list
-      // has its own overflow, and closing on it would make it unscrollable.
-      if (box.current && e.target instanceof Node && box.current.contains(e.target)) {
-        return
-      }
-      onClose()
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('mousedown', onClose)
-    window.addEventListener('scroll', away, true)
-    window.addEventListener('resize', reposition)
-    window.addEventListener('keydown', onKey)
-    box.current?.querySelector('button')?.focus()
-    return () => {
-      window.removeEventListener('mousedown', onClose)
-      window.removeEventListener('scroll', away, true)
-      window.removeEventListener('resize', reposition)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [anchorEl, onClose])
-  return createPortal(
-    <div ref={box} role="menu" onMouseDown={(e) => e.stopPropagation()} style={{
-      position: 'fixed', zIndex: 4000,
-      top: Math.min(rect.bottom + 4, window.innerHeight - 180),
-      left: Math.min(rect.left, window.innerWidth - 200),
-      minWidth: 160, maxHeight: 220, overflowY: 'auto', padding: 4,
-      borderRadius: 8, background: 'var(--panel, #161b22)',
-      border: '1px solid var(--border, #30363d)',
-      boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
-    }}>
-      {poses.length === 0 && (
-        <div style={{ padding: '6px 8px', opacity: 0.6, fontSize: '0.78em' }}>
-          {t('No two-person actions available.')}
-        </div>
-      )}
-      {poses.map((p) => (
-        <button key={p.key} role="menuitem" onClick={() => onPick(p.key)} style={{
-          display: 'block', width: '100%', textAlign: 'left', padding: '5px 8px',
-          background: 'none', border: 'none', color: 'inherit', cursor: 'pointer',
-          borderRadius: 5, fontSize: '0.82em',
-        }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}>
-          {p.label || p.key}
-        </button>
-      ))}
-    </div>,
-    document.body)
-}
-
 export function OthersPanel() {
   const { t } = useI18n()
   const enlarge = useEnlarge()
@@ -215,26 +144,18 @@ export function OthersPanel() {
   useEffect(() => onPropActionChanged(() => { void refresh() }), [refresh])
   // The world's two-person actions — fetched once; the clip library does not
   // change while a scene is being played.
-  const [pairPoses, setPairPoses] = useState<PairPose[] | null>(null)
-  const [menu, setMenu] = useState<{ name: string; el: HTMLElement } | null>(null)
+  const [pairPoses, setPairPoses] = useState<PairPose[]>([])
   const [note, setNote] = useState('')
-
-  const openMenu = useCallback((name: string, el: HTMLElement) => {
-    setNote('')
-    setMenu({ name, el })
-    if (pairPoses === null) {
-      apiGet<{ poses: PairPose[] }>('/play/interact/options')
-        .then((d) => setPairPoses(d.poses || []))
-        .catch(() => setPairPoses([]))
-    }
-  }, [pairPoses])
-
-  // Stable identity: PairMenu keys its window listeners on this, and a new
-  // function each render would re-register them on every 5 s poll.
-  const closeMenu = useCallback(() => setMenu(null), [])
+  useEffect(() => {
+    let cancelled = false
+    apiGet<{ poses: PairPose[] }>('/play/interact/options')
+      .then((d) => { if (!cancelled) setPairPoses(d.poses || []) })
+      .catch(() => { if (!cancelled) setPairPoses([]) })
+    return () => { cancelled = true }
+  }, [])
 
   const propose = useCallback(async (name: string, pose: string) => {
-    setMenu(null)
+    setNote('')
     try { await invitePair(name, pose) }
     catch (e) {
       // 409 carries the engine's own reason ("Kira is in another room") —
@@ -289,28 +210,26 @@ export function OthersPanel() {
             </div>
           )}
           <StatBars c={c} />
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {c.interaction?.partner === data.avatar ? (
-              <button onClick={stop} className="player-chip">{t('Stop')}</button>
-            ) : (
-              <button className="player-chip"
-                disabled={!!c.interaction}
-                title={c.interaction ? t('Busy with someone else') : t('Ask to do something together')}
-                onClick={(e) => openMenu(c.name, e.currentTarget)}>
-                {t('Together…')}
-              </button>
+          <PropActionsPanel partner={c.name} leading={c.interaction?.partner === data.avatar || pairPoses.length > 0 ? <>
+            {c.interaction?.partner === data.avatar && (
+              <button type="button" onClick={stop} className="player-chip">{t('Stop')}</button>
             )}
-          </div>
-          <PropActionsPanel partner={c.name} />
+            {pairPoses.map((pose) => {
+              const busy = !!c.interaction && c.interaction.partner !== data.avatar
+              return <HoverHint key={pose.key} text={busy ? t('Busy with someone else') : undefined}>
+                <button type="button" className="player-chip" disabled={busy}
+                  aria-disabled={busy ? true : undefined}
+                  style={{ pointerEvents: busy ? 'none' : undefined }}
+                  onClick={() => propose(c.name, pose.key)}>
+                  {pose.label || pose.key}
+                </button>
+              </HoverHint>
+            })}
+          </> : undefined} />
         </div>
       ))}
       {note && (
         <div style={{ flex: '1 1 100%', fontSize: '0.76em', color: '#ff9b9b' }}>{note}</div>
-      )}
-      {menu && (
-        <PairMenu anchorEl={menu.el} poses={pairPoses || []} t={t}
-          onClose={closeMenu}
-          onPick={(key) => propose(menu.name, key)} />
       )}
     </div>
   )

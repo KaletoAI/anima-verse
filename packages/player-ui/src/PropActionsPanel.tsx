@@ -43,12 +43,14 @@ function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] 
  *  action always opens its row: every piece there offers "Ask" (the partner
  *  consents first) and "Just do it" (it starts, the partner reacts) — the
  *  requester chooses each time, no action is authored twice. */
-export function PropActionOffers({ offers, partner, busy = false, nameProps = true, onPick }: {
+export function PropActionOffers({ offers, partner, busy = false, nameProps = true, leading, onPick }: {
   offers: PropActionOffer[]
   partner?: string
   busy?: boolean
   /** Off where the menu already belongs to one piece (the canvas place menu). */
   nameProps?: boolean
+  /** Standing actions and Stop share the first chip row on a character card. */
+  leading?: ReactNode
   onPick: (offer: PropActionOffer, partner?: string, consent?: PropActionConsent) => void
 }) {
   const { t } = useI18n()
@@ -91,6 +93,7 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
 
   return <div className="player-prop-offers" style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+      {leading}
       {solo.map(chip)}
       {[...partners].map(([name, pairs]) => {
         const usable = pairs.some(group => group.usable)
@@ -195,10 +198,11 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
 }
 
 /** Mounted unchanged in web frontend, browser HUD iframe and native HUD iframe. */
-export function PropActionsPanel({ partner, showOffers = true, showState = true }: {
+export function PropActionsPanel({ partner, showOffers = true, showState = true, leading }: {
   partner?: string
   showOffers?: boolean
   showState?: boolean
+  leading?: ReactNode
 }) {
   const { t } = useI18n()
   const { data, error, refresh } = usePropActions()
@@ -220,14 +224,15 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true 
     ['current', ownRuns(data.state.current)],
   ] as const : []
   // Finished runs are not listed: the room's storyteller line already told the player.
-  if (!note && !error && !hasOffers && !groups.some(([, runs]) => runs.length)) return null
-  return <section aria-label={t('Furniture actions')} style={{ flex: '0 0 auto', maxHeight: 230, overflow: 'auto', padding: 6, fontSize: '0.85em', borderTop: '1px solid var(--border, #30363d)' }}>
-    <strong>{t('Furniture actions')}</strong>
+  if (!note && !error && !leading && !hasOffers && !groups.some(([, runs]) => runs.length)) return null
+  const heading = leading ? t('Actions') : t('Furniture actions')
+  return <section aria-label={heading} style={{ flex: '0 0 auto', maxHeight: 230, overflow: 'auto', padding: 6, fontSize: '0.85em', borderTop: '1px solid var(--border, #30363d)' }}>
+    <strong>{heading}</strong>
     {error != null && <div role="alert">{error instanceof Error ? error.message : String(error)}</div>}
     {note && <div role="alert">{note}</div>}
     {groups.map(([kind, runs]) => runs.map(run => <PropActionExecutionRow key={`${kind}:${run.execution_id}`}
       run={run} kind={kind} busy={busy} perform={operation => { void perform(operation) }} />))}
-    {showOffers && data && <PropActionOffers offers={data.offers} partner={partner} busy={busy || error != null}
+    {showOffers && (data || leading) && <PropActionOffers offers={data?.offers ?? []} partner={partner} busy={busy || error != null} leading={leading}
       onPick={(offer, selectedPartner, consent) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision, selectedPartner, consent)) }} />}
   </section>
 }
