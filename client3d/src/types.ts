@@ -1,4 +1,5 @@
 import type { PropActionOffer } from '@anima/player-ui';
+import type { FinaleBlock } from './game/finaleClip';
 export type {
   PropActionTarget, PropActionOffer, PropActionChoice, PropActionState,
   PropActionExecution, PropActionResult,
@@ -291,6 +292,9 @@ export interface MapCharacter {
   prop_action_entry?: MapPropActionEntry | null;
   /** running PAIR interaction (§ A8a); null/absent when there is none */
   interaction?: MapInteraction | null;
+  /** this character's closing clip inside its running action (§ A8c):
+   *  played ONCE per `id`, from the start, then back to the action's clip */
+  finale?: FinaleBlock | null;
   /** The place the SERVER seated this character on (plan-posen-plaetze.md
    *  § 4): the client draws the figure on that slot (looked up by `id` in
    *  the room's markers) and chooses nothing. `x`/`z` are WORLD metres from

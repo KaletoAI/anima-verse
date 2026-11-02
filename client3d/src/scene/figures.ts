@@ -2682,6 +2682,11 @@ export class Figure {
     this.targetYaw = yaw;
   }
 
+  /** Is the clip `kind` bound on this rig, exactly (no stand-in)? */
+  hasClip(kind: string): boolean {
+    return this.actions.has(kind);
+  }
+
   /** Play the half of a PAIR clip (§ A8a). `t` is the clip time in REAL
    *  seconds — the phase `game/pairClip.ts` derived from the server's
    *  game-clock numbers: the clip always runs at its authored speed (E1), and

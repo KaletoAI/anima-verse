@@ -7,6 +7,7 @@ import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types'
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { pairBlend, BLEND_S, type PairPose } from '../game/pairBlend';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
+import { adoptFinale, stepFinale, type FinalePlay } from '../game/finaleClip';
 import { handBackYaw, entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
@@ -123,6 +124,10 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
 
 interface Npc {
   name: string;
+  /** the closing clip this figure plays once inside its action (§ A8c,
+   *  `game/finaleClip.ts`); `finaleSeen` = the last finale id taken over */
+  finale: FinalePlay | null;
+  finaleSeen: string;
   /** AV3D-6: the animation category the server delivered (authoritative) */
   animation?: string;
   surfaceGroup?: string;
@@ -879,6 +884,10 @@ export class NpcManager {
         // before it existed — `setPlayerDriven` found nothing to write then.
         if (st.char.name === this.playerDriven && !this.serverDriven.has(st.char.name)) this.takeOver(npc);
       }
+      // A finale (§ A8c) is taken over once per id, whatever else this row
+      // decides below; the action ending (no pair, no place) ends it.
+      ({ play: npc.finale, seen: npc.finaleSeen } = adoptFinale(npc.finale, npc.finaleSeen,
+        st.char.finale, !!(st.char.interaction || st.char.place)));
       // Player-driven figure (E3-T3): WHERE it stands belongs to the frame
       // hook in main.ts — pos/via/route/scale/face/lean/hidden are all
       // placement decisions of the server view and would fight the input at
@@ -1175,7 +1184,7 @@ export class NpcManager {
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
-      travelling: false, reckon: null, interaction: null, entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
+      travelling: false, reckon: null, interaction: null, finale: null, finaleSeen: '', entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       surfaceGroup: st.surfaceGroup,
       travelLine: null, travelKey: '',
@@ -1335,17 +1344,34 @@ export class NpcManager {
     // the CLIP clock: the frame's real seconds, unscaled — a frozen world
     // (rate 0) adds nothing and the clip stands where it is.
     if (it.rate > 0) it.clipT += dt;
-    const { phase } = pairClipPhase({
+    const { phase: loopPhase } = pairClipPhase({
       elapsedGameS: null, rate: it.rate, loop: it.loop,
       clipDurationS: it.clipDuration, localClipT: it.clipT,
     });
-    const root = this.figures.pairRootAt(it.clip, phase);
+    // This person's finale (§ A8c): its own half of the closing pair at the
+    // same anchor, once; the loop phase above keeps counting under it. A half
+    // this rig lacks drops the finale, never the action.
+    let clip = it.clip;
+    let phase = loopPhase;
+    let loop = it.loop;
+    if (npc.finale?.role) {
+      const step = stepFinale(npc.finale, dt, it.rate <= 0);
+      npc.finale = step.play;
+      if (step.clip && this.figures.pairRootAt(step.clip, step.t) && npc.figure.hasClip(step.clip)) {
+        clip = step.clip;
+        phase = step.t;
+        loop = false;
+      } else {
+        npc.finale = null;
+      }
+    }
+    const root = this.figures.pairRootAt(clip, phase);
     if (!root) return false;
     // `playPair` also ends a bridge that was still running (getting up out of
     // bed when the handshake came): its height, turn and travel let go with it.
     const seat = !ownAnchor && it.anchor.placeId
       ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
-    if (!npc.figure.playPair(it.clip, phase, it.rate <= 0, it.loop, seat?.group)) return false;
+    if (!npc.figure.playPair(clip, phase, it.rate <= 0, loop, seat?.group)) return false;
     // A bridge travel nobody took yet has no meaning here: the ANCHOR places
     // the figure, absolutely, every frame — kept on the instance it would
     // stand the body beside its anchor for the whole interaction.
@@ -1392,6 +1418,8 @@ export class NpcManager {
     committedClip?: string;
     confirmedState?: NpcState;
     frozenPoint?: ReturnType<typeof sampleMotion>;
+    /** a solo finale (§ A8c) holds the seat's clip right now */
+    finaleOn?: boolean;
     entryPausedAt?: number;
     cancel?: { departure: PropActionDeparture; done: () => void };
   }>();
@@ -1584,6 +1612,22 @@ export class NpcManager {
       let paired = false;
       if (sample.phase === 'arrived' && !motion.cancel && motion.confirmedState) {
         if (npc.interaction) paired = this.tickInteraction(npc, dt, labelVisible, false, plan.anchor);
+      }
+      // A solo finale (§ A8c) of the seated own figure: its held clip is a
+      // seeked one here (`finishPropEntry`), so the finale is seeked as well
+      // and the held clip comes back from its start once it is over.
+      if (!paired && sample.phase === 'arrived' && !motion.cancel && npc.figure) {
+        const step = npc.finale && !npc.finale.role ? stepFinale(npc.finale, dt, false) : null;
+        if (step) npc.finale = step.play;
+        if (step?.clip && npc.figure.hasClip(step.clip) && npc.figure.playPair(step.clip, step.t, false, false)) {
+          motion.finaleOn = true;
+        } else {
+          if (step) npc.finale = null;
+          if (motion.finaleOn) {
+            motion.finaleOn = false;
+            npc.figure.playPair(heldClip, 0, false, true);
+          }
+        }
       }
       if (!paired) npc.figure?.update(dt, { frozen: sample.phase === 'frozen' });
     }
@@ -2092,9 +2136,18 @@ export class NpcManager {
         // inside a built place like the clips are (`groundSink`). It is the
         // very number the root was raised with above, which is what makes the
         // pair meet: root − sink is the surface the body rests on.
+        // A solo finale (§ A8c) replaces the place pose's clip once; the
+        // pose's own clip comes back the frame it is over.
+        let finaleClip: string | null = null;
+        if (npc.finale && !npc.finale.role) {
+          const step = stepFinale(npc.finale, dt, frozen);
+          npc.finale = step.play;
+          if (step.clip && !moving && npc.figure.hasClip(step.clip)) finaleClip = step.clip;
+          else npc.finale = null;
+        }
         this.playLifting(npc,
           moving ? moveClip(standGm.movement, !reckoning && dist > RUN_DISTANCE)
-            : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY,
+            : finaleClip ?? standingClip, moving || !!standIdle, standSink, rootYBefore, goalY,
           moving || standIdle ? 'ground' : npc.surfaceGroup);
         npc.figure.update(dt, { frozen });
       } else if (npc.sprite) {
