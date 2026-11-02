@@ -5,6 +5,7 @@ explicitly picked backend or on the chain of the image-routing occasion, and
 overwrites the file (or writes a new one next to it).
 """
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -72,12 +73,12 @@ def _save_analysis(output_path: str, analysis: str, character_name: str) -> None
     from pathlib import Path as _Path
     filename = _Path(output_path).name
 
-    # Instagram-Bild?
+    # Instagram image?
     if "/instagram/" in output_path:
         try:
             from app.models.instagram import (
                 load_image_meta, save_image_meta, load_feed, save_feed)
-            # Separate Meta-Datei aktualisieren
+            # Update the separate metadata record.
             meta = load_image_meta(filename) or {}
             meta["image_analysis"] = analysis
             save_image_meta(filename, meta)
@@ -94,7 +95,7 @@ def _save_analysis(output_path: str, analysis: str, character_name: str) -> None
             logger.warning("Saving the Instagram meta failed: %s", e)
         return
 
-    # Character-Bild
+    # Character image
     if character_name:
         try:
             from app.models.character import add_character_image_metadata
@@ -197,8 +198,8 @@ def regenerate_image(character_name: str,
             reference unless the dialog picked another room
             (app/imagegen/source_refs.py). Persons the dialog adds resolve
             live. False for a NEW render (scene photo, portrait).
-        negative_prompt_extra: mandatory exclusions merged once with the selected
-            negative or use-case default, after each backend resolves its style.
+        negative_prompt_extra: exclusions merged once with the selected negative
+            or use-case default, only for backends with a negative input.
 
     Returns:
         (success, final_prompt, actual_output_path) — final_prompt is the
@@ -258,8 +259,9 @@ def regenerate_image(character_name: str,
     # 4. Person detection (backend-independent) ALWAYS runs when
     # character_name is present — the external post-processing needs
     # appearances to resolve the persons.
-    screenshot_subjects = (occasion == "photo" and use_source_as_reference
-                           and character_names is not None)
+    screenshot_photo = (occasion == "photo" and use_source_as_reference
+                        and bool(source_image_path))
+    screenshot_subjects = screenshot_photo and character_names is not None
     appearances: list = []
     if character_name:
         try:
@@ -357,6 +359,16 @@ def regenerate_image(character_name: str,
                     warn_dropped_loras(b.name, dropped, character_name)
                 params["lora_inputs"] = kept
         face_refs: Dict[str, Any] = {"reference_images": {}, "has_reference_slots": False}
+        _ref_slots = getattr(b, "ref_slot_count", 0)
+        if screenshot_photo:
+            # Reserve composition before resolving people. Even a failed person
+            # lookup must never evict the screenshot or replace it with a room.
+            if _ref_slots > 0:
+                face_refs = {"reference_images": {"input_reference_image_1": source_image_path},
+                             "has_reference_slots": True}
+            else:
+                logger.info("Screenshot photo: backend %s has no reference slots — text-only", b.name)
+            params["reference_images"] = face_refs["reference_images"]
         if character_name:
             try:
                 from app.core.prompt_builder import PromptBuilder, PromptVariables
@@ -373,11 +385,16 @@ def regenerate_image(character_name: str,
                 for idx, p in enumerate(persons, 1):
                     # A person of the source image keeps the reference it was
                     # rendered with; anyone else resolves live.
+                    # Avatars are characters too. The is_user shortcut uses a
+                    # profile image; photos need the same exact-outfit resolver
+                    # as NPCs, without altering the normal slot priorities.
+                    ref_person = replace(p, is_user=False) if occasion == "photo" and p.is_user else p
                     ref = (_source_refs["persons"].get(p.name)
-                           or _regen_builder._resolve_person_ref_image(p))
+                           or _regen_builder._resolve_person_ref_image(ref_person))
                     if ref:
                         _regen_pv.ref_images[idx] = ref
-                _regen_builder._collect_location(_regen_pv)
+                if not screenshot_photo:
+                    _regen_builder._collect_location(_regen_pv)
 
                 # Room override: inject the background image for the chosen room.
                 # Set BEFORE resolve_reference_slots so the room lands in its
@@ -389,7 +406,10 @@ def regenerate_image(character_name: str,
                 # generated purely from the text prompt. Otherwise the user
                 # would not notice the room change in the dialog because the
                 # previously chosen default image comes back again.
-                if _source_refs["room"] and not _room_changed:
+                if screenshot_photo:
+                    # Composition and room geometry already come from slot 1.
+                    _regen_pv.ref_image_room = ""
+                elif _source_refs["room"] and not _room_changed:
                     _regen_pv.ref_image_room = _source_refs["room"]
                     logger.info("Room reference of the source image: %s",
                                 Path(_source_refs["room"]).name)
@@ -427,13 +447,23 @@ def regenerate_image(character_name: str,
                 if not use_room:
                     _regen_pv.ref_image_room = ""
 
-                _ref_slots = getattr(b, "ref_slot_count", 0)
-                face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_ref_slots)
+                if screenshot_photo:
+                    candidates = [(p.name, _regen_pv.ref_images[idx])
+                                  for idx, p in enumerate(persons, 1)
+                                  if idx in _regen_pv.ref_images]
+                    budget = max(0, _ref_slots - 1)
+                    for slot, (_, ref) in enumerate(candidates[:budget], 2):
+                        face_refs["reference_images"][f"input_reference_image_{slot}"] = ref
+                    if _ref_slots > 0 and len(candidates) > budget:
+                        logger.info("Screenshot photo: dropped person references (max %d slots): %s",
+                                    _ref_slots, ", ".join(name for name, _ in candidates[budget:]))
+                else:
+                    face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_ref_slots)
 
                 # Self-reference (current image) into the first free slot — the
                 # dialog already caps the selection to the slot budget, here it
                 # is only inserted when there is actually room.
-                if use_source_as_reference and source_image_path:
+                if use_source_as_reference and source_image_path and not screenshot_photo:
                     import re as _re
                     if Path(source_image_path).exists():
                         _refs = face_refs.get("reference_images") or {}
@@ -464,7 +494,7 @@ def regenerate_image(character_name: str,
             gen_prompt = f"{_ucp['prompt_style']} {gen_prompt}"
         # Negative: the call's override wins, otherwise the use case's.
         gen_neg = negative or _ucp.get("prompt_negative", "")
-        if negative_prompt_extra:
+        if negative_prompt_extra and b.supports_negative_prompt:
             # Preserve the selected negative (or the photo-style default),
             # adding screenshot exclusions once, including on routed retries.
             terms = [term.strip() for term in f"{gen_neg}, {negative_prompt_extra}".split(",") if term.strip()]

@@ -10,6 +10,7 @@ present NPCs perceive "X takes a photo" and can react to it on their next
 loop turn.
 """
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -46,6 +47,7 @@ _SCREENSHOT_SENTENCE = (
     "The reference image gives only composition, camera angle and poses; "
     "its 3D/CGI look must not be copied.")
 _SCREENSHOT_NEGATIVE = "3d render, cgi, video game screenshot, low poly, plastic skin, game engine"
+_CAMERA_HOLDER = re.compile(r"\bselfie\b|\btaken\s+by\b", re.IGNORECASE)
 
 
 def _view_framing(view: PhotoView, visible: List[PhotoVisible]) -> str:
@@ -54,7 +56,8 @@ def _view_framing(view: PhotoView, visible: List[PhotoVisible]) -> str:
     angle = ("from above" if camera.pitch_deg < -20 else
              "from below" if camera.pitch_deg > 15 else "at eye level")
     shot = "wide view" if camera.fov_deg >= 60 else "close view"
-    parts = [f"Camera {angle}, {shot}, {camera.height_m:g} m above ground."]
+    parts = ["Photograph from an unseen photographer at the given angle.",
+             f"Camera {angle}, {shot}, {camera.height_m:g} m above ground."]
     depths = [person.depth_m for person in visible]
     nearest, farthest = (min(depths), max(depths)) if depths else (0, 0)
     midpoint = (nearest + farthest) / 2
@@ -196,6 +199,15 @@ def prepare_scene_photo(avatar: str, view: Optional[dict] = None) -> Dict[str, A
             resp = llm_call(task="image_prompt", system_prompt=sys_p,
                             user_prompt=user_p, agent_name=avatar)
             prompt = (getattr(resp, "content", "") or "").strip().strip('"')
+            from app.imagegen.prompt_guard import is_prompt_refusal
+            # Distillation intentionally compresses conversation. Reject only
+            # extreme truncation (at most 40 chars), not a valid short summary.
+            if is_prompt_refusal(prompt, transcript[:400], min_length_ratio=0.1):
+                logger.warning("Scene photo prompt is a refusal or too short — using deterministic poses")
+                prompt = ""
+            elif framing and _CAMERA_HOLDER.search(prompt):
+                logger.warning("Scene photo prompt contradicts the free camera — using deterministic poses")
+                prompt = ""
         except Exception as e:
             logger.warning("scene photo prompt distillation failed: %s", e)
     if not prompt:
@@ -208,6 +220,8 @@ def prepare_scene_photo(avatar: str, view: Optional[dict] = None) -> Dict[str, A
             if n in paired:
                 continue
             hint = _pose_hint(n)
+            if framing and _CAMERA_HOLDER.search(hint or ""):
+                hint = ""
             parts.append(f"{n} ({hint})" if hint else n)
         prompt = ("Candid photograph of the current moment: "
                   + "; ".join(parts))

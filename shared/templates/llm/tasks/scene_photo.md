@@ -1,7 +1,7 @@
 {# Scene photo (📷 button in the player UI): distill the CURRENT moment of a
    room conversation into ONE photographic image description. The
-   photographer holds the camera and is NOT in the frame (unless they are
-   alone — then it is a selfie).
+   ordinary photographer holds the camera; a free-camera view instead has
+   an unseen photographer, and the avatar can be a visible subject.
 
    Variables:
      photographer — avatar taking the photo
@@ -9,6 +9,7 @@
      pairs        — who is physically doing something TOGETHER right now
                     ("A and B are dancing together; ..."), "" when nobody is
      transcript   — recent room conversation ("Speaker: text" per line)
+     framing      — optional free-camera angle and visible subject positions
 #}
 
 ## system
@@ -18,9 +19,11 @@ a candid photograph of the CURRENT moment.
 
 Rules:
 - Exactly these people are in the frame: {{ subjects }} — no one else.
-  {{ photographer }} is taking the photo{% if photographer in subjects %} (selfie — they ARE in the frame){% else %} and is NOT in the frame{% endif %}.
-{% if framing | default('') %}- The screenshot defines the frame: {{ framing }}
+{% if framing | default('') %}  The camera belongs to an unseen photographer outside the frame, at the given angle.
+  Every listed person, including {{ photographer }} if listed, is a visible subject, never the camera holder.
+- The screenshot defines the frame: {{ framing }}
   Only the listed visible people may appear, regardless of who speaks in the conversation.
+{% else %}  {{ photographer }} is taking the photo{% if photographer in subjects %} (selfie — they ARE in the frame){% else %} and is NOT in the frame{% endif %}.
 {% endif %}- Derive each person's pose, expression and mood from the LAST lines of the
   conversation — the photo captures what is happening RIGHT NOW.
 {% if pairs %}- These people are touching, holding or moving WITH each other right now:
