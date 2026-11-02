@@ -66,6 +66,7 @@ class FlagSpec:
     cleared_by: str = ""          # skill_id of the clearing verb
     prompt_when_set: str = ""     # situation line; {name}/{clear_tool} placeholders
     ttl_minutes: int = 0          # 0 = no time decay
+    ttl_config: str = "ttl_minutes"  # package config field overriding ttl_minutes
     reset_on_location_change: bool = False
     distracting: bool = False     # a set flag occupies the character's attention
 

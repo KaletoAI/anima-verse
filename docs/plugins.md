@@ -115,6 +115,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
     cleared_by: end_training    # skill_id des lösenden Verbs (Auto-Clear ruft es auf)
     prompt_when_set: "You are in a training session — end it with {clear_tool} when it is over."
     ttl_minutes: 120            # 0 = kein Zeit-Zerfall
+    ttl_config: ttl_minutes     # Config-Feld des Pakets, das ttl_minutes überschreibt (Default ttl_minutes)
     reset_on_location_change: true
     distracting: false           # true: a set flag occupies attention
 ```
@@ -948,7 +949,10 @@ gesetzte Flags die `prompt_when_set`-Zeile in den Situationskontext des Charakte
 `ttl_minutes` bzw. `reset_on_location_change` — der Auto-Clear ruft das
 `cleared_by`-Verb auf, damit exakt dieselben Seiteneffekte laufen wie beim
 LLM-Tool-Call. Ein `ttl_minutes`-Feld im `config_schema` des Pakets
-(`skills.<paket>.ttl_minutes`) überschreibt den Manifest-Default zur Laufzeit.
+(`skills.<paket>.ttl_minutes`) überschreibt den Manifest-Default zur Laufzeit; ein
+Paket mit mehreren befristeten Flags gibt jedem per `ttl_config: <feld>` ein eigenes
+Feld (sonst gilt das eine `ttl_minutes` für alle). Ohne `cleared_by` setzt der
+Auto-Clear das Flag direkt zurück.
 
 Auch der Prompt der **Tool-Entscheidung** (rp_first-Chat und Thought-Zug) bekommt
 den Zustand: `flag_lifecycle.decision_state_lines` schreibt für jedes Flag, dessen

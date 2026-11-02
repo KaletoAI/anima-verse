@@ -35,11 +35,12 @@ def _specs():
 
 
 def _ttl_minutes(spec) -> int:
-    """Manifest TTL, overridable at runtime via ``skills.<package>.ttl_minutes``
-    (the package declares that field in its config_schema)."""
+    """Manifest TTL, overridable at runtime via ``skills.<package>.<ttl_config>``
+    (default field ``ttl_minutes``; the package declares it in its
+    config_schema). A package with several flags names one field per flag."""
     try:
         from app.core import config
-        val = config.get(f"skills.{spec.package_id}.ttl_minutes", None)
+        val = config.get(f"skills.{spec.package_id}.{spec.ttl_config}", None)
         if val not in (None, ""):
             return max(0, int(val))
     except Exception:

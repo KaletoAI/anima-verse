@@ -311,6 +311,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             cleared_by=(fdef.get("cleared_by") or "").strip(),
             prompt_when_set=(fdef.get("prompt_when_set") or "").strip(),
             ttl_minutes=int(fdef.get("ttl_minutes") or 0),
+            ttl_config=str(fdef.get("ttl_config") or "ttl_minutes").strip(),
             reset_on_location_change=bool(fdef.get("reset_on_location_change", False)),
             distracting=bool(fdef.get("distracting", False)),
         ))
