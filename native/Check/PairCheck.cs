@@ -63,7 +63,8 @@ public static class PairCheck
             inn.Fade.Snap(1);
             var bench = inn.Places.Markers["r-hall"]["bench1"].Slots;
             NearD("Q0 bench1 slot height (README \"Placement world\": 4.096875)", bench[0].Y, 4.096875, 1e-6);
-            var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-pairs] " + line), strict: true)
+            var logs = new List<string>();
+            var mgr = new FigureManager(source, builder.Height!, line => { logs.Add(line); GD.Print("[check-pairs] " + line); }, strict: true)
             {
                 ClipFit = ClipFitMode.OnDemandSync,
                 AutoTick = false, Slots = () => builder.Slots,
@@ -298,7 +299,9 @@ public static class PairCheck
             mgr.PairFacing("rollback", "turn-steer", "Ben Hand");
             NearD("Q84 steering wins over a late refusal", Wrap(avatar.Yaw), 0, 1e-6);
 
-            var report = $"pairs Q0..Q9 ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
+            await CheckFinale(mgr, dir, logs);
+
+            var report = $"pairs Q0..Q9 + Task96 finale ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
                          + $"hug ±{-ha.X:0.000} m; seat 4.097, loft 7.03; resync Δ {resyncMs:0.0} ms; "
                          + $"frozen 12 frames; Task84 blend/freeze/reseek/facing ok; solo Eve; loop twin Hal once / Ann cycle; {memory})";
             GD.Print($"[check-pairs] {report}");
@@ -308,6 +311,99 @@ public static class PairCheck
         {
             world.QueueFree();
         }
+    }
+
+    /// <summary>§ A8c, real fixture rigs: catches loop takeover, wrong root, seeking server time and repeated-id replay.
+    /// Pair starts at 0 despite elapsed .9; .5 + frozen .5 + .5 + .04 ends 1.033, underneath .5 + 1.04 = 1.54.</summary>
+    private static async Task CheckFinale(FigureManager mgr, string dir, List<string> logs)
+    {
+        mgr.SetPlayerDriven("");
+        var map = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "worldmap_finale.json")))!.AsObject();
+        var cyRow = map["characters"]![0]!;
+        var deeRow = map["characters"]![1]!;
+        var gilRow = map["characters"]![2]!;
+        Task Poll() => mgr.Apply(JsonSerializer.SerializeToElement(map));
+        // A fresh sighting puts the solo figure on its place, without a leftover room route from Q84.
+        var empty = map.DeepClone(); empty["characters"] = new JsonArray();
+        await mgr.Apply(JsonSerializer.SerializeToElement(empty));
+        await Poll(); mgr.Tick(0);
+        var cy = mgr.Figures["Cy Seat"]; var dee = mgr.Figures["Dee Seat"]; var gil = mgr.Figures["Gil Loft"];
+        Expect("F96 pair finale replaces only its half", cy.CurrentClip == "greeting-hug__a"
+            && dee.CurrentClip == "greeting-handshake__b", $"{cy.CurrentClip}, {dee.CurrentClip}");
+        NearD("F96 pair starts from frame zero", cy.ClipTime, 0, ClipTol);
+        Expect("F96 pair finale forces a listed cycle to play once", cy.Player!.GetAnimation(cy.Player.AssignedAnimation).LoopMode == Animation.LoopModeEnum.None, "loop");
+        Expect("F96 solo replaces the place pose directly", gil.CurrentClip == "idle" && !gil.Bridging, gil.CurrentClip);
+        NearD("F96 solo starts from frame zero", gil.ClipTime, 0, ClipTol);
+        var soloAt = gil.Position;
+        mgr.Tick(.5);
+        NearD("F96 underlying pair clock keeps running", cy.Pair!.ClipT, 1, 1e-9);
+        // The hug's constant raw root is −.211896 m (README); yaw zero adds it to anchor x=64.
+        NearV("F96 finale uses its own root at the interaction anchor", cy.Position, 63.788104, 4.096875, 131, PosTol);
+        NearV("F96 solo stays at its place", gil.Position, soloAt.X, soloAt.Y, soloAt.Z, PosTol);
+        double pairT = cy.ClipTime, soloT = gil.ClipTime;
+        map["game_rate"] = 0; cyRow["interaction"]!["rate"] = 0; deeRow["interaction"]!["rate"] = 0;
+        cyRow["finale"]!["elapsed_s"] = 3.2;
+        await Poll(); mgr.Tick(.5);
+        NearD("F96 frozen pair finale stands", cy.ClipTime, pairT, ClipTol);
+        NearD("F96 frozen solo finale stands", gil.ClipTime, soloT, ClipTol);
+        NearD("F96 frozen action clock stands", cy.Pair.ClipT, 1, 1e-9);
+        map["game_rate"] = 1; cyRow["interaction"]!["rate"] = 1; deeRow["interaction"]!["rate"] = 1;
+        cyRow["interaction"]!["elapsed_s"] = 1; deeRow["interaction"]!["elapsed_s"] = 1;
+        await Poll(); mgr.Tick(.5); mgr.Tick(.04);
+        Expect("F96 pair returns to action loop", cy.CurrentClip == "greeting-handshake__a", cy.CurrentClip);
+        NearD("F96 returned loop has the uninterrupted phase", cy.Pair.ClipT, 1.54, 1e-9);
+        mgr.Tick(.3);
+        Expect("F96 solo returns to its pose without an exit bridge", gil.CurrentClip == "sitting-at-the-table" && !gil.Bridging, gil.CurrentClip);
+        await Poll(); mgr.Tick(0); mgr.TickPlacement(); mgr.Tick(0);
+        Expect("F96 repeated polls and cached placement do not replay", cy.CurrentClip == "greeting-handshake__a" && gil.CurrentClip == "sitting-at-the-table", cy.CurrentClip);
+        Expect("F96 exactly one start log per finale", logs.Count(l => l.StartsWith("[figures] finale Cy Seat ") && l.Contains("id=pair-96")) == 1
+            && logs.Count(l => l.StartsWith("[figures] finale Gil Loft ") && l.Contains("id=solo-96")) == 1, "start count");
+
+        // A new id for the same currently played clip must reset even below the ordinary .2 s pair resync limit.
+        cyRow["finale"]!["id"] = "repeat-96";
+        await Poll(); mgr.Tick(0); mgr.Tick(.1);
+        cyRow["finale"]!["id"] = "repeat-new-96";
+        await Poll(); mgr.Tick(0);
+        NearD("F96 same clip with a new id resets exactly", cy.ClipTime, 0, ClipTol);
+        cyRow["finale"] = null;
+        await Poll(); mgr.Tick(.1);
+        Expect("F96 payload disappearing keeps the local finale", cy.Finale is not null && cy.CurrentClip == "greeting-hug__a", cy.CurrentClip);
+        NearD("F96 seek advances once per frame", cy.ClipTime, .1, ClipTol);
+
+        cyRow["finale"] = JsonNode.Parse("""{"id":"lazy-96","kind":"greeting-hug","role":"a","elapsed_s":0.9,"duration_s":1.033}""");
+        // Exercise the production on-demand boundary: a planned action can be temporarily unavailable.
+        var fit = cy.FitClip;
+        var library = cy.Player.GetAnimationLibrary("");
+        var hugAnimation = library.GetAnimation("greeting-hug__a");
+        cy.PlayPair("greeting-handshake__a", 0, false, true);
+        library.RemoveAnimation("greeting-hug__a");
+        bool ready = false;
+        cy.FitClip = clip => {
+            if (clip != "greeting-hug__a") return fit?.Invoke(clip) ?? cy.Player.HasAnimation(clip);
+            if (!ready) return false;
+            library.AddAnimation(clip, hugAnimation); return true;
+        };
+        await Poll(); mgr.Tick(.5);
+        Expect("F96 pending fit retains the action and frame zero", cy.CurrentClip == "greeting-handshake__a" && cy.Finale?.T == 0, cy.CurrentClip);
+        ready = true; mgr.Tick(.5);
+        NearD("F96 first fitted frame starts at zero", cy.ClipTime, 0, ClipTol);
+        cy.FitClip = fit;
+
+        cyRow["finale"]!["id"] = "missing-96"; cyRow["finale"]!["kind"] = "fixture-missing";
+        gilRow["finale"]!["id"] = "missing-solo-96"; gilRow["finale"]!["kind"] = "fixture-missing";
+        await Poll(); mgr.Tick(0); await Poll(); mgr.Tick(0);
+        Expect("F96 missing finale keeps action", cy.CurrentClip == "greeting-handshake__a" && cy.Pair is not null, cy.CurrentClip);
+        Expect("F96 missing solo keeps place pose", gil.CurrentClip == "sitting-at-the-table", gil.CurrentClip);
+        Expect("F96 missing clip logged once", logs.Count(l => l.Contains("id=missing-96") && l.Contains("missing clip")) == 1, "skip count");
+        Expect("F96 missing solo logged once", logs.Count(l => l.Contains("id=missing-solo-96") && l.Contains("missing clip")) == 1, "solo skip count");
+
+        cyRow["finale"]!["id"] = "end-96"; cyRow["finale"]!["kind"] = "greeting-hug";
+        await Poll(); mgr.Tick(0);
+        Expect("F96 new id starts again", cy.CurrentClip == "greeting-hug__a", cy.CurrentClip);
+        cyRow["interaction"] = null; cyRow["place"] = null;
+        await Poll(); mgr.Tick(0);
+        Expect("F96 disappearing action ends finale immediately", cy.Finale is null && cy.CurrentClip != "greeting-hug__a" && cy.Pair is null, cy.CurrentClip);
+        Expect("F96 partner stays in its loop", dee.CurrentClip == "greeting-handshake__b", dee.CurrentClip);
     }
 
     /// <summary>Two animations with the same tracks and keys, bit for bit (times, transitions, values).</summary>

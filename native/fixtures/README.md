@@ -1607,6 +1607,18 @@ for visual invite tests: turn toward Ben, retain it over 20 idle seconds, restor
 win over a late refusal. The prop-action check also sends actual HUD begin/keep/rollback commands to an
 arrived B1 seat owner and checks that its private playback keeps the preview.
 
+**Task 96 finale** (`pairs/worldmap_finale.json`): fresh Cy/Dee loop the handshake at elapsed .5 on
+bench1. Only Cy receives finale `greeting-hug`, role a, elapsed .9, duration 1.033. Both finale clocks start
+at zero; .5 + frozen .5 + .5 + .04 ends the pair finale, while the underlying clock reaches
+.5 + .5 + .5 + .04 = **1.54**. Cy's finale root is **(63.788104, 4.096875, 131)**, using hug root −.211896
+rather than handshake root −.366742; Dee retains her handshake half. Gil is already at bench1 slot 0,
+holding `sitting-at-the-table`, with solo `idle` (duration 1.333); .3 more seconds ends it and restores
+the place pose directly. The check also covers same-id polls and cached placement, new ids for the same
+clip, a disappearing block, deferred fitting from frame zero, missing pair/solo clips and losing the action.
+Only fixture clips are used; they demonstrate protocol playback without requiring any additional asset pack.
+The prop-action checks cover the private arrived avatar: solo returns to its authored held pose, and a
+synthetic pair half with root (.25,.5) uses its private anchor height .129, plays once, then loops again.
+
 **Q8 loop flag per figure** (Task 35): Ann and Hal both wear Test3_mia, so their players bind the SAME
 `greeting-hug__a` Animation; the listing calls the hug a cycle (`loop` absent → Linear), length **4.0333 s**. Called
 directly (no manager tick, which would put their handshakes back): Hal `playPair(hug, 0.2, loop: false)`, then Ann

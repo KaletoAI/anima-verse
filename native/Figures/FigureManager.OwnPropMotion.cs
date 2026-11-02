@@ -13,7 +13,7 @@ public sealed class OwnPropPlayback(JsonObject plan,string key,double startedAt,
     public JsonObject Plan=plan;
     public string Key=key,Phase="",PoseKey="";
     public double StartedAt=startedAt,StartY=startY,StartYaw=startYaw;
-    public bool Cancel=cancel,AccessLogged,AnchorLogged;
+    public bool Cancel=cancel,AccessLogged,AnchorLogged,FinaleOn;
     public JsonObject? HeldSample;
     public double? HeldEntryPhase;
 }
@@ -227,13 +227,17 @@ public partial class FigureManager
             string role=PropActionMotion.Text(plan["role"]);
             if(role is "a" or "b" && !pose.EndsWith("__"+role,StringComparison.Ordinal)) pose+="__"+role;
             string poseKey=$"{pose}|{figure.Player?.GetInstanceId()}";
-            if(playback.PoseKey!=poseKey && figure.FinishPropEntry(pose)) playback.PoseKey=poseKey;
+            var finale=!playback.Cancel && figure.Finale is { Role:null } ? StepFinale(figure,dt,WorldFrozen) : null;
+            if(finale is { } solo && figure.PlayPair(solo.Clip,solo.T,WorldFrozen,false,restart:solo.Start,frameStep:solo.Start ? 0 : dt)) playback.FinaleOn=true;
+            else if(playback.FinaleOn || playback.PoseKey!=poseKey) {
+                if(figure.FinishPropEntry(pose)) { playback.PoseKey=poseKey; playback.FinaleOn=false; }
+            }
             if(!playback.Cancel && !playback.AnchorLogged) {
                 playback.AnchorLogged=true;
                 _log($"[prop] motion seated on anchor {PropActionMotion.Text(plan["anchor"]?["place_id"])}/{PropActionMotion.Number(plan["anchor"]?["slot"])}");
             }
             if(playback.Cancel) { OwnPropMotion=null; OwnPropMotionReleased?.Invoke(); return; }
-            figure.SecondaryFrozen=WorldFrozen; figure.UpdateFigure(dt);
+            figure.SecondaryFrozen=WorldFrozen; figure.UpdateFigure(finale?.Start==true ? 0 : dt);
         } else {
             bool walking=phase=="walking";
             string clip=FigureClips.PoseKind(walking ? "walking" : "standing",figure.Poses);

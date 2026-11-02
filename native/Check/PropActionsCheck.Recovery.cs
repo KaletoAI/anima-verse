@@ -103,6 +103,26 @@ public static partial class PropActionsCheck
             source.MapOverride["characters"]![0]!["activity_animation"]="author-held";
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
             Is("matching anchor adopts changed authored activity",avatar.CurrentClip=="author-held"); Near("activity adoption retains anchor",avatar.Position.X,2);
+            // Task 96: an arrived private B1 plan still takes public finales before its placement early return.
+            var ownFinaleRow=source.MapOverride["characters"]![0]!;
+            ownFinaleRow["finale"]=JsonNode.Parse("""{"id":"own-finale-96","kind":"walk","role":null,"elapsed_s":0.9,"duration_s":1.033}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            Is("own finale replaces held pose",avatar.CurrentClip=="walk"); Near("own finale starts at frame zero",avatar.ClipTime,0);
+            Near("own finale retains anchor height",avatar.Position.Y,.129);
+            Step(.5); double finaleAt=avatar.ClipTime;
+            source.MapOverride["game_rate"]=0; mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(.5);
+            Near("own seated finale freezes",avatar.ClipTime,finaleAt);
+            source.MapOverride["game_rate"]=1; mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(.5); Step(.04);
+            Is("own finale returns to authored held pose",avatar.CurrentClip=="author-held" && mgr.OwnPropMotion?.Phase=="arrived");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            Is("own same-id poll never restarts finale",avatar.CurrentClip=="author-held");
+            ownFinaleRow["finale"]!["id"]="own-ended-96";
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            Is("own new id starts finale",avatar.CurrentClip=="walk");
+            var heldPlace=ownFinaleRow["place"]!.DeepClone(); ownFinaleRow["place"]=null;
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            Is("own losing action ends finale despite private motion",avatar.CurrentClip=="sitting" || avatar.CurrentClip=="author-held");
+            ownFinaleRow["place"]=heldPlace; ownFinaleRow["finale"]=null;
             InstallMeasuredRig(avatar); avatar.Player!.GetAnimationLibrary("").AddAnimation("author-held",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear }); Step(0); Near("body replacement retains anchor",avatar.Position.Y,.129);
             Is("body replacement replays available held pose",avatar.CurrentClip=="sitting" || avatar.CurrentClip=="author-held");
             source.StateOverride=RunState(first); source.StateOverride["current"]![0]!["motion"]!["paces_m_s_real"]=null;
@@ -264,7 +284,26 @@ public static partial class PropActionsCheck
             source.MapOverride=Read("worldmap_active.json"); source.MapOverride["characters"]![0]!["place"]!["slot"]=1;
             source.MapOverride["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"valid-pair-before-state","kind":"pair-pose","role":"b","partner":"fixture-npc","anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); source.StateOverride=RunState(raced);
-            await offers.PropActions!.RefreshAsync(); Step(8); Is("early matching active pair survives delayed state plan",avatar.Pair?.Id=="valid-pair-before-state"); await End(raced);
+            await offers.PropActions!.RefreshAsync(); Step(8); Is("early matching active pair survives delayed state plan",avatar.Pair?.Id=="valid-pair-before-state");
+            // Task 96: same clip for action and finale must switch loop mode per figure, then restore it.
+            mgr.Clips.Index.PairRoots["pair-pose__b"]=new RootPath(new float[]{0},new float[]{.25f,.5f});
+            var ownPairRow=source.MapOverride["characters"]![0]!;
+            ownPairRow["finale"]=JsonNode.Parse("""{"id":"own-pair-finale-96","kind":"pair-pose","role":"b","elapsed_s":0.9,"duration_s":1.033}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            Near("own pair finale starts at frame zero",avatar.ClipTime,0);
+            Is("own pair finale plays once",avatar.Player.GetAnimation(avatar.Player.AssignedAnimation).LoopMode==Animation.LoopModeEnum.None);
+            Near("own pair finale uses half root X",avatar.Position.X,2.25);
+            Near("own pair finale uses private anchor height",avatar.Position.Y,.129);
+            Near("own pair finale uses half root Z",avatar.Position.Z,.5);
+            Step(.5); Step(.54);
+            Is("own pair finale returns same clip to looping",avatar.Player.GetAnimation(avatar.Player.AssignedAnimation).LoopMode==Animation.LoopModeEnum.Linear);
+            ownPairRow["finale"]!["id"]="own-pair-ended-96";
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            ownPairRow["interaction"]=null; ownPairRow["place"]=null;
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
+            Is("own pair end hold does not retain finale",avatar.Finale is null);
+            mgr.Clips.Index.PairRoots.Remove("pair-pose__b");
+            await End(raced);
 
             // The pair is stopped on the server (HUD pair stop: POST /play/interact/end) while the own run still plays it:
             // the worldmap poll drops the interaction from both rows, the run's end comes with the prop-actions state. Both

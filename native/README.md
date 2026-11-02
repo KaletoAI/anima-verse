@@ -1058,6 +1058,16 @@ figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase
   0.85 m deep in the ground before.
 - `--check pairs` (`Check/PairCheck.cs`, `fixtures/pairs/`, README there).
 
+A row's `finale` (§ A8c, Task 96) plays once per id, starting at frame zero regardless of `elapsed_s`.
+`Core/Figures/FinaleClip.cs` owns its independent frame clock (frozen with the world); `FinaleClipTests`
+uses the same hand-derived numbers as browser smoke [1]–[7]. A pair half uses its own root path at the
+interaction anchor while the action clock continues underneath. A solo temporarily replaces the place pose;
+the arrived own B1 avatar uses seeked playback and returns to its held clip. Finales use the figure's set
+chain without stand-ins, play without looping, and wait at frame zero for an on-demand fit. A missing clip
+skips only the finale; losing both interaction and place ends it immediately. One `[figures] finale …` line
+records each start, and one `finale skipped …: missing clip …` line records a missing clip. The pairs and
+prop-actions checks cover these paths without a server or world database.
+
 ### Clip memory and figure cost (Task 35, ruling P3-R11)
 
 Measured on the world copy (`--offline`, 14 model figures + 1 portrait, the dump's model rotation as in Task 28):

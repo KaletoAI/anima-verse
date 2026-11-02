@@ -469,6 +469,11 @@ public partial class Figure : Node3D
     /// <summary>The rig HAS the action (the plan) — whether or not it is fitted yet; the choice of clips and bridges reads this.</summary>
     private bool HasAction(string kind) => Player is not null && ClipKinds.Contains(kind);
 
+    /// <summary>Exact action availability along this figure's set chain; finales never use a stand-in.</summary>
+    public bool HasClip(string kind) => HasAction(kind);
+
+    private bool _finaleClip;
+
     /// <summary>
     /// The action is in the player's library — fitted now if it was not yet and the mode fits at once; false while a lazy
     /// fit runs (the caller keeps what plays and asks again next frame) or when the rig does not have it.
@@ -515,20 +520,23 @@ public partial class Figure : Node3D
     /// actions, else the first; the stand-in pace; the action's own loop flag; a crossfade of
     /// <see cref="ClipLibraryRules.CrossfadeS"/> from the start of the clip.
     /// </summary>
-    public void Play(string rawKind, bool terrainClip = false, double sink = 0, string? surfaceGroup = null)
+    public void Play(string rawKind, bool terrainClip = false, double sink = 0, string? surfaceGroup = null,
+                     bool finale = false, bool restart = false)
     {
         surfaceGroup = terrainClip ? "ground" : ClipHeightOffsets.Surface(surfaceGroup);
         WantedClip = (rawKind, terrainClip, sink, surfaceGroup);
         var kind = (rawKind.Length > 0 ? rawKind : FigureClips.PoseKind(FigureClips.Standing, Poses)).ToLowerInvariant();
         // A bridge is running: let it finish; the frame after it asks again.
-        if (Bridging)
+        if (Bridging && !finale)
         {
             SetHeightCorrection(CurrentClip, "ground");
             return;
         }
         if (RefreshClipKinds is { } refresh) _clipKinds = refresh();
         PendingBridgeAccel = null;
-        var rule = FigureClips.Transition(CurrentKind, kind, Transitions);
+        // A temporary finale keeps the action's place; neither edge is a furniture entry/exit.
+        if (finale) ReleaseBridge();
+        var rule = finale || _finaleClip ? null : FigureClips.Transition(CurrentKind, kind, Transitions);
         var via = rule?.Kind ?? "";
         if (rule is not null && via.Length > 0 && via != kind && HasAction(via))
         {
@@ -545,7 +553,7 @@ public partial class Figure : Node3D
             return;
         }
         double sinkM = terrainClip && double.IsFinite(sink) && sink > 0 ? sink : 0;
-        if (!_bridgeResume && kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink
+        if (!restart && finale == _finaleClip && !_bridgeResume && kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink
             && (_clipKinds.Contains(CurrentClip) || _clipKinds.Count == 0))
         {
             SetHeightCorrection(CurrentClip, surfaceGroup);
@@ -560,6 +568,7 @@ public partial class Figure : Node3D
             SetClipDrop(0);
             SetHeightCorrection("", surfaceGroup);
             CurrentKind = kind;
+            _finaleClip = finale;
             return;
         }
         var chosen = FigureClips.ResolveClipKind(kind, _clipKinds, Poses);
@@ -578,15 +587,18 @@ public partial class Figure : Node3D
         SetClipDrop(terrainClip && resolved.Length > 0 ? GroundOffsetM(resolved) + sinkM : terrainClip ? sinkM : 0);
         double pace = ClipLibraryRules.StandInPace(kind, chosen);
         CurrentKind = kind;
+        _finaleClip = finale;
         if (resolved.Length == 0 || !Player.HasAnimation(resolved)) return;   // nothing bound: bind pose
         CurrentPace = pace;
         Player.SpeedScale = (float)pace;
         // The same action keeps playing (a stand-in for another kind): only its pace changes.
-        if (resolved == CurrentClip) return;
+        var playName = finale ? PlayName(resolved, false) : resolved;
+        if (!restart && resolved == CurrentClip && Player.AssignedAnimation == playName) return;
         // A different action starts from its first frame (the browser's reset().fadeIn(0.25)); a bridge on screen fades.
         if (_currentRun is { } run) run.FadeOutAt ??= _animTime;
         _currentRun = null;
-        Player.Play(resolved, ClipLibraryRules.CrossfadeS);
+        Player.Play(playName, ClipLibraryRules.CrossfadeS);
+        if (restart) Player.Seek(0, false);
         CurrentClip = resolved;
     }
 
@@ -635,6 +647,11 @@ public partial class Figure : Node3D
     /// <summary>The running pair interaction (npcs.ts <c>npc.interaction</c>): placement AND clip come from it; null = none.</summary>
     public PairPlay? Pair { get; set; }
 
+    /// <summary>The per-person finale clock and consumed id survive polls, body swaps and cached placement.</summary>
+    public FinalePlay? Finale { get; set; }
+    public string FinaleSeen { get; set; } = "";
+    public string FinaleStartedId { get; set; } = "";
+
     /// <summary>
     /// <c>playPair(clipName, t, frozen, loop)</c>: play the half of a PAIR clip at the clip time <paramref name="t"/> (REAL
     /// seconds, the phase <see cref="PairClip.Phase"/> derived). The pair takes the body over: a running bridge ends HERE
@@ -642,8 +659,10 @@ public partial class Figure : Node3D
     /// (one-shot) against the length the loaded clip has; a new half starts with the 0.25 s fade at that time, the same
     /// half re-seeks only when its own time drifted more than <see cref="PairClip.ResyncS"/> (measured on the circle for
     /// a cycle). <paramref name="frozen"/> stops the player where it stands. False when the half is not bound on this rig.
+    /// A finale supplies <paramref name="frameStep"/> for exact frame sampling and <paramref name="restart"/> for a new id.
     /// </summary>
-    public bool PlayPair(string clipName, double t, bool frozen, bool loop, string? surfaceGroup = null)
+    public bool PlayPair(string clipName, double t, bool frozen, bool loop, string? surfaceGroup = null, bool restart = false,
+                         double? frameStep = null)
     {
         if (Player is not { } p || !HasAction(clipName) || !EnsureClip(clipName)) return false;
         ReleaseBridge();
@@ -655,11 +674,14 @@ public partial class Figure : Node3D
         double duration = anim.Length > 0 ? anim.Length : 1;
         double clipT = Math.Max(t, 0);
         double want = loop ? clipT % duration : Math.Min(clipT, duration - 1e-3);
-        if (CurrentClip != clipName)
+        // Finale clocks describe the rendered frame. Seek before the upcoming UpdateFigure advance so large
+        // frames cannot advance twice, or rewind on freeze. Ordinary pairs retain their drift-based resync.
+        if (frameStep is { } step) want = Math.Max(0, want - (frozen ? 0 : step));
+        var name = PlayName(clipName, loop);
+        if (restart || CurrentClip != clipName || p.AssignedAnimation != name)
         {
             // three sets the loop on THIS figure's action (setLoop); the shared Animation keeps the listing's flag and a
             // figure that needs the other one plays its own twin (PlayName).
-            var name = PlayName(clipName, loop);
             if (_currentRun is { } run) run.FadeOutAt ??= _animTime;
             _currentRun = null;
             p.Play(name, ClipLibraryRules.CrossfadeS);
@@ -670,7 +692,7 @@ public partial class Figure : Node3D
         else
         {
             double raw = Math.Abs(p.CurrentAnimationPosition - want);
-            if ((loop ? Math.Min(raw, duration - raw) : raw) > PairClip.ResyncS)
+            if (frameStep is not null || (loop ? Math.Min(raw, duration - raw) : raw) > PairClip.ResyncS)
             {
                 // A one-shot that ran out stopped (clampWhenFinished holds its last frame): restart it for the seek —
                 // under the name it was started with (the clip, or this figure's loop twin of it).
@@ -679,6 +701,7 @@ public partial class Figure : Node3D
             }
         }
         CurrentPace = 1;
+        _finaleClip = false;
         p.SpeedScale = frozen ? 0 : 1;
         return true;
     }

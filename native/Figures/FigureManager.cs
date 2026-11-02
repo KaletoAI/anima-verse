@@ -324,13 +324,15 @@ public partial class FigureManager : Node3D
             if (!plans.TryGetValue(row.Name, out var plan)) continue;
             bool fresh = !_figures.TryGetValue(row.Name, out var fig);
             // Task 52: a poll older than a local seat write cannot restore its activity/clip/label either.
-            if (!fresh && row.Name == PlayerDriven && HoldAvatarPlacement) continue;
             if (fresh)
             {
                 fig = new Figure(row.Name);
                 _figures[row.Name] = fig;
                 AddChild(fig);
             }
+            // Finale adoption precedes placement ownership, including the seated own B1 avatar.
+            AdoptFinale(fig!, row);
+            if (!fresh && row.Name == PlayerDriven && HoldAvatarPlacement) continue;
             if (row.HeightCm is > 30 and < 400) fig!.HeightM = row.HeightCm.Value / 100.0;
             if (row.AnimationSets.Count > 0) fig!.Sets = row.AnimationSets;   // setCharacterSets: only a non-empty chain
             fig!.Activity = IsPlayerDriven(row.Name) && _playerAnimation is { } animation ? animation : row.ActivityAnimation;
@@ -568,6 +570,36 @@ public partial class FigureManager : Node3D
         if (fig.Pair is { } pair) fig.EnsureClip(pair.Clip);
     }
 
+    private static void AdoptFinale(Figure fig, CharacterRow row)
+        => (fig.Finale, fig.FinaleSeen) = FinaleClip.Adopt(fig.Finale, fig.FinaleSeen, row.Finale,
+                                                       row.Interaction is not null || row.Place is not null);
+
+    /// <summary>Exact clip lookup, lazy fitting, local clock and one start/skip log. A pending fit keeps frame zero.</summary>
+    private (string Clip, double T, bool Start)? StepFinale(Figure fig, double dt, bool frozen)
+    {
+        if (fig.Finale is not { } finale) return null;
+        string clip = finale.Role is { } role ? $"{finale.Kind}__{role}" : finale.Kind;
+        if (!fig.HasClip(clip) || (finale.Role is not null && Clips.PairRootAt(clip, 0) is null))
+        {
+            // Initial model work can still supply the figure's action table.
+            if (fig.Loading) return null;
+            _log($"[figures] finale skipped {fig.CharacterName} {finale.Kind} role={finale.Role ?? "null"} id={finale.Id}: missing clip {clip}");
+            fig.Finale = null;
+            return null;
+        }
+        if (!fig.EnsureClip(clip)) return null;
+        bool start = fig.FinaleStartedId != finale.Id;
+        var step = FinaleClip.Step(finale, start ? 0 : dt, frozen);
+        fig.Finale = step.Play;
+        if (step.Clip is null) return null;
+        if (start)
+        {
+            fig.FinaleStartedId = finale.Id;
+            _log($"[figures] finale {fig.CharacterName} {finale.Kind} role={finale.Role ?? "null"} id={finale.Id}");
+        }
+        return (step.Clip, step.T, start);
+    }
+
     /// <summary>
     /// The placement census of one location (the <c>--offline</c> report): its rows' plans counted by rule, how many are
     /// hidden, and how many stand in front of the building although the server has them in a room.
@@ -784,11 +816,18 @@ public partial class FigureManager : Node3D
         }
         bool run = !reckoning && !IsPlayerDriven(fig.CharacterName) && plan.Dist > NpcWalk.RunDistance;
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
-        PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
+        (string Clip, double T, bool Start)? finale = null;
+        if (fig.Finale is { Role: null })
+        {
+            if (plan.Moving) fig.Finale = null;
+            else finale = StepFinale(fig, dt, WorldFrozen);
+        }
+        PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : finale?.Clip ?? standingClip,
                     plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY,
-                    plan.Moving ? "ground" : fig.SurfaceGroup);
+                    plan.Moving ? "ground" : fig.SurfaceGroup, finale is not null, finale?.Start ?? false);
+        if (finale is not null && fig.Player is { } finalePlayer) finalePlayer.SpeedScale = WorldFrozen ? 0 : 1;
         fig.SecondaryFrozen = WorldFrozen;
-        fig.UpdateFigure(dt);
+        fig.UpdateFigure(finale?.Start == true ? 0 : dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
     }
 
@@ -806,8 +845,16 @@ public partial class FigureManager : Node3D
         var it = fig.Pair!;
         if (fig.Player is null || fig.Portrait is not null) return false;
         double phase = it.Advance(dt);
-        if (Clips.PairRootAt(it.Clip, phase) is not { } root) return false;
-        if (fig.ClipPending(it.Clip))
+        string clip = it.Clip;
+        bool loop = it.Loop, restart = false;
+        double? finaleFrame = null;
+        if (fig.Finale is { Role: not null } && StepFinale(fig, dt, it.Rate <= 0) is { } finale)
+        {
+            clip = finale.Clip; phase = finale.T; loop = false; restart = finale.Start;
+            finaleFrame = restart ? 0 : dt;
+        }
+        if (Clips.PairRootAt(clip, phase) is not { } root) return false;
+        if (fig.ClipPending(clip))
         {
             // Lazy (Task 35b): the half is being fitted — the figure holds where it stands, playing what it played.
             fig.SecondaryFrozen = WorldFrozen;
@@ -821,7 +868,7 @@ public partial class FigureManager : Node3D
             && slot.Places.Markers.TryGetValue(placedRow.RoomId, out var markers)
             && markers.TryGetValue(placeId, out var marker) && marker.Slots.Length > 0)
             surfaceGroup = ClipHeightOffsets.Surface(marker.Group);
-        if (!fig.PlayPair(it.Clip, phase, it.Rate <= 0, it.Loop, surfaceGroup)) return false;
+        if (!fig.PlayPair(clip, phase, it.Rate <= 0, loop, surfaceGroup, restart, finaleFrame)) return false;
         if (fig.HoldsTravel) fig.TakeTravel();
         var room = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.RoomId : "";
         var at = it.Place(root, (id, x, z) => ownAnchorY ?? SeatYAt?.Invoke(room, id, x, z),
@@ -834,7 +881,7 @@ public partial class FigureManager : Node3D
         fig.FaceTowards(new Vector3((float)Math.Sin(shown.Yaw), 0, (float)Math.Cos(shown.Yaw)), snap: true);
         if (age >= PairBlend.BlendS) it.Blend = null;
         fig.SecondaryFrozen = WorldFrozen || it.Rate <= 0;   // npcs.ts: figure.update(dt, {frozen: frozen || it.rate <= 0})
-        fig.UpdateFigure(dt);
+        fig.UpdateFigure(restart ? 0 : dt);
         return true;
     }
 
@@ -859,10 +906,10 @@ public partial class FigureManager : Node3D
     /// root onto its goal height at once and hand the difference over (<see cref="Figure.BeginBridgeLift"/>).
     /// </summary>
     private static void PlayLifting(Figure fig, string kind, bool terrainClip, double sink, double rootYBefore, double goalY,
-                                    string surfaceGroup)
+                                    string surfaceGroup, bool finale = false, bool restart = false)
     {
         bool wasBridging = fig.Bridging;
-        fig.Play(kind, terrainClip, sink, surfaceGroup);
+        fig.Play(kind, terrainClip, sink, surfaceGroup, finale, restart);
         if (!wasBridging && fig.Bridging && fig.BeginBridgeLift(rootYBefore - goalY))
             fig.Position = new Vector3(fig.Position.X, (float)goalY, fig.Position.Z);
         // Lazy (Task 35b): the HOLDING bridge this frame asked for waits for its clip — the root keeps the height it had,
@@ -1414,6 +1461,11 @@ public partial class FigureManager : Node3D
             if (raw.Length > 0) list.Add(ResolveAction(raw, kinds));
         if (fig.CurrentClip.Length > 0 && kinds.Contains(fig.CurrentClip)) list.Add(fig.CurrentClip);
         if (fig.Pair is { } pair && kinds.Contains(pair.Clip)) list.Add(pair.Clip);
+        if (fig.Finale is { } finale)
+        {
+            string clip = finale.Role is { } role ? $"{finale.Kind}__{role}" : finale.Kind;
+            if (kinds.Contains(clip)) list.Add(clip);
+        }
         return list.Where(a => a.Length > 0).Distinct().ToList();
     }
 

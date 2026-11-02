@@ -54,6 +54,9 @@ public sealed record CharacterRow(
     /// <summary><c>interaction</c>: the running pair interaction (§ A8a); null = none (or a block without an anchor).</summary>
     public PairInteraction? Interaction { get; init; }
 
+    /// <summary><c>finale</c>: one participant's closing clip (§ A8c); null = no new finale.</summary>
+    public FinaleBlock? Finale { get; init; }
+
     /// <summary>
     /// <c>motion</c> (§ A11a: the resolved secondary-motion payload, <c>{rev, groups}</c>) and whether the row carries
     /// the field at all — <c>refreshIfChanged(…, c.motion)</c> keeps the known payload when it is absent.
@@ -121,9 +124,18 @@ public sealed record CharacterRow(
             AvatarUrl = Json.Str(c, "avatar_url"),
             Travelling = OverviewLabels.TagTravelling(TagTravel.FromJson(c)),
             Interaction = ParseInteraction(c),
+            Finale = ParseFinale(c),
             HasMotion = c.TryGetProperty("motion", out var mo),
             Motion = c.TryGetProperty("motion", out mo) ? MotionPayload.Parse(mo) : null,
         };
+    }
+
+    private static FinaleBlock? ParseFinale(JsonElement c)
+    {
+        if (!c.TryGetProperty("finale", out var f) || f.ValueKind != JsonValueKind.Object) return null;
+        string role = Json.Str(f, "role");
+        return new FinaleBlock(Json.Str(f, "id"), Json.Str(f, "kind"), role is "a" or "b" ? role : null,
+                               Json.NumOrNull(f, "elapsed_s") ?? 0, Json.NumOrNull(f, "duration_s") ?? 0);
     }
 
     /// <summary>
