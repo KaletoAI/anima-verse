@@ -195,6 +195,7 @@ def prepare_scene_photo(avatar: str, view: Optional[dict] = None, *,
         try:
             from app.core.prompt_templates import render_task
             from app.core.llm_router import llm_call
+            from app.core.llm_queue import Priority
             sys_p, user_p = render_task(
                 "scene_photo",
                 photographer=avatar,
@@ -203,7 +204,8 @@ def prepare_scene_photo(avatar: str, view: Optional[dict] = None, *,
                                 for a, b, pose in pairs),
                 transcript=transcript, framing=framing)
             resp = llm_call(task="image_prompt", system_prompt=sys_p,
-                            user_prompt=user_p, agent_name=avatar)
+                            user_prompt=user_p, agent_name=avatar,
+                            priority=Priority.HIGH, label="scene-photo prepare")
             prompt = (getattr(resp, "content", "") or "").strip().strip('"')
             from app.imagegen.prompt_guard import is_prompt_refusal
             # Distillation intentionally compresses conversation. Reject only

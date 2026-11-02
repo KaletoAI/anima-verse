@@ -1,11 +1,16 @@
-/** Player regeneration uses automatic routing, with no backend or LoRA overrides. */
+/** Gallery and Instagram regeneration share the photo dialog's backend/LoRA
+ * picker. Auto sends no backend (routing decides); picked LoRAs are sent in
+ * both modes, nothing picked keeps the backend's/character's defaults.
+ * Options and pose-check defaults use the "regenerate" occasion. */
 import { useState } from 'react'
 import { useI18n } from './I18nProvider'
 import type { GalleryRegenControl } from './GalleryPanel'
 import type { InstagramImageGenControl } from './InstagramPanel'
+import { ImageBackendPicker } from './ImageBackendPicker'
+import { useImageBackendPicker } from './useImageBackendPicker'
 import { regenPayload } from './playerDialogPayloads'
 import { PlayerDialogFrame } from './PlayerDialogFrame'
-import { PromptImprover, usePoseCheck, usePoseCheckOption } from './PromptImprover'
+import { PromptImprover, usePoseCheck } from './PromptImprover'
 
 export function PlayerRegenDialog({ ctl }: { ctl: GalleryRegenControl | InstagramImageGenControl }) {
   const { t } = useI18n()
@@ -16,10 +21,12 @@ export function PlayerRegenDialog({ ctl }: { ctl: GalleryRegenControl | Instagra
   const [negative, setNegative] = useState('')
   const [improving, setImproving] = useState(false)
   // Gallery and Instagram regenerate both render on the "regenerate" occasion.
-  const pose = usePoseCheck(usePoseCheckOption('regenerate'))
+  const picker = useImageBackendPicker('regenerate')
+  const pose = usePoseCheck(picker.backends?.pose_check)
   const available = Array.from(new Set([...ctl.available, ...ctl.detected]))
-  const payload = regenPayload({ prompt, names, useRoom, useSource, negative, poseCheck: pose.value })
-  return <PlayerDialogFrame title={t('Regenerate image')} action={t('Generate')} disabled={!payload || improving}
+  const payload = regenPayload({ prompt, names, useRoom, useSource, negative, poseCheck: pose.value,
+    backend: picker.backend, loras: picker.picked })
+  return <PlayerDialogFrame title={t('Regenerate image')} action={t('Generate')} disabled={!payload || improving || picker.mediaOff}
     onClose={ctl.onClose} onSubmit={() => { if (payload) return ctl.onSubmit(payload) }}>
     <label className="ga-field">
       <span className="ga-field-caption">{t('Prompt')}</span>
@@ -36,6 +43,7 @@ export function PlayerRegenDialog({ ctl }: { ctl: GalleryRegenControl | Instagra
       </div>
       {!names.length && <div className="player-photo-hint">{t('Select at least one character.')}</div>}
     </div>
+    <ImageBackendPicker picker={picker} />
     <label className="player-photo-check">
       <input type="checkbox" checked={useRoom} onChange={(e) => setUseRoom(e.target.checked)} />
       <span>{t('Show the room around it')}</span>

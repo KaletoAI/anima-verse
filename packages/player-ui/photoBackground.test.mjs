@@ -12,6 +12,7 @@ let cursor = 0, polled = null;
 const hooks = {
   useState(initial) { const i = cursor++; if (!(i in state)) state[i] = typeof initial === 'function' ? initial() : initial;
     return [state[i], next => { state[i] = typeof next === 'function' ? next(state[i]) : next; }]; },
+  useSyncExternalStore(_subscribe, get) { return get(); },
   useRef(initial) { return this.useState(() => ({ current: initial }))[0]; },
   useEffect(fn) { effects.push(fn); }, useCallback(fn) { return fn; }, useMemo(fn) { return fn(); },
 };

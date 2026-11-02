@@ -16,7 +16,7 @@
  * the host slots it in via the `photoDialog` prop.
  */
 import { respondPair } from './pairInteractions'
-import { useCallback, useEffect, useRef, useState,
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent,
   type ReactNode } from 'react'
 import { useI18n } from './I18nProvider'
@@ -167,6 +167,11 @@ export interface ScenePhotoSubmit {
 /** What the host needs to render its image-generation dialog for the 📷 flow:
  * the prepared prompt plus the two callbacks that continue/abort the flow. */
 export interface PhotoDialogControl {
+  /** Stable for one shot, including while its prompt is being prepared. */
+  dialogId?: number
+  preparing?: boolean
+  promptEdited?: boolean
+  onPromptChange?: (prompt: string) => void
   /** Up-front validation failures stay visible for retry. */
   error?: string
   referenceImageUrl?: string
@@ -238,8 +243,9 @@ export interface ScenePanelProps {
  * `image_id` for an upload, `image_url` for a library pick. `preview` is the
  * URL shown in the composer thumbnail. `uploading` gates send during upload. */
 type AttachInfo = { image_id?: string; image_url?: string; preview: string; uploading?: boolean }
-/** Prepared scene-photo dialog payload (from /play/scene-photo/prepare). */
-type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[]; screenshot?: ScreenshotPhoto }
+/** Scene-photo dialog snapshot, including in-flight preparation. */
+type PhotoDlgInfo = { dialogId: number; preparing: boolean; promptEdited?: boolean; error?: string;
+  prompt: string; subjects: string[]; present: string[]; screenshot?: ScreenshotPhoto }
 
 // Module-level draft cache (same pattern as the Lightbox singleton): the host
 // unmounts this component whenever its panel closes (the HUD's chat panel
@@ -247,13 +253,10 @@ type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[]; scr
 // state across those remounts, so the panel stays self-contained.
 // Keyed by avatar: a full host remount (avatar gate, page load) mounts the
 // panel with avatar '' first, which discards the cache. Never persisted anywhere.
-// Async flows and the cache: send() clears the LOCAL state before its request
-// — the event-handler render write-throughs the cleared values, so any later
-// mount starts empty (no cache mutation can achieve this: a mounted instance
-// rewrites the cache from its own state on every render). Upload/photo-prepare
-// completions write the cache directly, which covers exactly the window where
-// the panel is unmounted and not yet remounted; a cached in-flight upload is
-// dropped (and its blob URL revoked) when a new instance mounts.
+// Photo preparation uses a subscribed snapshot: its result reaches a successor
+// mount too, and a shot's stable id invalidates late answers after replace/close.
+// Upload completions still write directly to the cache while unmounted; an
+// in-flight upload is dropped (and its blob URL revoked) on the next mount.
 // CONSTRAINT: one mounted ScenePanel per document. A second instance would
 // cross-wire composers through this shared object (unlike the Lightbox, whose
 // singleton is deliberately global one-host state). If Task 5 ever mounts two,
@@ -269,7 +272,20 @@ const draft = {
   photoDlg: null as PhotoDlgInfo | null,
 }
 
+let photoGeneration = 0
+const photoListeners = new Set<() => void>()
+const subscribePhoto = (listener: () => void) => {
+  photoListeners.add(listener)
+  return () => { photoListeners.delete(listener) }
+}
+const getPhotoDraft = () => draft.photoDlg
+function setPhotoDlg(value: PhotoDlgInfo | null) {
+  draft.photoDlg = value
+  photoListeners.forEach((listener) => listener())
+}
+
 function resetDraft(avatar: string) {
+  ++photoGeneration
   draft.avatar = avatar
   draft.text = ''
   draft.volume = 'normal'
@@ -370,9 +386,9 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     }
   }, [text, volume, addressees, sending, attach, refreshScene, toast, t])
 
-  // 📷 scene photo: step 1 distills the prompt from the recent room
-  // conversation (+ person descriptions) and opens the image-gen dialog
-  // (model/LoRA/prompt editable); step 2 generates into the avatar's
+  // 📷 scene photo: open the editable dialog immediately, then distill the
+  // prompt from the recent room conversation (+ person descriptions) in the
+  // background; step 2 generates into the avatar's
   // gallery; public photos announce it, secret photos can be discovered.
   const photoSkill = data?.capability_actions?.scene_photo || ''
   const photoBlock = data?.capability_blocks?.[photoSkill] || ''
@@ -380,44 +396,41 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     .map(([stat, amount]) => `${amount} ${stat}`).join(', ')
   const [photoBusy, setPhotoBusy] = useState(false)
   const [photoError, setPhotoError] = useState('')
-  const [photoDlg, setPhotoDlg] = useState<PhotoDlgInfo | null>(draft.photoDlg)
-  draft.photoDlg = photoDlg  // write-through, like the composer state above
+  const photoDlg = useSyncExternalStore(subscribePhoto, getPhotoDraft, getPhotoDraft)
   const takePhoto = useCallback(async (screenshot?: ScreenshotPhoto) => {
     if (photoBusy) return
+    // The host may remount with the same screenshot prop before acknowledging it.
+    if (screenshot && draft.photoDlg?.screenshot?.imageId === screenshot.imageId) return
+    const dialogId = ++photoGeneration
     setPhotoError('')
-    setPhotoBusy(true)
+    setPhotoDlg({ dialogId, preparing: true, prompt: '', subjects: [], present: [], screenshot })
     try {
-      const d = await apiPost<{ ok?: boolean; prompt?: string; subjects?: string[]; present?: string[] }>(
+      const d = await apiPost<{ ok?: boolean; prompt?: string; subjects?: string[]; present?: string[]; error?: string }>(
         '/play/scene-photo/prepare', screenshot ? { view: screenshot.view } : {})
-      if (d?.ok) {
-        const dlg = { prompt: d.prompt || '', subjects: d.subjects || [], present: d.present || [], screenshot }
-        setPhotoDlg(dlg)
-        // Direct cache write. It covers ONLY the ordering "completion lands
-        // while the panel is unmounted and no successor has mounted yet" —
-        // the dialog then opens on the next mount. If a new instance mounted
-        // during the prepare call, its write-through overwrites this value on
-        // its next render and the prepared prompt is LOST (the user presses
-        // the button again). send()'s local-state trick cannot help here: the
-        // value does not exist until the response arrives; closing the hole
-        // would need a cache subscription, which this deliberately is not.
-        draft.photoDlg = dlg
-      } else {
-        toast(t('Photo failed.'), 'error')
-      }
+      if (dialogId !== photoGeneration || !draft.photoDlg) return
+      if (!d?.ok) throw new Error(d?.error || t('Photo failed.'))
+      setPhotoDlg({ ...draft.photoDlg, preparing: false,
+        prompt: draft.photoDlg.promptEdited ? draft.photoDlg.prompt : d.prompt || '',
+        subjects: d.subjects || [], present: d.present || [] })
     } catch (e) {
-      toast((e as Error).message || t('Photo failed.'), 'error')
-    } finally {
-      setPhotoBusy(false)
+      if (dialogId !== photoGeneration || !draft.photoDlg) return
+      setPhotoDlg({ ...draft.photoDlg, preparing: false,
+        error: (e as Error).message || t('Photo failed.') })
     }
-  }, [photoBusy, toast, t])
+  }, [photoBusy, t])
   const preparingScreenshot = useRef<ScreenshotPhoto | null>(null)
   useEffect(() => {
     if (!screenshotPhoto || photoBusy || preparingScreenshot.current === screenshotPhoto) return
     preparingScreenshot.current = screenshotPhoto
-    void takePhoto(screenshotPhoto).finally(() => onScreenshotPhotoHandled?.(screenshotPhoto))
+    void takePhoto(screenshotPhoto)
+    // Acknowledge consumption now: a remount must not prepare this shot again.
+    onScreenshotPhotoHandled?.(screenshotPhoto)
   }, [screenshotPhoto, photoBusy, takePhoto, onScreenshotPhotoHandled])
 
   const submitPhoto = useCallback(async (payload: ScenePhotoSubmit) => {
+    if (photoBusy) return
+    ++photoGeneration  // A manually supplied prompt no longer needs the pending answer.
+    if (draft.photoDlg) setPhotoDlg({ ...draft.photoDlg, preparing: false })
     setPhotoBusy(true)
     setPhotoError('')
     try {
@@ -434,7 +447,6 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
       })
       if (d?.status === 'accepted') {
         setPhotoDlg(null)
-        draft.photoDlg = null
         const noticed = d.discovered_by?.length
           ? t('{names} noticed!').replace('{names}', d.discovered_by.join(', ')) : ''
         toast([t('Rendering photo…'), noticed].filter(Boolean).join(' '), 'info')
@@ -447,7 +459,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     } finally {
       setPhotoBusy(false)
     }
-  }, [toast, t, refreshScene])
+  }, [photoBusy, toast, t, refreshScene])
 
   // Upload a picked/pasted/dropped file → attach by image_id. A local object URL
   // is shown immediately as the preview while the upload resolves.
@@ -830,16 +842,24 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         />
       )}
       {photoDlg && photoDialog?.({
+        dialogId: photoDlg.dialogId,
+        preparing: photoDlg.preparing,
+        promptEdited: photoDlg.promptEdited,
+        onPromptChange: (prompt) => {
+          if (draft.photoDlg?.dialogId === photoDlg.dialogId) {
+            setPhotoDlg({ ...draft.photoDlg, prompt, promptEdited: true })
+          }
+        },
         prompt: photoDlg.prompt,
         subjects: photoDlg.subjects,
-        available: photoDlg.screenshot ? photoDlg.present
+        available: photoDlg.screenshot || photoDlg.preparing || photoDlg.error ? photoDlg.present
           : Array.from(new Set([...photoDlg.present, ...(avatar ? [avatar] : [])])),
         referenceImageId: photoDlg.screenshot?.imageId,
         referenceImageUrl: photoDlg.screenshot?.imageUrl,
         avatar,
-        error: photoError,
+        error: photoError || photoDlg.error,
         onSubmit: submitPhoto,
-        onClose: () => { setPhotoDlg(null); setPhotoError('') },
+        onClose: () => { ++photoGeneration; setPhotoDlg(null); setPhotoError('') },
       })}
       {giftOpen && (
         <GiftPicker

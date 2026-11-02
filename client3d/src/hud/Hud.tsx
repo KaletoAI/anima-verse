@@ -1204,7 +1204,7 @@ export function Hud({ avatar, username, role }: {
             <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
               hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
               screenshotPhoto={screenshotPhoto} onScreenshotPhotoHandled={screenshotHandled}
-              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.referenceImageId || ctl.prompt} {...ctl} />}
+              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.dialogId} {...ctl} />}
               highlightedId={chatFocus} onRowHover={setHoveredRowId}
               transcriptAside={
                 <ChatPortraits names={portraitNames} versions={speakerVersions} />} />

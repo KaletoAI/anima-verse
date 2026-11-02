@@ -55,36 +55,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { apiGet } from './api'
 import { useI18n } from './I18nProvider'
-import { PromptImprover, usePoseCheck, type PoseCheckOption } from './PromptImprover'
+import { PromptImprover, usePoseCheck } from './PromptImprover'
+import { ImageBackendPicker } from './ImageBackendPicker'
+import { useImageBackendPicker, type BackendOptions } from './useImageBackendPicker'
+export type { BackendOptions } from './useImageBackendPicker'
 import type { PhotoDialogControl, ScenePhotoSubmit } from './ScenePanel'
-
-/** One backend entry of `GET /world/imagegen-options` — the fields read here. */
-interface BackendOption {
-  name: string
-  label?: string
-  available?: boolean
-  has_loras?: boolean
-  /** This backend's LoRAs from the LoRA library; `missing` = vanished from
-   *  its listing but still offered. */
-  lora_options?: Array<{ name: string; missing?: boolean }>
-}
-
-interface LoraSlot { name: string; strength: number }
-
-const LORA_SLOTS = 4
-const emptySlots = (): LoraSlot[] =>
-  Array.from({ length: LORA_SLOTS }, () => ({ name: '', strength: 1.0 }))
-
-export interface BackendOptions {
-  options?: BackendOption[]
-  /** What "Auto (routing)" resolves this scene's occasion to right now. */
-  resolved?: string | null
-  media_generation_enabled?: boolean
-  /** Whether the occasion offers the LLM pose check + the checkbox preset. */
-  pose_check?: PoseCheckOption
-}
 
 interface PlayerPhotoDialogProps extends PhotoDialogControl {
   title?: string
@@ -99,6 +75,9 @@ interface PlayerPhotoDialogProps extends PhotoDialogControl {
 
 export function PlayerPhotoDialog({
   prompt: initialPrompt,
+  preparing = false,
+  promptEdited = false,
+  onPromptChange,
   referenceImageId,
   referenceImageUrl,
   subjects,
@@ -114,15 +93,22 @@ export function PlayerPhotoDialog({
 }: PlayerPhotoDialogProps) {
   const { t } = useI18n()
   const [prompt, setPrompt] = useState(initialPrompt)
+  const edited = useRef(promptEdited)
+  useEffect(() => { if (!edited.current) setPrompt(initialPrompt) }, [initialPrompt])
+  const editPrompt = (value: string) => {
+    edited.current = true
+    setPrompt(value)
+    onPromptChange?.(value)
+  }
   const [negative, setNegative] = useState('')
   const [selected, setSelected] = useState<string[]>(subjects)
+  useEffect(() => { setSelected(subjects) }, [subjects])
   const [useRoom, setUseRoom] = useState(true)
   const [secret, setSecret] = useState(false)
-  const [backend, setBackend] = useState('')  // '' = Auto (routing)
-  const [backends, setBackends] = useState<BackendOptions | null>(backendOptions ?? null)
+  const picker = useImageBackendPicker(occasion, avatar, backendOptions)
+  const { backend, backends, mediaOff, picked } = picker
   // LLM pose check: offered when the occasion renders people, preset from its routing switch.
   const pose = usePoseCheck(backends?.pose_check)
-  const [loraSlots, setLoraSlots] = useState<LoraSlot[]>(emptySlots)
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState(false)  // LLM rewrites the prompt
   const dialog = useRef<HTMLDivElement>(null)
@@ -132,41 +118,6 @@ export function PlayerPhotoDialog({
     alive.current = true
     return () => { alive.current = false }
   }, [])
-
-  useEffect(() => {
-    if (backendOptions !== undefined) {
-      setBackends(backendOptions)
-      return
-    }
-    let stale = false
-    const q = `?occasion=${occasion}${occasion === 'photo' && avatar ? `&character=${encodeURIComponent(avatar)}` : ''}`
-    apiGet<BackendOptions>(`/world/imagegen-options${q}`)
-      .then((d) => { if (!stale) setBackends(d || {}) })
-      .catch(() => { if (!stale) setBackends({}) })
-    return () => { stale = true }
-  }, [avatar, occasion, backendOptions])
-  // Reachable backends first; offline ones keep the server's "(offline?)" label.
-  const backendList = useMemo(() => {
-    const list = backends?.options || []
-    return [...list.filter((o) => o.available !== false),
-            ...list.filter((o) => o.available === false)]
-  }, [backends])
-  const mediaOff = backends?.media_generation_enabled === false
-  // The backend the LoRAs belong to: the pick, or what Auto resolves to.
-  const current = useMemo(
-    () => backendList.find((o) => o.name === (backend || backends?.resolved || '')) || null,
-    [backendList, backend, backends])
-  const loraOptions = useMemo(
-    () => (current?.has_loras ? current.lora_options || [] : []), [current])
-  // A backend switch clears the picks the new backend does not offer.
-  useEffect(() => {
-    const offered = new Set(loraOptions.map((l) => l.name))
-    setLoraSlots((prev) => (prev.every((s) => !s.name || offered.has(s.name))
-      ? prev
-      : prev.map((s) => (!s.name || offered.has(s.name) ? s : { name: '', strength: 1.0 }))))
-  }, [loraOptions])
-  const setSlot = (i: number, patch: Partial<LoraSlot>) =>
-    setLoraSlots((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
 
   // Everyone offerable: the distiller's subjects may name someone the scene
   // payload no longer lists, and dropping such a name silently would change
@@ -191,7 +142,6 @@ export function PlayerPhotoDialog({
   const submit = useCallback(async () => {
     if (busy || improving || !prompt.trim() || noneSelected || mediaOff) return
     setBusy(true)
-    const picked = loraOptions.length ? loraSlots.filter((s) => s.name) : []
     const payload: ScenePhotoSubmit = {
       prompt: prompt.trim(),
       ...(referenceImageId ? { reference_image_id: referenceImageId } : {}),
@@ -208,7 +158,7 @@ export function PlayerPhotoDialog({
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, improving, pose.value, referenceImageId, prompt, selected, useRoom, secret, occasion, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
+  }, [busy, improving, pose.value, referenceImageId, prompt, selected, useRoom, secret, occasion, negative, noneSelected, mediaOff, backend, picked, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -270,9 +220,11 @@ export function PlayerPhotoDialog({
                 the modal, where Q/E/WASD keep driving the camera — the
                 engine's key handling only stands down for a typing target. */}
             <textarea className="ga-input" rows={5} value={prompt} disabled={busy} autoFocus
-              onChange={(e) => setPrompt(e.target.value)} />
+              placeholder={preparing ? t('Describing the scene…') : undefined}
+              aria-busy={preparing}
+              onChange={(e) => editPrompt(e.target.value)} />
           </label>
-          <PromptImprover prompt={prompt} onPrompt={setPrompt} disabled={busy}
+          <PromptImprover prompt={prompt} onPrompt={editPrompt} disabled={busy}
             onBusyChange={setImproving} pose={pose} />
 
           {!hideSceneControls && <div className="ga-field" style={{ marginBottom: 10 }}>
@@ -294,51 +246,7 @@ export function PlayerPhotoDialog({
             )}
           </div>}
 
-          <label className="ga-field" style={{ marginBottom: 10 }}>
-            <span className="ga-field-caption">{t('Backend')}</span>
-            <select className="ga-input" value={backend} disabled={busy || !backends}
-              onChange={(e) => setBackend(e.target.value)}>
-              <option value="">
-                {!backends ? t('Loading…')
-                  : backends.resolved ? `${t('Auto (routing)')} → ${backends.resolved}`
-                    : t('Auto (routing) — no backend available')}
-              </option>
-              {backendList.map((o) => (
-                <option key={o.name} value={o.name}>{o.label || o.name}</option>
-              ))}
-            </select>
-            {mediaOff && (
-              <div className="player-photo-hint">
-                {t('Media generation is disabled for this world (Admin → Settings → Media Generation)')}
-              </div>
-            )}
-          </label>
-
-          {loraOptions.length > 0 && (
-            <div className="ga-field" style={{ marginBottom: 10 }}>
-              <span className="ga-field-caption">{t('LoRAs')}</span>
-              <div className="player-photo-loras">
-                {loraSlots.map((slot, i) => (
-                  <div key={i} className="player-photo-lora-row">
-                    <select className="ga-input" value={slot.name} disabled={busy}
-                      onChange={(e) => setSlot(i, { name: e.target.value })}>
-                      <option value="">{t('None')}</option>
-                      {loraOptions.map((l) => (
-                        <option key={l.name} value={l.name}>
-                          {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <input type="number" className="ga-input player-photo-lora-strength"
-                      min={-2} max={2} step={0.05} title={t('Strength')}
-                      disabled={busy || !slot.name} value={slot.strength}
-                      onChange={(e) => setSlot(i, { strength: parseFloat(e.target.value) || 0 })} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+          <ImageBackendPicker picker={picker} busy={busy} />
           {!hideSceneControls && <label className="player-photo-check">
             <input type="checkbox" checked={useRoom} disabled={busy}
               onChange={(e) => setUseRoom(e.target.checked)} />

@@ -27,7 +27,7 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import utc_now_iso, parse_iso
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.llm_lanes import Overflow
@@ -1812,6 +1812,12 @@ class ProviderQueue:
                         _log_task_result(task, model_name, max_tokens, None, error=task.error)
                     with self._lock:
                         self._futures.pop(task.task_id, None)
+
+            if task.label == "scene-photo prepare":
+                queue_wait = max(0.0, (parse_iso(task.started_at) - parse_iso(task.created_at)).total_seconds())
+                logger.info("[%s] Scene photo prepare: %s agent=%s queue_wait=%.2fs duration=%.2fs status=%s",
+                            self._queue_name, task.task_id, task.agent_name,
+                            queue_wait, task.duration_s, task.status)
 
             # Move to history
             with self._lock:
