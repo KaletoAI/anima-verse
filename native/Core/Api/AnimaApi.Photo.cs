@@ -11,7 +11,7 @@ public sealed partial class AnimaApi
     /// <summary>Existing player upload: same authenticated client and server-side upload limit/magic-byte chain.</summary>
     public async Task<string> UploadPhotoAsync(byte[] jpeg, CancellationToken ct = default)
     {
-        const string path = "/chat/me/upload-image";
+        const string path = "/chat/me/upload-image?purpose=scene_photo";
         using var content = new MultipartFormDataContent();
         using var file = new ByteArrayContent(jpeg);
         file.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");

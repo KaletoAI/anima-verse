@@ -34,7 +34,7 @@ public sealed partial class FixtureSource
         var pointRequest = JsonSerializer.SerializeToNode(report)!.AsObject();
         pointRequest.Remove("yaw");
         if (step.GetProperty("method").GetString() != "POST" || step.GetProperty("path").GetString() != "/play/pos"
-            || !double.IsFinite(report.yaw) || Math.Abs(report.yaw) > Math.PI
+            || (report.yaw is { } yaw && (!double.IsFinite(yaw) || Math.Abs(yaw) > Math.PI))
             || !JsonNode.DeepEquals(pointRequest, JsonNode.Parse(step.GetProperty("request").GetRawText())))
             throw new InvalidOperationException("Position fixture request does not match step " + _positionStep);
         _positionStep++; PositionRequests.Add(report);

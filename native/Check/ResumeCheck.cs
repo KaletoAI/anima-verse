@@ -22,7 +22,7 @@ public static class ResumeCheck
 {
     public static async Task<string> RunAsync(Node3D host, string fixtures)
     {
-        int n = 0;
+        int n = CefProfileCheck.Run();
         void Is(string name, bool value) { n++; if (!value) throw new InvalidOperationException("resume " + name); }
         static PositionAnswer Answer() => new(200, JsonSerializer.Deserialize<JsonElement>("{\"ok\":true}"));
         var handoff = typeof(HudOverlay).GetMethod(nameof(HudOverlay.HandoffScript))!;

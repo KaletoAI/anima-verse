@@ -177,6 +177,8 @@ public partial class HudOverlay : CanvasLayer
         AddChild(_cef.Runtime);
         var dir = ProjectSettings.GlobalizePath("user://cef");
         var logFile = CefLogFile(dir);
+        int removedProfiles = CefProfiles.SweepStale(System.IO.Path.GetTempPath(), DateTime.UtcNow);
+        Log($"hud: removed {removedProfiles} stale temporary CEF profiles");
         _cefProfile = System.IO.Directory.CreateTempSubdirectory("anima-cef-").FullName;
         var config = new Godot.Collections.Dictionary
         {

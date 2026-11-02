@@ -284,6 +284,8 @@ def resolve_chat_image(image_id: str = "", image_url: str = "") -> tuple[str, st
             return "", ""
         path = _get_chat_upload_dir() / image_id
         if path.exists():
+            from app.core.chat_ops import retain_chat_upload
+            retain_chat_upload(image_id)
             # The serve route is /chat/{user_id}/upload-image/{id}; user_id is
             # ignored, so a fixed segment is fine for the display URL.
             return str(path), f"/chat/me/upload-image/{image_id}"

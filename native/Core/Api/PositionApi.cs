@@ -11,7 +11,7 @@ using AnimaNative.Scatter;
 namespace AnimaNative.Api;
 
 /// <summary>Task 50 / E7-T5: verbatim /play/pos wire names; monotonic sampling time and per-session sequence.</summary>
-public sealed record PositionReport(double x, double z, long seq, double t_ms, string session, double yaw = 0);
+public sealed record PositionReport(double x, double z, long seq, double t_ms, string session, double? yaw = null);
 
 /// <summary>Task 50: retain both fixture error bodies and FastAPI detail objects, including the server's sentence.</summary>
 public sealed record PositionAnswer(int Status, JsonElement Body)

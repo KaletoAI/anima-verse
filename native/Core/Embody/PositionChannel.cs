@@ -22,8 +22,9 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     /// <summary>Figure yaw already uses atan2(x,z): +z = 0, +x = pi/2. Only wrap it for the wire.</summary>
     public static double ReportYaw(double figureYaw) => Math.Atan2(Math.Sin(figureYaw), Math.Cos(figureYaw));
     public static bool YawChanged(double before, double after) => Math.Abs(ReportYaw(after-before)) > YawThreshold;
-    private Func<double> _facingYaw = () => 0;
-    private double _reportedYaw;
+    private Func<double>? _facingYaw;
+    private double? _reportedYaw;
+    private double? FacingYaw => _facingYaw is { } source ? ReportYaw(source()) : null;
     /// <summary>Seed a quiet baseline on control handoff; sample the rendered facing, never its target.</summary>
     public void SetFacingSource(Func<double> facingYaw)
     { _facingYaw = facingYaw; _reportedYaw = ReportYaw(facingYaw()); }
@@ -49,7 +50,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
         if (serverOwned) _pending = null;
         else if (Dirty && point is { } p)
         {
-            _pending = (new(Math.Floor(p.X*100+.5)/100, Math.Floor(p.Z*100+.5)/100), ++Seq, ReportYaw(_facingYaw()));
+            _pending = (new(Math.Floor(p.X*100+.5)/100, Math.Floor(p.Z*100+.5)/100), ++Seq, FacingYaw);
             Dirty = false;
         }
         _propDraining = true; _propDrainFailed = false;
@@ -92,7 +93,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     private readonly List<long> _sent = new();
     private readonly CancellationTokenSource _lifetime = new();
     private TaskCompletionSource? _idle;
-    private (P2 Point, long Seq, double Yaw)? _pending;
+    private (P2 Point, long Seq, double? Yaw)? _pending;
     private P2? _reported;
     private double _lastReport, _quietUntil;
     private double? _lastAnswerAt;
@@ -117,7 +118,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     {
         if (Driver.Kind != DriverKind.SERVER || _disposed || ReportsPaused || !CanReport()) return;
         long seq = ++Seq;
-        _pending = (point, seq, ReportYaw(_facingYaw()));
+        _pending = (point, seq, FacingYaw);
         Apply(PosEcho.AvatarDriver(Driver, new DriverInput(seq), Cancelled));
         Flush();
     }
@@ -130,8 +131,8 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     public void Observe(P2 point, bool moved)
     {
         if (_disposed || ReportsPaused || !CanReport() || Driver.Kind == DriverKind.SERVER) return;
-        double yaw = ReportYaw(_facingYaw());
-        if (YawChanged(_reportedYaw, yaw)) Dirty = true;
+        double? yaw = FacingYaw;
+        if (_reportedYaw is { } before && yaw is { } after && YawChanged(before, after)) Dirty = true;
         if (moved && (_reported is not { } p || Math.Abs(p.X-point.X) >= .01 || Math.Abs(p.Z-point.Z) >= .01)) Dirty = true;
     }
     public void Tick(P2 point, bool moved)
@@ -140,7 +141,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
         Observe(point, moved);
         if (InFlight || !Dirty || clock() - _lastReport < ReportMs) return;
         Dirty = false;
-        _pending = (new(Math.Floor(point.X*100+.5)/100, Math.Floor(point.Z*100+.5)/100), ++Seq, ReportYaw(_facingYaw()));
+        _pending = (new(Math.Floor(point.X*100+.5)/100, Math.Floor(point.Z*100+.5)/100), ++Seq, FacingYaw);
         Flush();
     }
 
@@ -154,7 +155,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
         _ = Send(p.Point, p.Seq, p.Yaw);
     }
 
-    private async Task Send(P2 point, long seq, double yaw)
+    private async Task Send(P2 point, long seq, double? yaw)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         deadline.CancelAfter(TimeoutMs);

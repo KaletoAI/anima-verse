@@ -17,6 +17,23 @@ public static class PositionChannelCheck
         void Is(string label,bool value) { n++; if(!value) throw new InvalidOperationException("position channel "+label); }
         static PositionAnswer Answer(string json,int status=200)
         { using var doc=JsonDocument.Parse(json); return new(status,doc.RootElement.Clone()); }
+        double facingClock = 330, facing = .8;
+        var facingReports = new List<PositionReport>();
+        using (var facingChannel = new PositionChannel((p, _) => {
+            facingReports.Add(p); return Task.FromResult(Answer("{\"ok\":true}"));
+        }, () => facingClock))
+        {
+            facingChannel.Tick(new(1, 0), true);
+            await facingChannel.WhenIdle;
+            using var before = JsonDocument.Parse(JsonSerializer.Serialize(facingReports[0]));
+            Is("no yaw before facing source", !before.RootElement.TryGetProperty("yaw", out var absent) || absent.ValueKind == JsonValueKind.Null);
+            facingChannel.SetFacingSource(() => facing);
+            facingClock = 660;
+            facingChannel.Tick(new(2, 0), true);
+            await facingChannel.WhenIdle;
+            using var after = JsonDocument.Parse(JsonSerializer.Serialize(facingReports[1]));
+            Is("rendered yaw after facing source", after.RootElement.GetProperty("yaw").GetDouble() == .8);
+        }
         double now=330;
         var pending=new TaskCompletionSource<PositionAnswer>();
         var sent=new List<PositionReport>();

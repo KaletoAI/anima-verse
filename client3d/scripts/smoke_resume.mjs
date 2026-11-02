@@ -73,6 +73,32 @@ async function fixture(overrides = {}) {
   }, ['exitFlushing']);
   return { fn, sent, close() { for (const id of timeouts) clearTimeout(id); } };
 }
+// Execute the production lifecycle listeners. A browser reload replaces the frozen realm.
+{
+  const source = ts.createSourceFile('main.ts', readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  const listeners = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === 'window.addEventListener'
+      && (node.arguments[0]?.getText(source) === "'pageshow'"
+        || (node.arguments[0]?.getText(source) === "'pagehide'" && node.getText(source).includes('flushPlayerOnExit'))))
+      listeners.push(node.getText(source));
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  const events = new Map(); let reloads = 0;
+  const hidden = await fixture();
+  try {
+    new Function('window', 'location', 'flushPlayerOnExit', transformSync(listeners.join(';'), { loader: 'ts' }).code)(
+      { addEventListener: (name, fn) => events.set(name, fn) }, { reload: () => reloads++ }, hidden.fn);
+    events.get('pagehide')({ persisted: true });
+    assert.equal(hidden.fn.snapshot().exitFlushing, true);
+    events.get('pageshow')?.({ persisted: false }); assert.equal(reloads, 0);
+    events.get('pageshow')?.({ persisted: true }); assert.equal(reloads, 1, 'bfcache restore must rebuild the HUD and position channel');
+    const restored = await fixture();
+    try { await restored.fn(true); assert.equal(restored.sent[0].url, '/play/pos', 'new realm reports again'); }
+    finally { restored.close(); }
+  } finally { hidden.close(); }
+}
 const earlyExit = await mainFunction('flushPlayerOnExit', { exitFlushing: false, exitReportsReady: false });
 await earlyExit();
 for (const unloading of [true, false]) {
@@ -97,6 +123,12 @@ for (const overrides of [{ avatarSeated: true }, { ownedPropRun: () => ({}) }, {
 {
   const f = await fixture({ posDirty: false });
   try { await f.fn(true); assert.deepEqual(f.sent.map(r => r.url), ['/play/enter-room'], 'room dirtiness is independent of position dirtiness'); }
+  finally { f.close(); }
+}
+{
+  const f = await fixture({ npcs: { positionOf: () => ({ x: 1, z: 2 }), yawOf: () => null,
+    inInteraction: () => false, hasOwnMotion: () => false } });
+  try { await f.fn(true); assert.equal(f.sent[0].body.yaw, null, 'quit without a rendered figure must preserve server facing'); }
   finally { f.close(); }
 }
 {
@@ -157,6 +189,9 @@ const { facingYaw } = await import('data:text/javascript;base64,'
     bundle: true, format: 'esm', write: false }).outputFiles[0].text).toString('base64'));
 const faceTowards = sourceFunction('../src/scene/figures.ts', 'faceTowards', { facingYaw });
 const yawOf = sourceFunction('../src/scene/npcs.ts', 'yawOf');
+assert.equal(positionYaw(yawOf.call({ npcs: new Map() }, 'missing')), null, 'missing figure must not invent zero yaw');
+assert.equal(positionYaw(yawOf.call({ npcs: new Map([['pending', { root: { rotation: { y: 0 } } }]]) }, 'pending')), null,
+  'a placeholder without a rendered figure must not supply facing');
 for (const rendered of [0, Math.PI/2, -Math.PI/2, Math.PI, 7.2]) {
   const figure = { root: { rotation: { y: rendered } }, targetYaw: -2, holdsFacing: false };
   const yaw = positionYaw(yawOf.call({ npcs: new Map([['avatar', { figure }]]) }, 'avatar'));
@@ -172,6 +207,8 @@ const postPos = sourceFunction('../src/api.ts', 'postPos', {
 });
 await postPos(1, 2, undefined, 3, 330, 'fixture-session', .8);
 assert.deepEqual(wireBody, { x: 1, z: 2, yaw: .8, seq: 3, t_ms: 330, session: 'fixture-session' });
+await postPos(1, 2, undefined, 4, 660, 'fixture-session', null);
+assert.equal(wireBody.yaw ?? null, null, 'no facing leaves stored server yaw unchanged');
 const getWorldMap = sourceFunction('../src/api.ts', 'getWorldMap', {
   performance: { now: () => 0 }, worldMapMeta: new WeakMap(), json: r => r.json(),
   fetch: async () => ({ json: async () => ({ characters: [{ name: 'avatar', yaw: null }] }) }),
@@ -220,4 +257,7 @@ channel.tickPosReport({ x: 3.25, z: 2 }); await Promise.resolve();
 assert.equal(reports.length, 6); assert.equal(reports[5][0], 3.25); assert.equal(reports[5][6], 2.3, 'final stop carries resting yaw');
 now = 3060; channel.tickPosReport({ x: 3.25, z: 2 }); await Promise.resolve();
 assert.equal(reports.length, 6, 'final stop reports only once');
+now = 3390; renderedYaw = null;
+channel.markMoved({ x: 4, z: 2 }); channel.tickPosReport({ x: 4, z: 2 }); await Promise.resolve();
+assert.equal(reports.length, 7); assert.equal(reports[6][6], null, 'movement without a rendered figure must not send zero yaw');
 console.log('resume: PASS (handoff, position/room/yaw flush, ownership, null arrival, facing round trip, turn threshold, cadence, slow flight, final stop)');

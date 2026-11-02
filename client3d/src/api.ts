@@ -250,7 +250,7 @@ export async function switchCharacter(name: string): Promise<SwitchedCharacter> 
  * the time that really passed while walking, not between two handler runs.
  */
 export async function postPos(x: number, z: number, signal: AbortSignal | undefined,
-  seq: number, tMs: number, session: string, yaw: number
+  seq: number, tMs: number, session: string, yaw: number | null
 ): Promise<PosReport> {
   const res = await fetch('/play/pos', {
     method: 'POST',

@@ -449,9 +449,9 @@ export class NpcManager {
   }
 
   /** Current rendered facing, rather than the figure's eased target. +z = 0, +x = pi/2. */
-  yawOf(name: string): number {
+  yawOf(name: string): number | null {
     const npc = this.npcs.get(name);
-    return npc?.figure?.root.rotation.y ?? npc?.root.rotation.y ?? 0;
+    return npc?.figure?.root.rotation.y ?? null;
   }
 
   /** The point a camera should AIM at to look at a figure rather than at the

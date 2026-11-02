@@ -112,6 +112,7 @@ body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename=
 async def receive():
     return {"type": "http.request", "body": body, "more_body": False}
 request = Request({"type": "http", "method": "POST", "path": "/chat/me/upload-image",
+                   "query_string": b"",
                    "headers": [(b"content-type", f"multipart/form-data; boundary={boundary}".encode())]}, receive)
 token = current_user_ctx.set({"id": "uploader"})
 try:

@@ -1042,6 +1042,8 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
+    ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),
     ("item_reading_sessions", "session_id", "TEXT NOT NULL DEFAULT ''"),
     ("interaction_invites", "reason", "TEXT NOT NULL DEFAULT ''"),

@@ -262,6 +262,7 @@ public static class PhotoCheck
         {
             Paths.Add(request.RequestUri!.AbsolutePath);
             if (request.Method!=HttpMethod.Post || request.RequestUri.AbsolutePath!="/chat/me/upload-image"
+                || request.RequestUri.Query!="?purpose=scene_photo"
                 || request.Content is not MultipartFormDataContent multi) throw new InvalidOperationException("expected multipart player upload");
             var file=multi.Single(); var bytes=await file.ReadAsByteArrayAsync(ct);
             using var decoded=new Image();

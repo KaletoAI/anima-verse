@@ -16,7 +16,7 @@ try {
     return new Response(JSON.stringify({ image_id: '012345abcdef.jpg', filename: 'photo.jpg' }), { status: 200 });
   };
   await uploadPhotoShot(jpeg, view);
-  assert.equal(requests[0][0], '/chat/me/upload-image');
+  assert.equal(requests[0][0], '/chat/me/upload-image?purpose=scene_photo');
   assert.equal(requests[0][1].credentials, 'same-origin');
   assert.equal(requests[0][1].method, 'POST');
   const file = requests[0][1].body.get('file');

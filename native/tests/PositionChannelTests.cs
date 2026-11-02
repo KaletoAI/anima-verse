@@ -37,11 +37,11 @@ public sealed class PositionChannelTests
         channel.Tick(new(1, 1), false); Assert.Empty(sent);
         yaw = 2 * Math.PI / 180; channel.Tick(new(1, 1), false); Assert.Empty(sent);
         yaw = 4 * Math.PI / 180; channel.Tick(new(1, 1), false); Assert.Single(sent);
-        Assert.Equal(yaw, sent[0].yaw, 10);
+        Assert.Equal(yaw, sent[0].yaw!.Value, 10);
         now = 660; channel.Tick(new(1, 1), false); Assert.Single(sent);
         yaw = .8;
         Assert.True(await channel.FlushOnShutdownAsync(new(1, 1)));
-        Assert.Equal(2, sent.Count); Assert.Equal(.8, sent[1].yaw, 10);
+        Assert.Equal(2, sent.Count); Assert.Equal(.8, sent[1].yaw!.Value, 10);
         Assert.False(channel.Dirty);
         Assert.False(PositionChannel.YawChanged(Math.PI-.01, -Math.PI+.01));
         Assert.True(PositionChannel.YawChanged(Math.PI-.04, -Math.PI+.04));

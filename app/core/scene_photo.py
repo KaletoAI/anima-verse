@@ -329,6 +329,13 @@ def take_scene_photo(avatar: str,
     from app.models.character import add_character_image_metadata
     add_character_image_metadata(avatar, filename, {
         "scene_photo": True, "secret": secret, "photo_subjects": subjects})
+    if reference_image_id:
+        from app.core.chat_ops import delete_screenshot_upload
+        try:
+            delete_screenshot_upload(reference_image_id, user_id)
+        except OSError as exc:
+            # The generated gallery image is already safe; daily cleanup can retry.
+            logger.warning("scene photo input cleanup failed: %s", exc)
     discovered_by = []
     if secret:
         roll = rng if rng is not None else random.random

@@ -3881,7 +3881,7 @@ async function startApp(username: string, role: string) {
   let avatarCancelled: Cancelled = NO_CANCEL;
   let answerFloor = 0;
   let avatarLocalPos: { x: number; z: number } | null = null;
-  let pendingReport: { x: number; z: number; seq: number; yaw: number } | null = null;
+  let pendingReport: { x: number; z: number; seq: number; yaw: number | null } | null = null;
   const posSession = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const sentSeqs: number[] = [];
   /** When the last report went out (`performance.now()`, a DURATION clock). */
@@ -3895,6 +3895,9 @@ async function startApp(username: string, role: string) {
    *  the "one final report on stop" into a single call instead of a stream. */
   let posDirty = false;
   window.addEventListener('pagehide', () => { void flushPlayerOnExit(true); });
+  // pagehide also removes the HUD iframe and disconnects its bridge. Rebuild both
+  // clients on a bfcache return rather than resuming partially torn-down channels.
+  window.addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });
 
   /** Capture the final point and room before page teardown, including a room still in its walking hold. */
   async function flushPlayerOnExit(unloading = false): Promise<void> {

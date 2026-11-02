@@ -233,7 +233,8 @@ public static class HitchCheck
             for (int i = 0; i < 3; i++) await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
             if (!lines.Any(l => l.Contains("process 70 ms,") && l.Contains("HitchCheck.LiveContinuationAsync 9 ms")))
                 throw new InvalidOperationException("hitch live process bracket / post-render continuation missing: " + string.Join(" | ", lines));
-            if (!lines.Any(l => l.Contains("physics 3 ms,") || l.Contains("physics 6 ms,")))
+            // One 3 ms fixture step per physics tick; a loaded machine may run 1..4 ticks in that frame.
+            if (!lines.Any(l => System.Text.RegularExpressions.Regex.IsMatch(l, @"physics (3|6|9|12) ms,")))
                 throw new InvalidOperationException("hitch live physics brackets missing: " + string.Join(" | ", lines));
             return 3;
         }
