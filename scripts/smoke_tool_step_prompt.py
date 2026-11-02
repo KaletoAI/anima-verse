@@ -78,8 +78,12 @@ def main():
             assert 'Kommst du mit?' not in first.system and 'TalkTo' not in first.system
             assert 'Always respond in German.' in first.system
             assert 'Every message, caption or free-text tool argument' in first.system
-            assert 'Agreement needs no tool unless an open question' in first.system
-            assert 'an offered verb answers exactly that proposal' in first.system
+            # Live 2026-11-02: "Das lässt sich sicher einrichten…" to a request
+            # to undress produced NONE in 6 of 8 replays — a yes to something
+            # doable now is the action; maybe/later/condition/refusal are not.
+            assert 'A yes to something the character can do right now with an offered verb IS that action' in first.system
+            assert 'a yes to an open question takes its listed call.' in first.system
+            assert 'A maybe, "later", unmet condition or refusal is no action.' in first.system
             assert 'Proposing to go somewhere together is an action.' in first.system
             print('[1] PASS stable system, language, consent rule and syntax-only example')
             plan_mock.return_value = plans
