@@ -70,6 +70,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import smoke_prop_action_runs as RUNS                                 # noqa: E402
 
 F, A, R, clips, pose_catalog = RUNS.F, RUNS.A, RUNS.R, RUNS.clips, RUNS.pose_catalog
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
 from app.core import hooks, prop_actions as P                           # noqa: E402
 from app.core.timeutils import utc_now                                  # noqa: E402
 

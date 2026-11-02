@@ -31,6 +31,12 @@ def main():
                           ANIMATION_CLIPS_LICENSED_DIR=str(licensed),
                           ANIMATION_CLIPS_INBOX_DIR=str(root / "inbox"),
                           ANIMATION_RIG_FILE=str(root / "reference.fbx"))
+        os.environ["STORAGE_DIR"] = str(root / "world")
+        os.environ["INSTANCE_DIR"] = str(root / "instance")
+        os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(root / "clips-trial")
+        from app.core import paths
+        paths.init(root / "world")
+        paths.init_instance(root / "instance")
         from app.core import animation_clips as clips
 
         def put(name, meta=None, library=free):

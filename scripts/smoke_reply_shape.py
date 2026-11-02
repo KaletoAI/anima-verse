@@ -76,17 +76,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# The storage root and the clip library MUST be redirected BEFORE the first
-# app import: app.models.relationship reaches its world.db through paths, and
-# without a storage root every world access raises StorageNotInitialised —
-# there is no default world any more, so nothing here can land in the tracked
-# worlds/demo.
-os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="reply-shape-clips-")
+# Keep storage and installation assets private before importing app modules.
+_SMOKE_TEMP = tempfile.TemporaryDirectory(prefix="reply-shape-")
+_SMOKE_ROOT = Path(_SMOKE_TEMP.name)
+os.environ["STORAGE_DIR"] = str(_SMOKE_ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(_SMOKE_ROOT / "instance")
+os.environ["ANIMATION_CLIPS_DIR"] = str(_SMOKE_ROOT / "clips")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(_SMOKE_ROOT / "clips-licensed")
+os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(_SMOKE_ROOT / "clips-inbox")
+os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(_SMOKE_ROOT / "clips-trial")
+os.environ["ANIMATION_RIG_FILE"] = str(_SMOKE_ROOT / "reference.fbx")
 
 from app.core import paths  # noqa: E402
+paths.init(_SMOKE_ROOT / "world")
+paths.init_instance(_SMOKE_ROOT / "instance")
 
-paths.init(tempfile.mkdtemp(prefix="reply-shape-storage-"))
-paths.init_instance(paths.get_storage_dir() / "instance")
 from app.core.db import init_schema
 init_schema()
 

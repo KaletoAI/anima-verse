@@ -41,6 +41,8 @@ if ARGS.api_scenario_dir:
 
 import smoke_prop_action_runs as S
 F, A, R = S.F, S.A, S.R
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
 from app.core import prop_actions as P, auth_dependency, sessions, users, config, llm_router
 from app.core import prompt_templates as templates, template_overrides
 from app.core.dependencies import get_skill_manager

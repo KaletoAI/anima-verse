@@ -33,6 +33,8 @@ if ARGS.scenario_dir:
 
 import smoke_prop_action_runs as S
 F, A, R = S.F, S.A, S.R
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
 from app.core.game_time import GameDuration
 from app.core import effect_application as E, prompt_filters, stat_boosts, db
 from app.core import agent_loop, llm_router

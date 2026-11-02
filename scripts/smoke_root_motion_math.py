@@ -75,6 +75,8 @@ world slides BACKWARDS in these numbers by exactly the travel.
       points: B weighs 0.5 in every frame, never FULL, so it adds no run and
       the drift is A's 0.
 """
+import os
+import tempfile
 import math
 import sys
 from pathlib import Path
@@ -225,6 +227,21 @@ for args, want, eps in ((((0.0, 40.0), 90, 0, 0), (40.0, 0.0), EPS),
 # ------------------------------------------------------- [9] mode parity
 print("[9] the Blender copy of the modes matches the app's")
 sys.path.insert(0, str(ROOT))
+# Keep storage and installation assets private before importing app modules.
+_SMOKE_TEMP = tempfile.TemporaryDirectory(prefix="root_motion_math-")
+_SMOKE_ROOT = Path(_SMOKE_TEMP.name)
+os.environ["STORAGE_DIR"] = str(_SMOKE_ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(_SMOKE_ROOT / "instance")
+os.environ["ANIMATION_CLIPS_DIR"] = str(_SMOKE_ROOT / "clips")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(_SMOKE_ROOT / "clips-licensed")
+os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(_SMOKE_ROOT / "clips-inbox")
+os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(_SMOKE_ROOT / "clips-trial")
+os.environ["ANIMATION_RIG_FILE"] = str(_SMOKE_ROOT / "reference.fbx")
+
+from app.core import paths  # noqa: E402
+paths.init(_SMOKE_ROOT / "world")
+paths.init_instance(_SMOKE_ROOT / "instance")
+
 from app.core import animation_clips  # noqa: E402
 
 check("_root_motion.MODES == animation_clips.ROOT_MOTION_MODES",

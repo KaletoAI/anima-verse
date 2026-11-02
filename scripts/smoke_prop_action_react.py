@@ -64,6 +64,8 @@ import unittest
 
 import smoke_prop_action_runs as S
 from smoke_prop_action_runs import A, F, R, request, tick
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
 from app.core import hooks
 from app.core.game_time import GameDuration
 

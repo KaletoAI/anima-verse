@@ -24,19 +24,23 @@ PARSER = argparse.ArgumentParser()
 PARSER.add_argument("--observe-dir", type=Path)
 ARGS, REST = PARSER.parse_known_args()
 RESUME_ROOT = os.environ.get("PROP_ACTION_SMOKE_RESUME_ROOT", "")
+# A single root binding keeps the default temp path visible to the lint;
+# retained observation/restart roots still require explicit private scenarios.
+TEMP = None if RESUME_ROOT or ARGS.observe_dir else tempfile.TemporaryDirectory(prefix="prop-paths-")
+ROOT = (Path(RESUME_ROOT).resolve() if RESUME_ROOT else
+        ARGS.observe_dir.resolve() if ARGS.observe_dir else Path(TEMP.name))
 if RESUME_ROOT:
-    ROOT = Path(RESUME_ROOT).resolve()
     if not (ROOT / ".prop-action-scenario").is_file():
         raise ValueError("resume root is not an explicitly created private action scenario")
-    TEMP = None
-else:
-    TEMP = None if ARGS.observe_dir else tempfile.TemporaryDirectory(prefix="prop-paths-")
-    ROOT = ARGS.observe_dir.resolve() if ARGS.observe_dir else Path(TEMP.name)
-    if ARGS.observe_dir:
-        ROOT.mkdir(parents=True, exist_ok=False)
-os.environ.update(STORAGE_DIR=str(ROOT / "world"), INSTANCE_DIR=str(ROOT / "instance"),
-                  ANIMATION_CLIPS_DIR=str(ROOT / "clips"), ANIMATION_RIG_FILE=str(ROOT / "rig.fbx"),
-                  EVENT_ENTRY_ROLL_ENABLED="0")
+elif ARGS.observe_dir:
+    ROOT.mkdir(parents=True, exist_ok=False)
+os.environ["STORAGE_DIR"] = str(ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(ROOT / "instance")
+os.environ.update(ANIMATION_CLIPS_DIR=str(ROOT / "clips"),
+                  ANIMATION_CLIPS_LICENSED_DIR=str(ROOT / "clips-licensed"),
+                  ANIMATION_CLIPS_INBOX_DIR=str(ROOT / "clips-inbox"),
+                  ANIMATION_CLIPS_TRIAL_DIR=str(ROOT / "clips-trial"),
+                  ANIMATION_RIG_FILE=str(ROOT / "rig.fbx"), EVENT_ENTRY_ROLL_ENABLED="0")
 from app.core import paths
 paths.init(ROOT / "world")
 paths.init_instance(ROOT / "instance")

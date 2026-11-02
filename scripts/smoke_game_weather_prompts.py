@@ -53,17 +53,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-# The storage root and the clip library MUST be redirected BEFORE the first
-# app import: app.core.prompt_compose_llm reaches its world.db through paths,
-# and without a storage root every world access raises StorageNotInitialised —
-# there is no default world any more, so nothing here can land in the tracked
-# worlds/demo.
-os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
-    prefix="game-weather-prompts-clips-")
+# Keep storage and installation assets private before importing app modules.
+_SMOKE_TEMP = tempfile.TemporaryDirectory(prefix="game-weather-prompts-")
+_SMOKE_ROOT = Path(_SMOKE_TEMP.name)
+os.environ["STORAGE_DIR"] = str(_SMOKE_ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(_SMOKE_ROOT / "instance")
+os.environ["ANIMATION_CLIPS_DIR"] = str(_SMOKE_ROOT / "clips")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(_SMOKE_ROOT / "clips-licensed")
+os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(_SMOKE_ROOT / "clips-inbox")
+os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(_SMOKE_ROOT / "clips-trial")
+os.environ["ANIMATION_RIG_FILE"] = str(_SMOKE_ROOT / "reference.fbx")
 
 from app.core import paths  # noqa: E402
-paths.init(tempfile.mkdtemp(prefix="game-weather-prompts-storage-"))
-paths.init_instance(paths.get_storage_dir() / "instance")
+paths.init(_SMOKE_ROOT / "world")
+paths.init_instance(_SMOKE_ROOT / "instance")
+
 from app.core.db import init_schema
 init_schema()
 

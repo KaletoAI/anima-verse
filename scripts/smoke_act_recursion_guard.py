@@ -30,12 +30,29 @@ Usage:
 
 Exit code 0 = pass.
 """
+import os
+import tempfile
 import asyncio
 import concurrent.futures
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Keep storage and installation assets private before importing app modules.
+_SMOKE_TEMP = tempfile.TemporaryDirectory(prefix="act_recursion_guard-")
+_SMOKE_ROOT = Path(_SMOKE_TEMP.name)
+os.environ["STORAGE_DIR"] = str(_SMOKE_ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(_SMOKE_ROOT / "instance")
+os.environ["ANIMATION_CLIPS_DIR"] = str(_SMOKE_ROOT / "clips")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(_SMOKE_ROOT / "clips-licensed")
+os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(_SMOKE_ROOT / "clips-inbox")
+os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(_SMOKE_ROOT / "clips-trial")
+os.environ["ANIMATION_RIG_FILE"] = str(_SMOKE_ROOT / "reference.fbx")
+
+from app.core import paths  # noqa: E402
+paths.init(_SMOKE_ROOT / "world")
+paths.init_instance(_SMOKE_ROOT / "instance")
 
 from app.core import act_engine  # noqa: E402
 

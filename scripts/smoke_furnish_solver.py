@@ -177,12 +177,29 @@ B beside.  ``sofa wall_n`` → [3.0, 0.5], yaw 0, its left is EAST. Both copies
   on the table) sits exactly on the first raster cell, so a new candle skips to
   [0.15, 0].
 """
+import os
+import tempfile
 import json
 import math
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Keep storage and installation assets private before importing app modules.
+_SMOKE_TEMP = tempfile.TemporaryDirectory(prefix="furnish_solver-")
+_SMOKE_ROOT = Path(_SMOKE_TEMP.name)
+os.environ["STORAGE_DIR"] = str(_SMOKE_ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(_SMOKE_ROOT / "instance")
+os.environ["ANIMATION_CLIPS_DIR"] = str(_SMOKE_ROOT / "clips")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(_SMOKE_ROOT / "clips-licensed")
+os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(_SMOKE_ROOT / "clips-inbox")
+os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(_SMOKE_ROOT / "clips-trial")
+os.environ["ANIMATION_RIG_FILE"] = str(_SMOKE_ROOT / "reference.fbx")
+
+from app.core import paths  # noqa: E402
+paths.init(_SMOKE_ROOT / "world")
+paths.init_instance(_SMOKE_ROOT / "instance")
 
 from app.core import furnish_geometry as fg  # noqa: E402
 from app.core import furnish_solver as fs  # noqa: E402

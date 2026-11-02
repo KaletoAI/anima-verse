@@ -41,6 +41,8 @@ import unittest
 
 import smoke_prop_action_runs as S
 from smoke_prop_action_runs import F
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
 from app.core import places, prop_action_engine as A, prop_action_store as R
 from app.core.prop_actions import furniture_for_pose, strikable_pose_keys
 from app.models import character as C

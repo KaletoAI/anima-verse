@@ -6,6 +6,7 @@ Usage: ./.venv/bin/python scripts/smoke_llm_effective_metadata.py
 MockTransport intercepts real SDK serialization; no provider or world DB is used.
 Expected values below come from the top-level parameters and explicit body overrides.
 """
+import os
 import asyncio
 import json
 from pathlib import Path
@@ -17,6 +18,21 @@ import anthropic
 import httpx
 import httpx2
 import openai
+
+# Keep storage and installation assets private before importing app modules.
+_SMOKE_TEMP = TemporaryDirectory(prefix="llm_effective_metadata-")
+_SMOKE_ROOT = Path(_SMOKE_TEMP.name)
+os.environ["STORAGE_DIR"] = str(_SMOKE_ROOT / "world")
+os.environ["INSTANCE_DIR"] = str(_SMOKE_ROOT / "instance")
+os.environ["ANIMATION_CLIPS_DIR"] = str(_SMOKE_ROOT / "clips")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(_SMOKE_ROOT / "clips-licensed")
+os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(_SMOKE_ROOT / "clips-inbox")
+os.environ["ANIMATION_CLIPS_TRIAL_DIR"] = str(_SMOKE_ROOT / "clips-trial")
+os.environ["ANIMATION_RIG_FILE"] = str(_SMOKE_ROOT / "reference.fbx")
+
+from app.core import paths  # noqa: E402
+paths.init(_SMOKE_ROOT / "world")
+paths.init_instance(_SMOKE_ROOT / "instance")
 
 from app.core import llm_log_replay, llm_router, provider_queue
 from app.utils import llm_logger

@@ -34,6 +34,8 @@ if OPTIONS_ARGS.scenario_dir:
     raise SystemExit(0)
 
 import smoke_prop_action_paths as F
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
 # Keep complete shipped catalogs, but all authored test entries/templates are
 # private. In particular no save_template call can touch repository/shared.
 SHARED = F.ROOT / "shared"
