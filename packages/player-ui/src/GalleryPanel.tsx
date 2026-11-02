@@ -24,6 +24,7 @@ import { EmptyState } from './EmptyState'
 import { formatDateTime } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
 import { thumbUrl, thumbWidth } from './thumbs'
+import { ShowPhotoButton } from './ShowPhotoButton'
 
 /** Tile width the grid below targets: `minmax(72px, 1fr)` in a panel column,
  *  so a tile is ~72-110 CSS px wide. One bucket for the whole grid — the
@@ -391,6 +392,9 @@ export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
                   {t('Cancel')}
                 </button>
               </div>
+            )}
+            {selected === self && (
+              <ShowPhotoButton filename={zoom.name} onShown={() => setZoom(null)} />
             )}
             {zoom.postprocessed && (
               <div style={{ color: '#c79af0' }}>✎ {t('Edited externally')}{zoom.info.postprocessed_at ? ` (${fmt(zoom.info.postprocessed_at)})` : ''}</div>

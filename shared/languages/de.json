@@ -8,6 +8,18 @@
     }
   },
   "translations": {
+    "Secretly": "Heimlich",
+    "Show in chat": "Im Chat zeigen",
+    "Photo shown in chat.": "Foto im Chat gezeigt.",
+    "Could not show the photo.": "Das Foto konnte nicht gezeigt werden.",
+    "{names} noticed!": "Entdeckt von {names}!",
+    "{photographer} secretly took a photo.": "{photographer} hat heimlich ein Foto gemacht.",
+    "{watcher} notices {photographer} secretly taking a photo.": "{watcher} bemerkt, wie {photographer} heimlich ein Foto macht.",
+    "{watcher} notices {photographer} secretly taking a photo of them.": "{watcher} bemerkt, wie {photographer} heimlich ein Foto von ihm oder ihr macht.",
+    "{watcher} realizes the photo was taken secretly.": "{watcher} erkennt, dass das Foto heimlich aufgenommen wurde.",
+    "I discovered that {photographer} secretly took a photo.": "Ich habe entdeckt, dass {photographer} heimlich ein Foto gemacht hat.",
+    "{watcher} discovered that I secretly took a photo.": "{watcher} hat entdeckt, dass ich heimlich ein Foto gemacht habe.",
+    "You discover that {photographer} secretly took a photo.": "Du entdeckst, dass {photographer} heimlich ein Foto gemacht hat.",
     "{actor} takes a photo of the surroundings.": "{actor} fotografiert die Umgebung.",
     "Screenshot reference": "Screenshot als Referenz",
     "The screenshot sets composition and angle; the picture follows the photo style.": "Der Screenshot bestimmt Bildaufbau und Blickwinkel; das Bild folgt dem Fotostil.",

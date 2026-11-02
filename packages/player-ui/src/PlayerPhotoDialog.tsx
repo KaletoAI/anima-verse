@@ -117,6 +117,7 @@ export function PlayerPhotoDialog({
   const [negative, setNegative] = useState('')
   const [selected, setSelected] = useState<string[]>(subjects)
   const [useRoom, setUseRoom] = useState(true)
+  const [secret, setSecret] = useState(false)
   const [backend, setBackend] = useState('')  // '' = Auto (routing)
   const [backends, setBackends] = useState<BackendOptions | null>(backendOptions ?? null)
   // LLM pose check: offered when the occasion renders people, preset from its routing switch.
@@ -125,8 +126,7 @@ export function PlayerPhotoDialog({
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState(false)  // LLM rewrites the prompt
   const dialog = useRef<HTMLDivElement>(null)
-  // The host unmounts this dialog inside its own onSubmit (ScenePanel clears
-  // the prepared payload first), so the promise usually resolves after unmount.
+  // A successful submit can unmount this dialog before its promise resolves.
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -199,6 +199,7 @@ export function PlayerPhotoDialog({
       loras: picked.length ? picked : null,
       character_names: selected,
       use_room: useRoom,
+      ...(occasion === 'photo' ? { secret } : {}),
       negative_prompt: negative.trim(),
       ...(pose.value !== undefined ? { pose_check: pose.value } : {}),
     }
@@ -207,7 +208,7 @@ export function PlayerPhotoDialog({
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, improving, pose.value, referenceImageId, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
+  }, [busy, improving, pose.value, referenceImageId, prompt, selected, useRoom, secret, occasion, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -342,6 +343,12 @@ export function PlayerPhotoDialog({
             <input type="checkbox" checked={useRoom} disabled={busy}
               onChange={(e) => setUseRoom(e.target.checked)} />
             <span>{t('Show the room around it')}</span>
+          </label>}
+
+          {occasion === 'photo' && <label className="player-photo-check">
+            <input type="checkbox" checked={secret} disabled={busy}
+              onChange={(e) => setSecret(e.target.checked)} />
+            <span>{t('Secretly')}</span>
           </label>}
 
           <label className="ga-field" style={{ marginTop: 10 }}>

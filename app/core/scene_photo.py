@@ -5,13 +5,13 @@ the prompt is distilled from the recent room conversation (scene_photo
 template), references come from the regenerate pipeline (room background +
 present characters), and the result lands in the AVATAR's gallery.
 
-The action is also announced as a narrator line in the room stream, so the
-present NPCs perceive "X takes a photo" and can react to it on their next
-loop turn.
+Public photos announce a narrator line in the room stream. Secret photos
+stay silent unless an observer notices; showing them later can reveal them.
 """
 from pathlib import Path
+import random
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -255,7 +255,9 @@ def take_scene_photo(avatar: str,
                      use_room: bool = True,
                      pose_check: Optional[bool] = None,
                      reference_image_id: str = "",
-                     user_id: str = "") -> Dict[str, Any]:
+                     user_id: str = "",
+                     secret: bool = False,
+                     rng: Optional[Callable[[], float]] = None) -> Dict[str, Any]:
     """Synchronous — the caller (route) runs it in a worker thread.
 
     Without overrides it prepares everything itself (one-click path);
@@ -270,6 +272,13 @@ def take_scene_photo(avatar: str,
     loc, room = prep["location"], prep["room"]
     subjects = (list(character_names) if character_names or (source_path and character_names == [])
                 else prep["subjects"])
+    from app.core.room_entry import characters_in_room
+    from app.core.scene_photo_watch import discovery_chance, discover_photo
+    present = list(dict.fromkeys(characters_in_room(loc, room) or []))
+    subjects = list(dict.fromkeys(n for n in subjects if n in present))
+    # Snapshot attention at the shutter, before potentially slow generation.
+    chances = [(n, discovery_chance(n, depicted=n in subjects)) for n in present
+               if n != avatar] if secret and room else []
     if not prompt:
         prompt = prep["prompt"]
 
@@ -317,6 +326,19 @@ def take_scene_photo(avatar: str,
         return {"ok": False, "error": "Generation failed."}
 
     filename = Path(actual_path).name
+    from app.models.character import add_character_image_metadata
+    add_character_image_metadata(avatar, filename, {
+        "scene_photo": True, "secret": secret, "photo_subjects": subjects})
+    discovered_by = []
+    if secret:
+        roll = rng if rng is not None else random.random
+        for watcher, chance in chances:
+            if chance > 0 and roll() < chance and discover_photo(
+                    avatar, filename, subjects, watcher, loc, room):
+                discovered_by.append(watcher)
+        return {"ok": True, "filename": filename, "character": avatar,
+                "url": f"/characters/{avatar}/images/{filename}",
+                "prompt": final_prompt, "discovered_by": discovered_by}
     logger.info("scene photo: %s (%d subjects, prompt: %s)",
                 filename, len(subjects), final_prompt[:100])
 
@@ -350,4 +372,24 @@ def take_scene_photo(avatar: str,
 
     return {"ok": True, "filename": filename, "character": avatar,
             "url": f"/characters/{avatar}/images/{filename}",
-            "prompt": final_prompt}
+            "prompt": final_prompt, "discovered_by": []}
+
+
+def resolve_scene_photo(avatar: str, filename: str) -> str:
+    """Resolve only this avatar's own generated photo, with path containment."""
+    from fastapi import HTTPException
+    from app.models.character import get_character_images_dir
+    from app.core.upload_limits import ensure_image, max_upload_bytes
+    if not filename or Path(filename).name != filename or "\\" in filename or "\x00" in filename:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    root = get_character_images_dir(avatar).resolve()
+    path = (root / filename).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Photo not found")
+    limit = max_upload_bytes()
+    with path.open("rb") as stream:
+        content = stream.read(limit + 1)
+    if len(content) > limit:
+        raise HTTPException(status_code=413, detail="Photo too large")
+    ensure_image(content, filename=filename, what="photo")
+    return f"/characters/{avatar}/images/{filename}"

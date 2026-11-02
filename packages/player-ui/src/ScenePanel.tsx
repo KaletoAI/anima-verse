@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState,
 import { useI18n } from './I18nProvider'
 import { ApiError, apiPost, apiUpload } from './api'
 import { useToast } from './Toast'
+import { PhotoSavedDialog } from './ShowPhotoButton'
 import { ChatGalleryPicker } from './ChatGalleryPicker'
 import { GiftPicker, type GiftResult } from './GiftPicker'
 import { SceneView, type SceneLine } from './SceneView'
@@ -149,6 +150,7 @@ export interface ScreenshotPhoto {
  * host can hand `onSubmit` straight to it. */
 export interface ScenePhotoSubmit {
   prompt: string
+  secret?: boolean
   reference_image_id?: string
   backend?: string
   loras?: unknown[] | null
@@ -366,12 +368,13 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   // 📷 scene photo: step 1 distills the prompt from the recent room
   // conversation (+ person descriptions) and opens the image-gen dialog
   // (model/LoRA/prompt editable); step 2 generates into the avatar's
-  // gallery + narrator line in the chat (present characters can react).
+  // gallery; public photos announce it, secret photos can be discovered.
   const photoSkill = data?.capability_actions?.scene_photo || ''
   const photoBlock = data?.capability_blocks?.[photoSkill] || ''
   const photoCost = Object.entries(data?.capability_costs?.[photoSkill] || {})
     .map(([stat, amount]) => `${amount} ${stat}`).join(', ')
   const [photoBusy, setPhotoBusy] = useState(false)
+  const [savedPhoto, setSavedPhoto] = useState<string | null>(null)
   const [photoDlg, setPhotoDlg] = useState<PhotoDlgInfo | null>(draft.photoDlg)
   draft.photoDlg = photoDlg  // write-through, like the composer state above
   const takePhoto = useCallback(async (screenshot?: ScreenshotPhoto) => {
@@ -409,11 +412,11 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   }, [screenshotPhoto, photoBusy, takePhoto, onScreenshotPhotoHandled])
 
   const submitPhoto = useCallback(async (payload: ScenePhotoSubmit) => {
-    setPhotoDlg(null)
     setPhotoBusy(true)
     try {
-      const d = await apiPost<{ ok?: boolean }>('/play/scene-photo', {
+      const d = await apiPost<{ ok?: boolean; filename?: string; discovered_by?: string[] }>('/play/scene-photo', {
         prompt: payload.prompt,
+        secret: payload.secret === true,
         ...(payload.reference_image_id ? { reference_image_id: payload.reference_image_id } : {}),
         backend: payload.backend || '',
         loras: payload.loras || null,
@@ -423,7 +426,11 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         ...(typeof payload.pose_check === 'boolean' ? { pose_check: payload.pose_check } : {}),
       })
       if (d?.ok) {
-        toast(t('Photo saved to your gallery.'), 'success')
+        setPhotoDlg(null)
+        setSavedPhoto(d.filename || null)
+        const noticed = d.discovered_by?.length
+          ? t('{names} noticed!').replace('{names}', d.discovered_by.join(', ')) : ''
+        toast([t('Photo saved to your gallery.'), noticed].filter(Boolean).join(' '), 'success')
         await refreshScene()
       } else {
         toast(t('Photo failed.'), 'error')
@@ -583,6 +590,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   return (
     <>
       <div className="player-scene-body">
+        {savedPhoto && <PhotoSavedDialog filename={savedPhoto}
+          onClose={() => setSavedPhoto(null)} onShown={refreshScene} />}
         <ScenesRecap />
         {transcriptAside
           ? (

@@ -1453,10 +1453,9 @@ async def play_scene_photo_prepare(request: Request, user=Depends(get_current_us
 async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     """📷 step 2: renders the photo into the avatar's gallery. Body may
     carry dialog overrides (prompt, backend, loras, negative_prompt,
-    character_names, use_room, pose_check) — without them the one-click
+    character_names, use_room, pose_check, secret) — without them the one-click
     defaults run.
-    The action is announced as a narrator line so present characters can
-    react."""
+    Public photos announce the action; secret photos roll for discovery."""
     import asyncio
     from app.models.account import get_active_character
     from app.core.scene_photo import take_scene_photo
@@ -1469,6 +1468,9 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     except Exception:
         body = {}
     body = body if isinstance(body, dict) else {}
+    secret = body.get("secret", False)
+    if not isinstance(secret, bool):
+        raise HTTPException(status_code=422, detail="secret must be a boolean")
     from app.core.lora_library import LoraNotAllowedError
     from app.imagegen.pose_check import parse_override
     try:
@@ -1482,7 +1484,7 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
             bool(body.get("use_room", True)),
             parse_override(body.get("pose_check")),
             reference_image_id=str(body.get("reference_image_id") or ""),
-            user_id=user["id"])
+            user_id=user["id"], secret=secret)
     except LoraNotAllowedError as e:
         # An explicitly picked LoRA the library does not associate with the
         # picked backend: the user's own choice, said verbatim.
@@ -2192,13 +2194,19 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     # valid message — the avatar can "show" something without saying a word.
     image_id = str(body.get("image_id") or "")
     image_url = str(body.get("image_url") or "")
-    has_image = bool(image_id or image_url)
+    photo_filename = str(body.get("photo_filename") or "")
+    has_image = bool(image_id or image_url or photo_filename)
     if not content.strip() and not has_image:
         raise HTTPException(status_code=400, detail="content is required")
 
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
+
+    if photo_filename:
+        from app.core.scene_photo import resolve_scene_photo
+        image_url = resolve_scene_photo(avatar, photo_filename)
+        image_id = ""
 
     raw_addr = body.get("addressees") or []
     addressees = [str(a) for a in raw_addr] if isinstance(raw_addr, list) else []
@@ -2242,6 +2250,12 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         from app.routes.chat import resolve_chat_image, analyze_chat_image_blocking
         img_path, img_display_url = resolve_chat_image(image_id, image_url)
         if img_path:
+            # Library picks share the same disclosure semantics as Show in chat.
+            from app.models.character import get_character_images_dir
+            own_images = get_character_images_dir(avatar).resolve()
+            attached = Path(img_path).resolve()
+            if attached.parent == own_images:
+                photo_filename = attached.name
             _vision_agent = next((a for a in addressees if a and a != avatar), "") or avatar
             try:
                 _desc = await asyncio.wait_for(
@@ -2303,6 +2317,9 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     uid = record_utterance(speaker=avatar, content=say_content, volume=volume,
                            addressees=addressees, source="play",
                            perception_meta=_pmeta)
+    if uid and photo_filename:
+        from app.core.scene_photo_watch import reveal_photo
+        await asyncio.to_thread(reveal_photo, avatar, photo_filename)
 
     # 2b) Make the spell result (success_/fail_text) visible as a storyteller line.
     #     location_id explicit — the storyteller has no own location; the anchor
