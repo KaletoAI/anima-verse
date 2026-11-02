@@ -1140,7 +1140,7 @@ class StreamingAgent:
         # prompt is then minimal — action→tool mapping only, no EXTRACTION and
         # no FALLBACK MARKER section.
         self.constrained_tools = constrained_tools
-        self.log_task = log_task  # z.B. "chat_stream", "thought"
+        self.log_task = log_task  # e.g. "chat_stream", "thought"
         self.deferred_tools = deferred_tools or set()
         self.content_tools = content_tools or set()
         self.mode = mode
@@ -1221,7 +1221,7 @@ class StreamingAgent:
             yield event
 
     # ------------------------------------------------------------------
-    # Mode: no_tools — reiner Chat, ein LLM-Call
+    # Mode: no_tools — plain chat with one LLM call
     # ------------------------------------------------------------------
 
     async def _stream_chat_only(
@@ -1303,7 +1303,7 @@ class StreamingAgent:
         logger.info("Beendet: 2 Iterationen, %.2fs", time.monotonic() - _start)
 
     # ------------------------------------------------------------------
-    # Mode: rp_first — Chat-LLM antwortet, Tool-LLM entscheidet danach
+    # Mode: rp_first — chat LLM answers, then the tool LLM decides
     # ------------------------------------------------------------------
 
     async def _stream_rp_first(
@@ -1453,7 +1453,57 @@ class StreamingAgent:
     # Core: LLM streaming with heartbeat, retry, buffer, tool detection
     # ------------------------------------------------------------------
 
-    async def _stream_llm_response(
+    async def _switch_stream_lane(self, client):
+        """Move only this HTTP stream's lane; preserve the caller's registration.
+
+        Nested tools still use the original registration ID. The lane context
+        suspends and resumes that owner when pools share a capped provider.
+        """
+        from app.core.provider_manager import get_provider_manager
+        from app.core.llm_lanes import cache_key_for
+        previous = getattr(self, "_stream_lane_context", None)
+        self._stream_lane_context = None
+        self._stream_lane_handle = None
+        if previous is not None:
+            await asyncio.to_thread(previous.__exit__, None, None, None)
+        context = get_provider_manager().nested_call_lane(
+            self.chat_task_id, client, cache_key_for(self.log_task, self.agent_name),
+            label=self.log_task)
+        # Shield acquisition so cancellation cannot orphan a late lane handle.
+        pending = asyncio.create_task(asyncio.to_thread(context.__enter__))
+        try:
+            handle = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            async def close_late():
+                try:
+                    await pending
+                except Exception:
+                    return
+                await asyncio.to_thread(context.__exit__, None, None, None)
+            asyncio.create_task(close_late())
+            raise
+        self._stream_lane_context = context
+        self._stream_lane_handle = handle
+
+    async def _stream_llm_response(self, state, active_llm, system_content,
+                                   history, user_input, **kwargs):
+        """Keep a fallback lane through one response, releasing it before tools."""
+        self._stream_lane_context = None
+        self._stream_lane_handle = None
+        try:
+            if active_llm is getattr(self, "_fallback_stream_client", None):
+                await self._switch_stream_lane(active_llm)
+            async for event in self._stream_llm_response_inner(
+                    state, active_llm, system_content, history, user_input, **kwargs):
+                yield event
+        finally:
+            context = self._stream_lane_context
+            self._stream_lane_context = None
+            self._stream_lane_handle = None
+            if context is not None:
+                await asyncio.to_thread(context.__exit__, None, None, None)
+
+    async def _stream_llm_response_inner(
         self,
         state: _StreamState,
         active_llm,
@@ -1493,17 +1543,17 @@ class StreamingAgent:
             except Exception:
                 pass  # Non-fatal — display only.
 
-        # Message-Liste aufbauen
+        # Build the message list
         stream_messages = compose_messages(
             system_content, history, user_input, self.user_turn_suffix)
         # What actually went out as the user turn — the logs and the token
         # estimate below have to show the suffix, not the bare message.
         _logged_user_input = stream_messages[-1]["content"]
 
-        # Konfiguration
-        _HEARTBEAT_INTERVAL = 15  # Sekunden
+        # Configuration
+        _HEARTBEAT_INTERVAL = 15  # Seconds
         _EMPTY_RETRIES = 8
-        _RETRY_WAIT = 30  # Sekunden zwischen Retries
+        _RETRY_WAIT = 30  # Seconds between retries
         _TOOL_BUFFER_SIZE = 60
         # Mid-stream loop detect: see StreamLoopDetector (module level) for
         # the semantics and the two regressions its rules encode.
@@ -1563,10 +1613,10 @@ class StreamingAgent:
                     {_pending_task}, timeout=_HEARTBEAT_INTERVAL
                 )
                 if not done:
-                    # Timeout — Heartbeat senden, Task laeuft weiter
+                    # Timeout: send a heartbeat while the task continues
                     yield HeartbeatEvent()
                     continue
-                # Task fertig — Ergebnis holen
+                # Task finished: collect the result
                 try:
                     chunk = _pending_task.result()
                 except Exception as _chunk_err:
@@ -1581,7 +1631,17 @@ class StreamingAgent:
                     if chunk_count == 0 and not iteration_response and count_sent == 0:
                         _next_llm = self._fallback_after_upstream_error(
                             active_llm, _chunk_err, _tried_models)
+                        if _next_llm is None:
+                            from app.core.provider_quota import is_rate_limit_error
+                            from app.core.llm_router import quota_wait_seconds, resolve_llm_async
+                            if is_rate_limit_error(_chunk_err) and quota_wait_seconds(self.log_task, self.agent_name):
+                                instance = await resolve_llm_async(self.log_task, self.agent_name)
+                                if instance is not None:
+                                    _next_llm = instance.create_llm()
+                                    self.llm = _next_llm
                         if _next_llm is not None:
+                            await self._switch_stream_lane(_next_llm)
+                            self._fallback_stream_client = _next_llm
                             active_llm = _next_llm
                             try:
                                 _aiter = active_llm.astream(
@@ -1658,7 +1718,7 @@ class StreamingAgent:
                         unsent_buffer = ""
                         logger.info("Tool-Pattern im Stream erkannt - stoppe Ausgabe")
                     else:
-                        # Buffer: letzten Zeichen zurueckhalten (koennten Tool-Anfang sein)
+                        # Keep trailing characters buffered in case they begin a tool call
                         safe_len = max(0, len(unsent_buffer) - _TOOL_BUFFER_SIZE)
                         if safe_len > 0:
                             to_send = _SPECIAL_TOKEN_RE.sub('', unsent_buffer[:safe_len])
@@ -1667,7 +1727,7 @@ class StreamingAgent:
                                 yield ContentEvent(content=to_send)
                             unsent_buffer = unsent_buffer[safe_len:]
                 else:
-                    # --- Kein Tool-Detection — Content direkt senden ---
+                    # --- No tool detection: send content directly ---
                     clean = _SPECIAL_TOKEN_RE.sub('', chunk.content)
                     if clean:
                         yield ContentEvent(content=clean)
@@ -1683,9 +1743,9 @@ class StreamingAgent:
                 logger.warning("LLM antwortete mit 'SKIP' — retry (%d/%d)",
                                _attempt + 1, _EMPTY_RETRIES)
                 continue
-            # Leere Antwort → retry (falls Retries uebrig)
+            # Retry an empty response while attempts remain
 
-        # --- Stream beendet: Buffer flushen ---
+        # --- Stream ended: flush the buffer ---
         if not tool_call_detected and unsent_buffer:
             flush_text = _SPECIAL_TOKEN_RE.sub('', unsent_buffer)
             if flush_text:
@@ -1711,13 +1771,13 @@ class StreamingAgent:
             chunks=chunk_count,
             response_length=len(iteration_response))
 
-        # --- LLM-Logging ---
+        # --- LLM logging ---
         self._log_llm_call(
             active_llm, system_content, _logged_user_input, iteration_response,
             llm_label, _iter_start, history=history,
             finish_reason=finish_reason, usage=stream_usage)
 
-        # --- Tool-Matches extrahieren ---
+        # --- Extract tool matches ---
         if detect_tools and iteration_response:
             state.tool_matches = find_tool_calls(
                 self.tool_format, iteration_response, self.tools_dict
@@ -1830,7 +1890,13 @@ class StreamingAgent:
             logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
             self._warn_dead_tool_calls(state.tool_matches)
 
-    def _invoke_tool_llm_laned(self, messages: List[Dict[str, str]]):
+    def _invoke_tool_llm_laned(self, messages):
+        from app.core.llm_router import quota_fallback_call
+        return quota_fallback_call("intent", self.tool_llm,
+            lambda client: self._invoke_tool_client_laned(client, messages),
+            agent_name=self.agent_name)
+
+    def _invoke_tool_client_laned(self, client, messages: List[Dict[str, str]]):
         """The tool decision's LLM call, ON A LANE of its own pool.
 
         Runs in a worker thread (``asyncio.to_thread``), so it may block —
@@ -1868,6 +1934,7 @@ class StreamingAgent:
         cache per turn — and leaves a WARNING naming the character, instead of
         stalling the turn.
         """
+        self.tool_llm = client
         from contextlib import ExitStack
 
         from app.core.llm_lanes import cache_key_for
@@ -2301,6 +2368,9 @@ class StreamingAgent:
         The key is derived even without a registration: it says which prompt
         beginning this call produced, which is worth logging on its own.
         """
+        fallback = getattr(self, "_stream_lane_handle", None)
+        if fallback is not None:
+            return fallback.lane_id, fallback.cache_key
         lane: Optional[int] = None
         cache_key = ""
         try:
@@ -2383,7 +2453,9 @@ class StreamingAgent:
             _is_upstream_failure, _cooldown_provider, resolve_llm,
             mark_model_unhealthy)
         from app.core.llm_client import _is_no_backend_error
-        if not _is_upstream_failure(err):
+        from app.core.provider_quota import is_rate_limit_error
+        limited = is_rate_limit_error(err)
+        if not limited and not _is_upstream_failure(err):
             return None
         prov_name = self._resolve_provider(failed_llm)
         if not prov_name:
@@ -2391,7 +2463,12 @@ class StreamingAgent:
             return None
         failed_model = get_model_name(failed_llm)
         tried.add((prov_name, failed_model))
-        if _is_no_backend_error(err):
+        if limited:
+            from app.core.provider_manager import get_provider_manager
+            provider = get_provider_manager().get_provider(prov_name)
+            if provider:
+                provider.quota.exhaust(err)
+        elif _is_no_backend_error(err):
             # Model-specific — leave the provider up for its other models.
             mark_model_unhealthy(prov_name, failed_model)
         else:

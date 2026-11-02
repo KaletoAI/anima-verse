@@ -516,13 +516,27 @@ class LaneHandle:
                 f"key={self.cache_key!r}{' released' if self._released else ''})")
 
 
+def configured_provider_cap(provider_name: str) -> int:
+    """Whole-key LLM concurrency, independent of per-model pool sizes."""
+    from app.core import config
+    for provider in config.get("providers", []) or []:
+        if provider.get("name") == provider_name:
+            try:
+                return max(0, int(provider.get("max_parallel_llm") or 0))
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
 class LaneManager:
     """All pools of the process. One instance per server (see
     ``get_lane_manager``); checks build their own with a stepped clock."""
 
     def __init__(self, now: Optional[Callable[[], float]] = None,
                  lane_count: Optional[Callable[[str], int]] = None,
-                 rules: Optional[Callable[[], LaneRules]] = None):
+                 rules: Optional[Callable[[], LaneRules]] = None,
+                 provider_cap: Optional[Callable[[str], int]] = None):
+        self._provider_cap = provider_cap or configured_provider_cap
         self._now = now or time.monotonic
         self._lane_count = lane_count or configured_lane_count
         # A CALLABLE, not a value: the timings are read on every selection
@@ -617,6 +631,16 @@ class LaneManager:
         finally:
             handle.release()
 
+    def _provider_room(self, pool_key: str) -> Optional[int]:
+        """Called under the manager condition: count and acquisition are atomic."""
+        provider = pool_key.partition("/")[0]
+        cap = self._provider_cap(provider)
+        if cap <= 0:
+            return None
+        busy = sum(lane.busy for key, pool in self._pools.items()
+                   if key.partition("/")[0] == provider for lane in pool.lanes)
+        return max(0, cap - busy)
+
     def free_lanes(self, pool_key: str, cache_key: str = "",
                    priority: int = Priority.NORMAL) -> int:
         """How many lanes of the pool ``cache_key`` could take right now.
@@ -645,10 +669,16 @@ class LaneManager:
         phase-3 dispatcher to start three turns where one lane exists.
         """
         with self._cond:
+            room = self._provider_room(pool_key)
+            if room == 0:
+                return 0
             pool = self._pools.get(pool_key)
             if pool is None:
-                return max(1, int(self._lane_count(pool_key)))
+                count = max(1, int(self._lane_count(pool_key)))
+                return min(count, room) if room is not None else count
             free = [lane for lane in pool.lanes if not lane.busy]
+            if room is not None:
+                free = free[:room]
             if not cache_key:
                 return len(free)
             if int(priority) <= int(Priority.CHAT):
@@ -789,6 +819,8 @@ class LaneManager:
         its wait instead. An unknown pool is not saturated and is not
         created by asking."""
         with self._cond:
+            if self._provider_room(pool_key) == 0:
+                return True
             pool = self._pools.get(pool_key)
             return (pool is not None and bool(pool.lanes)
                     and all(lane.busy for lane in pool.lanes)
@@ -1175,6 +1207,8 @@ class LaneManager:
         (review of phase 2, 2026-09-18: measured 6 evictions in 6 turns and no
         cache hit, against 4 hits and no eviction with this step).
         """
+        if self._provider_room(pool.key) == 0:
+            return None, "provider_parallel_cap"
         free = [lane for lane in pool.lanes if not lane.busy]
         if not free:
             return None, "all_busy"
@@ -1397,6 +1431,7 @@ def admin_lane_view(manager: Optional[LaneManager] = None,
             "entries": (cfg or {}).get("entries", []),
             "configured": cfg is not None,
             "configured_lanes": (cfg or {}).get("configured_lanes"),
+            "max_parallel_llm": configured_provider_cap(provider),
             "started": pool is not None,
             "lane_count": (pool or {}).get("lane_count"),
             "busy": (pool or {}).get("busy"),

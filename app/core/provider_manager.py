@@ -44,11 +44,22 @@ class NoBackendChannelError(RuntimeError):
     """
 
 
+def _int_field(entry: dict, key: str, default: int) -> int:
+    """An int provider field; empty or malformed falls back to the default."""
+    try:
+        value = entry.get(key)
+        return int(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
 class ProviderManager:
     """Orchestrates all providers and their queues."""
 
     def __init__(self):
         self.providers: Dict[str, Provider] = {}
+        self._quota_lock = threading.Lock()
+        self._provider_quotas = {}
         # One channel per provider (key = provider name) plus one per image
         # backend (key = "backend:<name>").
         self.channels: Dict[str, ProviderQueue] = {}
@@ -73,6 +84,17 @@ class ProviderManager:
         # that no longer exist are pruned.
         self._queues: Dict[str, ProviderQueue] = {}
         self._round_robin: int = 0  # Tiebreaker for equal-load channel selection
+
+    def _configure_quota(self, provider: Provider) -> None:
+        """Share quota across reloads and disabled-provider suitability tests."""
+        identity = (provider.api_base, provider.api_key)
+        with self._quota_lock:
+            previous = self._provider_quotas.get(provider.name)
+            if previous is not None and previous[0] == identity:
+                provider.quota = previous[1]
+            provider.quota.reconfigure(provider.rate_limit_requests,
+                                       provider.rate_limit_window_seconds)
+            self._provider_quotas[provider.name] = (identity, provider.quota)
 
     def _serialize_gate(self, group: str) -> Optional[threading.Semaphore]:
         """Returns the shared Semaphore(1) for a serialize group ("" = None)."""
@@ -125,7 +147,13 @@ class ProviderManager:
 
             serialize_group = os.environ.get(f"{prefix}SERIALIZE_GROUP", "").strip()
 
+            from app.core import config
+            entry = next((p for p in config.get("providers", []) or []
+                          if p.get("name") == name), {})
             provider = Provider(
+                rate_limit_requests=_int_field(entry, "rate_limit_requests", 0),
+                rate_limit_window_seconds=_int_field(entry, "rate_limit_window_seconds", 60),
+                max_parallel_llm=_int_field(entry, "max_parallel_llm", 0),
                 name=name,
                 type=ptype,
                 api_base=api_base,
@@ -133,6 +161,7 @@ class ProviderManager:
                 max_concurrent=max_concurrent,
                 timeout=timeout)
 
+            self._configure_quota(provider)
             new_providers[name] = provider
 
             # One channel per provider, keyed by the provider name.
@@ -407,8 +436,8 @@ class ProviderManager:
         from its config entry — for the model test and its model list only.
 
         A disabled provider has no channel and no health probe, and routing
-        never sees it; this object is not registered anywhere, so the game
-        keeps ignoring the provider. Its reachability is probed once here."""
+        never sees it; this object is not registered for routing, so the game
+        keeps ignoring the provider. Its quota is shared across model tests. Its reachability is probed once here."""
         loaded = self.providers.get(name)
         if loaded is not None:
             return loaded
@@ -420,6 +449,9 @@ class ProviderManager:
             return None
         timeout = entry.get("timeout", field_default("providers", "timeout"))
         provider = Provider(
+            rate_limit_requests=_int_field(entry, "rate_limit_requests", 0),
+            rate_limit_window_seconds=_int_field(entry, "rate_limit_window_seconds", 60),
+            max_parallel_llm=_int_field(entry, "max_parallel_llm", 0),
             name=name,
             type=str(entry.get("type", field_default("providers", "type"))).strip().lower(),
             api_base=str(entry.get("api_base", "")).strip(),
@@ -427,6 +459,7 @@ class ProviderManager:
             max_concurrent=max(1, int(entry.get("max_concurrent")
                                       or field_default("providers", "max_concurrent") or 1)),
             timeout=int(timeout) if timeout else None)
+        self._configure_quota(provider)
         try:
             provider.check_availability()
         except Exception as exc:
@@ -586,6 +619,8 @@ class ProviderManager:
                                       exclude_pools=ov.left | {pool})
                 if alt is None:
                     continue
+                if getattr(llm_instance, "_quota_reservation", None) is not None:
+                    llm_instance._provider.quota.release(llm_instance._quota_reservation)
                 target_pool = pool_key_for(alt.provider_name, alt.model)
                 ov = ov.leaving(pool)
                 manager.note_overflow(pool, target_pool)
@@ -666,7 +701,11 @@ class ProviderManager:
         serves and show it to the admin in ``snapshot()``. An unknown pool is
         never "the same pool", so nothing is suspended either.
 
-        The two real cases:
+        A provider-wide cap also requires suspending the owner when a nested
+        call uses another model of the same provider, or a cap of one would
+        make the turn wait for itself. Lane IDs stay local to their pool.
+
+        The two pool cases:
 
         * **Another pool** (the normal topology — the chat model is
           `for-her-darkside-12b`, the tool alias is `tool`, different hosts):
@@ -702,7 +741,7 @@ class ProviderManager:
         whatever its class. Without an owner (no registration found) it is an
         ordinary background call, ``Priority.NORMAL``.
         """
-        from .llm_lanes import pool_key_for
+        from .llm_lanes import pool_key_for, configured_provider_cap
         from .llm_queue import Priority
 
         model = getattr(llm_instance, "model", "") or ""
@@ -730,14 +769,17 @@ class ProviderManager:
         if owner is not None:
             owner_pool, owner_priority = owner.chat_lane_context(chat_task_id)
         same_pool = bool(owner_pool) and owner_pool == pool_key
-        suspended = owner.suspend_chat_lane(chat_task_id) if same_pool else None
+        same_capped_provider = (bool(owner_pool) and target is not None
+                                and owner_pool.partition("/")[0] == pool_key.partition("/")[0]
+                                and configured_provider_cap(target.provider.name) > 0)
+        suspended = owner.suspend_chat_lane(chat_task_id) if same_pool or same_capped_provider else None
         own_lane, arrived = suspended if suspended else (None, None)
         handle = None
         try:
             if target is not None:
                 handle = target.acquire_nested_lane(
                     pool_key, cache_key, owner_priority, label=label,
-                    arrived=arrived, own_lane=own_lane)
+                    arrived=arrived, own_lane=own_lane if same_pool else None)
             yield handle
         finally:
             if handle is not None:

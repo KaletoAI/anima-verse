@@ -156,7 +156,8 @@ def section_b():
         for i, p in enumerate("ABC", 1)]
     routing[1]["accepts_overflow"] = False
     routing[1]["tasks"] = [{"task": "thought", "order": 2}]
-    providers = {p: SimpleNamespace(available=True, type="openai", api_base="", api_key="") for p in "ABC"}
+    from app.core.provider import Provider
+    providers = {p: Provider(p, "openai", "http://stub", "", available=True) for p in "ABC"}
     held, errors = [], []
     thread = None
     original_override = router._resolve_character_override
@@ -726,7 +727,7 @@ def section_f():
             (pm_mod, "_provider_manager", pm), (router, "get_provider_manager", lambda: pm),
             (router, "_load_routing", lambda: routing),
             (router, "disabled_providers", lambda: set()),
-            (router, "_resolve_character_override", lambda *a: None),
+            (router, "_resolve_character_override", lambda *a, **kw: None),
             (pq_mod, "_attach_duration_estimate", lambda task: None),
             (llm_stats, "record_call", lambda *a, **kw: None),
             (llm_logger, "LOG_DIR", Path(root)), (llm_logger, "LOG_FILE", log_file)):

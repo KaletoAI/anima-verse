@@ -61,6 +61,10 @@ class Provider:
     api_key: str
     max_concurrent: int = 1             # Max parallel requests
     timeout: Optional[int] = None       # Request timeout in seconds (None = use global default)
+    rate_limit_requests: int = 0
+    rate_limit_window_seconds: int = 60
+    max_parallel_llm: int = 0
+    quota: Any = field(default=None, repr=False)
     available: bool = False
     # Cooldown gate set by upstream-failure detector (5xx, connection drop,
     # process-crash). check_availability() respects this without re-probing,
@@ -72,6 +76,11 @@ class Provider:
     # Model list cache
     _models_cache: List[Dict[str, Any]] = field(default_factory=list, repr=False)
     _models_cache_time: float = field(default=0.0, repr=False)
+
+    def __post_init__(self):
+        from app.core.provider_quota import ProviderQuota
+        if self.quota is None:
+            self.quota = ProviderQuota(self.rate_limit_requests, self.rate_limit_window_seconds)
 
     def get_native_api_base(self) -> str:
         """Returns API base without /v1 suffix (for native Ollama API calls)."""

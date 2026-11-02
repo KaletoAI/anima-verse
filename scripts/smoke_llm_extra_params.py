@@ -123,8 +123,10 @@ def main():
                  "temperature": 0.8, "extra_params": saved}
         second = {"provider": "P", "model": "backup", "tasks": [{"task": "intent", "order": 2}],
                   "extra_params": {"nested": {"a": 99}}}
-        provider = SimpleNamespace(name="P", type="openai", api_base="https://mock.test/v1",
+        from app.core.provider import Provider
+        provider = Provider(name="P", type="openai", api_base="https://mock.test/v1",
                                    api_key="not-a-real-key", timeout=10, available=True)
+        provider.list_models = lambda **kw: []
         manager = SimpleNamespace(get_provider=lambda name: provider if name == "P" else None,
                                   provider_for_test=lambda name: provider if name == "P" else None,
                                   find_provider_for_model=lambda model: provider)
@@ -227,9 +229,10 @@ def main():
             assert anth.invoke([{"role": "user", "content": "ping"}]).content == "ok"
             assert BODIES[-1]["temperature"] == 0 and BODIES[-1]["metadata"] == {"user_id": "demo"}
             assert run_async(stream_body(anth))["temperature"] == 0
-            anth_provider = SimpleNamespace(
+            anth_provider = Provider(
                 name="P", type="anthropic", api_base="https://mock.test/v1",
                 api_key="not-a-real-key", timeout=10, available=True)
+            anth_provider.list_models = lambda **kw: []
             anth_manager = SimpleNamespace(get_provider=lambda name: anth_provider,
                                            find_provider_for_model=lambda model: anth_provider)
             with patch.object(llm_router, "get_provider_manager", return_value=anth_manager), patch.object(

@@ -167,12 +167,26 @@ class LLMQueue:
         llm: Any,
         messages_or_prompt: Any,
         agent_name: str = "", label: str = "",
-        overflow: Optional["Overflow"] = None) -> Any:
+        overflow: Optional["Overflow"] = None, routing_task: str = "") -> Any:
         """Hands an LLM call to the right provider queue.
 
         Determines the provider from the LLMClient's api_base and delegates
         to the matching ProviderQueue.
         """
+        from .provider_queue import _caller_handles_failure
+        if not _caller_handles_failure.get():
+            from .llm_router import quota_fallback_call
+            return quota_fallback_call(
+                routing_task or task_type, llm,
+                lambda client: self._submit_once(task_type, priority, client,
+                    messages_or_prompt, agent_name, label, overflow),
+                agent_name=agent_name)
+        return self._submit_once(task_type, priority, llm, messages_or_prompt,
+                                 agent_name, label, overflow)
+
+    def _submit_once(self, task_type, priority, llm, messages_or_prompt,
+                     agent_name, label, overflow):
+        """One queue handoff; caller-owned upstream loops remain outside it."""
         from .provider_manager import get_provider_manager
 
         pm = get_provider_manager()

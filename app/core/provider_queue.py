@@ -201,7 +201,8 @@ def _is_upstream_failure_safe(err: BaseException) -> bool:
     resolve it means "not recoverable" (full traceback)."""
     try:
         from app.core.llm_router import _is_upstream_failure
-        return _is_upstream_failure(err)
+        from app.core.provider_quota import is_rate_limit_error
+        return is_rate_limit_error(err) or _is_upstream_failure(err)
     except Exception:
         return False
 
@@ -215,7 +216,8 @@ def log_task_failure(queue_name: str, task: LLMTask, err: BaseException) -> None
     exhausted. Everything else — a user/payload error, or any failure nobody
     else reports — keeps the ERROR and the full traceback.
     """
-    if task._caller_handles_failure and _is_upstream_failure_safe(err):
+    from app.core.provider_quota import is_rate_limit_error
+    if is_rate_limit_error(err) or (task._caller_handles_failure and _is_upstream_failure_safe(err)):
         logger.warning("[%s] Upstream failure: %s: %s — the caller falls back",
                        queue_name, task.task_id, err)
     else:
@@ -242,7 +244,10 @@ def cooldown_after_failure(provider: Provider, model_name: str,
             mark_model_unhealthy,
         )
         from app.core.llm_client import _is_no_backend_error
-        if _is_no_backend_error(err):
+        from app.core.provider_quota import is_rate_limit_error
+        if is_rate_limit_error(err):
+            provider.quota.exhaust(err)
+        elif _is_no_backend_error(err):
             mark_model_unhealthy(provider.name, model_name)
         elif _is_upstream_failure(err):
             provider.mark_unhealthy(
@@ -1296,6 +1301,10 @@ class ProviderQueue:
         manager.sync_from_config(pool_key)
         if not task._lane_arrived:
             task._lane_arrived = manager.now()
+        quota = getattr(task._llm, "provider_quota", None)
+        if quota is not None and quota.wait_for_send(getattr(task._llm, "quota_reservation", None)):
+            # Reuse the worker's deferred pass; never sleep with a lane held.
+            return False
         try:
             task._lane_handle = manager.acquire_lane(
                 pool_key, task._cache_key, task._lane_priority,

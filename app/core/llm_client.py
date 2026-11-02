@@ -10,6 +10,7 @@ Provides:
   hits included, into one dict shape
 - to_openai_messages(): converts dicts/legacy objects into the OpenAI format
 """
+from contextlib import contextmanager
 import asyncio
 import time
 import openai
@@ -256,6 +257,20 @@ def _merge_sdk_dict_fields(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return kwargs
 
 
+@contextmanager
+def _quota_attempt(client, *, count=True):
+    """One counted HTTP send, including retries, streaming and continuations."""
+    quota = getattr(client, "provider_quota", None)
+    if count and quota is not None:
+        quota.send(getattr(client, "quota_reservation", None))
+    try:
+        yield
+    except Exception as exc:
+        if quota is not None:
+            quota.exhaust(exc)
+        raise
+
+
 class LLMClient:
     """Replaces ChatOpenAI — holds the config and offers invoke() + astream().
 
@@ -380,10 +395,14 @@ class LLMClient:
         attempt = 0
         while True:
             try:
-                resp = self._sync.chat.completions.create(
-                    messages=openai_msgs, **kwargs)
+                with _quota_attempt(self):
+                    resp = self._sync.chat.completions.create(
+                        messages=openai_msgs, **kwargs)
                 break
             except Exception as e:
+                from app.core.provider_quota import is_rate_limit_error
+                if is_rate_limit_error(e):
+                    raise
                 if self._retry_without_chat_template_kwargs(e, kwargs):
                     continue
                 if not _is_busy_error(e) or attempt >= max_attempts:
@@ -494,10 +513,14 @@ class LLMClient:
         # restart would duplicate output, so a mid-stream error is never retried.
         while True:
             try:
-                stream = await self._async.chat.completions.create(
-                    messages=openai_msgs, stream=True, **kwargs)
+                with _quota_attempt(self):
+                    stream = await self._async.chat.completions.create(
+                        messages=openai_msgs, stream=True, **kwargs)
                 break
             except Exception as e:
+                from app.core.provider_quota import is_rate_limit_error
+                if is_rate_limit_error(e):
+                    raise
                 if self._retry_without_chat_template_kwargs(e, kwargs):
                     continue
                 if (not explicit_stream_options and "stream_options" in kwargs
@@ -517,25 +540,26 @@ class LLMClient:
                 await asyncio.sleep(delay)
         finish = ""
         usage = None
-        async for chunk in stream:
-            if chunk.choices:
-                _c = chunk.choices[0]
-                if _c.delta and _c.delta.content:
-                    yield LLMChunk(content=_c.delta.content)
-                if getattr(_c, "finish_reason", None):
-                    finish = _c.finish_reason
-            # The usage arrives on the last chunk (choices empty with
-            # include_usage; llama.cpp puts its timings on the finishing one).
-            _chunk_usage = usage_from_openai(_field(chunk, "usage"),
-                                             _field(chunk, "timings"))
-            if _chunk_usage:
-                # Merge, never replace: the timings and the usage block may
-                # come on different chunks, and a zero from the one that does
-                # not carry a field must not wipe the other's value.
-                usage = usage or {}
-                for _k, _v in _chunk_usage.items():
-                    if _v or _k not in usage:
-                        usage[_k] = _v
+        with _quota_attempt(self, count=False):
+            async for chunk in stream:
+                if chunk.choices:
+                    _c = chunk.choices[0]
+                    if _c.delta and _c.delta.content:
+                        yield LLMChunk(content=_c.delta.content)
+                    if getattr(_c, "finish_reason", None):
+                        finish = _c.finish_reason
+                # The usage arrives on the last chunk (choices empty with
+                # include_usage; llama.cpp puts its timings on the finishing one).
+                _chunk_usage = usage_from_openai(_field(chunk, "usage"),
+                                                 _field(chunk, "timings"))
+                if _chunk_usage:
+                    # Merge, never replace: the timings and the usage block may
+                    # come on different chunks, and a zero from the one that does
+                    # not carry a field must not wipe the other's value.
+                    usage = usage or {}
+                    for _k, _v in _chunk_usage.items():
+                        if _v or _k not in usage:
+                            usage[_k] = _v
         _warn_if_cut_off("Stream", self.model, finish)
         if finish or usage:
             # Terminal marker — contentless, see LLMChunk. The streaming path
@@ -753,9 +777,9 @@ class AnthropicLLMClient:
             base = base[:-3]
 
         self._sync = anthropic.Anthropic(
-            api_key=api_key, base_url=base, timeout=float(request_timeout))
+            api_key=api_key, base_url=base, timeout=float(request_timeout), max_retries=0)
         self._async = anthropic.AsyncAnthropic(
-            api_key=api_key, base_url=base, timeout=float(request_timeout))
+            api_key=api_key, base_url=base, timeout=float(request_timeout), max_retries=0)
 
     def _build_kwargs(self, system: str, msgs: List[Dict]) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {
@@ -775,7 +799,8 @@ class AnthropicLLMClient:
     def invoke(self, messages: List) -> LLMResponse:
         """Synchronous LLM call."""
         system_msg, msgs = _split_anthropic_messages(messages)
-        resp = self._sync.messages.create(**self._build_kwargs(system_msg, msgs))
+        with _quota_attempt(self):
+            resp = self._sync.messages.create(**self._build_kwargs(system_msg, msgs))
 
         content = ""
         for block in resp.content:
@@ -790,26 +815,27 @@ class AnthropicLLMClient:
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async streaming generator."""
         system_msg, msgs = _split_anthropic_messages(messages)
-        async with self._async.messages.stream(
-            **self._build_kwargs(system_msg, msgs)
-        ) as stream:
-            async for text in stream.text_stream:
-                yield LLMChunk(content=text)
-            # Same terminal marker as the OpenAI stream. Reason and usage only
-            # exist on the assembled final message, and asking for them must
-            # never break a stream that already delivered its text.
-            finish = None
-            usage = None
-            try:
-                final = await stream.get_final_message()
-                finish = _anthropic_finish_reason(
-                    getattr(final, "stop_reason", None))
-                usage = _anthropic_usage(getattr(final, "usage", None))
-            except Exception as e:
-                logger.debug("Anthropic stream finish_reason unavailable: %s", e)
-            _warn_if_cut_off("Stream", self.model, finish)
-            if finish or usage:
-                yield LLMChunk(content="", finish_reason=finish, usage=usage)
+        with _quota_attempt(self):
+            async with self._async.messages.stream(
+                **self._build_kwargs(system_msg, msgs)
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield LLMChunk(content=text)
+                # Same terminal marker as the OpenAI stream. Reason and usage only
+                # exist on the assembled final message, and asking for them must
+                # never break a stream that already delivered its text.
+                finish = None
+                usage = None
+                try:
+                    final = await stream.get_final_message()
+                    finish = _anthropic_finish_reason(
+                        getattr(final, "stop_reason", None))
+                    usage = _anthropic_usage(getattr(final, "usage", None))
+                except Exception as e:
+                    logger.debug("Anthropic stream finish_reason unavailable: %s", e)
+                _warn_if_cut_off("Stream", self.model, finish)
+                if finish or usage:
+                    yield LLMChunk(content="", finish_reason=finish, usage=usage)
 
     def __repr__(self) -> str:
         return f"AnthropicLLMClient(model={self.model!r}, base_url={self.base_url!r})"

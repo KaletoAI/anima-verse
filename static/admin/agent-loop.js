@@ -189,6 +189,7 @@ function respondReasonText(code) {
 // Why a call PARKED ON A POOL does not run — the lane manager's vocabulary
 // (llm_lanes._waiter_view). Same rule: unknown codes are shown raw.
 function laneReasonText(code) {
+  if (code === 'provider_parallel_cap') return 'provider parallel request cap reached';
   if (code === 'all_busy') return 'every lane is busy';
   if (code === 'affinity_wait') return 'waiting briefly for its own lane (R3)';
   if (code === 'conversation_hold') return 'a conversation lane is protected (R4)';
@@ -241,6 +242,7 @@ function renderPool(p) {
       + ' · ' + p.free + ' free · ' + p.busy + ' busy';
     if (p.lane_count !== cfg) counts += ' · config ' + cfg;
   }
+  if (p.max_parallel_llm) counts += ' · provider cap ' + p.max_parallel_llm + ' across all models';
   let html = '<div class="pool">';
   html += '<div class="pool-head"><span class="pool-key">' + escapeHtml(p.pool_key) + '</span>'
     + '<span class="pool-counts">' + escapeHtml(counts) + '</span>'

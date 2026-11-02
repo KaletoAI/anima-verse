@@ -141,8 +141,7 @@ with tempfile.TemporaryDirectory() as directory:
     entries = [dict(name='On', type='openai', api_base='http://on/v1'),
                dict(name='Off', type='openai', api_base='http://off/v1', api_key='k',
                     max_concurrent=2, timeout=60, enabled=False)]
-    manager = ProviderManager.__new__(ProviderManager)
-    manager.providers = {}
+    manager = ProviderManager()
     real_get = cfg.get
     with patch.object(cfg, 'get', side_effect=lambda key, *a: entries if key == 'providers' else real_get(key, *a)), \
          patch('app.core.provider.Provider.check_availability', lambda self: setattr(self, 'available', True) or True):

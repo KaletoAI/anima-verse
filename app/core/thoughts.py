@@ -270,7 +270,7 @@ class ThoughtRunner:
         from app.models.world import get_location_name
         from app.models.character import get_character_current_location
         from app.core.dependencies import get_skill_manager
-        from app.core.llm_router import resolve_llm
+        from app.core.llm_router import resolve_llm, resolve_llm_async
         from app.core.streaming import (StreamingAgent, ContentEvent,
                                         ExtractionEvent, ToolResultEvent)
         from app.core.tool_formats import build_tool_instruction, get_format_for_model
@@ -310,7 +310,7 @@ class ThoughtRunner:
 
         # Build LLM and tools (via the router, task from the llm_task
         # parameter, default "thought").
-        _thought_inst = resolve_llm(llm_task, agent_name=character_name)
+        _thought_inst = await resolve_llm_async(llm_task, agent_name=character_name)
         llm = _thought_inst.create_llm() if _thought_inst else None
         if not llm:
             logger.warning("Kein LLM fuer %s (task=%s)", character_name, llm_task)

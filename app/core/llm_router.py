@@ -56,6 +56,7 @@ class LLMInstance:
     extra_params: Dict[str, Any] = field(default_factory=dict, repr=False)
     _provider: Optional[Provider] = field(default=None, repr=False)
     pinned: bool = False
+    _quota_reservation: Any = field(default=None, repr=False)
 
     @property
     def type(self) -> str:
@@ -136,6 +137,9 @@ class LLMInstance:
                 extra_params=extra_params,
                 thinking=thinking,
                 thinking_budget=overrides.get("thinking_budget", self.thinking_budget) if thinking else None)
+        if self._provider:
+            client.provider_quota = self._provider.quota
+            client.quota_reservation = self._quota_reservation
         client.provider_name = self.provider_name
         return client
 
@@ -341,7 +345,7 @@ async def preload_models() -> None:
     logger.info("Preload: alle Warmup-Requests abgeschlossen")
 
 
-def _resolve_character_override(task: str, agent_name: str) -> Optional[LLMInstance]:
+def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = True) -> Optional[LLMInstance]:
     """Reads `llm_routing_overrides[task]` from character_config.
 
     Supported value formats:
@@ -372,6 +376,12 @@ def _resolve_character_override(task: str, agent_name: str) -> Optional[LLMInsta
     if not instance.available:
         logger.info("Character-Override '%s' fuer task=%s (agent=%s): Provider unavailable — Fallback auf globales Routing",
                     raw, task, agent_name)
+        return None
+    if instance._provider.quota.wait_seconds():
+        if reserve:
+            instance._provider.quota.log_full(logger, instance.provider_name)
+        return None
+    if reserve and _reserve_instance(instance) is None:
         return None
     instance.tasks = [task]
     instance.pinned = True
@@ -454,7 +464,20 @@ def _usable(entry: dict, task: str = "", *, quiet: bool = False) -> Optional[Pro
                         task, provider_name, model)
         return None
 
+    if provider.quota.wait_seconds():
+        if not quiet:
+            provider.quota.log_full(logger, provider.name)
+        return None
     return provider
+
+
+def _reserve_instance(instance):
+    """Only final routing choices reserve; availability polling never does."""
+    token = instance._provider.quota.reserve()
+    if token is None:
+        return None
+    instance._quota_reservation = token
+    return instance
 
 
 def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
@@ -494,7 +517,7 @@ _OVERFLOW_LOGGED: Dict[Tuple[str, str], float] = {}
 
 
 def overflow_target(task: str, agent_name: str = "", *,
-                    exclude_pools: frozenset = frozenset()) -> Optional[LLMInstance]:
+                    exclude_pools: frozenset = frozenset(), reserve: bool = True) -> Optional[LLMInstance]:
     """Where a BACKGROUND call may move when its pool is full, or None
     (development_instructions/plan-lane-overflow.md § 4/§ 5).
 
@@ -533,11 +556,15 @@ def overflow_target(task: str, agent_name: str = "", *,
         provider = _usable(entry, chain_task, quiet=True)
         if provider is not None and manager.free_lanes(
                 pool, cache_key_for(task, agent_name), lane_priority_for(task)) > 0:
-            return _instance_for(chain_task, entry, provider)
+            instance = _instance_for(chain_task, entry, provider)
+            if reserve:
+                instance = _reserve_instance(instance)
+            if instance is not None:
+                return instance
     return None
 
 
-def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False) -> Optional[LLMInstance]:
+def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False, reserve: bool = True) -> Optional[LLMInstance]:
     """Determines the LLM for a task from the llm_routing config.
 
     Order:
@@ -565,7 +592,7 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False) -> O
 
     # 1. Character override
     if agent_name:
-        override_inst = _resolve_character_override(task, agent_name)
+        override_inst = _resolve_character_override(task, agent_name, reserve=reserve)
         if override_inst is not None:
             return override_inst
 
@@ -579,12 +606,12 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False) -> O
         parent = fallback_parent(task)
         if parent:
             logger.debug("resolve_llm(%s): no routing, falling back to '%s'", task, parent)
-            return resolve_llm(parent, agent_name=agent_name, overflow=overflow)
+            return resolve_llm(parent, agent_name=agent_name, overflow=overflow, reserve=reserve)
         return None
 
     candidates.sort(key=lambda x: x[0])
     for order, entry in candidates:
-        provider = _usable(entry, task)
+        provider = _usable(entry, task, quiet=not reserve)
         if provider is None:
             continue
         instance = _instance_for(task, entry, provider)
@@ -594,7 +621,7 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False) -> O
             if is_background(task) and configured_lane_rules().overflow_after > 0:
                 pool = pool_key_for(instance.provider_name, instance.model)
                 if get_lane_manager().pool_saturated(pool):
-                    alt = overflow_target(task, agent_name, exclude_pools={pool})
+                    alt = overflow_target(task, agent_name, exclude_pools={pool}, reserve=reserve)
                     if alt is not None:
                         now = time.monotonic()
                         key = (task, pool)
@@ -605,10 +632,79 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False) -> O
                                         task, agent_name, pool,
                                         pool_key_for(alt.provider_name, alt.model))
                         return alt
-        return instance
+        if reserve:
+            instance = _reserve_instance(instance)
+        if instance is not None:
+            return instance
 
-    logger.warning("resolve_llm(%s): kein verfuegbares LLM in der Kette", task)
+    if reserve and not quota_wait_seconds(task, agent_name):
+        logger.warning("resolve_llm(%s): no available LLM in chain", task)
     return None
+
+
+def quota_wait_seconds(task: str, agent_name: str = "") -> float:
+    """Earliest slot ONLY when every candidate is blocked solely by quota.
+
+    Read-only: no reservations and no sleep, safe from async callers too.
+    A disabled/missing/unhealthy/model-cooled candidate makes this zero.
+    """
+    from app.core.llm_task_state import is_enabled
+    if not is_enabled(task):
+        return 0.0
+    routing = _load_routing()
+    candidates = _candidates(task, routing)
+    while not candidates:
+        task = fallback_parent(task)
+        if not task or not is_enabled(task):
+            return 0.0
+        candidates = _candidates(task, routing)
+    waits = []
+    pm = get_provider_manager()
+    off = disabled_providers()
+    for _, entry in candidates:
+        name, model = entry.get("provider"), entry.get("model")
+        provider = pm.get_provider(name)
+        if not model or name in off or provider is None or not provider.available or _model_cooled_down(name, model):
+            return 0.0
+        wait = provider.quota.wait_seconds()
+        if not wait:
+            return 0.0
+        waits.append(wait)
+    return min(waits, default=0.0)
+
+
+def _running_in_event_loop():
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def resolve_llm_wait(task: str, agent_name: str = "", **kwargs):
+    """Worker-thread routing wait; sync callers on an event loop never sleep."""
+    while True:
+        instance = resolve_llm(task, agent_name, **kwargs)
+        if instance is not None or _running_in_event_loop():
+            return instance
+        wait = quota_wait_seconds(task, agent_name)
+        if not wait:
+            return None
+        time.sleep(wait)
+
+
+async def resolve_llm_async(task: str, agent_name: str = "", **kwargs):
+    """Async routing wait without parking the event loop or a queue worker."""
+    import asyncio
+    while True:
+        instance = resolve_llm(task, agent_name, **kwargs)
+        if instance is not None:
+            return instance
+        wait = quota_wait_seconds(task, agent_name)
+        if not wait:
+            return None
+        await asyncio.sleep(wait)
 
 
 def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
@@ -686,6 +782,8 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
                 skip = "provider unavailable"
             elif st["model_cooldown_s"] is not None:
                 skip = "model cooldown"
+            elif (provider := provider_lookup(entry.get("provider") or "")) is not None and getattr(provider, "quota", None) is not None and provider.quota.wait_seconds():
+                skip = provider.quota.reason()
             else:
                 skip = None
             chain.append({"index": idx, "order": order, "provider": entry.get("provider") or "",
@@ -835,6 +933,47 @@ def mark_model_unhealthy(provider_name: str, model: str,
                        provider_name, model, int(cooldown_seconds))
 
 
+def quota_fallback_call(task, client, call, *, agent_name=""):
+    """Retry a queued or direct call on the task chain after a key-level 429.
+
+    ``call`` owns execution/lane acquisition; this helper only changes clients.
+    Worker callers can wait on a quota-only chain. Sync event-loop callers
+    retain their immediate failure behavior instead of sleeping on that loop.
+    """
+    from app.core.provider_quota import is_rate_limit_error, QuotaUnavailable
+    last_error = None
+    for attempt in range(_LLM_CALL_MAX_ATTEMPTS):
+        quota = getattr(client, "provider_quota", None)
+        blocked = quota is not None and quota.wait_for_send(getattr(client, "quota_reservation", None))
+        if blocked:
+            quota.release(getattr(client, "quota_reservation", None))
+            instance = resolve_llm_wait(task, agent_name)
+            if instance is None:
+                raise last_error or QuotaUnavailable("Provider rate limit reached; no LLM available")
+            client = instance.create_llm()
+        try:
+            return call(client)
+        except Exception as exc:
+            if not is_rate_limit_error(exc):
+                raise
+            last_error = exc
+            quota = getattr(client, "provider_quota", None)
+            if quota is not None:
+                quota.exhaust(exc)
+            else:
+                name = getattr(client, "provider_name", "")
+                provider = get_provider_manager().get_provider(name)
+                if provider is not None:
+                    provider.quota.exhaust(exc)
+            if attempt + 1 == _LLM_CALL_MAX_ATTEMPTS:
+                raise
+            instance = resolve_llm_wait(task, agent_name)
+            if instance is None:
+                raise
+            client = instance.create_llm()
+    raise last_error
+
+
 def llm_call(
     task: str,
     system_prompt: str,
@@ -881,6 +1020,12 @@ def llm_call(
     last_err: Optional[BaseException] = None
     for attempt in range(1, _LLM_CALL_MAX_ATTEMPTS + 1):
         instance = resolve_llm(task, agent_name=agent_name, overflow=True)
+        while instance is None and not _running_in_event_loop():
+            wait = quota_wait_seconds(task, agent_name)
+            if not wait:
+                break
+            time.sleep(wait)
+            instance = resolve_llm(task, agent_name=agent_name, overflow=True)
         if instance is None:
             if last_err is not None:
                 # Nothing caught this one — the traceback the worker held back
@@ -914,12 +1059,17 @@ def llm_call(
                             label=label,
                             overflow=overflow)
                 except LaneOverflow as ov:
+                    instance._provider.quota.release(instance._quota_reservation)
                     if hop + 1 == hop_limit:
                         raise RuntimeError("llm_call: overflow hop limit exceeded") from ov
                     instance = ov.target
                     overflow = ov.overflow
         except Exception as e:
             last_err = e
+            from app.core.provider_quota import is_rate_limit_error
+            if is_rate_limit_error(e):
+                instance._provider.quota.exhaust(e)
+                continue
             if not _is_upstream_failure(e):
                 # User error / non-retryable — fail fast, don't cooldown.
                 raise

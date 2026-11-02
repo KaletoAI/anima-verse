@@ -107,7 +107,8 @@ def main():
         assert client.invoke('ping').content == '{"a":1}'
         assert calls[1]['messages'][-1]['content'] == '<|channel>thought\nR<channel|>'
     from app.core.llm_router import _instance_for
-    provider = NS(type='openai', api_base='http://fake/v1', api_key='k', timeout=60)
+    from app.core.provider import Provider
+    provider = Provider('demo', 'openai', 'http://fake/v1', 'k', timeout=60)
     for mode, expected in [('on', True), ('off', False), ('task', False)]:
         inst = _instance_for('extraction', dict(provider='P', model='M', thinking=mode, thinking_budget=200), provider)
         with patch('app.core.llm_tasks.task_thinks', return_value=False):

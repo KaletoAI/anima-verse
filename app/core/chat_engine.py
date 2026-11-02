@@ -205,7 +205,7 @@ def build_chat_context(
         speaker, medium
     """
     from app.core.dependencies import get_skill_manager
-    from app.core.llm_router import resolve_llm
+    from app.core.llm_router import resolve_llm, resolve_llm_wait
     from app.models.character import (
         get_character_config,
         get_character_language_instruction)
@@ -217,7 +217,7 @@ def build_chat_context(
     from app.routes.chat import _build_chat_prompt, _strip_tool_hallucinations
 
     agent_config = get_character_config(character_name)
-    _chat_instance = resolve_llm(chat_llm_task(character_name),
+    _chat_instance = resolve_llm_wait(chat_llm_task(character_name),
                                  agent_name=character_name)
     lang_instruction = get_character_language_instruction(character_name)
     # The player IS the avatar. ``get_player_identity`` is the one place that
@@ -885,6 +885,7 @@ def run_chat_turn(
             task_type=task_type,
             priority=Priority.CHAT,
             llm=ctx["llm"],
+            routing_task=chat_llm_task(responder),
             messages_or_prompt=messages,
             agent_name=responder,
             label=_label)

@@ -32,6 +32,21 @@ Eine frische Instanz bringt zwei Beispiel-Provider aus `config._DEFAULT_PROVIDER
 (`http://localhost:8080/v1`). Sie lassen sich unter LLM Providers anpassen oder ersetzen.
 Eine Änderung macht die ganze Liste zur Instanz-Abweichung; ein leeres `[]` bleibt leer.
 
+Provider request limits are instance settings in `/admin/settings → Providers`:
+`rate_limit_requests` defaults to **0** (off), `rate_limit_window_seconds`
+to **60** (minimum 1), and `max_parallel_llm` to **0** (no provider-wide cap).
+For Infermatic's whole-key limit, use **9**, **60**, and **1** respectively.
+The sliding window counts actual LLM HTTP requests, including streaming,
+continuations and retries, across every model of that provider. Routing reserves
+the first request slot; a full provider is skipped for the next task-chain entry.
+If the whole chain is blocked solely by quota, supported callers wait for the
+earliest slot. HTTP 429 gates the provider until Retry-After (otherwise the
+window end, or 60 seconds with no configured quota), without a health cooldown.
+The parallel cap applies at lane acquisition across all the provider's model
+pools, retaining lane waiting and background overflow. The lane view on
+`/admin/agent-loop` displays this cap. These fields are read directly from config,
+not through new environment variables.
+
 Die GROSSBUCHSTABEN-Namen unten sind trotzdem keine Fiktion: sie sind die internen
 Anker einer **Env-Bridge**. `config.load()` ruft am Ende `_flatten_to_env(config)`
 (`app/core/config.py`), das die JSON-Struktur in flache Namen in `os.environ`

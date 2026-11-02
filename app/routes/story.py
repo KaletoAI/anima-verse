@@ -68,7 +68,7 @@ def list_stories_route(character_name: str = Query("", alias="character_name")) 
     profile = get_character_profile(character_name)
     filtered = filter_stories_for_character(all_stories, profile)
 
-    # has_saved_state Flag hinzufuegen
+    # Add the has_saved_state flag
     result = []
     for story in filtered:
         state = get_story_state(character_name, story["filename"])
@@ -108,14 +108,14 @@ async def play_story_section(request: Request) -> StreamingResponse:
     character_name = data.get("character_name", "")
     story_filename = data.get("story_filename", "")
     section_id = data.get("section_id", "start")
-    user_choice = data.get("user_choice")  # None oder {"letter": "A", "text": "..."}
+    user_choice = data.get("user_choice")  # None or {"letter": "A", "text": "..."}
 
     if not character_name or not story_filename:
         raise HTTPException(
             status_code=400,
             detail="user_id, character_name und story_filename erforderlich")
 
-    # Story und Section laden
+    # Load the story and section
     story = get_story(story_filename)
     if not story:
         raise HTTPException(status_code=404, detail="Story nicht gefunden")
@@ -124,20 +124,20 @@ async def play_story_section(request: Request) -> StreamingResponse:
     if not section:
         raise HTTPException(status_code=404, detail=f"Section '{section_id}' nicht gefunden")
 
-    # LLM laden (via Router, Task: story_stream)
+    # Load the LLM via the story_stream route
     agent_config = get_character_config(character_name)
-    from app.core.llm_router import resolve_llm
-    _story_inst = resolve_llm("story_stream", agent_name=character_name)
+    from app.core.llm_router import resolve_llm_async
+    _story_inst = await resolve_llm_async("story_stream", agent_name=character_name)
     llm = _story_inst.create_llm() if _story_inst else None
     if llm is None:
         raise HTTPException(status_code=500, detail="Kein LLM verfuegbar (task=story_stream)")
 
-    # System-Prompt bauen (inkl. Szenen-Anweisung und Wahl-Kontext)
+    # Build the system prompt, including scene instructions and choice context
     system_content = _build_story_system_prompt(character_name, story["meta"], section_id,
         section_prompt=section["prompt"],
         user_choice=user_choice)
 
-    # User-Prompt: nur Options-Format (keine Szenen-Anweisung, kein Wahl-Text)
+    # User prompt: options format only; scene instructions belong in the system prompt
     options_map = section.get("options_map", {})
     options_labels = section.get("options_labels", {})
     user_prompt = "Play this scene."
@@ -200,15 +200,15 @@ async def play_story_section(request: Request) -> StreamingResponse:
                         for _sse in _tts.feed(event.content):
                             yield _sse
 
-            # --- Chunked TTS: Rest-Buffer + verbleibende Tasks ---
+            # --- Chunked TTS: remaining buffer and tasks ---
             if _tts:
                 for _sse in await _tts.flush():
                     yield _sse
 
-            # Optionen aus Antwort parsen
+            # Parse options from the response
             options = parse_options_from_response(full_response)
 
-            # Pruefen ob Story endet
+            # Check whether the story ends
             options_map = section.get("options_map", {})
             options_labels = section.get("options_labels", {})
             is_end = False
@@ -217,8 +217,8 @@ async def play_story_section(request: Request) -> StreamingResponse:
             elif len(options) == 1 and options_map.get(options[0]["letter"]) == "_end":
                 is_end = True
 
-            # Fallback: Wenn Parser keine Optionen findet aber options_map existiert,
-            # verwende die vordefinierten Labels aus dem Flowchart
+            # Fallback: when parsing finds no options but options_map exists,
+            # use the predefined labels from the flowchart
             if not options and options_map and not is_end:
                 logger.warning("Options-Parser fand keine Optionen im LLM-Text, verwende Flowchart-Labels")
                 for letter in sorted(options_map.keys()):
@@ -230,7 +230,7 @@ async def play_story_section(request: Request) -> StreamingResponse:
             elif options:
                 yield f"data: {json.dumps({'options': options})}\n\n"
 
-            # State speichern
+            # Save state
             state = get_story_state(character_name, story_filename) or {
                 "history": [],
                 "started_at": utc_now_iso(),
@@ -244,26 +244,26 @@ async def play_story_section(request: Request) -> StreamingResponse:
                     "timestamp": utc_now_iso(),
                 })
 
-            # Aktuelle Section speichern (nicht die naechste — der User hat noch nicht gewaehlt)
+            # Save the current section; the user has not chosen the next section yet
             state["current_section"] = section_id
 
             save_story_state(character_name, story_filename, state)
 
             yield f"data: {json.dumps({'section_complete': True, 'current_section': section_id})}\n\n"
 
-            # LLM-Logging erfolgt per-Iteration im StreamingAgent
+            # StreamingAgent logs each LLM iteration
 
-            # Queue freigeben — Streaming ist fertig, TTS/Visualisierung brauchen die Queue
+            # Release the queue after streaming so TTS and visualization can use it
             _llm_queue.register_chat_done(_story_task_id)
             _story_task_id = None
 
-            # TTS und Visualisierung parallel starten
+            # Start TTS and visualization concurrently
             do_tts = False
             do_viz = story["meta"].get("visualize", True)
             tts_task = None
             viz_task = None
 
-            # Nur Komplett-TTS wenn Chunked TTS NICHT aktiv ist
+            # Use full-response TTS only when chunked TTS is inactive
             if not (_tts and _tts.enabled) and story["meta"].get("tts", True):
                 try:
                     from app.core.tts_service import get_tts_service, clean_text_for_tts
@@ -286,7 +286,7 @@ async def play_story_section(request: Request) -> StreamingResponse:
                     _visualize_scene, character_name, full_response,
                     story_meta=story["meta"]))
 
-            # Status-Events senden
+            # Send status events
             if do_tts or do_viz:
                 status = {}
                 if do_tts:
@@ -295,12 +295,12 @@ async def play_story_section(request: Request) -> StreamingResponse:
                     status["generating_image"] = True
                 yield f"data: {json.dumps(status)}\n\n"
 
-            # TaskQueue registrieren (tracked tasks)
+            # Register tracked TaskQueue tasks
             _tq = get_task_queue()
             _tts_track_id = _tq.track_start("story_tts", "Story TTS", agent_name=character_name) if do_tts else None
             _viz_track_id = _tq.track_start("story_visualization", "Story Szene", agent_name=character_name) if do_viz else None
 
-            # TTS-Ergebnis abholen (normalerweise schneller)
+            # Collect the TTS result, which usually finishes first
             if tts_task:
                 try:
                     audio_path = await tts_task
@@ -316,7 +316,7 @@ async def play_story_section(request: Request) -> StreamingResponse:
                     if _tts_track_id:
                         _tq.track_finish(_tts_track_id, error=str(tts_err))
 
-            # Visualisierung-Ergebnis abholen (laeuft parallel, evtl. schon fertig)
+            # Collect the concurrent visualization result
             if viz_task:
                 try:
                     viz_result = await viz_task
@@ -338,7 +338,7 @@ async def play_story_section(request: Request) -> StreamingResponse:
         finally:
             if _story_task_id:
                 _llm_queue.register_chat_done(_story_task_id)
-            # Tracked tasks aufraeumen falls SSE-Verbindung abgebrochen
+            # Clean up tracked tasks if the SSE connection was interrupted
             try:
                 if _viz_track_id:
                     _tq.track_finish(_viz_track_id, error="abgebrochen")
@@ -431,12 +431,12 @@ def _build_story_system_prompt(character_name: str,
     """Baut den System-Prompt fuer Story-Interaktionen."""
     parts = []
 
-    # 1. Sprach-Anweisung (aus Character-Profil, Fallback: User-Level)
+    # 1. Language instruction from the character profile, falling back to user settings
     lang = get_character_language_instruction(character_name)
     if lang:
         parts.append(lang)
 
-    # 2. Player-Character-Infos (Player ist selbst ein Character)
+    # 2. Player character information
     from app.models.account import get_active_character
     player_name = get_active_character()
     if player_name and player_name != character_name:
@@ -448,7 +448,7 @@ def _build_story_system_prompt(character_name: str,
             if player_lines:
                 parts.append(f"\nYour interlocutor ({player_name}):\n" + "\n".join(player_lines))
 
-    # 3. Character-Infos (reuse pattern from chat.py)
+    # 3. Character information (reuse the chat.py pattern)
     char_profile = get_character_profile(character_name)
     char_template = get_template(char_profile.get("template", "human-default"))
 
@@ -462,7 +462,7 @@ def _build_story_system_prompt(character_name: str,
         if current_outfit:
             char_profile["default_outfit"] = current_outfit
 
-        # Location-ID zu Name aufloesen (in_prompt wuerde sonst die rohe ID ausgeben)
+        # Resolve the location ID to its name for the prompt
         loc_id = char_profile.get("current_location", "")
         if loc_id:
             loc_name = get_location_name(loc_id)
@@ -476,7 +476,7 @@ def _build_story_system_prompt(character_name: str,
     if char_lines:
         parts.append("\nYou are this character:\n" + "\n".join(char_lines))
 
-    # 4. Story-Kontext
+    # 4. Story context
     setting = story_meta.get("setting", "")
     title = story_meta.get("title", "")
     story_block = "\n=== INTERACTIVE STORY ==="
@@ -485,7 +485,7 @@ def _build_story_system_prompt(character_name: str,
     if setting:
         story_block += f"\nSetting: {setting}"
 
-    # 5. Szenen-Anweisung (als System-Instruktion, nicht User-Nachricht)
+    # 5. Scene instruction as a system instruction
     if user_choice:
         choice_text = user_choice.get("text", "")
         story_block += f"\n\nThe player chose: {choice_text}"
@@ -498,7 +498,7 @@ def _build_story_system_prompt(character_name: str,
         "Just narrate the scene directly."
     )
 
-    # 6. Antwortlaenge begrenzen (aus Frontmatter)
+    # 6. Limit response length from frontmatter
     max_len = story_meta.get("max_response_length")
     if max_len:
         story_block += f"\nKeep your response under {max_len} characters."

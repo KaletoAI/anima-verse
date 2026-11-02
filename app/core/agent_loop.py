@@ -133,7 +133,7 @@ def _pool_for(task_type: str, character_name: str) -> str:
     from app.core.llm_lanes import pool_key_for
     try:
         from app.core.llm_router import resolve_llm
-        instance = resolve_llm(task_type, agent_name=character_name)
+        instance = resolve_llm(task_type, agent_name=character_name, reserve=False)
     except Exception as e:  # noqa: BLE001 — routing must never stop a turn
         logger.debug("pool lookup for %s/%s failed: %s",
                      task_type, character_name, e)
@@ -2104,7 +2104,7 @@ def _chat_llm_available() -> bool:
     whole lane (2026-07-30 regression: the probe said "chat")."""
     try:
         from app.core.llm_router import resolve_llm
-        return resolve_llm("chat_stream") is not None
+        return resolve_llm("chat_stream", reserve=False) is not None
     except Exception:
         return False
 
@@ -2118,7 +2118,7 @@ def _thought_llm_available() -> bool:
     """
     try:
         from app.core.llm_router import resolve_llm
-        return resolve_llm("thought") is not None
+        return resolve_llm("thought", reserve=False) is not None
     except Exception:
         return False
 

@@ -57,7 +57,7 @@ def has_spell_detect_routing(avatar_name: str = "") -> bool:
     The chat flow can use this to explain why incantations cannot be detected."""
     try:
         from app.core.llm_router import resolve_llm
-        return resolve_llm("spell_detect", agent_name=avatar_name) is not None
+        return resolve_llm("spell_detect", agent_name=avatar_name, reserve=False) is not None
     except Exception:
         return False
 

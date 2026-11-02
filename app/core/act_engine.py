@@ -252,7 +252,7 @@ async def _run_storyteller_agent(
         ToolErrorEvent, ToolEndEvent, HeartbeatEvent, RetryHintEvent,
         ExtractionEvent, DeferredToolEvent, LoopInfoEvent,
     )
-    from app.core.llm_router import resolve_llm
+    from app.core.llm_router import resolve_llm, resolve_llm_async
     from app.core.prompt_templates import render_task
     from app.core.dependencies import get_skill_manager
     from app.core.tool_formats import get_format_for_model
@@ -339,8 +339,8 @@ async def _run_storyteller_agent(
         language_name=lang_name)
 
     # ── Resolve the LLMs ───────────────────────────────────────────────
-    st_inst = resolve_llm(llm_task, agent_name=actor) \
-        or resolve_llm("chat_stream", agent_name=actor)
+    st_inst = await resolve_llm_async(llm_task, agent_name=actor) \
+        or await resolve_llm_async("chat_stream", agent_name=actor)
     if st_inst is None:
         logger.error("Storyteller: no LLM available (task=%s, fallback chat_stream)",
                      llm_task)
@@ -597,8 +597,8 @@ def _try_resolve(actor: str, location_id: str,
     disruption → trust storyteller marker, resolve directly
     ambient   → not resolvable
 
-    Returns (resolved_bool, event_id_or_None, reason). reason = Begründung des
-    Urteils (v.a. bei abgelehnten danger-Events), für die UI-Anzeige.
+    Returns (resolved_bool, event_id_or_None, reason). The reason explains the
+    verdict for the UI, especially when a danger event solution is rejected.
     """
     from app.models.events import resolve_event, record_attempt
     from app.core.random_events import validate_solution, _on_resolution_cooldown
