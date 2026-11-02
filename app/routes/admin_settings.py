@@ -2285,6 +2285,7 @@ def _suitability_entry_groups(entry):
 @router.get('/settings/llm-suitability-test/apply')
 def llm_suitability_apply_preview(model: str, user=Depends(require_admin)):
     """Preview the latest stored result and eligible routing destinations."""
+    from app.core.model_suitability import group_options
     summary = _suitability_apply_result(model)
     provider, model_name = model.split('::', 1)
     with config._LOCK:
@@ -2301,7 +2302,7 @@ def llm_suitability_apply_preview(model: str, user=Depends(require_admin)):
                                 for group in _SUITABILITY_GROUPS if any(g != group for g in groups)}})
     return {'model': model, 'revision': revision, 'entries': entries,
             'settings': summary['settings'], 'thinking': summary['thinking'],
-            'vision': summary.get('vision')}
+            'vision': summary.get('vision'), 'options': group_options(summary)}
 
 
 @router.post('/settings/llm-suitability-test/apply')
@@ -2318,7 +2319,9 @@ def _llm_suitability_apply_sync(body):
     if not isinstance(body, dict) or set(body) != {'model', 'base_revision', 'groups'}:
         raise HTTPException(400, 'body must contain model, base_revision and groups')
     revision = _require_revision(body['base_revision'])
+    from app.core.model_suitability import group_options
     summary = _suitability_apply_result(body['model'])
+    options = group_options(summary)
     groups = body['groups']
     if not isinstance(groups, dict) or set(groups) - set(_SUITABILITY_GROUPS):
         raise HTTPException(400, 'groups must contain known groups only')
@@ -2335,7 +2338,7 @@ def _llm_suitability_apply_sync(body):
             if not isinstance(choice, dict) or choice.get('target') not in ('skip', 'new', 'entry'):
                 raise HTTPException(400, 'invalid target')
             target = choice['target']
-            if set(choice) != ({'target', 'index'} if target == 'entry' else {'target'}):
+            if set(choice) - {'setting'} != ({'target', 'index'} if target == 'entry' else {'target'}):
                 raise HTTPException(400, 'unknown target fields')
             if target == 'skip':
                 continue
@@ -2344,6 +2347,12 @@ def _llm_suitability_apply_sync(body):
                     or (summary['thinking'].get(group) or {}).get('score_off') == '0/0'
                     or (group == 'vision' and summary.get('vision') == 'not_supported')):
                 raise HTTPException(400, 'No result for ' + group)
+            offered = options.get(group) or {}
+            setting = choice.get('setting', offered.get('recommended'))
+            if setting is not None or 'setting' in choice:
+                if setting not in ('off', 'budget') or setting not in offered:
+                    raise HTTPException(400, 'Setting is not offered for ' + group)
+                recommendation = offered[setting]
             if target == 'new':
                 index = len(routing)
                 entry = {'name': model_name + ' · ' + group.title(), 'provider': provider,

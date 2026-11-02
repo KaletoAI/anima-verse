@@ -757,6 +757,38 @@ function suitThinkingSummary(summary) {
         + (notices[result.stopped] ? '<div class="suit-warn">' + esc(notices[result.stopped]) + '</div>' : '')).join('')
         + (summary.vision === 'not_supported' ? '<div class="suit-warn">Vision: no image input</div>' : '');
 }
+function suitApplySetting(group) {
+    const options = suitApplyData.options?.[group];
+    return ['off', 'budget'].find(setting => options?.[setting] && document.getElementById('suitApplySetting' + group + setting)?.checked)
+        || options?.recommended;
+}
+function suitApplyOptions(group, available) {
+    const options = suitApplyData.options?.[group];
+    if (!available || !options?.off) return '';
+    return '<div class="suit-apply-options">' + ['off', 'budget'].filter(setting => options[setting]).map(setting => {
+        const option = options[setting];
+        const label = (setting === 'off' ? 'Without thinking' : 'Thinking budget ' + option.thinking_budget)
+            + ' - ' + option.score + ' · ' + (option.median_latency_s == null ? 'unknown' : Number(option.median_latency_s).toFixed(1) + ' s')
+            + (options.recommended === setting ? ' (recommended)' : '');
+        return '<label><input type="radio" name="suitApplySetting' + esc(group) + '" id="suitApplySetting' + esc(group + setting)
+            + '" value="' + esc(setting) + '"' + (options.recommended === setting ? ' checked' : '')
+            + ' onchange="suitApplyTurnTime()"> ' + esc(label) + '</label>';
+    }).join('') + '</div>';
+}
+function suitApplyTurnTime() {
+    const options = suitApplyData?.options;
+    if (!options) return;
+    const timings = options.turn_tasks.map(task => {
+        const group = task === 'thought' ? 'tools' : 'helpers';
+        return options[group]?.[suitApplySetting(group)]?.task_medians?.[task];
+    });
+    const known = timings.every(value => typeof value === 'number' && Number.isFinite(value));
+    const total = known ? timings.reduce((sum, value) => sum + value, 0) : null;
+    const line = document.getElementById('suitApplyTurnTime');
+    line.textContent = 'Projected time per thought turn: ' + (known ? total.toFixed(1) + ' s' : 'unknown - a task has no timing')
+        + ' / maximum ' + options.max_turn_seconds + ' s';
+    line.className = !known || total > options.max_turn_seconds ? 'suit-warn' : '';
+}
 function suitApplyClose() {
     document.getElementById('suitApplyDialog').hidden = true;
     suitApplyData = null;
@@ -775,7 +807,7 @@ async function suitApplyOpen() {
                 const available = !!result && result.score_off !== '0/0' && !(group === 'vision' && suitApplyData.vision === 'not_supported');
                 const settings = suitApplyData.settings || {};
                 return '<section><h4>' + esc(group[0].toUpperCase() + group.slice(1)) + '</h4><p>'
-                    + esc(available ? suitRecommendedText(result.recommended) : 'No result') + '</p><pre>'
+                    + esc(available ? suitRecommendedText(result.recommended) : 'No result') + '</p>' + suitApplyOptions(group, available) + '<pre>'
                     + esc(JSON.stringify({temperature: settings.temperature?.[group], max_tokens: settings.max_tokens,
                         repetition_penalty: settings.repetition_penalty, chat_template: settings.chat_template, extra_params: settings.extra_params}, null, 2))
                     + '</pre><label>Target<select id="suitApplyTarget' + group + '" onchange="suitApplyWarning(\'' + group + '\')">'
@@ -783,8 +815,9 @@ async function suitApplyOpen() {
                     + (available ? '<option value="new" selected>New entry</option>' + suitApplyData.entries.map(entry => '<option value="' + esc(entry.index) + '">'
                         + esc(entry.name + ' · ' + ((entry.groups || []).join(', ') || 'no tasks')) + '</option>').join('') : '')
                     + '</select></label><div class="suit-warn" id="suitApplyWarning' + group + '"></div></section>';
-            }).join('') + '<p id="suitApplyStatus" role="status"></p><button type="button" class="btn" onclick="suitApplySave(this)">Apply settings</button> '
+            }).join('') + '<p id="suitApplyTurnTime" role="status"></p><p id="suitApplyStatus" role="status"></p><button type="button" class="btn" onclick="suitApplySave(this)">Apply settings</button> '
             + '<button type="button" class="btn" onclick="suitApplyClose()">Cancel</button>';
+        suitApplyTurnTime();
     } catch (error) {
         dialog.innerHTML = '<p>' + esc(error.message) + '</p><button type="button" class="btn" onclick="suitApplyClose()">Close</button>';
     }
@@ -798,7 +831,10 @@ async function suitApplySave(button) {
     const status = document.getElementById('suitApplyStatus');
     const groups = Object.fromEntries(['tools', 'helpers', 'vision'].map(group => {
         const target = document.getElementById('suitApplyTarget' + group).value;
-        return [group, ['skip', 'new'].includes(target) ? {target} : {target: 'entry', index: Number(target)}];
+        const choice = ['skip', 'new'].includes(target) ? {target} : {target: 'entry', index: Number(target)};
+        const setting = suitApplySetting(group);
+        if (target !== 'skip' && setting) choice.setting = setting;
+        return [group, choice];
     }));
     button.disabled = true;
     try {

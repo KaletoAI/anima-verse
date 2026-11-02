@@ -3,6 +3,9 @@
 Hand-derived: tools updates entry 0's seven sampling fields; helpers creates one
 entry with no tasks; skipped vision changes nothing. The mixed tool/helper entry
 warns for tools. The original task chains and unrelated entries remain equal.
+Hand fixture: tools off 1/2, durations 2 and 6 -> median 4; budget
+600 verification 4 and stage 5 -> 2/2, median 4.5. Helpers medians
+1 and 3 give an off projected turn of 8 seconds.
 A stale revision refuses every write (409), and duplicate targets are rejected.
 """
 import copy
@@ -30,9 +33,35 @@ with tempfile.TemporaryDirectory() as tmp:
     summary = {'settings': settings, 'vision': 'not_supported', 'thinking': {
         'tools': {'recommended': {'thinking': True, 'thinking_budget': 600}},
         'helpers': {'recommended': {'thinking': False, 'thinking_budget': None}}}}
+    summary['thinking']['tools'].update(score_off='1/2', score_at_budget='2/2', candidate_budget=600)
+    summary['thinking']['helpers'].update(score_off='2/2', score_at_budget=None)
+    summary['checks'] = [
+        dict(group='tools', task='thought', stages=[dict(budget=0, ok=True, duration_s=2)], verification=dict(budget=600, ok=True, duration_s=4)),
+        dict(group='tools', task='thought', stages=[dict(budget=0, ok=False, duration_s=6), dict(budget=600, ok=True, duration_s=5)]),
+        dict(group='helpers', task='extraction_chat_state', stages=[dict(budget=0, ok=True, duration_s=1)]),
+        dict(group='helpers', task='extraction', stages=[dict(budget=0, ok=True, duration_s=3)])]
+    from app.core import model_suitability
+    assert hasattr(model_suitability, 'group_options'), 'group_options is missing'
+    options = model_suitability.group_options(summary)
+    assert options['tools']['off'] == dict(setting='off', thinking=False, thinking_budget=None, score='1/2', median_latency_s=4, task_medians={'thought': 4})
+    assert options['tools']['budget'] == dict(setting='budget', thinking=True, thinking_budget=600, score='2/2', median_latency_s=4.5, task_medians={'thought': 4.5})
+    assert options['tools']['recommended'] == 'budget'
+    assert options['helpers']['off']['task_medians'] == {'extraction_chat_state': 1, 'extraction': 3}
+    assert 'budget' not in options['helpers']
+    assert model_suitability.group_options({'thinking': {'tools': {'recommended': {'thinking': True, 'thinking_budget': 600}}}})['tools'] == {}
+    failed = copy.deepcopy(summary)
+    failed['checks'][1]['stages'][1]['ok'] = False
+    failed['checks'][0]['verification']['ok'] = False
+    assert model_suitability.group_options(failed)['tools']['budget']['score'] == '0/2'
+    del failed['checks'][1]['stages'][1]
+    assert model_suitability.group_options(failed)['tools']['budget']['median_latency_s'] == 4
+    failed['thinking']['tools']['stopped'] = 'budget_unenforceable'
+    assert 'budget' not in model_suitability.group_options(failed)['tools']
+
     with patch.object(caps, 'get_all_suitability', return_value={'fake::demo': {'tested_suitability': summary}}), patch.object(config_admin, 'apply_section_reloads', return_value=['llm_routing']):
         assert hasattr(route, '_llm_suitability_apply_sync'), 'apply endpoint is missing'
         preview = route.llm_suitability_apply_preview('fake::demo', None)
+        assert preview['options'] == options
         assert preview['entries'][0]['groups'] == ['tools', 'helpers']
         assert preview['entries'][0]['warnings']['tools']
         body = dict(model='fake::demo', base_revision=preview['revision'], groups={
@@ -53,6 +82,17 @@ with tempfile.TemporaryDirectory() as tmp:
         else:
             raise AssertionError('stale revision accepted')
         body['base_revision'] = result['revision']
+        invalid = dict(body, groups={'helpers': {'target': 'new', 'setting': 'budget'}})
+        try:
+            route._llm_suitability_apply_sync(invalid)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+        else:
+            raise AssertionError('unoffered budget accepted')
+        off_result = route._llm_suitability_apply_sync(dict(body, groups={'tools': {'target': 'entry', 'index': 0, 'setting': 'off'}}))
+        entry = config_admin.layer_view(config_scope.INSTANCE)['llm_routing'][0]
+        assert entry['thinking'] == 'off' and entry['thinking_budget'] is None
+        body['base_revision'] = off_result['revision']
         body['groups']['helpers'] = {'target': 'entry', 'index': 0}
         try:
             route._llm_suitability_apply_sync(body)

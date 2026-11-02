@@ -619,6 +619,47 @@ def iter_suitability_results(
         yield {"type": "done", "summary": summary}
 
 
+def group_options(summary: dict) -> dict:
+    """Reconstruct fixed-setting scores and case timings from stored evidence."""
+    from app.core import config
+    options = {"max_turn_seconds": config.get("model_test.max_turn_seconds", 20),
+               "turn_tasks": ["thought", "extraction_chat_state", "extraction"]}
+    for group, thinking in summary.get("thinking", {}).items():
+        cases = [r for r in summary.get("checks", []) if r.get("group") == group]
+        off = [(r, r["stages"][0]) for r in cases if r.get("stages")]
+        eligible = [(r, evidence) for r, evidence in off if evidence.get("ok") is not None]
+        if not off:
+            options[group] = {}
+            continue
+
+        def option(setting, budget, evidence):
+            durations = [e["duration_s"] for _, e in evidence if e.get("duration_s") and e["duration_s"] > 0]
+            tasks = {}
+            for r, e in evidence:
+                if r.get("task") and e.get("duration_s") and e["duration_s"] > 0:
+                    tasks.setdefault(r["task"], []).append(e["duration_s"])
+            return {"setting": setting, "thinking": setting == "budget", "thinking_budget": budget,
+                    "score": f"{sum(e.get('ok') is True for _, e in evidence)}/{len(eligible)}",
+                    "median_latency_s": median(durations) if durations else None,
+                    "task_medians": {task: median(values) for task, values in tasks.items()}}
+
+        choices = {"off": option("off", None, eligible)}
+        candidate = thinking.get("candidate_budget")
+        if type(candidate) is int and candidate > 0 and thinking.get("score_at_budget") is not None and thinking.get("stopped") != "budget_unenforceable":
+            evidence = []
+            for record, _ in eligible:
+                stage = next((s for s in record["stages"] if s.get("budget") == candidate), None)
+                if stage is None and (record.get("verification") or {}).get("budget") == candidate:
+                    stage = record["verification"]
+                if stage is not None:
+                    evidence.append((record, stage))
+            choices["budget"] = option("budget", candidate, evidence)
+        recommended = thinking.get("recommended") or {}
+        choices["recommended"] = "budget" if recommended.get("thinking") and "budget" in choices else "off"
+        options[group] = choices
+    return options
+
+
 def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Optional[dict] = None) -> Dict[str, Any]:
     eligible = [r for r in results if r.get("ok") is not None]
     tool = [r for r in eligible if r["category"] == "tool"]

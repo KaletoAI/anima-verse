@@ -334,6 +334,28 @@ vm.runInContext(fs.readFileSync('static/admin/models.js','utf8').replace(/loadDa
  ctx.fetch=async(url,options)=>{const body=JSON.parse(options.body);assert.deepStrictEqual(body,{model:'P::<M>',base_revision:'r1',groups:{tools:{target:'entry',index:2},helpers:{target:'new'},vision:{target:'skip'}}});return {status:409};};
  const button={};await ctx.suitApplySave(button);assert.strictEqual(el('suitApplyStatus').textContent,'Settings changed meanwhile — reload');assert.strictEqual(button.disabled,false);
  ctx.loadData=()=>{};ctx.fetch=async()=>({ok:true,json:async()=>({revision:'r2',entries:[{},{}]})});await ctx.suitApplySave(button);assert(el('suitApplyStatus').textContent.includes('Applied to 2'));
+ // Hand-derived: thought 2 + chat-state 1 + extraction 3 = 6, below 20;
+ // budget thought 25 gives 29, above 20. Missing extraction is unknown.
+ data.options={max_turn_seconds:20,turn_tasks:['thought','extraction_chat_state','extraction'],
+ tools:{recommended:'budget',off:{setting:'off',score:'1/2',median_latency_s:2,task_medians:{thought:2}},budget:{setting:'budget',thinking_budget:300,score:'2/2',median_latency_s:25,task_medians:{thought:25}}},
+ helpers:{recommended:'off',off:{setting:'off',score:'2/2',median_latency_s:2,task_medians:{extraction_chat_state:1,extraction:3}}}};
+ data.thinking.helpers.score_off='2/2';
+ ctx.fetch=async()=>({ok:true,json:async()=>data});await ctx.suitApplyOpen();
+ const html=el('suitApplyDialog').innerHTML;
+ assert(html.includes('type="radio"') && html.includes('Without thinking'));
+ assert(html.includes('Thinking budget 300') && html.includes('(recommended)'));
+ assert(html.includes('onchange="suitApplyTurnTime()"'));
+ el('suitApplySettingtoolsbudget').checked=true;ctx.suitApplyTurnTime();
+ assert(el('suitApplyTurnTime').textContent.includes('29.0 s / maximum 20 s'));
+ assert.strictEqual(el('suitApplyTurnTime').className,'suit-warn');
+ el('suitApplySettingtoolsbudget').checked=false;el('suitApplySettingtoolsoff').checked=true;ctx.suitApplyTurnTime();
+ assert(el('suitApplyTurnTime').textContent.includes('6.0 s / maximum 20 s'));
+ assert.strictEqual(el('suitApplyTurnTime').className,'');
+ ctx.fetch=async(url,options)=>{const body=JSON.parse(options.body);assert.strictEqual(body.groups.tools.setting,'off');assert.strictEqual(body.groups.helpers.setting,'off');return {ok:true,json:async()=>({revision:'r3',entries:[]})};};
+ await ctx.suitApplySave({});
+ delete data.options.helpers.off.task_medians.extraction;ctx.suitApplyTurnTime();
+ assert(el('suitApplyTurnTime').textContent.includes('unknown - a task has no timing'));
+ assert.strictEqual(el('suitApplyTurnTime').className,'suit-warn');
  ctx.suitApplyClose();assert.strictEqual(el('suitApplyDialog').hidden,true);
  console.log('Suitability apply dialog targets, warning, escaping, stale revision and save OK');
 })().catch(error=>{console.error(error);process.exitCode=1;});

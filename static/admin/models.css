@@ -165,3 +165,7 @@ tr:hover { background: #161b22; }
 .suit-apply-dialog section { padding: 10px 0; border-bottom: 1px solid #30363d; }
 .suit-apply-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .suit-apply-dialog select { max-width: 100%; }
+
+.suit-apply-options { display: flex; flex-direction: column; gap: .5rem; margin: .75rem 0; }
+.suit-apply-options label { display: flex; align-items: center; gap: .4rem; cursor: pointer; }
+.suit-apply-options input { width: auto; margin: 0; }
