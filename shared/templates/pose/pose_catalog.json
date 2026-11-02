@@ -28,6 +28,8 @@
   },
   "entries": {
     "standing": {
+      "label": "standing",
+      "label_de": "Stehen",
       "prompt": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up",
       "synonyms": [
         "stehen",
@@ -48,6 +50,8 @@
       "solo": true
     },
     "sitting": {
+      "label": "sitting",
+      "label_de": "Sitzen",
       "prompt": "sitting comfortably in a chair, legs crossed, hands resting on lap, relaxed shoulders",
       "synonyms": [
         "sitzen",
@@ -67,6 +71,8 @@
       "solo": true
     },
     "reading": {
+      "label": "reading",
+      "label_de": "Lesen",
       "prompt": "sitting and reading a book held open in both hands, head bowed over the pages, absorbed",
       "synonyms": [
         "lesen",
@@ -85,6 +91,8 @@
       "solo": true
     },
     "cooking": {
+      "label": "cooking",
+      "label_de": "Kochen",
       "prompt": "standing at the stove cooking, stirring a pot with a wooden spoon, the other hand on the pot handle, steam rising",
       "synonyms": [
         "kochen",
@@ -105,6 +113,8 @@
       "solo": true
     },
     "sleeping": {
+      "label": "sleeping",
+      "label_de": "Schlafen",
       "prompt": "lying on side, head on pillow, eyes closed, relaxed curled body",
       "synonyms": [
         "schlafen",
@@ -121,6 +131,8 @@
       "solo": true
     },
     "walking": {
+      "label": "walking",
+      "label_de": "Gehen",
       "prompt": "walking at an easy pace, arms swinging naturally, upright posture, looking ahead",
       "synonyms": [
         "gehen",
@@ -141,6 +153,8 @@
       "group": "stand"
     },
     "running": {
+      "label": "jogging",
+      "label_de": "Joggen",
       "prompt": "jogging at an easy pace, arms bent and swinging, leaning slightly forward, athletic stride",
       "synonyms": [
         "laufen",
@@ -161,6 +175,8 @@
       "solo": true
     },
     "dancing": {
+      "label": "dancing",
+      "label_de": "Tanzen",
       "prompt": "graceful dance pose, one arm raised, body turned, weight on one foot",
       "synonyms": [
         "tanzen",
@@ -173,6 +189,8 @@
       "group": "stand"
     },
     "eating": {
+      "label": "eating",
+      "label_de": "Essen",
       "prompt": "sitting at a table eating, fork raised to the mouth, the other hand holding a knife, a plate in front",
       "synonyms": [
         "essen",
@@ -192,6 +210,8 @@
       "solo": true
     },
     "drinking": {
+      "label": "drinking",
+      "label_de": "Trinken",
       "prompt": "holding glass near lips, elbow raised, other hand resting on table",
       "synonyms": [
         "trinken",
@@ -218,6 +238,8 @@
       "group": "stand"
     },
     "working": {
+      "label": "working",
+      "label_de": "Arbeiten",
       "prompt": "sitting at a desk working on a computer, hands on the keyboard, eyes on the screen, focused",
       "synonyms": [
         "arbeiten",
@@ -239,6 +261,8 @@
       "solo": true
     },
     "exercising": {
+      "label": "exercising",
+      "label_de": "Trainieren",
       "prompt": "doing bodyweight squats, arms stretched forward, athletic clothes, focused",
       "synonyms": [
         "trainieren",
@@ -262,6 +286,8 @@
       "solo": true
     },
     "meditating": {
+      "label": "meditating",
+      "label_de": "Meditieren",
       "prompt": "sitting cross-legged on the floor in meditation, upright back, hands resting palms up on the knees, eyes closed, serene expression",
       "synonyms": [
         "meditieren",
@@ -280,6 +306,8 @@
       "solo": true
     },
     "painting": {
+      "label": "painting",
+      "label_de": "Malen",
       "prompt": "standing at an easel painting, a brush in one hand, a palette in the other, concentrated",
       "synonyms": [
         "malen",
@@ -299,6 +327,8 @@
       "solo": true
     },
     "gaming": {
+      "label": "gaming",
+      "label_de": "Zocken",
       "prompt": "sitting leaning forward with a game controller in both hands, elbows near the knees, intense focus on a screen",
       "synonyms": [
         "spielen",
@@ -318,6 +348,8 @@
       "solo": true
     },
     "cleaning": {
+      "label": "tidying up",
+      "label_de": "Aufräumen",
       "prompt": "standing and tidying up, upper body bent forward, one hand reaching down to pick something up, the other holding a cloth",
       "synonyms": [
         "putzen",
@@ -337,6 +369,8 @@
       "solo": true
     },
     "gardening": {
+      "label": "gardening",
+      "label_de": "Gärtnern",
       "prompt": "kneeling in a flower bed, bent forward, both hands pressing the soil around a young plant, gardening gloves",
       "synonyms": [
         "gaertnern",
@@ -359,6 +393,8 @@
       "solo": true
     },
     "shopping": {
+      "label": "shopping",
+      "label_de": "Einkaufen",
       "prompt": "walking with bags in hand, browsing posture, one hand reaching toward shelf",
       "synonyms": [
         "einkaufen",
@@ -372,6 +408,8 @@
       "group": "stand"
     },
     "relaxing": {
+      "label": "relaxing",
+      "label_de": "Entspannen",
       "prompt": "reclined on a couch with the hands clasped behind the head, elbows out, eyes half closed, completely at ease",
       "synonyms": [
         "entspannen",
@@ -395,6 +433,8 @@
       "solo": true
     },
     "studying": {
+      "label": "studying",
+      "label_de": "Lernen",
       "prompt": "sitting hunched over books at a desk, writing with a pen, the chin resting on the other hand",
       "synonyms": [
         "lernen",
@@ -414,6 +454,8 @@
       "solo": true
     },
     "singing": {
+      "label": "singing",
+      "label_de": "Singen",
       "prompt": "standing and singing with feeling, one hand on the chest, the other open to the side, head raised",
       "synonyms": [
         "singen",
@@ -432,6 +474,8 @@
       "solo": true
     },
     "playing": {
+      "label": "fooling around",
+      "label_de": "Herumalbern",
       "prompt": "fooling around, bouncing on the spot with flapping arms and a goofy grin",
       "synonyms": [
         "herumtoben",
@@ -449,6 +493,8 @@
       "solo": true
     },
     "talking": {
+      "label": "talking",
+      "label_de": "Reden",
       "prompt": "standing and talking, one hand gesturing with an open palm, engaged expression, mid-sentence",
       "synonyms": [
         "reden",
@@ -478,6 +524,8 @@
       "solo": true
     },
     "showering": {
+      "label": "showering",
+      "label_de": "Duschen",
       "prompt": "standing under water, head tilted back, eyes closed, arms raised to hair",
       "synonyms": [
         "duschen",
@@ -490,6 +538,8 @@
       "group": "stand"
     },
     "bathing": {
+      "label": "bathing",
+      "label_de": "Baden",
       "prompt": "sitting in a bathtub with the knees drawn up, washing one forearm with a cloth, relaxed, steam rising",
       "synonyms": [
         "baden",
@@ -508,6 +558,8 @@
       "solo": true
     },
     "yoga": {
+      "label": "doing yoga",
+      "label_de": "Yoga",
       "prompt": "in a low yoga posture on a mat, knees folded under the hips, back straight, arms reaching forward",
       "synonyms": [
         "yoga machen",
@@ -518,6 +570,8 @@
       "group": "ground"
     },
     "meeting": {
+      "label": "attending a meeting",
+      "label_de": "Besprechen",
       "prompt": "sitting at a conference table in a meeting, hands folded, attentive, making a point",
       "synonyms": [
         "besprechung",
@@ -537,6 +591,8 @@
       "solo": true
     },
     "presenting": {
+      "label": "presenting",
+      "label_de": "Präsentieren",
       "prompt": "standing and giving a presentation, notes in one hand, the other pointing to a screen, confident",
       "synonyms": [
         "praesentieren",
@@ -555,6 +611,8 @@
       "solo": true
     },
     "driving": {
+      "label": "driving",
+      "label_de": "Autofahren",
       "prompt": "sitting behind the steering wheel driving a car, both hands on the wheel, eyes on the road",
       "synonyms": [
         "fahren",
@@ -572,6 +630,8 @@
       "solo": true
     },
     "photography": {
+      "label": "taking photos",
+      "label_de": "Fotografieren",
       "prompt": "standing and taking a photo, a camera held up to the eye with both hands, one knee slightly bent, focused",
       "synonyms": [
         "fotografieren",
@@ -598,6 +658,8 @@
       "group": "stand"
     },
     "watching_tv": {
+      "label": "watching TV",
+      "label_de": "Fernsehen",
       "prompt": "slumped comfortably on a sofa, legs extended or crossed, arms resting loosely on cushions or holding a remote, head tilted toward the screen",
       "synonyms": [
         "fernsehen",
@@ -616,6 +678,8 @@
       "group": "seat"
     },
     "thinking": {
+      "label": "thinking",
+      "label_de": "Nachdenken",
       "prompt": "standing deep in thought, one hand on the chin, the other arm across the body, head tilted, looking up",
       "synonyms": [
         "denken",
@@ -637,6 +701,8 @@
       "solo": true
     },
     "waiting": {
+      "label": "waiting",
+      "label_de": "Warten",
       "prompt": "standing with weight shifted to one leg, arms loosely crossed over the chest, head tilted slightly as if scanning",
       "synonyms": [
         "warten",
@@ -651,6 +717,8 @@
       "solo": true
     },
     "kneeling": {
+      "label": "kneeling",
+      "label_de": "Knien",
       "prompt": "kneeling upright on the floor, shins on the ground, hands resting on the thighs, calm posture",
       "synonyms": [
         "knien",
@@ -671,6 +739,8 @@
       "solo": true
     },
     "celebrating": {
+      "label": "celebrating",
+      "label_de": "Feiern",
       "prompt": "standing with legs slightly apart, arms raised high in a celebratory gesture, energetic stance",
       "synonyms": [
         "feiern",
@@ -684,6 +754,8 @@
       "group": "stand"
     },
     "making_coffee": {
+      "label": "making coffee",
+      "label_de": "Kaffeekochen",
       "prompt": "standing at a counter making coffee, holding a cup under the machine, pouring milk",
       "synonyms": [
         "kaffee zubereiten",
@@ -708,6 +780,8 @@
       "solo": true
     },
     "serving": {
+      "label": "serving",
+      "label_de": "Servieren",
       "prompt": "waiter serving, a tray balanced on one hand, the other hand setting a glass down on a table, polite smile",
       "synonyms": [
         "bedienen",
@@ -727,6 +801,8 @@
       "solo": true
     },
     "monitoring": {
+      "label": "monitoring screens",
+      "label_de": "Überwachen",
       "prompt": "sitting alert at a desk watching several screens, one hand on the mouse, eyes scanning",
       "synonyms": [
         "überwachen",
@@ -745,6 +821,8 @@
       "solo": true
     },
     "flirting": {
+      "label": "flirting",
+      "label_de": "Flirten",
       "prompt": "standing flirtatiously, weight on one leg, playing with the hair, head tilted, a coy smile",
       "synonyms": [
         "flirten",
@@ -762,6 +840,8 @@
       "solo": true
     },
     "filming": {
+      "label": "filming",
+      "label_de": "Filmen",
       "prompt": "standing upright with slight forward lean, holding a camera steady with both hands at eye level, legs shoulder-width apart for balance",
       "synonyms": [
         "filmen",
@@ -779,6 +859,8 @@
       "group": "stand"
     },
     "changing_clothes": {
+      "label": "changing clothes",
+      "label_de": "Umziehen",
       "prompt": "standing and changing clothes, pulling a top over the head",
       "synonyms": [
         "umkleiden",
@@ -799,6 +881,8 @@
       "solo": true
     },
     "freshening_up": {
+      "label": "freshening up",
+      "label_de": "Frischmachen",
       "prompt": "standing in front of a mirror freshening up, fixing the hair, checking the face",
       "synonyms": [
         "sich frisch machen",
@@ -818,6 +902,8 @@
       "solo": true
     },
     "lying": {
+      "label": "lying down",
+      "label_de": "Liegen",
       "prompt": "lying flat with limbs sprawled loosely, arms resting at the sides, head tilted back",
       "synonyms": [
         "liegen",
@@ -838,6 +924,8 @@
       "group": "lie"
     },
     "washing_dishes": {
+      "label": "washing dishes",
+      "label_de": "Abwaschen",
       "prompt": "standing at the kitchen sink washing dishes, one hand holding a wet plate, the other scrubbing it with a sponge, sleeves rolled up",
       "synonyms": [
         "abwaschen",
@@ -858,6 +946,8 @@
       "solo": true
     },
     "holding_knife": {
+      "label": "chopping vegetables",
+      "label_de": "Gemüseschneiden",
       "prompt": "standing at a kitchen counter chopping vegetables with a knife on a cutting board",
       "synonyms": [
         "holding a knife in the kitchen",
@@ -874,6 +964,8 @@
       "solo": true
     },
     "recovering": {
+      "label": "catching breath",
+      "label_de": "Verschnaufen",
       "prompt": "sitting slumped back, exhausted, catching breath, hands resting on the thighs, flushed face",
       "synonyms": [
         "erholen",
@@ -891,6 +983,8 @@
       "solo": true
     },
     "shooting": {
+      "label": "aiming a gun",
+      "label_de": "Zielen",
       "prompt": "standing in an aiming stance, a handgun held with both hands at eye level, arms extended, knees slightly bent, focused",
       "synonyms": [
         "schießen",
@@ -907,6 +1001,8 @@
       "solo": true
     },
     "commanding_attention": {
+      "label": "commanding attention",
+      "label_de": "Kommandieren",
       "prompt": "standing tall in a wide stance, chest out, pointing firmly forward, commanding attention",
       "synonyms": [
         "autoritaet",
@@ -924,8 +1020,9 @@
       "solo": true
     },
     "dancing together": {
+      "label": "salsa dancing",
+      "label_de": "Salsatanzen",
       "prompt": "a couple dancing salsa together in closed hold, one hand on the partner's back, the other hands clasped, hips swaying",
-      "label_de": "Tanzen",
       "synonyms": [
         "salsa",
         "couple dance",
@@ -945,8 +1042,9 @@
       "yaw_offset": 0
     },
     "comforting": {
-      "prompt": "one person comforting another, both hands on the sad person's shoulders, the other with the head bowed, consoling",
+      "label": "comforting",
       "label_de": "Trösten",
+      "prompt": "one person comforting another, both hands on the sad person's shoulders, the other with the head bowed, consoling",
       "synonyms": [
         "comfort",
         "console",
@@ -968,6 +1066,8 @@
       "yaw_offset": 0
     },
     "cleaning surface": {
+      "label": "wiping a surface",
+      "label_de": "Abwischen",
       "prompt": "cleaning the surface of an object",
       "synonyms": [
         "wischt die theke ab",
@@ -983,6 +1083,8 @@
       "group": "stand"
     },
     "leaning": {
+      "label": "leaning",
+      "label_de": "Anlehnen",
       "prompt": "leaning back against a wall or counter, one shoulder on the surface, arms loosely crossed, one foot crossed over the other",
       "synonyms": [
         "anlehnen",
@@ -999,6 +1101,8 @@
       "group": "stand"
     },
     "lounging": {
+      "label": "lounging",
+      "label_de": "Lümmeln",
       "prompt": "slouched deep into a sofa, arms spread along the backrest, legs apart, relaxed, half watching something",
       "synonyms": [
         "zurückgelehnt sitzen",
@@ -1017,6 +1121,8 @@
       "group": "seat"
     },
     "using_phone": {
+      "label": "using the phone",
+      "label_de": "Tippen am Handy",
       "prompt": "standing with head bowed over a phone held in both hands at chest height, thumbs on the screen",
       "synonyms": [
         "am handy",
@@ -1032,6 +1138,8 @@
       "group": "stand"
     },
     "sitting at table": {
+      "label": "sitting at a table",
+      "label_de": "Sitzen am Tisch",
       "prompt": "sitting upright at a table, forearms resting on the tabletop, hands loosely folded in front",
       "synonyms": [
         "am schreibtisch sitzen",
@@ -1046,6 +1154,8 @@
       "group": "seat"
     },
     "taking-off-tshirt": {
+      "label": "taking off a T-shirt",
+      "label_de": "Ausziehen",
       "prompt": "A person is in the middle of taking off a T-shirt, with arms raised above the head and the fabric pulled over the head.",
       "synonyms": [
         "t-shirt ausziehen",
@@ -1057,6 +1167,8 @@
       "group": "stand"
     },
     "forehead-wiping": {
+      "label": "wiping the forehead",
+      "label_de": "Abwischen der Stirn",
       "prompt": "wiping the face with the back of the hand",
       "synonyms": [
         "gesicht abwischen",
@@ -1072,6 +1184,8 @@
       "group": "stand"
     },
     "face-washing": {
+      "label": "washing the face",
+      "label_de": "Waschen des Gesichts",
       "prompt": "washing the face with both hands",
       "synonyms": [
         "das gesicht waschen",
@@ -1087,6 +1201,8 @@
       "group": "stand"
     },
     "hugging": {
+      "label": "hugging",
+      "label_de": "Umarmen",
       "prompt": "two people hugging in greeting, arms wrapped around each other, one arm over the shoulder and one around the waist, heads side by side, warm smiles",
       "synonyms": [
         "hug",
@@ -1108,10 +1224,11 @@
       "group": "stand",
       "solo": false,
       "places": 2,
-      "yaw_offset": 0,
-      "label_de": "Umarmung"
+      "yaw_offset": 0
     },
     "kissing": {
+      "label": "kissing",
+      "label_de": "Küssen",
       "prompt": "two people kissing, standing close, one with hands on the other's waist, the other with arms around the partner's neck, eyes closed",
       "synonyms": [
         "kiss",
@@ -1132,10 +1249,11 @@
       "group": "stand",
       "solo": false,
       "places": 2,
-      "yaw_offset": 0,
-      "label_de": "Küssen"
+      "yaw_offset": 0
     },
     "greeting handshake": {
+      "label": "shaking hands",
+      "label_de": "Händeschütteln",
       "prompt": "two people shaking hands in greeting, standing face to face, right hands clasped, a slight nod, friendly eye contact",
       "synonyms": [
         "handshake",
@@ -1156,12 +1274,12 @@
       "group": "stand",
       "solo": false,
       "places": 2,
-      "yaw_offset": 0,
-      "label_de": "Händedruck"
+      "yaw_offset": 0
     },
     "phone call": {
-      "prompt": "standing and talking on the phone, holding a phone to one ear, the other arm relaxed, attentive expression",
+      "label": "making a phone call",
       "label_de": "Telefonieren",
+      "prompt": "standing and talking on the phone, holding a phone to one ear, the other arm relaxed, attentive expression",
       "synonyms": [
         "telefonieren",
         "telefonieren im stehen",
@@ -1181,8 +1299,9 @@
       "solo": true
     },
     "digging": {
-      "prompt": "standing and digging with a shovel, pushing the blade into the ground and lifting the soil",
+      "label": "digging",
       "label_de": "Graben",
+      "prompt": "standing and digging with a shovel, pushing the blade into the ground and lifting the soil",
       "synonyms": [
         "umgraben",
         "schaufeln",
@@ -1197,8 +1316,9 @@
       "solo": true
     },
     "cleaning windows": {
+      "label": "cleaning windows",
+      "label_de": "Fensterputzen",
       "prompt": "standing at a window and wiping the glass with a cloth in circular motions at head height",
-      "label_de": "Fenster putzen",
       "synonyms": [
         "fenster putzen",
         "die fenster putzen",
@@ -1212,8 +1332,9 @@
       "solo": true
     },
     "sleeping on back": {
+      "label": "sleeping on the back",
+      "label_de": "Schlafen auf dem Rücken",
       "prompt": "lying on the back asleep, head on a pillow, eyes closed, one knee slightly bent, arms relaxed",
-      "label_de": "Auf dem Rücken schlafen",
       "synonyms": [
         "auf dem rücken schlafen",
         "schläft auf dem rücken",
@@ -1225,8 +1346,9 @@
       "solo": true
     },
     "picking up": {
+      "label": "picking something up",
+      "label_de": "Aufheben",
       "prompt": "crouching down to pick something up from the floor, then standing up holding it out",
-      "label_de": "Etwas aufheben",
       "synonyms": [
         "etwas aufheben",
         "hebt etwas auf",
@@ -1240,6 +1362,8 @@
       "solo": true
     },
     "crawling_rest": {
+      "label": "resting on all fours",
+      "label_de": "Ausruhen auf allen vieren",
       "prompt": "resting on hands and knees on the ground, arms straight under the shoulders, head raised, looking around",
       "synonyms": [
         "im vierfüßlerstand",
@@ -1252,6 +1376,8 @@
       "solo": true
     },
     "crawling": {
+      "label": "crawling",
+      "label_de": "Krabbeln",
       "prompt": "crawling on hands and knees across the ground, back level, head raised, looking ahead",
       "synonyms": [
         "kriechen",
@@ -1265,6 +1391,8 @@
       "solo": true
     },
     "swimming": {
+      "label": "swimming",
+      "label_de": "Schwimmen",
       "prompt": "swimming in open water, steady breaststroke, head above the surface, looking ahead",
       "synonyms": [
         "schwimmen",
@@ -1280,6 +1408,8 @@
       "solo": true
     },
     "treading_water": {
+      "label": "treading water",
+      "label_de": "Wassertreten",
       "prompt": "treading water in deep water, head and shoulders above the surface, arms sculling slowly",
       "synonyms": [
         "wassertreten",
