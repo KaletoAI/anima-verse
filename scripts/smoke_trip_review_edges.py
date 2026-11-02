@@ -366,24 +366,16 @@ def ordinary_duplicate_after_departure():
     assert P.get_party_of(b) is None
 
 
-def arrived_follower_stays_with_leader():
+def arrived_companion_regains_movement():
     a, b = character(), character()
     intent = trip(a, b)
     assert P.resolve_pending_invite(invite_id(intent), True)["status"] == "accepted"
-    answer = {"room": "taproom", "activity": "waits beside the leader", "pose": "standing"}
+    assert I.get_intent(intent["id"])["status"] == "done"
+    assert not P.is_party_follower(b)
+    answer = {"room": "taproom", "activity": "returns downstairs", "pose": "standing"}
     npc_actions.run_action_for(b, llm=lambda *args, **kwargs: SimpleNamespace(content=json.dumps(answer)))
     assert C.get_character_current_room(a) == "cellar"
-    assert C.get_character_current_room(b) == "cellar", "NPC follower moved independently"
-    assert P.is_party_follower(b)
-    with keyed_lock("character_profile", b):
-        profile = C.get_character_profile(b)
-        profile["npc_home"] = circle_home(HOME, 0, 0, 5)
-        assert C.save_character_profile(b, profile)
-    position = C.get_character_pos(b)
-    npc_actions.run_action_for(b, llm=lambda *args, **kwargs: SimpleNamespace(content=json.dumps({
-        "activity": "waits with the leader", "pose": "standing"})))
-    assert not travel_engine.get_journey(b)
-    assert C.get_character_pos(b) == position
+    assert C.get_character_current_room(b) == "taproom", "former companion cannot move independently"
 
 
 def chat_consent_without_saved_skill_config():
@@ -411,7 +403,7 @@ def referenced_counterproposal():
     assert all(C.get_character_current_room(n) == "taproom" for n in (a, b))
     invitation.execute(json.dumps({**args, "intent_id": current["id"]}))
     assert I.get_intent(current["id"])["status"] == "done"
-    assert P.get_party_of(b)["leader"] == a
+    assert P.get_party_of(b) is None
     assert all(C.get_character_current_room(n) == "cellar" for n in (a, b))
 
 
@@ -421,7 +413,7 @@ def main():
              lambda: invalid_scope(True), lambda: invalid_scope(False), ordinary_avatar_move,
              unplaced_actor_move, stale_director, reserved_partner_list, stale_pair_target,
              home_npc_proposal, concurrent_accepts, spoken_before_consent,
-             ordinary_duplicate_after_departure, arrived_follower_stays_with_leader,
+             ordinary_duplicate_after_departure, arrived_companion_regains_movement,
              chat_consent_without_saved_skill_config, referenced_counterproposal]
     for index, case in enumerate(cases, 1):
         try:

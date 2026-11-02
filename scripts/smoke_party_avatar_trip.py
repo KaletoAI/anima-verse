@@ -78,7 +78,7 @@ def main():
                 answer = _play_party_respond_sync(user, {'invite_id': pending['invite_id'], 'accept': True})
                 assert answer['ok'], answer
                 assert all(chars.get_character_current_room(n) == 'loft' for n in (leader, avatar))
-                assert party.get_party_of(avatar)['leader'] == leader
+                assert party.get_party_of(avatar) is None
                 assert intents.get_intent(intent['id'])['status'] == 'done'
                 party.leave_party(leader)
                 print(f'PASS {leader}: tool -> intent -> play Join chip -> consent -> both arrive')

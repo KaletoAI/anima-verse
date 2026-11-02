@@ -20,3 +20,5 @@ The group has arrived. The server has proposed the agreed activity through its u
 The agreed pair activity is running. Do not start it again or claim completion while it is still active. Its actual end signal completes the intent; leaving, sleeping or being removed interrupts it.
 {% endif %}
 You may withdraw by leaving the party, or explicitly cancel this intent. Withdrawal ends this trip; cancelling a trip does not silently dissolve its party.
+
+Destination-bound consent lasts only for that proposal. If accepting it creates a new party, the added follower leaves automatically when the trip completes, or when it is cancelled, fails or expires. Without an activity this happens on arrival; with an agreed activity it happens at that activity's actual end. A party that already existed before the proposal remains intact. Plain invitations without a destination remain ordinary parties until someone leaves.

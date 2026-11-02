@@ -157,6 +157,30 @@ def _cancel_owned(intent: Dict) -> None:
     cancel(intent)
 
 
+def _release_party(intent: Dict) -> None:
+    """Release only membership owned by this proposal, through ordinary leave."""
+    state = _state(intent)
+    if not state.get("party_created") or state.get("party_released"):
+        return
+    with keyed_lock("party_membership", "world"):
+        if not state.get("created_party_id"):
+            # Consent and membership commit atomically before runtime metadata.
+            # Recover that receipt even if expiry/cancellation wins on restart.
+            invitation = P.get_invite(state.get("invite_id", "")) or {}
+            if invitation.get("status") == "accepted" and _group_matches(intent, True):
+                state["created_party_id"] = (P.get_party_of(intent["owner"]) or {}).get("party_id", "")
+                if I.get_intent(intent["id"]):
+                    intent = _save(intent, state)
+        for member in state.get("added_members", []):
+            party = P.get_party_of(member)
+            if party and party["role"] == "follower" and party["leader"] == intent["owner"] \
+                    and party["party_id"] == state.get("created_party_id"):
+                P.leave_party(member)
+        current = I.get_intent(intent["id"])
+        if current:
+            _save(current, {**_state(current), "party_released": True})
+
+
 def _terminate(intent: Dict, reason: str, status: str = "cancelled") -> None:
     state = {**_state(intent), "phase": "cancelled", "reason": reason}
     if intent.get("status") == "active":
@@ -165,6 +189,7 @@ def _terminate(intent: Dict, reason: str, status: str = "cancelled") -> None:
         intent = _save(intent, state)
     _cancel_owned(intent)
     P.close_intent_invites(intent["id"], status)
+    _release_party(I.get_intent(intent["id"]) or intent)
 
 
 def _expired(intent: Dict) -> bool:
@@ -226,7 +251,8 @@ def _initialize(intent: Dict) -> Dict:
         members, invitee = _members(owner, intent.get("participants") or {}, action["scope"])
         state = {"phase": "waiting_consent", "reason": "Waiting for the companion's explicit answer.",
                  "origin": _position(owner), "expected_members": members, "invitee": invitee,
-                 "consent": False}
+                 "consent": False, "party_created": P.get_party_of(owner) is None,
+                 "added_members": [invitee]}
         if _state(intent).get("announcement"):
             state["announcement"] = _state(intent)["announcement"]
         intent = _save(intent, state, action=action)
@@ -260,6 +286,7 @@ def _reconcile(intent_id: str, *, request: bool = True) -> bool | None:
                 _cancel_owned(intent)
                 _save(intent, {**_state(intent), "phase": "cancelled",
                                "reason": "Trip was ended before actual arrival."}, status="cancelled")
+            _release_party(I.get_intent(intent_id) or intent)
             return
         if _expired(intent):
             _terminate(intent, "The shared trip expired.", "expired")
@@ -326,7 +353,9 @@ def _reconcile(intent_id: str, *, request: bool = True) -> bool | None:
             return
         else:
             if not state.get("consent"):
-                intent = _save(intent, {**state, "consent": True, "phase": "ready", "reason": ""})
+                party = P.get_party_of(intent["owner"]) or {}
+                intent = _save(intent, {**state, "consent": True, "phase": "ready", "reason": "",
+                                       "created_party_id": party.get("party_id", "")})
                 state = _state(intent)
             with keyed_lock("party_membership", "world"):
                 if not _group_matches(intent, True):
@@ -808,6 +837,7 @@ def _on_changed(intent: Dict, previous: Dict) -> None:
         if not intent_action_managed(intent) and intent_action_managed(previous):
             _cancel_owned(previous)
             P.close_intent_invites(previous["id"])
+            _release_party(previous)
             return
         if not intent_action_managed(intent):
             return
@@ -834,6 +864,7 @@ def _on_deleted(intent: Dict) -> None:
         with keyed_lock("intent_execution", intent["id"]):
             _cancel_owned(intent)
             P.close_intent_invites(intent["id"])
+            _release_party(intent)
 
 
 def _on_detached(character: str, **kwargs) -> None:
@@ -856,9 +887,22 @@ def _on_invite_closed(invite: Dict, reason: str) -> None:
                 _terminate(intent, f"Invitation was {reason}.")
 
 
+def _release_finished_parties() -> None:
+    """Startup backstop: a trip that ended before a restart releases its party.
+
+    Only finished trips — active ones keep their own recovery path, so a
+    restart never re-asks for consent or starts a move from here."""
+    for intent in I.list_intents():
+        state = _state(intent)
+        if intent_action_managed(intent) and intent["status"] != "active" \
+                and state.get("party_created") and not state.get("party_released"):
+            reconcile(intent["id"])
+
+
 def world_tick() -> None:
-    for intent in I.list_intents(status="active"):
-        if intent_action_managed(intent):
+    for intent in I.list_intents():
+        if intent_action_managed(intent) and (intent["status"] == "active" or
+                (_state(intent).get("party_created") and not _state(intent).get("party_released"))):
             reconcile(intent["id"])
 
 
@@ -887,6 +931,7 @@ def register() -> None:
     hooks.register("intent_changed", _on_changed, tag="party.trip.changed")
     hooks.register("intent_deleted", _on_deleted, tag="party.trip.deleted")
     hooks.register("world_tick", world_tick, tag="party.trip.tick")
+    hooks.register("startup", _release_finished_parties, tag="party.trip.startup")
     hooks.register("party_membership_changed", _on_detached, tag="party.trip.membership")
     hooks.register("party_invites_cleared", _on_detached, tag="party.trip.detached")
     hooks.register("party_invite_closed", _on_invite_closed, tag="party.trip.invite_closed")

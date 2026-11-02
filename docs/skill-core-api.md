@@ -953,7 +953,11 @@ self-intent TTL remains disabled. NPC invitations persist their announcement
 before execution; consent waits for its speech write. Recovery uses
 `app.models.perception_store.utterance_exists(speaker, ts, content)` with the
 persisted technical timestamp to avoid repeating an already recorded line.
-For travel-only intents, arrival completes the intent, not party membership.
+For travel-only intents, arrival completes the intent. Destination-bound consent lasts only for that proposal. If accepting it creates a new party, the added follower leaves automatically when the trip completes, or when it is cancelled, fails or expires. Without an activity this happens on arrival; with an agreed activity it happens at that activity's actual end. A party that already existed before the proposal remains intact. Plain invitations without a destination remain ordinary parties until someone leaves.
+Runtime `meta.travel` persists `party_created`, `added_members`, the accepted
+`created_party_id` and the idempotent `party_released` receipt. Terminal intents
+with an outstanding receipt are reconciled on startup and world ticks, using
+`party_engine.leave_party` for ordinary presence/notices sync.
 Optional `after_arrival={"type":"pair","pose_key":"<exact available catalog key>"}`
 extends that same intent through the existing pair invitation after arrival.
 Exactly two participants are required. `GET /intents/shared-activity-options`

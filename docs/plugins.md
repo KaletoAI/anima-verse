@@ -1166,6 +1166,8 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `undress` | `undress`, `get_dressed` | Aus-/Anziehen für Freitext-Garderoben |
 | `wet` | `enter_water`, `dry_off` | Nässe-Zustand — Schwimm-Ausnahme solange nass, Auto-Trocknung per TTL |
 
+Destination-bound party invitations: Destination-bound consent lasts only for that proposal. If accepting it creates a new party, the added follower leaves automatically when the trip completes, or when it is cancelled, fails or expires. Without an activity this happens on arrival; with an agreed activity it happens at that activity's actual end. A party that already existed before the proposal remains intact. Plain invitations without a destination remain ordinary parties until someone leaves.
+
 Drei weitere Ordner unter `plugins/` sind **Symlinks in ein privates Repo** und
 gehören nicht zu diesem SFW-Repo; ohne dieses Repo existieren sie schlicht nicht.
 

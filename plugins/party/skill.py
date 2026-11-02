@@ -179,6 +179,9 @@ class PartySkill(PluginSkill):
             return "Who exactly to invite? (no valid target)"
         if P.is_party_follower(character_name):
             return f"{character_name} is part of a party and cannot invite anyone."
+        if target in P.party_followers(character_name):
+            return (f"{target} is already travelling with you — no new invitation is needed. "
+                    "If a shared trip is active, wait until it ends before proposing another.")
         incoming = P.find_pending_invite(target, character_name)
         if incoming and (data.get("destination") or data.get("intent_id")):
             if not incoming.get("intent_id"):
@@ -210,10 +213,13 @@ class PartySkill(PluginSkill):
                     f"You can only invite someone who is here with you.")
         if data.get("destination") or data.get("intent_id"):
             from plugins.party.trip_intents import propose_trip
-            intent = propose_trip(character_name, target, data.get("destination") or {},
-                                  data.get("scope", "pair"),
-                                  intent_id=str(data.get("intent_id") or ""),
-                                  after_arrival=data.get("after_arrival"))
+            try:
+                intent = propose_trip(character_name, target, data.get("destination") or {},
+                                      data.get("scope", "pair"),
+                                      intent_id=str(data.get("intent_id") or ""),
+                                      after_arrival=data.get("after_arrival"))
+            except ValueError as e:
+                return f"Trip proposal refused: {e}"
             travel = (intent.get("meta") or {}).get("travel") or {}
             return (f"Shared trip {intent['id']}: {travel.get('phase', 'waiting_consent')}"
                     f" — {travel.get('reason', '')}")

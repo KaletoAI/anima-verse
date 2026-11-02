@@ -29,6 +29,9 @@ def arrive(intent):
         T._save(intent, {**T._state(intent), "phase": "arrived", "reason": ""})
         if not I.complete_intent(intent["id"]):
             raise RuntimeError("Arrival completion could not be persisted.")
+        # The consent covered this trip only: release its party now, not on
+        # the next world tick (the tick stays the restart/backstop path).
+        T._release_party(I.get_intent(intent["id"]) or intent)
         return False
     state = T._state(intent)
     activity = state.get("activity") or {}
@@ -36,6 +39,7 @@ def arrive(intent):
         T._save(intent, {**state, "phase": "completed", "reason": ""})
         if not I.complete_intent(intent["id"]):
             raise RuntimeError("Activity completion could not be persisted.")
+        T._release_party(I.get_intent(intent["id"]) or intent)
         return False
     if any(T._position(name) != intent["action"]["destination"] for name in state["expected_members"]):
         T._terminate(intent, "A participant left before the agreed activity finished.")
