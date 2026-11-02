@@ -102,11 +102,11 @@ with tempfile.TemporaryDirectory() as directory:
     from app.core.provider import _reported_capabilities, _parameter_size_from_name
     swap = {"id": "gemma-4-26b-a4b-it-q6-k", "capabilities": {"function_calling": True, "vision": True},
             "meta": {"llamaswap": {"quantization": "q6-k"}}}
-    assert _reported_capabilities(swap) == {"vision": True, "tool_calling": True, "quantization": "q6-k"}
+    assert _reported_capabilities(swap) == {"vision": True, "tool_calling": True, "quantization": "q6-k", "slots": None}
     text_only = {"id": "granite-switch-4.1-8b-bf16", "architecture": {"input_modalities": ["text"]}}
-    assert _reported_capabilities(text_only) == {"vision": False, "tool_calling": None, "quantization": ""}
+    assert _reported_capabilities(text_only) == {"vision": False, "tool_calling": None, "quantization": "", "slots": None}
     assert _reported_capabilities({"id": "x", "supported_parameters": ["tools"]})["tool_calling"] is True
-    assert _reported_capabilities({"id": "gpt-4o"}) == {"vision": None, "tool_calling": None, "quantization": ""}
+    assert _reported_capabilities({"id": "gpt-4o"}) == {"vision": None, "tool_calling": None, "quantization": "", "slots": None}
     for name, size in (("gemma-4-26b-a4b-it", "26B-A4B"), ("granite-switch-4.1-8b-bf16", "8B"),
                        ("together/Qwen/Qwen3.5-9B", "9B"), ("lfm3-1.7b-bf16", "1.7B"), ("gpt-4o", "")):
         assert _parameter_size_from_name(name) == size, (name, _parameter_size_from_name(name))

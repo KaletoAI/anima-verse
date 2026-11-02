@@ -33,8 +33,14 @@ def _reported_capabilities(entry: Dict[str, Any]) -> Dict[str, Any]:
         tools = "tools" in params
     meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
     swap = meta.get("llamaswap") if isinstance(meta.get("llamaswap"), dict) else {}
+    # Parallel slots the server runs for this model (llama-swap meta, else
+    # the "slots=N" token of its description); None = not reported.
+    slots = swap.get("max_num_seqs")
+    if not (type(slots) is int and slots > 0):
+        match = re.search(r"(?:^|[\s|])slots=(\d+)", str(entry.get("description") or ""))
+        slots = int(match.group(1)) if match and int(match.group(1)) > 0 else None
     return {"vision": vision, "tool_calling": tools,
-            "quantization": str(swap.get("quantization") or "")}
+            "quantization": str(swap.get("quantization") or ""), "slots": slots}
 
 
 def _parameter_size_from_name(model_id: str) -> str:
@@ -296,6 +302,7 @@ class Provider:
                             "context_length": ctx_len,
                             "vision": is_vision,
                             "tool_calling": reported["tool_calling"],
+                            "slots": reported["slots"],
                             "pricing": {"input": price_in, "output": price_out},
                         })
 

@@ -372,6 +372,12 @@ def iter_suitability_results(
     except (TypeError, ValueError):
         provider_cap = concurrency
     concurrency = max(1, min(concurrency, provider_cap))
+    # A model with fewer server slots than parallel test requests makes the
+    # extra requests wait in the router, and that wait would count as answer
+    # time (measured: a 1-slot SenseNova build at 3 parallel requests).
+    slots = model_slots(getattr(inst, "_provider", None), model)
+    if slots:
+        concurrency = min(concurrency, slots)
     live_play = bool(get_agent_loop().status()["running"] and not is_world_frozen())
     cases = [prepare_case(case) for case in cases]
 
@@ -617,6 +623,17 @@ def iter_suitability_results(
                        fixture_version=data.get("fixture_version") or fixture_version(cases))
         summary["saved"] = _persist(model_full, summary, results)
         yield {"type": "done", "summary": summary}
+
+
+def model_slots(provider, model: str) -> Optional[int]:
+    """Parallel slots the provider reports for ``model`` (None = unknown)."""
+    try:
+        entry = next((m for m in provider.list_models() if m.get("name") == model), None)
+    except Exception as exc:
+        logger.debug("No model list for slot lookup of %s: %s", model, exc)
+        return None
+    slots = (entry or {}).get("slots")
+    return slots if type(slots) is int and slots > 0 else None
 
 
 def group_options(summary: dict) -> dict:
