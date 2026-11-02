@@ -8380,7 +8380,8 @@ walked floor, nullable), remaining world-XZ
 to that trimmed path, `walked_m`, `remaining_m`, remaining `paces_m_s_real`, and
 optional departure `starts_in_s`. No target/execution/partner/foreign room is
 included. Every published segment is checked against the same current room
-geometry. Loss of room, sight, ownership or route returns null; clients must
+geometry, except the departure legs (seat -> stand, stand -> step-out), which
+leave the furniture by design and are checked by the travel engine's own rule. Loss of room, sight, ownership or route returns null; clients must
 delete their cached local path. Existing foreign overland travel stays thinned.
 
 `worldmap.characters[].prop_action_entry` projects the actual measured entry

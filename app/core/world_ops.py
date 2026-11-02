@@ -412,7 +412,13 @@ def _local_prop_approach(name, observer, profile, observer_profile, journey, vis
     if not geometry:
         return None
     space = _Space(*geometry)
-    if not all(space.visible(tuple(a), tuple(b)) for a, b in zip(remaining, remaining[1:])):
+    # The departure legs (seat -> stand, stand -> step-out) leave the furniture
+    # and cross it by design; the travel engine checks them by its own rule
+    # (travel_engine._advance_approach). Sight applies to the walk behind them.
+    escape = (1 if journey.get("departure_seat") else 0) + (1 if journey.get("step_out") else 0)
+    if not all(space.visible(tuple(a), tuple(b))
+               for i, (a, b) in enumerate(zip(remaining, remaining[1:]))
+               if state["seg"] + i + 1 > escape):
         return None
     from app.core.game_time import GameTime
     pending = max(0, (GameTime.parse(journey["started_at_game"]) - now).seconds - fraction)

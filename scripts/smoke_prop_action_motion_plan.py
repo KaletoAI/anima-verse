@@ -166,6 +166,17 @@ class MotionPlan(unittest.TestCase):
             seat=[seat['x'], seat['z']], stand=list(journey['waypoints'][1][:2]),
             exit_clip='run-exit', exit_s=1.0))
         self.assertEqual(motion['waypoints'][0], [round(seat['x'], 3), round(seat['z'], 3)])
+        # An observer in the room sees the same departure: the seat leg and the
+        # escape cross the furniture being left, which the travel engine allows
+        # (fails on 9862d368: withdrawn, the figure stood up on the terrain).
+        from app.core.world_ops import _local_prop_approach
+        observer = F.actor(target['location_id'], at=(2, 5))
+        local = _local_prop_approach(name, observer, F.C.get_character_profile(name),
+                                     F.C.get_character_profile(observer), journey, {name},
+                                     F.game_time(), 0, 1)
+        self.assertIsNotNone(local)
+        self.assertEqual(local['waypoints'][0], [seat['x'], seat['z']])
+        self.assertEqual(local['floor_y'], journey['floor_y'])
 
     def test_terminal_motion_is_null_without_a_released_place(self):
         name, target, _ = S.setup_run()
