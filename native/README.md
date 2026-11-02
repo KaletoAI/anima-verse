@@ -359,6 +359,9 @@ Labels and the performance readout (Task 11) — the browser's CSS2D layer as a 
   (height + 0.45 m), shown while the camera is closer than 55 m; the name of a traveller reads `🚶 HH:MM Name`,
   the avatar's in gold. The HUD's `sayBubble` puts a bubble over the speaker (at most 140 characters, 22ch wide,
   3.5–12 s). Rules: `Core/Overview/OverviewLabels.cs`, vector-checked (`shared/test-vectors/overview_labels.json`).
+  Worldmap `badges` (Task 107) draw in a separate 11 px run, 3 px after the name, using the event pins' emoji font
+  fallback. Polls update or remove the badges in place, preserving the name's text, metrics and anchor height.
+  Titles are retained as supplied; this pointer-transparent overlay has no hover tooltips.
 - **Location names** (`World/LocationLabels.cs`): every non-area place, serif small capitals in gold, 2.2 m above
   the place's height on its ground; no distance limit.
 - **Event pins** float 3.5 m above the top of their place measured from its ground (`pinY`, vectors in

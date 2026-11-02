@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
+using AnimaNative.Figures;
 
 namespace AnimaNative.Overview;
 
@@ -35,7 +37,16 @@ public readonly record struct TagTravel(double? StartsInS, string? EtaHhmm)
 }
 
 /// <summary>One character's tag inputs from a world-map payload.</summary>
-public sealed record TagRow(string Name, string Activity, TagTravel? Travel);
+public sealed record TagRow(string Name, string Activity, TagTravel? Travel)
+{
+    public IReadOnlyList<CharacterBadge> Badges { get; init; } = Array.Empty<CharacterBadge>();
+}
+
+/// <summary>The separate badge element's content and update key (browser <c>tagBadges</c>).</summary>
+public readonly record struct TagBadgeText(string Text, string Title)
+{
+    public string Key => Text + "\u0001" + Title;
+}
 
 /// <summary>
 /// Port of client3d/src/scene/nameTags.ts — the rules behind a character's name tag and a location's name on the
@@ -72,6 +83,11 @@ public static class OverviewLabels
         return $"{Walker}{eta} {name}";
     }
 
+    /// <summary>Icons without gaps; nonempty titles joined with LF, exactly as <c>tagBadges</c>.</summary>
+    public static TagBadgeText TagBadges(IReadOnlyList<CharacterBadge>? badges)
+        => badges is null ? new("", "") : new(string.Concat(badges.Select(b => b.Icon)),
+            string.Join("\n", badges.Select(b => b.Title).Where(t => t.Length > 0)));
+
     /// <summary><c>tagAnchorY</c>: 0.45 m over a model figure of <paramref name="figureHeight"/> m, −0.15 for a portrait (null).</summary>
     public static double TagAnchorY(double? figureHeight)
         => figureHeight is { } h ? h + TagAboveHeadM : TagPortraitY;
@@ -96,7 +112,7 @@ public static class OverviewLabels
             string name = c.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()! : "";
             if (name.Length == 0) continue;
             string activity = c.TryGetProperty("activity", out var act) && act.ValueKind == JsonValueKind.String ? act.GetString()! : "";
-            rows.Add(new TagRow(name, activity, TagTravel.FromJson(c)));
+            rows.Add(new TagRow(name, activity, TagTravel.FromJson(c)) { Badges = CharacterRow.ParseBadges(c) });
         }
         return (rows, avatar);
     }

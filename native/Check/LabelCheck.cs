@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
@@ -132,6 +133,56 @@ public static class LabelCheck
             cam.SetChatBox(null);
             for (int i = 0; i < 180; i++) cam.Step(1.0 / 60);
 
+            // ---- NB name badges: a separate 11 px run, 3 px after the unchanged name, at its baseline.
+            // The row widens by 3 + badge width, but its height and world anchor stay identical. Repeated polls,
+            // title-only changes, replacement and removal must keep the tag and shaped name (including travel).
+            foreach (string name in new[] { Ada, Cleo })
+            {
+                var tag = tags.Tags[name];
+                var plainSize = tag.Size;
+                var plainAnchor = tag.Anchor;
+                var nameLine = tag.NameLine;
+                var nameText = tag.NameText;
+                var nameSize = nameLine.GetSize();
+                var poll = JsonNode.Parse(map.RootElement.GetRawText())!.AsObject();
+                var row = poll["characters"]!.AsArray().Single(c => c!["name"]!.GetValue<string>() == name)!;
+                row["badges"] = JsonNode.Parse("""[{"icon":"🔒","title":"Private"},{"icon":"⭐","title":""}]""");
+                void ApplyBadges() { tags.Apply(JsonSerializer.SerializeToElement(poll)); overlay.Collect(size, false); }
+                ApplyBadges();
+                await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+                Expect("NB same tag and name run", ReferenceEquals(tag, tags.Tags[name]) && ReferenceEquals(nameLine, tag.NameLine), name);
+                Expect("NB icons separate from name", tag.BadgeText == "🔒⭐" && tag.NameText == nameText && tag.BadgeLine is not null, tag.BadgeText);
+                Expect("NB title retained verbatim", tag.BadgeTitle == "Private", tag.BadgeTitle);
+                Near("NB name width unchanged", tag.NameLine.GetSize().X, nameSize.X, 1e-4);
+                Near("NB badge follows name by 3 px", tag.BadgeOffset.X - tag.NameOffset.X - nameSize.X, 3, 1e-4);
+                Near("NB shared baseline", tag.NameOffset.Y + nameLine.GetLineAscent(), tag.BadgeOffset.Y + tag.BadgeLine!.GetLineAscent(), 1e-4);
+                Near("NB row width", tag.Size.X, plainSize.X + 3 + tag.BadgeLine.GetSize().X, 1e-4);
+                Near("NB row height unchanged", tag.Size.Y, plainSize.Y, 1e-4);
+                NearV("NB anchor unchanged", tag.Anchor, plainAnchor);
+                var badgeLine = tag.BadgeLine;
+                ApplyBadges();
+                Expect("NB identical poll keeps badge run", ReferenceEquals(badgeLine, tag.BadgeLine), name);
+                row["badges"]![0]!["title"] = "Private (state: X)";
+                ApplyBadges();
+                Expect("NB title-only poll keeps glyphs", tag.BadgeTitle == "Private (state: X)" && ReferenceEquals(badgeLine, tag.BadgeLine), tag.BadgeTitle);
+                row["badges"] = JsonNode.Parse("""[{"icon":"💞","title":"Friends"}]""");
+                ApplyBadges();
+                Expect("NB replacement on poll", tag.BadgeText == "💞" && tag.BadgeTitle == "Friends", tag.BadgeText);
+                foreach (string? empty in new string?[] { null, "null", "[]", "{}" })
+                {
+                    row["badges"] = JsonNode.Parse("""[{"icon":"🔓"}]""");
+                    ApplyBadges();
+                    if (empty is null) row.AsObject().Remove("badges");
+                    else row["badges"] = JsonNode.Parse(empty);
+                    ApplyBadges();
+                    Expect("NB no badge element after removal", tag.BadgeLine is null && tag.BadgeText == "" && tag.BadgeTitle == "", empty ?? "absent");
+                    Near("NB original width restored", tag.Size.X, plainSize.X, 1e-4);
+                    Near("NB original height restored", tag.Size.Y, plainSize.Y, 1e-4);
+                    NearV("NB original anchor restored", tag.Anchor, plainAnchor);
+                }
+                Expect("NB name and tag survive every poll", ReferenceEquals(nameLine, tag.NameLine) && ReferenceEquals(tag, tags.Tags[name]) && tag.NameText == nameText, name);
+            }
+
             // ---- B bubbles ----
             var ada = tags.Tags[Ada];
             float plainH = ada.Size.Y;
@@ -182,6 +233,9 @@ public static class LabelCheck
             // ---- emoji in a name ----
             var walker = LabelStyle.Line("🚶", LabelStyle.SansSemiBold, LabelStyle.NameSize).GetSize();
             Expect("emoji in a name has a size", walker.X > 4 && walker.X < 24, $"{walker}");
+            Expect("badge font shares event-pin emoji fallback", EventPins.SharedEmojiFont is { } emoji && LabelStyle.Sans.Fallbacks.Contains(emoji), "missing fallback");
+            foreach (int cp in new[] { 0x1F512, 0x1F49E, 0x1F513 })
+                Expect("privacy badge glyph exists", LabelStyle.Sans.HasChar(cp), $"U+{cp:X}");
 
             // ---- cost: 60 tags shaped and collected ----
             var sw = Stopwatch.StartNew();
@@ -208,7 +262,7 @@ public static class LabelCheck
             // ---- P perf ----
             var perf = CheckPerf(host);
 
-            return $"labels T1..P ok (tags at 40 m 3 of 3 ({onScreen40} on screen), at 60 m 0; places 3/3; projection "
+            return $"labels T1..P + NB badges ok (tags at 40 m 3 of 3 ({onScreen40} on screen), at 60 m 0; places 3/3; projection "
                    + $"{err:0.####} px, shifted ({shift.Dx:0.#},{shift.Dy:0.#}) px {errShift:0.####} px — Godot UnprojectPosition off by "
                    + $"{godot:0.###} px plain, {godotShift:0.###} px shifted; Bram moved {(bramShifted - bramPlain).Length():0.#} px; "
                    + $"bubble 22ch = {maxW:0.#} px, 140 chars in {wrapLines} lines; 🚶 {walker.X:0.#}×{walker.Y:0.#} px; "

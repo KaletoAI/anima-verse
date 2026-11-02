@@ -131,6 +131,9 @@ public static class LabelStyle
 {
     // .npc-name / .npc-activity / .npc-avatar
     public const int NameSize = 12, NameWeight = 600, ActivitySize = 10;
+    // .npc-name-row / .npc-badges: a separate baseline-aligned run after the unchanged name.
+    public const int BadgeSize = 11;
+    public const float BadgeGap = 3;
     public static readonly Color NameColor = new(1, 1, 1);
     public static readonly Color AvatarColor = new("f2d98c");
     public static readonly Color ActivityColor = new("d8d2c2");
@@ -155,6 +158,8 @@ public static class LabelStyle
 
     /// <summary><c>0 1px 3px #000, 0 0 4px rgba(0,0,0,.8)</c></summary>
     public static readonly Shadow[] NameShadow = { new(0, 1, 3, new Color(0, 0, 0, 1)), new(0, 0, 4, new Color(0, 0, 0, 0.8f)) };
+    /// <summary><c>.npc-badges: text-shadow: 0 1px 3px #000</c>.</summary>
+    public static readonly Shadow[] BadgeShadow = { new(0, 1, 3, new Color(0, 0, 0, 1)) };
     /// <summary><c>0 1px 2px #000</c></summary>
     public static readonly Shadow[] ActivityShadow = { new(0, 1, 2, new Color(0, 0, 0, 1)) };
     /// <summary><c>0 1px 2px #000, 0 0 6px rgba(0,0,0,.9)</c></summary>

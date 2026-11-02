@@ -53,6 +53,7 @@ public sealed class NameTags
             if (!_figures.Figures.ContainsKey(row.Name)) continue;
             if (!_tags.TryGetValue(row.Name, out var tag)) _tags[row.Name] = tag = new Tag(row.Name);
             tag.SetText(OverviewLabels.TagName(row.Name, row.Travel), row.Activity, row.Name == avatar);
+            tag.SetBadges(OverviewLabels.TagBadges(row.Badges));
         }
         foreach (var gone in _tags.Keys.Where(n => !_figures.Figures.ContainsKey(n)).ToList()) _tags.Remove(gone);
     }
@@ -91,6 +92,7 @@ public sealed class NameTags
     public sealed class Tag : IOverlayLabel
     {
         private TextLine _name = new(), _activity = new();
+        private TextLine? _badges;
         private TextParagraph? _bubble;
         private Vector2 _bubbleBox, _size;
 
@@ -99,6 +101,13 @@ public sealed class NameTags
         public string Character { get; }
         public string NameText { get; private set; } = "";
         public string ActivityText { get; private set; } = "";
+        public string BadgeText { get; private set; } = "";
+        public string BadgeTitle { get; private set; } = "";
+        // Separate shaped runs, also inspected by the headless label check.
+        internal TextLine NameLine => _name;
+        internal TextLine? BadgeLine => _badges;
+        internal Vector2 NameOffset { get; private set; }
+        internal Vector2 BadgeOffset { get; private set; }
         public bool IsAvatar { get; private set; }
         public string BubbleText { get; private set; } = "";
         public double BubbleUntilMs { get; private set; }
@@ -116,6 +125,16 @@ public sealed class NameTags
             IsAvatar = avatar;
             _name = LabelStyle.Line(name, LabelStyle.SansSemiBold, LabelStyle.NameSize);
             _activity = LabelStyle.Line(activity, LabelStyle.Sans, LabelStyle.ActivitySize);
+            Layout();
+        }
+
+        internal void SetBadges(TagBadgeText badges)
+        {
+            BadgeTitle = badges.Title;
+            if (badges.Text == BadgeText) return;
+            BadgeText = badges.Text;
+            _badges?.Dispose();
+            _badges = badges.Text.Length > 0 ? LabelStyle.Line(badges.Text, LabelStyle.Sans, LabelStyle.BadgeSize) : null;
             Layout();
         }
 
@@ -161,9 +180,15 @@ public sealed class NameTags
         {
             var name = NameText.Length > 0 ? _name.GetSize() : Vector2.Zero;
             var act = ActivityText.Length > 0 ? _activity.GetSize() : Vector2.Zero;
-            float w = Math.Max(Math.Max(name.X, act.X), _bubbleBox.X);
-            float h = name.Y + act.Y + (_bubble is not null ? _bubbleBox.Y + LabelStyle.BubbleMarginBottom : 0);
+            float rowWidth = name.X + (_badges is not null ? LabelStyle.BadgeGap + _badges.GetSize().X : 0);
+            float w = Math.Max(Math.Max(rowWidth, act.X), _bubbleBox.X);
+            float above = _bubble is not null ? _bubbleBox.Y + LabelStyle.BubbleMarginBottom : 0;
+            // Badges extend the row horizontally; keep the existing name's metrics and the column's height.
+            float h = name.Y + act.Y + above;
             _size = new Vector2(w, h);
+            NameOffset = new Vector2((w - rowWidth) / 2, above);
+            BadgeOffset = NameOffset + new Vector2(name.X + LabelStyle.BadgeGap,
+                _badges is not null ? _name.GetLineAscent() - _badges.GetLineAscent() : 0);
         }
 
         public void Draw(CanvasItem canvas, Vector2 topLeft)
@@ -188,8 +213,10 @@ public sealed class NameTags
             if (NameText.Length > 0)
             {
                 var s = _name.GetSize();
-                LabelStyle.DrawText(canvas, _name, new Vector2(topLeft.X + (_size.X - s.X) / 2, y),
+                LabelStyle.DrawText(canvas, _name, topLeft + NameOffset,
                                     IsAvatar ? LabelStyle.AvatarColor : LabelStyle.NameColor, LabelStyle.NameShadow);
+                if (_badges is { } badges)
+                    LabelStyle.DrawText(canvas, badges, topLeft + BadgeOffset, LabelStyle.NameColor, LabelStyle.BadgeShadow);
                 y += s.Y;
             }
             if (ActivityText.Length > 0)

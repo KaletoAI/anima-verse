@@ -9,6 +9,9 @@ using AnimaNative.World;
 
 namespace AnimaNative.Figures;
 
+/// <summary>An icon after a figure's name; its optional title is already in the avatar's language.</summary>
+public sealed record CharacterBadge(string Icon, string Title);
+
 /// <summary>
 /// One character row of <c>GET /play/worldmap</c> (§ A1.4), reduced to what
 /// the spike draws: where it stands, how tall it is, which mesh it wears.
@@ -17,6 +20,9 @@ public sealed record CharacterRow(
     string Name, string LocationId, double? PosX, double? PosZ, double? HeightCm, string? ModelSig,
     TravelInfo? Travel)
 {
+    /// <summary><c>badges</c>: ordered name icons; absent or malformed input clears them on the next poll.</summary>
+    public IReadOnlyList<CharacterBadge> Badges { get; init; } = Array.Empty<CharacterBadge>();
+
     /// <summary>Task 57: public geometry only; absent projections clear on the next poll.</summary>
     public JsonObject? LocalApproach { get; init; }
     public JsonObject? PropActionEntry { get; init; }
@@ -113,6 +119,7 @@ public sealed record CharacterRow(
                                 Json.NumOrNull(c, "height_cm"), sig, travel)
         {
             Yaw = Json.NumOrNull(c, "yaw"),
+            Badges = ParseBadges(c),
             LocalApproach = c.TryGetProperty("local_approach",out var la) && la.ValueKind==JsonValueKind.Object ? JsonNode.Parse(la.GetRawText())!.AsObject() : null,
             PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
             ActivityAnimation = Json.Str(c, "activity_animation"),
@@ -128,6 +135,23 @@ public sealed record CharacterRow(
             HasMotion = c.TryGetProperty("motion", out var mo),
             Motion = c.TryGetProperty("motion", out mo) ? MotionPayload.Parse(mo) : null,
         };
+    }
+
+    /// <summary>Shared by figure rows and tag rows: accept only nonempty string icons, without trimming.</summary>
+    internal static IReadOnlyList<CharacterBadge> ParseBadges(JsonElement row)
+    {
+        if (!row.TryGetProperty("badges", out var badges) || badges.ValueKind != JsonValueKind.Array)
+            return Array.Empty<CharacterBadge>();
+        var result = new List<CharacterBadge>();
+        foreach (var badge in badges.EnumerateArray())
+        {
+            if (badge.ValueKind != JsonValueKind.Object ||
+                !badge.TryGetProperty("icon", out var icon) || icon.ValueKind != JsonValueKind.String ||
+                icon.GetString() is not { Length: > 0 } text) continue;
+            string title = badge.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString()! : "";
+            result.Add(new CharacterBadge(text, title));
+        }
+        return result;
     }
 
     private static FinaleBlock? ParseFinale(JsonElement c)
