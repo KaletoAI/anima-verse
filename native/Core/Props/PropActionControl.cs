@@ -36,6 +36,9 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     private string _offeredOwnKey="";
     private JsonObject? _requestedRun,_trackedRun;
     public event Action<string,string>? RunEnded;
+    /// <summary>The tracked run ended because a NEW own run took its place (old id, new id): another action on the same
+    /// piece switches in place, an accepted invitation replaces what ran. Not an end: the avatar stays the server's.</summary>
+    public event Action<string,string>? RunSuperseded;
     /// <summary>A refused or failed mutation that was not about the own run. The server keeps the current run on a
     /// refusal and ends it only when a new request replaced it, so only the following state read
     /// (<see cref="ReconcileRun"/>) may end it; this only undoes the local click preview.</summary>
@@ -175,8 +178,15 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         var row=new[]{"current","outgoing","recent_results"}.SelectMany(k=>(_state[k] as JsonArray ?? new()).OfType<JsonObject>())
             .FirstOrDefault(r=>PropActionMotion.Text(r["execution_id"])==id);
         string status=PropActionMotion.Text(row?["status"]);
-        if(status is "cancelled" or "failed" or "completed" || (row is null && PropActionMotion.Text(previous["status"])=="approaching"))
-            { EndRun(status.Length>0 ? status : "cancelled",row is null ? "approach_withdrawn" : PropActionMotion.Text(row["reason"])); return true; }
+        if(status is "cancelled" or "failed" or "completed" || (row is null && PropActionMotion.Text(previous["status"])=="approaching")) {
+            if(OwnedRun is { } next && PropActionMotion.Text(next["execution_id"]) is { Length:>0 } nextId && nextId!=id) {
+                _released.Add(id); _trackedRun=(JsonObject)next.DeepClone();
+                Log?.Invoke($"run superseded: status={status} next={nextId}");
+                RunSuperseded?.Invoke(id,nextId);
+                return false;
+            }
+            EndRun(status.Length>0 ? status : "cancelled",row is null ? "approach_withdrawn" : PropActionMotion.Text(row["reason"])); return true;
+        }
         else if(OwnedRun is { } owned) _trackedRun=(JsonObject)owned.DeepClone();
         return false;
     }

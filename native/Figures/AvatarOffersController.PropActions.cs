@@ -58,6 +58,7 @@ public sealed partial class AvatarOffersController
         props.NotifyChanged+=PropNotifyChanged;
         props.RefreshFailed+=PropRefreshFailed;
         props.RunEnded+=PropRunEnded;
+        props.RunSuperseded+=PropRunSuperseded;
         props.MutationRejected+=PropMutationRejected;
         props.MotionReceived+=PropMotionReceived;
         _figures.OwnPropMotionReleased+=ReleaseLocalProp;
@@ -178,6 +179,22 @@ public sealed partial class AvatarOffersController
         _nextPropPoll=_clock()+PropPollPeriod();
         if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
         ReleaseLocalProp();
+    }
+    /// <summary>
+    /// A new own run replaced the tracked one in place (another action on the same piece, an accepted invitation): no
+    /// hand-back and no position report in between. The played plan of the old run is let go; the server keeps the
+    /// figure, and the worldmap row's seat or pair places it as for any running action.
+    /// </summary>
+    private void PropRunSuperseded(string previous,string next)
+    {
+        if(_disposed) return;
+        if(_figures.OwnPropMotion is { } played && PropActionMotion.Text(played.Plan["execution_id"])!=next) _figures.ClearOwnPropMotion();
+        _figures.SetServerDriven(true);
+        _manualPropRelease=false; _propPrepared=false; _propPreviewYaw=null;
+        _position.Channel.DiscardPendingAnswers();
+        _steering.CancelRoute(); _steering.PropActionDriven=true;
+        LogProp($"run superseded in place: {previous} -> {next}");
+        PropPauseChanged();
     }
     private void PropMutationRejected(string status,string reason)
     {
@@ -309,7 +326,7 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.MutationRejected-=PropMutationRejected; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp; props.Dispose();
+        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.RunSuperseded-=PropRunSuperseded; props.MutationRejected-=PropMutationRejected; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null; _hud.PropActionResult=null; _hud.PropActionTarget=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
         _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;

@@ -61,6 +61,28 @@ for(const status of ['cancelled','failed','refused']){
  scope.adoptPropState({...state([]),recent_results:[{execution_id:'run',status:'completed',reason:'phases_completed'}]});
  assert.equal(f.calls.filter(c=>c==='release').length,1,'completed finite actions return player control');
 }
+// Another action on the same piece switches IN PLACE (prop_action_engine): the
+// state shows the tracked run completed and a NEW own run current — the answer
+// was "active" without a motion, or (via state) the partner said yes. Not a
+// hand-back (fails on 97cc89a8: "handed back"): the played plan is let go once,
+// the server keeps the figure, no position report is pending; the NEW run's own
+// end hands back as before.
+for(const via of ['answer','state']){
+ const f=setup();const scope=await mainFunctions(['ownedPropRun','receivePropAnswer','adoptPropState','endPropRun','releaseLocalProp','resyncPropState','refreshPropMotion'],f.deps,['manualPropRelease','pendingReport']);
+ const driven=[];f.deps.npcs.setServerDriven=(_name,on)=>driven.push(on);
+ scope.receivePropAnswer({execution_id:'run',status:'approaching',motion:plan},'request');
+ scope.adoptPropState(state([{execution_id:'run',status:'active',motion:null}]));
+ if(via==='answer')scope.receivePropAnswer({execution_id:'next',status:'active',reason:'',motion:null},'request');
+ scope.adoptPropState({...state([{execution_id:'next',status:'active',motion:null}]),recent_results:[{execution_id:'run',status:'completed',reason:'ended'}]});
+ assert.ok(!f.calls.includes('[prop] motion ended: handed back'),`${via}: a switch is no hand-back`);
+ assert.equal(scope.ownedPropRun()?.execution_id,'next',`${via}: the new run is the own run`);
+ assert.equal(f.calls.filter(c=>c==='release').length,1,`${via}: the old plan is let go once`);
+ assert.equal(driven.at(-1),true,`${via}: the server keeps the figure`);
+ assert.equal(scope.snapshot().pendingReport,null);assert.equal(scope.snapshot().manualPropRelease,false);
+ scope.adoptPropState({...state([]),recent_results:[{execution_id:'next',status:'completed',reason:'ended'}]});
+ assert.ok(f.calls.includes('[prop] motion ended: handed back'),`${via}: the new run's end hands back`);
+ assert.equal(driven.at(-1),false);
+}
 // A verdict about anything but the own run leaves that run alone: the server
 // keeps the current action on a refusal (prop_action_engine.request_with_creation,
 // "Refusals that need no route keep the current action"), a declined invitation

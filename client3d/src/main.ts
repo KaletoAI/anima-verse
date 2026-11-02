@@ -4951,8 +4951,23 @@ async function startApp(username: string, role: string) {
       const row = [...state.current, ...state.outgoing, ...state.recent_results]
         .find(run => run.execution_id === previous.execution_id);
       if (row?.status === 'cancelled' || row?.status === 'failed' || row?.status === 'completed' || (!row && previous.status === 'approaching')) {
-        endPropRun(previous.execution_id, row?.status ?? 'cancelled', row?.reason ?? 'approach_withdrawn');
-        return;
+        const next = ownedPropRun();
+        if (!next || next.execution_id === previous.execution_id) {
+          endPropRun(previous.execution_id, row?.status ?? 'cancelled', row?.reason ?? 'approach_withdrawn');
+          return;
+        }
+        // A NEW own run took its place: another action on the same piece
+        // switches in place, an accepted invitation replaces what ran. Not a
+        // hand-back and no position report in between — the old run's played
+        // plan is let go, the server keeps the figure, and the worldmap row's
+        // seat or pair places it as for any running action.
+        console.info(`[prop] run superseded in place: ${previous.execution_id} -> ${next.execution_id}`);
+        releasedPropExecutions.add(previous.execution_id);
+        manualPropRelease = false;
+        answerFloor = posSeq + 1; pendingReport = null;
+        cancelRoute(); walkIn = null; correction = null;
+        npcs.clearOwnMotion(avatarName);
+        npcs.setServerDriven(avatarName, true);
       }
     }
     trackedPropRun = ownedPropRun() ?? null;

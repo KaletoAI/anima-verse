@@ -122,6 +122,33 @@ public static partial class PropActionsCheck
             }
             var accepted=Motion("respond"); await Start(accepted,respond:true); Step(.5); Near("respond answer starts own walk",avatar.Position.X,-2.5); await End(accepted);
 
+            // Another action on the same piece switches IN PLACE (prop_action_engine): the answer is "active" without a
+            // motion — or, when the partner says yes, only the state tells — and the state shows the old run completed and
+            // the new one current. Not a hand-back (fails on 97cc89a8: the avatar was released and could report): the
+            // played plan is let go, the server keeps the figure, the row's seat (2, 0) and held clip place it.
+            foreach(bool answered in new[]{true,false}) {
+                string tag=answered ? "answer" : "state";
+                var before=Motion("switch-old-"+tag); await Start(before); Step(8);
+                Is("switch: the old run is seated "+tag,mgr.OwnPropMotion?.Phase=="arrived");
+                source.MapOverride=Read("worldmap_active.json"); source.MapOverride["characters"]![0]!["activity_animation"]="author-held";
+                var after=new JsonObject { ["execution_id"]="switch-new-"+tag,["status"]="active",["reason"]="",["motion"]=null };
+                source.StateOverride=new JsonObject { ["current"]=new JsonArray(after.DeepClone()),["outgoing"]=new JsonArray(),
+                    ["recent_results"]=new JsonArray(new JsonObject { ["execution_id"]=before["execution_id"]!.DeepClone(),["status"]="completed",["reason"]="ended" }) };
+                if(answered) {
+                    source.PendingRequest=new(); source.PendingRequest.SetResult(JsonDocument.Parse(after.ToJsonString()));
+                    hud.Handlers["pickPropAction"](new JsonArray(action["action_id"]!.DeepClone(),action["target"]!.DeepClone(),action["definition_revision"]!.DeepClone()));
+                    await offers.PendingPropAction!; source.PendingRequest=null;
+                } else await offers.PropActions!.RefreshAsync();
+                Step(.1);
+                Is($"switch keeps the avatar the server's {tag} (server={mgr.ServerDriven} driven={steering.PropActionDriven})",
+                    mgr.ServerDriven && steering.PropActionDriven && !position.Channel.CanReport());
+                Is("switch tracks the new run "+tag,offers.PropActions!.OwnExecutionId=="switch-new-"+tag && mgr.OwnPropMotion is null);
+                Is($"switch plays the row's held clip {tag} (clip={avatar.CurrentClip})",avatar.CurrentClip=="author-held");
+                Near("switch stands on the row's seat x "+tag,avatar.Position.X,2); Near("switch stands on the row's seat z "+tag,avatar.Position.Z,0);
+                source.MapOverride=Read("worldmap_cancelled.json"); await End(after,"completed");
+                Is("the new run's end hands back "+tag,!mgr.ServerDriven && !steering.PropActionDriven && mgr.OwnPropMotion is null);
+            }
+
             // The exit clock is measured clip time. Its non-linear path remains on the held-seat root.
             foreach(bool clip in new[]{true,false}) {
                 var plan=Motion("departure-"+clip);
