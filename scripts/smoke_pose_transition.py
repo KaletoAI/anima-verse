@@ -65,9 +65,152 @@ def main():
         print('PASS [hub-pairs] hashes, names, content and stable variant indices')
         from app.core.db import init_schema
         init_schema()
+        role_checks(pt, Path(tmp))
+        role_choice_checks(pt, Path(tmp))
         lifecycle(pt, Path(tmp))
         service_checks()
         print('PASS: pose transition checks')
+
+
+def role_checks(pt, root):
+    """Hand derived: entering idle -> hug has A/B targets. Leaving a five-role
+    crowd has five sources; crowd -> hug has only A->A and B->B, never A->B.
+    Replacing B preserves A's old bridge, including when a world row hides
+    the entire shared row. Neutral B must win over a set containing only A.
+    """
+    from app.core import animation_clips as ac, pose_catalog as pc, clip_bvh_export as ex
+    catalog = {'standing': {'animation': 'idle', 'solo': True},
+               'hug': {'animation': 'hug', 'solo': False},
+               'crowd': {'animation': 'crowd', 'solo': False}}
+    entries = [dict(kind=k, role=r, set=cs, path=root / f'{k}{r}.fbx',
+                    rel=f'{k}{r}.fbx', source='free')
+               for k, roles, cs in [('idle', [''], ''), ('hug', ['a'], 'female'),
+                                    ('hug', ['a', 'b'], ''), ('crowd', list('abcde'), '')] for r in roles]
+    maps = ({k: e['animation'] for k, e in catalog.items()}, {})
+    with patch.object(pc, 'get_catalog', return_value=catalog), patch.object(ac, 'clip_entries', return_value=entries):
+        assert pt.pose_clip('hug', 'female', role='b') == ('hug', '')
+        assert pt.pose_clip('crowd', '', role='e') == ('crowd', '')
+        for pose, role in [('hug', ''), ('standing', 'a'), ('hug', 'c'), ('hug', None)]:
+            try:
+                pt.pose_clip(pose, '', role=role)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError((pose, role, 'invalid role accepted'))
+        request = dict(start_pose='standing', target_pose='hug', cset='female', start_role='', target_role='b',
+                       start_time_s=1, target_time_s=0, forward_m=0, left_m=0, yaw_deg=0)
+        service = SimpleNamespace(resolve_transition_backend=lambda name: SimpleNamespace(
+            backend=SimpleNamespace(name='fixture', max_variants=4)))
+        with patch.object(pt, 'get_image_service', return_value=service), \
+             patch.object(pt.get_task_queue(), 'submit', return_value='task_fixture') as submit:
+            assert pt.submit(**request) == {'task_id': 'task_fixture'}
+            assert submit.call_args.args[1]['target_role'] == 'b'
+            for changes in ({'target_role': ''}, {'start_role': 'a'}, {'start_pose': 'crowd', 'start_role': 'a'}):
+                try:
+                    pt.submit(**dict(request, **changes))
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError('submit accepted invalid or mismatched roles')
+        folder = root / 'role-prepare'; folder.mkdir()
+        with patch.object(pt, 'export_clip_bvh', return_value={'duration_s': 4}) as export:
+            pt._prepare(dict(request, guide=None, variants=1), folder)
+            assert [(c.args[:2], c.kwargs['role']) for c in export.call_args_list] == [
+                (('idle', ''), ''), (('hug', ''), 'b')]
+        with patch.object(ac, 'resolve_pose_transition', return_value={
+                'from': 'walking', 'to': '@stand', 'kind': 'old-a', 'store': 'shared'}):
+            assert pt.affected_rule('walking', 'hug', target_role='b') == {
+                'from': 'walking', 'to': 'hug', 'store': 'shared', 'old_kind': 'old-a',
+                'role': 'b', 'other_kinds': {'a': 'old-a'}}
+        with patch.object(ac, 'resolve_pose_transition', return_value={
+                'from': 'crowd', 'to': '*', 'kind': 'old-a', 'store': 'shared'}):
+            assert pt.affected_rule('crowd', 'hug', 'b', 'b')['other_kinds'] == {
+                'a': 'old-a', 'c': 'old-a', 'd': 'old-a', 'e': 'old-a'}
+        assert pt.suggested_kind('standing', 'hug', target_role='a') == 'mb-standing-to-hug-a'
+        for src, dst, kinds in [('standing', 'hug', {'a': 'old-a', 'b': 'old-b'}),
+                                ('crowd', 'standing', {r: 'old-a' for r in 'abcde'}),
+                                ('standing', 'crowd', {r: 'old-b' for r in 'abcde'})]:
+            assert ac._validate_transitions([
+                {'from': src, 'to': dst, 'kind': kinds}], solo={'old-a', 'old-b'})[0]['kind'] == kinds
+        for kinds in ({'c': 'old-a'}, {'z': 'old-a'}):
+            try:
+                ac._validate_transitions([{'from': 'standing', 'to': 'hug', 'kind': kinds}], solo={'old-a'})
+            except ac.ClipLibraryError:
+                pass
+            else:
+                raise AssertionError('out-of-range role accepted')
+        entering = {'from': 'standing', 'to': 'hug', 'kind': {'a': 'old-a', 'b': 'old-b'}}
+        assert ac._transition_triples(entering, maps) == [('idle', 'hug__a', 'a'), ('idle', 'hug__b', 'b')]
+        leaving = {'from': 'crowd', 'to': 'standing', 'kind': 'old-a'}
+        assert ac._transition_triples(leaving, maps, ac._leaving_kinds([leaving])) == [
+            (f'crowd__{r}', 'idle', r) for r in 'abcde']
+        both = {'from': 'crowd', 'to': 'hug', 'kind': 'old-a'}
+        assert ac._transition_triples(both, maps) == [('crowd__a', 'hug__a', 'a'), ('crowd__b', 'hug__b', 'b')]
+        with patch.object(ac, '_pose_kind_maps', return_value=maps):
+            assert ac.client_transition_rules([entering]) == [
+                {'from': 'idle', 'to': 'hug__a', 'kind': 'old-a', 'accel': 0},
+                {'from': 'idle', 'to': 'hug__b', 'kind': 'old-b', 'accel': 0}]
+        out = root / 'exported.bvh'
+        raw = root / 'raw.bvh'; raw.write_bytes(b'HIERARCHY role B')
+        with patch.object(ex, 'clip_entries', return_value=entries), patch.object(ex.runner, 'run', return_value={
+                'ok': True, 'outputs': {'bvh': str(raw)}, 'data': {}}) as run:
+            ex.export_clip_bvh('hug', 'female', out, role='b')
+            assert run.call_args.kwargs['inputs']['clip'] == root / 'hugb.fbx'
+            assert out.read_bytes() == b'HIERARCHY role B'
+    print('PASS [roles] resolution, export match, validation and entering/leaving/both expansion')
+
+
+def role_choice_checks(pt, root):
+    """Accepting B changes only B: maps keep A, strings expand A/B first.
+    A licensed B shadows the whole shared rule, so world must contain A too.
+    """
+    from app.core import animation_clips as ac, pose_catalog as pc
+    free, licensed = ac.library_root('free'), ac.library_root('licensed')
+    free.mkdir(parents=True); licensed.mkdir(parents=True)
+    for stem in ('idle', 'old-a', 'old-b', 'hug__a', 'hug__b',
+                 'crowd__a', 'crowd__b', 'crowd__c', 'crowd__d', 'crowd__e'):
+        (free / f'{stem}.fbx').write_bytes(b'role fixture')
+    catalog = {'standing': {'animation': 'idle', 'solo': True},
+               'hug': {'animation': 'hug', 'solo': False},
+               'crowd': {'animation': 'crowd', 'solo': False}}
+    transitions = root / 'role-transitions.json'
+    tq = pt.get_task_queue()
+    with patch.object(pc, 'get_catalog', return_value=catalog), \
+         patch.object(ac, 'clip_transitions_path', return_value=transitions):
+        for n, original, library, expected, old in [
+                (1, {'a': 'old-a', 'b': 'old-b'}, 'free', {'a': 'old-a', 'b': 'new-1'}, 'old-b'),
+                (2, 'old-a', 'free', {'a': 'old-a', 'b': 'new-2'}, 'old-a'),
+                (3, {'a': 'old-a', 'b': 'old-b'}, 'licensed', {'a': 'old-a', 'b': 'new-3'}, 'old-b')]:
+            ac._write_world_transitions([])
+            ac._write_transitions([{'from': 'standing', 'to': 'hug', 'kind': original}])
+            ac.reload_clip_caches()
+            request = dict(start_pose='standing', target_pose='hug', start_role='', target_role='b', cset='')
+            with patch.object(tq, 'start'):
+                tid = tq.submit(pt.TASK_TYPE, request, max_retries=0, queue_name=pt.TASK_TYPE)
+            folder = pt._staging(tid); folder.mkdir(parents=True)
+            fbx = folder / 'candidate.fbx'; fbx.write_bytes(b'new bridge')
+            sidecar = folder / 'candidate.json'; sidecar.write_text('{}')
+            candidate = dict(ok=True, fbx=str(fbx), sidecar=str(sidecar))
+            affected = pt.affected_rule('standing', 'hug', target_role='b')
+            assert affected['old_kind'] == old and affected['other_kinds'] == {'a': 'old-a'}
+            (folder / 'candidates.json').write_text(json.dumps(dict(created_at=pt.utc_now_iso(),
+                request=request, candidates=[candidate], library=library, affected_rule=affected)))
+            tq.update_task_progress(tid, {'state': 'awaiting_choice'})
+            try:
+                pt.choose(tid, 0, kind=f'new-{n}', expected_old_kind='stale')
+            except pt.ChoiceError as exc:
+                assert exc.status == 409
+            else:
+                raise AssertionError('per-role stale kind accepted')
+            result = pt.choose(tid, 0, kind=f'new-{n}', expected_old_kind=old)
+            assert result['rule']['kind'] == expected
+            rule = ac.resolve_pose_transition('standing', 'hug')
+            assert rule['kind'] == expected
+            assert rule['store'] == ('world' if library == 'licensed' else 'shared')
+            if library == 'licensed':
+                assert ac.load_shared_transitions()[0]['kind'] == {'a': 'old-a', 'b': 'old-b'}
+        ac._write_world_transitions([])
+    print('PASS [choose-roles] maps, plain strings, per-role stale checks and licensed world shadow')
 
 
 def lifecycle(pt, root):
@@ -79,8 +222,8 @@ def lifecycle(pt, root):
         'standing': {'solo': True, 'group': 'stand', 'animation': 'idle', 'prompt': 'standing'},
         'sitting': {'solo': True, 'group': 'seat', 'animation': 'sit', 'prompt': 'sitting'}}}))
     free, licensed = clips.library_root('free'), clips.library_root('licensed')
-    free.mkdir(parents=True)
-    licensed.mkdir(parents=True)
+    free.mkdir(parents=True, exist_ok=True)
+    licensed.mkdir(parents=True, exist_ok=True)
     for kind in ('idle', 'sit', 'get-up-chair'):
         (free / (kind + '.fbx')).write_bytes(b'fixture')
         (free / (kind + '.json')).write_text(json.dumps({'kind': kind, 'duration_s': 4,
@@ -96,7 +239,7 @@ def lifecycle(pt, root):
     write_fixture(fixture_path)
     fixture_bvh = fixture_path.read_text()
     exported = []
-    def export(kind, cset, path):
+    def export(kind, cset, path, *, role=''):
         exported.append((kind, cset))
         path.write_bytes(b'HIERARCHY fixture')
         library = 'licensed' if (licensed / (kind + '.fbx')).exists() else 'free'

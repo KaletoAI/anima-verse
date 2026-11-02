@@ -6,8 +6,8 @@
  * much speed the body picks up while it plays. `"*"` is the wildcard — on the
  * TO side it makes an exit clip ("stand up, whatever comes next"), on the FROM
  * side an enter clip; the more precise rule wins. A rule leaving a PAIR pose
- * may name one bridge per clip role (`{a, b}`): the two figures of a pair
- * get up differently.
+ * may name one bridge per clip role. Entering a pair or group can do the
+ * same; each figure receives the bridge of its role.
  *
  * Free bridges can live in the shared seed; licensed bridges stay in the
  * world layer. The whole effective list travels on every save: they are few,
@@ -25,10 +25,9 @@ import { apiGet, apiPut } from '../../lib/api'
 import { bridgeKinds as kindsOf } from './clipSets'
 import type { ClipListing, PoseTransition as Transition, RoleKinds } from './clipSets'
 
-export interface PoseRef { key: string; solo?: boolean }
+export interface PoseRef { key: string; solo?: boolean; animation?: string }
 
 const TRANSITION_ANY = '*'
-const ROLES = ['a', 'b'] as const
 
 export function ClipTransitions({ poses, onSaved }: {
   poses: PoseRef[]
@@ -42,6 +41,7 @@ export function ClipTransitions({ poses, onSaved }: {
   const [selected, setSelected] = useState<number | null>(null)
   const [kinds, setKinds] = useState<string[]>([])
   const [freeKinds, setFreeKinds] = useState<Set<string>>(() => new Set())
+  const [clipRoles, setClipRoles] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -55,8 +55,10 @@ export function ClipTransitions({ poses, onSaved }: {
         if (!alive) return
         // A bridge is played by ONE figure, so only solo kinds can be one —
         // the server refuses a pair kind here anyway.
-        const pair = new Set(data.pair_kinds || [])
-        setKinds((data.kinds || []).filter((k) => !pair.has(k)))
+        setKinds([...new Set(data.clips.filter((c) => !c.role).map((c) => c.kind))])
+        const roles: Record<string, string[]> = {}
+        for (const c of data.clips) if (c.role && !(roles[c.kind] || []).includes(c.role)) (roles[c.kind] ||= []).push(c.role)
+        setClipRoles(roles)
         const free = new Set(data.clips.filter((c) => c.library === 'free' && !c.role).map((c) => c.kind))
         setFreeKinds(free)
         const rules = (data.transitions || []).map((r) => ({
@@ -76,6 +78,11 @@ export function ClipTransitions({ poses, onSaved }: {
 
   const poseKeys = useMemo(() => poses.map((p) => p.key).sort(), [poses])
   const pairPoses = useMemo(() => new Set(poses.filter((p) => p.solo === false).map((p) => p.key)), [poses])
+  const rolesOf = useCallback((rule: Transition) => {
+    const of = (key: string) => clipRoles[poses.find((p) => p.key === key)?.animation || ''] || []
+    const a = of(rule.from); const b = of(rule.to)
+    return (a.length && b.length ? a.filter((r) => b.includes(r)) : a.length ? a : b).slice().sort()
+  }, [clipRoles, poses])
   const allFree = useCallback((kind: Transition['kind']) => kindsOf(kind).every((k) => freeKinds.has(k)), [freeKinds])
 
   const dirty = useMemo(
@@ -88,12 +95,16 @@ export function ClipTransitions({ poses, onSaved }: {
       if (j !== i) return r
       const next = { ...r, ...part }
       if (next.from !== 'walking' && next.to.startsWith('@')) next.to = TRANSITION_ANY
-      // A bridge per role exists only for a rule leaving a pair pose.
-      if (typeof next.kind !== 'string' && !pairPoses.has(next.from)) next.kind = kindsOf(next.kind)[0] || ''
+      // Either multi-person side can select bridges per role.
+      if (typeof next.kind !== 'string' && !pairPoses.has(next.from) && !pairPoses.has(next.to)) next.kind = kindsOf(next.kind)[0] || ''
+      if (typeof next.kind !== 'string' && (part.from !== undefined || part.to !== undefined)) {
+        const roles = rolesOf(next)
+        next.kind = Object.fromEntries(Object.entries(next.kind).filter(([r]) => roles.includes(r)))
+      }
       if (!allFree(next.kind)) next.store = 'world'
       return next
     }))
-  }, [allFree, pairPoses])
+  }, [allFree, pairPoses, rolesOf])
 
   const removeRule = useCallback((i: number) => {
     setDraft((d) => d.filter((_, j) => j !== i))
@@ -219,7 +230,7 @@ export function ClipTransitions({ poses, onSaved }: {
                     {typeof rule.kind === 'string' ? (
                       <KindSelect value={rule.kind} kinds={kinds} disabled={busy}
                         onChange={(kind) => patch(i, { kind })} />
-                    ) : ROLES.map((role) => {
+                    ) : rolesOf(rule).map((role) => {
                       const perRole = rule.kind as RoleKinds
                       return (
                         <label key={role} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -229,14 +240,14 @@ export function ClipTransitions({ poses, onSaved }: {
                         </label>
                       )
                     })}
-                    {pairPoses.has(rule.from) ? (
+                    {(pairPoses.has(rule.from) || pairPoses.has(rule.to)) ? (
                       <label className="ga-form-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                        title={t('The two figures of a pair get up differently: name a bridge for role A and one for role B. A role without one blends over.')}>
+                        title={t('Choose a bridge for each role. A role without one blends over.')}>
                         <input type="checkbox" disabled={busy} checked={typeof rule.kind !== 'string'}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => patch(i, {
                             kind: e.target.checked
-                              ? { a: kindsOf(rule.kind)[0] || '', b: kindsOf(rule.kind)[0] || '' }
+                              ? Object.fromEntries(rolesOf(rule).map((r) => [r, kindsOf(rule.kind)[0] || '']))
                               : kindsOf(rule.kind)[0] || '',
                           })} />
                         {t('one per role')}
@@ -345,7 +356,7 @@ export function ClipTransitions({ poses, onSaved }: {
                 looking at one figure in particular — one per role. */}
             {typeof row.kind === 'string' ? (
               <ClipPreview kind={row.kind} set="" height={360} />
-            ) : ROLES.filter((role) => (row.kind as RoleKinds)[role]).map((role) => (
+            ) : rolesOf(row).filter((role) => (row.kind as RoleKinds)[role]).map((role) => (
               <div key={role}>
                 <div className="ga-form-hint">{t('Role {role}').replace('{role}', role.toUpperCase())}</div>
                 <ClipPreview kind={(row.kind as RoleKinds)[role] || ''} set="" height={260} />

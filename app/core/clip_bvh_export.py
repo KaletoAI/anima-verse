@@ -11,7 +11,7 @@ from app.core.animation_clips import clip_entries
 
 def export_clip_bvh(kind: str, cset: str, out_path: Path, *,
                     start_s: float = 0.0, end_s: Optional[float] = None,
-                    fps: int = 30) -> dict:
+                    fps: int = 30, role: str = '') -> dict:
     """Resolve set before neutral, retaining the winning library's provenance."""
     if isinstance(fps, bool) or not isinstance(fps, int) or fps <= 0:
         raise ValueError("fps must be a positive integer")
@@ -22,7 +22,7 @@ def export_clip_bvh(kind: str, cset: str, out_path: Path, *,
     entries = clip_entries()
     entry = None
     for wanted in dict.fromkeys((cset.strip().lower(), "")):
-        matches = [e for e in entries if e["kind"] == kind and e["set"] == wanted
+        matches = [e for e in entries if e["kind"] == kind and e["set"] == wanted and e["role"] == role
                    and e["path"].suffix.lower() == ".fbx"]
         if matches:
             entry = matches[0]

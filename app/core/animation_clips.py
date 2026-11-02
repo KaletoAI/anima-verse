@@ -491,23 +491,15 @@ def _validate_transition_group(src: str, dst: str) -> None:
             raise ClipLibraryError("place group target requires from == 'walking'")
 
 
-#: The clip roles a bridge may be named for, one each (pair pose as ``from``).
-BRIDGE_ROLES = ("a", "b")
-
-
 def normalize_rule_kind(raw: Any) -> Any:
-    """A rule's bridge as stored: one clip kind, or ``{a, b}`` — a bridge per
-    clip ROLE, for a rule leaving a pair pose (two figures of one set would
-    otherwise both play the same half's bridge). A JSON text of such a map
-    (the world table's column) is read back as the map; a map with no kind
-    left is ""."""
+    """One bridge kind or a map of role to bridge; decode world JSON columns."""
     if isinstance(raw, str) and raw.strip().startswith("{"):
         try:
             raw = json.loads(raw)
         except ValueError:
             return ""
     if isinstance(raw, dict):
-        roles = {r: str(raw.get(r) or "").strip().lower() for r in BRIDGE_ROLES}
+        roles = {r: str(raw.get(r) or "").strip().lower() for r in raw}
         roles = {r: k for r, k in roles.items() if k}
         return roles or ""
     return str(raw or "").strip().lower()
@@ -785,10 +777,12 @@ def _validate_transitions(entries: Any, offset: int = 0,
                     raise ClipLibraryError(f"rule {i + 1}: invalid pose key on {side}")
         kind = normalize_rule_kind(raw.get("kind"))
         if isinstance(kind, dict):
-            from app.core.pose_catalog import get_catalog
-            if (get_catalog("pose").get(src) or {}).get("solo", True):
+            roles = transition_roles(src, dst)
+            if not roles:
                 raise ClipLibraryError(
-                    f"rule {i + 1}: a bridge per role needs a pair pose as 'from'")
+                    f"rule {i + 1}: a bridge per role needs a pair pose or group pose on either side")
+            if any(r not in roles for r in kind):
+                raise ClipLibraryError(f"rule {i + 1}: invalid bridge role for pose")
             kind = {r: validate_kind(k) for r, k in kind.items()}
         else:
             kind = validate_kind(kind)
@@ -834,25 +828,43 @@ def _transition_pairs(rule: Dict[str, Any], maps: Tuple[Dict[str, str], Dict[str
     return [(src, dst) for src, dst, _role in _transition_triples(rule, maps)]
 
 
+def pose_roles(pose: str) -> Tuple[str, ...]:
+    """The roles present for a multi-person pose's clip across library sets."""
+    from app.core.pose_catalog import get_catalog
+    entry = get_catalog("pose").get(pose) or {}
+    if entry.get("solo", True):
+        return ()
+    kind = str(entry.get("animation") or "")
+    if not kind:
+        return ()
+    roles = {e["role"] for e in clip_entries() if e["kind"] == kind and e["role"]}
+    return tuple(r for r in CLIP_ROLES if r in roles) if roles else tuple(_meta_roles(clip_meta(kind)))
+
+
+def transition_roles(src: str, dst: str) -> Tuple[str, ...]:
+    """A bridge between multi-person poses can only connect matching roles."""
+    left, right = pose_roles(src), pose_roles(dst)
+    return tuple(r for r in left if r in right) if left and right else left or right
+
+
 def _transition_triples(rule: Dict[str, Any], maps,
                         leaving: Optional[Dict[str, List[Tuple[str, str]]]] = None):
-    """``(from clip, to clip, clip role)`` a pose rule stands for. A pose the
-    figure LEAVES may play more than its own kind (``leaving``, pose ->
-    kinds): a pair pose plays its halves ``<kind>__a`` / ``<kind>__b`` — and
-    its finale's — so a rule out of a pair pose names those, each with its
-    role; a solo pose may still show its finale clip."""
+    """Expand both pose sides to played clip roles; X only connects to X."""
     played, shipped = maps
 
     def kinds(key):
         if key == TRANSITION_ANY:
-            return [TRANSITION_ANY]
-        return list(dict.fromkeys(k for k in (played.get(key, ""), shipped.get(key, "")) if k))
+            return [(TRANSITION_ANY, "")]
+        own = list(dict.fromkeys(k for k in (played.get(key, ""), shipped.get(key, "")) if k))
+        roles = pose_roles(key)
+        return [(f"{k}{ROLE_SEPARATOR}{r}", r) for k in own for r in roles] if roles else [(k, "") for k in own]
 
-    sources = [(kind, "") for kind in kinds(rule["from"])]
+    sources = kinds(rule["from"])
     if leaving and rule["from"] in leaving:
         sources = list(dict.fromkeys(leaving[rule["from"]]))
-    return [(src, dst, role) for src, role in sources
-            for dst in kinds(rule["to"]) if src != dst]
+    return [(src, dst, sr or dr) for src, sr in sources
+            for dst, dr in kinds(rule["to"])
+            if src != dst and (not sr or not dr or sr == dr)]
 
 
 def _leaving_kinds(rules: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
@@ -878,14 +890,14 @@ def _leaving_kinds(rules: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str
             if finale:
                 out[key] = [(kind, "") for kind in own]
         else:
-            out[key] = [(f"{kind}{ROLE_SEPARATOR}{role}", role) for kind in own for role in BRIDGE_ROLES]
+            out[key] = [(f"{kind}{ROLE_SEPARATOR}{role}", role) for kind in own for role in pose_roles(key)]
     return out
 
 
 def client_transition_rules(rules=None) -> List[Dict[str, Any]]:
     """The pose rules translated into the CLIP rules the 3D client switches
     by (it knows clip kinds, not poses); the first rule to occupy a clip
-    pair keeps it. A rule out of a pair pose names its halves as ``from``
+    pair keeps it. A rule out of a multi-person pose names its halves as ``from``
     (the clients play ``<kind>__<role>``), each with the bridge of its role
     (``rule_kind``); a half without one is left out."""
     maps = _pose_kind_maps()

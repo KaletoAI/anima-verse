@@ -4,11 +4,12 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { clipWindow } from './transitionSequence'
 import { TransitionSequencePreview } from './TransitionSequencePreview'
-import { transitionClip, type TransitionPose, type TransitionRequest } from './PoseTransitionDialog'
+import type { TransitionRequest } from './PoseTransitionDialog'
+import { transitionClip, type TransitionPose } from './transitionSelection'
 import type { ClipListing } from './clipSets'
 import { useTransitionModal } from './useTransitionModal'
 
-interface AffectedRule { from: string; to: string; store: string; old_kind: string | null }
+interface AffectedRule { from: string; to: string; store: string; old_kind: string | null; role?: string; other_kinds?: Record<string, string | null> }
 export interface TransitionJob {
   task_id: string; status: string; state?: string; phase?: string; error?: string; kind?: string
   affected_rule?: AffectedRule
@@ -38,17 +39,17 @@ export function PoseTransitionChoice({ job, poses, listing, onClose, onDecided }
   // Always fetch on reopening; never silently update an already displayed rule.
   useEffect(() => {
     let live = true
-    apiGet<AffectedRule>(`/poses/transition-jobs/affected-rule?start=${encodeURIComponent(request.start_pose)}&target=${encodeURIComponent(request.target_pose)}`)
+    apiGet<AffectedRule>(`/poses/transition-jobs/affected-rule?start=${encodeURIComponent(request.start_pose)}&target=${encodeURIComponent(request.target_pose)}&start_role=${encodeURIComponent(request.start_role || '')}&target_role=${encodeURIComponent(request.target_role || '')}`)
       .then((current) => { if (live) {
         setRule(current)
         const old = job.affected_rule
-        if (old && (old.from !== current.from || old.to !== current.to || old.store !== current.store || old.old_kind !== current.old_kind)) setStale(true)
+        if (old && (old.from !== current.from || old.to !== current.to || old.store !== current.store || old.old_kind !== current.old_kind || JSON.stringify(old.other_kinds) !== JSON.stringify(current.other_kinds))) setStale(true)
       } })
       .catch((e: Error) => { if (live) setError(e.message) })
     return () => { live = false }
-  }, [job.affected_rule, request.start_pose, request.target_pose])
-  const start = transitionClip(poses, listing, request.start_pose, request.cset)
-  const target = transitionClip(poses, listing, request.target_pose, request.cset)
+  }, [job.affected_rule, request.start_pose, request.target_pose, request.start_role, request.target_role])
+  const start = transitionClip(poses, listing, request.start_pose, request.cset, request.start_role)
+  const target = transitionClip(poses, listing, request.target_pose, request.cset, request.target_role)
   const decide = async (index?: number) => {
     if (submitting.current) return
     submitting.current = true; setBusy(true); setError('')
@@ -72,6 +73,8 @@ export function PoseTransitionChoice({ job, poses, listing, onClose, onDecided }
         <label>{t('Kind name')} <input className="ga-input" disabled={busy} value={kind} onChange={(e) => setKind(e.target.value)} /></label>
         {rule ? <p>{t('Writes rule: {from} → {to} ({store}) — replaces: {old}')
           .replace('{from}', rule.from).replace('{to}', rule.to).replace('{store}', rule.store).replace('{old}', rule.old_kind || t('nothing'))}</p> : <p>{t('Loading…')}</p>}
+        {rule?.role ? <p>{Object.entries({ ...rule.other_kinds, [rule.role]: kind }).sort(([a], [b]) => a.localeCompare(b))
+          .map(([role, value]) => `${role.toUpperCase()}: ${role === rule.role ? t('new') : t('keeps')} ${value || t('nothing')}`).join(' · ')}</p> : null}
         {stale ? <p role="alert">{t('The rule changed meanwhile — reopen to see the current one')}<br />{t('Generate a new transition for the current rule.')}</p> : null}
         {error ? <p role="alert">{t('Error')}: {error}</p> : null}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: 12 }}>

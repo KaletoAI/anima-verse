@@ -6,18 +6,11 @@ import { ClipPreview } from './ClipPreview'
 import { TransitionPlacementPreview } from './TransitionPlacementPreview'
 import { orderSets, setLabel, type ClipListing } from './clipSets'
 import { useTransitionModal } from './useTransitionModal'
+import { transitionClip, transitionOptions, transitionSets, type TransitionPose } from './transitionSelection'
 
-export interface TransitionPose { key: string; animation: string; solo: boolean; group?: string }
 export interface TransitionRequest {
-  start_pose: string; target_pose: string; cset: string; start_time_s: number; target_time_s: number
+  start_pose: string; target_pose: string; start_role: string; target_role: string; cset: string; start_time_s: number; target_time_s: number
   forward_m: number; left_m: number; yaw_deg: number; variants: number; backend: string
-}
-
-/** Matches pose_transition.pose_clip: walking conditions on standing idle. */
-export function transitionClip(poses: TransitionPose[], listing: ClipListing, pose: string, set: string) {
-  const kind = poses.find((p) => p.key === (pose === 'walking' ? 'standing' : pose))?.animation
-  return listing.clips.find((c) => c.kind === kind && !c.role && (c.set || '') === set && /\.fbx(?:\?|$)/i.test(c.url))
-    || listing.clips.find((c) => c.kind === kind && !c.role && !c.set && /\.fbx(?:\?|$)/i.test(c.url))
 }
 
 export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
@@ -25,7 +18,7 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
 }) {
   const { t } = useI18n()
   const [request, setRequest] = useState<TransitionRequest>({ start_pose: 'walking', target_pose: 'sitting',
-    cset: '', start_time_s: 0, target_time_s: 0, forward_m: -0.25, left_m: 0, yaw_deg: 0, variants: 3, backend: '' })
+    start_role: '', target_role: '', cset: '', start_time_s: 0, target_time_s: 0, forward_m: -0.25, left_m: 0, yaw_deg: 0, variants: 3, backend: '' })
   const [guideEnabled, setGuideEnabled] = useState(false)
   const [guide, setGuide] = useState({ kind: '', time_s: 0, forward_m: 0, left_m: 0, yaw_deg: 0 })
   const [backends, setBackends] = useState<Array<{ name: string; available: boolean }>>([])
@@ -40,23 +33,19 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
       .catch((e: Error) => { if (live) setError(e.message) })
     return () => { live = false }
   }, [])
-  const start = transitionClip(poses, listing, request.start_pose, request.cset)
-  const target = transitionClip(poses, listing, request.target_pose, request.cset)
+  const start = transitionClip(poses, listing, request.start_pose, request.cset, request.start_role)
+  const target = transitionClip(poses, listing, request.target_pose, request.cset, request.target_role)
   const guideClips = listing.clips.filter((c) => !c.role && /\.fbx(?:\?|$)/i.test(c.url)
     && ((c.set || '') === request.cset || !c.set))
   const guideClip = guideClips.find((c) => c.kind === guide.kind && (c.set || '') === request.cset)
     || guideClips.find((c) => c.kind === guide.kind)
-  const options = ['walking', ...poses.filter((p) => p.solo && p.animation && p.key !== 'walking').map((p) => p.key)]
-  // Sets a pose's clip exists in; a pose resolves in the chosen set or, failing that, the neutral one.
-  const setsOf = (pose: string) => {
-    const kind = poses.find((p) => p.key === (pose === 'walking' ? 'standing' : pose))?.animation
-    return [...new Set(listing.clips.filter((c) => c.kind === kind && !c.role && /\.fbx(?:\?|$)/i.test(c.url))
-      .map((c) => c.set || ''))]
-  }
-  const elsewhere = (pose: string) => {
-    const sets = setsOf(pose)
+  const options = transitionOptions(poses, listing)
+  const elsewhere = (pose: string, role: string) => {
+    const sets = transitionSets(poses, listing, pose, role)
     return sets.includes(request.cset) || sets.includes('') ? '' : sets.map((set) => setLabel(set, t)).join(', ')
   }
+  const targetPartners = request.target_role && target ? options.filter((o) => o.pose === request.target_pose && o.role !== request.target_role)
+    .map((o) => transitionClip(poses, listing, o.pose, request.cset, o.role)).filter((c) => c !== undefined) : []
   const constrained = ['seat', 'ground', 'lie'].includes(poses.find((p) => p.key === request.target_pose)?.group || '')
   const numberField = (label: string, value: number, min: number, max: number, step: number, change: (v: number) => void) => (
     <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
@@ -94,19 +83,23 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
             {(['start', 'target'] as const).map((side) => {
               const clip = side === 'start' ? start : target
               const poseField = side === 'start' ? 'start_pose' : 'target_pose'
+              const roleField = side === 'start' ? 'start_role' : 'target_role'
               const timeField = side === 'start' ? 'start_time_s' : 'target_time_s'
               return <div key={side}>
                 <label>{side === 'start' ? t('Start pose') : t('Target pose')}
-                  <select className="ga-input" disabled={busy} value={request[poseField]} onChange={(e) =>
-                    setRequest({ ...request, [poseField]: e.target.value, [timeField]: 0 })}>
-                    {options.map((pose) => {
-                      const only = elsewhere(pose)
-                      return <option key={pose} value={pose} disabled={!!only}>
-                        {only ? `${pose} — ${t('only in set')} ${only}` : pose}</option>
+                  <select className="ga-input" disabled={busy} value={`${request[poseField]}:${request[roleField]}`} onChange={(e) => {
+                    const [pose, role] = e.target.value.split(':')
+                    setRequest({ ...request, [poseField]: pose, [roleField]: role, [timeField]: 0 })
+                  }}>
+                    {options.map(({ pose, role }) => {
+                      const only = elsewhere(pose, role)
+                      const label = role ? `${pose} (${role.toUpperCase()})` : pose
+                      return <option key={`${pose}:${role}`} value={`${pose}:${role}`} disabled={!!only}>
+                        {only ? `${label} — ${t('only in set')} ${only}` : label}</option>
                     })}
                   </select></label>
-                {clip ? <ClipPreview urls={{ solo: clip.url }} height={190} /> : <p>{elsewhere(request[poseField])
-                  ? `${t('Not in this set — choose the set')}: ${elsewhere(request[poseField])}` : t('No resolved clip')}</p>}
+                {clip ? <ClipPreview urls={{ solo: clip.url }} height={190} /> : <p>{elsewhere(request[poseField], request[roleField])
+                  ? `${t('Not in this set — choose the set')}: ${elsewhere(request[poseField], request[roleField])}` : t('No resolved clip')}</p>}
                 {numberField(side === 'start' ? t('Start time (s)') : t('Target time (s)'), request[timeField],
                   0, clip?.duration_s || 0, 0.01, (value) => setRequest({ ...request, [timeField]: value }))}
               </div>
@@ -117,7 +110,8 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
           {numberField(t('Turn (°)'), request.yaw_deg, -180, 180, 1, (v) => setRequest({ ...request, yaw_deg: v }))}
           {start && target ? <TransitionPlacementPreview startUrl={start.url} targetUrl={target.url}
             startTimeS={request.start_time_s} targetTimeS={request.target_time_s}
-            forwardM={request.forward_m} leftM={request.left_m} yawDeg={request.yaw_deg} /> : null}
+            forwardM={request.forward_m} leftM={request.left_m} yawDeg={request.yaw_deg} targetClip={target} targetPartners={targetPartners}
+            targetGroup={poses.find((p) => p.key === request.target_pose)?.group} /> : null}
           <details><summary>{t('Guide (optional)')}</summary>
             <label><input type="checkbox" checked={guideEnabled} disabled={busy} onChange={(e) => setGuideEnabled(e.target.checked)} />{t('Enable guide')}</label>
             {guideEnabled ? <>
@@ -147,7 +141,7 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
           {error ? <p role="alert">{t('Error')}: {error}</p> : null}
         </div>
         <div className="ga-modal-footer"><button type="button" className="ga-btn" disabled={busy} onClick={onClose}>{t('Cancel')}</button>
-          <button type="submit" className="ga-btn ga-btn-primary" disabled={busy || !start || !target || (guideEnabled && !guideClip)}>{t('Generate')}</button></div>
+          <button type="submit" className="ga-btn ga-btn-primary" disabled={busy || !start || !target || (!!request.start_role && !!request.target_role && request.start_role !== request.target_role) || request.start_pose === request.target_pose || (guideEnabled && !guideClip)}>{t('Generate')}</button></div>
       </form>
     </div>
   </div>, document.body)

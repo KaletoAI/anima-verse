@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D } from 'three'
-import { anchorFigureBind, clipHipsDrop } from '@anima/scene-render'
+import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { loadPreviewClip, rootPath, rootAt } from './ClipPreview'
+import { previewCalibration, relativeTargetRoot } from './clipPreviewPlacement'
+import type { ApiClipRow } from './clipSets'
 import { chainRoots, segmentAt, type Segment } from './transitionSequence'
 
 export interface Placement {
   startUrl: string; startTimeS: number; targetUrl: string; targetTimeS: number
   forwardM: number; leftM: number; yawDeg: number
+  targetClip?: ApiClipRow; targetPartners?: ApiClipRow[]; targetGroup?: string
 }
 
 /** Shared scene ownership: one-shot sequence or two frozen placement poses. */
@@ -23,6 +26,7 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
   const { t } = useI18n()
   const [status, setStatus] = useState('')
   const key = JSON.stringify(segments)
+  const partnerKey = JSON.stringify(placement?.targetPartners || [])
   const placementMode = !!placement
   useEffect(() => {
     const element = host.current
@@ -40,7 +44,8 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
         const stand = ((await standHipsRef()) || 0) / 100
         if (!source) throw new Error(t('No test figure available (shared/models/figure).'))
         const specs: Segment[] = JSON.parse(key)
-        const loaded = await Promise.all(specs.map((s) => loadPreviewClip(s.url)))
+        const partners: ApiClipRow[] = JSON.parse(partnerKey)
+        const loaded = await Promise.all([...specs, ...partners.map((p) => ({ url: p.url }))].map((s) => loadPreviewClip(s.url)))
         // FBX resources belong to this effect; figure resources are shared
         // with the cached test figure and must stay alive.
         const releaseClips = () => loaded.forEach(({ object }) => object.traverse((o) => {
@@ -111,12 +116,12 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
             const v = new THREE.Vector3(0, 0, 1).applyQuaternion(hips?.getWorldQuaternion(new THREE.Quaternion()) || new THREE.Quaternion())
             return Math.atan2(v.x, v.z)
           }
-          const start = specs[index].startS
+          const start = specs[index]?.startS || 0
           const initialYaw = heading(start)
-          const endYaw = heading(specs[index].endS)
-          const a = rootAt(path, start); const b = rootAt(path, specs[index].endS)
+          const endYaw = heading(specs[index]?.endS || 0)
+          const a = rootAt(path, start); const b = rootAt(path, specs[index]?.endS || 0)
           const c = Math.cos(initialYaw); const s = Math.sin(initialYaw)
-          if (placementMode && index === 1) inst.traverse((o) => {
+          if (placementMode && index >= 1) inst.traverse((o) => {
             if (o instanceof THREE.Mesh) {
               o.material = (Array.isArray(o.material) ? o.material : [o.material]).map((m) => {
                 const mat = m.clone(); mat.transparent = true; mat.opacity = 0.35
@@ -137,7 +142,7 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
         cleanup.push(() => scene.traverse((o) => {
           if (o instanceof THREE.GridHelper) { o.geometry.dispose(); for (const m of [o.material].flat()) m.dispose() }
         }))
-        const roots = chainRoots(players.map((p) => p.end))
+        const roots = chainRoots(players.slice(0, specs.length).map((p) => p.end))
         const duration = specs.reduce((sum, s) => sum + s.endS - s.startS, 0)
         const started = performance.now()
         let notified = false
@@ -146,6 +151,12 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
           if (disposed) return
           const elapsed = (performance.now() - started) / 1000
           const current = segmentAt(specs, Math.min(elapsed, duration))
+          const frozen = livePlacement.current
+          let targetYaw = 0
+          if (frozen) {
+            players[1].root.rotation.y = 0
+            targetYaw = players[1].heading(frozen.targetTimeS)
+          }
           for (const [i, p] of players.entries()) {
             const placement = livePlacement.current
             p.root.visible = placementMode || current?.index === i
@@ -155,12 +166,23 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
             const r = rootAt(p.path, time)
             const base = placement ? { x: i ? placement.leftM : 0, z: i ? placement.forwardM : 0,
               yaw: i ? placement.yawDeg * Math.PI / 180 : 0 } : roots[i]
-            // Normalize each frozen pose's heading at the selected time.
+            // All target halves share the chosen half's frame and heading.
             p.root.rotation.y = 0
-            p.root.rotation.y = base.yaw - (placement ? p.heading(time) : p.initialYaw)
-            const offset = new THREE.Vector3(placement ? 0 : r.x - p.a.x, 0, placement ? 0 : r.z - p.a.z)
-              .applyAxisAngle(new THREE.Vector3(0, 1, 0), p.root.rotation.y)
-            p.root.position.set(base.x + offset.x, -clipHipsDrop(p.bindY, r.y, stand), base.z + offset.z)
+            const target = players[1]
+            const rotation = base.yaw - (placement ? (i >= 1 ? targetYaw : p.heading(time)) : p.initialYaw)
+            p.root.rotation.y = rotation
+            const targetRoot = placement && i >= 1 ? rootAt(target.path, time) : r
+            const metadata = i === 1 ? placement?.targetClip : partners[i - specs.length]
+            const targetMetadata = placement?.targetClip
+            const calibration = (c: ApiClipRow | undefined) => previewCalibration(c?.orientation?.shift_cm,
+              clipHeightOffsetM(c?.height_offsets_cm, placement?.targetGroup, 1.7))
+            const ownCalibration = calibration(metadata)
+            const targetCalibration = calibration(targetMetadata)
+            const offset = placement ? (i >= 1
+              ? relativeTargetRoot(r, targetRoot, ownCalibration, targetCalibration, rotation) : { x: 0, z: 0 })
+              : new THREE.Vector3(r.x - p.a.x, 0, r.z - p.a.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation)
+            p.root.position.set(base.x + offset.x,
+              -clipHipsDrop(p.bindY, r.y, stand) + (placement && i >= 1 ? ownCalibration.y : 0), base.z + offset.z)
           }
           if (!placementMode && elapsed >= duration && !notified) { notified = true; ended.current?.() }
           controls.update(); renderer.render(scene, camera)
@@ -170,7 +192,7 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
       } catch (error) { if (!disposed) setStatus(String(error)) }
     })()
     return () => { disposed = true; cancelAnimationFrame(raf); cleanup.reverse().forEach((fn) => fn()) }
-  }, [key, placementMode, height, replay, t])
+  }, [key, partnerKey, placementMode, height, replay, t])
   return <><div ref={host} style={{ height, width: '100%', background: '#0d1117' }} />
     <div className="ga-hint">{status || t('Figures 1.70 m · grid 0.25 m')}</div></>
 }

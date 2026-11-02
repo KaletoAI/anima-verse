@@ -40,32 +40,55 @@ def _staging(task_id):
     return folder
 
 
-def pose_clip(pose, cset):
+def pose_clip(pose, cset, role=''):
     entry = pose_catalog.get_catalog('pose').get('standing' if pose == 'walking' else pose)
-    if not entry or not entry.get('solo', True):
-        raise ValueError('unknown or non-solo pose')
+    if not entry:
+        raise ValueError('unknown pose')
+    if not isinstance(role, str) or (role != '' if entry.get('solo', True) else role not in clips.pose_roles(pose)):
+        raise ValueError('invalid pose role')
     kind = entry.get('animation')
     if not kind:
         raise ValueError('pose has no animation')
     for wanted in dict.fromkeys((cset, '')):
-        if any(e['kind'] == kind and e['set'] == wanted and e['path'].suffix.lower() == '.fbx'
+        if any(e['kind'] == kind and e['set'] == wanted and e['role'] == role and e['path'].suffix.lower() == '.fbx'
                for e in clips.clip_entries()):
             return kind, wanted
     raise ValueError('pose animation missing from library')
 
 
-def affected_rule(start_pose, target_pose):
+def affected_rule(start_pose, target_pose, start_role='', target_role=''):
+    role = _transition_role(start_pose, target_pose, start_role, target_role)
     rule = clips.resolve_pose_transition(start_pose, target_pose)
-    return {'from': rule['from'] if rule else start_pose,
-            'to': rule['to'] if rule else target_pose,
-            'store': rule.get('store', 'shared') if rule else 'shared',
-            'old_kind': rule['kind'] if rule else None}
+    result = {'from': rule['from'] if rule else start_pose,
+              'to': rule['to'] if rule else target_pose,
+              'store': rule.get('store', 'shared') if rule else 'shared',
+              'old_kind': clips.rule_kind(rule, role) or None}
+    if role:
+        # A group fallback cannot store per-role bridges: specialize this pair.
+        if not rule or role not in clips.transition_roles(rule['from'], rule['to']):
+            result.update({'from': start_pose, 'to': target_pose})
+        result['role'] = role
+        result['other_kinds'] = {r: clips.rule_kind(rule, r) or None
+                                 for r in clips.transition_roles(result['from'], result['to']) if r != role}
+    return result
 
 
-def suggested_kind(start_pose, target_pose):
+def _transition_role(start_pose, target_pose, start_role, target_role):
+    for pose, role in ((start_pose, start_role), (target_pose, target_role)):
+        roles = clips.pose_roles(pose)
+        if not isinstance(role, str) or (role not in roles if roles else role != ''):
+            raise ValueError('invalid pose role')
+    if start_role and target_role and start_role != target_role:
+        raise ValueError('multi-person transitions require matching roles')
+    return start_role or target_role
+
+
+def suggested_kind(start_pose, target_pose, start_role='', target_role=''):
     def clean(value):
         return re.sub('[^a-z0-9-]+', '-', value.replace('@', '').replace('*', 'any')).strip('-')
-    base = clips.validate_kind(f'mb-{clean(start_pose)}-to-{clean(target_pose)}')
+    src = clean(start_pose) + (f'-{start_role}' if start_role else '')
+    dst = clean(target_pose) + (f'-{target_role}' if target_role else '')
+    base = clips.validate_kind(f'mb-{src}-to-{dst}')
     taken = {e['kind'] for e in clips.clip_entries()}
     kind, n = base, 2
     while kind in taken:
@@ -105,14 +128,16 @@ def report_warnings(report):
 
 
 def submit(*, start_pose, target_pose, cset='', start_time_s, target_time_s,
-           forward_m, left_m, yaw_deg, guide=None, variants=DEFAULT_VARIANTS, backend=''):
+           forward_m, left_m, yaw_deg, guide=None, variants=DEFAULT_VARIANTS, backend='',
+           start_role='', target_role=''):
     if not isinstance(start_pose, str) or not isinstance(target_pose, str) or start_pose == target_pose:
         raise ValueError('start and target must be different poses')
     cset = clips._validate_set(cset)
     if isinstance(variants, bool) or not isinstance(variants, int) or not 1 <= variants <= MAX_VARIANTS:
         raise ValueError('variants must be 1..4')
-    for pose in (start_pose, target_pose):
-        pose_clip(pose, cset)
+    _transition_role(start_pose, target_pose, start_role, target_role)
+    for pose, role in ((start_pose, start_role), (target_pose, target_role)):
+        pose_clip(pose, cset, role)
     _number(start_time_s, 'start_time_s', 0, 86400)
     _number(target_time_s, 'target_time_s', 0, 86400)
     placement = _placement(locals())
@@ -136,6 +161,7 @@ def submit(*, start_pose, target_pose, cset='', start_time_s, target_time_s,
     if variants > route.backend.max_variants:
         raise ValueError('backend variant limit exceeded')
     payload = dict(start_pose=start_pose, target_pose=target_pose, cset=cset,
+                   start_role=start_role, target_role=target_role,
                    start_time_s=start_time_s, target_time_s=target_time_s,
                    **placement, guide=guide, variants=variants, backend=route.backend.name)
     tid = get_task_queue().submit(TASK_TYPE, payload, max_retries=0, queue_name=TASK_TYPE)
@@ -145,9 +171,10 @@ def submit(*, start_pose, target_pose, cset='', start_time_s, target_time_s,
 def _prepare(payload, folder):
     files, exports = {}, {}
     for side in ('start', 'target'):
-        kind, used = pose_clip(payload[side + '_pose'], payload['cset'])
+        role = payload.get(side + '_role', '')
+        kind, used = pose_clip(payload[side + '_pose'], payload['cset'], role)
         path = folder / f'{side}.bvh'
-        exports[side] = dict(export_clip_bvh(kind, used, path), kind=kind, set=used)
+        exports[side] = dict(export_clip_bvh(kind, used, path, role=role), kind=kind, set=used)
         files['input_' + side + '_bvh_path'] = str(path)
     duration = exports['start']['duration_s']
     meta = clips.clip_meta(exports['start']['kind'], exports['start']['set']) or {}
@@ -220,9 +247,11 @@ def _build(tid, op, progress, route):
         label=f'Transition: {request["start_pose"]} to {request["target_pose"]}')
     cancelled()
     folder = _staging(tid)
-    kind = suggested_kind(request['start_pose'], request['target_pose'])
+    kind = suggested_kind(request['start_pose'], request['target_pose'],
+                          request.get('start_role', ''), request.get('target_role', ''))
     source = {'generator': 'motionbricks', **{k: request[k] for k in (
         'start_pose', 'target_pose', 'cset', 'target_time_s', 'forward_m', 'left_m', 'yaw_deg', 'guide')},
+        'start_role': request.get('start_role', ''), 'target_role': request.get('target_role', ''),
         'set': request['cset'], 'start_kind': inputs['exports']['start']['kind'], 'target_kind': inputs['exports']['target']['kind'],
         'hub_job': result.get('job_id', ''), 'backend': result.get('backend', request['backend']),
         'model_revision': inputs['meta']['model_revision']}
@@ -266,7 +295,8 @@ def _build(tid, op, progress, route):
         raise RuntimeError('no variant passed the check: ' + '; '.join(c['error'] for c in candidates))
     library = 'free' if all(e['library'] == 'free' for e in inputs['exports'].values()) else 'licensed'
     data = {'created_at': utc_now_iso(), 'request': request, 'candidates': candidates,
-            'library': library, 'kind': kind, 'affected_rule': affected_rule(request['start_pose'], request['target_pose'])}
+            'library': library, 'kind': kind, 'affected_rule': affected_rule(request['start_pose'], request['target_pose'],
+                request.get('start_role', ''), request.get('target_role', ''))}
     (folder / 'candidates.json').write_text(json.dumps(data, indent=2), encoding='utf-8')
     update(phase='choose', state='awaiting_choice', kind=kind, backend=result.get('backend', request['backend']),
            candidates=[_public(c) for c in candidates], affected_rule=data['affected_rule'])
@@ -314,7 +344,8 @@ def choose(task_id, index, *, kind, expected_old_kind):
         if not data or (not resuming and _age_s(data, folder) >= CANDIDATE_MAX_AGE_DAYS * 86400):
             raise ChoiceError(410, 'the candidates expired')
         request = data['request']
-        rule = affected_rule(request['start_pose'], request['target_pose'])
+        rule = affected_rule(request['start_pose'], request['target_pose'],
+                request.get('start_role', ''), request.get('target_role', ''))
         frozen = progress.get('publication_rule') if resuming else None
         # A stop after saving the rule needs only to finish the local state.
         already_saved = bool(frozen and rule['old_kind'] == kind and
@@ -339,7 +370,11 @@ def choose(task_id, index, *, kind, expected_old_kind):
         meta['redistributable'] = data['library'] == 'free'
         meta.setdefault('source', {})['transition_task_id'] = task_id
         current_rule = clips.resolve_pose_transition(request['start_pose'], request['target_pose']) or {}
-        replacement = frozen or {'accel': current_rule.get('accel', 0), 'from': rule['from'], 'to': rule['to'], 'kind': kind,
+        bridge = kind
+        if rule.get('role'):
+            bridge = {r: k for r, k in rule['other_kinds'].items() if k}
+            bridge[rule['role']] = kind
+        replacement = frozen or {'accel': current_rule.get('accel', 0), 'from': rule['from'], 'to': rule['to'], 'kind': bridge,
             'store': 'world' if data['library'] == 'licensed' else rule['store']}
         if not resuming and (any(e['kind'] == kind for e in clips.clip_entries()) or any(t.exists() for t in targets)):
             raise ChoiceError(409, 'kind already exists')

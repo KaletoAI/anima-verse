@@ -36,5 +36,42 @@ try {
     assert.ok(Math.abs(roots[i].z - z) < 1e-9)
   }
   assert.equal(roots[2].yaw, Math.PI)
+  await build({ entryPoints: ['frontend/src/tabs/poses/transitionSelection.ts'], bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'selection.mjs') })
+  const { transitionClip, transitionOptions, transitionSets } = await import(join(dir, 'selection.mjs'))
+  const poses = [{ key: 'standing', animation: 'idle', solo: true }, { key: 'hug', animation: 'hug', solo: false },
+    { key: 'crowd', animation: 'crowd', solo: false }]
+  const listing = { clips: [
+    { kind: 'idle', role: '', set: '', url: 'idle.fbx' },
+    { kind: 'hug', role: 'a', set: 'female', url: 'female-a.fbx' },
+    { kind: 'hug', role: 'b', set: '', url: 'neutral-b.fbx' },
+    { kind: 'hug', role: 'b', set: 'male', url: 'male-b.fbx' },
+    ...['a', 'b', 'c', 'd', 'e'].map((role) => ({ kind: 'crowd', role, set: '', url: `${role}.fbx` })),
+    { kind: 'hug', role: 'c', set: '', url: 'not-an-animation.json' },
+  ] }
+  assert.deepEqual(transitionOptions(poses, listing), [
+    { pose: 'walking', role: '' }, { pose: 'standing', role: '' },
+    { pose: 'hug', role: 'a' }, { pose: 'hug', role: 'b' },
+    { pose: 'crowd', role: 'a' }, { pose: 'crowd', role: 'b' }, { pose: 'crowd', role: 'c' },
+    { pose: 'crowd', role: 'd' }, { pose: 'crowd', role: 'e' },
+  ])
+  assert.equal(transitionClip(poses, listing, 'hug', 'male', 'b').url, 'male-b.fbx')
+  assert.equal(transitionClip(poses, listing, 'hug', 'female', 'b').url, 'neutral-b.fbx')
+  assert.equal(transitionClip(poses, listing, 'hug', 'male', 'a'), undefined)
+  assert.equal(transitionClip(poses, listing, 'walking', 'female').url, 'idle.fbx')
+  assert.deepEqual(transitionSets(poses, listing, 'hug', 'a'), ['female'])
+  assert.deepEqual(transitionSets(poses, listing, 'hug', 'b'), ['', 'male'])
+  await build({ entryPoints: ['frontend/src/tabs/poses/clipPreviewPlacement.ts'], bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'placement.mjs') })
+  const { previewCalibration, relativeTargetRoot } = await import(join(dir, 'placement.mjs'))
+  // B at x=.4, A at -.4: delta .8. B shift +10 cm, A -10 cm:
+  // delta becomes 1 m. Turning +90 degrees sends +X to -Z.
+  const a = previewCalibration([-10, 0], .02)
+  const b = previewCalibration([10, 0], .03)
+  assert.equal(a.y, .02)
+  const relative = relativeTargetRoot({ x: .4, z: 0 }, { x: -.4, z: 0 }, b, a, Math.PI / 2)
+  assert.ok(Math.abs(relative.x) < 1e-9)
+  assert.ok(Math.abs(relative.z + 1) < 1e-9)
+  assert.deepEqual(relativeTargetRoot({ x: .4, z: 0 }, { x: .4, z: 0 }, b, b, 0), { x: 0, z: 0 })
+  console.log('PASS transition selection: solo/pair/group roles, set fallback and availability')
+  console.log('PASS transition placement: target-relative partners, sidecar shift and rotation')
   console.log('PASS transition sequence: boundaries, local time, composed travel and turn')
 } finally { rmSync(dir, { recursive: true, force: true }) }

@@ -62,12 +62,12 @@ export interface ApiClipRow {
   root_motion?: ClipRootMotion | null
 }
 
-/** A bridge per clip role — only in a rule whose `from` is a pair pose. */
-export interface RoleKinds { a?: string; b?: string }
+/** A bridge per clip role on either multi-person side of a rule. */
+export type RoleKinds = Record<string, string>
 
 /** Every bridge clip a rule names — one, or one per role. */
 export function bridgeKinds(kind: PoseTransition['kind']): string[] {
-  return (typeof kind === 'string' ? [kind] : [kind.a || '', kind.b || '']).map((k) => k.trim()).filter(Boolean)
+  return (typeof kind === 'string' ? [kind] : Object.values(kind)).map((k) => k.trim()).filter(Boolean)
 }
 
 export interface PoseTransition {

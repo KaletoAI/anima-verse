@@ -24,11 +24,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Object3D } from 'three'
-import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM, clipShiftM, pairYaw,
+import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM, pairYaw,
   type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
+import { previewCalibration } from './clipPreviewPlacement'
 import { SliderInput } from '../../components/SliderInput'
 
 const FIGURE_H = 1.7
@@ -518,8 +519,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             // Placement yaw rotates the saved shift; orientation draft angles
             // are baked into the take and must not rotate its calibration.
             const draft = shiftRef.current
-            const horizontal = clipShiftM([(p.shift?.[0] ?? 0) + (draft?.[0] ?? 0),
-              (p.shift?.[1] ?? 0) + (draft?.[1] ?? 0)], seat ? pairYaw(0, yawRef.current || 0) : 0)
+            const horizontal = previewCalibration([(p.shift?.[0] ?? 0) + (draft?.[0] ?? 0),
+              (p.shift?.[1] ?? 0) + (draft?.[1] ?? 0)], 0, seat ? pairYaw(0, yawRef.current || 0) : 0)
             p.root.position.add(heightShift.set(horizontal.x, 0, horizontal.z).applyQuaternion(inverseFrame))
             if (importHeightRef.current === undefined && p.heightM) {
               heightShift.set(0, p.heightM, 0).applyQuaternion(inverseFrame)

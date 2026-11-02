@@ -473,10 +473,14 @@ async def transition_backends(_: Dict[str, Any] = Depends(require_admin)):
 
 
 @router.get("/transition-jobs/affected-rule")
-async def transition_affected_rule(start: str, target: str, _: Dict[str, Any] = Depends(require_admin)):
+async def transition_affected_rule(start: str, target: str, start_role: str = '', target_role: str = '',
+                                   _: Dict[str, Any] = Depends(require_admin)):
     import asyncio
     from app.core import pose_transition
-    return await asyncio.to_thread(pose_transition.affected_rule, start, target)
+    try:
+        return await asyncio.to_thread(pose_transition.affected_rule, start, target, start_role, target_role)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/transition-jobs/{task_id}/candidates/{index}/clip.fbx")
