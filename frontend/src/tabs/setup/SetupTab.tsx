@@ -171,8 +171,9 @@ export function SetupTab() {
         onClose={() => setStalePaths(null)}
       />
       <DetailToolbar
-        title={dirty ? t('Setup (unsaved)') : t('Setup')}
+        title={t('Setup')}
         onSave={save}
+        dirty={dirty}
         onCancel={dirty ? revert : undefined}
         disabled={saving}
         cancelLabel={t('Revert')}

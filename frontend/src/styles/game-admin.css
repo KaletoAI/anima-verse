@@ -537,6 +537,17 @@ a.ga-btn {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
+/* Edits that were never saved: Save stands out, a marker says why. */
+.ga-btn-dirty {
+  box-shadow: 0 0 0 2px var(--warning, #d29922);
+}
+
+.ga-dirty-marker {
+  font-size: 12px;
+  color: var(--warning, #d29922);
+  white-space: nowrap;
+}
+
 .ga-detail-toolbar-title {
   margin-left: auto;
   font-size: 12px;

@@ -817,6 +817,7 @@ export function CharactersTab() {
                 ? t('Saving…')
                 : t('Save ({n})').replace('{n}', String(dirtyCount))}
               disabled={saving}
+              dirty={dirtyCount > 0}
               extra={
                 <>
                   {dirtyCount > 0 ? (

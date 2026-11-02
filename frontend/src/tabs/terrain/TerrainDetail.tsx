@@ -434,6 +434,7 @@ export function TerrainDetail({
         saveLabel={isNew ? t('Create') : t('Save')}
         onSave={() => { void save() }}
         disabled={!canSave}
+        dirty={dirty}
         // Cancel and Reset ride in `extra` rather than in the toolbar's own
         // slots: `disabled` gates ALL of its buttons, and a create form whose
         // kind is still empty would then hold the user in a form they cannot

@@ -752,6 +752,7 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
       <DetailToolbar
         title={location.name}
         onSave={save}
+        dirty={dirty}
         onDelete={remove}
         extra={
           <>

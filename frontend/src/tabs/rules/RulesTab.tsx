@@ -11,6 +11,7 @@ import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { roomLabel } from '../world/worldTypes'
 import { InfluenceRuleFields, type Influence, type PairCondition, type InfluenceValidation } from './InfluenceRuleFields'
+import { useDiscardGuard, useDraft } from '../../lib/useDraft'
 
 type RuleType = 'block' | 'force' | 'discover' | 'modify' | 'influence'
 type TargetScope = 'location' | 'any_room' | 'danger_level' | 'skill'
@@ -198,7 +199,8 @@ export function RulesTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [rules, setRules] = useState<Rule[] | null>(null)
-  const [draft, setDraft] = useState<DraftRule | null>(null)
+  const { draft, setDraft, load: loadDraft, dirty } = useDraft<DraftRule>()
+  const { guard, dialog: discardDialog } = useDiscardGuard(dirty)
   const [locations, setLocations] = useState<LocationRef[]>([])
   const [skills, setSkills] = useState<{ id: string; name: string }[]>([])
   const [quantities, setQuantities] = useState<Quantity[]>([])
@@ -230,25 +232,25 @@ export function RulesTab() {
     return [...rules].sort((a, b) => (a.name || a.id || '').localeCompare(b.name || b.id || ''))
   }, [rules])
 
-  const newRule = useCallback(() => {
+  const newRule = useCallback(() => guard(() => {
     setOperationError('')
-    setDraft({ ...EMPTY_DRAFT, influence: { ...EMPTY_DRAFT.influence }, pair_conditions: [], localized: {} })
-  }, [])
+    loadDraft({ ...EMPTY_DRAFT, influence: { ...EMPTY_DRAFT.influence }, pair_conditions: [], localized: {} })
+  }), [guard, loadDraft])
 
-  const editRule = useCallback((r: Rule) => {
+  const editRule = useCallback((r: Rule) => guard(() => {
     setOperationError('')
-    setDraft(ruleToDraft(r))
-  }, [])
+    loadDraft(ruleToDraft(r))
+  }), [guard, loadDraft])
 
   const copyRule = useCallback(() => {
     setDraft((prev) =>
       prev ? { ...prev, id: '', name: `${prev.name} (copy)`.trim(), origin: '', isNew: true } : prev,
     )
-  }, [])
+  }, [setDraft])
 
   const update = useCallback(<K extends keyof DraftRule>(key: K, value: DraftRule[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
-  }, [])
+  }, [setDraft])
 
   const save = useCallback(async () => {
     setOperationError('')
@@ -288,13 +290,13 @@ export function RulesTab() {
       await reload()
       // Keep the detail panel open on the just-saved rule instead of
       // bouncing back to the empty placeholder.
-      if (saved) setDraft(ruleToDraft(saved))
+      if (saved) loadDraft(ruleToDraft(saved))
     } catch (e) {
       const message = e instanceof ApiError && typeof e.detail !== 'string' ? JSON.stringify(e.detail) || e.message : (e as Error).message
       setOperationError(message)
       toast(t('Error') + ': ' + message, 'error')
     }
-  }, [draft, reload, t, toast])
+  }, [draft, loadDraft, reload, t, toast])
 
   // Both deletions ask in-app: the click arms, the dialog at the end acts.
   // One state for the two questions — they cannot be open at the same time.
@@ -310,11 +312,11 @@ export function RulesTab() {
       await apiDelete(`/rules/${encodeURIComponent(draft.id)}?target=world`)
       toast(t('World override removed'))
       await reload()
-      setDraft(null)
+      loadDraft(null)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [draft, reload, t, toast])
+  }, [draft, loadDraft, reload, t, toast])
 
   const deleteRule = useCallback(() => {
     if (!draft || draft.isNew) return
@@ -327,11 +329,11 @@ export function RulesTab() {
       await apiDelete(`/rules/${encodeURIComponent(draft.id)}`)
       toast(t('Deleted'))
       await reload()
-      setDraft(null)
+      loadDraft(null)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [draft, reload, t, toast])
+  }, [draft, loadDraft, reload, t, toast])
 
   const move = useCallback(
     async (target: 'world' | 'shared') => {
@@ -358,7 +360,7 @@ export function RulesTab() {
         }
         toast(target === 'shared' ? t('Moved to shared') : t('Moved to world'))
         await reload()
-        setDraft(null)
+        loadDraft(null)
       } catch (e) {
         const detail = e instanceof ApiError && typeof e.detail !== 'string' ? JSON.stringify(e.detail) || e.message : (e as Error).message
         const message = destinationSaved
@@ -369,7 +371,7 @@ export function RulesTab() {
         toast(t('Error') + ': ' + message, 'error')
       }
     },
-    [draft, reload, t, toast],
+    [draft, loadDraft, reload, t, toast],
   )
 
   if (rules === null) return <div className="ga-loading">{t('Loading…')}</div>
@@ -421,7 +423,8 @@ export function RulesTab() {
             <DetailToolbar
               title={draft.name || draft.id || t('New rule')}
               onSave={save}
-              onCancel={() => setDraft(null)}
+              onCancel={() => loadDraft(null)}
+              dirty={dirty}
               onDelete={
                 draft.isNew
                   ? undefined
@@ -486,6 +489,7 @@ export function RulesTab() {
         }}
         onClose={() => setPendingDelete('')}
       />
+      {discardDialog}
     </div>
   )
 }

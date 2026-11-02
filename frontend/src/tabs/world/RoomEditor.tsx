@@ -1,5 +1,5 @@
 import { StatRatesEditor } from './StatRatesEditor'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -47,6 +47,9 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
     return () => { stale = true }
   }, [location.id, room.id, t, toast])
 
+  // The draft starts as a copy of the room, so any difference is an edit.
+  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify({ ...room }), [draft, room])
+
   const upd = useCallback(<K extends keyof RoomDraft>(k: K, v: RoomDraft[K]) => {
     setDraft((prev) => ({ ...prev, [k]: v }))
   }, [])
@@ -91,6 +94,7 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
       <DetailToolbar
         title={`${location.name} / ${roomLabel(room, t) || t('room')}`}
         onSave={save}
+        dirty={dirty}
         onDelete={isReserved ? undefined : remove}
         deleteLabel={t('Remove room')}
       />

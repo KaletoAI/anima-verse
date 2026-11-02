@@ -28,6 +28,7 @@ import {
   type Owner,
   type Rarity,
 } from './itemsModel'
+import { useDiscardGuard, useDraft } from '../../lib/useDraft'
 
 interface ItemRowProps {
   item: Item
@@ -60,7 +61,8 @@ export function ItemsTab() {
   const enlarge = useEnlarge()
   const { toast } = useToast()
   const [items, setItems] = useState<Item[] | null>(null)
-  const [draft, setDraft] = useState<DraftItem | null>(null)
+  const { draft, setDraft, load: loadDraft, dirty } = useDraft<DraftItem>()
+  const { guard, dialog: discardDialog } = useDiscardGuard(dirty)
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<Category | ''>('')
   const [filterRarity, setFilterRarity] = useState<Rarity | ''>('')
@@ -174,17 +176,17 @@ export function ItemsTab() {
     return VALID_PIECE_SLOTS.filter((s) => used.has(s))
   }, [items])
 
-  const newItem = useCallback(() => {
-    setDraft({ ...EMPTY_DRAFT })
+  const newItem = useCallback(() => guard(() => {
+    loadDraft({ ...EMPTY_DRAFT })
     setOwners([])
-  }, [])
+  }), [guard, loadDraft])
 
   const editItem = useCallback(
-    (it: Item) => {
-      setDraft(itemToDraft(it))
+    (it: Item) => guard(() => {
+      loadDraft(itemToDraft(it))
       loadOwners(it.id)
-    },
-    [loadOwners],
+    }),
+    [guard, loadDraft, loadOwners],
   )
 
   const copyItem = useCallback(() => {
@@ -192,11 +194,11 @@ export function ItemsTab() {
       prev ? { ...prev, id: '', name: `${prev.name} (copy)`.trim(), isNew: true } : prev,
     )
     setOwners([])
-  }, [])
+  }, [setDraft])
 
   const update = useCallback(<K extends keyof DraftItem>(key: K, value: DraftItem[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
-  }, [])
+  }, [setDraft])
 
   // Writes a value into the extras dict (spell/tracker/evidence fields).
   // Empty values are deleted so draftToBody doesn't post the key along.
@@ -208,7 +210,7 @@ export function ItemsTab() {
       else extras[key] = value
       return { ...prev, extras }
     })
-  }, [])
+  }, [setDraft])
 
   const toggleListItem = useCallback(
     (key: 'outfit_types' | 'slots' | 'covers' | 'partially_covers', value: string) => {
@@ -221,7 +223,7 @@ export function ItemsTab() {
         return { ...prev, [key]: Array.from(set) }
       })
     },
-    [],
+    [setDraft],
   )
 
   // Click-to-cycle on the silhouette: empty → slot → cover → partial → empty.
@@ -246,7 +248,7 @@ export function ItemsTab() {
       // inPartial → empty
       return { ...prev, partially_covers: dropFrom(prev.partially_covers) }
     })
-  }, [])
+  }, [setDraft])
 
   const save = useCallback(async () => {
     if (!draft) return
@@ -271,15 +273,15 @@ export function ItemsTab() {
       // returns the persisted record; if for any reason it doesn't, fall
       // back to flipping the draft to non-new state instead of closing.
       if (saved) {
-        setDraft(itemToDraft(saved))
+        loadDraft(itemToDraft(saved))
         if (draft.isNew) loadOwners(saved.id)
       } else {
-        setDraft((prev) => (prev ? { ...prev, isNew: false } : prev))
+        loadDraft({ ...draft, isNew: false })
       }
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [draft, loadOwners, reload, t, toast])
+  }, [draft, loadDraft, loadOwners, reload, t, toast])
 
   // The question is an in-app dialog: `remove` only arms it, `confirmRemove`
   // below deletes.
@@ -295,12 +297,12 @@ export function ItemsTab() {
       await apiDelete(`/inventory/items/${encodeURIComponent(draft.id)}`)
       toast(t('Deleted'))
       await reload()
-      setDraft(null)
+      loadDraft(null)
       setOwners([])
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [draft, reload, t, toast])
+  }, [draft, loadDraft, reload, t, toast])
 
   const move = useCallback(
     async (target: 'world' | 'shared') => {
@@ -313,13 +315,13 @@ export function ItemsTab() {
         await apiPost(path, {})
         toast(target === 'shared' ? t('Moved to shared') : t('Moved to world'))
         await reload()
-        setDraft(null)
+        loadDraft(null)
         setOwners([])
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [draft, reload, t, toast],
+    [draft, loadDraft, reload, t, toast],
   )
 
   // Build the dialog's default prompt — mirrors the server fallback chain
@@ -519,9 +521,10 @@ export function ItemsTab() {
             title={draft.name || draft.id || t('New item')}
             onSave={save}
             onCancel={() => {
-              setDraft(null)
+              loadDraft(null)
               setOwners([])
             }}
+            dirty={dirty}
             onDelete={draft.isNew ? undefined : remove}
             onMove={draft.isNew ? undefined : move}
             storage={draft.shared ? 'shared' : 'world'}
@@ -653,6 +656,7 @@ export function ItemsTab() {
         onConfirm={() => { void doRemove() }}
         onClose={() => setConfirmRemove(false)}
       />
+      {discardDialog}
     </div>
   )
 }

@@ -124,8 +124,9 @@ export function StorytellerTab() {
   return (
     <div className="ga-page-scroll">
       <DetailToolbar
-        title={dirty ? t('Storyteller (unsaved)') : t('Storyteller')}
+        title={t('Storyteller')}
         onSave={save}
+        dirty={dirty}
         onCancel={dirty && original ? () => setConfig(original) : undefined}
         disabled={saving}
         cancelLabel={t('Revert')}

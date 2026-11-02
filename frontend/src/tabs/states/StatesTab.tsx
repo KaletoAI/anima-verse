@@ -11,6 +11,7 @@ import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { IconPicker } from '../../components/IconPicker'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
+import { useDiscardGuard, useDraft } from '../../lib/useDraft'
 
 const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill', 'length', 'girth'] as const
 type PoseField = typeof POSE_FIELDS[number]
@@ -126,7 +127,8 @@ function StatesPane() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [data, setData] = useState<FiltersData | null>(null)
-  const [draft, setDraft] = useState<DraftState | null>(null)
+  const { draft, setDraft, load: loadDraft, dirty } = useDraft<DraftState>()
+  const { guard, dialog: discardDialog } = useDiscardGuard(dirty)
   const [loading, setLoading] = useState(true)
   // In-app confirmation for the two destructive actions (no window.confirm).
   const [confirmAction, setConfirmAction] = useState<'delete' | 'reset' | null>(null)
@@ -152,26 +154,26 @@ function StatesPane() {
     return [...data.filters].sort((a, b) => a.id.localeCompare(b.id))
   }, [data])
 
-  const newFilter = useCallback(() => {
+  const newFilter = useCallback(() => guard(() => {
     setConfirmAction(null)
-    setDraft({ ...EMPTY_DRAFT })
-  }, [])
+    loadDraft({ ...EMPTY_DRAFT })
+  }), [guard, loadDraft])
 
-  const editFilter = useCallback((f: PromptFilter) => {
+  const editFilter = useCallback((f: PromptFilter) => guard(() => {
     setConfirmAction(null)
-    setDraft(asDraft(f))
-  }, [])
+    loadDraft(asDraft(f))
+  }), [guard, loadDraft])
 
   const copyFilter = useCallback(() => {
     setConfirmAction(null)
     setDraft((prev) => (prev
       ? { ...prev, id: '', isNew: true, source: '', originalId: '', maskedFields: [] }
       : prev))
-  }, [])
+  }, [setDraft])
 
   const updateDraft = useCallback(<K extends keyof DraftState>(key: K, value: DraftState[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
-  }, [])
+  }, [setDraft])
 
   const toggleBlock = useCallback((block: string) => {
     setDraft((prev) => {
@@ -181,7 +183,7 @@ function StatesPane() {
       else set.add(block)
       return { ...prev, drop_blocks: Array.from(set) }
     })
-  }, [])
+  }, [setDraft])
 
   const save = useCallback(async () => {
     if (!draft) return
@@ -221,11 +223,11 @@ function StatesPane() {
       const next = await apiGet<FiltersData>('/admin/prompt-filters/data')
       setData(next)
       const saved = next.filters.find((f) => f.id === id)
-      if (saved) setDraft(asDraft(saved))
+      if (saved) loadDraft(asDraft(saved))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [draft, reload, t, toast])
+  }, [draft, loadDraft, reload, t, toast])
 
   /** Both actions send the SAME request — DELETE drops the world row. What
    *  differs is what that means: for a world-only state it removes the state,
@@ -238,11 +240,11 @@ function StatesPane() {
       toast(wasReset ? t('Reset to the shared state') : t('Deleted'))
       await reload()
       setConfirmAction(null)
-      setDraft(null)
+      loadDraft(null)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [confirmAction, draft, reload, t, toast])
+  }, [confirmAction, draft, loadDraft, reload, t, toast])
 
   const move = useCallback(
     async (target: 'world' | 'shared') => {
@@ -252,12 +254,12 @@ function StatesPane() {
         await apiPost(`/admin/prompt-filters/${encodeURIComponent(draft.originalId)}/move`, { target })
         toast(target === 'shared' ? t('Moved to shared') : t('Moved to world'))
         await reload()
-        setDraft(null)
+        loadDraft(null)
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [draft, reload, t, toast],
+    [draft, loadDraft, reload, t, toast],
   )
 
   if (loading || !data) return <div className="ga-loading">{t('Loading…')}</div>
@@ -343,7 +345,8 @@ function StatesPane() {
             <DetailToolbar
               title={draft.id || t('New state')}
               onSave={save}
-              onCancel={() => { setConfirmAction(null); setDraft(null) }}
+              onCancel={() => { setConfirmAction(null); loadDraft(null) }}
+              dirty={dirty}
               onDelete={draft.isNew
                 ? undefined
                 : () => setConfirmAction(draft.source === OVERRIDE ? 'reset' : 'delete')}
@@ -400,6 +403,7 @@ function StatesPane() {
           <div className="ga-placeholder">{t('Click a state or create a new one.')}</div>
         )}
       </section>
+      {discardDialog}
     </div>
   )
 }
