@@ -871,6 +871,7 @@ function suitRenderJob(job) {
         return '<div class="suit-case"><b>' + esc(check.ok === false ? 'Failed' : check.ok ? 'Passed' : 'Excluded')
             + (cut ? ' · cut off ' + cut + '/' + (check.run_checks || runs).length : '')
             + (check.budget_hits > 0 ? ' · budget hit ' + check.budget_hits + '/' + (check.run_checks || runs).length : '')
+            + (check.budget_overruns > 0 ? ' · kept writing after the budget ' + check.budget_overruns + '/' + (check.run_checks || runs).length : '')
             + ' · ' + esc(check.group || '') + ' · ' + esc(check.task || check.label || check.id || '') + '</b>'
             + '<div>' + esc(check.detail || '') + '</div>'
             + (Array.isArray(check.stages) ? '<div>' + esc(check.stage === 0 ? 'passed without thinking' : check.stage != null ? 'passed at ' + check.stage : 'failed up to ' + Math.max(0, ...check.stages.map(stage => stage.budget))) + '</div>' : '')
@@ -883,7 +884,7 @@ function suitRenderJob(job) {
                     + esc(run.content || run.error || (run.finish_reason === 'length' ? '' : '(empty answer)'))
                     + esc(run.finish_reason === 'length' ? (run.content ? '\n' : '') + '(cut off at the token limit'
                         + ((run.usage || {}).reasoning_tokens != null ? ' - ' + run.usage.reasoning_tokens + ' reasoning tokens' : '') + ')'
-                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + (run.budget_hit ? ' (thinking capped at the budget, answer continued)' : '') + (run.reasoning_tokens_estimated ? ' (reasoning tokens estimated)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
+                        : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + (run.budget_hit ? (run.budget_overrun ? ' (thinking capped at the budget; the answer then ran on to the token limit)' : ' (thinking capped at the budget, answer continued)') : '') + (run.reasoning_tokens_estimated ? ' (reasoning tokens estimated)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
                 + '</details>' : '')
             + (hasRecommendation && outcome !== check.ok ? '<details open><summary>Recommended-setting answer(s)</summary>'
                 + ((check.recommended_runs || []).length ? check.recommended_runs.map((run, index) => '<h4>Run ' + (index + 1) + '</h4><pre>'

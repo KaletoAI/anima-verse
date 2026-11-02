@@ -118,6 +118,8 @@ class LLMResponse:
     reasoning: Optional[str] = None
     budget_hit: bool = False
     budget_unenforceable: bool = False
+    # A budgeted call whose continuation wrote on to the token limit.
+    budget_overrun: bool = False
 
 
 @dataclass
@@ -205,7 +207,11 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
 THINK_OPEN = "<think>\n"
 THINK_CLOSE = "\n</think>\n\n"
 # (base_url, model) pairs that could not continue a capped thought (400/422
-# or an empty/length-limited answer); budgeted calls then run without thinking.
+# or an empty answer); budgeted calls then run without thinking. A continuation
+# that writes on to the token limit is NOT such a failure: measured on Gemma 4
+# (llama.cpp) and Qwen3.5 (vLLM), a model sometimes answers and then keeps
+# thinking aloud in the answer — that one call is cut off (finish "length",
+# ``budget_overrun``), the next may be fine.
 _NO_CONTINUE: set = set()
 # (base_url, model) pairs whose server refused ``stream_options``. The OpenAI
 # SDK only sends the final usage chunk on request, and a strict or older
@@ -443,7 +449,7 @@ class LLMClient:
             if close_marker in answer:
                 answer = answer.rsplit(close_marker, 1)[1]
             answer = answer.lstrip()
-            if final.finish_reason == "length" or not answer.strip():
+            if not answer.strip():
                 final = None
             elif partial and not answer.startswith(partial):
                 answer = partial + answer
@@ -465,7 +471,8 @@ class LLMClient:
                 usage[name] = usage.get(name, 0) + count
         return LLMResponse(content=answer, usage=usage, finish_reason=final.finish_reason,
                            reasoning=first.reasoning, budget_hit=True,
-                           budget_unenforceable=final.budget_unenforceable)
+                           budget_unenforceable=final.budget_unenforceable,
+                           budget_overrun=final.finish_reason == "length")
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async streaming generator (for the streaming.py agent loop).

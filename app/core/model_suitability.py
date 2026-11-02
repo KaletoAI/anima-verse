@@ -397,6 +397,7 @@ def iter_suitability_results(
                "reasoning_tokens_estimated": estimated,
                "budget_unenforceable": bool(getattr(resp, "budget_unenforceable", False)),
                "budget_hit": bool(getattr(resp, "budget_hit", False)),
+               "budget_overrun": bool(getattr(resp, "budget_overrun", False)),
                "finish_reason": getattr(resp, "finish_reason", None),
                "usage": usage, "duration_s": dt}
         return raw, dt, ctok
@@ -464,6 +465,7 @@ def iter_suitability_results(
                "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
                "runs": outputs,
                "budget_hits": sum(bool(r.get("budget_hit")) for r in outputs),
+               "budget_overruns": sum(bool(r.get("budget_overrun")) for r in outputs),
                "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
                "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
                "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
@@ -474,7 +476,8 @@ def iter_suitability_results(
 
     def stage_info(rec, budget):
         return {"budget": budget, "ok": rec["ok"], "duration_s": rec["duration_s"],
-                "reasoning_tokens": rec["reasoning_tokens"], "budget_hits": rec["budget_hits"]}
+                "reasoning_tokens": rec["reasoning_tokens"], "budget_hits": rec["budget_hits"],
+                "budget_overruns": rec["budget_overruns"]}
 
     def stop_reason(rec):
         if any(run.get("budget_unenforceable") for run in rec["runs"]):
@@ -671,6 +674,7 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
             failed_by_truncation.append(record["id"])
     return {
         "budget_hits": sum(bool(run.get("budget_hit")) for run in all_runs),
+        "budget_overruns": sum(bool(run.get("budget_overrun")) for run in all_runs),
         "thinking_leak_runs": sum(
             (((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0 or bool((run.get("reasoning") or "").strip()))
             for record in results if not (record.get("recommended_budget") if "recommended_budget" in record else
@@ -716,7 +720,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits", "stage", "stages", "verification",
+                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits", "budget_overruns", "stage", "stages", "verification",
                        "recommended_budget", "recommended_ok")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
@@ -752,7 +756,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
-                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
+                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
             "checks": stored_checks,
         },
     }

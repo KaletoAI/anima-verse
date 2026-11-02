@@ -6,7 +6,9 @@ Hand expectations: an under-budget answer costs one call; a length cutoff costs
 Content, parser reasoning and echoed tags all yield exactly {"a":1}. A partial
 {"a" plus :1} must concatenate once. Unsupported continuation costs three calls
 initially and one on the next invocation, both fallback answers thinking off.
-Length continuations also fall back and flag both calls unenforceable. Gemma
+A continuation that writes on to the length limit is kept: content as sent,
+finish "length", budget_overrun, NOT unenforceable, nothing remembered, so the
+next call (one cut thought + one clean answer) is budgeted again. Gemma
 prefill is exactly <|channel>thought\nR<channel|>; echoed tags extract the answer.
 """
 import copy
@@ -69,7 +71,15 @@ def main():
     assert client.invoke('ping').usage == dict(prompt_tokens=2, completion_tokens=3)
     rejected422 = Rejected('unsupported continuation')
     rejected422.status_code = 422
-    for failure in (Rejected('unsupported continuation'), rejected422, response(''), response('more reasoning', finish='length')):
+    llm._NO_CONTINUE.clear()
+    client, calls = client_for([response('', 'R', 'length'), response('<tool/>\nWait, more', finish='length'),
+                                response('', 'R', 'length'), response('<tool/>')])
+    overrun, clean = client.invoke('ping'), client.invoke('ping')
+    assert overrun.content == '<tool/>\nWait, more' and overrun.finish_reason == 'length'
+    assert overrun.budget_overrun and not overrun.budget_unenforceable
+    assert clean.content == '<tool/>' and clean.finish_reason == 'stop' and not clean.budget_overrun
+    assert len(calls) == 4 and not llm._NO_CONTINUE
+    for failure in (Rejected('unsupported continuation'), rejected422, response('')):
         llm._NO_CONTINUE.clear()
         client, calls = client_for([response('', 'R', 'length'), failure, response('ok'), response('next')])
         with patch.object(llm.logger, 'warning') as warning:
