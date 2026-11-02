@@ -13,6 +13,7 @@ import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   terrainPace, propWaterWord,
   type MovementType, type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
+import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -295,6 +296,33 @@ const PLAIN_FLOOR_MOVE: GroundMove = { movement: 'walk_run', scope: 'wilderness'
 export class NpcManager {
   onPropEntryError: ((message: string) => void) | null = null;
   group = new THREE.Group();
+  /** Photo mode holds only the avatar; all other figures keep their world tick. */
+  photoHeldName: string | null = null;
+
+  photoOverlays(): THREE.Object3D[] {
+    const overlays: THREE.Object3D[] = this.walkTargetRing ? [this.walkTargetRing] : [];
+    for (const npc of this.npcs.values()) {
+      if (npc.travelLine) overlays.push(npc.travelLine);
+      if (npc.sprite) overlays.push(npc.sprite);
+    }
+    return overlays;
+  }
+
+  photoSubjects(): PhotoSubject[] {
+    const subjects: PhotoSubject[] = [];
+    for (const npc of this.npcs.values()) {
+      if (!npc.figure) continue;
+      let visible = true;
+      for (let object: THREE.Object3D | null = npc.root; object; object = object.parent) {
+        if (!object.visible) { visible = false; break; }
+      }
+      if (!visible) continue;
+      const head = this.lensOf(npc.name);
+      if (head) subjects.push({ name: npc.name, head: [head.x, head.y, head.z] });
+    }
+    return subjects;
+  }
+
   private npcs = new Map<string, Npc>();
   private avatarName = '';
   /** The camera's own figure in first person: never picked, never labelled;
@@ -1676,6 +1704,11 @@ export class NpcManager {
       // A hidden root takes its label with it (CSS2DRenderer hides the
       // subtree); the rule states it all the same, for the native client.
       const labelVisible = tagVisible(camDist, !npc.root.visible, own);
+      if (npc.name === this.photoHeldName) {
+        npc.figure?.update(0, { frozen: true });
+        npc.label.visible = false;
+        continue;
+      }
       if (this.tickOwnMotion(npc, labelVisible, now, dt)) continue;
       if (npc.entryBlocked) { npc.label.visible = false; continue; }
       if (npc.entry) { this.tickPropEntry(npc, labelVisible); continue; }

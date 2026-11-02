@@ -1,3 +1,5 @@
+import { encodePhotoCanvas, type PhotoFrame } from '../game/photoMode';
+import type { PhotoView } from '@anima/player-ui';
 import { effectiveRenderScale, type RenderScale } from '../game/prefs';
 import { gameHourLights } from './skyLight';
 import { isTypingTarget } from '../hud/dom';
@@ -37,6 +39,7 @@ export { MIN_DIST } from './cameraFraming';
  * the bare left button now orbits.
  */
 const ORBIT_DRAG_PX = 4;
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 /**
  * The vectors `frame()` works in, allocated ONCE (review finding UI-11) —
@@ -121,9 +124,83 @@ export class Engine {
   private firstPersonZoom = new FirstPersonZoom();
   /** First person is available only while following the controlled avatar. */
   get firstPerson(): boolean {
-    return this.follow !== null && this.firstPersonZoom.active;
+    return !this.photoMode && this.follow !== null && this.firstPersonZoom.active;
   }
+  private photoCamera: THREE.PerspectiveCamera | null = null;
+  private photoKeys = new Set<string>();
+  private photoYaw = 0;
+  private photoPitch = 0;
+  private flySpeed = 4;
+  private photoCapture?: { view: () => PhotoView; resolve: (frame: PhotoFrame) => void; reject: (error: unknown) => void };
+  /** Re-evaluated at render time so newly streamed pins are hidden too. */
+  photoOverlays?: () => Iterable<THREE.Object3D>;
+  get photoMode(): boolean { return !!this.photoCamera; }
+  get photoSpeed(): number { return this.flySpeed ?? 4; }
+
+  enterPhotoMode() {
+    if (this.photoMode) return;
+    // Keep the actual play camera, including its off-centre projection. All
+    // orbit/follow/fly/dwell state stays untouched while its frame path sleeps.
+    this.photoCamera = this.camera;
+    this.camera = this.camera.clone();
+    this.camera.clearViewOffset();
+    const rotation = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+    this.photoYaw = rotation.y; this.photoPitch = rotation.x;
+    this.photoKeys = new Set();
+    this.keys.clear(); this.orbiting = false;
+  }
+
+  leavePhotoMode() {
+    if (!this.photoCamera) return;
+    this.camera = this.photoCamera;
+    this.photoCamera = null;
+    this.keys.clear(); this.photoKeys.clear(); this.orbiting = false;
+    const capture = this.photoCapture; this.photoCapture = undefined;
+    capture?.reject(new Error('Photo capture cancelled'));
+  }
+
+  capturePhotoFrame(view: () => PhotoView): Promise<PhotoFrame> {
+    if (!this.photoMode || this.photoCapture) return Promise.reject(new Error('Photo capture unavailable'));
+    return new Promise((resolve, reject) => { this.photoCapture = { view, resolve, reject }; });
+  }
+
+  private movePhotoCamera(dt: number) {
+    const forward = this.camera.getWorldDirection(SCRATCH.fwd);
+    const right = SCRATCH.right.set(Math.cos(this.photoYaw), 0, -Math.sin(this.photoYaw));
+    const move = SCRATCH.off.set(0, 0, 0);
+    if (this.photoKeys.has('w')) move.add(forward);
+    if (this.photoKeys.has('s')) move.sub(forward);
+    if (this.photoKeys.has('d')) move.add(right);
+    if (this.photoKeys.has('a')) move.sub(right);
+    if (this.photoKeys.has('e')) move.y += 1;
+    if (this.photoKeys.has('q')) move.y -= 1;
+    const speed = this.photoSpeed * (this.photoKeys.has('shift') ? 3 : 1);
+    this.camera.position.addScaledVector(move.normalize(), speed * dt);
+  }
+
+  private renderScene() {
+    const hidden: Array<[THREE.Object3D, boolean]> = [];
+    if (this.photoMode) for (const object of this.photoOverlays?.() ?? []) {
+      hidden.push([object, object.visible]); object.visible = false;
+    }
+    const capture = this.photoCapture; this.photoCapture = undefined;
+    try {
+      this.renderer.render(this.scene, this.camera);
+      if (capture) {
+        // No await or event-loop boundary between render, view and canvas copy.
+        const view = capture.view();
+        encodePhotoCanvas(this.renderer.domElement).then(jpeg => capture.resolve({ jpeg, view }), capture.reject);
+      }
+    } catch (error) {
+      if (capture) capture.reject(error);
+      else throw error;
+    } finally {
+      for (const [object, visible] of hidden) object.visible = visible;
+    }
+  }
+
   private keys = new Set<string>();
+  private photoGesture = false;
   private orbiting = false;              // any mouse button: free orbit
   private orbitLast = { x: 0, y: 0 };
   private orbitStart = { x: 0, y: 0 };   // where the gesture began (click vs. drag)
@@ -363,7 +440,7 @@ export class Engine {
    *  avatar control of task 3 reads the SAME set the camera pan reads, so a
    *  key can never be down for one and up for the other. */
   keysDown(): ReadonlySet<string> {
-    return this.keys;
+    return this.photoMode ? EMPTY_KEYS : this.keys;
   }
 
   setPickables(objs: THREE.Object3D[]) {
@@ -388,6 +465,7 @@ export class Engine {
 
   /** Ease the camera onto a point + distance. */
   flyTo(point: THREE.Vector3, dist: number) {
+    if (this.photoMode) return;
     this.flyFrom = this.target.clone();
     this.flyToPoint = point.clone();
     this.flyT = 0;
@@ -401,6 +479,10 @@ export class Engine {
   private resize(container: HTMLElement) {
     const w = container.clientWidth || window.innerWidth;
     const h = container.clientHeight || window.innerHeight;
+    if (this.photoCamera) {
+      this.photoCamera.aspect = w / h;
+      this.photoCamera.updateProjectionMatrix();
+    }
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
@@ -456,6 +538,10 @@ export class Engine {
 
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (this.photoMode) {
+        this.flySpeed = THREE.MathUtils.clamp(this.photoSpeed * Math.exp(-e.deltaY * .0012), .5, 20);
+        return;
+      }
       // `cameraMath.wheelZoom`, taken apart only so the cap can report.
       const before = this.targetDist;
       this.targetDist = this.clampZoom(before * wheelFactor(e.deltaY));
@@ -477,6 +563,7 @@ export class Engine {
       const orbit = e.button === 0 || e.button === 1 || e.button === 2;
       if (orbit) {
         e.preventDefault();
+        this.photoGesture = this.photoMode;
         this.orbiting = true;
         this.moved = false;
         this.orbitLast = { x: e.clientX, y: e.clientY };
@@ -501,18 +588,27 @@ export class Engine {
         if (Math.hypot(e.clientX - this.orbitStart.x, e.clientY - this.orbitStart.y)
             > ORBIT_DRAG_PX) this.moved = true;
         this.orbitLast = { x: e.clientX, y: e.clientY };
+        if (this.photoMode) {
+          this.photoYaw -= dx * .005;
+          this.photoPitch = THREE.MathUtils.clamp(this.photoPitch - dy * .005, -Math.PI * .49, Math.PI * .49);
+          this.camera.quaternion.setFromEuler(new THREE.Euler(this.photoPitch, this.photoYaw, 0, 'YXZ'));
+          return;
+        }
         const step = orbitStep(this.targetYaw, this.pitchOffset, dx, dy, this.firstPerson);
         this.targetYaw = step.targetYaw;
         this.pitchOffset = step.pitchOffset;
         this.flyT = 1;
         return;
       }
+      if (this.photoMode) return;
       this.onHover?.(this.pickLocation(e.clientX, e.clientY));
     });
     el.addEventListener('pointerup', (e) => {
+      const wasPhotoGesture = this.photoGesture;
+      this.photoGesture = false;
       const wasDrag = this.orbiting && this.moved;
       this.orbiting = false;
-      if (wasDrag || e.button !== 0) return;
+      if (this.photoMode || wasPhotoGesture || wasDrag || e.button !== 0) return;
       // Figures first: a hit figure eats the click, so clicking a character
       // does not also open the tile's info panel.
       if (this.pickFigure?.(e.clientX, e.clientY)) return;
@@ -525,16 +621,19 @@ export class Engine {
     // HUD chat TEXTAREA also panned the camera (w/a/s/d) and turned it (q/e).
     window.addEventListener('keydown', (e) => {
       if (isTypingTarget(e)) return;
+      if (this.photoMode) { this.photoKeys.add(e.key.toLowerCase()); return; }
       this.keys.add(e.key.toLowerCase());
       if (e.key.toLowerCase() === 'q') this.targetYaw += Math.PI / 4;
       if (e.key.toLowerCase() === 'e') this.targetYaw -= Math.PI / 4;
     });
     window.addEventListener('keydown', (e) => {
       if (isTypingTarget(e)) return;
+      if (this.photoMode) return;
       if (e.key === '+') this.targetDist = this.clampZoom(this.targetDist * 0.8);
       if (e.key === '-') this.targetDist = this.clampZoom(this.targetDist * 1.25);
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+    window.addEventListener('keyup', (e) => { this.keys.delete(e.key.toLowerCase()); this.photoKeys?.delete(e.key.toLowerCase()); });
+    window.addEventListener('blur', () => { this.keys.clear(); this.photoKeys?.clear(); this.orbiting = false; });
     container.addEventListener('pointerleave', () => {
       this.pointerAt = null;
       this.pointerSeq += 1;
@@ -628,52 +727,57 @@ export class Engine {
     // WASD/arrow-key pan relative to the view direction — skipped while a
     // follow target is set (E3-T2): the camera then belongs to the followed
     // figure and the keys to its movement.
-    if (!this.follow) {
-      const panSpeed = this.dist * 0.9 * dt;
-      const fwd = SCRATCH.fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-      const right = SCRATCH.right.set(-fwd.z, 0, fwd.x);
-      if (this.keys.has('w') || this.keys.has('arrowup')) this.target.addScaledVector(fwd, panSpeed);
-      if (this.keys.has('s') || this.keys.has('arrowdown')) this.target.addScaledVector(fwd, -panSpeed);
-      if (this.keys.has('a') || this.keys.has('arrowleft')) this.target.addScaledVector(right, -panSpeed);
-      if (this.keys.has('d') || this.keys.has('arrowright')) this.target.addScaledVector(right, panSpeed);
+    let firstPerson = false;
+    const off = SCRATCH.off;
+    if (this.photoMode) this.movePhotoCamera(dt);
+    else {
+      if (!this.follow) {
+        const panSpeed = this.dist * 0.9 * dt;
+        const fwd = SCRATCH.fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+        const right = SCRATCH.right.set(-fwd.z, 0, fwd.x);
+        if (this.keys.has('w') || this.keys.has('arrowup')) this.target.addScaledVector(fwd, panSpeed);
+        if (this.keys.has('s') || this.keys.has('arrowdown')) this.target.addScaledVector(fwd, -panSpeed);
+        if (this.keys.has('a') || this.keys.has('arrowleft')) this.target.addScaledVector(right, -panSpeed);
+        if (this.keys.has('d') || this.keys.has('arrowright')) this.target.addScaledVector(right, panSpeed);
+      }
+
+      // Camera fly
+      if (this.flyT < 1 && this.flyFrom && this.flyToPoint) {
+        this.flyT = flyAdvance(this.flyT, dt);
+        this.target.lerpVectors(this.flyFrom, this.flyToPoint, flyEase(this.flyT));
+      }
+
+      // Follow target — the ONE evaluation per frame, deliberately AFTER the fly:
+      // during the fly-in both run, the fly carries the distance and the soft
+      // chase closes the gap to the moving figure. Together they ARE the ride.
+      const followAt = this.follow?.();
+      if (followAt) this.target.lerp(followAt, 1 - Math.exp(-6 * dt));
+
+      const ease = damp(dt);
+      this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, ease);
+      this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, ease);
+
+      // Require the eased zoom to reach the entry threshold too: one large
+      // inward scroll must not teleport a distant camera straight to the eyes.
+      const zoomDistance = this.firstPersonZoom.active ? this.targetDist
+        : Math.max(this.dist - 1e-6, this.targetDist);
+      firstPerson = this.firstPersonZoom.update(zoomDistance, !!followAt, dt);
+      const orbitDist = followAt ? Math.max(this.dist, THIRD_PERSON_MIN_DIST) : this.dist;
+      const basePitch = firstPerson ? 0 : basePitchDeg(orbitDist, this.nearPitchDeg);
+      const pitchDeg = clampPitchDeg(basePitch + this.pitchOffset, firstPerson);
+      // `cameraMath.cameraPose`, written into the frame's scratch vector.
+      off.fromArray(orbitOffset(this.yaw, pitchDeg, SCRATCH.offTuple));
+      if (firstPerson && followAt) {
+        // Place the lens at the actual eyes, without the chase lag behind a
+        // walking avatar. Keep the orbit's view direction, now looking ahead.
+        // Placed again after the frame hooks, once the figure has its pose.
+        this.placeFirstPerson(followAt, off.negate());
+      } else {
+        this.camera.position.copy(this.target).add(off.multiplyScalar(orbitDist));
+        this.camera.lookAt(this.target);
+      }
+      this.applyViewShift(dt);
     }
-
-    // Camera fly
-    if (this.flyT < 1 && this.flyFrom && this.flyToPoint) {
-      this.flyT = flyAdvance(this.flyT, dt);
-      this.target.lerpVectors(this.flyFrom, this.flyToPoint, flyEase(this.flyT));
-    }
-
-    // Follow target — the ONE evaluation per frame, deliberately AFTER the fly:
-    // during the fly-in both run, the fly carries the distance and the soft
-    // chase closes the gap to the moving figure. Together they ARE the ride.
-    const followAt = this.follow?.();
-    if (followAt) this.target.lerp(followAt, 1 - Math.exp(-6 * dt));
-
-    const ease = damp(dt);
-    this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, ease);
-    this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, ease);
-
-    // Require the eased zoom to reach the entry threshold too: one large
-    // inward scroll must not teleport a distant camera straight to the eyes.
-    const zoomDistance = this.firstPersonZoom.active ? this.targetDist
-      : Math.max(this.dist - 1e-6, this.targetDist);
-    const firstPerson = this.firstPersonZoom.update(zoomDistance, !!followAt, dt);
-    const orbitDist = followAt ? Math.max(this.dist, THIRD_PERSON_MIN_DIST) : this.dist;
-    const basePitch = firstPerson ? 0 : basePitchDeg(orbitDist, this.nearPitchDeg);
-    const pitchDeg = clampPitchDeg(basePitch + this.pitchOffset, firstPerson);
-    // `cameraMath.cameraPose`, written into the frame's scratch vector.
-    const off = SCRATCH.off.fromArray(orbitOffset(this.yaw, pitchDeg, SCRATCH.offTuple));
-    if (firstPerson && followAt) {
-      // Place the lens at the actual eyes, without the chase lag behind a
-      // walking avatar. Keep the orbit's view direction, now looking ahead.
-      // Placed again after the frame hooks, once the figure has its pose.
-      this.placeFirstPerson(followAt, off.negate());
-    } else {
-      this.camera.position.copy(this.target).add(off.multiplyScalar(orbitDist));
-      this.camera.lookAt(this.target);
-    }
-    this.applyViewShift(dt);
     this.benchCamera?.();
 
     // The sun follows the map section so the shadow map can stay small — but it
@@ -700,9 +804,9 @@ export class Engine {
     }
     this.benchCamera?.(); // Reassert after hooks and the first-person lens update.
     this.benchVisibility?.();
-    this.renderer.render(this.scene, this.camera);
+    this.renderScene();
     this.benchRendered?.(benchDt, performance.now() - frameStart,
       this.renderer.info.render.calls, this.renderer.info.render.triangles);
-    this.labelRenderer.render(this.scene, this.camera);
+    if (!this.photoMode) this.labelRenderer.render(this.scene, this.camera);
   }
 }

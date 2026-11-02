@@ -106,3 +106,16 @@ html, body, #app {
   background: #e0b64a;
   color: #22201a;
 }
+
+/* Hide existing and newly portalled HUD content without changing its own state. */
+body.photo-mode > :not(#app):not(#photo-mode-overlay) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+body.photo-mode .label-layer { display: none !important; }
+#photo-mode-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
+.photo-mode-hint {
+  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+  padding: 8px 14px; border-radius: 6px; background: #111c; color: #fff;
+  font: 12px/1.6 system-ui, sans-serif; text-align: center; white-space: nowrap;
+}

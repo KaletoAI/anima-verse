@@ -21,6 +21,11 @@ installSkinnedNormalCorrection(THREE);
 import * as api from './api';
 import { pollCore, syncHub, SYNC_ENDPOINTS, onPropActionChanged, setPropActionPollPeriod } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
+import { createPhotoMode } from './game/photoMode';
+import { photoView } from './game/photoView';
+import { uploadPhotoShot } from './game/photoShot';
+import { mountPhotoHint } from './hud/photoMode';
+import { isTypingTarget } from './hud/dom';
 import { Engine, MIN_DIST } from './scene/engine';
 import { fitDistance, worldCentreXZ } from './scene/cameraMath';
 import { viewHeading } from './scene/cameraFraming';
@@ -494,6 +499,7 @@ async function boot() {
  *  in the iframe stay there; scene listeners continue reading the mirrored bus. */
 function mountHudFrame(): void {
   const frame = document.createElement('iframe');
+  frame.id = 'hud-frame';
   frame.title = 'Anima Verse HUD';
   frame.src = import.meta.env.BASE_URL + 'hud.html';
   frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:transparent;z-index:20;pointer-events:none';
@@ -517,6 +523,13 @@ function mountHudFrame(): void {
     // Same-origin access lets its mousemove listener apply the identical rule
     // and hand input back to the canvas when the pointer leaves HUD surfaces.
     child.addEventListener('mousemove', move);
+    // Same-origin debug HUD: F2 may arrive in the child even outside a field.
+    child.addEventListener('keydown', (event) => {
+      if (event.key !== 'F2' || isTypingTarget(event)) return;
+      event.preventDefault();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: event.key, repeat: event.repeat,
+        ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey }));
+    });
     route();
   });
   window.addEventListener('pagehide', () => {
@@ -2252,6 +2265,50 @@ async function startApp(username: string, role: string) {
       uiActions.toast?.('Your avatar is not on the map yet.', true);
     }
   };
+  const photoHint = mountPhotoHint();
+  const photo = createPhotoMode({
+    engine,
+    view: () => {
+      const { x, y, z } = engine.camera.position;
+      return photoView(engine.camera, npcs.photoSubjects(), photoFloorY(x, y, z));
+    },
+    hideHud: () => {
+      const alreadyHidden = document.body.classList.contains('photo-mode');
+      document.body.classList.add('photo-mode');
+      // Move focus out of a hidden iframe so Esc and flight keys reach the scene.
+      (document.activeElement as HTMLElement | null)?.blur();
+      engine.renderer.domElement.tabIndex = -1;
+      engine.renderer.domElement.focus();
+      npcs.photoHeldName = avatarName;
+      return () => {
+        if (!alreadyHidden) document.body.classList.remove('photo-mode');
+        npcs.photoHeldName = null;
+      };
+    },
+    hint: photoHint.update, upload: uploadPhotoShot,
+    taken: photoHint.taken,
+    error: error => {
+      console.warn('[photo]', error);
+      uiActions.toast?.('Could not take photo.', true);
+    },
+  });
+  // Capture precedes Esc's embodied-mode handler and all ordinary scene keys.
+  window.addEventListener('keydown', e => {
+    if (!bootDone) return;
+    if (photo.keydown(e, getHudUiState().typing)) return;
+    if (engine.photoMode && !isTypingTarget(e)) {
+      // The engine still receives flight keys; game hotkeys (F/M) do not.
+      if (['f', 'm'].includes(e.key.toLowerCase())) {
+        e.preventDefault(); e.stopImmediatePropagation();
+      }
+    }
+  }, true);
+  engine.addFrameHook(() => photo.updateHint());
+  engine.photoOverlays = () => [
+    ...eventPins.values(), ...doorMarks.values(), ...boundaryMarks.values(), ...npcs.photoOverlays(),
+    ...(placeGlyphs ? [placeGlyphs] : []),
+  ];
+
   // Esc leaves the mode — THE one binding for it. Guarded like the engine's own
   // keys: while the focus sits in a form field Esc belongs to that field (the
   // chat clears/blurs with it), not to the camera.
@@ -4268,6 +4325,20 @@ async function startApp(username: string, role: string) {
     return tileGroundY(tile, groundProbe);
   }
 
+  /** Highest displayed floor beneath the lens, otherwise the existing terrain sampler. */
+  function photoFloorY(x: number, y: number, z: number): number {
+    const tile = tileAt(x, z);
+    const terrain = groundY(x, z);
+    if (!tile || tile.loc.id !== openLocationId) return terrain;
+    const local = worldToTile(tile, x, z);
+    const floor = bakedFloorAt(tile, local.x, local.z, e =>
+      tile.roomLevels.get(e.roomId) === tile.levelFilter);
+    if (floor !== null && floor <= y) return floor;
+    const room = roomAt(tile, x, z) ?? corridorAt(tile, x, z);
+    const centre = room ? tile.roomCenters.get(room) : null;
+    return centre && centre.y <= y ? centre.y : terrain;
+  }
+
   // The player drives the avatar for exactly as long as the mode is on. Hung
   // off the BUS, not off the enter/exit calls: zooming out leaves the mode
   // from inside embody.ts, and the figure has to be handed back then too.
@@ -4305,7 +4376,7 @@ async function startApp(username: string, role: string) {
   // Overview and first person need no corridor cleared to a visible avatar.
   // With strength 0 the shader's guard discards nothing.
   engine.addFrameHook(() => {
-    const thirdPerson = getGameState().mode === 'embodied' && !engine.firstPerson;
+    const thirdPerson = !engine.photoMode && getGameState().mode === 'embodied' && !engine.firstPerson;
     updateOcclusion(engine.camera.position,
                     thirdPerson ? npcs.positionOf(avatarName) : null, thirdPerson);
   });
@@ -4318,6 +4389,7 @@ async function startApp(username: string, role: string) {
 
   const walkGoal = new THREE.Vector3();
   engine.addFrameHook((dt) => {
+    if (engine.photoMode) return;
     const state = getGameState();
     if (exitFlushing) return;
     if (state.mode !== 'embodied') {
@@ -5218,6 +5290,16 @@ async function startApp(username: string, role: string) {
     return best;
   }
 
+  /** Hover glows are UI too; restore their ordinary probe after leaving. */
+  function photoOwnsHover(): boolean {
+    if (!engine.photoMode) return false;
+    clearPropHover();
+    clearVerticalHover();
+    engine.onHover?.(null);
+    hoverSeq = -1;
+    return true;
+  }
+
   // HOVER ON A SEATABLE PROP (ruling 2026-08-28) — ONCE PER FRAME, not per
   // pointer event: the engine only records where the pointer stands
   // (`engine.pointerAt`), and the raycast happens here, at most once per
@@ -5239,6 +5321,7 @@ async function startApp(username: string, role: string) {
   // and yaw are eased asymptotically and never land on the target exactly —
   // a strict comparison would call every frame dirty forever.
   engine.addFrameHook(() => {
+    if (photoOwnsHover()) return;
     if (engine.pointerSeq === hoverSeq
         && hoverCam.distanceToSquared(engine.camera.position) <= HOVER_CAM_EPS_M2) return;
     hoverSeq = engine.pointerSeq;
@@ -5613,7 +5696,7 @@ async function startApp(username: string, role: string) {
    * only authority, unchanged.
    */
   function followAvatarStorey(tile: Tile | null, room: string | null) {
-    if (!tile) return;
+    if (engine.photoMode || !tile) return;
     if (tile.loc.id !== followedLoc) {
       followedStorey.clear();
       followedLoc = tile.loc.id;
@@ -5639,6 +5722,7 @@ async function startApp(username: string, role: string) {
   // `performance.now()` throughout, never the wall clock: these are DURATIONS,
   // and a clock correction must not make a hold fire instantly or never.
   engine.addFrameHook(() => {
+    if (engine.photoMode) return;
     const state = getGameState();
     if (exitFlushing) return;
     if (state.mode !== 'embodied') { roomWalk = idleRoomWalk(); return; }
@@ -6518,23 +6602,25 @@ async function startApp(username: string, role: string) {
     //    auto-close: camera beyond CLOSE_CAM_DIST, or the tile panned out of
     //    view. There is NO auto-REopen — opening is only ever explicit.
     // Closing is always the crossfade below, never a hard cut.
-    if (getGameState().mode === 'embodied') {
-      const pos = npcs.positionOf(avatarName);
-      if (pos) {
-        const t = tileAt(pos.x, pos.z);
-        const room = t?.modelIsGround ? roomAt(t, pos.x, pos.z)
-          : t?.modelIsPlanHull ? (roomAt(t, pos.x, pos.z) ?? corridorAt(t, pos.x, pos.z))
-          : null;
-        if (t && openable(t) &&
-            (!(t.modelIsGround || t.modelIsPlanHull) || (room !== null && !t.alwaysVisibleRooms.has(room)))) {
-          openLocation(t.loc.id);
-        } else closeOpenLocation();
-      }
-    } else if (openLocationId) {
-      const t = places.get(openLocationId);
-      if (!t || openViewShouldClose(engine.dist, engine.target.x, engine.target.z,
-                                    t.center.x, t.center.z, t.width)) {
-        closeOpenLocation();
+    if (!engine.photoMode) {
+      if (getGameState().mode === 'embodied') {
+        const pos = npcs.positionOf(avatarName);
+        if (pos) {
+          const t = tileAt(pos.x, pos.z);
+          const room = t?.modelIsGround ? roomAt(t, pos.x, pos.z)
+            : t?.modelIsPlanHull ? (roomAt(t, pos.x, pos.z) ?? corridorAt(t, pos.x, pos.z))
+            : null;
+          if (t && openable(t) &&
+              (!(t.modelIsGround || t.modelIsPlanHull) || (room !== null && !t.alwaysVisibleRooms.has(room)))) {
+            openLocation(t.loc.id);
+          } else closeOpenLocation();
+        }
+      } else if (openLocationId) {
+        const t = places.get(openLocationId);
+        if (!t || openViewShouldClose(engine.dist, engine.target.x, engine.target.z,
+                                      t.center.x, t.center.z, t.width)) {
+          closeOpenLocation();
+        }
       }
     }
 

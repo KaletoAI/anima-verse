@@ -3707,6 +3707,12 @@
     "Ask {name} first": "Erst {name} fragen",
     "Start at once; {name} reacts and may push you away": "Sofort beginnen; {name} reagiert und kann dich wegstoßen",
     "The partner pushed the action away.": "Der Partner hat die Aktion abgewehrt.",
-    "The partner pushed you away": "Der Partner hat dich weggestoßen"
+    "The partner pushed you away": "Der Partner hat dich weggestoßen",
+    "Photo mode": "Fotomodus",
+    "Speed": "Geschwindigkeit",
+    "WASD move · Q/E down/up · Drag to look · Wheel speed · Shift faster": "WASD bewegen · Q/E ab/auf · Ziehen zum Umsehen · Mausrad Tempo · Umschalt schneller",
+    "Space: take photo · F2 / Esc: leave": "Leertaste: Foto aufnehmen · F2 / Esc: verlassen",
+    "Shot taken": "Foto aufgenommen",
+    "Could not take photo.": "Foto konnte nicht aufgenommen werden."
   }
 }
