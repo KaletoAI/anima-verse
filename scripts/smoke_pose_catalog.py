@@ -324,31 +324,33 @@ try:
 
     _ch.save_character_profile = _counting_save
 
-    # 1. "sitzen" is a listed synonym of `sitting` -> exact catalog hit.
-    #    sanitize_flavor("sitzen") == "sitzen" != the key, so it is KEPT.
-    _ch.set_pose_intent("demo", "sitzen")
-    assert _state("pose_key") == "sitting", _state("pose_key")
-    assert _state("pose_flavor") == "sitzen", _state("pose_flavor")
+    # 1. "stehen" is a listed synonym of `standing` -> exact catalog hit.
+    #    (A standing pose: since 6faa73f2 a seated one needs a free place,
+    #    and this throwaway room has none.)
+    #    sanitize_flavor("stehen") == "stehen" != the key, so it is KEPT.
+    _ch.set_pose_intent("demo", "stehen")
+    assert _state("pose_key") == "standing", _state("pose_key")
+    assert _state("pose_flavor") == "stehen", _state("pose_flavor")
     assert _variant_rows() == [], _variant_rows()
     assert _saves["n"] == 1, _saves
 
     # 2. Same text again: key AND flavor unchanged -> no write at all.
-    _ch.set_pose_intent("demo", "sitzen")
+    _ch.set_pose_intent("demo", "stehen")
     assert _saves["n"] == 1, _saves
 
-    # 3. "Sitting" -> same key; the flavor equals the key (case-insensitively)
+    # 3. "Standing" -> same key; the flavor equals the key (case-insensitively)
     #    and is therefore dropped. Flavor changed -> exactly one more write.
-    _ch.set_pose_intent("demo", "Sitting")
-    assert _state("pose_key") == "sitting", _state("pose_key")
+    _ch.set_pose_intent("demo", "Standing")
+    assert _state("pose_key") == "standing", _state("pose_key")
     assert _state("pose_flavor") == "", repr(_state("pose_flavor"))
     assert _saves["n"] == 2, _saves
     assert _variant_rows() == [], _variant_rows()
 
     # 4. Read API: display text falls back to the key when the flavor is empty.
-    assert _ch.get_character_pose_key("demo") == "sitting"
+    assert _ch.get_character_pose_key("demo") == "standing"
     assert _ch.get_character_pose_flavor("demo") == ""
-    assert _ch.get_effective_activity("demo") == "sitting"
-    assert _ch.get_effective_pose_key("demo") == "sitting"
+    assert _ch.get_effective_activity("demo") == "standing"
+    assert _ch.get_effective_pose_key("demo") == "standing"
 
     # 5. Sleeping overrides both read APIs (flag = authority, fields untouched).
     with _db.transaction() as _conn:
@@ -356,7 +358,7 @@ try:
                       "WHERE character_name='demo'")
     assert _ch.get_effective_activity("demo") == "Sleeping"
     assert _ch.get_effective_pose_key("demo") == "sleeping"
-    assert _state("pose_key") == "sitting", _state("pose_key")
+    assert _state("pose_key") == "standing", _state("pose_key")
     with _db.transaction() as _conn:
         _conn.execute("UPDATE character_state SET is_sleeping=0 "
                       "WHERE character_name='demo'")
@@ -623,8 +625,8 @@ try:
     _ch.set_pose_intent("demo", "gardening")
     assert _state("pose_key") == "gardening", _state("pose_key")
     assert _ch.get_effective_pose_key("demo") == "gardening"
-    _ch.set_pose_intent("demo", "sitzen")
-    assert _state("pose_key") == "sitting"
+    _ch.set_pose_intent("demo", "stehen")
+    assert _state("pose_key") == "standing"
     assert _variant_rows() == [], _variant_rows()
 
     # 3. The surviving cache reset is per character and needs no variant row:

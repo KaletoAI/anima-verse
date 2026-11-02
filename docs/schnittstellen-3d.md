@@ -973,10 +973,11 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 `characters` · `events_by_location` · `game_time` · `game_rate` · `world_bounds` ·
 `locations_rev` · `terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
 `world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
+`sync` (§ A11, "Required root field `sync`") ·
 `backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
 ist, § A17).
 
-Siebzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
+Achtzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
 `world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
 `scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
 gebautes Payload hält.
@@ -1072,7 +1073,8 @@ Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
-`travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
+`travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
+`interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
 **`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`.
 
 | Feld | Typ | Bedeutung |
@@ -1083,7 +1085,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
 | `pos_origin` | `{session: str, seq: int} \| null` | Origin of the accepted position report, only on the avatar row; null for every other writer and every other character. Always present. |
 | `yaw` | `float \| null` | The avatar's own facing in radians, as its last position report gave it (§ A15, view vector `(sin yaw, 0, cos yaw)` in world x/z, normalised to [−π, π]). Only on the avatar row; null on every other row and whenever none is stored — every server writer that puts the character somewhere (travel, furniture, pool, admin move) clears it. A client applies it when it first places a free-standing avatar. Always present. |
-| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `floor_y`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `floor_y`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`, `paces_m_s_real`, `journey_id`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **`pos` gilt auch IN einem Raum** (2026-09-13, T4). Der Server hat den Punkt
   gestellt: frei von Wänden, Möbeln, Türzonen und Mitbewohnern. Ein Client
@@ -5837,7 +5839,8 @@ Admin-Regler weg: der Sanitizer verwirft das Feld, es hat keinen Schreiber.
                                            # sonst läuft man über den offenen
                                            # Treppenschacht
   walls:   [ { level, from: [x,z], to: [x,z], base_y, height, thickness,
-               texture_kind?, glass?, leaf?, lintel?, opacity_role, room_id?,
+               texture_kind?, glass?, window_style?, leaf?, door_style?,
+               door_prop?, lintel?, opacity_role, room_id?,
                outward_normal: [nx,nz] } ],
                                            # lintel = das Stück ÜBER einer
                                            # begehbaren Öffnung (Nachtrag
@@ -6011,7 +6014,7 @@ Admin-Regler weg: der Sanitizer verwirft das Feld, es hat keinen Schreiber.
   # --- Türschwellen & Befunde (2026-08-05) ---
   doorways: [ { level, at_world: [x,z], along: [ux,uz], type, width_m,
                 height_m, base_y, rooms: [room_id, …], outside,
-                hull?, outward_normal?: [nx,nz] } ],
+                hull?, outward_normal?: [nx,nz], door_style? } ],
                                            # IMMER da, leer = keine Tür
                                            # base_y = STEH-Höhe der Raumseite
                                            # height_m = lichte Höhe; darüber

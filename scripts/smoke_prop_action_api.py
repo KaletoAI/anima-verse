@@ -752,10 +752,12 @@ class ApiContracts(unittest.TestCase):
                 self.assertEqual(set(entry['anchor']), {'x', 'y', 'z', 'yaw'})
                 self.assertEqual((entry['anchor']['x'], entry['anchor']['z'], entry['anchor']['yaw']), (8, 5, 0))
                 # The real stool-style half-metre cushion uses the catalog's
-                # measured seat drop: root is .102 m, not floor or surface.
+                # measured seat drop: root is .112 m, not floor or surface. The
+                # piece stands on the floor + PROP_CLEARANCE (.01, § B), so its
+                # seat is at .51 and the root .51 - .398.
                 self.assertAlmostEqual(entry['root_offset'], .398)
-                self.assertAlmostEqual(entry['anchor']['y'], .102)
-                self.assertAlmostEqual(entry['anchor']['y'] + entry['root_offset'], .5)
+                self.assertAlmostEqual(entry['anchor']['y'], .112)
+                self.assertAlmostEqual(entry['anchor']['y'] + entry['root_offset'], .51)
                 self.assertEqual(entry['duration_game_s'], 2)
                 self.assertEqual(entry['elapsed_game_s'], 0)
                 self.assertEqual(entry['game_seconds_per_real_second'], 1)
