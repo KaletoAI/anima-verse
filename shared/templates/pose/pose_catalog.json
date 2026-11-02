@@ -188,7 +188,8 @@
         "zur musik tanzen"
       ],
       "animation": "dance",
-      "group": "stand"
+      "group": "stand",
+      "follow_pose": "catching breath"
     },
     "eating": {
       "label": "eating",
