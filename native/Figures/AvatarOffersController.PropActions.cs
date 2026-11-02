@@ -62,6 +62,8 @@ public sealed partial class AvatarOffersController
         props.MutationRejected+=PropMutationRejected;
         props.MotionReceived+=PropMotionReceived;
         _figures.OwnPropMotionReleased+=ReleaseLocalProp;
+        _figures.OwnPropRunLive=()=>props.OwnedRun is not null;
+        _figures.OwnPairEnding+=PropPairEnding;
         _hud.PropActionResult=(result,source)=> {
             string ownId=props.OwnExecutionId;
             props.ConsumeMotion(result,source);
@@ -196,6 +198,13 @@ public sealed partial class AvatarOffersController
         LogProp($"run superseded in place: {previous} -> {next}");
         PropPauseChanged();
     }
+    /// <summary>The own pair left the rows: its run has ended or is ending — read the state now, not a poll later, so the
+    /// avatar's end (and with it the NPC half the figures hold) follows within one round trip.</summary>
+    private void PropPairEnding()
+    {
+        if(_disposed) return;
+        _lastStatePoll=double.NegativeInfinity; _nextPropPoll=_clock();
+    }
     private void PropMutationRejected(string status,string reason)
     {
         if(_disposed) return;
@@ -327,7 +336,8 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.RunSuperseded-=PropRunSuperseded; props.MutationRejected-=PropMutationRejected; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp; props.Dispose();
+        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.RunSuperseded-=PropRunSuperseded; props.MutationRejected-=PropMutationRejected; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp;
+        _figures.OwnPairEnding-=PropPairEnding; _figures.OwnPropRunLive=null; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null; _hud.PropActionResult=null; _hud.PropActionTarget=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
         _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;

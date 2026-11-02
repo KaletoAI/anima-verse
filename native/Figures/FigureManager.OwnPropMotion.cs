@@ -24,6 +24,40 @@ public partial class FigureManager
     private readonly HashSet<string> _ownMotionKeys=new(StringComparer.Ordinal);
     public OwnPropPlayback? OwnPropMotion { get; private set; }
     public event Action? OwnPropMotionReleased;
+    /// <summary>Whether the avatar's own furniture run is still live as far as the client knows (the controller's state).</summary>
+    public Func<bool>? OwnPropRunLive { get; set; }
+    /// <summary>The own pair's interaction left the rows before the run's end reached the client: ask for the state now.</summary>
+    public event Action? OwnPairEnding;
+    /// <summary>How long a vanished own pair is held for the run's end before both halves let go anyway (real seconds).</summary>
+    public const double OwnPairEndHoldS=3;
+    private string _endingOwnPair="";
+    private double _endingOwnPairAt;
+    /// <summary>
+    /// A pair the avatar plays in its own furniture run ended on the server (the HUD pair stop, a partner who left): the
+    /// worldmap poll drops the interaction from BOTH rows at once, but the avatar ends with its run — the stand-up
+    /// comes with the prop-actions state, read on its own clock. The NPC used to stop at the worldmap poll and the
+    /// avatar a poll later. Both halves keep playing until the own run's end lets the avatar go
+    /// (<see cref="WithdrawOwnPropInteraction"/>) — the same frame — or <see cref="OwnPairEndHoldS"/> passed.
+    /// </summary>
+    private bool OwnPairEndingHeld(string pairId)
+    {
+        if(_endingOwnPair==pairId) return true;
+        if(!_figures.TryGetValue(AvatarName,out var avatar) || avatar.Pair?.Id!=pairId || _releasedOwnPropPairs.Contains(pairId)) return false;
+        if(!(OwnPropMotion is { Cancel:false } || OwnPropRunLive?.Invoke()==true)) return false;
+        if(_rowByName.TryGetValue(AvatarName,out var row) && row.Interaction?.Id==pairId) return false;
+        _endingOwnPair=pairId; _endingOwnPairAt=_clock;
+        _log($"[prop] own pair {pairId} ended on the server; both halves wait for the run's end");
+        OwnPairEnding?.Invoke();
+        return true;
+    }
+    private void ReleaseEndingOwnPair()
+    {
+        if(_endingOwnPair.Length==0) return;
+        string id=_endingOwnPair; _endingOwnPair="";
+        _releasedOwnPropPairs.Add(id);
+        foreach(var figure in _figures.Values) if(figure.Pair?.Id==id) figure.Pair=null;
+    }
+    private void ExpireEndingOwnPair() { if(_endingOwnPair.Length>0 && _clock-_endingOwnPairAt>OwnPairEndHoldS) ReleaseEndingOwnPair(); }
 
     public bool PlayOwnPropMotion(JsonObject motion,string source,string executionId="")
     {
@@ -103,6 +137,7 @@ public partial class FigureManager
             if(figure.Pair is { } pair) _releasedOwnPropPairs.Add(pair.Id);
             figure.Pair=null;
         }
+        ReleaseEndingOwnPair();
     }
     public void ClearOwnPropMotion() { OwnPropMotion=null; }
     private double OwnPropFloor(Figure figure,JsonObject? plan,double x,double z)

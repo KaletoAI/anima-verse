@@ -265,6 +265,44 @@ public static partial class PropActionsCheck
             source.MapOverride["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"valid-pair-before-state","kind":"pair-pose","role":"b","partner":"fixture-npc","anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); source.StateOverride=RunState(raced);
             await offers.PropActions!.RefreshAsync(); Step(8); Is("early matching active pair survives delayed state plan",avatar.Pair?.Id=="valid-pair-before-state"); await End(raced);
+
+            // The pair is stopped on the server (HUD pair stop: POST /play/interact/end) while the own run still plays it:
+            // the worldmap poll drops the interaction from both rows, the run's end comes with the prop-actions state. Both
+            // halves hold until then and end in ONE frame (fails on 39f31bea: the NPC let go at the worldmap poll, the
+            // avatar a state poll later). Afterwards nothing is left over: the next action walks at once.
+            foreach(bool answered in new[]{true,false}) {
+                string tag=answered ? "state" : "timeout", pairId="pair-stop-"+tag;
+                var stopped=Motion(pairId); stopped["entry"]!["pose_key"]="pair-pose"; stopped["role"]="b";
+                var npcFigure=mgr.Figures["fixture-npc"];
+                JsonNode Half(string role,string partner)=>JsonNode.Parse("{\"id\":\""+pairId+"\",\"kind\":\"pair-pose\",\"role\":\""+role+"\",\"partner\":\""+partner
+                    +"\",\"anchor\":{\"x\":2,\"z\":0,\"yaw\":0,\"place_id\":\"prop-bench-56-seat56\"},\"elapsed_s\":0,\"clip_duration_s\":1,\"loop\":true,\"rate\":1}")!;
+                var both=Read("worldmap_active.json"); both["characters"]![0]!["place"]!["slot"]=1;
+                both["characters"]![0]!["interaction"]=Half("b","fixture-npc");
+                both["characters"]!.AsArray().First(c=>c!["name"]!.GetValue<string>()=="fixture-npc")!["interaction"]=Half("a","fixture-avatar");
+                source.MapOverride=both; mgr.ApplyPolled(JsonSerializer.SerializeToElement(both));
+                await Start(stopped); Step(8);
+                Is($"pair stop: both halves run {tag} (npc={npcFigure.Pair?.Id ?? "none"} avatar={avatar.Pair?.Id ?? "none"})",avatar.Pair?.Id==pairId && npcFigure.Pair?.Id==pairId);
+                int asked=0; void Ask()=>asked++; mgr.OwnPairEnding+=Ask;
+                var ended=both.DeepClone().AsObject();
+                foreach(var c in ended["characters"]!.AsArray()) { c!["interaction"]=null; c["place"]=null; }
+                source.MapOverride=ended; mgr.ApplyPolled(JsonSerializer.SerializeToElement(ended)); Step(.1);
+                mgr.OwnPairEnding-=Ask;
+                Is($"pair stop: the NPC half waits for the avatar's end {tag} (npc={npcFigure.Pair?.Id ?? "none"} avatar={avatar.Pair?.Id ?? "none"})",
+                    npcFigure.Pair?.Id==pairId && avatar.Pair?.Id==pairId);
+                Is("pair stop: the state is asked for at once "+tag,asked==1);
+                if(answered) {
+                    source.MapOverride=Read("worldmap_cancelled.json"); await End(stopped);
+                    Is($"pair stop: both halves end in one frame (npc={npcFigure.Pair?.Id ?? "none"} avatar={avatar.Pair?.Id ?? "none"})",npcFigure.Pair is null && avatar.Pair is null);
+                } else {
+                    Step(FigureManager.OwnPairEndHoldS);
+                    Is("pair stop: an end that never comes lets both go",npcFigure.Pair is null && avatar.Pair is null);
+                    source.MapOverride=Read("worldmap_cancelled.json"); await End(stopped);
+                }
+                Is("pair stop hands back "+tag,mgr.OwnPropMotion is null && !mgr.ServerDriven && !steering.PropActionDriven && !position.Channel.ReportsPaused && !offers.PropActions!.Paused);
+                var after=Motion("after-pair-stop-"+tag); await Start(after); Step(.5);
+                Near("pair stop: the next action walks at once "+tag,avatar.Position.X,-2.5);
+                await End(after);
+            }
             source.MapOverride=Read("worldmap_cancelled.json");
             // The detached HUD transports the same request answer before the state reconciliation starts.
             var detached=Motion("hud-result"); source.PendingState=new();
@@ -302,6 +340,10 @@ public static partial class PropActionsCheck
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(paired)); Step(.1);
             Is($"NPC partner leaves the entry for its pair (entry={observer.PropEntry is not null} pending={observer.PropCommitPending})",observer.PropEntry is null && !observer.PropCommitPending && observer.Pair is not null);
             Is($"NPC partner plays its pair half (clip={observer.CurrentClip})",observer.CurrentClip=="pair-pose__b");
+            // ...without the entry's support lift: the entry at phase 1 lifts the body by the whole rise from the access
+            // floor to the anchor root (0.129 here) — on top of a root that already stands on the anchor (fails on
+            // 39f31bea: the bare pair kind could not be committed, so the lift stayed; Kira sat a bed height too high).
+            Near("NPC partner's half carries no entry lift",observer.PropEntryLift,0);
             Step(.4);   // past the 0.4 s pair blend from where the entry left the figure
             Near("NPC partner stands at the pair anchor x",observer.Position.X,2); Near("NPC partner stands at the pair anchor z",observer.Position.Z,0);
             return checks;
@@ -331,6 +373,17 @@ public static partial class PropActionsCheck
                 mgr.Tick(1); Near("server anchor root on upper storey "+explicitFloor,avatar.Position.Y,9.529);
                 mgr.ClearOwnPropMotion();
             }
+            // An NPC getting up from a seat on this storey for an approach: its exact local route is withheld while the
+            // seat leg runs (the leg starts inside the furniture), so the row's travel route places it — on the journey's
+            // floor, not on the ground under the building (fails on 39f31bea: the figure fell to storey 0 until it walked).
+            var npc=mgr.Figures["fixture-npc"];
+            var rows=JsonNode.Parse(map.RootElement.GetRawText())!.AsObject();
+            var npcRow=rows["characters"]!.AsArray().First(c=>c!["name"]!.GetValue<string>()=="fixture-npc")!;
+            npcRow["travel"]=JsonNode.Parse("""{"target_id":"","journey_id":null,"waypoints":[[4,2],[4,1],[2,1]],"progress_m":0,"total_m":3,"floor_y":9.4,"starts_in_s":100,"paces_m_s_real":null}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(rows));
+            for(int i=0;i<20;i++) mgr.Tick(.25);
+            Near("NPC travel route stands on the journey's floor",npc.Position.Y,9.41);
+            Near("NPC travel route holds its start before it walks",npc.Position.X,4);
             return checks;
         } finally { builder.StopResidency(); builder.Models?.FreeAll(); world.QueueFree(); }
     }

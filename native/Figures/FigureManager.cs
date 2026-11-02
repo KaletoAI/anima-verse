@@ -486,10 +486,11 @@ public partial class FigureManager : Node3D
         double target = TravelPath.AdvanceAlongPaces(points, tr.Paces, serverM, Math.Max(0, age - (tr.StartsInS ?? 0)));
         if (fig.Route is not { } r || r.Key != key)
             fig.Route = new JourneyRoute { Key = key, Points = points.ToArray(), TotalM = TravelPath.PolylineLength(points),
-                Paces = tr.Paces, TargetM = target, ShownM = target, Stamp = Stats.Polls };
+                Paces = tr.Paces, TargetM = target, ShownM = target, Stamp = Stats.Polls, FloorY = tr.FloorY };
         else
         {
             r.Paces = tr.Paces;
+            r.FloorY = tr.FloorY;
             if (r.Stamp != Stats.Polls)
             {
                 r.TargetM = target;
@@ -499,7 +500,7 @@ public partial class FigureManager : Node3D
                 if (a.Snap == "back")
                 {
                     var at = TravelPath.PointAtDistance(r.Points, a.ShownM)!.Value;
-                    fig.Position = new Vector3((float)at.X, (float)GroundY(at.X, at.Z), (float)at.Z);
+                    fig.Position = new Vector3((float)at.X, (float)RouteBedY(r, at.X, at.Z), (float)at.Z);
                     fig.ResetSecondaryMotion();
                     Stats.TravBack++;
                 }
@@ -520,6 +521,8 @@ public partial class FigureManager : Node3D
     {
         var it = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Interaction : null;
         if(fig.CharacterName==AvatarName && it is not null && _releasedOwnPropPairs.Contains(it.Id)) it=null;
+        if(it is null && fig.Pair is { } held && OwnPairEndingHeld(held.Id)) return;
+        if(it is not null && fig.CharacterName==AvatarName && _endingOwnPair.Length>0 && it.Id!=_endingOwnPair) ReleaseEndingOwnPair();
         bool newId = it is not null && fig.Pair?.Id != it.Id;
         fig.Pair = PairPlay.Adopt(fig.Pair, it, Stats.Polls, out bool fresh);
         if (newId && fig.Pair is { } adopted)
@@ -582,6 +585,7 @@ public partial class FigureManager : Node3D
     public void Tick(double dt)
     {
         _clock += dt;
+        ExpireEndingOwnPair();
         BeforeTick?.Invoke(dt);
         double camDist = CamDist?.Invoke() ?? DefaultCamDist;
         // npcs.ts facingTargets(): every figure's neighbours, measured before anybody steps this frame.
@@ -607,6 +611,14 @@ public partial class FigureManager : Node3D
     private double GroundY(double x, double z) => GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z);
 
     /// <summary>
+    /// The height a server route walks at: the journey's own floor (<c>travel.floor_y</c> + the walking clearance, an
+    /// upper storey) when the row names one, else the terrain. Without it a figure whose exact local route is withheld
+    /// (an NPC getting up from a seat: the seat leg starts inside the furniture) walked on the ground under the building.
+    /// </summary>
+    private double RouteBedY(JourneyRoute r, double x, double z)
+        => r.FloorY is { } floor && double.IsFinite(floor) ? floor + FigureGround.WalkClearanceM : GroundY(x, z);
+
+    /// <summary>
     /// Task 42: npcs.ts route tick, ordinary travel only. Segment paces feed the tau smoother, the reached point
     /// supplies the ground word and height, and catch-up uses max(3.4, segment pace) times the bridge pace limit.
     /// A completed get-up hands its travel to the root once; journeys never settle or run.
@@ -620,10 +632,11 @@ public partial class FigureManager : Node3D
         UpdateTravelLine(fig);
         _travelErrors.Push(_clock * 1000, Math.Abs(r.TargetM - r.ShownM));
         var at = TravelPath.PointAtDistance(r.Points, r.ShownM)!.Value;
-        double bedY = GroundY(at.X, at.Z), rootYBefore = fig.Position.Y;
+        double bedY = RouteBedY(r, at.X, at.Z), rootYBefore = fig.Position.Y;
         double dx = at.X - fig.Position.X, dz = at.Z - fig.Position.Z, d = Math.Sqrt(dx * dx + dz * dz);
         bool moving = d > .02 || (r.ShownM < r.TotalM && (TravelPath.RateAt(r.Points, r.Paces, r.ShownM) ?? 0) > 0);
-        var ground = WordAt(at.X, at.Z);
+        // An indoor floor is plain floor: the terrain's water, sand or snow under the building says nothing about it.
+        var ground = r.FloorY is null ? WordAt(at.X, at.Z) : WalkGround.WordOf(GroundMove.Plain, bedY);
         var raw = ground.Raw;
         if (fig.Portrait is null) fig.SetSubmerged(WaterGates.GhostCutY(bedY, WaterGates.GroundWaterLevel(raw.Water, raw.Scope)));
         string idle = FigureClips.IdleClip(ground.Word.Movement, fig.Poses);

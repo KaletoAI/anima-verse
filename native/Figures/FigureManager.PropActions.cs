@@ -64,7 +64,11 @@ public partial class FigureManager
                     fig.FaceTowards(EntryFacing(previous.Spec["anchor"]!),snap:true);
                 }
                 if(fig.CharacterName==AvatarName && row.Place is not null) _log("[prop] seated confirmed");
-                fig.FinishPropEntry(row.ActivityAnimation.Length>0 ? row.ActivityAnimation : FigureClips.PoseKind("standing",fig.Poses));
+                // An entry that ends in a PAIR hands clip and height to the half (TickPair): its activity is the bare pair
+                // kind, which no rig binds, so committing it fails before the entry's support lift is dropped — the body
+                // stayed lifted by the whole rise from the floor to the seat on top of the anchor root.
+                if(row.Interaction is not null) fig.HoldPropPoseAtAnchor();
+                else fig.FinishPropEntry(row.ActivityAnimation.Length>0 ? row.ActivityAnimation : FigureClips.PoseKind("standing",fig.Poses));
                 fig.PropEntry=null; fig.Route=null;
                 if((row.Place is not null || row.Interaction is not null) && Slots is null) return true;
             }
