@@ -133,9 +133,25 @@ def _check_llm_routing(config: dict) -> list:
                 f"Task '{tid}' order {order} assigned multiple times (entries {', '.join('#'+str(i+1) for i in idxs)})"
             ))
 
-    # Coverage: every task in the catalog needs at least one entry — unless gated off
+    # Coverage: every task in the catalog needs at least one entry — unless
+    # gated off, or it borrows one along the same fallback chain resolve_llm
+    # follows (``llm_router.fallback_parent``: intent_* -> intent, a package
+    # task's declared ``fallback``, ...). Warning about those reported tasks
+    # that do run, e.g. a package narration that writes with chat_stream.
+    from app.core.llm_router import fallback_parent
+
+    def _borrows(tid: str) -> bool:
+        seen = {tid}
+        parent = fallback_parent(tid)
+        while parent and parent not in seen:
+            if coverage.get(parent):
+                return True
+            seen.add(parent)
+            parent = fallback_parent(parent)
+        return False
+
     for tid in TASK_TYPES.keys():
-        if coverage.get(tid):
+        if coverage.get(tid) or _borrows(tid):
             continue
         if is_task_gated_off(tid, config):
             continue
