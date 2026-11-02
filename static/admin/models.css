@@ -161,7 +161,10 @@ tr:hover { background: #161b22; }
 .suit-interrupted-notice[hidden] { display:none; }
 .suit-interrupted { color:#bda36c; }
 
-.suit-apply-dialog { margin: 16px 0; padding: 20px; border: 1px solid #58677a; border-radius: 8px; background: #161b22; }
+.suit-apply-dialog { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); z-index: 1000;
+    width: min(760px, 94vw); max-height: 90vh; overflow: auto; padding: 20px;
+    border: 1px solid #58677a; border-radius: 8px; background: #161b22; box-shadow: 0 12px 40px rgba(0, 0, 0, .6); }
+.btn-apply { padding: 2px 8px; font-size: .8em; margin-left: 4px; }
 .suit-apply-dialog section { padding: 10px 0; border-bottom: 1px solid #30363d; }
 .suit-apply-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .suit-apply-dialog select { max-width: 100%; }

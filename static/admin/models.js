@@ -267,7 +267,10 @@ function testBadge(caps) {
     return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
         + ' title="' + esc(tooltip) + '"'
         + (key ? ' onclick="suitShowSaved(\'' + escJs(key) + '\')"' : '') + '>'
-        + esc((caps.tested_score || result.score || '') + ' · ' + verdict) + '</span>' + suitDiagnosticBadges(result);
+        + esc((caps.tested_score || result.score || '') + ' · ' + verdict) + '</span>' + suitDiagnosticBadges(result)
+        + (key && result.thinking && !result.infra
+            ? ' <button type="button" class="btn btn-apply" title="Apply the tested settings to LLM routing entries" onclick="suitApplyOpen(\'' + escJs(key) + '\')">Apply…</button>'
+            : '');
 }
 
 // Speed of the last current test: projected seconds per thought turn, big,
@@ -789,11 +792,15 @@ function suitApplyTurnTime() {
         + ' / maximum ' + options.max_turn_seconds + ' s';
     line.className = !known || total > options.max_turn_seconds ? 'suit-warn' : '';
 }
+document.addEventListener?.('keydown', event => {
+    if (event.key === 'Escape' && !document.getElementById('suitApplyDialog').hidden) suitApplyClose();
+});
 function suitApplyClose() {
     document.getElementById('suitApplyDialog').hidden = true;
     suitApplyData = null;
 }
-async function suitApplyOpen() {
+async function suitApplyOpen(model = suitApplyModel) {
+    suitApplyModel = model;
     const dialog = document.getElementById('suitApplyDialog');
     dialog.hidden = false;
     dialog.textContent = 'Loading settings…';
@@ -801,7 +808,7 @@ async function suitApplyOpen() {
         const response = await fetch('/admin/settings/llm-suitability-test/apply?model=' + encodeURIComponent(suitApplyModel));
         if (!response.ok) throw new Error(await response.text());
         suitApplyData = await response.json();
-        dialog.innerHTML = '<h3>Apply to game</h3><p>Choose routing entries for the tested settings. New entries have no tasks; assign them on the Tasks page.</p>'
+        dialog.innerHTML = '<h3>Apply to game — ' + esc(suitApplyData.model || model) + '</h3><p>Choose routing entries for the tested settings. New entries have no tasks; assign them on the Tasks page.</p>'
             + ['tools', 'helpers', 'vision'].map(group => {
                 const result = suitApplyData.thinking?.[group];
                 const available = !!result && result.score_off !== '0/0' && !(group === 'vision' && suitApplyData.vision === 'not_supported');
@@ -860,8 +867,6 @@ function suitRenderJob(job) {
     // Starting another model is allowed while the current job waits or runs.
     document.getElementById('suitStartBtn').disabled = false;
     const summary = job.summary || {};
-    suitApplyModel = job.model || summary.model || '';
-    document.getElementById('suitApplyButton').hidden = !(job.status === 'done' && summary.thinking && suitApplyModel && !summary.infra && summary.saved !== false && job.apply_available !== false);
     let checks = summary.checks || job.checks || [];
     if (job.status === 'done') {
         if (!suitCurrent(summary)) { status.textContent = ''; prog.innerHTML = ''; return; }

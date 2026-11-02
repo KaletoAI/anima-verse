@@ -265,8 +265,6 @@ def _build_models_html() -> str:
     <h2>Results</h2>
     <div id="suitDetail" hidden>
         <div id="suitDetailStatus" role="status"></div>
-        <button type="button" class="btn" id="suitApplyButton" hidden onclick="suitApplyOpen()">Apply to game…</button>
-        <div id="suitApplyDialog" class="suit-apply-dialog" role="dialog" aria-modal="true" aria-label="Apply to game" hidden></div>
         <div id="suitSettings"></div>
         <div id="suitProgress"></div>
     </div>
@@ -321,5 +319,6 @@ def _build_models_html() -> str:
 
 <script src="/static/admin/model-combobox.js"></script>
 <script src="/static/admin/models.js"></script>
+<div id="suitApplyDialog" class="suit-apply-dialog" role="dialog" aria-modal="true" aria-label="Apply to game" hidden></div>
 </body>
 </html>'''

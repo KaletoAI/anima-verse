@@ -249,10 +249,13 @@ assert(el('suitProgress').innerHTML.includes('failed up to 900'));
 assert(el('suitDetailStatus').innerHTML.includes('Off 1/3 · at 600 1/3'));
 assert(el('suitDetailStatus').innerHTML.includes('thinking had no effect'));
 assert(el('suitDetailStatus').innerHTML.includes('no image input'));
-assert(el('suitApplyButton').hidden === false);
+const applyBadge = caps => ctx.testBadge({tested_suitability:{scorer_version:'suitability-5',model:'P::<M>',...caps}});
+assert(applyBadge({thinking:{tools:{}}}).includes("suitApplyOpen('P::&lt;M&gt;')"));
+assert(!applyBadge({}).includes('suitApplyOpen'));
+assert(!applyBadge({thinking:{tools:{}},infra:{reason:'down'}}).includes('suitApplyOpen'));
 assert(ctx.suitThinkingSummary({thinking:{tools:{score_off:'0/1',stopped:'budget_unenforceable'}}}).includes('the model keeps thinking after the budget'));
 ctx.suitRenderJob({status:'done',apply_available:false,model:'P::M',summary:{scorer_version:'suitability-5',thinking:{},checks:[{ok:true,stage:0,stages:[{budget:0}]}]}});
-assert(el('suitProgress').innerHTML.includes('passed without thinking'));assert.strictEqual(el('suitApplyButton').hidden,true);
+assert(el('suitProgress').innerHTML.includes('passed without thinking'));
 // A stage pass remains a pass even when the fixed recommended setting fails.
 ctx.suitRenderJob({status:'done',model:'P::M',summary:{scorer_version:'suitability-5',thinking:{tools:{recommended:{thinking:false,thinking_budget:null}}},checks:[{id:'tie-X',group:'tools',ok:true,stage:600,stages:[{budget:0},{budget:600}],recommended_ok:false,runs:[{content:'deciding pass'}],recommended_runs:[{content:'<off failure>'}]}]}});
 assert(el('suitProgress').innerHTML.includes('<b>Passed · tools · tie-X</b>'));
@@ -321,10 +324,9 @@ const elements=new Map();const el=id=>{if(!elements.has(id))elements.set(id,{val
 const ctx={document:{getElementById:el},setTimeout:()=>0,clearTimeout:()=>{},console};vm.createContext(ctx);
 vm.runInContext(fs.readFileSync('static/admin/models.js','utf8').replace(/loadData\(\);\s*suitInit\(\);\s*$/,''),ctx);
 (async()=>{
- vm.runInContext("suitApplyModel='P::<M>'",ctx);
  const data={model:'P::<M>',revision:'r1',vision:'not_supported',settings:{temperature:{tools:0.1},max_tokens:900,chat_template:'<template>',extra_params:{x:'<y>'}},thinking:{tools:{score_off:'1/2',recommended:{thinking:true,thinking_budget:600}},helpers:{score_off:'0/0',recommended:{thinking:false,thinking_budget:null}}},entries:[{index:2,name:'<mixed>',groups:['tools','helpers'],warnings:{tools:'Also changes helpers'}}]};
  ctx.fetch=async url=>{assert(url.includes('apply?model=P%3A%3A%3CM%3E'));return {ok:true,json:async()=>data};};
- await ctx.suitApplyOpen();
+ await ctx.suitApplyOpen('P::<M>');
  assert(el('suitApplyDialog').innerHTML.includes('&lt;mixed&gt;'));
  assert(el('suitApplyDialog').innerHTML.includes('&lt;template&gt;'));
  assert(el('suitApplyDialog').innerHTML.includes('budget 600'));
