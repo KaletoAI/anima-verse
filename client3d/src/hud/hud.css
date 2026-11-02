@@ -701,6 +701,27 @@
 }
 .player-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 .player-chip-follow { border-color: var(--accent-2, #d6b06a); }
+/* An action whose pose has a finale clip (offer `finale`, § A8c). */
+.player-chip-finale {
+  background: color-mix(in srgb, var(--finale, #c2507a) 22%, transparent);
+  border-color: color-mix(in srgb, var(--finale, #c2507a) 60%, transparent);
+}
+.player-chip-finale.on { background: color-mix(in srgb, var(--finale, #c2507a) 40%, transparent); }
+/* A participant's gauge of a running action (state row `meters`). */
+.player-prop-meter {
+  display: inline-block;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+.player-prop-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--finale, #c2507a);
+  transition: width 0.6s linear;
+}
 
 .player-thinking-dots { display: inline-flex; gap: 3px; }
 .player-thinking-dot {

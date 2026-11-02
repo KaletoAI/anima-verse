@@ -40,7 +40,12 @@ export interface PropActionOffer {
   required_partner: boolean
   available_targets: Array<PropActionChoice & { partner: string }>
   effects: PropActionEffect[]
+  /** The action's pose has a finale clip (schnittstellen-3d § A8c) — the chip is marked. */
+  finale?: boolean
 }
+/** One participant's gauge of a running action, 0..100 — a package's
+ *  (provider `prop_action.meters`); `label` empty = the neutral word. */
+export interface PropActionMeter { name: string; value: number; label: string }
 export interface PropActionDeparture {
   stand_yaw_deg?: number | null
   seat: [number, number]
@@ -87,6 +92,10 @@ export interface PropActionExecution extends PropActionResult {
   }
   can_respond: boolean
   can_cancel: boolean
+  /** The held pose has a finale clip. */
+  has_finale?: boolean
+  /** Gauges of the participants, one bar each. */
+  meters?: PropActionMeter[]
   /** The viewer's side of the run. */
   own_role?: 'actor' | 'partner'
   /** Pair runs: "ask" = the partner consents first, "react" = it starts and the partner reacts. */

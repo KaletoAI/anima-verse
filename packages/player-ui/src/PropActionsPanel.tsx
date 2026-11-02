@@ -70,10 +70,12 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
     const disabled = busy || !group.usable
     // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
     // the native client shows it too); a single piece names itself there.
-    const hint = !group.usable ? propActionReason(first.reason, t)
+    const finale = group.entries.some(entry => entry.offer.finale)
+    const plain = !group.usable ? propActionReason(first.reason, t)
       : !several && nameProps ? pieceText(first.offer) : undefined
+    const hint = finale ? [plain, t('With finale')].filter(Boolean).join(' · ') : plain
     return <HoverHint key={group.key} text={hint}>
-      <button type="button" className={`player-chip${action === group ? ' on' : ''}`} disabled={disabled}
+      <button type="button" className={`player-chip${finale ? ' player-chip-finale' : ''}${action === group ? ' on' : ''}`} disabled={disabled}
         aria-disabled={disabled ? true : undefined} aria-expanded={several ? action === group : undefined}
         style={{ pointerEvents: !group.usable ? 'none' : undefined }}
         onClick={() => several ? setOpenAction(action === group ? '' : group.key) : onPick(first.offer, first.partner)}>
@@ -160,6 +162,18 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
     </>}
     {run.can_cancel && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(() => cancelPropAction(run.execution_id))}>{t(run.can_resist ? 'Push away' : kind === 'outgoing' ? 'Withdraw' : 'Stop')}</button>}
+    {run.status === 'active' && run.meters?.map(meter => {
+      const value = Math.max(0, Math.min(100, meter.value))
+      return <HoverHint key={`meter:${meter.name}`} text={`${meter.name} · ${meter.label || t('Finale')}: ${Math.round(value)} %`}>
+        <span className="player-prop-meter-row" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+          <span>{meter.name}</span>
+          <span className="player-prop-meter" role="meter" aria-valuemin={0} aria-valuemax={100}
+            aria-valuenow={Math.round(value)} aria-label={`${meter.name} · ${meter.label || t('Finale')}`}>
+            <span className="player-prop-meter-fill" style={{ width: `${value}%` }} />
+          </span>
+        </span>
+      </HoverHint>
+    })}
     {run.status === 'sleeping' && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(async () => {
         // Existing player wake path; Core clears sleep and semantic bed ownership.
