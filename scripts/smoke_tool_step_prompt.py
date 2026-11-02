@@ -12,6 +12,8 @@ offered outfit verb supplies Red Mieder. [5] Exact supplied full names or
 marker. [7] Constrained renders contain neither plan grammar nor plan data.
 [8] A world override replaces the turn template. [9] rp_first discards tool
 mood/pose markers and sends the supplied system/user prompt unchanged.
+[11] The stable system carries the character language and explicitly permits
+consent calls and shared-trip proposals.
 [10] Respond queue submission equals the builder, partner words are context only,
 TalkTo needs a third person, and tool mood/pose markers are ignored.
 Movement menus include all
@@ -55,6 +57,7 @@ def main():
         plans = 'p1 | Buy bread'
         prose = 'Ich ziehe mein rotes Mieder an.'
         with patch('app.core.dependencies.get_skill_manager', return_value=manager), \
+             patch('app.models.character.get_character_language_instruction', return_value='Always respond in German.'), \
              patch('app.core.flag_lifecycle.inactive_clearing_tools', return_value=set()), \
              patch('app.routes.chat._marker_travel_refusal', return_value='has_movement_verb') as refusal, \
              patch('app.models.intents.build_open_intents_brief', return_value=plans) as plan_mock:
@@ -73,7 +76,12 @@ def main():
             assert '<tool name="ToolName">{"key": "value"}</tool>' in first.system
             assert 'The example shows syntax only.' in first.system
             assert 'Kommst du mit?' not in first.system and 'TalkTo' not in first.system
-            print('[1] PASS stable system and syntax-only example')
+            assert 'Always respond in German.' in first.system
+            assert 'Every message, caption or free-text tool argument' in first.system
+            assert 'Agreement needs no tool unless an open question' in first.system
+            assert 'an offered verb answers exactly that proposal' in first.system
+            assert 'Proposing to go somewhere together is an action.' in first.system
+            print('[1] PASS stable system, language, consent rule and syntax-only example')
             plan_mock.return_value = plans
             menu = streaming.decision_menu_note('Ada Example', skills, indent='')
             tool_lines = [f'- {s.name}: {s.brief}' for s in tools]

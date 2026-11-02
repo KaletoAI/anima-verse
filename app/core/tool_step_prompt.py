@@ -46,9 +46,11 @@ def build_tool_step_prompt(
         known_places = [loc['name'] for loc in list_locations_for_character(character) or []
                         if loc.get('name')]
     fmt = get_format_for_model(model_name) if tool_format == 'auto' else tool_format
+    from app.models.character import get_character_language_instruction
     system = prompt_templates.render(
         'chat/tool_step_system.md', character=character, constrained=constrained,
         syntax_example=get_format(fmt)["example"],
+        language_instruction=get_character_language_instruction(character),
     )
     user = prompt_templates.render(
         'chat/tool_step_turn.md', character=character, mode=mode,

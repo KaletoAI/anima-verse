@@ -40,10 +40,10 @@ def emit(event: str, **kwargs: Any) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Provider registry — a single implementation of a named CAPABILITY.
+# Provider registry — singleton capabilities and optional contributors.
 # ---------------------------------------------------------------------------
 # Distinct from the event bus above: emit()/register() fan out to many
-# listeners; a provider is exactly one function that answers a capability
+# listeners; a singleton provider is one function that answers a capability
 # (e.g. "romantic_compatibility"). A package supplies it at load; the core
 # names only the capability string, never the package (R1). Last
 # registration wins; get_provider returns None when nobody supplied it, so
@@ -51,10 +51,20 @@ def emit(event: str, **kwargs: Any) -> int:
 
 _providers: Dict[str, Callable] = {}
 _provider_owners: Dict[str, str] = {}
+_contributors: Dict[Tuple[str, str], Tuple[Callable, str | None]] = {}
 
 
-def register_provider(capability: str, fn: Callable, *, owner: str | None = None) -> None:
-    """Replace a capability, optionally binding its lifetime to a package."""
+def register_provider(capability: str, fn: Callable, *, owner: str | None = None, multiple: bool = False) -> None:
+    """Register a capability, optionally as an independent contributor.
+
+    Multiple contributors are replaced by owner (or callback identity on
+    ownerless registrations). Consumers use get_providers and isolate errors.
+    Ordinary capabilities retain their single-provider replacement semantics.
+    """
+    if multiple:
+        tag = owner or f"{fn.__module__}.{fn.__qualname__}"
+        _contributors[(capability, tag)] = (fn, owner)
+        return
     _providers[capability] = fn
     if owner is None:
         _provider_owners.pop(capability, None)
@@ -64,6 +74,9 @@ def register_provider(capability: str, fn: Callable, *, owner: str | None = None
 
 def unregister_owned_providers(owner: str) -> None:
     """Remove only capabilities still owned by this package."""
+    for key, (_, registered_owner) in list(_contributors.items()):
+        if registered_owner == owner:
+            _contributors.pop(key, None)
     for capability, registered_owner in list(_provider_owners.items()):
         if registered_owner == owner:
             _providers.pop(capability, None)
@@ -72,3 +85,10 @@ def unregister_owned_providers(owner: str) -> None:
 
 def get_provider(capability: str) -> Optional[Callable]:
     return _providers.get(capability)
+
+
+def get_providers(capability: str) -> list[Callable]:
+    """Return all implementations in registration order, including a singleton."""
+    single = get_provider(capability)
+    return ([single] if single else []) + [
+        fn for (name, _), (fn, _) in list(_contributors.items()) if name == capability]

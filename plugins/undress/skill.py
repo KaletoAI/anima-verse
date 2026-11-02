@@ -85,6 +85,17 @@ class UndressSkill(PluginSkill):
         text = self.execute(json.dumps({"agent_name": character_name}))
         result.update(success=not text.startswith("Error"), text=text)
 
+    def tool_decision_context(self, character_name: str) -> str:
+        """Show only the acting character's relevant clothing state."""
+        from app.core.outfit_renderer import is_outfit_worn
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+        description = " ".join(str(profile.get("outfit_description") or "").split())
+        if len(description) > 240:
+            description = description[:240].rsplit(" ", 1)[0] + " …"
+        return (f"currently wearing: {description}" if is_outfit_worn(profile)
+                else f"clothes off; available to put back on: {description}")
+
     def visible_for(self, character_name: str) -> bool:
         """Offer this verb only where it means something.
 

@@ -222,6 +222,12 @@ class BaseSkill(ABC):
         only exists once those ran). Default: never."""
         return False
 
+    decision_menu_heading = ""
+
+    def tool_decision_context(self, character_name: str) -> str:
+        """Optional short state line needed by this offered verb's decision."""
+        return ""
+
     def decision_menu(self, character_name: str) -> List[str]:
         """The names this verb takes for this character, one per entry —
         for the tool-decision prompt of a separate tool LLM, which sees the

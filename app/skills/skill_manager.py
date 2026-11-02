@@ -208,11 +208,6 @@ class SkillManager:
         The generic replacement for hardcoded tool-name lists in the core."""
         return frozenset(s.name for s in self.skills if getattr(s, flag, False))
 
-    def get_action_hint(self, tool_name: str) -> str:
-        """Declared action hint of a tool (skill meta frontmatter `action_hint:`)."""
-        skill = self.get_skill_by_name(tool_name)
-        return getattr(skill, "action_hint", "") if skill else ""
-
     def get_agent_usage_instructions(self, character_name: str,
                                      format_name: str = "",
                                      check_limits: bool = True,

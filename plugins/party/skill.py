@@ -83,6 +83,29 @@ class PartySkill(PluginSkill):
         # name/description/action_hint come from templates/llm/skills/<id>.md
         self._defaults = {"enabled": True}
 
+    @property
+    def decision_menu_heading(self) -> str:
+        return "copy destination objects exactly" if self._verb == "invite" else ""
+
+    def decision_menu(self, character_name: str) -> list[str]:
+        if self._verb != "invite":
+            return []
+        from plugins.party.trip_intents import destination_menu
+        return destination_menu(character_name)
+
+    def tool_decision_context(self, character_name: str) -> str:
+        if self._verb != "invite":
+            return ""
+        from app.core.hooks import get_provider
+        import json
+        provider = get_provider("shared_activity_options")
+        keys = provider() if provider else []
+        if not keys or len(keys) > 8 or len(json.dumps(keys)) > 240:
+            return ""
+        return ('If the proposal names an activity there, optionally add '
+                '"after_arrival":{"type":"pair","pose_key":"<key>"}; keys: '
+                + json.dumps(keys, ensure_ascii=False))
+
     def available_now(self, facts):
         if self._verb not in ("invite", "join") or facts.present:
             return None

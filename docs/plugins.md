@@ -1068,7 +1068,7 @@ gegen ein totes Backend würde die Seite blockieren.
 
 Optionale Überschreibungen aus `BaseSkill`, die der Core generisch abfragt:
 `visible_for(character_name)`, `defer_for_attachment(raw_input)`,
-`thought_context_block(character_name)`, `decision_menu(character_name)`, `handle_intent(intent_type, payload)`,
+`thought_context_block(character_name)`, `decision_menu(character_name)`, `tool_decision_context(character_name)`, `handle_intent(intent_type, payload)`,
 `tool_intent_payload(raw_input)`, `get_usage_instructions(format_name, character_name)`.
 Details in `docs/skill-core-api.md` → „Skill-Hooks".
 
@@ -1692,3 +1692,37 @@ exclusion, then each package availability hook. `inactive_clearing_tools`
 reads flag declarations generically; a clearing verb stays available if any
 state it clears is active. Existing `decision_tools` mapping callers keep
 receiving mappings; list callers receive lists. The core names no skill.
+
+
+### Tool-decision menus, context and open questions
+
+`decision_menu(character_name) -> list[str]` supplies only the inputs needed
+by an offered verb. The default heading says to copy names exactly. A skill
+may override `decision_menu_heading: str` (also a property) with a short English
+heading when entries contain structured objects, for example destination IDs.
+The renderer prefixes the verb name and appends a colon. Keep entries compact;
+notes must distinguish labels from the exact input to copy.
+
+`tool_decision_context(character_name) -> str` defaults to an empty string.
+An offered skill may supply one short state line that its brief/menu needs.
+The renderer emits it as "<Tool>: <line>", even with an empty menu. Do not duplicate full roleplay
+context or include another character's state unless this verb needs it.
+For clothing, inventory menus already identify worn wardrobe pieces; the
+free-text clothing verbs supply the acting character's current clothing state.
+
+`hooks.register_provider(capability, fn, owner="<package id>", multiple=True)`
+registers an independent contributor, idempotent per capability and owner.
+`hooks.get_providers(capability)` returns all contributors in registration
+order (plus an ordinary singleton if registered). Ownerless contributors use
+the callback module/qualified name as identity. `unregister_owned_providers`
+also removes contributors owned by that package. Ordinary registrations keep
+their existing singleton replacement semantics; `get_provider` retrieves only
+that singleton. Consumers of a multiple-provider capability must isolate errors.
+
+`tool_decision.open_questions` uses multiple providers:
+`fn(character_name, offered_tool_names) -> list[str]`. Each line names an open
+question and the exact yes/no calls, including any required invitation reference.
+The renderer aggregates every provider and logs/ignores each failing provider
+independently. Both party and pair-interaction packages contribute; pair lines
+keep their existing wording. A provider must emit nothing when its answering
+verb is not offered.

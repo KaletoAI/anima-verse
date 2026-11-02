@@ -1057,8 +1057,9 @@ Queue; das Verb antwortet dem LLM sofort, was es angestoßen hat.
 |---|---|
 | `register(event, fn, tag='')` | Paket abonniert ein Core-Event (idempotent pro `(event, tag)` — Reload-sicher). Typisch im `on_load`-Modul oder im Skill-`__init__` |
 | `emit(event, **kwargs) -> int` | Core feuert generisch; Fehler in Callbacks erreichen den Core-Pfad nie |
-| `register_provider(capability, fn, *, owner=None)` | Replace the one named capability implementation; `owner` binds its lifetime to a package |
+| `register_provider(capability, fn, *, owner=None, multiple=False)` | Replace a singleton, or register an independent contributor with `multiple=True`; `owner` binds its lifetime to a package |
 | `unregister_owned_providers(owner) -> None` | Remove only providers still owned by this package; a replacement owned by someone else is retained |
+| `get_providers(capability) -> list[Callable]` | All registered implementations for aggregation; the consumer isolates failures |
 | `get_provider(capability) -> Optional[Callable]` | Look up the implementation; absence handling belongs to each capability contract |
 
 Event subscriptions have no `unregister`; keep their `(event, tag)`
@@ -1099,7 +1100,7 @@ Capabilities, die der Core heute abfragt:
 |---|---|---|
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
 | `shared_activity_options`, `shared_activity_validate`, `shared_activity_request`, `shared_activity_status`, `shared_activity_cancel` | Structured intent continuation and exact pair ownership | No pair continuation; available options are empty. The action is only `{type:"pair", pose_key:"<exact available key>"}`. Request/status return `pending`, `approaching`, `running`, `declined` or `blocked` with `invite_id` and optional `interaction_id`/`reason`; status never starts anything. Initial unsubmitted requests alone may return `not_found`; missing questions without exact live pair provenance and accepted-but-not-live requests block, never replay. Exact provenance reports a running pair even before `accepted` or start hooks persist. Cancel's optional `interaction_id` restricts actual receipt/provenance ownership; it never grants ownership or ends another pair |
-| `tool_decision.open_questions` | `streaming.tool_state_note` / `open_questions_note`: the rp_first tool decision (both paths) and, for a `single` character, the chat turn's scene state. `fn(agent_name, tool_names) -> list[str]`: one line per question someone put to the character that an offered verb answers, with the exact yes and no call (`interact`: open pair invitations) | No open-question block; the invitee only hears the question in prose |
+| `tool_decision.open_questions` | `streaming.tool_state_note` / `open_questions_note`: the rp_first tool decision (both paths) and, for a `single` character, the chat turn's scene state. `fn(agent_name, tool_names) -> list[str]`: one line per question someone put to the character that an offered verb answers, with the exact yes and no call (multiple providers: party and pair invitations; each failure is isolated) | No open-question block; the invitee only hears the question in prose |
 | `pair_reaction` | `prop_action_engine`: a pair furniture action requested with consent "react" that an NPC partner did not start. Called with the keywords execution_id, actor and partner, it must return at once; the answer goes to `app.core.prop_action_engine.react` (below). The run waits at the furniture for it up to `REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such runs never wait: reaction `none`, the action goes straight in |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
@@ -1117,7 +1118,7 @@ Capabilities, die der Core heute abfragt:
 | `visible_for(character_name) -> bool` | Per-Character-Sichtbarkeit jenseits der enabled-Config (z.B. Party-Rolle) — der skill_manager fragt generisch ab. Gilt für die RUNTIME-Toolliste; der Admin-Skills-Tab zeigt das Verb weiter an (Config-Fläche ≠ Laufzeit-Fläche) |
 | `defer_for_attachment(raw_input) -> bool` | Call muss NACH den deferred Image-Tools desselben Turns laufen (Input referenziert ein erst dann existierendes Attachment) |
 | `thought_context_block(character_name) -> str` | Selbst-enthaltene Prompt-Sektion (s.u.) |
-| `decision_menu(character_name) -> List[str]` | Names this verb takes for the character (ChangeOutfit: the clothes with slot and "worn"). `streaming.tool_state_note` lists them per offered verb in every tool-decision prompt ("<Tool> takes these names — copy one exactly"), because a separate tool LLM sees the roleplay prose, not the character's prompt. Default `[]` |
+| `decision_menu(character_name) -> List[str]` | Input entries this verb takes for the character (ChangeOutfit: the clothes with slot and "worn"). `streaming.tool_state_note` lists them per offered verb in every tool-decision prompt (default heading "<Tool> takes these names — copy one exactly"; overridable with `decision_menu_heading`), because a separate tool LLM sees the roleplay prose, not the character's prompt. Default `[]` |
 | `handle_intent(intent_type, payload) -> Dict` | Ausführung eines deklarierten Intents |
 | `tool_intent_payload(raw_input) -> str` | Vergleichs-Inhalt für den Redundanz-Skip |
 | `get_usage_instructions(format_name='', character_name='') -> str` | Eigenes Tool-Beispiel; baut man mit `app.core.tool_formats.format_example(format_name, tool_name, example_input)`, damit es zum aktiven Tool-Format passt |
@@ -1543,3 +1544,37 @@ receive a proposal, otherwise a refusal reason. Combine it with
 proposal menus. The latter returns `(pose_key, animation_kind)`, not display
 labels; only free pair clips qualify. Pending invitations are answered through
 the separate question flow and must not be copied into proposal menus.
+
+
+### Tool-decision menus, context and open questions
+
+`decision_menu(character_name) -> list[str]` supplies only the inputs needed
+by an offered verb. The default heading says to copy names exactly. A skill
+may override `decision_menu_heading: str` (also a property) with a short English
+heading when entries contain structured objects, for example destination IDs.
+The renderer prefixes the verb name and appends a colon. Keep entries compact;
+notes must distinguish labels from the exact input to copy.
+
+`tool_decision_context(character_name) -> str` defaults to an empty string.
+An offered skill may supply one short state line that its brief/menu needs.
+The renderer emits it as "<Tool>: <line>", even with an empty menu. Do not duplicate full roleplay
+context or include another character's state unless this verb needs it.
+For clothing, inventory menus already identify worn wardrobe pieces; the
+free-text clothing verbs supply the acting character's current clothing state.
+
+`app.core.hooks.register_provider(capability, fn, owner="<package id>", multiple=True)`
+registers an independent contributor, idempotent per capability and owner.
+`app.core.hooks.get_providers(capability)` returns all contributors in registration
+order (plus an ordinary singleton if registered). Ownerless contributors use
+the callback module/qualified name as identity. `unregister_owned_providers`
+also removes contributors owned by that package. Ordinary registrations keep
+their existing singleton replacement semantics; `get_provider` retrieves only
+that singleton. Consumers of a multiple-provider capability must isolate errors.
+
+`tool_decision.open_questions` uses multiple providers:
+`fn(character_name, offered_tool_names) -> list[str]`. Each line names an open
+question and the exact yes/no calls, including any required invitation reference.
+The renderer aggregates every provider and logs/ignores each failing provider
+independently. Both party and pair-interaction packages contribute; pair lines
+keep their existing wording. A provider must emit nothing when its answering
+verb is not offered.

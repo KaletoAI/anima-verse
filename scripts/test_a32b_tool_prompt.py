@@ -94,10 +94,6 @@ class _StubManager:
     def get_skill_by_name(self, name):
         return next((s for s in _SKILLS if s.name.lower() == name.lower()), None)
 
-    def get_action_hint(self, name):
-        s = self.get_skill_by_name(name)
-        return getattr(s, "action_hint", "") if s else ""
-
     def tool_names_with_flag(self, flag):
         return frozenset(s.name for s in _SKILLS if getattr(s, flag, False))
 
@@ -126,7 +122,7 @@ deps.get_skill_manager = lambda: _StubManager()
 import app.core.streaming as _streaming_mod  # noqa: E402
 _streaming_mod.current_pose_text = lambda name: "sitting: reads a letter"
 
-from app.core.streaming import (StreamingAgent, action_mapping_lines)  # noqa: E402
+from app.core.streaming import (StreamingAgent,)  # noqa: E402
 
 LEADER = {n: (lambda x: "") for n in
           ["ChangeOutfit", "TakePhoto", "SetLocation", "JoinParty", "TalkTo", "SendMessage"]}
@@ -173,13 +169,9 @@ for name, text in ALL_PROMPTS.items():
     for dead in ("ImageGenerator", "SetPose"):
         check(f"{name}: no '{dead}'", dead not in text)
 
-print("\n3) Inventory-derived declarations and legacy mapping")
-lines = action_mapping_lines(LEADER)
+print("\n3) Inventory-derived declarations")
 check("shared template declares every offered tool", all(f"- {n}:" in ALL_PROMPTS["streaming/chat"] for n in LEADER))
 check("respond contains short inventory declarations", all(f"- {n}:" in ce_lead for n in LEADER))
-check("6 tools → 6 mapping lines", len(lines.splitlines()) == 6,
-      f"{len(lines.splitlines())}")
-check("follower mapping has 5 lines", len(action_mapping_lines(FOLLOWER).splitlines()) == 5)
 
 print("\n4) Anti-hallucination rules present")
 for name, text in ALL_PROMPTS.items():

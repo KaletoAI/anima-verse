@@ -1,5 +1,6 @@
 ---
 name: ReadItem
+brief: Read another person's written item here, only alone and once per item per day; {"item":"<item name or id>"}.
 description: Read a written item lying here, such as a letter or notebook.
 ---
 Read a written item lying here, such as a letter or notebook.

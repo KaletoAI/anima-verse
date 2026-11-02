@@ -1,5 +1,6 @@
 ---
 name: SetActivity
+brief: Set your solo free body pose or room marker; plain text exact pose key. Never claim furniture or start a pair action.
 action_hint: Changes only the character's own solo free body pose or room-owned marker; never claims furniture or starts a shared action
 ---
 Sets a free body pose (or an existing room-owned marker), never allocates furniture or bypasses a prop action's rules. For furniture use PropAction with an offered action ID, current revision and exact target instead. An explicit call interrupts the character's own current semantic action.

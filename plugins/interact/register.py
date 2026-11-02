@@ -227,7 +227,7 @@ decision.register_point(
 )
 register_provider("pair_verb_name", pair_verb_name)
 register_provider("pair_reaction", ask_reaction)
-register_provider("tool_decision.open_questions", open_questions)
+register_provider("tool_decision.open_questions", open_questions, owner="interact", multiple=True)
 register_provider("shared_activity_options", shared_activity_options)
 register_provider("shared_activity_validate", shared_activity_validate)
 register_provider("shared_activity_request", shared_activity_request)

@@ -167,6 +167,10 @@ async def recover_failed_response():
         await until(lambda: REPLY_COUNT == 1)
         await until(lambda: COMPANION not in loop._respond_active)
         assert party.get_invite(pending["invite_id"])["status"] == "pending"
+        # Worker removal precedes the asynchronous respond_finished hook. Wait
+        # for its persisted retry release before asking the next world check.
+        await until(lambda: not intents.get_intent(intention["id"])["meta"]["travel"].get(
+            "consent_request_session"))
         _sub_plugin_tick()
         await until(lambda: party.get_invite(pending["invite_id"])["status"] == "accepted")
         await until(lambda: COMPANION not in loop._respond_active)
@@ -177,6 +181,7 @@ async def recover_failed_response():
         assert all(chars.get_character_current_room(name) == "cellar" for name in (OWNER, COMPANION))
         print("OK: failed external reply is consumed -> next check asks again -> recovered consent completes")
     finally:
+        loop._stop.set()
         dispatcher.cancel()
         await asyncio.gather(dispatcher, return_exceptions=True)
         await asyncio.gather(*loop._respond_active.values(), return_exceptions=True)

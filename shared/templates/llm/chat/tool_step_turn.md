@@ -6,6 +6,9 @@ Other person’s words (context only):
 {% endif %}
 {% if present %}
 Present in your room: {{ present | join(", ") }}
+{% if mode == 'respond' and partner %}
+Talking with: {{ partner }}
+{% endif %}
 {% else %}
 Nobody else is here.
 {% endif %}

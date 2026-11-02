@@ -450,26 +450,6 @@ def turn_tools(tools, facts: TurnFacts, *, rp_first: bool) -> tuple[list, dict[s
     return offered, hidden
 
 
-def action_mapping_lines(tools: Dict[str, Any]) -> str:
-    """Action→tool hint lines for exactly the tools the character has.
-
-    The hints are declared by the skills themselves (skill meta frontmatter
-    `action_hint:`, exposed via the skill manager). Fallback for a hint-less
-    tool: a generic trigger line.
-    """
-    try:
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-    except Exception:
-        sm = None
-    lines = []
-    for name in (tools or {}):
-        hint = (sm.get_action_hint(name) if sm else "") \
-            or f"Character triggers {name}"
-        lines.append(f"  - {hint} → {name}")
-    return "\n".join(lines) if lines else "  (no tools available)"
-
-
 def _room_speech_tools(tools: Dict[str, Any]) -> List[str]:
     """Available verbs that deliver spoken words to someone in the SAME room
     (DELIVERS_SPEECH without REMOTE_COMM)."""
@@ -543,16 +523,27 @@ def decision_menu_note(agent_name: str, tools: Dict[str, Any],
         skill = manager.get_skill_by_name(name)
         try:
             lines = [str(line) for line in (skill.decision_menu(agent_name) if skill else []) if line]
+            heading = getattr(skill, "decision_menu_heading", "")
         except Exception as exc:  # noqa: BLE001 — one skill must not break the prompt
             logger.debug("decision menu of %s failed for %s: %s", name, agent_name, exc)
             continue
+        try:
+            context_fn = getattr(skill, "tool_decision_context", None)
+            context = context_fn(agent_name) if context_fn else ""
+        except Exception as exc:  # An optional state line must not hide valid inputs.
+            logger.debug("decision context of %s failed for %s: %s", name, agent_name, exc)
+            context = ""
+        if context:
+            # Named, so the line cannot be read as part of the menu above it.
+            note += f"{indent}{name}: {context}\n"
         if lines:
             body = "".join(f"{indent}- {line}\n" for line in lines)
             # A menu line may carry a note in brackets (an outfit piece's
             # slots, "worn"); the verb matches the name in front of it.
             hint = (" (a part in brackets is a note, not part of the name)"
                     if any("(" in line for line in lines) else "")
-            note += f"{indent}{name} takes these names — copy one exactly{hint}:\n{body}"
+            heading = heading or f"takes these names — copy one exactly{hint}"
+            note += f"{indent}{name} {heading}:\n{body}"
     return note
 
 
@@ -569,15 +560,14 @@ def open_questions_note(agent_name: str, tools: Dict[str, Any],
     character: the invitation's hint in the roleplay prompt is prose only,
     and "Kai suggests X" alone once made the tool LLM accept a different
     action than the one asked."""
-    from app.core.hooks import get_provider
-    provider = get_provider("tool_decision.open_questions")
-    if provider is None:
-        return ""
-    try:
-        lines = [str(line) for line in provider(agent_name, list(tools or {})) or [] if line]
-    except Exception as exc:  # noqa: BLE001 — the prompt works without it
-        logger.debug("open questions note failed for %s: %s", agent_name, exc)
-        return ""
+    from app.core.hooks import get_providers
+    lines = []
+    for provider in get_providers("tool_decision.open_questions"):
+        try:
+            contribution = [str(line) for line in provider(agent_name, list(tools or {})) or [] if line]
+            lines.extend(contribution)
+        except Exception as exc:  # One provider must not hide other questions.
+            logger.debug("open questions provider failed for %s: %s", agent_name, exc)
     if not lines:
         return ""
     body = "".join(f"{indent}- {line}\n" for line in lines)

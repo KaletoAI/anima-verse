@@ -586,6 +586,72 @@ def _destinations(name: str) -> list[Dict]:
                        for r in get_location_rooms(loc)]}
             for loc in list_locations_for_character(name)]
 
+
+def _room_level(room: Dict) -> int:
+    layout = room.get("layout") if isinstance(room.get("layout"), dict) else {}
+    try:
+        return int(layout.get("level") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _storey_note(level: int, here: int) -> str:
+    """Where a room lies relative to the speaker, so "upstairs" finds a room."""
+    diff = level - here
+    if diff == 0:
+        return "same floor"
+    word = "up" if diff > 0 else "down"
+    return f"{word}stairs" if abs(diff) == 1 else f"{abs(diff)} floors {word}"
+
+
+def destination_menu(name: str) -> list[str]:
+    """Current-location rooms and other known places, with exact trip objects.
+
+    The ground and the storey corridors are reserved rooms, never a place to
+    propose. Another place needs no room: the trip resolves its arrival room.
+    """
+    import json
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
+    current = get_character_current_location(name)
+    room_id = get_character_current_room(name)
+    location = get_location_by_id(current) if current else None
+    entries = []
+    if location:
+        rooms = [r for r in get_location_rooms(location)
+                 if r.get("id") and r["id"] != GROUND_ROOM_ID and not is_floor_room(r["id"])]
+        here = next((_room_level(r) for r in rooms if r["id"] == room_id), 0)
+        storeys = len({_room_level(r) for r in rooms}) > 1
+        for room in rooms:
+            if room["id"] == room_id:
+                continue
+            note = f" ({_storey_note(_room_level(room), here)})" if storeys else ""
+            entries.append((f"{location.get('name', current)} / {room.get('name') or room['id']}{note}",
+                            {"location_id": current, "room_id": room["id"]}))
+    for loc in _destinations(name):
+        if loc["location_id"] != current:
+            entries.append((f"{loc['name']} (another place)", {"location_id": loc["location_id"]}))
+    return [f"{label} = {json.dumps(dest, ensure_ascii=False, separators=(',', ':'))}"
+            for label, dest in entries]
+
+
+def open_questions(name: str, tool_names: list[str]) -> list[str]:
+    """Expose pending party consent with the exact reference for both answers."""
+    import json
+    if "JoinParty" not in tool_names:
+        return []
+    lines = []
+    for invitation in P.get_pending_invites_for(name):
+        leader = invitation["inviter"]
+        destination = invitation.get("destination_label", "")
+        yes = json.dumps({"leader": leader, "answer": "yes", "invite_id": invitation["invite_id"]}, ensure_ascii=False)
+        no = json.dumps({"leader": leader, "answer": "no", "invite_id": invitation["invite_id"]}, ensure_ascii=False)
+        lines.append(f"{leader} invited {name} to go together"
+                     + (f" to {destination}" if destination else "")
+                     + (f" then {invitation['after_arrival_label']}" if invitation.get("after_arrival_label") else "")
+                     + f". Yes: JoinParty {yes}. No: JoinParty {no}.")
+    return lines
+
+
 def _can_propose(name: str) -> bool:
     return get_character_skill_config(name, "invite_to_party").get("enabled", True) is not False
 
@@ -801,6 +867,7 @@ def intent_action_types() -> list[str]:
 
 
 def register() -> None:
+    hooks.register_provider("tool_decision.open_questions", open_questions, owner="party", multiple=True)
     providers = {"intent_action_types": intent_action_types,
                  "intent_action_validate": intent_action_validate,
                  "intent_action_change_validate": intent_action_change_validate,
