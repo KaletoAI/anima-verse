@@ -918,7 +918,13 @@ def run_chat_turn(
                            responder, _me)
             _inline_matches = []
 
-    clean = clean_response(raw)
+    # A bare "ToolName {json}" call is not tag-shaped, so clean_response
+    # keeps it: strip it here, or the call itself becomes the spoken line.
+    if _inline_matches:
+        from app.core.tool_formats import strip_bare_json_calls
+        clean = clean_response(strip_bare_json_calls(raw, ctx["tools_dict"]))
+    else:
+        clean = clean_response(raw)
     if not clean:
         if _inline_matches:
             # The character DID something, it just said nothing: the tool

@@ -29,6 +29,9 @@ Throwaway storage, no server, no LLM. Hand-derived expectations:
       a tag-only reply → "" AND the tool still ran (the character did
       something, it just said nothing); two calls of a SINGLETON tool → only
       the last one runs (``_dedupe_singleton_tools``).
+      A bare ``SetActivity {"pose": "sitting"}`` (no tag, no colon — the
+      shape of 2026-11-03, fails on 988d0107) alone → "" and it ran with
+      that JSON; after "Gern." on its own line → "Gern." and it ran.
 
 Usage:  ./.venv/bin/python scripts/smoke_respond_single_tools.py
 """
@@ -185,6 +188,23 @@ reply = chat_engine.run_chat_turn("", "Gast", "Kai", "Prost", "in_person",
 check("both tags stripped", reply, "Prost.")
 check("a singleton tool runs once, with the last call",
       wait_for(lambda: CALLS == [("SetActivity", "last")]), True)
+
+CALLS.clear()
+BARE = 'SetActivity {"pose": "sitting"}'
+Q = FakeQueue(BARE)
+llm_queue_mod.get_llm_queue = lambda: Q
+reply = chat_engine.run_chat_turn("", "Gast", "Kai", "Prost", "in_person",
+                                  "character_talk", False, room_stream=[{"x": 1}])
+check("a bare call alone says nothing", reply, "")
+check("and runs", wait_for(lambda: CALLS == [("SetActivity", '{"pose": "sitting"}')]), True)
+
+CALLS.clear()
+Q = FakeQueue("Gern.\n" + BARE)
+llm_queue_mod.get_llm_queue = lambda: Q
+reply = chat_engine.run_chat_turn("", "Gast", "Kai", "Prost", "in_person",
+                                  "character_talk", False, room_stream=[{"x": 1}])
+check("speech before a bare call stays, the call goes", reply, "Gern.")
+check("and the call runs", wait_for(lambda: CALLS == [("SetActivity", '{"pose": "sitting"}')]), True)
 
 CALLS.clear()
 chat_engine.build_chat_context = lambda *a, **k: fake_ctx(mode="rp_first")

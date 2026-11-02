@@ -393,19 +393,32 @@ def _is_placeholder_input(tool_input: str) -> bool:
     return False
 
 
-def _bare_json_calls(text: str, known_tools: Dict) -> List[Tuple[str, str]]:
-    """``ToolName: {json}`` at the start of a line, for an offered tool name,
-    with a JSON object that parses; anything else is no call."""
+def _bare_json_spans(text: str, known_tools: Dict):
+    """``ToolName {json}`` or ``ToolName: {json}`` at the start of a line, for
+    an offered tool name, with a JSON object that parses: yields
+    ``(start, end, name, input)``; anything else is no call."""
     names = "|".join(re.escape(name) for name in known_tools)
-    calls = []
-    for match in re.finditer(rf"^[ \t]*(?:[-*][ \t]*)?({names}):[ \t]*(?=\{{)", text, re.MULTILINE):
+    for match in re.finditer(rf"^[ \t]*(?:[-*][ \t]*)?({names}):?[ \t]*(?=\{{)", text, re.MULTILINE):
         try:
             value, end = json.JSONDecoder().raw_decode(text, match.end())
         except ValueError:
             continue
         if isinstance(value, dict):
-            calls.append((match.group(1), text[match.end():end]))
-    return calls
+            yield match.start(), end, match.group(1), text[match.end():end]
+
+
+def _bare_json_calls(text: str, known_tools: Dict) -> List[Tuple[str, str]]:
+    return [(name, inp) for _, _, name, inp in _bare_json_spans(text, known_tools)]
+
+
+def strip_bare_json_calls(text: str, known_tools: Dict) -> str:
+    """``text`` without its bare ``ToolName {json}`` calls (see
+    ``_bare_json_spans``) — what is left is what the character said."""
+    if not known_tools:
+        return text
+    for start, end, _, _ in reversed(list(_bare_json_spans(text, known_tools))):
+        text = text[:start] + text[end:]
+    return text
 
 
 def find_tool_calls(format_name: str, text: str,
@@ -463,11 +476,13 @@ def find_tool_calls(format_name: str, text: str,
         raw_matches = [(name, inp.strip()) for name, inp in
                        re.findall(pattern, text, re.IGNORECASE)]
 
-    # Bare "ToolName: {json}" lines, only for tools offered this turn: the
-    # tool list itself reads "- ToolName: description; {json}", and a model
-    # copies that shape instead of the taught syntax (2026-11-01: 58 of 266
-    # tool decisions, every call dropped). The JSON object is mandatory, so
-    # prose ("Act: she smiles") never matches.
+    # Bare "ToolName: {json}" / "ToolName {json}" lines, only for tools
+    # offered this turn: the tool list reads "- ToolName: description;
+    # {json}" and the furniture contract "PropAction {json}", and a model
+    # copies those shapes instead of the taught syntax (2026-11-01: 58 of 266
+    # tool decisions; 2026-11-03: an NPC's consent "InteractWith {...}" three
+    # times — every call dropped). The JSON object is mandatory, so prose
+    # ("Act: she smiles") never matches.
     if not raw_matches and known_tools:
         raw_matches = _bare_json_calls(text, known_tools)
 

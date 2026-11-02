@@ -48,6 +48,15 @@ Hand-derived expectations:
         format -> one call, unchanged.
 
 Usage:  ./.venv/bin/python scripts/smoke_tool_formats.py
+  (h) The same without the colon (2026-11-03: Melanie's consent answer
+      ``InteractWith {"partner": "Kai", "answer": "yes"}``, logged three
+      times, never executed — fails on 988d0107), format tag, offered
+      InteractWith/PropAction/Act: that answer -> one InteractWith call with
+      the JSON verbatim; the contract's ``PropAction {"stop": true}`` -> one
+      call; ``Act {broken``, ``Act ["x"]``, a call inside a sentence and a
+      tool not offered (TalkTo) -> no call. strip_bare_json_calls leaves ""
+      for the call alone, "Ja, gern." for speech plus a call line, and
+      ``Act {broken`` unchanged.
 """
 import sys
 from pathlib import Path
@@ -154,6 +163,21 @@ for text in ('GoToCharacter: {"partner": "Kai"}\n[INTENT_DONE: 7fd96d4d]',
     check("no call: " + text.splitlines()[0], find_tool_calls("natural_en", text, offered), [])
 check("taught format unchanged", find_tool_calls("natural_en", 'Use Act for: {"text": "wave"}', offered),
       [("Act", '{"text": "wave"}')])
+
+print("(h) bare ToolName {json} without the colon, and the spoken rest")
+offered_h = {"InteractWith": None, "PropAction": None, "Act": None}
+consent = '{"partner": "Kai", "answer": "yes"}'
+check("Melanie's consent", find_tool_calls("tag", "InteractWith " + consent, offered_h),
+      [("InteractWith", consent)])
+check("contract shape", find_tool_calls("tag", 'PropAction {"stop": true}', offered_h),
+      [("PropAction", '{"stop": true}')])
+for text in ("Act {broken", 'Act ["x"]', 'Gern, InteractWith {"partner": "Kai"}', 'TalkTo {"name": "Ben"}'):
+    check("no call: " + text, find_tool_calls("tag", text, offered_h), [])
+from app.core.tool_formats import strip_bare_json_calls
+check("call only -> nothing said", strip_bare_json_calls("InteractWith " + consent, offered_h), "")
+check("speech kept", strip_bare_json_calls("Ja, gern.\nInteractWith " + consent, offered_h).strip(),
+      "Ja, gern.")
+check("prose untouched", strip_bare_json_calls("Act {broken", offered_h), "Act {broken")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed"
       + (": " + ", ".join(FAILURES) if FAILURES else ""))
