@@ -178,15 +178,29 @@ public partial class FigureManager
         var playback=OwnPropMotion!; var plan=playback.Plan; double elapsed=Math.Max(0,_clock-playback.StartedAt);
         var sample=playback.HeldSample ?? PropActionMotion.SampleMotion(plan,elapsed); string phase=PropActionMotion.Text(sample["phase"]);
         bool changed=phase!=playback.Phase;
-        if(changed && playback.Phase=="departure") figure.FinishPropEntry(FigureClips.PoseKind("standing",figure.Poses));
+        double? handBackYaw=null;
+        if(playback.Cancel && phase=="arrived") {
+            // Seek the last measured turn even if a slow frame skipped the entire departure.
+            var departure=plan["departure"]!;
+            if(PropActionMotion.Text(departure["exit_clip"]).Length>0)
+                figure.PlayOwnPropDeparture(PropActionMotion.Text(departure["exit_clip"]),1,
+                    playback.StartY-OwnPropFloor(figure,plan,PropActionMotion.Number(sample["x"]),PropActionMotion.Number(sample["z"])));
+            double clipEnd=figure.Yaw*180/Math.PI;
+            var decision=PropActionMotion.HandBackYaw(clipEnd,departure["stand_yaw_deg"] is { } stand ? PropActionMotion.Number(stand) : null);
+            if(decision.Mismatch) _log($"[prop] stand yaw mismatch clip={clipEnd:F1} server={PropActionMotion.Number(departure["stand_yaw_deg"]):F1}");
+            handBackYaw=decision.YawDeg*Math.PI/180;
+            figure.FinishPropEntry(FigureClips.PoseKind("standing",figure.Poses));
+        }
+        if(changed && playback.Phase=="departure" && !playback.Cancel) figure.FinishPropEntry(FigureClips.PoseKind("standing",figure.Poses));
         double x=PropActionMotion.Number(sample["x"]),z=PropActionMotion.Number(sample["z"]);
         if(phase=="departure") { x=PropActionMotion.Number(plan["departure"]?["seat"]?[0]); z=PropActionMotion.Number(plan["departure"]?["seat"]?[1]); }
         double y=phase is "walking" or "frozen" or "departure" ? OwnPropFloor(figure,plan,x,z) : PropActionMotion.Number(sample["y"]);
         if(phase=="arrived" && !playback.Cancel) AdoptInteraction(figure);
         figure.Position=figure.Target=new((float)x,(float)y,(float)z);
         figure.SetHidden(false);
-        double yaw=phase=="departure" ? playback.StartYaw : PropActionMotion.Number(sample["yaw"])*Math.PI/180;
-        if((phase!="arrived" || figure.Pair is null) && !(phase=="arrived" && HoldsPairFacing(figure))) figure.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true);
+        double yaw=handBackYaw ?? (phase=="departure" ? playback.StartYaw : PropActionMotion.Number(sample["yaw"])*Math.PI/180);
+        if(handBackYaw is { } finalYaw) figure.HandBackPropYaw(finalYaw);
+        else if((phase!="arrived" || figure.Pair is null) && !(phase=="arrived" && HoldsPairFacing(figure))) figure.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true);
         if(phase is "entry" or "arrived" && !playback.AccessLogged) { playback.AccessLogged=true; _log("[prop] motion arrived at access"); }
         if(phase=="departure") {
             double duration=Math.Max(0,PropActionMotion.Number(plan["departure"]?["exit_s"]));

@@ -42,6 +42,7 @@ export interface PropActionOffer {
   effects: PropActionEffect[]
 }
 export interface PropActionDeparture {
+  stand_yaw_deg?: number | null
   seat: [number, number]
   stand: [number, number]
   exit_clip: string

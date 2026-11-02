@@ -7,7 +7,7 @@ import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types'
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { pairBlend, BLEND_S, type PairPose } from '../game/pairBlend';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
-import { entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
+import { handBackYaw, entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
@@ -1496,7 +1496,7 @@ export class NpcManager {
     const motion = this.ownMotions.get(npc.name);
     if (!motion) return false;
     const plan = motion.plan, age = Math.max(0, ((motion.entryPausedAt ?? now) - motion.at) / 1000), sample = motion.frozenPoint ?? sampleMotion(plan, age);
-    const yaw = THREE.MathUtils.degToRad(sample.yaw);
+    let yaw = THREE.MathUtils.degToRad(sample.yaw);
     const floor = plan.floor_y != null ? plan.floor_y + WALK_CLEARANCE_M
       : this.roomStandAt(npc.name, sample.x, sample.z) ?? this.groundY(sample.x, sample.z);
     const changed = motion.phase !== sample.phase;
@@ -1529,6 +1529,16 @@ export class NpcManager {
         console.error(`[prop-entry] ${message}`); this.onPropEntryError?.(message);
       }
     } else {
+      if (sample.phase === 'arrived' && motion.cancel) {
+        const departure = motion.cancel.departure;
+        // Evaluate the endpoint before finishPropEntry clears the measured turn.
+        if (departure.exit_clip) npc.figure?.playPropEntry(departure.exit_clip, 1, plan.height_cm ?? 170,
+          motion.seatYaw ?? yaw, motion.seatY, floor, 0, false);
+        const clipEnd = THREE.MathUtils.radToDeg(npc.figure?.root.rotation.y ?? motion.seatYaw ?? yaw);
+        const decision = handBackYaw(clipEnd, departure.stand_yaw_deg);
+        if (decision.mismatch) console.info(`[prop] stand yaw mismatch clip=${clipEnd.toFixed(1)} server=${departure.stand_yaw_deg}`);
+        yaw = THREE.MathUtils.degToRad(decision.yawDeg);
+      }
       if (changed || rebound || wasDeparture) {
         npc.figure?.finishPropEntry(sample.phase === 'arrived' && !motion.cancel ? heldClip
           : poseClip(sample.phase === 'walking' ? 'walking' : 'standing'));

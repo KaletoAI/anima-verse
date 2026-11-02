@@ -90,6 +90,13 @@ public partial class Figure
         _transition!.Time=time; player.SpeedScale=0; player.Seek(time,true);
         _lift=startLift*(1-fraction); SecondaryFrozen=false; UpdateFigure(0); return true;
     }
+    /// <summary>Hand back the exit heading, discarding facing requests queued while the bridge owned the root.</summary>
+    public void HandBackPropYaw(double yaw)
+    {
+        _pendingYaw=null;
+        Yaw=TargetYaw=yaw;
+        ApplyRotation();
+    }
     /// <summary>Bake the measured rendered displacement into the root before input takes ownership.</summary>
     public void ReleasePropAtRenderedPoint()
     {

@@ -199,3 +199,10 @@ for(const [label,mapPolledAt,current,expected] of [
  assert.equal(scope.snapshot().manualPropRelease,expected,label);
 }
 console.log('prop action release gate: PASS (manualPropRelease ends on a fresh read without a live own run)');
+
+// [turn-exit] Start 90 + turn 90 = 180; wrapping does not create a mismatch.
+for (const [server, yawDeg, mismatch] of [[180,180,false],[0,0,true],[null,180,false],[-180,180,false],[-175,180,false],[-174.9,-174.9,true]]) {
+ assert.equal(typeof motion.handBackYaw, 'function', '[turn-exit] hand-back decision exists');
+ assert.deepEqual(motion.handBackYaw(90 + 90, server), {yawDeg, mismatch});
+}
+console.log('[turn-exit] PASS (clip end, server mismatch, null, wrap and five-degree boundary)');

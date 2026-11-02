@@ -24,9 +24,9 @@ console.log('prop action playback: PASS (own clock, corners, frozen, departure, 
 // Production manager is exercised without WebGL; the figure boundary records exact clip calls.
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-const bundle = await build({stdin:{contents:`export {NpcManager} from './client3d/src/scene/npcs'; export {Figure,setClipRootPath} from './client3d/src/scene/figures'; export * as THREE from 'three';`,
+const bundle = await build({stdin:{contents:`export {NpcManager} from './client3d/src/scene/npcs'; export {Figure,setClipRootPath,setClipRootTurn} from './client3d/src/scene/figures'; export * as THREE from 'three';`,
  resolveDir:fileURLToPath(new URL('../..',import.meta.url)),loader:'ts'},bundle:true,loader:{'.css':'empty'},write:false,platform:'node',format:'esm'});
-const {NpcManager,THREE,Figure,setClipRootPath} = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+const {NpcManager,THREE,Figure,setClipRootPath,setClipRootTurn} = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 const savedPerformance=globalThis.performance; let now=10000;
 globalThis.performance={now:()=>now};
 try {
@@ -121,6 +121,30 @@ try {
  now+=250;manager.tick(.25,10);assert.equal(exitDone,0,'cancel owns the complete exit clip');
  now+=250;manager.tick(.25,10);assert.equal(exitDone,1);assert.equal(root.position.z,-.5);
  assert.equal(manager.hasOwnMotion('avatar'),false,'cancel returns control without a poll');
+ // [turn-exit] A real measured +90 turn from +90 ends at 180, including a skipped departure frame.
+ setClipRootTurn(exit,{times:new Float32Array([0,.5]),yaw:new Float32Array([0,Math.PI/2]),pivot:[0,0,0]});
+ for(const skipped of [false,true]) for(const server of [180,0,null]) {
+  root.position.set(2,.129,0);realFigure.finishPropEntry('sitting');
+  realFigure.faceTowards(new THREE.Vector3(1,0,0),true);
+  const logs=[],savedInfo=console.info;console.info=line=>logs.push(line);
+  try {
+   let ended=0;
+   manager.playOwnCancel('avatar',{seat:[2,0],stand:[2,-.5],exit_clip:'up',exit_s:.5,stand_yaw_deg:server},()=>ended++);
+   if(!skipped){now+=250;manager.tick(.25,10);}
+   now+=500;manager.tick(.5,10);
+   assert.equal(ended,1);
+   const expected=server===0 ? 0 : Math.PI;
+   assert.ok(Math.abs(Math.atan2(Math.sin(realFigure.root.rotation.y-expected),Math.cos(realFigure.root.rotation.y-expected)))<1e-4,
+    '[turn-exit] hand-back retains the measured endpoint');
+   assert.equal(logs.filter(line=>line.startsWith('[prop] stand yaw mismatch')).length,server===0?1:0);
+   manager.setPlayerDriven('avatar');
+   manager.update([{char:{name:'avatar',yaw:expected,activity_animation:'standing'},pos:root.position.clone()}]);
+   manager.tick(0,10);
+   assert.ok(Math.abs(realFigure.root.rotation.y-expected)<1e-4,'[turn-exit] agreeing worldmap cannot reset yaw');
+   manager.setPlayerDriven(null);
+  } finally {console.info=savedInfo;}
+ }
+ console.log('[turn-exit] playback PASS (measured turn, mismatch log, null, skipped frame, worldmap)');
  // Observer local_approach still plays the measured departure while its server lead holds the walk.
  root.position.set(2,.129,0);realFigure.finishPropEntry('sitting');realFigure.faceTowards(new THREE.Vector3(0,0,1),true);
  manager.update([{char:{name:'avatar',activity_animation:'up',travel:{journey_id:'observer-exit'}},pos:root.position.clone(),

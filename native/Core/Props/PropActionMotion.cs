@@ -14,6 +14,13 @@ namespace AnimaNative.Props;
 /// </summary>
 public static class PropActionMotion
 {
+    /// <summary>Keep the measured clip heading unless the server differs by more than five degrees.</summary>
+    public static (double YawDeg, bool Mismatch) HandBackYaw(double clipEndYawDeg, double? standYawDeg)
+    {
+        double delta=standYawDeg is { } server ? Math.IEEERemainder(server-clipEndYawDeg,360) : 0;
+        bool mismatch=Math.Abs(delta)>5;
+        return (mismatch ? standYawDeg!.Value : clipEndYawDeg,mismatch);
+    }
     public static double Number(JsonNode? n)
     {
         if(n is not JsonValue value) return 0;

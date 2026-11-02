@@ -1,3 +1,10 @@
+/** Keep the measured clip heading unless the server differs by more than five degrees. */
+export function handBackYaw(clipEndYawDeg: number, standYawDeg: number | null | undefined): { yawDeg: number; mismatch: boolean } {
+  const delta = standYawDeg == null ? 0 : ((standYawDeg - clipEndYawDeg) % 360 + 540) % 360 - 180;
+  const mismatch = Math.abs(delta) > 5;
+  return { yawDeg: mismatch ? standYawDeg! : clipEndYawDeg, mismatch };
+}
+
 type Point = readonly [number, number];
 interface LocalPath {
   waypoints: readonly Point[];
