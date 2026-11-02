@@ -2759,8 +2759,9 @@ Versatz von bis zu einem Poll zwischen zwei Clients fällt bei einem Einmal-Clip
 `role` des Paars `kind` am Anker der laufenden Aktion (`interaction.anchor`, Wurzel aus der Abschluss-Hälfte wie
 in § A8a); Solo: der Clip `kind` (Set-Kette der Figur) an ihrem Platz. Danach zurück in den Clip der Aktion,
 dessen Phase aus `interaction.elapsed_s` bzw. der Platz-Pose unverändert weitergelaufen ist. Der Partner bleibt
-in seiner Schleife — der Abschluss gehört nur einer Person. Die Uhr des Abschlusses steht in einer eingefrorenen
-Welt NICHT (Systemzeit, wie jeder Einmal-Clip). Endet die Aktion (kein `interaction`/`place` mehr), endet auch
+in seiner Schleife — der Abschluss gehört nur einer Person. Die Uhr des Clients für den Clip läuft auf der
+Frame-Zeit und steht in einer eingefrorenen Welt wie die Paar-Uhr daneben; der Server zählt `elapsed_s` und das
+Anzeigefenster in Systemzeit. Fehlt der Figur der Clip, entfällt der Abschluss — nie die Aktion. Endet die Aktion (kein `interaction`/`place` mehr), endet auch
 ein noch laufender Abschluss. Der Server lässt das Feld bis **4 s nach Clipende** stehen (damit jeder Poll es
 einmal sieht) und hält den Abschluss nur im Prozess (Neustart = weg); solange steht, lehnt er einen neuen
 Abschluss derselben Person ab.
