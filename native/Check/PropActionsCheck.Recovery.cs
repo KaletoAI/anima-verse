@@ -259,6 +259,21 @@ public static partial class PropActionsCheck
             lazy.Complete(); Step(0); Is("observer fits measured clip",observer.PropEntry?.Played==true); Near("observer public entry clock",observer.ClipTime,1); Near("observer public support lift",observer.PropEntryLift,.0645);
             var oldEntry=observer.PropEntry; npcEntry["characters"]![1]!["prop_action_entry"]!["elapsed_game_s"]=2.5;
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(npcEntry)); Step(0); Is("observer elapsed poll retains identity",ReferenceEquals(oldEntry,observer.PropEntry)); Near("observer elapsed poll seeks clock",observer.ClipTime,1.25);
+
+            // The entry ends in a furniture PAIR: the row holds the prop seat AND the interaction, its activity is the bare
+            // pair kind "pair-pose" (no rig binds it). The NPC plays its half pair-pose__b at the anchor — the held-pose
+            // commit must not stay pending on the bare kind (fails on 781bd9c1: the figure kept its entry clip).
+            observer.Player!.GetAnimationLibrary("").AddAnimation("pair-pose__b",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
+            mgr.Clips.Index.PairRoots["pair-pose__b"]=new RootPath(new float[]{0},new float[]{0,0});
+            var paired=Read("worldmap_entry.json"); var npcRow=paired["characters"]![1]!;
+            paired["characters"]![0]!["prop_action_entry"]=null; npcRow["prop_action_entry"]=null; npcRow["activity_animation"]="pair-pose";
+            npcRow["place"]=JsonNode.Parse("""{"id":"prop-bench-56-seat56","slot":1,"x":2,"z":0,"facing":180,"room_id":"r-props"}""");
+            npcRow["interaction"]=JsonNode.Parse("""{"id":"npc-pair","kind":"pair-pose","role":"b","partner":"fixture-avatar","anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(paired)); Step(.1);
+            Is($"NPC partner leaves the entry for its pair (entry={observer.PropEntry is not null} pending={observer.PropCommitPending})",observer.PropEntry is null && !observer.PropCommitPending && observer.Pair is not null);
+            Is($"NPC partner plays its pair half (clip={observer.CurrentClip})",observer.CurrentClip=="pair-pose__b");
+            Step(.4);   // past the 0.4 s pair blend from where the entry left the figure
+            Near("NPC partner stands at the pair anchor x",observer.Position.X,2); Near("NPC partner stands at the pair anchor z",observer.Position.Z,0);
             return checks;
         } finally { offers?.Dispose(); position?.Dispose(); hud.Free(); builder.StopResidency(); builder.Models?.FreeAll(); world.QueueFree(); }
     }

@@ -69,7 +69,9 @@ public partial class FigureManager
                 if((row.Place is not null || row.Interaction is not null) && Slots is null) return true;
             }
             string commit="";
-            if(row.Place is { } place && Slots?.Invoke().GetValueOrDefault(row.LocationId) is { } tile
+            // A running pair owns clip and placement (TickPair, npcs.ts tickInteraction): its activity is the bare pair
+            // KIND, which no rig binds — committing it would leave the commit pending and keep the half from playing.
+            if(row.Interaction is null && row.Place is { } place && Slots?.Invoke().GetValueOrDefault(row.LocationId) is { } tile
                 && tile.Places.Markers.TryGetValue(row.RoomId,out var markers)
                 && markers.TryGetValue(place.Id,out var marker) && marker.Fixed && !plan.Hidden
                 && !(fig.CharacterName==AvatarName && SuppressAvatarPropEntry?.Invoke()==true)) {
