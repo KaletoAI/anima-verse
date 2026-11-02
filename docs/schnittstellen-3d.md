@@ -2425,6 +2425,25 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   prop-action cancel, and the stand point of `room_stand`. The client resolver
   is unchanged: pose keys never equal `@seat` etc., and these server entry
   targets do not expand into client clip rules.
+- **Brücke aus einer Paar-Pose** (2026-11-02, Folge-Pose F2,
+  plan-folge-pose.md): Nach einem Paar hält ein Renderer die gespielte
+  Hälfte `<kind>__<role>` als Clip, den die Figur verlässt (client3d
+  `Figure.playPair`, native `Figure.PlayPair`: `currentKind = clipName`).
+  Eine Regel mit einer Paar-Pose als `from` erscheint in `transition_clips`
+  darum als ihre Hälften `<kind>__a` / `<kind>__b` und die Hälften ihres
+  Abschluss-Clips (`finale_animation` oder Paket-Automatik) — nie als die
+  bloße Paar-Art, die keine Figur spielt. `kind` darf in einer solchen Regel
+  `{a, b}` sein, eine Brücke je Clip-Rolle (zwei Figuren desselben Sets
+  bekämen sonst dieselbe Brücke); eine Hälfte ohne eigene Brücke fehlt in
+  `transition_clips`. Eine Solo-Pose mit Abschluss nennt zusätzlich ihren
+  Abschluss-Clip als `from`. Die Renderer ändern sich nicht: Sie suchen wie
+  bisher `clipTransition(currentKind, kind)` (Smokes
+  `scripts/smoke_follow_pose.py` [9]–[10], `scripts/smoke_follow_bridge_client.mjs`).
+  Serverseitige Leser einer Regel nehmen die Brücke über
+  `animation_clips.rule_kind(rule, role)`; ohne Rolle hat eine Regel je Rolle
+  keine Brücke. Die Folge-Pose selbst ist eine gewöhnliche Pose an einem Platz,
+  neue Payload-Felder gibt es nicht; liegt ihr Slot nicht am Rollenpunkt, springt
+  die Figur dorthin wie beim Aufstehen ohne Clip.
 - **Loop oder letztes Bild** (2026-09-13, E5): Jeder Clip der Auflistung trägt
   `loop` — `true` = wiederholen, `false` = letztes Bild halten (Three.js
   `LoopOnce` + `clampWhenFinished`). Das Kennzeichen setzt der Admin NACH dem

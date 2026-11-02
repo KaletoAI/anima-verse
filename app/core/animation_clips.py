@@ -472,6 +472,41 @@ def _validate_transition_group(src: str, dst: str) -> None:
             raise ClipLibraryError("place group target requires from == 'walking'")
 
 
+#: The clip roles a bridge may be named for, one each (pair pose as ``from``).
+BRIDGE_ROLES = ("a", "b")
+
+
+def normalize_rule_kind(raw: Any) -> Any:
+    """A rule's bridge as stored: one clip kind, or ``{a, b}`` — a bridge per
+    clip ROLE, for a rule leaving a pair pose (two figures of one set would
+    otherwise both play the same half's bridge). A JSON text of such a map
+    (the world table's column) is read back as the map; a map with no kind
+    left is ""."""
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return ""
+    if isinstance(raw, dict):
+        roles = {r: str(raw.get(r) or "").strip().lower() for r in BRIDGE_ROLES}
+        roles = {r: k for r, k in roles.items() if k}
+        return roles or ""
+    return str(raw or "").strip().lower()
+
+
+def rule_kind(rule: Optional[Dict[str, Any]], role: str = "") -> str:
+    """The bridge clip ``rule`` plays for clip role ``role`` ("" = none). A
+    per-role rule answers only for a named role."""
+    kind = (rule or {}).get("kind") or ""
+    return kind.get(role, "") if isinstance(kind, dict) else str(kind)
+
+
+def rule_kinds(rule: Dict[str, Any]) -> List[str]:
+    """Every bridge clip ``rule`` names."""
+    kind = rule.get("kind") or ""
+    return [k for k in (kind.values() if isinstance(kind, dict) else [kind]) if k]
+
+
 def load_shared_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """The transition rules as ``[{from, to, kind}]``, junk entries dropped.
 
@@ -486,7 +521,7 @@ def load_shared_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]
             continue
         src = str(raw.get("from") or "").strip().lower()
         dst = str(raw.get("to") or "").strip().lower()
-        kind = str(raw.get("kind") or "").strip().lower()
+        kind = normalize_rule_kind(raw.get("kind"))
         if not src or not dst or not kind:
             continue
         try:
@@ -514,7 +549,7 @@ def world_transitions() -> List[Dict[str, Any]]:
         if "no such table" not in str(exc):
             raise
         return []
-    return [{"from": src, "to": dst, "kind": kind, "accel": _accel(accel)}
+    return [{"from": src, "to": dst, "kind": normalize_rule_kind(kind), "accel": _accel(accel)}
             for src, dst, kind, accel in rows]
 
 
@@ -528,7 +563,8 @@ def _write_world_transitions(rules: List[Dict[str, Any]]) -> None:
         conn.executemany(
             "INSERT INTO clip_transitions_world (from_pose, to_pose, kind, accel, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            [(r["from"], r["to"], r["kind"], r["accel"], now) for r in rules])
+            [(r["from"], r["to"], json.dumps(r["kind"], sort_keys=True) if isinstance(r["kind"], dict)
+              else r["kind"], r["accel"], now) for r in rules])
 
 
 def replace_world_transitions(rules: Any) -> List[Dict[str, Any]]:
@@ -564,7 +600,7 @@ def effective_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     shared = {(r["from"], r["to"]): r for r in load_shared_transitions(path)}
     out = []
     for rule in load_transitions(path):
-        if rule.get("store", "shared") == "world" and rule["kind"] not in solo:
+        if rule.get("store", "shared") == "world" and any(k not in solo for k in rule_kinds(rule)):
             fallback = shared.get((rule["from"], rule["to"]))
             if fallback is not None:
                 out.append(dict(fallback, store="shared"))
@@ -674,9 +710,10 @@ def save_transitions(entries: Any,
             store = raw.get("store", "shared")
             if store not in ("shared", "world"):
                 raise ClipLibraryError(f"rule {i + 1}: store must be shared or world")
-            if store == "shared" and rule["kind"] not in free:
+            licensed = [k for k in rule_kinds(rule) if k not in free]
+            if store == "shared" and licensed:
                 raise ClipLibraryError(
-                    f"rule {i + 1}: bridge clip {rule['kind']} is licensed — it belongs to the world layer")
+                    f"rule {i + 1}: bridge clip {licensed[0]} is licensed — it belongs to the world layer")
             layer = shared if store == "shared" else world
             pair = (rule["from"], rule["to"])
             if pair in seen[store]:
@@ -727,12 +764,21 @@ def _validate_transitions(entries: Any, offset: int = 0,
             if value != TRANSITION_ANY:
                 if "/" in value or "*" in value:
                     raise ClipLibraryError(f"rule {i + 1}: invalid pose key on {side}")
-        kind = validate_kind(raw.get("kind"))
+        kind = normalize_rule_kind(raw.get("kind"))
+        if isinstance(kind, dict):
+            from app.core.pose_catalog import get_catalog
+            if (get_catalog("pose").get(src) or {}).get("solo", True):
+                raise ClipLibraryError(
+                    f"rule {i + 1}: a bridge per role needs a pair pose as 'from'")
+            kind = {r: validate_kind(k) for r, k in kind.items()}
+        else:
+            kind = validate_kind(raw.get("kind"))
         if solo is None:
             solo = _solo_kinds()
-        if kind not in solo:
-            raise ClipLibraryError(
-                f"rule {i + 1}: no solo clip of kind '{kind}' in any library")
+        for one in (kind.values() if isinstance(kind, dict) else [kind]):
+            if one not in solo:
+                raise ClipLibraryError(
+                    f"rule {i + 1}: no solo clip of kind '{one}' in any library")
         if (src, dst) in seen:
             raise ClipLibraryError(
                 f"rule {i + 1}: '{src}' to '{dst}' is already ruled")
@@ -766,6 +812,16 @@ def _pose_kind_maps() -> Tuple[Dict[str, str], Dict[str, str]]:
 def _transition_pairs(rule: Dict[str, Any], maps: Tuple[Dict[str, str], Dict[str, str]]):
     """The clip pairs a pose rule stands for: played kinds before shipped
     ones, a pose this world does not know gives none, ``*`` stays ``*``."""
+    return [(src, dst) for src, dst, _role in _transition_triples(rule, maps)]
+
+
+def _transition_triples(rule: Dict[str, Any], maps,
+                        leaving: Optional[Dict[str, List[Tuple[str, str]]]] = None):
+    """``(from clip, to clip, clip role)`` a pose rule stands for. A pose the
+    figure LEAVES may play more than its own kind (``leaving``, pose ->
+    kinds): a pair pose plays its halves ``<kind>__a`` / ``<kind>__b`` — and
+    its finale's — so a rule out of a pair pose names those, each with its
+    role; a solo pose may still show its finale clip."""
     played, shipped = maps
 
     def kinds(key):
@@ -773,23 +829,58 @@ def _transition_pairs(rule: Dict[str, Any], maps: Tuple[Dict[str, str], Dict[str
             return [TRANSITION_ANY]
         return list(dict.fromkeys(k for k in (played.get(key, ""), shipped.get(key, "")) if k))
 
-    return [(src, dst) for src in kinds(rule["from"])
+    sources = [(kind, "") for kind in kinds(rule["from"])]
+    if leaving and rule["from"] in leaving:
+        sources = list(dict.fromkeys(leaving[rule["from"]]))
+    return [(src, dst, role) for src, role in sources
             for dst in kinds(rule["to"]) if src != dst]
+
+
+def _leaving_kinds(rules: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
+    """``{pose: [(clip, role), …]}`` for the ``from`` poses of ``rules`` that
+    play more than their own kind: a pair pose's halves (and its finale's),
+    a solo pose's own kind plus its finale. Only poses the rules name."""
+    from app.core.pose_catalog import get_catalog
+    catalog = get_catalog("pose")
+    out: Dict[str, List[Tuple[str, str]]] = {}
+    for key in {r["from"] for r in rules}:
+        entry = catalog.get(key)
+        if not entry or not entry.get("animation"):
+            continue
+        finale = entry.get("finale_animation") or ""
+        if not finale:
+            try:
+                from app.core.prop_action_engine import auto_finale
+                finale = auto_finale(key, entry)
+            except Exception:
+                finale = ""
+        own = [entry["animation"]] + ([finale] if finale and finale != entry["animation"] else [])
+        if entry.get("solo", True):
+            if finale:
+                out[key] = [(kind, "") for kind in own]
+        else:
+            out[key] = [(f"{kind}{ROLE_SEPARATOR}{role}", role) for kind in own for role in BRIDGE_ROLES]
+    return out
 
 
 def client_transition_rules(rules=None) -> List[Dict[str, Any]]:
     """The pose rules translated into the CLIP rules the 3D client switches
     by (it knows clip kinds, not poses); the first rule to occupy a clip
-    pair keeps it."""
+    pair keeps it. A rule out of a pair pose names its halves as ``from``
+    (the clients play ``<kind>__<role>``), each with the bridge of its role
+    (``rule_kind``); a half without one is left out."""
     maps = _pose_kind_maps()
+    table = effective_transitions() if rules is None else rules
+    leaving = _leaving_kinds(table)
     out = []
     seen = set()
-    for rule in effective_transitions() if rules is None else rules:
-        for src, dst in _transition_pairs(rule, maps):
-            if (src, dst) in seen:
+    for rule in table:
+        for src, dst, role in _transition_triples(rule, maps, leaving):
+            kind = rule_kind(rule, role) if role else rule_kind(rule)
+            if not kind or (src, dst) in seen:
                 continue
             seen.add((src, dst))
-            out.append({"from": src, "to": dst, "kind": rule["kind"],
+            out.append({"from": src, "to": dst, "kind": kind,
                         "accel": _accel(rule.get("accel"))})
     return out
 
@@ -814,7 +905,7 @@ def annotated_transitions(rules=None) -> List[Dict[str, Any]]:
             row[side + "_kind"] = TRANSITION_ANY if key == TRANSITION_ANY else played.get(key, "")
             row[side + "_public_kind"] = (TRANSITION_ANY if key == TRANSITION_ANY
                                           else shipped.get(key, ""))
-        row["bridge_public"] = rule["kind"] in free
+        row["bridge_public"] = all(k in free for k in rule_kinds(rule))
         row["conflict"] = any(pair in seen for pair in pairs)
         seen.update(pairs)
         out.append(row)

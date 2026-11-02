@@ -1358,9 +1358,9 @@ def _exit_motion(pose, before, after):
     """The released place's departure, shared by state and cancel answers."""
     kind, seconds = travel.exit_bridge_for_pose(pose)
     if not kind:
-        from app.core.animation_clips import clip_meta, resolve_pose_transition
+        from app.core.animation_clips import clip_meta, resolve_pose_transition, rule_kind
         rule = resolve_pose_transition(pose, "standing") or {}
-        kind = str(rule.get("kind") or "")
+        kind = rule_kind(rule)
         seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
     return dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
                 exit_clip=kind, exit_s=round(seconds, 3),
@@ -1663,13 +1663,13 @@ def register_owner():
 
 def _entry_capability(pose):
     """The same static clip guard used before routing and at actual entry."""
-    from app.core.animation_clips import resolve_pose_transition, clip_meta, _solo_kinds
+    from app.core.animation_clips import resolve_pose_transition, clip_meta, _solo_kinds, rule_kind
     # The pose's own rule, else its group's (walking → @seat), including pair
     # poses' catalog groups.
     rule = resolve_pose_transition("walking", pose)
     if not rule:
         return None, "missing_entry_transition"
-    kind = rule["kind"]
+    kind = rule_kind(rule)
     meta = clip_meta(kind)
     if kind not in _solo_kinds() or not meta or meta.get("pair"):
         return None, "missing_entry_transition"

@@ -686,11 +686,11 @@ def exit_bridge_for_pose(pose_key: str) -> Tuple[str, float]:
     answer ``("", 0.0)``, and nothing here raises.
     """
     try:
-        from app.core.animation_clips import clip_meta, resolve_pose_transition
+        from app.core.animation_clips import clip_meta, resolve_pose_transition, rule_kind
         rule = resolve_pose_transition(pose_key, "walking")
         if not rule or float(rule.get("accel") or 0) > 0:
             return "", 0.0
-        via = str(rule.get("kind") or "")
+        via = rule_kind(rule)
         meta = clip_meta(via) or {}
         seconds = float(meta.get("duration_s") or 0.0)
         return (via, seconds) if seconds > 0 else ("", 0.0)

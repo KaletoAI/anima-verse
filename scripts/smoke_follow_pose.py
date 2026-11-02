@@ -37,6 +37,18 @@ storage + instance, no server, no real world). Expected values, by hand:
     "moved" gives no follow.
 [8] FINISH. ``/play/self/activity`` with ``finish``: a free ``dancing``
     with follow ``kneeling`` goes into kneeling; without a follow it clears.
+[9] BRIDGE RULES FOR THE CLIENTS (F2). The clients play a pair half as
+    ``<kind>__<role>`` and keep that as the clip they leave. A rule
+    ``run-pair -> sitting`` with bridge ``run-up`` therefore reaches them as
+    ``run-pair__a -> sit`` and ``run-pair__b -> sit``, both ``run-up`` — and,
+    with the finale ``run-pair-end``, ``run-pair-end__a/b -> sit`` too: 4 rows.
+    A per-role bridge ``{a: run-up, b: run-up-b}`` gives the b halves
+    ``run-up-b``; ``{a: run-up}`` alone leaves the b halves out (2 rows).
+    A solo pose with a finale (``dancing`` -> ``run-end``) names both its own
+    clip ``dance`` and ``run-end`` as ``from`` (to ``kneeling``, its own kind).
+[10] VALIDATION. A per-role bridge on a solo ``from`` is refused; a per-role
+    bridge naming a clip no library has is refused; the world table stores
+    the map and reads it back equal.
 """
 import json
 import sys
@@ -273,6 +285,65 @@ class FollowPose(unittest.TestCase):
         self.assertEqual(F.C.get_character_profile(name)["pose_key"], "kneeling")
         self.assertFalse(play._finish_into_follow(name))      # kneeling has no follow
         set_entry("dancing", follow_pose=None)
+
+
+def bridge_clips():
+    directory = F.ROOT / "clips"
+    directory.mkdir(exist_ok=True)
+    for kind in ("run-up", "run-up-b", "run-end"):
+        (directory / f"{kind}.fbx").write_bytes(b"private bridge fixture")
+        (directory / f"{kind}.json").write_text(json.dumps(dict(kind=kind, duration_s=1.2, loop=False)))
+    for role in ("a", "b"):
+        (directory / f"run-pair-end__{role}.fbx").write_bytes(b"private finale fixture")
+    (directory / "run-pair-end.json").write_text(json.dumps(dict(
+        kind="run-pair-end", pair=True, duration_s=1.5, loop=False)))
+    clips._clear_entries_cache()
+
+
+class FollowBridge(unittest.TestCase):
+    tearDown = RUNS.Runs.tearDown
+
+    def rows(self, kind, **extra):
+        rules = [dict(dict(extra.get("rule") or {}), **{"from": "run-pair", "to": "sitting", "kind": kind,
+                                                       "accel": 0})]
+        return [(r["from"], r["to"], r["kind"]) for r in clips.client_transition_rules(rules)]
+
+    def test_9_pair_halves_and_finale(self):
+        RUNS.authored_pair()
+        bridge_clips()
+        set_entry("run-pair", finale_animation=None)
+        self.assertEqual(self.rows("run-up"), [("run-pair__a", "sit", "run-up"), ("run-pair__b", "sit", "run-up")])
+        set_entry("run-pair", finale_animation="run-pair-end")
+        self.assertEqual(self.rows("run-up"), [
+            ("run-pair__a", "sit", "run-up"), ("run-pair__b", "sit", "run-up"),
+            ("run-pair-end__a", "sit", "run-up"), ("run-pair-end__b", "sit", "run-up")])
+        self.assertEqual(self.rows({"a": "run-up", "b": "run-up-b"}), [
+            ("run-pair__a", "sit", "run-up"), ("run-pair__b", "sit", "run-up-b"),
+            ("run-pair-end__a", "sit", "run-up"), ("run-pair-end__b", "sit", "run-up-b")])
+        self.assertEqual(self.rows({"a": "run-up"}), [
+            ("run-pair__a", "sit", "run-up"), ("run-pair-end__a", "sit", "run-up")])
+        set_entry("run-pair", finale_animation=None)
+        set_entry("dancing", finale_animation="run-end")
+        solo = clips.client_transition_rules([{"from": "dancing", "to": "kneeling", "kind": "run-up", "accel": 0}])
+        self.assertEqual([(r["from"], r["to"], r["kind"]) for r in solo],
+                         [("dance", "kneeling", "run-up"), ("run-end", "kneeling", "run-up")])
+        set_entry("dancing", finale_animation=None)
+
+    def test_10_validation_and_world_roundtrip(self):
+        RUNS.authored_pair()
+        bridge_clips()
+        with self.assertRaisesRegex(clips.ClipLibraryError, "needs a pair pose"):
+            clips._validate_transitions([{"from": "dancing", "to": "sitting", "kind": {"a": "run-up"}}])
+        with self.assertRaisesRegex(clips.ClipLibraryError, "no solo clip of kind 'no-such-bridge'"):
+            clips._validate_transitions([{"from": "run-pair", "to": "sitting",
+                                          "kind": {"a": "run-up", "b": "no-such-bridge"}}])
+        saved = clips.replace_world_transitions([{"from": "run-pair", "to": "sitting",
+                                                  "kind": {"b": "Run-Up-B", "a": "run-up"}}])
+        self.assertEqual(saved[0]["kind"], {"a": "run-up", "b": "run-up-b"})
+        self.assertEqual(clips.world_transitions()[0]["kind"], {"a": "run-up", "b": "run-up-b"})
+        self.assertEqual(clips.rule_kind(clips.resolve_pose_transition("run-pair", "sitting"), "b"), "run-up-b")
+        self.assertEqual(clips.rule_kind(clips.resolve_pose_transition("run-pair", "sitting")), "")
+        clips._write_world_transitions([])
 
 
 if __name__ == "__main__":
