@@ -30,6 +30,8 @@ import { ClipCatalog } from './ClipCatalog'
 import { ClipInbox } from './ClipInbox'
 import { ClipLibrary } from './ClipLibrary'
 import { ClipTransitions } from './ClipTransitions'
+import { PoseTransitionDialog } from './PoseTransitionDialog'
+import { PoseTransitionChoice, type TransitionJob } from './PoseTransitionChoice'
 import { clipCoverage, setLabel } from './clipSets'
 import type { ClipListing } from './clipSets'
 import { ClipPreview } from './ClipPreview'
@@ -227,6 +229,11 @@ export function PosesTab() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [animationDialog, setAnimationDialog] = useState<PoseAnimationRequest | null>(null)
+  const [transitionOpen, setTransitionOpen] = useState(false)
+  const [transitionJobs, setTransitionJobs] = useState<TransitionJob[]>([])
+  const [transitionChoice, setTransitionChoice] = useState<TransitionJob | null>(null)
+  const [transitionRefresh, setTransitionRefresh] = useState(0)
+  const [transitionError, setTransitionError] = useState('')
   const [animationJobs, setAnimationJobs] = useState<AnimationJob[]>([])
   const [jobsRefresh, setJobsRefresh] = useState(0)
   const jobStatuses = useRef(new Map<string, AnimationJob['status']>())
@@ -278,6 +285,30 @@ export function PosesTab() {
     await loadClips()
     await load()
   }, [load, loadClips])
+
+  useEffect(() => {
+    if (axis !== 'pose') return
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      try {
+        const result = await apiGet<{ jobs: TransitionJob[] }>('/poses/transition-jobs')
+        if (disposed) return
+        setTransitionJobs(result.jobs)
+        setTransitionError('')
+        if (result.jobs.some((j) => j.status === 'pending' || j.status === 'running' || j.state === 'publishing')) {
+          timer = setTimeout(() => { void poll() }, 4000)
+        }
+      } catch (error) {
+        if (!disposed) {
+          setTransitionError((error as Error).message)
+          timer = setTimeout(() => { void poll() }, 4000)
+        }
+      }
+    }
+    void poll()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [axis, transitionRefresh])
 
   useEffect(() => {
     let disposed = false
@@ -805,7 +836,27 @@ export function PosesTab() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
-        <ClipTransitions poses={data.entries} onSaved={() => { void loadClips() }} />
+        <div style={{ padding: 8 }}>
+          <button type="button" className="ga-btn ga-btn-primary" onClick={() => setTransitionOpen(true)}>{t('Generate transition')}</button>
+          {transitionError ? <p role="alert">{t('Error')}: {transitionError}</p> : null}
+          {transitionJobs.map((job) => <div key={job.task_id} style={{ display: 'flex', gap: 8, padding: 6, alignItems: 'center' }}>
+            <span>{job.request.start_pose} → {job.request.target_pose} · {t(job.state || job.phase || job.status)}</span>
+            {job.error ? <span role="alert">{job.error}</span> : null}
+            {job.state === 'awaiting_choice' ? <button type="button" className="ga-btn ga-btn-sm" onClick={() => setTransitionChoice(job)}>{t('Choose a transition')}</button> : null}
+            {['failed', 'cancelled'].includes(job.status) || ['published', 'discarded', 'expired'].includes(job.state || '')
+              ? <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
+                void apiPost(`/poses/transition-jobs/${job.task_id}/dismiss`, {}).then(() => setTransitionRefresh((n) => n + 1))
+                  .catch((error: Error) => setTransitionError(error.message))
+              }}>{t('Dismiss')}</button> : null}
+          </div>)}
+        </div>
+        <ClipTransitions key={transitionRefresh} poses={data.entries} onSaved={() => { void loadClips() }} />
+        {transitionOpen ? <PoseTransitionDialog poses={data.entries} listing={clipList} onClose={() => setTransitionOpen(false)}
+          onStarted={() => { setTransitionOpen(false); setTransitionRefresh((n) => n + 1) }} /> : null}
+        {transitionChoice ? <PoseTransitionChoice key={transitionChoice.task_id} job={transitionChoice} poses={data.entries} listing={clipList}
+          onClose={() => setTransitionChoice(null)} onDecided={() => {
+            setTransitionChoice(null); setTransitionRefresh((n) => n + 1); void reloadLibrary()
+          }} /> : null}
       </div>
     )
   }

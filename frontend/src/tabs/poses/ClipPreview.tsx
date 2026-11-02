@@ -102,7 +102,7 @@ interface ApiClip {
  *  previews a TRIAL clip, which is in no library and has no kind yet. */
 export interface ClipUrls { a?: string; b?: string; solo?: string }
 
-interface RootPath { times: ArrayLike<number>; xyz: Float32Array }
+export interface RootPath { times: ArrayLike<number>; xyz: Float32Array }
 
 /** Root path of a half: hips XZ per key, clip centimetres → metres.
  *
@@ -110,7 +110,7 @@ interface RootPath { times: ArrayLike<number>; xyz: Float32Array }
  *  (`standHipsRef`, the reference rig's rest hips height) — a clip without a
  *  hips track carries no height of its own, so it is played at exactly that
  *  reference and the figure stays where it binds. */
-function rootPath(clip: AnimationClip, standRefM: number): RootPath {
+export function rootPath(clip: AnimationClip, standRefM: number): RootPath {
   const track = clip.tracks.find((tr) => tr.name.endsWith('.position') && /hips/i.test(tr.name))
   if (!track) return { times: [0], xyz: new Float32Array([0, standRefM, 0]) }
   const n = track.times.length
@@ -119,7 +119,7 @@ function rootPath(clip: AnimationClip, standRefM: number): RootPath {
   return { times: track.times, xyz }
 }
 
-function rootAt(path: RootPath, t: number) {
+export function rootAt(path: RootPath, t: number) {
   const { times, xyz } = path
   const n = times.length
   const at = (i: number) => ({ x: xyz[i * 3], y: xyz[i * 3 + 1], z: xyz[i * 3 + 2] })
@@ -588,4 +588,13 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
       ) : null}
     </div>
   )
+}
+
+/** Shared lazy FBX loader for the transition previews. */
+export async function loadPreviewClip(url: string) {
+  const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+  const object = await new FBXLoader().loadAsync(url)
+  const clip = object.animations[0]
+  if (!clip) throw new Error('No animation in clip')
+  return { object, clip }
 }
