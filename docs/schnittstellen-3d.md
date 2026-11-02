@@ -2642,6 +2642,47 @@ nicht-binären Figur ihre; entscheidet nichts (gleiches Geschlecht, kein
 Geschlecht, keine Zuordnung), spielt der Initiator A — abgelehnt wird deswegen
 nie. Regel + handgerechnete Tabelle: `interaction_engine.assign_roles`,
 `scripts/smoke_pair_role_gender.py`.
+
+**Gruppen-Clips (G1, 2026-11-02, plan-gruppen-animationen.md).** Ein Paar ist
+der Fall N = 2 eines Clips mit Rollen `a`..`e` (`animation_clips.CLIP_ROLES`):
+`<kind>__a.fbx` … `<kind>__e.fbx`, lückenlos ab `a`. Eine Datei `…__f` ist
+keine Rolle, sondern ein gewöhnlicher Kind-Name (Testvektor
+`shared/test-vectors/pair_clip_geometry.json`). Das Sidecar nennt die Rollen
+in `roles: ["a","b","c"]`; ein Paar-Sidecar ohne `roles` liest sich als
+`a`/`b`. `pair` heißt „hat Rollen“, also ab zwei. `pair_kinds` listet nur die
+vollständigen Kinds mit GENAU zwei Rollen, `groups.<kind>` die mit drei bis
+fünf (`roles`, `duration_s`, `fps`, `frames`, `geometry`, `role_gender`).
+Der Rahmen bleibt die Paar-Regel, auf N verallgemeinert
+(`app/blender/scripts/_group_frame.py`, handgerechnet in
+`scripts/smoke_group_frame.py`):
+- Ankerframe = kleinste Summe der Abstände A → jede andere Rolle (bei N = 2
+  der kleinste A–B-Abstand).
+- +X = A → B.
+- Ursprung = Schwerpunkt aller Wurzeln am Ankerframe (bei N = 2 die Mitte).
+
+Der Kontaktabgleich (das Rig hat andere Arme als der Darsteller) verhält sich
+je nach Rollenzahl:
+- Ein Paar teilt die Lücke wie bisher, jede Hälfte rückt um die Hälfte.
+- Eine Gruppe wächst von A aus. Als Nächstes kommt die Rolle mit dem nächsten
+  Darsteller-Kontakt (eine Hand beteiligt) zu einer schon eingepassten Rolle.
+  Sie rückt um die ganze Lücke auf diese zu; A bewegt sich nie.
+- Protokoll: `geometry.contact` beim Paar, `geometry.contacts.<rolle>` mit
+  `to`, `hands`, `actor_distance_m`, `rig_distance_m` und `shift_m` bei der
+  Gruppe.
+
+Beim Import (`POST /assets/clips-inbox/import|preview`):
+- `files` nimmt bis zu fünf Quellen in Rollenreihenfolge.
+- `offsets_m: {"<rolle>": [seitlich, hoch, vorwärts]}` ersetzt `offset_b_m`
+  (Pack-Angaben wie „Mann −0,3 vorwärts“).
+- Die Vorschau liefert `urls.<rolle>`.
+
+`role_gender` einer Gruppe nennt JEDE Rolle (`male`/`female`), nicht alle
+gleich, sonst gilt sie als nicht zugeordnet. Der Import leitet sie aus den
+Take- bzw. Dateinamen ab („Female…“ / „Male…“). Eine Gruppe lässt sich nicht
+per `partner_shift_cm` ausrichten, ihre Rollen werden beim Import
+ausgerichtet. Das Abspielen von Gruppen (Anker, Platz, Rollenwahl) folgt in
+G2/G3; bis dahin spielt nur die Clip-Vorschau sie.
+
 Erzeugung: `scripts/clip_import_cmu.py` (CMU-Mocap → Mixamo-Skelett, Blender
 headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
 

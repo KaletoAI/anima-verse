@@ -124,6 +124,15 @@
       "args": [
         "x__c"
       ],
+      "expect": true,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] x__f",
+      "fn": "isPairClipName",
+      "args": [
+        "x__f"
+      ],
       "expect": false,
       "eps": 1e-09
     },

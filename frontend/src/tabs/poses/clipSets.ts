@@ -32,9 +32,10 @@ export interface ApiClipRow {
   fps?: number | null
   frames?: number | null
   loop?: boolean
-  /** Pair halves only: which gender plays which half (`{a: 'male', b: 'female'}`
-   *  or reversed); empty = not assigned, the initiator plays A. */
-  role_gender?: { a?: string; b?: string }
+  /** Pair and group halves only: which gender plays which role
+   *  (`{a: 'male', b: 'female'}` or reversed; a group names every role up to
+   *  `e`); empty = not assigned, the initiator plays A. */
+  role_gender?: Record<string, string>
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */

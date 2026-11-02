@@ -364,7 +364,7 @@ network or a DOM. The canonical source smokes also run their own vectors:
 |---|---|---:|
 | `pair_blend.json` | `smoke_pair_blend.mjs` | 12 |
 | `pair_clip_phase.json` | `smoke_pair_realtime.mjs` | 32 |
-| `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 22 |
+| `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 23 |
 | `pair_height.json` | `smoke_pair_storey.mjs` | 12 |
 | `figure_normalisation.json` | `smoke_figure_normalisation.mjs` | 4 |
 

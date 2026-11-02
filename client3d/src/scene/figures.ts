@@ -738,9 +738,10 @@ function relockOnRig(charName: string, clips: readonly THREE.AnimationClip[],
   else console.info(`[figures] ${charName}: ${line}`);
 }
 
-/** `<kind>__a` / `<kind>__b` — the half of a pair clip (contract § A8a). */
+/** `<kind>__a` … `<kind>__e` — a role file of a pair or group clip (contract
+ *  § A8a; a group continues the letters up to `__e`). Never a solo kind. */
 export function isPairClipName(name: string): boolean {
-  return /__[ab]$/.test(name);
+  return /__[a-e]$/.test(name);
 }
 
 /** The horizontal root path of a PAIR clip half: hips XZ per keyframe in

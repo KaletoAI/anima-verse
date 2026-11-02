@@ -6,7 +6,9 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
     inputs   rig            the Mixamo skeleton to drive
                             (``shared/models/rig/reference.fbx``)
              src            the animation FBX/BVH (solo), or
-             src_a, src_b   the two halves of a pair (same world space)
+             src_<role>     the sources of a pair or group (roles a..e, one
+                            world space); a file that plays several roles is
+                            handed over ONCE, ``sources`` names it per role
              rest           OPTIONAL: an FBX of the SAME rig in a reference
                             pose (T/A-pose export). With it the bones take
                             their real node rotations relative to that pose
@@ -19,10 +21,16 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
              bone_map       name of the skeleton family ("unity-humanoid",
                             "mixamo-noprefix"; "auto" detects it from the
                             node names)
-             offset_b_m     [side, up, forward] metres added to every joint of
-                            half B before the pair is framed — for packs whose
-                            halves are NOT in one world space ("set the male
-                            model to -0.3 on the forward axis": [0, 0, -0.3])
+             roles          the role letters in order (["a", "b", "c"]); empty
+                            for a solo clip
+             sources        per role the input slot its file travels in
+                            (["src_a", "src_a", "src_a"] for three takes of
+                            one pack file)
+             offsets_m      {role: [side, up, forward]} metres added to every
+                            joint of that role before the group is framed —
+                            for packs whose roles are NOT in one world space
+                            ("set the male model to -0.3 on the forward
+                            axis": {"b": [0, 0, -0.3]})
              source_name    free text for the sidecar (file names)
 
 How it works — positions, not rotations
@@ -1099,10 +1107,12 @@ def run(job):
         return (None if take is None else int(take),
                 int(spec.get("take_count") or 0), str(spec.get("take_name") or ""))
 
-    # A pair whose halves are two takes of ONE file arrives with src_a only.
+    # A pair or group whose roles are takes of ONE file arrives with that
+    # file once; ``sources`` says which slot plays which role.
+    roles = list(args.get("roles") or [])
+    slots = list(args.get("sources") or [])
     entries = ([("", inputs["src"])] if "src" in inputs
-               else [("a", inputs["src_a"]),
-                     ("b", inputs.get("src_b") or inputs["src_a"])])
+               else [(role, inputs[slots[i]]) for i, role in enumerate(roles)])
     entries = [(role, path) + _pick(i) for i, (role, path) in enumerate(entries)]
     mix_pos, mix_frames = _mixamo_rest(args["rig"])
 
@@ -1149,11 +1159,13 @@ def run(job):
 
     takes = []
     src_fps = None
-    off = [float(v) for v in (args.get("offset_b_m") or (0, 0, 0))]
+    offsets = {role: [float(v) for v in off][:3]
+               for role, off in (args.get("offsets_m") or {}).items() if any(off)}
     for role, _path, _t, _c, _n in entries:
         sfps, (f0, f1), by_frame, rot_frame = sampled[role]
         src_fps = src_fps or sfps
-        if role == "b" and any(off):
+        off = offsets.get(role)
+        if off:
             shift = Vector((off[0] * 100.0, off[1] * 100.0, off[2] * 100.0))
             by_frame = [{k: v + shift for k, v in P.items()} for P in by_frame]
         takes.append(_build_take(role, fps, sfps, by_frame, mix_pos, mix_frames, args,
@@ -1165,7 +1177,7 @@ def run(job):
               "takes": [t for _r, _p, t, _c, _n in entries],
               "fingers": any("LeftHandIndex1" in t.sk.bones for t in takes),
               "rotation_mode": "rest-delta" if rest else "positional",
-              "offset_b_m": off,
+              "offsets_m": offsets,
               "rest_file": str(args.get("rest_name") or "")}
     return cmu_clip.run_takes(takes, args, fps, source)
 

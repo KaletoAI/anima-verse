@@ -13,8 +13,10 @@
  * keeps its structure instead of flattening into one long list.
  *
  * Three things the form exists for:
- *   * a PAIR is two files, the selected one first; the partner is suggested
- *     from the file names and can be dropped again;
+ *   * a PAIR or GROUP is two to five sources, the selected one first (role
+ *     A); the further roles are suggested from the file or take names (a
+ *     pack scene with three performers preselects all of them) and can be
+ *     dropped again;
  *   * a REFERENCE POSE (T-/A-pose export of the same rig) gives the bones
  *     their real twist instead of a positional reconstruction;
  *   * the TARGET is the licensed library by default — a foreign file is
@@ -51,6 +53,21 @@ interface Take {
   duration_s: number
   /** index of the take that plays the other half of the same scene, or null */
   pair: number | null
+  /** indices of every take of the same scene when three or more perform it,
+   *  in role order (A first), or null */
+  group?: number[] | null
+}
+
+/** The role letters of a pair or group, in order (`animation_clips.CLIP_ROLES`). */
+const ROLES = ['a', 'b', 'c', 'd', 'e'] as const
+
+/** One further role of a pair or group (B, C, …): the file, the animation
+ *  inside it ('' when the file holds only one), and its offset in metres —
+ *  forward / side / up as strings of the inputs. */
+interface RoleSource { file: string; take: string; fwd: string; side: string; up: string }
+
+function roleSource(file: string, take = '', keep?: RoleSource): RoleSource {
+  return { file, take, fwd: keep?.fwd ?? '0', side: keep?.side ?? '0', up: keep?.up ?? '0' }
 }
 
 interface InboxEntry {
@@ -156,6 +173,64 @@ function useTakes(name: string): Take[] {
   return takes
 }
 
+/** One further role of the import: which file and animation plays it, and
+ *  where the pack recorded it (the offset). Its own component, because every
+ *  role loads the takes of ITS file. */
+function RoleRow({ letter, value, onChange, onRemove, entry, ownTakes, kin, t }: {
+  letter: string
+  value: RoleSource
+  onChange: (v: RoleSource) => void
+  onRemove: () => void
+  entry: InboxEntry
+  ownTakes: Take[]
+  kin: InboxEntry[]
+  t: (s: string) => string
+}) {
+  const takes = useTakes(value.file)
+  return (
+    <div style={{ border: '1px solid var(--ga-border, #3a3a3a)', borderRadius: 4,
+      padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
+          <span className="ga-hint">{t('Role')} {letter.toUpperCase()}</span>
+          <select className="ga-input" value={value.file}
+            onChange={(e) => onChange({ ...value, file: e.target.value, take: '' })}>
+            <option value="">{t('— pick a file —')}</option>
+            {/* Every role out of one pack file is the normal case for a
+                scene, so the file itself is a candidate. */}
+            {ownTakes.length > 1 ? (
+              <option value={entry.name}>{t('this file (another animation)')}</option>
+            ) : null}
+            {kin.map((e) => (
+              <option key={e.name} value={e.name}>{e.name}</option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="ga-btn ga-btn-sm" title={t('Remove this role')}
+          onClick={onRemove}>✕</button>
+      </div>
+      {takes.length > 1 ? (
+        <TakeSelect
+          label={t('Its animation')}
+          takes={takes}
+          value={value.take}
+          onChange={(v) => onChange({ ...value, take: v })}
+          placeholder={t('— pick one —')}
+        />
+      ) : null}
+      <div style={{ display: 'flex', gap: 8 }}>
+        {([['forward', 'fwd'], ['side', 'side'], ['up', 'up']] as const).map(([lbl, key]) => (
+          <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+            <span className="ga-hint">{t(lbl)} (m)</span>
+            <input className="ga-input" type="number" step="0.05" value={value[key]}
+              onChange={(e) => onChange({ ...value, [key]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
@@ -182,10 +257,10 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
   const [selected, setSelected] = useState('')
   /** the subfolder groups the user has opened (the root files are never folded) */
   const [openGroups, setOpenGroups] = useState<string[]>([])
-  const [second, setSecond] = useState('')
+  /** the further roles B, C, … of a pair or group — empty = a solo import */
+  const [others, setOthers] = useState<RoleSource[]>([])
   /** which animation inside each file — '' when the file holds only one */
   const [take, setTake] = useState('')
-  const [secondTake, setSecondTake] = useState('')
   const [restTake, setRestTake] = useState('')
   /** takes queued for one batch run, by index */
   const [batch, setBatch] = useState<number[]>([])
@@ -211,11 +286,6 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
    *  turn dial this one changes the conversion, so the preview shows it only
    *  after a fresh probe. */
   const [levelHead, setLevelHead] = useState(false)
-  /** partner offset for pairs whose halves are not in one world space —
-   *  packs say things like "set the male model to -0.3 on the forward axis" */
-  const [offFwd, setOffFwd] = useState('0')
-  const [offSide, setOffSide] = useState('0')
-  const [offUp, setOffUp] = useState('0')
   const [overwrite, setOverwrite] = useState(false)
   const [target, setTarget] = useState<Target>('licensed')
   const [redistributable, setRedistributable] = useState(false)
@@ -284,7 +354,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
     (name: string) => {
       const e = entries.find((x) => x.name === name) || null
       setSelected(name)
-      setSecond(e?.pair || '')
+      setOthers(e?.pair ? [roleSource(e.pair)] : [])
       // the pair select lists the partner by its relative path; keep it
       // reachable in the list too
       const dir = splitInboxName(name)[0]
@@ -294,7 +364,6 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
         && rest.probe.skeleton_family === e?.probe.skeleton_family ? rest.name : '')
       setKind(slugFromFile(name))
       setTake('')
-      setSecondTake('')
       setRestTake('')
       setBatch([])
       setBatchResult([])
@@ -357,7 +426,6 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
     [clips, clipSet, target],
   )
   const takes = useTakes(selected)
-  const secondTakes = useTakes(second)
   const restTakes = useTakes(restFile)
 
   // A pack ships its reference pose as one take among the movements, so a
@@ -371,26 +439,28 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
   }, [selected, takes])
 
   // With a take chosen, the clip name comes from what the ANIMATION is called,
-  // not from the pack file it happens to sit in — and the other half of the
-  // scene is preselected the way a single-take export preselects its partner
-  // FILE, because here both halves live in one file.
+  // not from the pack file it happens to sit in — and the other roles of the
+  // scene are preselected the way a single-take export preselects its partner
+  // FILE, because here every role lives in one file. The chosen take plays
+  // role A; a scene of three or more fills B, C, … in the server's role order.
+  // Offsets already typed stay with their row.
   useEffect(() => {
     if (take === '') return
     const tk = takes.find((x) => String(x.index) === take)
     if (!tk) return
     setKind(slugFromTake(tk.name))
-    if (tk.pair != null) {
-      setSecond(selected)
-      setSecondTake(String(tk.pair))
-    }
+    const rest = tk.group ? tk.group.filter((i) => i !== tk.index)
+      : tk.pair != null ? [tk.pair] : null
+    if (rest) setOthers((prev) => rest.map((i, n) => roleSource(selected, String(i), prev[n])))
   }, [selected, take, takes])
 
   const kindExists = existingKinds.has(kind.trim().toLowerCase())
   const unknownRig = !!entry && !entry.probe.skeleton_family
-  const isPair = !!second
+  /** a pair or group: role A plus at least one further role */
+  const isPair = others.length > 0
 
   /** probe conversion — the preview plays exactly what the form would import */
-  const [probe, setProbe] = useState<{ urls: { a?: string; b?: string; solo?: string }; seq: number; seconds: number } | null>(null)
+  const [probe, setProbe] = useState<{ urls: Record<string, string | undefined>; seq: number; seconds: number } | null>(null)
   const [probing, setProbing] = useState(false)
 
   /** One source address as the API spells it: the file, and which animation
@@ -413,17 +483,25 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
 
   const formBody = useCallback((only?: Take): Record<string, unknown> | null => {
     if (!entry) return null
-    const myTake = only ? String(only.index) : take
-    const myPair = only
-      ? (only.pair == null ? '' : String(only.pair))
-      : secondTake
-    const mySecond = only ? (only.pair == null ? '' : entry.name) : second
-    const pairBody = only ? !!mySecond : isPair
-    const files = pairBody
-      ? [src(entry.name, myTake), src(mySecond, myPair)]
-      : [src(entry.name, myTake)]
+    // A batch take brings its own scene: its group in role order, else its
+    // pair partner, else it stands alone. The form's offsets apply by role.
+    const files = only
+      ? (only.group || [only.index, ...(only.pair == null ? [] : [only.pair])])
+        .map((i) => src(entry.name, String(i)))
+      : [src(entry.name, take), ...others.map((o) => src(o.file, o.take))]
+    const pairBody = files.length > 1
+    const offsets: Record<string, number[]> = {}
+    if (pairBody) {
+      others.forEach((o, i) => {
+        const role = ROLES[i + 1]
+        if (i + 1 < files.length) {
+          offsets[role] = [Number(o.side) || 0, Number(o.up) || 0, Number(o.fwd) || 0]
+        }
+      })
+    }
+    const first = only?.group ? takes.find((x) => x.index === only.group![0]) || only : only
     return {
-      kind: only ? slugFromTake(only.name)
+      kind: first ? slugFromTake(first.name)
         : (kind.trim().toLowerCase() || 'preview'),
       files,
       rest_file: restFile ? src(restFile, restTake) : null,
@@ -436,14 +514,13 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       root_motion: pairBody ? 'strip' : rootMotion,
       yaw_deg: yawDeg || 0,
       level_head: levelHead,
-      offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
+      offsets_m: pairBody ? offsets : null,
       overwrite,
       target,
       redistributable: target === 'free' ? redistributable : false,
     }
-  }, [clipSet, endS, entry, isPair, kind, levelHead, loopOn, loopS, offFwd, offSide,
-      offUp, rootMotion, speed, overwrite, redistributable, restFile, restTake, second, secondTake, src,
-      startS, take, target, yawDeg])
+  }, [clipSet, endS, entry, isPair, kind, levelHead, loopOn, loopS, others, rootMotion, speed,
+      overwrite, redistributable, restFile, restTake, src, startS, take, takes, target, yawDeg])
 
   /** Loop + travel is refused by the route (400) — the buttons say so first. */
   const loopBlocked = !isPair && rootMotionBlocksLoop(loopOn, rootMotion)
@@ -458,12 +535,12 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
     if (!body || probing) return
     setProbing(true)
     try {
-      const r = await apiPost<{ urls: { a?: string; b?: string; solo?: string }; seconds: number }>(
+      const r = await apiPost<{ urls: Record<string, string>; seconds: number }>(
         '/assets/clips-inbox/preview', body)
       // cache-bust: the probe files are overwritten on every run
-      const bust = (u?: string) => (u ? `${u}?v=${Date.now()}` : undefined)
-      setProbe((prev) => ({ urls: { a: bust(r.urls.a), b: bust(r.urls.b), solo: bust(r.urls.solo) },
-        seq: (prev?.seq || 0) + 1, seconds: r.seconds || 0 }))
+      const now = Date.now()
+      const urls = Object.fromEntries(Object.entries(r.urls || {}).map(([k, u]) => [k, `${u}?v=${now}`]))
+      setProbe((prev) => ({ urls, seq: (prev?.seq || 0) + 1, seconds: r.seconds || 0 }))
       setImported(null)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -512,7 +589,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       // The very same body the preview plays — one place decides what an
       // import IS, so a field added to the form cannot reach only one of them.
       body.kind = kind.trim().toLowerCase()
-      const names = isPair ? [entry.name, second] : [entry.name]
+      const names = Array.from(new Set([entry.name, ...others.map((o) => o.file).filter(Boolean)]))
       const r = await apiPost<{ kind: string; seconds: number; files: string[] }>(
         '/assets/clips-inbox/import',
         body,
@@ -525,7 +602,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
     } finally {
       setImporting(false)
     }
-  }, [entry, formBody, importing, isPair, kind, loadClips, second, t, toast])
+  }, [entry, formBody, importing, kind, loadClips, others, t, toast])
 
   // Only the FIRST load blanks the view; a refresh keeps the list (and the
   // selection, the form, the preview) in place while the answer is on its way.
@@ -700,20 +777,26 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
               />
             ) : null}
 
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span className="ga-hint">{t('Second file (a pair — both halves become one kind)')}</span>
-              <select className="ga-input" value={second} onChange={(e) => setSecond(e.target.value)}>
-                <option value="">{t('— solo —')}</option>
-                {/* Both halves out of one pack file is the normal case for a
-                    scene, so the file itself is a partner candidate. */}
-                {takes.length > 1 ? (
-                  <option value={entry.name}>{t('this file (another animation)')}</option>
-                ) : null}
-                {kin.map((e) => (
-                  <option key={e.name} value={e.name}>{e.name}</option>
-                ))}
-              </select>
-            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span className="ga-hint">
+                {t('Further roles — the animation above plays role A. A pair adds B, a group up to E; all of them become one kind (__a … __e) at a shared anchor. The offset moves a role whose pack recorded it elsewhere, e.g. "set the male model to -0.3 on the forward axis" → forward -0.3.')}
+              </span>
+              {others.map((o, i) => (
+                <RoleRow key={i} letter={ROLES[i + 1]} value={o} entry={entry} ownTakes={takes}
+                  kin={kin} t={t}
+                  onChange={(v) => setOthers((prev) => prev.map((x, n) => (n === i ? v : x)))}
+                  onRemove={() => setOthers((prev) => prev.filter((_x, n) => n !== i))} />
+              ))}
+              {others.length < ROLES.length - 1 ? (
+                <div>
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setOthers((prev) => [...prev,
+                      roleSource(takes.length > 1 ? entry.name : '')])}>
+                    + {t('Add role')} {ROLES[others.length + 1].toUpperCase()}
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
             {takes.length > 1 ? (
               <details style={{ border: '1px solid var(--ga-border, #3a3a3a)',
@@ -741,7 +824,9 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                     {takes.map((tk) => (
                       <option key={tk.index} value={tk.index}>
                         {tk.name} — {tk.duration_s.toFixed(2)} s
-                        {tk.pair != null ? ` + ${takes[tk.pair]?.name ?? ''}` : ''}
+                        {tk.group
+                          ? ` · ${t('group of')} ${tk.group.length}`
+                          : tk.pair != null ? ` + ${takes[tk.pair]?.name ?? ''}` : ''}
                       </option>
                     ))}
                   </select>
@@ -774,18 +859,6 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
               </details>
             ) : null}
 
-            {isPair && secondTakes.length > 1 ? (
-              <TakeSelect
-                label={t("The partner's animation")}
-                hint={t('Preselected: the same scene and phase played by the'
-                        + ' counterpart role. Set the second file to solo if you'
-                        + ' want this half on its own.')}
-                takes={secondTakes}
-                value={secondTake}
-                onChange={setSecondTake}
-                placeholder={t('— pick one —')}
-              />
-            ) : null}
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span className="ga-hint">{t('Reference pose (optional)')}</span>
@@ -859,23 +932,6 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                 onChange={(e) => setLoopS(e.target.value)} />
               <span>s</span>
             </label>
-
-            {isPair ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span className="ga-hint">
-                  {t('Partner (B) offset in metres — forward / side / up. Packs whose halves were not recorded in one space say so, e.g. "set the male model to -0.3 on the forward axis" → forward -0.3.')}
-                </span>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {([['forward', offFwd, setOffFwd], ['side', offSide, setOffSide], ['up', offUp, setOffUp]] as const).map(([lbl, val, set]) => (
-                    <label key={lbl} style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-                      <span className="ga-hint">{t(lbl)}</span>
-                      <input className="ga-input" type="number" step="0.05" value={val}
-                        onChange={(e) => set(e.target.value)} />
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ) : null}
 
             <RootMotionField t={t} value={rootMotion} onChange={setRootMotion}
               pair={isPair} loopOn={loopOn} />
@@ -954,7 +1010,8 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
 
             <div className="ga-hint">
               {isPair
-                ? t('A pair — both halves are converted into one kind (__a / __b) at a shared anchor.')
+                ? `${t('Roles')}: ${['A', ...others.map((_o, i) => ROLES[i + 1].toUpperCase())].join(', ')}`
+                  + ` — ${t('one kind, converted at a shared anchor.')}`
                 : t('One Blender run of a few seconds; the new kind is selectable in the pose editor right after.')}
             </div>
 

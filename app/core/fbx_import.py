@@ -30,6 +30,7 @@ purpose: that module imports ``bpy`` and can only be read inside Blender, so a
 server-side probe cannot import it. A new family there needs a line here too.
 """
 import json
+import math
 import os
 import re
 import struct
@@ -39,7 +40,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.blender import runner
 from app.core import cmu_import
-from app.core.animation_clips import clip_entries, library_write_lock, reload_clip_caches
+from app.core.animation_clips import (CLIP_ROLES, clip_entries, clip_role_gender,
+                                     library_write_lock, reload_clip_caches)
 from app.core.clip_catalog import ClipKindExists, existing_kinds
 from app.core.cmu_import import ClipImportError
 from app.core.log import get_logger
@@ -611,8 +613,10 @@ def inbox_takes(name: Any) -> List[Dict[str, Any]]:
     takes = _cached_takes(get_clips_inbox_dir() / rel)
     names = [t["name"] for t in takes]
     # ``pair`` is the partner's INDEX, so the picker can preselect the other
-    # half the way it preselects a partner FILE for a single-take export.
-    return [dict(t, pair=partner_take(t["name"], names)) for t in takes]
+    # half the way it preselects a partner FILE for a single-take export;
+    # ``group`` the indices of a scene of three or more, in role order.
+    return [dict(t, pair=partner_take(t["name"], names),
+                 group=group_takes(t["name"], names)) for t in takes]
 
 
 def _cached_probe(path: Path) -> Dict[str, Any]:
@@ -811,6 +815,55 @@ def partner_take(name: str, names: List[str]) -> Optional[int]:
     return None if best is None else best[1]
 
 
+def _role_order(role: Tuple[str, str, str]) -> Tuple[int, str]:
+    """Sort key of a take role: the role WORDS in the order of
+    ``PAIR_ROLE_WORDS`` (female before male, so a pair's A half is the
+    woman as in every pair imported so far), then the slot letter."""
+    words = [w for pair in PAIR_ROLE_WORDS for w in pair]
+    return (words.index(role[0]) if role[0] in words else len(words), role[1])
+
+
+def group_takes(name: str, names: List[str]) -> Optional[List[int]]:
+    """Indices in ``names`` of every take of the SAME scene and phase as
+    ``name`` when three or more performers play it ("Female[A]_X_Loop0",
+    "Female[B]_X_Loop0", "Male[A]_X_Loop0"), in ROLE order — the first is
+    role A (see :func:`_role_order`). None for a pair, a solo take, a take
+    without a role marker or more performers than ``CLIP_ROLES`` has
+    letters: the pair keeps :func:`partner_take`."""
+    me = _take_role(name)
+    if me is None:
+        return None
+    members = []
+    for i, other in enumerate(names):
+        o = _take_role(other)
+        if o is not None and o[2] == me[2]:
+            members.append((_role_order(o), i))
+    if not 3 <= len(members) <= len(CLIP_ROLES):
+        return None
+    return [i for _key, i in sorted(members)]
+
+
+#: A take word's gender, for the role assignment an import writes.
+_WORD_GENDER = {"female": "female", "male": "male"}
+
+
+def role_gender_from_names(names: List[str]) -> Dict[str, str]:
+    """``{role: gender}`` read off the take (or file) names of a pair or
+    group in role order — every name has to say "Female…" or "Male…", and
+    not all the same; otherwise ``{}`` (the admin assigns it in the Poses
+    tab)."""
+    if len(names) < 2:
+        return {}
+    out = {}
+    for role, name in zip(CLIP_ROLES, names):
+        who = _take_role(Path(name).stem)
+        gender = _WORD_GENDER.get(who[0]) if who else None
+        if gender is None:
+            return {}
+        out[role] = gender
+    return clip_role_gender({"roles": list(out), "role_gender": out})
+
+
 def pair_suggestion(name: str) -> str:
     """The partner file of ``name`` (a relative inbox path) — but only when it
     really lies in the SAME folder of the inbox. ``""`` when nothing matches;
@@ -857,7 +910,7 @@ def preview_dir() -> Path:
 
 def preview_clip_path(name: str) -> Optional[Path]:
     """A probe clip by file name — only the names the probe writes."""
-    if name not in ("preview.fbx", "preview__a.fbx", "preview__b.fbx"):
+    if name != "preview.fbx" and name not in {f"preview__{r}.fbx" for r in CLIP_ROLES}:
         return None
     p = preview_dir() / name
     return p if p.is_file() else None
@@ -872,23 +925,26 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
                clip_set: str = "", start_s: float = 0.0,
                end_s: Optional[float] = None, loop_s: Optional[float] = None,
                root_motion: str = "strip", overwrite: bool = False,
-               offset_b_m: Optional[List[float]] = None,
+               offsets_m: Optional[Dict[str, List[float]]] = None,
                loops: Optional[bool] = None, speed: float = 1.0,
                yaw_deg: float = 0.0, level_head: bool = False,
                target: str = "licensed", redistributable: bool = False,
                out_dir: Optional[Path] = None, rig: Optional[Path] = None,
                fps: int = 30, timeout_s: int = 900,
                preview: bool = False) -> Dict[str, Any]:
-    """Retargets one inbox file (or a pair) onto the library rig and writes the
-    clip into the chosen library.
+    """Retargets one inbox file (or a pair, or a group) onto the library rig
+    and writes the clip into the chosen library.
 
-    ``files`` is one relative inbox path, or two — the A half first (see
-    :func:`safe_inbox_name` for the form); ``rest_file`` is an
+    ``files`` is one relative inbox path, or two to five — role A first, then
+    B, C … (see :func:`safe_inbox_name` for the form; a pack file names a
+    take per role); ``offsets_m`` is ``{role: [side, up, forward]}`` metres
+    for packs whose roles were not recorded in one space; ``rest_file`` is an
     optional reference-pose export of the SAME rig, which gives the bones their
     real twist instead of a positional reconstruction. ``root_motion``
-    (``animation_clips.ROOT_MOTION_MODES``) is meaningless for a pair (the two
-    roots carry the contact geometry) — the converter gets ``strip`` there,
-    exactly as in the CMU import.
+    (``animation_clips.ROOT_MOTION_MODES``) is meaningless for a pair or group
+    (the roots carry the contact geometry) — the converter gets ``strip``
+    there, exactly as in the CMU import. A pair or group whose take (or file)
+    names say "Female…"/"Male…" gets its ``role_gender`` written at once.
 
     Everything refusable raises ``ClipImportError``; "the kind is already
     there" raises ``ClipKindExists`` so a route can answer 409.
@@ -920,15 +976,15 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
 
     specs = [file_spec(f) for f in (files or [])]
     names = [n for n, _t in specs]
-    if not 1 <= len(specs) <= 2:
-        raise ClipImportError("an import takes one source, or two for a pair")
+    if not 1 <= len(specs) <= len(CLIP_ROLES):
+        raise ClipImportError(
+            f"an import takes one source, or 2..{len(CLIP_ROLES)} for a pair or group")
     root_motion = cmu_import.validate_root_motion(
         root_motion, loop_s if len(specs) == 1 else None)
-    if len(specs) == 2 and (specs[0][0].lower(), specs[0][1]) == \
-            (specs[1][0].lower(), specs[1][1]):
+    seen_specs = [(n.lower(), t) for n, t in specs]
+    if len(set(seen_specs)) != len(seen_specs):
         raise ClipImportError(
-            "a pair needs two DIFFERENT sources — one take cannot play both "
-            "halves")
+            "every role needs its own source — one take cannot play two roles")
     paths_in: List[Path] = []
     take_specs: List[Dict[str, Any]] = []
     src_family = ""
@@ -963,7 +1019,7 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
     inputs, params = _prepare_job(
         kind, paths_in, take_specs, names, rest_path, rest_spec, rig=rig,
         fps=fps, start_s=start_s, end_s=end_s, root_motion=root_motion,
-        loop_s=loop_s, loops=loops, offset_b_m=offset_b_m, speed=speed,
+        loop_s=loop_s, loops=loops, offsets_m=offsets_m, speed=speed,
         yaw_deg=yaw_deg, level_head=level_head)
     if preview:
         params["kind"] = "preview"
@@ -976,9 +1032,10 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
         if not res["ok"]:
             raise ClipImportError(str(res.get("error") or "blender run failed"))
         base = "/assets/clips-inbox/preview-clip/"
-        urls = ({"a": base + "preview__a.fbx", "b": base + "preview__b.fbx"}
-                if len(paths_in) == 2 else {"solo": base + "preview.fbx"})
-        return {"preview": True, "pair": len(paths_in) == 2, "urls": urls,
+        urls = ({r: base + f"preview__{r}.fbx" for r in params["roles"]}
+                if len(paths_in) >= 2 else {"solo": base + "preview.fbx"})
+        return {"preview": True, "pair": len(paths_in) >= 2,
+                "roles": params["roles"], "urls": urls,
                 "sidecar": res.get("data") or {}, "seconds": res.get("seconds") or 0.0}
 
     out = Path(out_dir) if out_dir else target_dir(target)
@@ -1005,7 +1062,8 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
             "kind": kind,
             "set": cset,
             "target": target,
-            "pair": len(paths_in) == 2,
+            "pair": len(paths_in) >= 2,
+            "roles": params["roles"],
             "files": names,
             "rest_file": inbox_rel(rest_path) if rest_path is not None else "",
             "sidecar": res.get("data") or {},
@@ -1060,7 +1118,7 @@ def _prepare_rest(path: Path, take: Optional[int], src_family: str, *,
 def _prepare_job(kind, paths_in, take_specs, names, rest_path, rest_spec, *,
                     rig=None, fps=30, start_s=0.0, end_s=None,
                     root_motion="strip", loop_s=None, loops=None,
-                    offset_b_m=None, speed=1.0, yaw_deg=0.0, level_head=False):
+                    offsets_m=None, speed=1.0, yaw_deg=0.0, level_head=False):
     """Build the shared conversion job for inbox and staged sources."""
     rig = Path(rig) if rig else cmu_import.default_rig()
     if not rig.is_file():
@@ -1068,16 +1126,35 @@ def _prepare_job(kind, paths_in, take_specs, names, rest_path, rest_spec, *,
                               "— see shared/models/rig/README.md")
 
     inputs: Dict[str, Path] = {"rig": rig}
-    if len(paths_in) == 2:
-        inputs["src_a"] = paths_in[0]
-        # Both halves out of ONE pack file is the normal case for a scene, and
+    roles = list(CLIP_ROLES[:len(paths_in)]) if len(paths_in) >= 2 else []
+    sources: List[str] = []
+    if roles:
+        # Every role out of ONE pack file is the normal case for a scene, and
         # then the file travels once: the runner copies every input into the
         # job directory and Blender imports every path it is given, so naming
-        # it twice would copy and import the same bytes twice.
-        if paths_in[1] != paths_in[0]:
-            inputs["src_b"] = paths_in[1]
+        # it twice would copy and import the same bytes twice. ``sources``
+        # says per role which slot carries its file.
+        for role, path in zip(roles, paths_in):
+            slot = next((k for k, v in inputs.items() if k != "rig" and v == path), "")
+            if not slot:
+                slot = f"src_{role}"
+                inputs[slot] = path
+            sources.append(slot)
     else:
         inputs["src"] = paths_in[0]
+    offsets: Dict[str, List[float]] = {}
+    for role, raw in (offsets_m or {}).items():
+        if role not in roles:
+            raise ClipImportError(f"offsets_m names role '{role}' — the import has "
+                                  f"{', '.join(roles) or 'no roles'}")
+        try:
+            vec = [float(v) for v in raw][:3]
+        except (TypeError, ValueError):
+            raise ClipImportError(f"offsets_m.{role} must be [side, up, forward] numbers")
+        if len(vec) != 3 or not all(math.isfinite(v) and abs(v) <= 5 for v in vec):
+            raise ClipImportError(f"offsets_m.{role} must be three numbers from -5 to 5 m")
+        if any(vec):
+            offsets[role] = vec
     # A reference pose that IS one of the sources travels as a take index, not
     # as a second copy of the same file: the runner copies every input into the
     # job directory, so passing it twice would copy a pack file twice and make
@@ -1105,7 +1182,9 @@ def _prepare_job(kind, paths_in, take_specs, names, rest_path, rest_spec, *,
               "rest_take": rest_spec,
               "rest_from": rest_from,
               "rest_name": rest_path.name if rest_path is not None else "",
-              "offset_b_m": [float(v) for v in (offset_b_m or (0, 0, 0))][:3],
+              "roles": roles, "sources": sources, "offsets_m": offsets,
+              "role_gender": role_gender_from_names(
+                  [s["take_name"] or n for s, n in zip(take_specs, names)]),
               "speed": float(speed or 1.0), "yaw_deg": float(yaw_deg or 0.0),
               "level_head": bool(level_head),
               "bone_map": "auto", "source_name": names}

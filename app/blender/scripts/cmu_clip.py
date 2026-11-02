@@ -1,7 +1,9 @@
 """Retargets CMU ASF/AMC motion onto the Mixamo rig and writes clip FBX files.
 
-One run produces ONE clip kind: either a solo clip (one ASF/AMC) or a PAIR
-(two ASF/AMC recorded together, written as ``<kind>__a`` / ``<kind>__b``).
+One run produces ONE clip kind: either a solo clip (one ASF/AMC), a PAIR
+(two ASF/AMC recorded together, written as ``<kind>__a`` / ``<kind>__b``) or —
+through ``run_takes``, from the FBX importer — a GROUP of three to five roles
+(``__a`` .. ``__e``; frame and contact fit in ``_group_frame.py``).
 Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
 
     inputs   rig            FBX with the Mixamo skeleton to drive
@@ -12,8 +14,9 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
              fps            output frame rate (the library is 30 fps)
              start_s        first second of the take to keep (default 0)
              end_s          last second (default: whole take)
-             anchor_s       PAIR ONLY — the second whose geometry defines the
-                            anchor frame (default: when the roots are closest)
+             anchor_s       PAIR/GROUP ONLY — the second whose geometry defines
+                            the anchor frame (default: when everybody is
+                            closest to A, see ``_group_frame.anchor_index``)
              root_motion    SOLO ONLY — strip | keep | foot_lock (default
                             strip), see clip_root_motion.py
              loop_s         SOLO ONLY — cut the take to its best-closing
@@ -99,6 +102,7 @@ import _common                                                # noqa: E402
 from _action import curves  # noqa: E402
 import _cmu                                                   # noqa: E402
 import _foot_plant                                            # noqa: E402
+import _group_frame                                           # noqa: E402
 import _root_motion                                           # noqa: E402
 import clip_root_motion                                       # noqa: E402
 sys.path.remove(_SCRIPTS_DIR)
@@ -296,8 +300,8 @@ def _frame_takes(takes, args):
     marker in the import preview, and the sidecar keeps the number.
     """
     floor = min(t.lowest() for t in takes)
-    yaw = math.radians(float(args.get("yaw_deg") or 0.0))
     if len(takes) == 1:
+        yaw = math.radians(float(args.get("yaw_deg") or 0.0))
         take = takes[0]
         fx, fz = _cmu.forward_xz(take.poses[0])
         # Rotate so the root faces +Z at the first frame, then by the dial.
@@ -309,37 +313,29 @@ def _frame_takes(takes, args):
         _apply_rigid(take, -theta, (-p.x, -p.z), floor, mode in ("strip", "foot_lock"))
         return _with_yaw({"floor_shift_cm": round(-floor, 2)}, args)
 
-    a = next(t for t in takes if t.role == "a")
-    b = next(t for t in takes if t.role == "b")
-    n = min(len(a.poses), len(b.poses))
-    a.poses = a.poses[:n]
-    b.poses = b.poses[:n]
+    # A pair or a group (2..5 roles): anchor, turn and origin come from
+    # ``_group_frame`` — for two roles exactly the old pair rule.
+    by_role = {t.role: t for t in takes}
+    n = min(len(t.poses) for t in takes)
+    for t in takes:
+        t.poses = t.poses[:n]
     fps = args.get("fps", 30)
-    if args.get("anchor_s") is not None:
-        ai = min(n - 1, int(round(float(args["anchor_s"]) * fps)))
-    else:
-        ai = min(range(n), key=lambda i: math.dist(a.root_xz(i), b.root_xz(i)))
-    ax, az = a.root_xz(ai)
-    bx, bz = b.root_xz(ai)
-    mid = ((ax + bx) / 2, (az + bz) / 2)
-    # Angle that turns the A→B direction onto +X, plus the dial.
-    theta = math.atan2(bz - az, bx - ax) + yaw
-    r = _ry(theta)
-    m = r @ Vector((mid[0], 0.0, mid[1]))
-    for t in (a, b):
-        _apply_rigid(t, theta, (-m.x, -m.z), floor, False)
-    dist = math.dist(a.root_xz(ai), b.root_xz(ai))
+    ai = _group_frame.anchor_index(
+        {r: [t.root_xz(i) for i in range(n)] for r, t in by_role.items()},
+        fps, args.get("anchor_s"))
+    theta, m = _group_frame.frame({r: t.root_xz(ai) for r, t in by_role.items()},
+                                  args.get("yaw_deg") or 0.0)
+    for t in takes:
+        _apply_rigid(t, theta, (-m[0], -m[1]), floor, False)
+    dist = math.dist(by_role["a"].root_xz(ai), by_role["b"].root_xz(ai))
     return _with_yaw({
         "anchor_frame": ai,
         "anchor_s": round(ai / fps, 3),
         "root_distance_m": round(dist / 100, 3),
         "floor_shift_cm": round(-floor, 2),
-        "roles": {
-            "a": {"start_xz_m": [round(v / 100, 3) for v in a.root_xz(0)],
-                  "anchor_xz_m": [round(v / 100, 3) for v in a.root_xz(ai)]},
-            "b": {"start_xz_m": [round(v / 100, 3) for v in b.root_xz(0)],
-                  "anchor_xz_m": [round(v / 100, 3) for v in b.root_xz(ai)]},
-        },
+        "roles": {t.role: {"start_xz_m": [round(v / 100, 3) for v in t.root_xz(0)],
+                           "anchor_xz_m": [round(v / 100, 3) for v in t.root_xz(ai)]}
+                  for t in takes},
     }, args)
 
 
@@ -831,7 +827,7 @@ def _clip_entries(args):
     if "asf" in inputs:
         return [{"asf": inputs["asf"], "amc": inputs["amc"], "role": ""}]
     return [{"asf": inputs[f"asf_{r}"], "amc": inputs[f"amc_{r}"], "role": r}
-            for r in ("a", "b")]
+            for r in _group_frame.ROLES if f"asf_{r}" in inputs]
 
 
 def run(job):
@@ -905,47 +901,36 @@ def run_takes(takes, args, fps, source):
     scales = [sol[4][0] for sol in solved]
     stands = [sol[4][1] for sol in solved]
     geometry["hips_scale"] = [round(k, 4) for k in scales]
-    # CONTACT FIT (pair): at the anchor frame the two closest hands of the
-    # ACTORS are this far apart; the rig's arms are not the actors', so the
-    # same pose leaves its hands farther apart (handshake: 25 cm instead of
-    # 11). Both halves are shifted towards each other along the hand-to-hand
-    # line by half the difference — a constant offset on the whole take, so
-    # nothing else changes.
+    # CONTACT FIT (pair and group, ``_group_frame.fit``): at the anchor frame
+    # the closest hand contact of the ACTORS is this far apart; the rig's arms
+    # are not the actors', so the same pose leaves its hands farther apart
+    # (handshake: 25 cm instead of 11). The gap is closed by a constant
+    # horizontal offset per take — a pair splits it, a group grows from A.
     offsets = [(0.0, 0.0) for _ in takes]
-    if len(takes) == 2:
+    if len(takes) >= 2:
         ai = geometry["anchor_frame"]
-        a_idx, b_idx = (0, 1) if takes[0].role == "a" else (1, 0)
-        # A contact is a HAND on something: the other hand (handshake), a
-        # shoulder (comfort), the head or the hips (an embrace) — the closest
-        # such pair of the actors at the anchor frame is taken.
-        hands = {"LeftHand": "lhand", "RightHand": "rhand"}
-        targets = {**hands, "LeftArm": "lhumerus", "RightArm": "rhumerus",
-                   "Head": "head", "Hips": "root"}
-        best = None
-        for ha, ca in targets.items():
-            for hb, cb in targets.items():
-                if ha not in hands and hb not in hands:
-                    continue
-                pa = Vector(takes[a_idx].poses[ai].pos[ca])
-                pb = Vector(takes[b_idx].poses[ai].pos[cb])
-                d = (pa - pb).length
-                if best is None or d < best[0]:
-                    best = (d, ha, hb)
-        cmu_d, ha, hb = best
-        ra = solved[a_idx][2][ai][PREFIX + ha].translation
-        rb = solved[b_idx][2][ai][PREFIX + hb].translation
-        rig_d = (ra - rb).length
-        v = Vector((rb.x - ra.x, 0.0, rb.z - ra.z))
-        delta = rig_d - cmu_d
-        if v.length > 1e-6 and delta > 0:
-            v.normalize()
-            offsets[a_idx] = (v.x * delta / 2, v.z * delta / 2)
-            offsets[b_idx] = (-v.x * delta / 2, -v.z * delta / 2)
-        geometry["contact"] = {"hands": [ha, hb], "actor_distance_m": round(cmu_d / 100, 3),
-                               "rig_distance_m": round(rig_d / 100, 3),
-                               "shift_m": round(max(delta, 0.0) / 100, 3)}
-        for role, off in (("a", offsets[a_idx]), ("b", offsets[b_idx])):
-            r = geometry["roles"][role]
+        targets = _group_frame.TARGETS
+        actor = {t.role: {bone: tuple(t.poses[ai].pos[joint])
+                          for bone, joint in targets.items()} for t in takes}
+        rig = {t.role: {bone: tuple(sol[2][ai][PREFIX + bone].translation)
+                        for bone in targets} for t, sol in zip(takes, solved)}
+        moved, contacts = _group_frame.fit(actor, rig)
+        offsets = [moved[t.role] for t in takes]
+        if len(takes) == 2:
+            (c,) = contacts.values()
+            geometry["contact"] = {"hands": c["hands"],
+                                   "actor_distance_m": round(c["actor_cm"] / 100, 3),
+                                   "rig_distance_m": round(c["rig_cm"] / 100, 3),
+                                   "shift_m": round(c["shift_cm"] / 100, 3)}
+        else:
+            geometry["contacts"] = {
+                role: {"to": c["to"], "hands": c["hands"],
+                       "actor_distance_m": round(c["actor_cm"] / 100, 3),
+                       "rig_distance_m": round(c["rig_cm"] / 100, 3),
+                       "shift_m": round(c["shift_cm"] / 100, 3)}
+                for role, c in contacts.items()}
+        for take, off in zip(takes, offsets):
+            r = geometry["roles"][take.role]
             r["start_xz_m"] = [round(r["start_xz_m"][0] + off[0] / 100, 3),
                                round(r["start_xz_m"][1] + off[1] / 100, 3)]
             r["anchor_xz_m"] = [round(r["anchor_xz_m"][0] + off[0] / 100, 3),
@@ -1008,8 +993,10 @@ def run_takes(takes, args, fps, source):
         geometry["despiked"] = spikes
     sidecar = {
         "kind": kind,
-        "pair": len(takes) == 2,
-        "roles": ["a", "b"] if len(takes) == 2 else [],
+        # "pair" = the clip has role halves (2..5 roles, a group included);
+        # "roles" names them in order.
+        "pair": len(takes) >= 2,
+        "roles": [t.role for t in takes] if len(takes) >= 2 else [],
         "fps": fps,
         "source_fps": float(args.get("source_fps") or _cmu.CMU_FPS),
         "frames": nframes,
@@ -1023,6 +1010,9 @@ def run_takes(takes, args, fps, source):
         "geometry": geometry,
         "source": source,
     }
+    if args.get("role_gender") and len(takes) >= 2:
+        # who plays which role, read off the source names by the server
+        sidecar["role_gender"] = dict(args["role_gender"])
     side = out_dir / f"{kind}.json"
     side.write_text(json.dumps(sidecar, indent=1), encoding="utf-8")
     outputs["sidecar"] = str(side)

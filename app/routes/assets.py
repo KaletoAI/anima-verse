@@ -49,12 +49,12 @@ from fastapi.responses import Response
 
 from app.blender import runner as blender_runner
 from app.core import clip_catalog, fbx_import
-from app.core.animation_clips import (CLIP_EXTS, ClipExists,
+from app.core.animation_clips import (CLIP_EXTS, CLIP_ROLES, ClipExists,
                                       ClipLibraryError, ClipNotFound,
                                       clip_entries, clip_meta,
                                       clip_role_gender, clip_view, delete_clip,
                                       annotated_transitions, client_transition_rules,
-                                      orient_clip, pair_kinds, rename_clip,
+                                      orient_clip, pair_kinds, rename_clip, role_counts,
                                       library_revision, save_transitions,
                                       set_clip_height_offsets, set_clip_loop,
                                       set_clip_role_gender, validate_height_offsets)
@@ -109,10 +109,26 @@ def list_animation_clips() -> Dict[str, Any]:
             # Which gender plays which half ({} = the initiator plays A).
             "role_gender": clip_role_gender(meta),
         }
+    # Group clips (three to five roles, plan-gruppen-animationen.md): the
+    # same facts plus how many roles play.
+    groups = {}
+    for kind, n in role_counts().items():
+        if n < 3:
+            continue
+        meta = clip_meta(kind) or {}
+        groups[kind] = {
+            "roles": list(CLIP_ROLES[:n]),
+            "duration_s": meta.get("duration_s"),
+            "fps": meta.get("fps"),
+            "frames": meta.get("frames"),
+            "geometry": meta.get("geometry") or {},
+            "role_gender": clip_role_gender(meta),
+        }
     return {"clips": clips, "revision": library_revision(),
             "kinds": sorted({c["kind"] for c in clips}),
             "pair_kinds": sorted(pairs),
             "pairs": pairs,
+            "groups": groups,
             # Sets that HAVE clips …
             "clip_sets": sorted({c["set"] for c in clips if c["set"]}),
             # … and everything selectable on a character: the base sets
@@ -166,8 +182,8 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     map of ground/seat/lie to finite numbers from -50 to 50 cm; zero removes
     only that surface. Corrections are absolute for a 1.70 m figure, shared
     by pair halves and applied by the renderer, never baked into the clip.
-    ``role_gender`` is ``{"a": "male", "b": "female"}`` (or reversed) or
-    ``null`` to clear it — pair clips only, stored in the ``<kind>.json``
+    ``role_gender`` is ``{"a": "male", "b": "female"}`` (or reversed; a group
+    names every role) or ``null`` to clear it — pair/group clips only, stored in the ``<kind>.json``
     like ``loop`` (§ A8a). ``set: ""``
     moves the clip to the neutral root — the ONE empty value with a meaning;
     ``library: ""`` is a bad request, not a silent no-op. ``loop`` is the
@@ -192,7 +208,7 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
-                            detail="role_gender must be an object {a, b} or null")
+                            detail="role_gender must be an object {a, b, …} or null")
     if "library" in body and not str(body["library"] or "").strip():
         raise HTTPException(status_code=400,
                             detail="library must be 'free' or 'licensed'")
@@ -629,16 +645,18 @@ def get_clips_inbox_preview_clip(name: str, request: Request,
 async def post_clips_inbox_import(request: Request,
                                   _: Dict[str, Any] = Depends(require_admin)
                                   ) -> Dict[str, Any]:
-    """Imports one inbox file — or a pair — into a clip library, synchronously."""
+    """Imports one inbox file — or a pair or group — into a clip library, synchronously."""
     return await _clips_inbox_convert(request, preview=False)
 
 
 async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any]:
-    """Imports one inbox file — or a pair — into a clip library, synchronously.
+    """Imports one inbox file — or a pair or group — into a clip library, synchronously.
 
-    Body: ``{kind, files: [src] | [src_a, src_b], rest_file?, set?, start_s?,
-    end_s?, loop_s?, root_motion?, overwrite?, target?, redistributable?,
-    yaw_deg?, level_head?}``. ``root_motion`` is validated exactly as in the
+    Body: ``{kind, files: [src] | [src_a, src_b, …up to src_e], rest_file?,
+    set?, start_s?, end_s?, loop_s?, root_motion?, overwrite?, target?,
+    redistributable?, yaw_deg?, level_head?, offsets_m?}``; ``offsets_m`` is
+    ``{role: [side, up, forward]}`` metres for a pack whose roles were not
+    recorded in one space. ``root_motion`` is validated exactly as in the
     CMU import (``cmu_import.validate_root_motion``: default ``strip``, never
     with a loop on a single source; a pair converts with ``strip`` anyway).
     ``yaw_deg`` is the orientation dial — the angle
@@ -683,6 +701,10 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
                                     _num("loop_s") if len(files) == 1 else None)
     except ClipImportError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    offsets = body.get("offsets_m")
+    if offsets is not None and not isinstance(offsets, dict):
+        raise HTTPException(status_code=400,
+                            detail="offsets_m must be an object {role: [side, up, forward]}")
     target = str(body.get("target") or "licensed").strip().lower()
     redistributable = bool(body.get("redistributable"))
     if preview:
@@ -702,8 +724,7 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
             loop_s=_num("loop_s"),
             root_motion=mode,
             overwrite=bool(body.get("overwrite")),
-            offset_b_m=[float(v) for v in (body.get("offset_b_m") or [0, 0, 0])][:3]
-            if isinstance(body.get("offset_b_m"), list) else None,
+            offsets_m=offsets,
             loops=None if body.get("loops") is None else bool(body.get("loops")),
             speed=_num("speed") or 1.0, yaw_deg=_num("yaw_deg") or 0.0,
             level_head=bool(body.get("level_head")),

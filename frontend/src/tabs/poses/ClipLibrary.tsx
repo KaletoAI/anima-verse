@@ -40,7 +40,7 @@
  *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { ClipPreview } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -93,9 +93,52 @@ interface Cell {
   all: ApiClipRow[]
 }
 
+/** Which gender plays which role of a GROUP clip (three roles and more):
+ *  one choice per role, sent as a whole with "Apply" — the server takes only a
+ *  complete assignment (every role, not everybody the same). A pair keeps its
+ *  one compact choice. */
+function GroupGenders({ roles, value, disabled, onApply, t }: {
+  roles: string[]
+  value: Record<string, string>
+  disabled: boolean
+  onApply: (v: Record<string, string> | null) => void
+  t: (s: string) => string
+}) {
+  const [draft, setDraft] = useState<Record<string, string>>(value)
+  const saved = JSON.stringify(value)
+  useEffect(() => { setDraft(JSON.parse(saved)) }, [saved])
+  const complete = roles.every((r) => draft[r]) && new Set(roles.map((r) => draft[r])).size > 1
+  const changed = JSON.stringify(roles.map((r) => draft[r] || '')) !== JSON.stringify(roles.map((r) => value[r] || ''))
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+      <span>{t('Roles')}</span>
+      {roles.map((r) => (
+        <label key={r} style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+          <span>{r.toUpperCase()}</span>
+          <select className="ga-input" value={draft[r] || ''} disabled={disabled}
+            onChange={(e) => setDraft((prev) => ({ ...prev, [r]: e.target.value }))}>
+            <option value="">—</option>
+            <option value="male">{t('man')}</option>
+            <option value="female">{t('woman')}</option>
+          </select>
+        </label>
+      ))}
+      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !complete || !changed}
+        title={complete ? '' : t('Every role needs a gender, and not all the same.')}
+        onClick={() => onApply(draft)}>{t('Apply')}</button>
+      {Object.keys(value).length ? (
+        <button type="button" className="ga-btn ga-btn-sm" disabled={disabled}
+          onClick={() => onApply(null)}>{t('Clear')}</button>
+      ) : null}
+    </div>
+  )
+}
+
 interface Row {
   kind: string
   pair: boolean
+  /** how many roles the kind's files play (2 = a pair, 3..5 = a group, 0 = solo) */
+  roles: number
   /** pose keys whose `animation` is this kind */
   used: string[]
   cells: Record<string, Cell>
@@ -218,6 +261,7 @@ export function ClipLibrary({
         return {
           kind,
           pair: pairKinds.has(kind) || own.some((c) => (c.role || '') === 'b'),
+          roles: new Set(own.map((c) => c.role || '').filter(Boolean)).size,
           used: usage[kind] || [],
           cells,
           clips: own,
@@ -466,9 +510,17 @@ export function ClipLibrary({
     const rel = `${lib}/${relOf(clip)}`
     const open = action?.rel === rel ? action.type : null
     const other = lib === 'licensed' ? 'free' : 'licensed'
-    // Which gender plays which half — one answer for both halves of the pair.
+    // Which gender plays which half — one answer for every role of the kind.
     const genderA = clip.role_gender?.a || ''
-    const halfGender = clip.role === 'a' ? genderA : clip.role === 'b' ? clip.role_gender?.b || '' : ''
+    const halfGender = clip.role ? clip.role_gender?.[clip.role] || '' : ''
+    // The roles of THIS kind in this set and library: a group (three and
+    // more) edits one gender per role, a pair keeps the compact choice.
+    const kindRoles = clip.role
+      ? Array.from(new Set(clips
+        .filter((c) => c.kind === clip.kind && (c.set || '') === (clip.set || '')
+          && libraryOf(c) === lib && c.role)
+        .map((c) => c.role as string))).sort()
+      : []
     const facts = [
       clip.role
         ? `${t('half')} ${clip.role.toUpperCase()}${halfGender ? ` (${halfGender === 'male' ? t('man') : t('woman')})` : ''}`
@@ -515,7 +567,11 @@ export function ClipLibrary({
             {t('Root motion')}: {rootMotionSummary(clip.root_motion, t)}
           </div>
         ) : null}
-        {clip.role ? (
+        {clip.role && kindRoles.length > 2 ? (
+          <GroupGenders roles={kindRoles} value={clip.role_gender || {}} t={t}
+            disabled={busy || clip.has_sidecar === false}
+            onApply={(v) => run(clip, { role_gender: v })} />
+        ) : clip.role ? (
           <label
             style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}
             title={clip.has_sidecar === false
@@ -796,7 +852,12 @@ export function ClipLibrary({
                     <code style={{ color: r.missing ? 'var(--warn, #d29922)' : undefined }}>
                       {r.kind}
                     </code>
-                    {r.pair ? (
+                    {r.roles > 2 ? (
+                      <span className="ga-tag" style={{ marginLeft: 4 }}
+                        title={t('Group animation — one figure per role')}>
+                        {t('group')} {r.roles}
+                      </span>
+                    ) : r.pair ? (
                       <span className="ga-tag" style={{ marginLeft: 4 }} title={t('Pair animation — needs a partner')}>
                         {t('pair')}
                       </span>

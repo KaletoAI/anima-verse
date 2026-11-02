@@ -161,7 +161,8 @@ def test_discovery() -> None:
     print("\n[2b] pair clips")
     for name, want in (("hug__a.fbx", ("hug", "a")), ("hug__b_02.fbx", ("hug", "b")),
                        ("spell_casting.fbx", ("spell_casting", "")),
-                       ("x__c.fbx", ("x__c", "")), ("__a.fbx", ("__a", ""))):
+                       ("x__c.fbx", ("x", "c")), ("x__f.fbx", ("x__f", "")),
+                       ("__a.fbx", ("__a", ""))):
         check(f"parse_clip_role({name}) == {want}", ac.parse_clip_role(name) == want,
               str(ac.parse_clip_role(name)))
     roles = sorted((e["kind"], e["role"]) for e in ac.clip_entries() if e["role"])
@@ -189,8 +190,9 @@ def test_listing() -> None:
     check("the lowercased set is used in the URL, not the directory case",
           "/assets/animation-clips/lady/dance_02.fbx" in urls)
     check("the payload shape",
-          set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets",
-                        "sets", "movement_poses", "transitions", "transition_clips"},
+          set(data) == {"clips", "kinds", "pair_kinds", "pairs", "groups", "clip_sets",
+                        "sets", "movement_poses", "transitions", "transition_clips",
+                        "revision"},
           str(sorted(data)))
     check("per-clip fields",
           set(data["clips"][0]) == {"kind", "role", "set", "source", "library",
@@ -198,7 +200,7 @@ def test_listing() -> None:
                                     "has_sidecar", "origin", "duration_s",
                                     "fps", "frames", "loop", "role_gender",
                                     "orientation", "root_motion", "generator",
-                                    "license"},
+                                    "license", "height_offsets_cm"},
           str(sorted(data["clips"][0])))
     check("pairs carries the sidecar of every complete pair",
           data["pair_kinds"] == ["hug"] and data["pairs"]["hug"]["duration_s"] == 2.0

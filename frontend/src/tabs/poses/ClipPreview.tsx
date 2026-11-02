@@ -100,8 +100,16 @@ interface ApiClip {
 }
 
 /** Explicit clip URLs instead of a kind lookup — how the CMU catalog browser
- *  previews a TRIAL clip, which is in no library and has no kind yet. */
-export interface ClipUrls { a?: string; b?: string; solo?: string }
+ *  previews a TRIAL clip, which is in no library and has no kind yet. A pair
+ *  names `a` and `b`, a group continues up to `e`. */
+export interface ClipUrls { a?: string; b?: string; c?: string; d?: string; e?: string; solo?: string }
+
+/** The role letters of a pair or group clip, in order (`CLIP_ROLES`). */
+const ROLES = ['a', 'b', 'c', 'd', 'e'] as const
+/** Label colour per role over the figure's head. */
+const ROLE_COLOR: Record<string, string> = {
+  a: '#58a6ff', b: '#f78166', c: '#3fb950', d: '#d29922', e: '#bc8cff',
+}
 
 export interface RootPath { times: ArrayLike<number>; xyz: Float32Array }
 
@@ -193,9 +201,9 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   const [status, setStatus] = useState<string>('')
   const [info, setInfo] = useState<{ dist: number; time: number; duration: number } | null>(null)
   // The effect must not re-run on every render just because the caller passed a
-  // fresh object literal — the three URLs go in as ONE string and come apart
-  // again inside.
-  const urlKey = [urls?.a || '', urls?.b || '', urls?.solo || ''].join('|')
+  // fresh object literal — the URLs go in as ONE string and come apart again
+  // inside (the roles a..e, then the solo URL).
+  const urlKey = [...ROLES.map((r) => urls?.[r] || ''), urls?.solo || ''].join('|')
   // The window is read by the running tick through a ref — changing it must
   // not rebuild the whole scene (the figures and clips stay loaded).
   const winRef = useRef<PlayWindow | undefined>(win)
@@ -227,16 +235,19 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   const dialled = importYaw !== undefined || importTilt !== undefined
     || importRoll !== undefined || importHeightM !== undefined
   const box = markerBox(group)
-  // Does the loaded clip actually have two halves? Only then is there a pair
-  // to seat — a kind without an A/B pair plays solo whatever the pose says.
+  // Does the loaded clip actually have exactly two halves? Only then is there
+  // a pair to seat — a kind without an A/B pair plays solo whatever the pose
+  // says, and a group (three roles and more) plays on the ground plane.
   const [pairClip, setPairClip] = useState(false)
   // A marker to turn against: a pair clip AND a place type with a body.
   const seated = pairClip && !!box
 
   useEffect(() => {
     const host = hostRef.current
-    const [urlA, urlB, urlSolo] = urlKey.split('|')
-    const direct = !!(urlA || urlB || urlSolo)
+    const keyParts = urlKey.split('|')
+    const roleUrls = ROLES.map((r, i) => ({ role: r as string, url: keyParts[i] })).filter((p) => p.url)
+    const urlSolo = keyParts[ROLES.length]
+    const direct = !!(roleUrls.length || urlSolo)
     if (!host || (!kind && !direct)) return
     let disposed = false
     let raf = 0
@@ -250,11 +261,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
-        let parts: Array<{ role: 'a' | 'b' | ''; url: string; heightOffsets?: ClipHeightOffsetsCm; shift?: [number, number] | null }> = []
+        let parts: Array<{ role: string; url: string; heightOffsets?: ClipHeightOffsetsCm; shift?: [number, number] | null }> = []
         if (direct) {
-          parts = urlA && urlB
-            ? [{ role: 'a', url: urlA }, { role: 'b', url: urlB }]
-            : [{ role: '', url: urlSolo || urlA || urlB }]
+          parts = roleUrls.length >= 2
+            ? roleUrls
+            : [{ role: '', url: urlSolo || roleUrls[0]?.url || '' }]
         } else {
           const listing = await apiGet<{ clips?: ApiClip[] }>('/assets/animation-clips')
           const clips = listing.clips || []
@@ -269,13 +280,15 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             || clips.find((c) => c.kind === kind && (c.role || '') === role && !c.set)
             || clips.find((c) => c.kind === kind && (c.role || '') === role)
           const bustUrl = (u: string) => (bust ? `${u}${u.includes('?') ? '&' : '?'}v=${bust}` : u)
-          const isPair = !!(pick('a') && pick('b'))
-          const part = (role: 'a' | 'b' | '') => {
+          // A pair or group: the role files a, b, … without a gap.
+          const roles: string[] = []
+          for (const r of ROLES) { if (!pick(r)) break; roles.push(r) }
+          const part = (role: string) => {
             const clip = pick(role)!
             return { role, url: bustUrl(clip.url), heightOffsets: clip.height_offsets_cm, shift: clip.orientation?.shift_cm }
           }
-          parts = isPair
-            ? [part('a'), part('b')]
+          parts = roles.length >= 2
+            ? roles.map(part)
             : pick('') ? [part('')] : []
         }
         if (!parts.length) { setStatus(t('No clip file for this kind in shared/models/clips.')); return }
@@ -387,7 +400,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
 
         // ── figures + clips ──
         const fbx = new FBXLoader()
-        const players: Array<{ role: 'a' | 'b' | ''; root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number; shift?: [number, number] | null }> = []
+        const players: Array<{ role: string; root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number; shift?: [number, number] | null }> = []
         const hipsOf = (root: Object3D): Object3D | null => {
           let found: Object3D | null = null
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
@@ -440,12 +453,12 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           // it binds
           root.updateMatrixWorld(true)
           const hipsBindY = instHips ? instHips.getWorldPosition(new THREE.Vector3()).y : FIGURE_H * 0.55
-          // label A / B over the head (pair only)
+          // label A / B / … over the head (pair and group only)
           const canvas = document.createElement('canvas')
           canvas.width = 64; canvas.height = 64
           const ctx = canvas.getContext('2d')
           if (ctx && role) {
-            ctx.fillStyle = role === 'a' ? '#58a6ff' : '#f78166'
+            ctx.fillStyle = ROLE_COLOR[role] || '#f78166'
             ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
             ctx.fillText(role.toUpperCase(), 32, 34)
           }

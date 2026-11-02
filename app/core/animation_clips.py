@@ -14,9 +14,11 @@ layout is ``[<set>/]<kind>[_<n>].<ext>``:
 
 A PAIR clip — two files recorded together, one per partner — carries the
 ROLE as a ``__a`` / ``__b`` suffix of the stem: ``handshake__a.fbx`` and
-``handshake__b.fbx`` are the two halves of the kind ``handshake``. The double
-underscore is the role separator and nothing else (a single ``_`` stays part
-of the kind). A pair kind has no solo file; it is played by two figures at a
+``handshake__b.fbx`` are the two halves of the kind ``handshake``. A GROUP
+clip continues the letters up to ``__e`` (three to five people,
+``CLIP_ROLES``; the sidecar's ``roles`` lists them). The double underscore is
+the role separator and nothing else (a single ``_`` stays part of the kind).
+A pair or group kind has no solo file; it is played by its figures at a
 shared anchor, in lockstep. Next to the files a JSON SIDECAR (written by
 ``scripts/clip_import_cmu.py``) holds duration, frame rate and the anchor
 geometry: for a file ``<stem>.fbx`` it is ``<stem>.json`` when that exists —
@@ -66,7 +68,9 @@ from app.core.paths import (get_animation_clips_dir, get_animation_clips_dirs,
 logger = get_logger(__name__)
 
 CLIP_EXTS = (".fbx", ".glb", ".gltf")
-PAIR_ROLES = ("a", "b")
+#: The role letters of a multi-person clip, in order: a pair has ``a``/``b``,
+#: a group up to five (plan-gruppen-animationen.md). File ``<kind>__<role>``.
+CLIP_ROLES = ("a", "b", "c", "d", "e")
 ROLE_SEPARATOR = "__"
 LIBRARIES = ("free", "licensed")
 #: The cumulative orientation dials a clip sidecar records, in degrees —
@@ -88,7 +92,7 @@ KIND_RE = re.compile(r"^[a-z0-9][a-z0-9 _-]*$")
 # A set is a DIRECTORY name — same alphabet without spaces; "" is the root.
 SET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # ``<kind>__<role>[_<n>]`` — the parts a rename has to keep apart.
-_STEM_RE = re.compile(r"^(?P<kind>.*?)(?:__(?P<role>[ab]))?(?P<num>_\d+)?$")
+_STEM_RE = re.compile(r"^(?P<kind>.*?)(?:__(?P<role>[a-e]))?(?P<num>_\d+)?$")
 # The variant numbering — cut from a file stem, refused inside a kind.
 _NUM_SUFFIX_RE = re.compile(r"_\d+$")
 
@@ -127,14 +131,15 @@ def parse_clip_name(filename: str) -> str:
 
 
 def parse_clip_role(filename: str) -> Tuple[str, str]:
-    """``(kind, role)`` from a file name — role ``"a"``/``"b"`` for the half of
-    a pair clip (``kiss__b.fbx`` → ``("kiss", "b")``), ``""`` for a solo clip.
+    """``(kind, role)`` from a file name — role ``"a"``..``"e"`` for the half of
+    a pair or group clip (``kiss__b.fbx`` → ``("kiss", "b")``), ``""`` for a
+    solo clip.
     The numbering suffix is cut BEFORE the role is read, so ``hug__a_02.fbx``
     is a second take of the A half."""
     stem = Path(filename).stem.strip().lower()
     stem = _NUM_SUFFIX_RE.sub("", stem) or stem
     head, sep, tail = stem.rpartition(ROLE_SEPARATOR)
-    if sep and head and tail in PAIR_ROLES:
+    if sep and head and tail in CLIP_ROLES:
         return head, tail
     return stem, ""
 
@@ -372,12 +377,26 @@ def clip_kinds() -> List[str]:
 
 
 def pair_kinds() -> List[str]:
-    """Kinds that exist as a COMPLETE pair (both halves present in one set)."""
+    """Kinds that exist as a COMPLETE pair (both halves present in one set)
+    — exactly the roles ``a`` and ``b``: a group clip (``__c`` and on) is not
+    a pair, playing two of its roles would leave the others out."""
+    return sorted(k for k, n in role_counts().items() if n == 2)
+
+
+def role_counts() -> Dict[str, int]:
+    """Kind -> number of roles, for every kind that exists COMPLETE in one
+    set: its role files are ``a`` up to some letter without a gap (a pair
+    2, a group 3..5). A kind with a missing role is left out."""
     halves: Dict[Tuple[str, str], set] = {}
     for e in clip_entries():
         if e["role"]:
             halves.setdefault((e["set"], e["kind"]), set()).add(e["role"])
-    return sorted({k for (_s, k), roles in halves.items() if roles >= set(PAIR_ROLES)})
+    out: Dict[str, int] = {}
+    for (_s, kind), roles in halves.items():
+        n = len(roles)
+        if n >= 2 and roles == set(CLIP_ROLES[:n]):
+            out[kind] = max(out.get(kind, 0), n)
+    return out
 
 
 def clip_meta(kind: str, cset: str = "",
@@ -982,26 +1001,36 @@ def clip_loops(meta: Optional[Dict[str, Any]]) -> bool:
     return bool(isinstance(geometry, dict) and geometry.get("loop"))
 
 
-#: The genders a pair half can be assigned to — the two the profile field
+#: The genders a role can be assigned to — the two the profile field
 #: ``gender`` names unambiguously (the same pair ``animation_sets`` derives).
 ROLE_GENDERS = ("male", "female")
 
 
-def clip_role_gender(meta: Optional[Dict[str, Any]]) -> Dict[str, str]:
-    """Which gender plays which half of a pair clip: ``{"a": …, "b": …}``.
+def _meta_roles(meta: Optional[Dict[str, Any]]) -> List[str]:
+    """The role letters a sidecar names (``roles``), ``a``/``b`` for an old
+    pair sidecar without the list."""
+    raw = (meta or {}).get("roles") if isinstance(meta, dict) else None
+    roles = [r for r in (raw or []) if r in CLIP_ROLES] if isinstance(raw, list) else []
+    return roles or list(CLIP_ROLES[:2])
 
-    Written by the admin in the Poses tab (``set_clip_role_gender``). Only a
-    complete assignment counts — one man, one woman — anything else (no key,
-    one half missing, both the same, an unknown word) is ``{}``: the pair is
-    not assigned, and the initiator plays half A.
+
+def clip_role_gender(meta: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Which gender plays which role of a pair or group clip:
+    ``{"a": …, "b": …[, "c": …]}``.
+
+    Written by the import from the take names, or by the admin in the Poses
+    tab (``set_clip_role_gender``). Only a complete assignment counts —
+    every role of the sidecar's ``roles`` male or female, and not all the
+    same (a pair: one man, one woman) — anything else (no key, a role
+    missing, an unknown word) is ``{}``: not assigned, and the initiator
+    plays role A.
     """
     raw = (meta or {}).get("role_gender") if isinstance(meta, dict) else None
     if not isinstance(raw, dict):
         return {}
-    a = str(raw.get("a") or "").strip().lower()
-    b = str(raw.get("b") or "").strip().lower()
-    if a in ROLE_GENDERS and b in ROLE_GENDERS and a != b:
-        return {"a": a, "b": b}
+    out = {r: str(raw.get(r) or "").strip().lower() for r in _meta_roles(meta)}
+    if all(g in ROLE_GENDERS for g in out.values()) and len(set(out.values())) > 1:
+        return out
     return {}
 
 
@@ -1157,7 +1186,7 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "height_offsets_cm": clip_height_offsets(_height_meta(
             path, entry["kind"], library_root(entry["source"]).resolve(),
             pair=bool(entry["role"]))),
-        # Which gender plays which half — pair halves only, {} = not assigned.
+        # Which gender plays which role — pair/group halves only, {} = not assigned.
         "role_gender": clip_role_gender(meta) if entry["role"] else {},
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
@@ -1217,15 +1246,21 @@ def _split_stem(stem: str) -> Tuple[str, str, str]:
     return m.group("kind") or stem, m.group("role") or "", m.group("num") or ""
 
 
-def _pair_partner(path: Path) -> Optional[Path]:
-    """The other half of a pair clip (``kiss__a`` ↔ ``kiss__b``), None when the
-    clip is a solo one or the partner file is missing."""
+def _role_siblings(path: Path) -> List[Path]:
+    """The other role files of a pair or group clip (``kiss__a`` → ``kiss__b``;
+    ``x__b`` → ``x__a``, ``x__c``), in role order; ``[]`` for a solo clip.
+    Only files that exist."""
     kind, role, num = _split_stem(path.stem)
     if not role:
-        return None
-    other = PAIR_ROLES[0] if role == PAIR_ROLES[1] else PAIR_ROLES[1]
-    partner = path.with_name(f"{kind}{ROLE_SEPARATOR}{other}{num}{path.suffix}")
-    return partner if partner.is_file() else None
+        return []
+    out = []
+    for other in CLIP_ROLES:
+        if other == role:
+            continue
+        sibling = path.with_name(f"{kind}{ROLE_SEPARATOR}{other}{num}{path.suffix}")
+        if sibling.is_file():
+            out.append(sibling)
+    return out
 
 
 def _kind_files(directory: Path, kind: str) -> List[Path]:
@@ -1318,7 +1353,7 @@ def _library_writer(fn):
 
 @_library_writer
 def delete_clip(library: str, rel: str) -> Dict[str, Any]:
-    """Removes one clip from one library — both halves when it is a pair.
+    """Removes one clip from one library — every role file of a pair or group.
 
     A sidecar that belongs to THIS file alone (``walk_02.json`` next to
     ``walk_02.fbx``) goes with it. The shared ``<kind>.json`` goes only when NO
@@ -1334,10 +1369,7 @@ def delete_clip(library: str, rel: str) -> Dict[str, Any]:
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
 
-    targets = [path]
-    partner = _pair_partner(path)
-    if partner is not None:
-        targets.append(partner)
+    targets = [path] + _role_siblings(path)
     sidecars_removed = []
     for p in targets:
         own = _own_sidecar(p)
@@ -1371,7 +1403,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
                 overwrite: bool = False) -> List[Dict[str, Any]]:
     """Renames a clip and/or moves it to another set or library.
 
-    A pair moves as a pair (both halves), a numbered variant keeps its
+    A pair or group moves whole (every role file), a numbered variant keeps its
     ``_<n>``. The sidecars follow: one belonging to a single file
     (``walk_02.json``) travels with that file and is renamed with it, the
     shared ``<kind>.json`` MOVES when nothing of the old kind stays behind and
@@ -1382,7 +1414,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     A name already taken at the target is a ``ClipExists`` — unless
     ``overwrite`` says the admin answered the question with "Replace": then
     the file lying there is deleted before the move, together with the sidecar
-    belonging to it ALONE, for every half of a pair alike (``_clear_replaced``).
+    belonging to it ALONE, for every role file alike (``_clear_replaced``).
 
     Returns the moved clips as listing views.
     """
@@ -1402,10 +1434,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     dest_dir = library_root(new_library).resolve() / new_set if new_set \
         else library_root(new_library).resolve()
 
-    sources = [src]
-    partner = _pair_partner(src)
-    if partner is not None:
-        sources.append(partner)
+    sources = [src] + _role_siblings(src)
 
     moves: List[Tuple[Path, Path]] = []
     replaced: List[Path] = []
@@ -1511,15 +1540,17 @@ def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
 @_library_writer
 def set_clip_role_gender(library: str, rel: str,
                          role_gender: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Writes which gender plays which half of a PAIR clip.
+    """Writes which gender plays which role of a PAIR or GROUP clip.
 
     ``role_gender`` is ``{"a": "male", "b": "female"}`` (or the other way
-    round); ``None`` / ``{}`` removes the assignment, so the initiator plays
-    half A again. Like the loop flag it belongs to the KIND in its set and
-    lives in the shared ``<kind>.json`` — both halves read the same answer.
+    round; a group names every role of its sidecar's ``roles``); ``None`` /
+    ``{}`` removes the assignment, so the initiator plays role A again. Like
+    the loop flag it belongs to the KIND in its set and lives in the shared
+    ``<kind>.json`` — every role file reads the same answer.
 
-    Refused (``ClipLibraryError``): a solo clip (it has no halves), a kind
-    without a shared sidecar, and anything but one man plus one woman.
+    Refused (``ClipLibraryError``): a solo clip (it has no roles), a kind
+    without a shared sidecar, and an incomplete assignment (a role missing,
+    an unknown word, everybody the same gender — see ``clip_role_gender``).
     Returns the touched clips as listing views.
     """
     path = resolve_clip(library, rel)
@@ -1529,14 +1560,8 @@ def set_clip_role_gender(library: str, rel: str,
     if not role:
         raise ClipLibraryError(
             f"'{kind}' is a solo clip — only the halves of a pair have roles")
-    value: Dict[str, str] = {}
-    if role_gender:
-        if not isinstance(role_gender, dict):
-            raise ClipLibraryError("role_gender must be an object {a, b}")
-        value = clip_role_gender({"role_gender": role_gender})
-        if not value:
-            raise ClipLibraryError(
-                "role_gender needs one half male and the other female")
+    if role_gender and not isinstance(role_gender, dict):
+        raise ClipLibraryError("role_gender must be an object {a, b, …}")
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
     sidecar = path.parent / f"{kind}.json"
@@ -1550,6 +1575,13 @@ def set_clip_role_gender(library: str, rel: str,
         raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
     if not isinstance(data, dict):
         raise ClipLibraryError(f"{sidecar.name} is not an object")
+    value: Dict[str, str] = {}
+    if role_gender:
+        value = clip_role_gender({**data, "role_gender": role_gender})
+        if not value:
+            raise ClipLibraryError(
+                "role_gender needs every role ("
+                + ", ".join(_meta_roles(data)) + ") male or female, not all the same")
     if value:
         data["role_gender"] = value
     else:
@@ -1570,7 +1602,7 @@ def set_clip_height_offsets(library: str, rel: str,
     Solo variants use their own sidecar when present, otherwise the shared
     kind sidecar. Inheriting a root variant sidecar creates a local own
     sidecar, so the write wins the same lookup without touching siblings.
-    Both pair halves use the shared map; existing half sidecars receive it
+    Every role file of a pair or group uses the shared map; existing role sidecars receive it
     too. All input and sidecar reads are validated before writing. Zero
     removes only the addressed key.
     """
@@ -1581,10 +1613,7 @@ def set_clip_height_offsets(library: str, rel: str,
     root = library_root(library).resolve()
     kind, role = parse_clip_role(path.name)
     cset = path.parent.name if path.parent != root else ""
-    files = [path]
-    partner = _pair_partner(path)
-    if partner is not None:
-        files.append(partner)
+    files = [path] + _role_siblings(path)
     sidecar = _orient_sidecar(path, kind, bool(role))
     # An exact-stem sidecar (including original filename case) wins the
     # lookup. Write its local owner, or materialize a root-inherited variant.
@@ -1716,9 +1745,9 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     ``yaw_deg`` / ``tilt_deg`` / ``roll_deg`` are the rigid rotation
     ``Ry(yaw) · Rx(tilt) · Rz(roll)`` about the origin of the clip frame on
     the floor, ``height_cm`` the lift after it (``app/blender/scripts/
-    clip_orient.py`` writes out the convention). A PAIR is turned as a pair:
-    both halves go into ONE Blender run with the same numbers, so their shared
-    anchor survives.
+    clip_orient.py`` writes out the convention). A PAIR or GROUP is turned
+    whole: every role file goes into ONE Blender run with the same numbers,
+    so their shared anchor survives.
 
     There is no second truth: the FBX is rewritten (temp file, then
     ``os.replace``) and the sidecar follows it — the three angles add up
@@ -1730,10 +1759,13 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
 
     ``partner_shift_cm`` is ``[side, up, forward]`` in the clip frame (+X =
     the clip's left, +Y up, +Z forward), centimetres: it moves the B half of
-    a PAIR against the A half — the import's ``offset_b_m``, after the fact,
+    a PAIR against the A half — the import's ``offsets_m``, after the fact,
     for a pack whose halves turn out misaligned. It is applied before the
     turn (``clip_orient.py``), so it lives in the frame the dials turn, and
-    adds up in ``geometry.partner_shift_cm``. A solo clip refuses it.
+    adds up in ``geometry.partner_shift_cm``. A solo clip refuses it, and so
+    does a group (three roles and more): which role should move is not
+    one answer there — a group is aligned per role at the import
+    (``offsets_m``).
 
     ``shift_cm`` is a cumulative renderer-only [side, forward] correction,
     -200..200 cm per edit, shared by both pair halves. It is applied after
@@ -1760,10 +1792,13 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     if not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift, *horizontal)):
         return [_view_of(path, cset, library)]               # nothing dialled
 
-    partner = _pair_partner(path)
-    if partner is None and any(abs(v) > 1e-9 for v in shift):
+    siblings = _role_siblings(path)
+    if not siblings and any(abs(v) > 1e-9 for v in shift):
         raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair has a partner to move")
-    sidecar = _orient_sidecar(path, kind, partner is not None)
+    if len(siblings) > 1 and any(abs(v) > 1e-9 for v in shift):
+        raise ClipLibraryError(
+            f"'{kind}' is a group clip — its roles are aligned at the import (offsets per role)")
+    sidecar = _orient_sidecar(path, kind, bool(siblings))
     if not sidecar.is_file():
         raise ClipLibraryError(
             f"'{kind}' has no sidecar {sidecar.name} — the baked angles are "
@@ -1779,7 +1814,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         geometry = {}
         meta["geometry"] = geometry
 
-    targets = [path] + ([partner] if partner is not None else [])
+    targets = [path] + siblings
     slots = {f"src_{i}": p for i, p in enumerate(targets)}
     baked = any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift))
     data: Dict[str, Any] = {}
@@ -1804,8 +1839,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             if missing:
                 raise ClipLibraryError("the Blender run declared no file for "
                                        + ", ".join(slots[s].name for s in missing))
-            # Both halves are staged beside their targets first: a pair must never
-            # end up with one turned and one untouched file.
+            # Every role file is staged beside its target first: a pair or group
+            # must never end up with one turned and one untouched file.
             staged = []
             try:
                 for slot, target in slots.items():
@@ -1837,10 +1872,10 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     # A solo clip's travel is a direction in the clip frame — it turns with
     # the file (a lift moves nothing horizontal).
     rm = geometry.get("root_motion")
-    if baked and partner is None and isinstance(rm, dict) and rm.get("travel_m"):
+    if baked and not siblings and isinstance(rm, dict) and rm.get("travel_m"):
         tx, tz = _root_motion_mod().rotate_travel(tuple(rm["travel_m"]), yaw, tilt, roll)
         rm["travel_m"] = [round(tx, 3), round(tz, 3)]
-    if partner is not None and baked:
+    if siblings and baked:
         roles = geometry.get("roles")
         if not isinstance(roles, dict):
             roles = {}
@@ -1854,7 +1889,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             d = data.get(slot) or {}
             entry["start_xz_m"] = _xz_m(d.get("root_after"))
             entry["anchor_xz_m"] = _xz_m(d.get("root_after_anchor"))
-        a, b = (roles.get(r) or {} for r in PAIR_ROLES)
+        a, b = (roles.get(r) or {} for r in CLIP_ROLES[:2])
         if a.get("anchor_xz_m") and b.get("anchor_xz_m"):
             geometry["root_distance_m"] = round(
                 math.dist(a["anchor_xz_m"], b["anchor_xz_m"]), 3)
