@@ -3917,6 +3917,8 @@ async function startApp(username: string, role: string) {
   let requestedPropRun: PropActionResult | null = null;
   let trackedPropRun: PropActionResult | null = null;
   const releasedPropExecutions = new Set<string>();
+  const endedOwnPropExecutions = new Set<string>();
+  const playedCancelMotions = new Set<string>();
   const propPreparation = createPropPreparationBarrier();
   let propPositionDrainActive = false;
   let propPositionDrainFailed = false;
@@ -4953,6 +4955,11 @@ async function startApp(username: string, role: string) {
       if (row?.status === 'cancelled' || row?.status === 'failed' || row?.status === 'completed' || (!row && previous.status === 'approaching')) {
         const next = ownedPropRun();
         if (!next || next.execution_id === previous.execution_id) {
+          if (row?.motion && 'seat' in row.motion) {
+            trackedPropRun = previous;
+            receivePropAnswer(row, 'cancel', true);
+            return;
+          }
           endPropRun(previous.execution_id, row?.status ?? 'cancelled', row?.reason ?? 'approach_withdrawn');
           return;
         }
@@ -4976,7 +4983,7 @@ async function startApp(username: string, role: string) {
 
   function endPropRun(executionId: string, status: string, reason: string): void {
     console.info(`[prop] run ended without approach: status=${status} reason=${reason}`);
-    if (executionId) releasedPropExecutions.add(executionId);
+    if (executionId) { releasedPropExecutions.add(executionId); endedOwnPropExecutions.add(executionId); }
     if (trackedPropRun) releasedPropExecutions.add(trackedPropRun.execution_id);
     trackedPropRun = requestedPropRun = null;
     propStateUncertain = false; propPreparation.adoptFreshState();
@@ -5008,16 +5015,17 @@ async function startApp(username: string, role: string) {
     void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
   }
 
-  function receivePropAnswer(result: PropActionResult, source: string): void {
-    if (result.execution_id && releasedPropExecutions.has(result.execution_id)) return;
+  function receivePropAnswer(result: PropActionResult, source: string, terminal = false): void {
+    if (source !== 'cancel' && result.execution_id && releasedPropExecutions.has(result.execution_id)) return;
+    if (source === 'cancel' && playedCancelMotions.has(result.execution_id)) return;
     const motion = result.motion;
     const ownId = (trackedPropRun ?? ownedPropRun())?.execution_id;
     const ownRun = !!result.execution_id && result.execution_id === ownId;
-    if (source === 'cancel' && (result.status === 'refused' || result.status === 'failed')) {
+    if (!terminal && source === 'cancel' && (result.status === 'refused' || result.status === 'failed')) {
       propStateUncertain = false; propPreparation.adoptFreshState();
       return;
     }
-    if (source === 'cancel' && !ownRun) {
+    if (source === 'cancel' && !ownRun && !endedOwnPropExecutions.has(result.execution_id)) {
       // Withdrawing an invitation or stopping another row leaves the own run alone.
       releasedPropExecutions.add(result.execution_id);
       propClickRevert = null;
@@ -5026,11 +5034,15 @@ async function startApp(username: string, role: string) {
     }
     if (source === 'cancel') {
       releasedPropExecutions.add(result.execution_id);
-      trackedPropRun = requestedPropRun = null;
+      endedOwnPropExecutions.add(result.execution_id);
+      if (ownRun) trackedPropRun = requestedPropRun = null;
       propClickRevert = null;
       const journey = npcs.ownMotionJourney(avatarName);
       const done = () => releaseLocalProp(journey);
-      if (motion && 'seat' in motion) npcs.playOwnCancel(avatarName, motion, done);
+      if (motion && 'seat' in motion) {
+        playedCancelMotions.add(result.execution_id);
+        npcs.playOwnCancel(avatarName, motion, done);
+      }
       else done();
     } else if (result.status === 'refused' || result.status === 'failed' || result.status === 'cancelled') {
       propClickRevert?.(); propClickRevert = null;

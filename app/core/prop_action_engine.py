@@ -950,28 +950,31 @@ def _narrate_finish(run, before, status, reason, keep_seated):
 
 @_internal_mutation()
 def _finish(run, status, reason, *, keep_seated=""):
-    if run["status"] in store.TERMINAL:
+    # State readers share this lock: terminal status and departure cleanup
+    # become visible together, including server-side endings.
+    with _lock(run["execution_id"]):
+        if run["status"] in store.TERMINAL:
+            return _result(run)
+        before = run["status"]
+        phases = []
+        if run["status"] == "active" and run["definition"]["ability"] != "sleep":
+            # Include the final online partial interval before any cleanup. _clock
+            # has already advanced on scheduler paths, so this never counts twice.
+            delta = _clock(run, game_time())
+            if run["definition"]["ability"] == "combined":
+                duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
+                delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
+                run["data"]["phase_elapsed"] += delta
+            run["data"]["active_game_s"] = run["data"].get("active_game_s", 0) + delta
+            phases.append("active")
+        if status == "completed" and reason == "phases_completed":
+            phases.append("success")
+        run.update(status=status, reason=reason)
+        run["data"]["cleanup_pending"] = True
+        _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
+        _cleanup(run, keep_seated=keep_seated)
+        _narrate_finish(run, before, status, reason, keep_seated)
         return _result(run)
-    before = run["status"]
-    phases = []
-    if run["status"] == "active" and run["definition"]["ability"] != "sleep":
-        # Include the final online partial interval before any cleanup. _clock
-        # has already advanced on scheduler paths, so this never counts twice.
-        delta = _clock(run, game_time())
-        if run["definition"]["ability"] == "combined":
-            duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
-            delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
-            run["data"]["phase_elapsed"] += delta
-        run["data"]["active_game_s"] = run["data"].get("active_game_s", 0) + delta
-        phases.append("active")
-    if status == "completed" and reason == "phases_completed":
-        phases.append("success")
-    run.update(status=status, reason=reason)
-    run["data"]["cleanup_pending"] = True
-    _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
-    _cleanup(run, keep_seated=keep_seated)
-    _narrate_finish(run, before, status, reason, keep_seated)
-    return _result(run)
 
 
 @_internal_mutation()
@@ -983,14 +986,24 @@ def _cleanup(run, keep_seated=""):
         jid = run["data"]["journey_ids"].get(name)
         if jid:
             travel.cancel_journey(name, journey_id=jid, execution_kind="prop_action", execution_ref=run["execution_id"], reason=reason)
+        if name != keep_seated:
+            pose = C.get_effective_pose_key(name)
+            before = C.get_character_pos(name)
+            place = (C.get_character_profile(name) or {}).get("place") or {}
+            held = place.get("execution_id") == run["execution_id"]
+            released = C.release_prop_action_state(name, run["execution_id"])
+            after = C.get_character_pos(name)
+            if released and held and before and after:
+                run["data"].setdefault("exit_motions", {})[name] = _exit_motion(pose, before, after)
+    # Pair interaction cleanup can release both members itself. Capture and
+    # release every owned place first, while its original pose still exists.
+    for _role, name in _members(run):
         profile = C.get_character_profile(name)
         inter = profile.get("interaction") or {}
         if inter.get("execution_ref") == run["execution_id"]:
             from app.core.interaction_engine import end_interaction
             end_interaction(name, reason=reason, interaction_id=inter["id"])
-        if name != keep_seated:
-            C.release_prop_action_state(name, run["execution_id"])
-    store.cleanup_finished(run["execution_id"])
+    store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
 
 
 def cancel_with_motion(actor: str, execution_id: str) -> dict:
@@ -998,24 +1011,23 @@ def cancel_with_motion(actor: str, execution_id: str) -> dict:
     stand-up its own client plays at once: the exit clip of the pose it held
     and the standing point the server put it on (``motion: null`` when the
     actor did not move)."""
-    pose = C.get_effective_pose_key(actor)
-    before = C.get_character_pos(actor)
-    held = bool((C.get_character_profile(actor) or {}).get("place"))
     result = cancel(actor, execution_id)
     if result["status"] == "refused":
         return result
-    after = C.get_character_pos(actor)
-    motion = None
-    if held and before and after:
-        kind, seconds = travel.exit_bridge_for_pose(pose)
-        if not kind:
-            from app.core.animation_clips import clip_meta, resolve_pose_transition
-            rule = resolve_pose_transition(pose, "standing") or {}
-            kind = str(rule.get("kind") or "")
-            seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
-        motion = dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
-                      exit_clip=kind, exit_s=round(seconds, 3))
-    return dict(result, motion=motion)
+    run = store.get(execution_id)
+    return dict(result, motion=run["data"].get("exit_motions", {}).get(actor))
+
+
+def _exit_motion(pose, before, after):
+    """The released place's departure, shared by state and cancel answers."""
+    kind, seconds = travel.exit_bridge_for_pose(pose)
+    if not kind:
+        from app.core.animation_clips import clip_meta, resolve_pose_transition
+        rule = resolve_pose_transition(pose, "standing") or {}
+        kind = str(rule.get("kind") or "")
+        seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
+    return dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
+                exit_clip=kind, exit_s=round(seconds, 3))
 
 
 def cancel(actor: str, execution_id: str) -> dict:
@@ -1659,7 +1671,7 @@ def state_for(actor: str) -> dict:
     cutoff = utc_now() - timedelta(minutes=30)
     rows = store.db.get_connection().execute(
         "SELECT * FROM prop_action_runs WHERE actor=? OR partner=? ORDER BY created_at,execution_id",
-        (actor, actor))
+        (actor, actor)).fetchall()
     for raw in rows:
         terminal = raw["status"] in store.TERMINAL
         if terminal:
@@ -1668,7 +1680,13 @@ def state_for(actor: str) -> dict:
                     continue
             except (ValueError, TypeError):
                 continue
-        run = store._decode(raw)
+        # A terminal commit precedes cleanup; wait for its departure before
+        # publishing the row. Re-read even a formerly live cursor snapshot.
+        with _lock(raw["execution_id"]):
+            run = store.get(raw["execution_id"])
+        if run is None:
+            continue
+        terminal = run["status"] in store.TERMINAL
         pending = run["status"] == "awaiting_consent"
         row = {k: run[k] for k in ("execution_id", "action_id", "definition_revision",
                                   "target", "actor", "partner", "status", "phase", "reason")}
@@ -1686,6 +1704,7 @@ def state_for(actor: str) -> dict:
                    can_resist=(not terminal and actor == run["partner"] and _reacts(run)
                                and run["status"] == "approaching"))
         if terminal:
+            row["motion"] = run["data"].get("exit_motions", {}).get(actor)
             row["effects"] = run["data"].get("effect_results", {})
             result["recent_results"].append(row)
         elif pending:

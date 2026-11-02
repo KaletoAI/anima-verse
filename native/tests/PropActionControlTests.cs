@@ -118,4 +118,44 @@ public class PropActionControlTests
         Assert.Equal("mutation failed", error.Message);
         Assert.False(control.Paused);
     }
+    [Theory]
+    [InlineData(false,true,"completed")]
+    [InlineData(false,true,"failed")]
+    [InlineData(false,true,"cancelled")]
+    [InlineData(true,true,"completed")]
+    [InlineData(false,false,"completed")]
+    public async Task TerminalDepartureOnce(bool hudFirst,bool motion,string status)
+    {
+        var transport=new Transport(); using var api=new AnimaApi("http://fixture/",transport);
+        using var control=new PropActionControl(api,()=>0);
+        transport.Reply=_=>Task.FromResult("""{"current":[{"execution_id":"run","status":"active"}]}""");
+        await control.RefreshAsync();
+        var answer=System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"completed","motion":{"seat":[8,5],"stand":[8,7],"exit_clip":"rise","exit_s":1}}""")!.AsObject();
+        answer["status"]=status;
+        if(!motion) answer["motion"]=null;
+        int plays=0,ends=0;
+        control.MotionReceived+=(_,source,id)=>{ Assert.Equal("cancel",source); Assert.Equal("run",id); plays++; };
+        control.RunEnded+=(_,_)=>ends++;
+        if(hudFirst) control.ConsumeMotion(answer,"cancel");
+        transport.Reply=_=>Task.FromResult("""{"current":[],"recent_results":["""+answer.ToJsonString()+"]}");
+        await control.RefreshAsync();
+        Assert.Equal(motion ? 1 : 0,plays); Assert.Equal(motion ? 0 : 1,ends);
+        control.ConsumeMotion(answer,"cancel"); Assert.Equal(motion ? 1 : 0,plays);
+    }
+
+    [Fact]
+    public async Task LateHudDepartureAfterMotionlessEndStillPlays()
+    {
+        var transport=new Transport(); using var api=new AnimaApi("http://fixture/",transport);
+        using var control=new PropActionControl(api,()=>0);
+        transport.Reply=_=>Task.FromResult("""{"current":[{"execution_id":"run","status":"active"}]}""");
+        await control.RefreshAsync();
+        transport.Reply=_=>Task.FromResult("""{"current":[],"recent_results":[{"execution_id":"run","status":"completed"}]}""");
+        int plays=0,ends=0; control.MotionReceived+=(_,_,_)=>plays++; control.RunEnded+=(_,_)=>ends++;
+        await control.RefreshAsync(); Assert.Equal(1,ends);
+        var answer=System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"completed","motion":{"seat":[8,5],"stand":[8,7]}}""")!.AsObject();
+        control.ConsumeMotion(answer,"cancel"); control.ConsumeMotion(answer,"cancel");
+        Assert.Equal(1,plays);
+    }
+
 }

@@ -8146,6 +8146,12 @@ Player routes require the authenticated user's current authorized avatar:
 - `POST /play/prop-actions/respond`: `{execution_id,accept:bool}`, exact invitee only.
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
+  Terminal `recent_results` rows include participant-specific `motion`:
+  `{seat:[x,z], stand:[x,z], exit_clip, exit_s}` for a participant released
+  from a place, otherwise `null` (including a participant kept seated).
+  This persisted departure is identical to the cancel answer's `motion`.
+  Clients play it once per execution id across state and cancel answers.
+
   Rows contain `execution_id,action_id,definition_revision,label,target,actor,
   partner,roles,status,phase,phase_label,reason,can_respond,can_cancel`. Roles distinguish
   semantic actor/partner from physical clip/access roles. Incoming is only for

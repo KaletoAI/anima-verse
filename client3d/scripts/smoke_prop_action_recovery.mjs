@@ -8,6 +8,7 @@ const state=current=>({current,outgoing:[],recent_results:[]});
 function setup(){
  const calls=[], gate=motion.createManualPropGate(), preparation=motion.createPropPreparationBarrier();
  const deps={requestedPropRun:null,trackedPropRun:null,semanticState:state([]),releasedPropExecutions:new Set(),
+  endedOwnPropExecutions:new Set(),playedCancelMotions:new Set(),
   propMutationPending:false,propStateEpoch:0,propStateUncertain:false,manualPropRelease:false,
   propPreparation:preparation,manualPropGate:gate,avatarName:'avatar',avatarDrive:{kind:'SERVER'},avatarSeated:true,seatedKey:'old',
   ownSeatChangeAt:0,answerFloor:0,posSeq:2,pendingReport:{},avatarCancelled:null,
@@ -61,6 +62,29 @@ for(const status of ['cancelled','failed','refused']){
  scope.adoptPropState({...state([]),recent_results:[{execution_id:'run',status:'completed',reason:'phases_completed'}]});
  assert.equal(f.calls.filter(c=>c==='release').length,1,'completed finite actions return player control');
 }
+// A terminal state and HUD answer compete for one departure, in either order.
+for(const hudFirst of [false,true]) for(const status of ['completed','cancelled','failed']){
+ const f=setup();const scope=await mainFunctions(['ownedPropRun','receivePropAnswer','adoptPropState','endPropRun','releaseLocalProp','resyncPropState','refreshPropMotion'],f.deps);
+ scope.receivePropAnswer({execution_id:'run',status:'approaching',motion:plan},'request');
+ scope.adoptPropState(state([{execution_id:'run',status:'active',motion:null}]));
+ const answer={execution_id:'run',status:'completed',motion:{seat:[2.5,0],stand:[2,0],exit_clip:'stand-up',exit_s:1}};
+ if(hudFirst) scope.receivePropAnswer(answer,'cancel');
+ const terminal={...state([]),recent_results:[{...answer,status}]};
+ scope.adoptPropState(terminal);
+ scope.receivePropAnswer(answer,'cancel');scope.adoptPropState(terminal);
+ assert.equal(f.calls.filter(c=>Array.isArray(c)&&c[0]==='exit').length,1,'terminal/HUD departure plays once');
+ assert.equal(f.calls.filter(c=>c==='release').length,0,'departure retains figure');
+ f.deps.finishExit();assert.equal(f.calls.filter(c=>c==='release').length,1);
+}
+{
+ const f=setup();const scope=await mainFunctions(['ownedPropRun','receivePropAnswer','adoptPropState','endPropRun','releaseLocalProp','resyncPropState','refreshPropMotion'],f.deps);
+ scope.receivePropAnswer({execution_id:'run',status:'approaching',motion:plan},'request');
+ scope.adoptPropState({...state([]),recent_results:[{execution_id:'run',status:'completed',motion:null}]});
+ const answer={execution_id:'run',status:'completed',motion:{seat:[2.5,0],stand:[2,0],exit_clip:'stand-up',exit_s:1}};
+ scope.receivePropAnswer(answer,'cancel');scope.receivePropAnswer(answer,'cancel');
+ assert.equal(f.calls.filter(c=>Array.isArray(c)&&c[0]==='exit').length,1,'late HUD after motionless end still departs once');
+}
+console.log('prop action terminal departure races: PASS');
 // Another action on the same piece switches IN PLACE (prop_action_engine): the
 // state shows the tracked run completed and a NEW own run current — the answer
 // was "active" without a motion, or (via state) the partner said yes. Not a

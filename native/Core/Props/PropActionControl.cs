@@ -18,6 +18,8 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
 {
     public PropPreparationBarrier Preparation { get; }=new();
     public ManualPropGate ManualGate { get; }=new();
+    private readonly HashSet<string> _cancelMotions=new(StringComparer.Ordinal);
+    private readonly HashSet<string> _endedOwn=new(StringComparer.Ordinal);
     private readonly HashSet<string> _released=new(StringComparer.Ordinal);
     private JsonObject _state=new() { ["incoming"]=new JsonArray(),["current"]=new JsonArray(),["outgoing"]=new JsonArray(),["recent_results"]=new JsonArray() };
     private int _epoch;
@@ -125,15 +127,17 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         if(source!="state" && status=="approaching") { _requestedRun=(JsonObject)answer.DeepClone(); _trackedRun=(JsonObject)answer.DeepClone(); }
         if(answer["motion"] is JsonObject motion) MotionReceived?.Invoke((JsonObject)motion.DeepClone(),source,id);
     }
-    private void ConsumeCancel(JsonObject answer,string id,string status,bool own)
+    private void ConsumeCancel(JsonObject answer,string id,string status,bool own,bool terminal=false)
     {
-        if(status is "refused" or "failed") return;
+        if(!terminal && status is "refused" or "failed") return;
         _released.Add(id);
         _uncertain=false; Preparation.AdoptFreshState();
         // Withdrawing an invitation or stopping another row leaves the own run alone.
-        if(!own) return;
-        _trackedRun=_requestedRun=null;
-        if(answer["motion"] is JsonObject motion) MotionReceived?.Invoke((JsonObject)motion.DeepClone(),"cancel",id);
+        if(!own && !_endedOwn.Contains(id)) return;
+        _endedOwn.Add(id);
+        if(own) _trackedRun=_requestedRun=null;
+        if(answer["motion"] is JsonObject motion && _cancelMotions.Add(id))
+            MotionReceived?.Invoke((JsonObject)motion.DeepClone(),"cancel",id);
     }
     private void RejectMutation(string status,string reason)
     {
@@ -185,6 +189,7 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
                 RunSuperseded?.Invoke(id,nextId);
                 return false;
             }
+            if(row?["motion"] is JsonObject) { ConsumeCancel(row,id,status,own:true,terminal:true); return true; }
             EndRun(status.Length>0 ? status : "cancelled",row is null ? "approach_withdrawn" : PropActionMotion.Text(row["reason"])); return true;
         }
         else if(OwnedRun is { } owned) _trackedRun=(JsonObject)owned.DeepClone();
@@ -193,6 +198,7 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     private void EndRun(string status,string reason)
     {
         if(_trackedRun is null) return;
+        _endedOwn.Add(PropActionMotion.Text(_trackedRun["execution_id"]));
         _released.Add(PropActionMotion.Text(_trackedRun["execution_id"]));
         _trackedRun=_requestedRun=null;
         _uncertain=false; Preparation.AdoptFreshState();

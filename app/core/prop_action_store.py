@@ -130,7 +130,7 @@ def pending_cleanup():
         "AND json_extract(data,'$.cleanup_pending')=1")]
 
 
-def cleanup_finished(execution_id):
+def cleanup_finished(execution_id, exit_motions):
     with transaction() as conn:
-        conn.execute("UPDATE prop_action_runs SET data=json_set(data,'$.cleanup_pending',json('false')) "
-                     "WHERE execution_id=? AND status IN ('completed','cancelled','failed')", (execution_id,))
+        conn.execute("UPDATE prop_action_runs SET data=json_set(data,'$.cleanup_pending',json('false'),'$.exit_motions',json_patch(COALESCE(json_extract(data,'$.exit_motions'),'{}'),json(?))) "
+                     "WHERE execution_id=? AND status IN ('completed','cancelled','failed')", (encode(exit_motions), execution_id))

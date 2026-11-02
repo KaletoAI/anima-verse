@@ -218,6 +218,9 @@ public static partial class PropActionsCheck
                 int states=source.StateRequests,maps=source.WorldRequests;
                 hud.Handlers["cancelPropAction"](new JsonArray(seated["execution_id"]!.DeepClone())); await offers.PendingPropAction!;
                 Is("cancel answer needs no follow-up state or world poll",source.StateRequests==states && source.WorldRequests==maps);
+                var departure=mgr.OwnPropMotion;
+                offers.PropActions!.ConsumeMotion(source.CancelAnswer!,"cancel");
+                Is("duplicate HUD cancel preserves departure",ReferenceEquals(departure,mgr.OwnPropMotion));
                 if(clip) { Is("cancel retains ownership during exit",mgr.OwnPropMotion?.Cancel==true && steering.PropActionDriven); Step(.25); Near("cancel measured exit clock",avatar.ClipTime,.25); Step(.25); }
                 Near("cancel answer stands at server point",avatar.Position.Z,.5);
                 Is($"cancel hands back input after exit own={mgr.OwnPropMotion?.Phase} driven={steering.PropActionDriven} paused={position.Channel.ReportsPaused} gate={offers.PropActions!.Paused}",mgr.OwnPropMotion is null && !steering.PropActionDriven && !position.Channel.ReportsPaused);

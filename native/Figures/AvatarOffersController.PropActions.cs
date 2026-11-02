@@ -175,7 +175,7 @@ public sealed partial class AvatarOffersController
     }
     private void PropRunEnded(string status,string reason)
     {
-        if(_disposed) return;
+        if(_disposed || _figures.OwnPropMotion?.Cancel==true) return;
         _nextPropPoll=_clock()+PropPollPeriod();
         if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
         ReleaseLocalProp();
@@ -207,6 +207,7 @@ public sealed partial class AvatarOffersController
     }
     private void ReleaseLocalProp()
     {
+        if(_figures.OwnPropMotion?.Cancel==true) return;
         PropActions?.ManualGate.Withdraw(_position.OwnedPropJourney);
         PropActions?.ManualGate.Withdraw(PropActionMotion.Text(_figures.OwnPropMotion?.Plan["journey_id"]) is { Length:>0 } playedJourney ? playedJourney : _position.OwnedPropJourney);
         _figures.WithdrawOwnPropInteraction();

@@ -25,9 +25,15 @@ Hand-derived expectations (contract docs/schnittstellen-3d.md, "Own motion"):
   a switch on the SAME piece ("rest-2") begins in place: status active,
   motion null, no journey, the place on the same piece and the position its
   anchor (fails on a1c5af11: "approaching" with a departure);
+- Server-side end: run-exit travels 2 m forward from seat (8,5), yaw 0,
+  yielding stand (8,7); its duration is 1 second. The terminal state row and
+  a later cancel answer both retain that exact departure.
 - cancel while seated: motion = {seat: before, stand: where the server put
   the figure, exit_clip run-exit, exit_s 1.0}; cancel while walking: null.
 """
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from threading import Event
+from unittest.mock import patch
 from copy import deepcopy
 import json
 import math
@@ -160,6 +166,75 @@ class MotionPlan(unittest.TestCase):
             seat=[seat['x'], seat['z']], stand=list(journey['waypoints'][1][:2]),
             exit_clip='run-exit', exit_s=1.0))
         self.assertEqual(motion['waypoints'][0], [round(seat['x'], 3), round(seat['z'], 3)])
+
+    def test_terminal_motion_is_null_without_a_released_place(self):
+        name, target, _ = S.setup_run()
+        walking = S.request(name, target)
+        self.assertIsNone(A.cancel_with_motion(name, walking['execution_id'])['motion'])
+        row = next(r for r in A.state_for(name)['recent_results'] if r['execution_id'] == walking['execution_id'])
+        self.assertIsNone(row['motion'])
+        seated = S.request(name, target)
+        run = until_active(seated['execution_id'])
+        A._finish(run, 'completed', 'ended', keep_seated=name)
+        row = next(r for r in A.state_for(name)['recent_results'] if r['execution_id'] == seated['execution_id'])
+        self.assertIsNone(row['motion'])
+        self.assertIsNotNone(F.C.get_character_profile(name).get('place'))
+        self.assertIsNone(A.cancel_with_motion(name, seated['execution_id'])['motion'])
+
+    def test_terminal_poll_waits_for_departure_cleanup(self):
+        name, target, _ = S.setup_run()
+        exit_clip_fixture()
+        # Keep a second participant row: an open multi-row SQLite cursor
+        # would otherwise pin the pre-cleanup snapshot across the run lock.
+        previous = S.request(name, target)
+        A.cancel(name, previous['execution_id'])
+        first = S.request(name, target)
+        run = until_active(first['execution_id'])
+        entered, proceed, reading = Event(), Event(), Event()
+        cleanup = A._cleanup
+        def delayed_cleanup(*args, **kwargs):
+            entered.set()
+            if not proceed.wait(5):
+                raise AssertionError('cleanup was never released')
+            return cleanup(*args, **kwargs)
+        def read_state():
+            reading.set()
+            return A.state_for(name)
+        with patch.object(A, '_cleanup', delayed_cleanup), ThreadPoolExecutor(max_workers=2) as pool:
+            finish = pool.submit(A._finish, run, 'cancelled', 'interaction_avatar')
+            try:
+                self.assertTrue(entered.wait(5))
+                state = pool.submit(read_state)
+                self.assertTrue(reading.wait(5))
+                with self.assertRaises(TimeoutError):
+                    state.result(timeout=.05)
+            finally:
+                proceed.set()
+            finish.result(timeout=5)
+            row = next(r for r in state.result(timeout=5)['recent_results']
+                       if r['execution_id'] == first['execution_id'])
+        self.assertEqual(row['motion'], dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0))
+
+    def test_server_end_persists_departure(self):
+        # By hand: the fixture exit travels 2 m forward from (8,5), yaw 0,
+        # so stand is (8,7); run-exit lasts 1 second.
+        name, target, _ = S.setup_run()
+        exit_clip_fixture()
+        first = S.request(name, target)
+        run = until_active(first['execution_id'])
+        stale = deepcopy(run)
+        S.A._finish(run, 'cancelled', 'interaction_avatar')
+        expected = dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0)
+        stand = F.C.get_character_pos(name)
+        self.assertEqual([stand['x'], stand['z']], expected['stand'])
+        row = next(r for r in S.A.state_for(name)['recent_results'] if r['execution_id'] == first['execution_id'])
+        self.assertEqual(row['motion'], expected)
+        saved = R.get(first['execution_id'])
+        self.assertFalse(saved['data']['cleanup_pending'])
+        self.assertEqual(saved['data']['exit_motions'][name], expected)
+        S.A._cleanup(saved)  # A retry cannot replace a released place's motion.
+        S.A._cleanup(stale)  # Neither can a snapshot taken before the finish.
+        self.assertEqual(S.A.cancel_with_motion(name, first['execution_id'])['motion'], expected)
 
     def test_cancel_while_seated_returns_the_stand_up(self):
         name, target, _ = S.setup_run()
