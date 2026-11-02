@@ -89,7 +89,7 @@ export function PoseTransitionChoice({ job, poses, listing, onClose, onDecided }
                 ]} /> : <p>{t('No resolved clip')}</p>}
                 <dl>
                   <dt>{t('Hop')}</dt><dd>{display(m.hop_cm, 'cm')}</dd>
-                  <dt>{t('Foot slide (left / right)')}</dt><dd>{m.foot_slide_cm ? display([m.foot_slide_cm.left, m.foot_slide_cm.right], 'cm') : '—'}</dd>
+                  <dt>{t('Foot slide before foot lock (left / right)')}</dt><dd>{m.foot_slide_cm ? display([m.foot_slide_cm.left, m.foot_slide_cm.right], 'cm') : '—'}</dd>
                   <dt>{t('Final root error')}</dt><dd>{display(m.final_root_error_cm, 'cm')}</dd>
                   <dt>{t('Final yaw error')}</dt><dd>{display(m.final_yaw_error_deg, '°')}</dd>
                   <dt>{t('Drift')}</dt><dd>{display(m.drift_cm, 'cm')}</dd>

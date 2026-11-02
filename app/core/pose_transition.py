@@ -19,8 +19,11 @@ STAGING_DIRNAME = '.pose_transition'
 MAX_VARIANTS = 4
 DEFAULT_VARIANTS = 3
 CANDIDATE_MAX_AGE_DAYS = 7
-WARN = {'hop_cm': 2.0, 'foot_slide_cm': 3.0,
-        'final_root_error_cm': 5.0, 'final_yaw_error_deg': 5.0}
+# The node's foot_slide_cm is measured BEFORE Anima's foot_lock import and runs
+# 10-20 cm on every MotionBricks transition (gate 2026-11-02 and the first hub
+# job); the published clip is held by foot_lock and rejected above 1.5 cm drift.
+# So the raw slide is shown, never warned on.
+WARN = {'hop_cm': 2.0, 'final_root_error_cm': 5.0, 'final_yaw_error_deg': 5.0}
 
 
 def _staging_root():
@@ -96,7 +99,7 @@ def report_warnings(report):
         if isinstance(value, list):
             return max((maximum(v) for v in value), default=0)
         return abs(value) if isinstance(value, (int, float)) else 0
-    return [name for field, name in (('hop_cm', 'hop'), ('foot_slide_cm', 'slide'),
+    return [name for field, name in (('hop_cm', 'hop'),
             ('final_root_error_cm', 'root_error'), ('final_yaw_error_deg', 'yaw_error'))
             if maximum(report.get(field)) > WARN[field]]
 

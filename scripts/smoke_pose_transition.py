@@ -34,8 +34,9 @@ def main():
         for report, expected in (({'hop_cm': 2.5}, ['hop']), ({'hop_cm': 1.9}, []),
                                  ({'flight_cm': 5, 'hop_cm': .3}, []), ({'flight_cm': 5}, [])):
             assert pt.report_warnings(report) == expected
-        assert pt.report_warnings({'foot_slide_cm': {'left': 3.1, 'right': 0},
-            'final_root_error_cm': [0, 5.1], 'final_yaw_error_deg': [0, -5.1]}) == ['slide', 'root_error', 'yaw_error']
+        # Raw slide (16.47 / 9.95 cm on the first hub job) is pre-foot_lock: no warning.
+        assert pt.report_warnings({'foot_slide_cm': {'left': 16.47, 'right': 9.95},
+            'final_root_error_cm': [0, 5.1], 'final_yaw_error_deg': [0, -5.1]}) == ['root_error', 'yaw_error']
         print('PASS [params] [warnings]')
         from app.imagegen.backends.openai_motion_transition import OpenAIMotionTransitionBackend
         backend = OpenAIMotionTransitionBackend('fixture', 'http://fixture', 0, 'TASK12_')
