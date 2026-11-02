@@ -2314,7 +2314,7 @@ GET /characters/{name}/model3d      → { model: {url, format, rig,
 GET /play/test-figure/meta|/model   → Referenz-Figur der Admin-Vorschau
 GET /assets/props                   → Bare Array (§ A2 Props)
 GET /assets/props/{id}/model        → GLB (ETag; 404 = kein Mesh)
-GET /assets/animation-clips         → {clips: [{kind, set?, url, loop, height_offsets_cm, …}], …}
+GET /assets/animation-clips         → {revision: str, clips: [{kind, set?, url, loop, height_offsets_cm, …}], …}
 GET /characters/{name}/model/meta   → {url, low_url?, texture_url?, …}
 GET /assets/animation-clips/{rel}   → FBX/GLB (content ETag)
 GET /assets/surface-textures        → Flächen + Blends (§ A9)
@@ -12220,3 +12220,16 @@ Package `length` (default 1, range [0.5,3]) survives world and character overrid
 then multiplies state factors and clamps to [0.25,4]. Both setup and character
 advanced inputs expose it with a live preview hint. Runtime particles are ordered
 by driven ancestor count independently of payload order.
+
+### Clip library revision and push (MotionBricks D7)
+
+`GET /assets/animation-clips` includes `revision`, an opaque SHA1 derived
+from sorted `(library, rel, mtime_ns, size)` file identities in both clip
+libraries (clips and JSON sidecars), the shared `clip_transitions.json`
+mtime_ns and the rows of `clip_transitions_world`. Own in-place
+writes invalidate the directory-fingerprint cache through `reload_clip_caches`.
+After that reload, and after `save_transitions`, the server sends the
+`clips` topic via `/events/sync` to `Everyone`: libraries are public world
+structure. Frames carry topics only; clients refetch the authenticated listing.
+Tasks 10/11 add client reload handling. Existing browser and native clients
+ignore unmatched topics; a resync keeps its existing full-refresh behavior.

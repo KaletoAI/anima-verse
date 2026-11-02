@@ -49,6 +49,7 @@ state_events.publish = lambda *a, **kw: None
 
 # B-T2a matrix, including the binding Step-0 amendments; row 18 is dropped.
 INVENTORY = {
+    "app/core/animation_clips.py": ["notify_library_changed"],
     "app/models/character.py": "save_character_current_location save_character_current_room _publish_activity_changed enter_offmap_sleep wake_from_offmap appear_in_world _clear_location_and_room set_is_sleeping save_character_current_feeling delete_character set_character_profile_image add_character_image delete_character_image".split(),
     "app/core/places.py": "assign release assign_pair".split(),
     "app/core/travel_engine.py": "start_journey start_journey_to_point cancel_journey _settle_arrival".split(),
@@ -93,6 +94,7 @@ INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_e
 # Rows 10 and 15 inherit the location/publication writers rather than adding
 # a second hook. Guard those edges as well as the direct-hook inventory.
 DELEGATED = {
+    "app/core/animation_clips.py": {"reload_clip_caches": "notify_library_changed", "save_transitions": "notify_library_changed"},
     "app/core/places.py": {"release_pair": "release"},
     "app/core/travel_engine.py": {"_settle_arrival": "save_character_current_location"},
     "app/core/model3d.py": {"_checkpoint_mesh": "_publish_signature"},

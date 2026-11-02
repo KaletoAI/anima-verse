@@ -55,7 +55,7 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       clip_role_gender, clip_view, delete_clip,
                                       annotated_transitions, client_transition_rules,
                                       orient_clip, pair_kinds, rename_clip,
-                                      save_transitions,
+                                      library_revision, save_transitions,
                                       set_clip_height_offsets, set_clip_loop,
                                       set_clip_role_gender, validate_height_offsets)
 from app.core.movement import movement_pose_kinds
@@ -109,7 +109,7 @@ def list_animation_clips() -> Dict[str, Any]:
             # Which gender plays which half ({} = the initiator plays A).
             "role_gender": clip_role_gender(meta),
         }
-    return {"clips": clips,
+    return {"clips": clips, "revision": library_revision(),
             "kinds": sorted({c["kind"] for c in clips}),
             "pair_kinds": sorted(pairs),
             "pairs": pairs,

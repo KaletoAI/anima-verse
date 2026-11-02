@@ -39,6 +39,7 @@ installs a premium pack wants it played. A licensed clip's ``url`` carries a
 This module is the ONE place that scans the clip directories; the assets
 route, the animation sets and the pose presets all read from here.
 """
+import hashlib
 import json
 from contextlib import nullcontext
 from functools import wraps
@@ -273,9 +274,91 @@ def clip_entries() -> List[Dict[str, Any]]:
 
 
 def _clear_entries_cache() -> None:
-    global _ENTRIES_CACHE
+    global _ENTRIES_CACHE, _REVISION_CACHE, _REVISION_EPOCH
+    _REVISION_EPOCH = object()
+    _REVISION_CACHE = None
     with _ENTRIES_LOCK:
         _ENTRIES_CACHE = None
+
+
+# Reuse the entry cache's directory fingerprint; own in-place writes clear both.
+_REVISION_CACHE = None
+_REVISION_EPOCH = object()
+
+
+def _revision_files(libraries):
+    """Stat clips and JSON sidecars in both libraries, including hidden twins."""
+    rows = []
+    for root, source in libraries:
+        if not root.exists():
+            continue
+        directories = [root] + sorted(p for p in root.iterdir()
+                                      if p.is_dir() and not p.name.startswith("."))
+        for directory in directories:
+            for path in directory.iterdir():
+                if path.name.startswith(".") or path.suffix.lower() not in (*CLIP_EXTS, ".json"):
+                    continue
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                if path.is_file():
+                    rows.append((source, path.relative_to(root).as_posix(),
+                                 stat.st_mtime_ns, stat.st_size))
+    return sorted(rows)
+
+
+def library_revision() -> str:
+    """SHA1 of both libraries' file stats, shared seed mtime and world rules.
+
+    Directory discovery is cheap; the full file-stat scan is cached by the
+    same settled fingerprint as clip_entries. In-place library writers must
+    call reload_clip_caches, as they already do for the pose caches.
+    """
+    global _REVISION_CACHE
+    import sqlite3
+    from app.core.db import get_connection
+    libraries = [(Path(root), source) for root, source in get_animation_clips_dirs()]
+    fingerprint = tuple(((str(root.resolve()), source), _library_fingerprint(root))
+                        for root, source in libraries)
+    # Capture invalidation before scanning: a concurrent reload must not let
+    # an older file snapshot become the cached value of a newer publication.
+    cache_key = (_REVISION_EPOCH, fingerprint)
+    cached = _REVISION_CACHE
+    if cached is not None and cached[0] == cache_key:
+        files_digest = cached[1]
+    else:
+        files_digest = json.dumps(_revision_files(libraries), separators=(",", ":"))
+        if _fingerprint_is_settled(fingerprint):
+            _REVISION_CACHE = (cache_key, files_digest)
+    try:
+        seed_mtime = clip_transitions_path().stat().st_mtime_ns
+    except FileNotFoundError:
+        seed_mtime = None
+    try:
+        # The rows themselves (a small table): a deleted older rule changes
+        # neither MAX(updated_at) nor anything else a cheaper stamp would see.
+        world_stamp = get_connection().execute(
+            "SELECT from_pose, to_pose, kind, accel FROM clip_transitions_world "
+            "ORDER BY from_pose, to_pose").fetchall()
+        world_stamp = [list(row) for row in world_stamp]
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        world_stamp = None
+    return hashlib.sha1(json.dumps((files_digest, seed_mtime, world_stamp),
+                                   separators=(",", ":")).encode()).hexdigest()
+
+
+def notify_library_changed() -> None:
+    """Invalidate public library structure, never send library data.
+
+    Safe under a writer lock: notify only queues topics and wakes the SSE
+    loop via call_soon_threadsafe; it never reads clips or waits for a reader.
+    In particular, do not compute the revision in this notification path.
+    """
+    from app.core import sync_topics
+    sync_topics.notify("clips", to=sync_topics.Everyone())
 
 
 def clip_files() -> List[Path]:
@@ -612,7 +695,9 @@ def save_transitions(entries: Any,
     shared.sort(key=lambda r: order.get((r["from"], r["to"]), len(order)))
     _write_world_transitions(world)
     _write_transitions(shared, path)
-    return load_transitions(path)
+    result = load_transitions(path)
+    notify_library_changed()
+    return result
 
 
 def _validate_transitions(entries: Any, offset: int = 0,
@@ -1107,6 +1192,7 @@ def reload_clip_caches() -> None:
         epm.reload_presets()
     except Exception as e:                                   # pragma: no cover
         logger.warning("preset reload after clip library change failed: %s", e)
+    notify_library_changed()
 
 
 def library_write_lock(destination: Path):

@@ -20,7 +20,7 @@ from app.core.log import get_logger
 
 logger = get_logger("sync_topics")
 
-TOPICS: Tuple[str, ...] = ("presence", "scene", "notices", "self", "world")
+TOPICS: Tuple[str, ...] = ("presence", "scene", "notices", "self", "world", "clips")
 BATCH_S = 0.25  # At most four bundled topic frames per second.
 HEARTBEAT_S = 15.0  # Keep idle proxy connections alive.
 CHECK_S = 60.0  # Bound session and avatar staleness to a minute.
