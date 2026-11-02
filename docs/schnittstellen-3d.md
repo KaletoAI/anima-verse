@@ -2751,14 +2751,19 @@ name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt d
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `finale` | `{kind, role, elapsed_s, duration_s}` \| `null` | `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`/`b`, `null` bei Solo); `elapsed_s` = wie weit er läuft, `duration_s` = Cliplänge, beides **Systemsekunden** (Animation läuft in Echtzeit wie jeder Clip, auch in einer eingefrorenen Welt) |
+| `finale` | `{id, kind, role, elapsed_s, duration_s}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`/`b`, `null` bei Solo); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Cliplänge |
 
-Der Client spielt die Hälfte `role` des Paars `kind` (bzw. den Solo-Clip, aufgelöst über die Set-Kette der
-Figur) **einmal** ab `elapsed_s` am Anker der laufenden Aktion (`interaction.anchor` bzw. `place`) und kehrt
-danach in den Clip der Aktion zurück, dessen Phase aus `interaction.elapsed_s` unverändert weiterläuft. Der
-Partner bleibt in seiner Schleife — der Abschluss gehört nur einer Person. Steht das Feld nicht (mehr) da,
-endet ein noch laufender Abschluss sofort. Der Server hält den Abschluss nur im Prozess (Neustart = weg) und
-entfernt ihn nach `duration_s` + 0,5 s oder mit dem Ende der Aktion.
+Der Client spielt den Abschluss **einmal pro `id`, von vorn, sobald er das Feld zum ersten Mal sieht** — die
+Clips dauern um eine Sekunde, ein Poll alle 3 s: ein Abspielen ab `elapsed_s` zeigte meist nichts, und ein
+Versatz von bis zu einem Poll zwischen zwei Clients fällt bei einem Einmal-Clip nicht auf. Paar: die Hälfte
+`role` des Paars `kind` am Anker der laufenden Aktion (`interaction.anchor`, Wurzel aus der Abschluss-Hälfte wie
+in § A8a); Solo: der Clip `kind` (Set-Kette der Figur) an ihrem Platz. Danach zurück in den Clip der Aktion,
+dessen Phase aus `interaction.elapsed_s` bzw. der Platz-Pose unverändert weitergelaufen ist. Der Partner bleibt
+in seiner Schleife — der Abschluss gehört nur einer Person. Die Uhr des Abschlusses steht in einer eingefrorenen
+Welt NICHT (Systemzeit, wie jeder Einmal-Clip). Endet die Aktion (kein `interaction`/`place` mehr), endet auch
+ein noch laufender Abschluss. Der Server lässt das Feld bis **4 s nach Clipende** stehen (damit jeder Poll es
+einmal sieht) und hält den Abschluss nur im Prozess (Neustart = weg); solange steht, lehnt er einen neuen
+Abschluss derselben Person ab.
 
 `GET /play/prop-actions/state` liefert pro laufender Zeile zusätzlich `has_finale` (die gehaltene Pose hat
 einen Abschluss-Clip) und `meters: [{name, value 0..100, label}]` (Füllstände eines Pakets, Provider

@@ -898,9 +898,11 @@ def _held_pose(run):
 # on the SYSTEM clock like every clip (a frozen world still finishes it), and
 # it lives in this process only: lost on a restart, it was a second long.
 
-#: Seconds past the clip's own length before ``advance`` drops a finale — a
-#: late tick must never cut it short, the payload already says how far it is.
-FINALE_GRACE_S = 0.5
+#: Seconds a finale stays in the payload past its clip's own length. The
+#: clips last about a second, the worldmap poll of a bystander 3 s: every
+#: client must see the block once to play it (once per ``id``, § A8c), and a
+#: new finale of the same person is refused until it is gone.
+FINALE_SHOW_S = 4.0
 _finales = {}
 _finales_mutex = Lock()
 
@@ -1002,7 +1004,8 @@ def begin_finale(execution_id: str, name: str) -> dict:
         with _finales_mutex:
             if _finale_live(_finales.get(name)):
                 return dict(ok=False, reason="finale_playing")
-            _finales[name] = dict(execution_id=execution_id, kind=kind, role=role or None,
+            _finales[name] = dict(id=uuid.uuid4().hex[:12], execution_id=execution_id,
+                                  kind=kind, role=role or None,
                                   pose_key=pose, started=utc_now(), duration_s=duration)
         _notify(run)
     _after_locks(lambda: emit("prop_action.finale_started", execution_id=execution_id,
@@ -1012,22 +1015,21 @@ def begin_finale(execution_id: str, name: str) -> dict:
 
 def _finale_live(finale) -> bool:
     return bool(finale) and ((utc_now() - finale["started"]).total_seconds()
-                             < finale["duration_s"] + FINALE_GRACE_S)
+                             < finale["duration_s"] + FINALE_SHOW_S)
 
 
 def finale_for(name: str) -> dict | None:
-    """The worldmap row's ``finale`` block of ``name`` while one plays:
-    ``{kind, role, elapsed_s, duration_s}`` — the half (``role`` a/b, None
-    for a solo clip) to play once from ``elapsed_s`` (SYSTEM seconds), then
-    back to the action's own clip."""
+    """The worldmap row's ``finale`` block of ``name`` (§ A8c):
+    ``{id, kind, role, elapsed_s, duration_s}`` — the half (``role`` a/b,
+    None for a solo clip) a client plays ONCE per ``id``, then back to the
+    action's own clip. Shown until ``FINALE_SHOW_S`` past the clip's end, so
+    a polling bystander sees it too; ``elapsed_s`` in SYSTEM seconds."""
     with _finales_mutex:
         finale = _finales.get(name)
-        if not finale:
+        if not _finale_live(finale):
             return None
         elapsed = (utc_now() - finale["started"]).total_seconds()
-        if elapsed >= finale["duration_s"]:
-            return None
-        return dict(kind=finale["kind"], role=finale["role"],
+        return dict(id=finale["id"], kind=finale["kind"], role=finale["role"],
                     elapsed_s=round(max(0.0, elapsed), 3), duration_s=round(finale["duration_s"], 3))
 
 

@@ -24,15 +24,16 @@ EXPECTATIONS, DERIVED BY HAND
     solo pose.
 [2] PAIR FINALE. Both active, `begin_finale(run, partner)` -> ok. The
     partner's block at t0 + 0.4 s is
-        {kind run-pair-end, role <its clip role>, elapsed_s 0.4, duration_s 1.5}
+        {id <12 hex>, kind run-pair-end, role <its clip role>, elapsed_s 0.4, duration_s 1.5}
     and the actor has none (the partner alone closes, the actor plays on).
     A second begin for the partner -> `finale_playing`; an outsider ->
     `not_participant`. `prop_action.finale_started` fired once, with the pose
     `run-pair`.
-[3] IT ENDS ON ITS OWN. At t0 + 1.5 the block is gone (elapsed = duration),
-    yet a new begin is still refused until the grace (1.5 + 0.5 = 2.0) ran
-    out; a tick at t0 + 2.1 drops it and fires `prop_action.finale_done` for
-    the partner; a begin afterwards works again.
+[3] IT ENDS ON ITS OWN. The block stays shown FINALE_SHOW_S (4 s) past the
+    clip: at t0 + 5.4 it is still there (same id, elapsed 5.4) and a new
+    begin is refused; at t0 + 5.5 (1.5 + 4.0) it is gone; a tick at t0 + 5.6
+    drops it and fires `prop_action.finale_done` for the partner; a begin
+    afterwards works again with a NEW id.
 [4] THE BEAT. `tick(5)` fires `prop_action.active` for the run with members
     [actor, partner], pose `run-pair` and delta_game_s 5.0 (game seconds
     since the previous tick). A frozen world fires none.
@@ -141,21 +142,26 @@ class Finale(RUNS.Runs):
             self.assertEqual(A.begin_finale(eid, partner)["reason"], "finale_playing")
             self.assertEqual(A.begin_finale(eid, "nobody")["reason"], "not_participant")
         with clock(0.4):
-            self.assertEqual(A.finale_for(partner), dict(kind="run-pair-end", role=role,
-                                                         elapsed_s=0.4, duration_s=1.5))
+            block = A.finale_for(partner)
+            first = block.pop("id")
+            self.assertRegex(first, r"^[0-9a-f]{12}$")
+            self.assertEqual(block, dict(kind="run-pair-end", role=role, elapsed_s=0.4, duration_s=1.5))
             self.assertIsNone(A.finale_for(name))
         started = events("prop_action.finale_started")
         self.assertEqual(len(started), 1)
         self.assertEqual((started[0]["name"], started[0]["pose_key"]), (partner, "run-pair"))
-        with clock(1.5):
-            self.assertIsNone(A.finale_for(partner))
+        with clock(5.4):
+            self.assertEqual((A.finale_for(partner)["id"], A.finale_for(partner)["elapsed_s"]), (first, 5.4))
             self.assertEqual(A.begin_finale(eid, partner)["reason"], "finale_playing")
-        with clock(2.1):
+        with clock(5.5):
+            self.assertIsNone(A.finale_for(partner))
+        with clock(5.6):
             RUNS.tick(1)
             done = events("prop_action.finale_done")
             self.assertEqual([d["name"] for d in done], [partner])
             self.assertTrue(A.begin_finale(eid, partner)["ok"])
-        with clock(9):
+            self.assertNotEqual(A.finale_for(partner)["id"], first)
+        with clock(12):
             RUNS.tick(1)
 
     def test_4_beat(self):
@@ -208,7 +214,9 @@ class Finale(RUNS.Runs):
         with clock(0):
             self.assertTrue(A.begin_finale(result["execution_id"], name)["ok"])
         with clock(0.2):
-            self.assertEqual(A.finale_for(name), dict(kind="run-end", role=None, elapsed_s=0.2, duration_s=0.8))
+            block = A.finale_for(name)
+            block.pop("id")
+            self.assertEqual(block, dict(kind="run-end", role=None, elapsed_s=0.2, duration_s=0.8))
         A.cancel(name, result["execution_id"])
         set_finale("sitting", "")
         P._offers_cache.clear()
