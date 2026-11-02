@@ -122,12 +122,24 @@ EXEMPT = {"app/core/memory_service.py", "app/routes/diary.py",
           "app/core/decision_points.py"}
 
 
+def _code_without_comments(source: str) -> str:
+    """The source minus its comments: a comment that MENTIONS game_date
+    supplies nothing (thoughts.py explains where the date comes from)."""
+    import io
+    import tokenize
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        return " ".join(tok.string for tok in tokens if tok.type != tokenize.COMMENT)
+    except (tokenize.TokenError, SyntaxError):
+        return source
+
+
 def test_suppliers() -> None:
     print("\n[1] every game_date supplier is a game_weather supplier")
     missing = []
     for path in sorted((ROOT / "app").rglob("*.py")):
         rel = path.relative_to(ROOT).as_posix()
-        text = path.read_text(encoding="utf-8")
+        text = _code_without_comments(path.read_text(encoding="utf-8"))
         if "game_date" not in text or rel in EXEMPT:
             continue
         if "game_weather" not in text:
@@ -160,7 +172,7 @@ _OPTIONAL = ("inbox_block", "events_block", "assignments_block",
              "recent_thoughts", "outfit_self_block", "outfit_avatar_block",
              "room_items_block", "inventory_block", "elsewhere_block",
              "tracker_block", "activity_hint_block", "daily_schedule_block",
-             "tools_hint")
+             "tools_hint", "away_block")
 THOUGHT_CTX.update({k: "" for k in _OPTIONAL})
 
 PERCEPTION_VARS = {

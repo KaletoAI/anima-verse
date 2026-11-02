@@ -109,8 +109,11 @@ def main():
                  "max_tokens": 257, "repetition_penalty": 1.35}
         entry = {"provider": "P", "model": "test", "temperature": 0.8,
                  "max_tokens": 91, "repetition_penalty": 1.1, "extra_params": saved}
+        from app.core.provider_quota import ProviderQuota
+        # A real provider always carries a quota (Provider.__post_init__); 0 = no rate limit.
         provider = SimpleNamespace(name="P", type="openai", api_base="https://mock.test/v1",
-                                   api_key="test-key", timeout=10, available=True)
+                                   api_key="test-key", timeout=10, available=True,
+                                   quota=ProviderQuota(0, 60))
         manager = SimpleNamespace(get_provider=lambda name: provider if name == "P" else None,
                                   find_provider_for_model=lambda model: provider)
         with patch.object(llm_router, "get_provider_manager", return_value=manager), patch.object(
