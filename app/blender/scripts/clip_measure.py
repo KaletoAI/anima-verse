@@ -1,4 +1,4 @@
-"""Measure animated joint heights and head tilt on an imported FBX clip."""
+"""Measure animated world joints, heights and head tilt on FBX or direct BVH."""
 import math
 import sys
 from pathlib import Path
@@ -45,7 +45,17 @@ def run(job):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     scene.render.fps = 30
-    bpy.ops.wm.fbx_import(filepath=job["inputs"]["clip"])
+    clip = job["inputs"]["clip"]
+    is_bvh = Path(clip).suffix.lower() == ".bvh"
+    if is_bvh:
+        # Library BVH is centimetres, Y-up; measure in the same metre world
+        # frame as FBX. This reads the export directly, without retargeting.
+        bpy.ops.import_anim.bvh(filepath=clip, global_scale=.01,
+                                axis_forward="-Z", axis_up="Y", frame_start=1,
+                                use_fps_scale=False, update_scene_fps=False,
+                                update_scene_duration=True)
+    else:
+        bpy.ops.wm.fbx_import(filepath=clip)
     arms = [obj for obj in scene.objects if obj.type == "ARMATURE"]
     if len(arms) != 1:
         raise ValueError("expected one armature")
@@ -64,20 +74,25 @@ def run(job):
         return Vector((point.x, point.z, -point.y))
 
     heights, foot_heights, tilts = [], [], []
+    joint_positions = {name: [] for name in ("Hips", "LeftFoot", "RightFoot",
+                                                    "LeftToeBase", "RightToeBase") if name in bones}
     start, end = (int(value) for value in action.frame_range)
     for frame in range(start, end + 1):
         scene.frame_set(frame)
         bpy.context.view_layer.update()
         heights.append(float(position(hips).y))
+        for name, points in joint_positions.items():
+            points.append(list(position(bones[name])))
         foot_heights.extend(float(position(bone).y) for bone in feet)
         if "Neck" in bones and "HeadTop_End" in bones:
             direction = position(bones["HeadTop_End"]) - position(bones["Neck"])
             if direction.length:
                 tilts.append(math.degrees(direction.angle(Vector((0, 1, 0)))))
-    tracks = _source_tracks(job["inputs"]["clip"])
+    tracks = (_source_tracks(clip) if not is_bvh else
+              {name: [] for name in ("rot_tracks", "loc_tracks", "scale_tracks")})
     duration_s = float(action.frame_range[1] - action.frame_range[0]) / (scene.render.fps / scene.render.fps_base)
     return {"bones": list(bones), **tracks,
-            "duration_s": duration_s, "frames": len(heights), "hips_y": heights, "min_foot_y": min(foot_heights),
+            "joint_positions_m": joint_positions, "duration_s": duration_s, "frames": len(heights), "hips_y": heights, "min_foot_y": min(foot_heights),
             "head_tilt_deg_median": median(tilts) if tilts else 0.0}, {}
 
 
