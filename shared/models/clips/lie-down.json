@@ -32,7 +32,8 @@
      2.167
     ]
    ],
-   "max_drift_cm": 2.92
+   "max_drift_cm": 2.92,
+   "turn_deg": 104.75385769052951
   },
   "support_unbaked_cm": 45.312,
   "floor_lift_max_cm": 3.348

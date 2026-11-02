@@ -38,7 +38,8 @@
      2.4
     ]
    ],
-   "max_drift_cm": 0.08
+   "max_drift_cm": 0.08,
+   "turn_deg": 0.0
   }
  },
  "source": {
