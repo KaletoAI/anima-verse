@@ -364,8 +364,11 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         if reason:
             return reason
     if presence:
-        present = {n for n, _ in places._present(run["target"]["location_id"], run["target"]["room_id"])}
+        from app.core.model_refs import is_humanoid
         members = set(profiles)
+        # Who is in the room means people: a pet lying there is nobody.
+        present = {n for n, _ in places._present(run["target"]["location_id"], run["target"]["room_id"])
+                   if n in members or is_humanoid(n, profile=query.profile(n))}
         rule = definition["presence"]
         if ((rule == "alone" and present != {run["actor"]}) or
                 (rule == "others" and not present - {run["actor"]}) or

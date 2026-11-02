@@ -653,6 +653,21 @@ class Runs(unittest.TestCase):
         self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
         self.assertFalse(R.claims())
 
+    def test_an_animal_in_the_room_is_nobody_for_presence(self):
+        # 2026-11-02: the cat in the room blocked every intimate pair action
+        # ("participants_only") — fails on 39f31bea with presence_not_met.
+        name, target, pid = setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc["actions"][0]["presence"] = "alone"
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        pet = F.actor(target["location_id"])
+        profile = F.C.get_character_profile(pet)
+        profile["template"] = "animal-default"
+        F.C.save_character_profile(pet, profile)
+        result = request(name, target)
+        self.assertEqual(result["status"], "approaching", result)
+
     def test_effective_requirement_is_rechecked_during_approach(self):
         name, target, pid = setup_run()
         from app.core import prompt_filters
