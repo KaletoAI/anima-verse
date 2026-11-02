@@ -1033,6 +1033,43 @@ def finale_for(name: str) -> dict | None:
                     elapsed_s=round(max(0.0, elapsed), 3), duration_s=round(finale["duration_s"], 3))
 
 
+def _emit_lifecycle(event, run, **extra):
+    """``prop_action.started`` (a run turned active) / ``prop_action.ended``
+    (an active run finished): ``execution_id``, ``members``, ``pose_key``
+    plus ``extra`` — after every lock, so a package may start or end its own
+    state (a solo action has no pair hook of its own)."""
+    from app.core.hooks import emit
+    from app.core.keyed_lock import _after_locks
+    payload = dict(execution_id=run["execution_id"], members=[n for _, n in _members(run)],
+                   pose_key=_held_pose(run), **extra)
+    _after_locks(lambda: emit(event, **payload))
+
+
+def hold_meter(execution_id: str, name: str, hold: bool) -> dict:
+    """``name`` holds its own gauge back (or lets go) in its running action —
+    ``{ok, reason}``. What holding means is the package's (provider
+    ``prop_action.meter_hold``); refused for a run that is not active, a
+    non-participant and when no package takes it (``unsupported``)."""
+    from app.core.hooks import get_provider
+    if not isinstance(execution_id, str) or not isinstance(name, str) or not isinstance(hold, bool):
+        return dict(ok=False, reason="invalid")
+    run = store.get(execution_id)
+    if run is None or run["status"] != "active":
+        return dict(ok=False, reason="not_active")
+    if name not in [member for _, member in _members(run)]:
+        return dict(ok=False, reason="not_participant")
+    provider = get_provider("prop_action.meter_hold")
+    try:
+        taken = bool(provider and provider(execution_id=execution_id, name=name, hold=hold))
+    except Exception as e:
+        logger.debug("meter hold provider failed for %s: %s", name, e)
+        taken = False
+    if not taken:
+        return dict(ok=False, reason="unsupported")
+    _notify(run)
+    return dict(ok=True, reason="")
+
+
 def _end_finales(execution_id=None, *, expired_only=False):
     """Drops finales of one run (its end) or every expired one; the
     ``prop_action.finale_done`` events fire after the locks."""
@@ -1137,6 +1174,8 @@ def _finish(run, status, reason, *, keep_seated=""):
         run["data"]["cleanup_pending"] = True
         _end_finales(run["execution_id"])
         _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
+        if before == "active":
+            _emit_lifecycle("prop_action.ended", run, status=status, reason=reason)
         _cleanup(run, keep_seated=keep_seated)
         _narrate_finish(run, before, status, reason, keep_seated)
         return _result(run)
@@ -1614,6 +1653,8 @@ def _activate(run):
                          room_id=run["target"]["room_id"], execution_id=run["execution_id"])
             entered({name: dict(pose_key=pose, pose_flavor="", place=place, prop_action_entry=None,
                                 pos_x=anchor["x"], pos_z=anchor["z"], pos_session=None, pos_seq=None)})
+    if run["status"] == "active":
+        _emit_lifecycle("prop_action.started", run, ability=ability)
     if ability != "pair":
         C._publish_activity_changed(run["actor"], pose, "", pose, place, None)
         line = ("{actor} lies down on the {prop} to sleep." if ability == "sleep"
@@ -1924,7 +1965,9 @@ def _meters(run):
             continue
         if isinstance(row.get("name"), str) and math.isfinite(value):
             out.append(dict(name=row["name"], value=round(min(100.0, max(0.0, value)), 1),
-                            label=str(row.get("label") or "")))
+                            label=str(row.get("label") or ""),
+                            # ``hold_meter`` applies to this gauge / it is held now
+                            holdable=row.get("holdable") is True, held=row.get("held") is True))
     return out
 
 

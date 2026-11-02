@@ -55,4 +55,12 @@ assert.match(gauged, /width:100%/);
 assert.match(row({ meters: [{ name: 'Player', value: -3, label: '' }] }), /aria-valuenow="0"/);
 assert.doesNotMatch(row({ status: 'approaching', meters: [{ name: 'Player', value: 10, label: '' }] }), /role="meter"/);
 assert.doesNotMatch(row({}), /role="meter"/);
-console.log('PASS finale chip mark and per-participant gauges');
+// Hold back: a toggle only on the viewer's OWN holdable gauge (own_role picks
+// the side), pressed while held; never on the partner's row.
+const holding = row({ own_role: 'actor', meters: [{ name: 'Player', value: 20, label: '', holdable: true, held: true }, { name: 'Mira', value: 30, label: '', holdable: true }] });
+assert.equal([...holding.matchAll(/>Hold back<\/button>/g)].length, 1);
+assert.match(holding, /class="player-chip on"[^>]*aria-pressed="true"[^>]*>Hold back</);
+assert.match(holding, /class="player-prop-meter held"/);
+assert.equal([...row({ own_role: 'partner', meters: [{ name: 'Player', value: 20, label: '', holdable: true }, { name: 'Mira', value: 30, label: '', holdable: true }] }).matchAll(/aria-pressed="false"/g)].length, 1);
+assert.doesNotMatch(row({ own_role: 'actor', meters: [{ name: 'Player', value: 20, label: '' }] }), /Hold back/);
+console.log('PASS finale chip mark, per-participant gauges and the hold toggle');

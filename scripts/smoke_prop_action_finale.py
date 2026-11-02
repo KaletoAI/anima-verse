@@ -40,6 +40,13 @@ EXPECTATIONS, DERIVED BY HAND
 [5] GAUGES. A `prop_action.meters` provider answering 130 / -5 / "x" gives
     the HUD row [{actor, 100.0}, {partner, 0.0}] (clamped, the junk row
     dropped) and `has_finale` true; without a provider the row says [].
+[9] LIFECYCLE. A pair run turning active fires `prop_action.started` once
+    (members [actor, partner], pose run-pair, ability pair); cancelling it
+    fires `prop_action.ended` once with status completed. A solo pose run
+    fires both as well (ability pose).
+[10] HOLD. Without a provider `hold_meter` -> unsupported; an outsider ->
+    not_participant; with a provider answering True -> ok and the provider
+    saw (run, partner, True); a row's holdable/held pass through as booleans.
 [6] THE RUN ENDS -> the finale ends. Cancelling the run while the partner's
     finale plays drops it at once and fires `finale_done`.
 [7] SOLO. The pose action on `sitting` (finale `run-end`): `begin_finale`
@@ -68,7 +75,8 @@ from app.core.timeutils import utc_now                                  # noqa: 
 
 T0 = utc_now()
 EVENTS = []
-for event in ("prop_action.finale_started", "prop_action.finale_done", "prop_action.active"):
+for event in ("prop_action.finale_started", "prop_action.finale_done", "prop_action.active",
+              "prop_action.started", "prop_action.ended"):
     hooks.register(event, lambda event=event, **kw: EVENTS.append((event, kw)), tag="smoke.finale")
 
 
@@ -188,8 +196,8 @@ class Finale(RUNS.Runs):
             dict(name="junk", value="x")])
         try:
             row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == run["execution_id"])
-            self.assertEqual(row["meters"], [dict(name=name, value=100.0, label="x"),
-                                             dict(name=partner, value=0.0, label="")])
+            self.assertEqual(row["meters"], [dict(name=name, value=100.0, label="x", holdable=False, held=False),
+                                             dict(name=partner, value=0.0, label="", holdable=False, held=False)])
         finally:
             hooks._providers.pop("prop_action.meters", None)
 
@@ -224,6 +232,50 @@ class Finale(RUNS.Runs):
         self.assertFalse(offer["finale"])
 
 
+class Lifecycle(RUNS.Runs):
+    def setUp(self):
+        EVENTS.clear()
+
+    def test_9_started_and_ended(self):
+        name, partner, run = active_pair()
+        started = [e for e in events("prop_action.started") if e["execution_id"] == run["execution_id"]]
+        self.assertEqual(len(started), 1)
+        self.assertEqual((started[0]["members"], started[0]["pose_key"], started[0]["ability"]),
+                         ([name, partner], "run-pair", "pair"))
+        A.cancel(name, run["execution_id"])
+        ended = [e for e in events("prop_action.ended") if e["execution_id"] == run["execution_id"]]
+        self.assertEqual(len(ended), 1)
+        self.assertEqual(ended[0]["status"], "completed")
+        solo, target, _ = RUNS.setup_run()
+        result = RUNS.request(solo, target)
+        RUNS.tick(30)
+        RUNS.tick(2)
+        self.assertEqual([e["ability"] for e in events("prop_action.started")
+                          if e["execution_id"] == result["execution_id"]], ["pose"])
+        A.cancel(solo, result["execution_id"])
+        self.assertEqual(len([e for e in events("prop_action.ended")
+                              if e["execution_id"] == result["execution_id"]]), 1)
+
+    def test_10_hold(self):
+        name, partner, run = active_pair()
+        eid = run["execution_id"]
+        self.assertEqual(A.hold_meter(eid, partner, True)["reason"], "unsupported")
+        self.assertEqual(A.hold_meter(eid, "nobody", True)["reason"], "not_participant")
+        seen = []
+        hooks.register_provider("prop_action.meter_hold", lambda **kw: seen.append(kw) or True)
+        hooks.register_provider("prop_action.meters", lambda execution_id, members, pose_key: [
+            dict(name=members[0], value=10, holdable=True, held="yes")])
+        try:
+            self.assertEqual(A.hold_meter(eid, partner, True), dict(ok=True, reason=""))
+            self.assertEqual(seen, [dict(execution_id=eid, name=partner, hold=True)])
+            row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
+            self.assertEqual(row["meters"][0]["holdable"], True)
+            self.assertEqual(row["meters"][0]["held"], False)
+        finally:
+            hooks._providers.pop("prop_action.meter_hold", None)
+            hooks._providers.pop("prop_action.meters", None)
+
+
 class Automatic(RUNS.Runs):
     def test_8_provider_derives_the_finale(self):
         RUNS.authored_pair()
@@ -255,6 +307,7 @@ class Automatic(RUNS.Runs):
 if __name__ == "__main__":
     # Only the finale cases — the inherited regression suite runs in its own smoke.
     suite = unittest.TestSuite([Finale(m) for m in sorted(Finale.__dict__) if m.startswith("test_")]
-                               + [Automatic("test_8_provider_derives_the_finale")])
+                               + [Automatic("test_8_provider_derives_the_finale"),
+                                  Lifecycle("test_9_started_and_ended"), Lifecycle("test_10_hold")])
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)

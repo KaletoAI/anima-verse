@@ -4,7 +4,7 @@ import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
-import { cancelPropAction, notifyPropActionChanged, requestPropAction, respondPropAction,
+import { cancelPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction,
   type PropActionConsent, type PropActionExecution, type PropActionOffer } from './propActions'
 
 interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
@@ -164,15 +164,26 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
       onClick={() => perform(() => cancelPropAction(run.execution_id))}>{t(run.can_resist ? 'Push away' : kind === 'outgoing' ? 'Withdraw' : 'Stop')}</button>}
     {run.status === 'active' && run.meters?.map(meter => {
       const value = Math.max(0, Math.min(100, meter.value))
-      return <HoverHint key={`meter:${meter.name}`} text={`${meter.name} · ${meter.label || t('Finale')}: ${Math.round(value)} %`}>
-        <span className="player-prop-meter-row" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-          <span>{meter.name}</span>
-          <span className="player-prop-meter" role="meter" aria-valuemin={0} aria-valuemax={100}
-            aria-valuenow={Math.round(value)} aria-label={`${meter.name} · ${meter.label || t('Finale')}`}>
-            <span className="player-prop-meter-fill" style={{ width: `${value}%` }} />
+      // Only the viewer's own gauge can be held back — the own side of the run.
+      const own = (run.own_role === 'partner' ? run.partner : run.actor) === meter.name
+      return <span key={`meter:${meter.name}`} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+        <HoverHint text={`${meter.name} · ${meter.label || t('Finale')}: ${Math.round(value)} %`}>
+          <span className="player-prop-meter-row" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <span>{meter.name}</span>
+            <span className={`player-prop-meter${meter.held ? ' held' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100}
+              aria-valuenow={Math.round(value)} aria-label={`${meter.name} · ${meter.label || t('Finale')}`}>
+              <span className="player-prop-meter-fill" style={{ width: `${value}%` }} />
+            </span>
           </span>
-        </span>
-      </HoverHint>
+        </HoverHint>
+        {own && meter.holdable && <HoverHint text={t('Slows your own gauge while on')}>
+          <button type="button" className={`player-chip${meter.held ? ' on' : ''}`} disabled={busy}
+            aria-pressed={!!meter.held}
+            onClick={() => perform(() => holdPropActionMeter(run.execution_id, !meter.held))}>
+            {t('Hold back')}
+          </button>
+        </HoverHint>}
+      </span>
     })}
     {run.status === 'sleeping' && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(async () => {

@@ -2767,8 +2767,9 @@ einmal sieht) und hält den Abschluss nur im Prozess (Neustart = weg); solange s
 Abschluss derselben Person ab.
 
 `GET /play/prop-actions/state` liefert pro laufender Zeile zusätzlich `has_finale` (die gehaltene Pose hat
-einen Abschluss-Clip) und `meters: [{name, value 0..100, label}]` (Füllstände eines Pakets, Provider
-`prop_action.meters`); ein Angebot trägt `finale` (die Pose der Aktion hat einen Abschluss-Clip) — das HUD
+einen Abschluss-Clip) und `meters: [{name, value 0..100, label, holdable, held}]` (Füllstände eines Pakets,
+Provider `prop_action.meters`; `holdable` = die Person kann ihren Füllstand per `POST /play/prop-actions/hold`
+`{execution_id, hold}` zurückhalten, `held` = sie tut es gerade — das HUD zeigt der eigenen Zeile den Schalter); ein Angebot trägt `finale` (die Pose der Aktion hat einen Abschluss-Clip) — das HUD
 markiert es.
 
 ## A9. Terrain & Oberflächen (AV3D-13 v2)

@@ -45,7 +45,14 @@ export interface PropActionOffer {
 }
 /** One participant's gauge of a running action, 0..100 — a package's
  *  (provider `prop_action.meters`); `label` empty = the neutral word. */
-export interface PropActionMeter { name: string; value: number; label: string }
+export interface PropActionMeter {
+  name: string
+  value: number
+  label: string
+  /** the person may hold this gauge back (`holdPropActionMeter`) / does so now */
+  holdable?: boolean
+  held?: boolean
+}
 export interface PropActionDeparture {
   stand_yaw_deg?: number | null
   seat: [number, number]
@@ -251,4 +258,10 @@ export function respondPropAction(executionId: string, accept: boolean): Promise
 }
 export function cancelPropAction(executionId: string): Promise<PropActionResult> {
   return mutate('/play/prop-actions/cancel', { execution_id: executionId })
+}
+
+/** The own avatar holds its gauge back in a running action (or lets go). */
+export async function holdPropActionMeter(executionId: string, hold: boolean): Promise<void> {
+  await apiPost('/play/prop-actions/hold', { execution_id: executionId, hold })
+  notifyPropActionChanged()
 }

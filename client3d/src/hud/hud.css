@@ -716,6 +716,7 @@
   overflow: hidden;
   background: color-mix(in srgb, currentColor 15%, transparent);
 }
+.player-prop-meter.held .player-prop-meter-fill { opacity: 0.55; }
 .player-prop-meter-fill {
   display: block;
   height: 100%;

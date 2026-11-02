@@ -44,6 +44,11 @@ class CancelRequest(Input):
     execution_id: StrictStr
 
 
+class HoldRequest(Input):
+    execution_id: StrictStr
+    hold: StrictBool
+
+
 class AdminCheck(ActionRequest):
     actor: StrictStr
 
@@ -147,6 +152,15 @@ def respond(body: ResponseRequest, user=Depends(get_current_user)):
 @router.post("/play/prop-actions/cancel")
 def cancel(body: CancelRequest, user=Depends(get_current_user)):
     return _answer(engine.cancel_with_motion(_avatar(user), body.execution_id))
+
+
+@router.post("/play/prop-actions/hold")
+def hold(body: HoldRequest, user=Depends(get_current_user)):
+    """The player's avatar holds its own gauge back (schnittstellen-3d § A8c)."""
+    result = engine.hold_meter(body.execution_id, _avatar(user), body.hold)
+    if not result["ok"]:
+        raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=result)
+    return result
 
 
 def _admin_target(prop_id, body):

@@ -807,11 +807,13 @@ entscheidet ein Paket (Payload `finale`, schnittstellen-3d.md § A8c). Den Takt 
 | `auto_finale(pose_key, entry=None) -> str` | Was der Provider `pose.finale_animation` (Kwargs `pose_key`, `animation`, `solo`; Antwort: ein Clip-Kind) für eine Pose ohne eigenes `finale_animation` ableitet (z. B. eine Namensregel des Pakets); ungeprüft, "" ohne Provider |
 | `finale_kind(pose_key, name='', *, profile=None) -> str` | Das Abschluss-Kind der Pose (Katalogfeld, sonst `auto_finale`), "" ohne eines oder wenn der Clip in der nötigen Form fehlt (Paar-Pose: vollständiges Paar; Solo-Pose: Solo-Clip — für `name`s Figur, wenn gegeben) |
 | `begin_finale(execution_id, name) -> dict` | Startet `name`s Abschluss in der laufenden Aktion: `{ok, reason}`; `reason` ∈ `not_active`, `not_participant`, `no_finale`, `finale_playing`, `invalid`. Nur `name` spielt ihn, der Partner bleibt in seinem Clip. Benachrichtigt die Teilnehmer; `prop_action.finale_started` nach allen Sperren. Nimmt die Sperre des Laufs — nie mit einer Profil-Sperre aufrufen |
+| `hold_meter(execution_id, name, hold) -> dict` | `name` hält den eigenen Füllstand zurück (oder lässt los): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `unsupported` (kein Paket nimmt es), `invalid`. Was Zurückhalten bedeutet, entscheidet der Provider `prop_action.meter_hold` (Kwargs `execution_id`, `name`, `hold`; Antwort `True` = übernommen). Route `POST /play/prop-actions/hold` für den Avatar des Spielers |
 | `finale_for(name) -> dict \| None` | Der Abschluss `{id, kind, role, elapsed_s, duration_s}` — bis 4 s nach Clipende (`FINALE_SHOW_S`) — oder None |
 
 Provider `prop_action.meters` (Kwargs `execution_id`, `members`, `pose_key`; Antwort: `[{name, value, label}]`): die Füllstände
 einer laufenden Aktion für die HUD-Zeile (`GET /play/prop-actions/state` → `meters`); `value` wird auf
-0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`.
+0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`. Optional `holdable`/`held` (nur
+echtes `True` zählt): das HUD bietet der eigenen Zeile dann einen Zurückhalten-Schalter an (`hold_meter`).
 
 ## Pose — `app.models.character` ✅ (set_pose-Paket)
 
@@ -1064,6 +1066,7 @@ Events, die der Core heute feuert:
 | `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
 | `interaction.ended` | `character`, `partner`, `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair is cleared. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
 | `prop_action.active` | `execution_id`, `members` (Namen), `pose_key` (die gehaltene Pose), `delta_game_s`; einmal pro Scheduler-Schritt für jede aktive Möbel-Aktion (nicht Schlaf), die ONLINE Spielzeit verbracht hat — eine eingefrorene Welt und Offline-Zeit liefern keinen Takt. Nach allen Sperren |
+| `prop_action.started` / `prop_action.ended` | `execution_id`, `members`, `pose_key`; `started` zusätzlich `ability` (`pose`, `pair`, `combined`, `sleep`), wenn ein Lauf aktiv wird; `ended` zusätzlich `status`, `reason`, wenn ein AKTIVER Lauf endet (auch beim Wechsel auf eine andere Aktion: erst `ended`, dann `started`). Nach allen Sperren — der Ort, an dem ein Paket mit einer Solo-Aktion einen eigenen Zustand beginnt und beendet |
 | `prop_action.finale_started` / `prop_action.finale_done` | `execution_id`, `name`, `kind`, `pose_key`; Start nach `begin_finale`, Ende 4 s nach der Cliplänge (`FINALE_SHOW_S`) oder mit dem Ende der Aktion. Nach allen Sperren |
 | `prop_action.pair_started` | `execution_id`, `interaction`, `actor`, `partner`; emitted after a furniture pair action has started the real pair (consent was the run's, so there is no `invite_started`); delivered after all locks. Its end is the ordinary `interaction.ended` |
 | `interaction.invite_failed` | `invite_id`, `inviter`, `invitee`, `pose_key`, `reason`; emitted by the core on every failed yes, retaining the actual cause for an owned undertaking |
