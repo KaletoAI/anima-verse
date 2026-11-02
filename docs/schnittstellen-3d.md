@@ -2672,8 +2672,12 @@ je nach Rollenzahl:
 
 Beim Import (`POST /assets/clips-inbox/import|preview`):
 - `files` nimmt bis zu fünf Quellen in Rollenreihenfolge.
-- `offsets_m: {"<rolle>": [seitlich, hoch, vorwärts]}` ersetzt `offset_b_m`
-  (Pack-Angaben wie „Mann −0,3 vorwärts“).
+- `offsets_m: {"<rolle>": [seitlich, hoch, vorwärts]}` ersetzt `offset_b_m`.
+  Eine Pack-Angabe nennt die Achse IHRER Engine: „−0,3 auf der Vorwärtsachse“
+  ist bei einem Unity-Export vorwärts −0,3, bei einem Unreal-Export
+  (Vorwärts = dessen X) seitlich +0,3. Gemessen am Ankerbild einer
+  Unreal-Dreierszene: Mit seitlich +0,3 liegt die Hüfte der Rolle 0,10 m unter
+  der aufsitzenden Rolle, mit vorwärts −0,3 sind es 0,33 m.
 - Die Vorschau liefert `urls.<rolle>`.
 
 `role_gender` einer Gruppe nennt JEDE Rolle (`male`/`female`), nicht alle

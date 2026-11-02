@@ -779,7 +779,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <span className="ga-hint">
-                {t('Further roles — the animation above plays role A. A pair adds B, a group up to E; all of them become one kind (__a … __e) at a shared anchor. The offset moves a role whose pack recorded it elsewhere, e.g. "set the male model to -0.3 on the forward axis" → forward -0.3.')}
+                {t('Further roles — the animation above plays role A. A pair adds B, a group up to E; all of them become one kind (__a … __e) at a shared anchor. The offset moves a role whose pack recorded it elsewhere. A pack names the axis of ITS engine: a Unity export\'s forward is forward here, an Unreal export\'s forward (its X) is side here with the opposite sign — "-0.3 on the forward axis" is forward -0.3 for Unity, side +0.3 for Unreal.')}
               </span>
               {others.map((o, i) => (
                 <RoleRow key={i} letter={ROLES[i + 1]} value={o} entry={entry} ownTakes={takes}
