@@ -138,6 +138,22 @@ cos 10 = 0.98481, sin 10 = 0.17365; cos 20 = 0.93969, sin 20 = 0.34202.
     shift-only [-5,10] yields [20,-30], leaving both FBX files byte-identical.
 
 [12] A SOLO CLIP REFUSES THE PARTNER SHIFT (ClipLibraryError, file untouched).
+
+[13] A GROUP MOVES ANY ROLE. A group of three, `grp__a`/`grp__b` = the pair
+    fixture's halves and `grp__c` = a second copy of A, with
+    `role_shift_cm` {a: [0, 0, 5], c: [-5, 0, 0]} (forward +5 = +Z,
+    side -5 = -X), no turn:
+        A frame 1 (10, 20) + (0, 5)  = (10, 25) -> start  (0.100, 0.250) m
+        A frame 2 (12, 23) + (0, 5)  = (12, 28) -> anchor (0.120, 0.280) m
+        B unchanged                             -> start  (0.700, 0.200) m
+        C frame 1 (10, 20) + (-5, 0) = ( 5, 20) -> start  (0.050, 0.200) m
+        C frame 2 (12, 23) + (-5, 0) = ( 7, 23) -> anchor (0.070, 0.230) m
+        root_distance_m = |(0.12, 0.28) - (0.72, 0.23)|
+                        = sqrt(0.60^2 + 0.05^2) = sqrt(0.3625) = 0.602
+    The sidecar records `role_shift_cm` {a: [0.0, 0.0, 5.0], c: [-5.0, 0.0,
+    0.0]}; moving C back by [5, 0, 0] drops C and keeps A. The partner shift
+    is refused on the group, `role_shift_cm` on the pair and on a role the
+    group does not have (ClipLibraryError each).
 """
 import json
 import math
@@ -503,6 +519,42 @@ def main() -> int:
     except ac.ClipLibraryError:
         check_true("refused", True)
     check_true("the file is untouched", (FREE / "turn.fbx").read_bytes() == was)
+
+    print("\n[13] a group moves any role")
+    for role, src in (("a", "a"), ("b", "b"), ("c", "a")):
+        shutil.copy2(WORK / f"pair__{src}.fbx", FREE / f"grp__{role}.fbx")
+    (FREE / "grp.json").write_text(json.dumps({
+        "kind": "grp", "pair": True, "roles": ["a", "b", "c"], "fps": 30, "frames": 3,
+        "duration_s": 0.1, "loop": True,
+        "geometry": {"anchor_frame": 1, "anchor_s": 0.033, "root_distance_m": 9.99,
+                     "floor_shift_cm": 0.0}}, indent=1), encoding="utf-8")
+    ac.orient_clip("free", "grp__b.fbx", role_shift_cm={"a": [0.0, 0.0, 5.0], "c": [-5.0, 0.0, 0.0]})
+    geo = json.loads((FREE / "grp.json").read_text(encoding="utf-8"))["geometry"]
+    roles = geo.get("roles") or {}
+    want = {("a", "start_xz_m"): [0.100, 0.250], ("a", "anchor_xz_m"): [0.120, 0.280],
+            ("b", "start_xz_m"): [0.700, 0.200],
+            ("c", "start_xz_m"): [0.050, 0.200], ("c", "anchor_xz_m"): [0.070, 0.230]}
+    for (role, field), w in want.items():
+        got = (roles.get(role) or {}).get(field) or [0.0, 0.0]
+        check(f"{role}.{field} x", got[0], w[0], TOL_M)
+        check(f"{role}.{field} z", got[1], w[1], TOL_M)
+    check("root_distance_m re-measured", float(geo.get("root_distance_m", 0.0)), 0.602, TOL_M)
+    check_true("role_shift_cm recorded",
+               geo.get("role_shift_cm") == {"a": [0.0, 0.0, 5.0], "c": [-5.0, 0.0, 0.0]},
+               str(geo.get("role_shift_cm")))
+    ac.orient_clip("free", "grp__a.fbx", role_shift_cm={"c": [5.0, 0.0, 0.0]})
+    geo = json.loads((FREE / "grp.json").read_text(encoding="utf-8"))["geometry"]
+    check_true("C back at zero drops out, A stays",
+               geo.get("role_shift_cm") == {"a": [0.0, 0.0, 5.0]}, str(geo.get("role_shift_cm")))
+    for label, call in (
+            ("partner shift on a group", lambda: ac.orient_clip("free", "grp__a.fbx", partner_shift_cm=[5.0, 0.0, 0.0])),
+            ("role shift on a pair", lambda: ac.orient_clip("free", "pair__a.fbx", role_shift_cm={"a": [5.0, 0.0, 0.0]})),
+            ("a role the group lacks", lambda: ac.orient_clip("free", "grp__a.fbx", role_shift_cm={"e": [5.0, 0.0, 0.0]}))):
+        try:
+            call()
+            check_true(f"{label} refused", False, "no error")
+        except ac.ClipLibraryError:
+            check_true(f"{label} refused", True)
 
     print("\n[9] all dials at 0 is a no-op")
     was = (FREE / "turn.fbx").read_bytes()

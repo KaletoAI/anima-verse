@@ -108,7 +108,7 @@ export interface ClipUrls { a?: string; b?: string; c?: string; d?: string; e?: 
 /** The role letters of a pair or group clip, in order (`CLIP_ROLES`). */
 const ROLES = ['a', 'b', 'c', 'd', 'e'] as const
 /** Label colour per role over the figure's head. */
-const ROLE_COLOR: Record<string, string> = {
+export const ROLE_COLOR: Record<string, string> = {
   a: '#58a6ff', b: '#f78166', c: '#3fb950', d: '#d29922', e: '#bc8cff',
 }
 
@@ -149,7 +149,7 @@ export interface PlayWindow { start: number; end: number }
 
 export function ClipPreview({ kind = '', set = '', height = 300, urls, window: win, speed = 1,
   group, rootDrop = 0, yawOffset = 0, onYawOffset,
-  importYaw, importTilt, importRoll, importHeightM, partnerShiftM, shiftCm, footprint = '', bust }:
+  importYaw, importTilt, importRoll, importHeightM, roleShiftM, shiftCm, footprint = '', bust }:
   { kind?: string
     /** which figure set to play the kind from — empty picks the neutral clip
      *  (and falls back to any set, the way the viewers do) */
@@ -180,10 +180,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     importTilt?: number
     importRoll?: number
     importHeightM?: number
-    /** Draft partner offset of a pair's B half, `[side, up, forward]` metres
-     *  in the clip frame (+X its left, +Z forward) — moved INSIDE the turned
-     *  frame, the order `clip_orient.py` bakes it in (shift, then turn). */
-    partnerShiftM?: [number, number, number]
+    /** Draft offset per role — a pair's B half, a group's any role —
+     *  `[side, up, forward]` metres in the clip frame (+X its left, +Z
+     *  forward), moved INSIDE the turned frame, the order `clip_orient.py`
+     *  bakes it in (shift, then turn). */
+    roleShiftM?: Record<string, [number, number, number]>
     /** Whole-clip shift draft, added to the saved calibration, in centimetres. */
     shiftCm?: [number, number]
     /** place type whose CALIBRATION BOX is drawn as the reference to turn
@@ -231,8 +232,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   importHeightRef.current = importHeightM
   const shiftRef = useRef(shiftCm)
   shiftRef.current = shiftCm
-  const partnerShiftRef = useRef(partnerShiftM)
-  partnerShiftRef.current = partnerShiftM
+  const roleShiftRef = useRef(roleShiftM)
+  roleShiftRef.current = roleShiftM
   const dialled = importYaw !== undefined || importTilt !== undefined
     || importRoll !== undefined || importHeightM !== undefined
   const box = markerBox(group)
@@ -514,7 +515,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             // place, so this preview walks the root along the path itself).
             // A standing clip yields 0 and the figure stays where it binds.
             p.root.position.set(r.x, -clipHipsDrop(p.hipsBindY, r.y, standRefM), r.z)
-            const shift = p.role === 'b' ? partnerShiftRef.current : undefined
+            const shift = p.role ? roleShiftRef.current?.[p.role] : undefined
             if (shift) p.root.position.add(heightShift.set(shift[0], shift[1], shift[2]))
             // Placement yaw rotates the saved shift; orientation draft angles
             // are baked into the take and must not rotate its calibration.

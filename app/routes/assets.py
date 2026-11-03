@@ -262,11 +262,13 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     """Turns an already imported clip — the import's orientation dial,
     applied to the FILE.
 
-    Body ``{yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, shift_cm?}``, at least
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?}``, at least
     one of them non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)``
     about the origin of the clip frame on the floor. ``partner_shift_cm`` is
     ``[side, up, forward]`` centimetres (clip frame, −100..100) that move a
-    PAIR's B half against its A half before the turn; a solo clip answers 400. Surface heights use the PATCH route's
+    PAIR's B half against its A half before the turn; a solo clip answers 400.
+    ``role_shift_cm`` is ``{role: [side, up, forward]}`` for a GROUP — every
+    named role moves, with its alt halves (``orient_clip``). Surface heights use the PATCH route's
     ``height_offsets_cm`` instead. ``shift_cm`` is the renderer-only cumulative
     [side, forward] correction in cm (-200..200 per edit), shared by both halves.
     Shift-only edits do not require Blender. Both halves of a pair are turned in ONE
@@ -299,21 +301,32 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
             raise HTTPException(status_code=400,
                                 detail="partner_shift_cm must be [side, up, forward] numbers")
         shift = [float(v) for v in shift]
+    role_shift = body.get("role_shift_cm")
+    if role_shift is not None:
+        if (not isinstance(role_shift, dict) or any(
+                not isinstance(v, list) or len(v) != 3
+                or any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in v)
+                for v in role_shift.values())):
+            raise HTTPException(status_code=400,
+                                detail="role_shift_cm must be {role: [side, up, forward] numbers}")
+        role_shift = {str(r): [float(x) for x in v] for r, v in role_shift.items()}
+    role_moves = [x for v in (role_shift or {}).values() for x in v]
     from app.core.animation_clips import validate_clip_shift
     try:
         horizontal = validate_clip_shift(body.get("shift_cm"))
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
-    if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *horizontal)):
+    if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal)):
         raise HTTPException(
             status_code=400,
-            detail="one of yaw_deg, tilt_deg, roll_deg, partner_shift_cm, shift_cm must be non-zero")
-    if any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()))) and not blender_runner.is_available():
+            detail="one of yaw_deg, tilt_deg, roll_deg, partner_shift_cm, role_shift_cm, shift_cm must be non-zero")
+    if any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves)) and not blender_runner.is_available():
         raise HTTPException(status_code=503,
                             detail="Blender is not available on this server")
     started = time.monotonic()
     try:
-        clips = orient_clip(library, rel, **dials, partner_shift_cm=shift, shift_cm=horizontal)
+        clips = orient_clip(library, rel, **dials, partner_shift_cm=shift,
+                            role_shift_cm=role_shift, shift_cm=horizontal)
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}

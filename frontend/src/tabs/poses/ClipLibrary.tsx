@@ -37,12 +37,12 @@
  * this is the only way a clip that lies across the bed gets straightened.
  *
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
- *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, shift_cm?}
+ *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { ClipPreview } from './ClipPreview'
+import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -160,6 +160,16 @@ interface PoseRef {
   animation: string
 }
 
+/** The orientation dials: one grid, as many columns as the panel holds. */
+const DIAL_GRID = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+  gap: '6px 12px', alignItems: 'end',
+} as const
+const DIAL_HEAD = { fontSize: 12, fontWeight: 600, opacity: 0.8, marginTop: 4 } as const
+const DIAL = {
+  sliderWidth: 'auto', sliderStyle: { flex: 1, minWidth: 70 }, style: { display: 'flex', flex: 1, minWidth: 0 },
+} as const
+
 export function ClipLibrary({
   listing,
   poses,
@@ -211,6 +221,10 @@ export function ClipLibrary({
   const [rollDeg, setRollDeg] = useState(0)
   // A pair's B half against A: [side, up, forward] centimetres, baked like the angles.
   const [partnerShift, setPartnerShift] = useState<[number, number, number]>([0, 0, 0])
+  // A group's roles, each against the scene: {role: [side, up, forward]} cm,
+  // baked like the partner shift; `shiftRole` is the one the sliders move.
+  const [roleShift, setRoleShift] = useState<Record<string, [number, number, number]>>({})
+  const [shiftRole, setShiftRole] = useState('a')
   const [clipShift, setClipShift] = useState<[number, number]>([0, 0])
   const [heightDraft, setHeightDraft] = useState<ClipHeightOffsetsCm>({})
   const [heightBusy, setHeightBusy] = useState(false)
@@ -320,6 +334,8 @@ export function ClipLibrary({
     setTiltDeg(0)
     setRollDeg(0)
     setPartnerShift([0, 0, 0])
+    setRoleShift({})
+    setShiftRole('a')
     setClipShift([0, 0])
     setHeightDraft({})
     setOrientError('')
@@ -375,10 +391,17 @@ export function ClipLibrary({
   const heightDirty = Object.entries(heightDraft).some(
     ([group, cm]) => cm !== (orientTarget?.height_offsets_cm?.[group as keyof ClipHeightOffsetsCm] ?? 0),
   )
-  const isPairTarget = orientTarget?.role === 'a'
+  // The dials act on the A half; how many roles it has decides pair or group.
+  const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
+  const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
+  const groupRoles = isGroupTarget ? (['a', 'b', 'c', 'd', 'e'] as const).slice(0, row?.roles ?? 0) : []
   const shiftDirty = isPairTarget && partnerShift.some((v) => v !== 0)
+  const movedRoles = useMemo(() => (isGroupTarget
+    ? Object.fromEntries(Object.entries(roleShift).filter(([, v]) => v.some((x) => x !== 0)))
+    : {}), [isGroupTarget, roleShift])
+  const roleShiftDirty = Object.keys(movedRoles).length > 0
   const clipShiftDirty = clipShift.some((v) => v !== 0)
-  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || clipShiftDirty
+  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || roleShiftDirty || clipShiftDirty
   // The baked angles live in the sidecar, so a clip without one has nowhere to
   // put them — the block says so instead of earning a 400 after Apply.
   const heightLocked = orientBusy || heightBusy
@@ -392,6 +415,7 @@ export function ClipLibrary({
       const res = await apiPost<{ seconds?: number; clips?: { kind: string }[] }>(`${clipPath(orientTarget)}/orient`, {
         yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
         ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
+        ...(roleShiftDirty ? { role_shift_cm: movedRoles } : {}),
         ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
       })
       setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
@@ -400,6 +424,7 @@ export function ClipLibrary({
       setTiltDeg(0)
       setRollDeg(0)
       setPartnerShift([0, 0, 0])
+      setRoleShift({})
       setClipShift([0, 0])
       // The file keeps its URL, so the preview has to be rebuilt AND the
       // clip re-fetched — `seq` does both (component key + cache buster).
@@ -411,7 +436,7 @@ export function ClipLibrary({
     } finally {
       setOrientBusy(false)
     }
-  }, [clipShift, clipShiftDirty, onReload, orientBusy, orientDirty, orientTarget, partnerShift, rollDeg, shiftDirty, tiltDeg, yawDeg])
+  }, [clipShift, clipShiftDirty, movedRoles, onReload, orientBusy, orientDirty, orientTarget, partnerShift, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, yawDeg])
 
   const saveHeights = useCallback(async () => {
     if (!orientTarget || heightBusy || !heightDirty) return
@@ -444,6 +469,8 @@ export function ClipLibrary({
       o.partner_shift_cm
         ? `${t('partner B forward / side / up')} ${o.partner_shift_cm[2]} / ${o.partner_shift_cm[0]} / ${o.partner_shift_cm[1]} cm`
         : '',
+      ...Object.entries(o.role_shift_cm || {}).map(([r, v]) =>
+        `${t('role {r} forward / side / up').replace('{r}', r.toUpperCase())} ${v[2]} / ${v[0]} / ${v[1]} cm`),
     ].filter(Boolean)
     return parts.length ? parts.join(' · ') : t('nothing turned yet')
   }, [orientTarget, t])
@@ -778,7 +805,8 @@ export function ClipLibrary({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(320px, 1.3fr) minmax(320px, 1fr)',
+        // the list 30 % narrower than it was (1.3fr), the settings wider
+        gridTemplateColumns: 'minmax(280px, 0.9fr) minmax(380px, 1.4fr)',
         gap: 14,
         alignItems: 'stretch',
         flex: 1,
@@ -974,9 +1002,12 @@ export function ClipLibrary({
                   importRoll={rollDeg}
                   importHeightM={heightCm / 100}
                   shiftCm={clipShift}
-                  partnerShiftM={isPairTarget
-                    ? [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100]
-                    : undefined}
+                  roleShiftM={isPairTarget
+                    ? { b: [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100] }
+                    : isGroupTarget
+                      ? Object.fromEntries(Object.entries(roleShift).map(([r, v]) =>
+                        [r, [v[0] / 100, v[1] / 100, v[2] / 100] as [number, number, number]]))
+                      : undefined}
                   footprint={footprint}
                   rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
                   bust={seq}
@@ -1003,28 +1034,27 @@ export function ClipLibrary({
                         {t('Apply orientation writes angles into the clip file and saves horizontal shifts separately. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.')}
                       </span>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                      <SliderInput
-                        label={t('Turn the clip')}
-                        unit="°"
-                        title={t('Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.')}
-                        min={-180}
-                        max={180}
-                        step={5}
-                        fineStep={1}
-                        value={yawDeg}
-                        onChange={setYawDeg}
-                        disabled={orientLocked}
-                        sliderWidth="auto"
-                        sliderStyle={{ flex: 1, minWidth: 90 }}
-                        style={{ display: 'flex', flex: '1 1 260px' }}
-                      />
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
-                        onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
-                        onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={DIAL_HEAD}>{t('Rotation')}</div>
+                    <div style={DIAL_GRID}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end' }}>
+                        <SliderInput
+                          label={t('Turn the clip')}
+                          unit="°"
+                          title={t('Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.')}
+                          min={-180}
+                          max={180}
+                          step={5}
+                          fineStep={1}
+                          value={yawDeg}
+                          onChange={setYawDeg}
+                          disabled={orientLocked}
+                          {...DIAL}
+                        />
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
+                          onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
+                          onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
+                      </div>
                       <SliderInput
                         label={t('Tilt')}
                         unit="°"
@@ -1036,9 +1066,7 @@ export function ClipLibrary({
                         value={tiltDeg}
                         onChange={setTiltDeg}
                         disabled={orientLocked}
-                        sliderWidth="auto"
-                        sliderStyle={{ flex: 1, minWidth: 70 }}
-                        style={{ display: 'flex', flex: '1 1 200px' }}
+                        {...DIAL}
                       />
                       <SliderInput
                         label={t('Roll')}
@@ -1051,26 +1079,11 @@ export function ClipLibrary({
                         value={rollDeg}
                         onChange={setRollDeg}
                         disabled={orientLocked}
-                        sliderWidth="auto"
-                        sliderStyle={{ flex: 1, minWidth: 70 }}
-                        style={{ display: 'flex', flex: '1 1 200px' }}
-                      />
-                      <SliderInput
-                        label={t('Surface height correction')}
-                        unit="cm"
-                        title={t('Absolute height correction for the selected surface only. Other surface types keep their own values.')}
-                        min={-50}
-                        max={50}
-                        step={1}
-                        value={heightCm}
-                        onChange={(cm) => setHeightDraft((prev) => ({ ...prev, [heightGroup]: cm }))}
-                        disabled={heightLocked}
-                        sliderWidth="auto"
-                        sliderStyle={{ flex: 1, minWidth: 70 }}
-                        style={{ display: 'flex', flex: '1 1 200px' }}
+                        {...DIAL}
                       />
                     </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={DIAL_HEAD}>{t('Position')}</div>
+                    <div style={DIAL_GRID}>
                       {([['Shift sideways', 0], ['Shift forward', 1]] as const).map(([label, axis]) => (
                         <SliderInput
                           key={label}
@@ -1084,36 +1097,90 @@ export function ClipLibrary({
                           value={clipShift[axis]}
                           onChange={(cm) => setClipShift((prev) => axis === 0 ? [cm, prev[1]] : [prev[0], cm])}
                           disabled={orientLocked}
-                          sliderWidth="auto"
-                          sliderStyle={{ flex: 1, minWidth: 70 }}
-                          style={{ display: 'flex', flex: '1 1 200px' }}
+                          {...DIAL}
                         />
                       ))}
+                      <SliderInput
+                        label={t('Surface height correction')}
+                        unit="cm"
+                        title={t('Absolute height correction for the selected surface only. Other surface types keep their own values.')}
+                        min={-50}
+                        max={50}
+                        step={1}
+                        value={heightCm}
+                        onChange={(cm) => setHeightDraft((prev) => ({ ...prev, [heightGroup]: cm }))}
+                        disabled={heightLocked}
+                        {...DIAL}
+                      />
                     </div>
                     {isPairTarget ? (
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}
-                        title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
-                        {([['Partner B forward', 2], ['Partner B side', 0], ['Partner B up', 1]] as const).map(([label, axis]) => (
-                          <SliderInput
-                            key={label}
-                            label={t(label)}
-                            unit="cm"
-                            min={-50}
-                            max={50}
-                            step={1}
-                            value={partnerShift[axis]}
-                            onChange={(cm) => setPartnerShift((prev) => {
-                              const next: [number, number, number] = [prev[0], prev[1], prev[2]]
-                              next[axis] = cm
-                              return next
-                            })}
-                            disabled={orientLocked}
-                            sliderWidth="auto"
-                            sliderStyle={{ flex: 1, minWidth: 70 }}
-                            style={{ display: 'flex', flex: '1 1 200px' }}
-                          />
-                        ))}
-                      </div>
+                      <>
+                        <div style={DIAL_HEAD}>{t('Partner B')}</div>
+                        <div style={DIAL_GRID}
+                          title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
+                          {([['Partner B forward', 2], ['Partner B side', 0], ['Partner B up', 1]] as const).map(([label, axis]) => (
+                            <SliderInput
+                              key={label}
+                              label={t(label)}
+                              unit="cm"
+                              min={-50}
+                              max={50}
+                              step={1}
+                              value={partnerShift[axis]}
+                              onChange={(cm) => setPartnerShift((prev) => {
+                                const next: [number, number, number] = [prev[0], prev[1], prev[2]]
+                                next[axis] = cm
+                                return next
+                              })}
+                              disabled={orientLocked}
+                              {...DIAL}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                    {isGroupTarget ? (
+                      <>
+                        <div style={{ ...DIAL_HEAD, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span>{t('Move a role')}</span>
+                          {groupRoles.map((r) => {
+                            const moved = (roleShift[r] || [0, 0, 0]).some((v) => v !== 0)
+                            return (
+                              <button key={r} type="button"
+                                className={`ga-btn ga-btn-sm${shiftRole === r ? ' ga-btn-primary' : ''}`}
+                                style={{ borderColor: ROLE_COLOR[r], minWidth: 34 }}
+                                aria-pressed={shiftRole === r}
+                                disabled={orientLocked}
+                                onClick={() => setShiftRole(r)}>
+                                <span style={{ color: shiftRole === r ? undefined : ROLE_COLOR[r] }}>{r.toUpperCase()}</span>
+                                {moved ? ' •' : ''}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <div style={DIAL_GRID}
+                          title={t('Moves the selected role against the others in the clip files — its own half and its alt halves. Forward is the clip’s forward axis, side positive is its left.')}>
+                          {([['Forward', 2], ['Side', 0], ['Up', 1]] as const).map(([label, axis]) => (
+                            <SliderInput
+                              key={label}
+                              label={`${t('Role')} ${shiftRole.toUpperCase()} · ${t(label)}`}
+                              unit="cm"
+                              min={-50}
+                              max={50}
+                              step={1}
+                              value={(roleShift[shiftRole] || [0, 0, 0])[axis]}
+                              onChange={(cm) => setRoleShift((prev) => {
+                                const cur = prev[shiftRole] || [0, 0, 0]
+                                const next: [number, number, number] = [cur[0], cur[1], cur[2]]
+                                next[axis] = cm
+                                return { ...prev, [shiftRole]: next }
+                              })}
+                              disabled={orientLocked}
+                              {...DIAL}
+                            />
+                          ))}
+                        </div>
+                      </>
                     ) : null}
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
