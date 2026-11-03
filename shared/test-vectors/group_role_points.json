@@ -1,0 +1,598 @@
+{
+ "format": "anima-test-vectors/1",
+ "source": "client3d/scripts/smoke_group_role_points.mjs",
+ "fixtures": {
+  "group": {
+   "tile": {
+    "center": [
+     0,
+     0,
+     0
+    ],
+    "surfaces": [],
+    "roomFloors": [],
+    "roomCenters": []
+   },
+   "anchor": {
+    "x": 10,
+    "z": 22,
+    "yaw": 1.5707963267948966
+   },
+   "terrainY": 0.5,
+   "room": null,
+   "placeId": null,
+   "seatSlots": null,
+   "clip": "trio__a",
+   "root": {
+    "x": 0,
+    "z": 0
+   }
+  }
+ },
+ "cases": [
+  {
+   "label": "[1] three a x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "trio__a",
+      "root": {
+       "x": -0.6,
+       "z": 0
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 10,
+   "eps": 1e-09
+  },
+  {
+   "label": "[1] three a z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "trio__a",
+      "root": {
+       "x": -0.6,
+       "z": 0
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 22.6,
+   "eps": 1e-09
+  },
+  {
+   "label": "[1] three b x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "trio__b",
+      "root": {
+       "x": 0.3,
+       "z": 0.52
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 10.52,
+   "eps": 1e-09
+  },
+  {
+   "label": "[1] three b z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "trio__b",
+      "root": {
+       "x": 0.3,
+       "z": 0.52
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 21.7,
+   "eps": 1e-09
+  },
+  {
+   "label": "[1] three c x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "trio__c",
+      "root": {
+       "x": 0.3,
+       "z": -0.52
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 9.48,
+   "eps": 1e-09
+  },
+  {
+   "label": "[1] three c z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "trio__c",
+      "root": {
+       "x": 0.3,
+       "z": -0.52
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 21.7,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five a x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__a",
+      "root": {
+       "x": -0.8,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 10.8,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five a z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__a",
+      "root": {
+       "x": -0.8,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 22,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five a y",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__a",
+      "root": {
+       "x": -0.8,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "y"
+   ],
+   "expect": 0.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five b x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__b",
+      "root": {
+       "x": 0.4,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 9.6,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five b z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__b",
+      "root": {
+       "x": 0.4,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 22,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five b y",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__b",
+      "root": {
+       "x": 0.4,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "y"
+   ],
+   "expect": 0.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five c x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__c",
+      "root": {
+       "x": 0,
+       "z": 0.5
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 10,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five c z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__c",
+      "root": {
+       "x": 0,
+       "z": 0.5
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 21.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five c y",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__c",
+      "root": {
+       "x": 0,
+       "z": 0.5
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "y"
+   ],
+   "expect": 0.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five d x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__d",
+      "root": {
+       "x": 0.2,
+       "z": -0.5
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 9.8,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five d z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__d",
+      "root": {
+       "x": 0.2,
+       "z": -0.5
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 22.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five d y",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__d",
+      "root": {
+       "x": 0.2,
+       "z": -0.5
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "y"
+   ],
+   "expect": 0.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five e x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__e",
+      "root": {
+       "x": 0.2,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "x"
+   ],
+   "expect": 9.8,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five e z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__e",
+      "root": {
+       "x": 0.2,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "z"
+   ],
+   "expect": 22,
+   "eps": 1e-09
+  },
+  {
+   "label": "[2] five e y",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__e",
+      "root": {
+       "x": 0.2,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      }
+     }
+    },
+    "y"
+   ],
+   "expect": 0.5,
+   "eps": 1e-09
+  },
+  {
+   "label": "[3] five e on a place x",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__e",
+      "root": {
+       "x": 0.2,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      },
+      "placeId": "p1",
+      "seatSlots": [
+       {
+        "y": 0.45
+       }
+      ]
+     }
+    },
+    "x"
+   ],
+   "expect": 9.8,
+   "eps": 1e-09
+  },
+  {
+   "label": "[3] five e on a place y",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__e",
+      "root": {
+       "x": 0.2,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      },
+      "placeId": "p1",
+      "seatSlots": [
+       {
+        "y": 0.45
+       }
+      ]
+     }
+    },
+    "y"
+   ],
+   "expect": 0.45,
+   "eps": 1e-09
+  },
+  {
+   "label": "[3] five e on a place z",
+   "fn": "pairPlacementValue",
+   "args": [
+    {
+     "$fixture": "group",
+     "$with": {
+      "clip": "five__e",
+      "root": {
+       "x": 0.2,
+       "z": 0
+      },
+      "anchor": {
+       "x": 10,
+       "z": 22,
+       "yaw": 3.141592653589793
+      },
+      "placeId": "p1",
+      "seatSlots": [
+       {
+        "y": 0.45
+       }
+      ]
+     }
+    },
+    "z"
+   ],
+   "expect": 22,
+   "eps": 1e-09
+  }
+ ]
+}

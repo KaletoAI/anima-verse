@@ -26,6 +26,9 @@
  *     seen. Junk (no id / duration 0) starts nothing.
  * [7] Near the end the handed-out time stays 1 ms short: duration 1.0,
  *     t 0.9995 -> 0.999.
+ * [8] A GROUP member (G3, plan-gruppen-animationen.md): role c plays its own
+ *     half `standing-dancer-climax__c`, role e `…__e`; a role outside a..e
+ *     (`f`) is no role — the plain kind, like a solo block.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -83,4 +86,12 @@ assert.deepEqual(adoptFinale(null, '', block('f4', { duration_s: 0 }), true), { 
 step = stepFinale({ id: 'x', kind: 'k', role: 'a', t: 0.9, duration: 1.0 }, 0.0995, false);
 close(step.t, 0.999);
 
-console.log('PASS smoke_finale_clip [1]-[7]');
+// [8]
+for (const role of ['c', 'e']) {
+  const group = adoptFinale(null, '', block(`g${role}`, { role }), true);
+  assert.equal(stepFinale(group.play, 0.1, false).clip, `standing-dancer-climax__${role}`);
+}
+assert.equal(stepFinale(adoptFinale(null, '', block('gf', { role: 'f' }), true).play, 0.1, false).clip,
+  'standing-dancer-climax');
+
+console.log('PASS smoke_finale_clip [1]-[8]');

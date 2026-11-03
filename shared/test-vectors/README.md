@@ -357,7 +357,7 @@ production implementation; they are not converted into passing vectors.
 
 ## Pair clips and figure normalisation (Task 32)
 
-`smoke_pair_vectors.mjs` runs all 82 cases without live tables, model files,
+`smoke_pair_vectors.mjs` runs all 107 cases without live tables, model files,
 network or a DOM. The canonical source smokes also run their own vectors:
 
 | JSON | Source smoke | Cases |
@@ -367,10 +367,13 @@ network or a DOM. The canonical source smokes also run their own vectors:
 | `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 23 |
 | `pair_height.json` | `smoke_pair_storey.mjs` | 12 |
 | `figure_normalisation.json` | `smoke_figure_normalisation.mjs` | 4 |
+| `group_role_points.json` | `smoke_group_role_points.mjs` | 24 |
 
 All source paths are under `client3d/scripts/`. Derivations stay in those
 smokes' docstrings. `pairVectorDispatch.mjs` only constructs Three objects,
-executes production functions and selects result fields. No production code
+executes production functions and selects result fields. A placement fixture
+with `clip` (a group role, `group_role_points.json`) plays that half, and its
+library stand-in answers the root only for that name. No production code
 was extracted or changed. The real-FBX/GLB integration checks in
 `smoke_clip_pair.mjs` remain, including track shape and the RED counter-probe;
 they still use real model files and sidecars, outside the standalone vectors.

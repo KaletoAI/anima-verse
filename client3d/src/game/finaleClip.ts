@@ -16,11 +16,15 @@
  * phase never stopped counting. The action ending ends the finale too.
  */
 
+/** A clip role of a pair or group (§ A8a): `a`..`e`. */
+export type FinaleRole = 'a' | 'b' | 'c' | 'd' | 'e';
+const FINALE_ROLES: readonly string[] = ['a', 'b', 'c', 'd', 'e'];
+
 /** The worldmap row's `finale` block (§ A8c). */
 export interface FinaleBlock {
   id: string;
   kind: string;
-  role: 'a' | 'b' | null;
+  role: FinaleRole | null;
   elapsed_s: number;
   duration_s: number;
 }
@@ -29,7 +33,7 @@ export interface FinaleBlock {
 export interface FinalePlay {
   id: string;
   kind: string;
-  role: 'a' | 'b' | null;
+  role: FinaleRole | null;
   t: number;
   duration: number;
 }
@@ -45,7 +49,7 @@ export function adoptFinale(current: FinalePlay | null, seen: string,
   if (!block || typeof block.id !== 'string' || !block.id || block.id === seen) return { play, seen };
   const duration = Number(block.duration_s);
   if (inAction && block.kind && Number.isFinite(duration) && duration > 0) {
-    play = { id: block.id, kind: block.kind, role: block.role === 'a' || block.role === 'b' ? block.role : null,
+    play = { id: block.id, kind: block.kind, role: block.role && FINALE_ROLES.includes(block.role) ? block.role : null,
       t: 0, duration };
   }
   return { play, seen: block.id };

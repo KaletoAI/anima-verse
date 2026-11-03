@@ -40,7 +40,8 @@ function tileFrom(data) {
 /** Exercise the full manager tick with the same minimal NPC as the source smoke. */
 function placement(m, data) {
   const tile = tileFrom(data.tile);
-  const lib = { pairRootAt: () => data.root };
+  // A fixture naming its `clip` (a group role) gets its root only for that half.
+  const lib = { pairRootAt: (name) => (data.clip && name !== data.clip ? null : data.root) };
   const figure = {
     playPair: () => true, holdsTravel: false, takeTravel: () => {},
     faceTowards: () => {}, setYaw: () => {}, update: () => {}, setFirstPerson: () => {}, hasHead: false,
@@ -59,7 +60,7 @@ function placement(m, data) {
     labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
     waypoints: [], ride: null, route: null, travelling: false, reckon: null,
     interaction: {
-      id: 'p1', clip: 'handshake__a',
+      id: 'p1', clip: data.clip ?? 'handshake__a',
       anchor: { ...data.anchor, placeId: data.placeId },
       elapsed: 0, clipT: 0, clipDuration: 2, loop: true, rate: 1, stamp: 0,
     },

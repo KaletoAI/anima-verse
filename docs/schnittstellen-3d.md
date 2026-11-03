@@ -2685,8 +2685,25 @@ Beim Import (`POST /assets/clips-inbox/import|preview`):
 gleich, sonst gilt sie als nicht zugeordnet. Der Import leitet sie aus den
 Take- bzw. Dateinamen ab („Female…“ / „Male…“). Eine Gruppe lässt sich nicht
 per `partner_shift_cm` ausrichten, ihre Rollen werden beim Import
-ausgerichtet. Das Abspielen von Gruppen (Anker, Platz, Rollenwahl) folgt in
-G2/G3; bis dahin spielt nur die Clip-Vorschau sie.
+ausgerichtet.
+
+**Gruppen abspielen (G3, 2026-11-03).** Eine Gruppe spielt wie ein Paar, nur
+mit mehr Figuren:
+- Jedes Mitglied spielt SEINE Hälfte `<kind>__<role>` (Rolle aus
+  `interaction.role`, `a`..`e`) am EINEN Anker der Gruppe.
+- Sein Weltpunkt ist `anchor + R(yaw)·root`, mit
+  `x = ax + rx·cos(yaw) + rz·sin(yaw)` und `z = az − rx·sin(yaw) + rz·cos(yaw)`.
+  Das ist dieselbe Drehung, mit der der Server die Spielzustands-Positionen der
+  Mitglieder schreibt (`interaction_engine._rotate`).
+- Höhe: ohne Platz der Boden unter der Figur; auf einem Platz dessen
+  Slot-Höhe, für JEDE Rolle, denn die Gruppe hält einen Platz.
+- Fehlt einer Figur ihre Hälfte, wird sie nicht an den Anker gestellt. Sie
+  leiht sich nie die Wurzel einer anderen Rolle.
+- Testvektor `shared/test-vectors/group_role_points.json`: drei Rollen bei
+  90°, fünf bei 180°, eine Fünfer-Rolle auf einem Platz. Handrechnung in
+  `client3d/scripts/smoke_group_role_points.mjs`. Gegenprobe gegen den Server
+  in `scripts/smoke_group_role_points.py`.
+- Der Abschluss (§ A8c) einer Gruppe nennt die Rolle des Mitglieds, `a`..`e`.
 
 Erzeugung: `scripts/clip_import_cmu.py` (CMU-Mocap → Mixamo-Skelett, Blender
 headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
@@ -2839,7 +2856,7 @@ name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt d
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `finale` | `{id, kind, role, elapsed_s, duration_s}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`/`b`, `null` bei Solo); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Cliplänge |
+| `finale` | `{id, kind, role, elapsed_s, duration_s}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Cliplänge |
 
 Der Client spielt den Abschluss **einmal pro `id`, von vorn, sobald er das Feld zum ersten Mal sieht** — die
 Clips dauern um eine Sekunde, ein Poll alle 3 s: ein Abspielen ab `elapsed_s` zeigte meist nichts, und ein
@@ -5814,6 +5831,7 @@ sie produziert.
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
+| `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
 | `client3d/scripts/smoke_pair_storey.mjs` | die HÖHE eines Paares (§ A8a): ohne Platz steht es auf dem Boden SEINES Raums (`tiles.roomStandY` — Obergeschoss, Keller, Flur), nicht auf dem Gelände unter dem Haus; nur der Grund des Ortes nimmt das Gelände, ein Platz seine Slot-Höhe |
 | `client3d/scripts/smoke_marker_floor.mjs` | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |

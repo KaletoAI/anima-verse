@@ -1091,7 +1091,7 @@ def _finale_live(finale) -> bool:
 
 def finale_for(name: str) -> dict | None:
     """The worldmap row's ``finale`` block of ``name`` (§ A8c):
-    ``{id, kind, role, elapsed_s, duration_s}`` — the half (``role`` a/b,
+    ``{id, kind, role, elapsed_s, duration_s}`` — the half (``role`` a..e,
     None for a solo clip) a client plays ONCE per ``id``, then back to the
     action's own clip. Shown until ``FINALE_SHOW_S`` past the clip's end, so
     a polling bystander sees it too; ``elapsed_s`` in SYSTEM seconds."""
