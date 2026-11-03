@@ -2384,6 +2384,31 @@ def take_furniture_for_pose(actor: str, pose_key: str) -> dict | None:
     return None
 
 
+def going_to_bed(actor: str) -> bool:
+    """Whether a live SLEEP action of ``actor`` has not put it to sleep yet —
+    it is still asked, walking over or lying down."""
+    return any(run["actor"] == actor and run["definition"].get("ability") == "sleep"
+               and run["status"] != "sleeping" for run in store.live_runs())
+
+
+def take_bed_to_sleep(actor: str) -> dict | None:
+    """Falling asleep without a lying place of the room: start the nearest
+    sleep action of a piece in ``actor``'s room (``prop_actions.beds_for_sleep``).
+    The run walks the character over, lays it down and sets the sleep flag
+    itself on arrival. Returns the accepted request result, or None when no
+    bed takes it (each is tried once; a refused one passes to the next)."""
+    from app.core.prop_actions import beds_for_sleep
+    for offer in beds_for_sleep(actor):
+        result = request(actor, offer["target"], offer["action_id"], offer["definition_revision"])
+        if result.get("status") not in ("refused", "failed", "cancelled"):
+            logger.info("%s goes to bed to sleep: %s on %s (%s)", actor, offer["label"],
+                        offer["prop_label"], result.get("status"))
+            return dict(result, label=offer["label"], prop_label=offer["prop_label"])
+        logger.info("%s: %s on %s refused for sleep: %s", actor, offer["label"],
+                    offer["prop_label"], result.get("reason"))
+    return None
+
+
 def has_semantic_action(actor: str) -> bool:
     """Implicit narration never overrides an explicit, still-owned action."""
     row = store.db.get_connection().execute(

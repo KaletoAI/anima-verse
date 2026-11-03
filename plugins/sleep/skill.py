@@ -36,7 +36,12 @@ class SleepWakeSkill(PluginSkill):
         try:
             from app.models.character import (
                 set_is_sleeping, enter_offmap_sleep, wake_from_offmap)
+            from app.models.character import is_character_sleeping
             set_is_sleeping(char, self._asleep)
+            if self._asleep and not is_character_sleeping(char):
+                # Gone to bed: the bed's sleep action puts it to sleep on
+                # arrival — it stays on the map, in its bed.
+                return f"{char} goes to bed to sleep."
             try:
                 if self._asleep:
                     enter_offmap_sleep(char)

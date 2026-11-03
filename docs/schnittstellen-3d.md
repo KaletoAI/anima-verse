@@ -8249,7 +8249,7 @@ no offer, 2026-10-31), including blocked ones. Each row includes `action_id`, `d
 `distance_m` (metres from the actor to the piece's nearest place, one decimal; `null`
 without an actor position — the player panel lists an action once and lets the player
 pick among the pieces offering it, nearest first), `label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
-(per-partner `{partner,enabled,reason}`) and declared `effects`. Checks cover every
+(per-partner `{partner,enabled,reason}`), `ability` (`pose`/`combined`/`pair`/`sleep`/…) and declared `effects`. Checks cover every
 present person, awake/exact partners, effective requirements, exclusive claims,
 current revision/variant/bindings/capability, real collision route and measured
 entry asset. They do not reserve, start, wake, change profiles or queue media.

@@ -1591,7 +1591,16 @@ waits), `declined_by`, `reaction` (a react run's partner reaction: `pending`, `a
 `app.core.prop_actions.furniture_for_pose(actor, pose_key) -> list[dict]` lists
 the enabled solo furniture actions in the actor's room that hold `pose_key`
 (offer rows, which carry `pose_key` for ability `pose`), then those holding
-another pose of the same place group, nearest first.
+another pose of the same place group, nearest first; for `sleeping` the sleep
+actions come first (`beds_for_sleep(actor)`: the enabled solo rows of ability
+`sleep`, nearest first). `app.core.prop_action_engine.take_bed_to_sleep(actor)
+-> dict | None` starts the first bed that accepts; `going_to_bed(actor) -> bool`
+says whether a live sleep action has not put the actor to sleep yet.
+`app.models.character.set_is_sleeping` with value True uses both: an awake
+character in a room without a free room-owned lying place goes to bed instead
+of falling asleep on the spot — the flag is set by the bed's sleep action on
+arrival, so `is_character_sleeping` stays False until then (a Sleep verb then
+reports "goes to bed" and does not send it off the map).
 `app.core.prop_action_engine.take_furniture_for_pose(actor, pose_key) -> dict | None`
 starts the first of them that accepts (the request result plus `label` and
 `prop_label`), or returns None. `app.core.places.seat_missing(name, pose_key) -> bool`

@@ -1023,7 +1023,10 @@ class Runs(unittest.TestCase):
                 A.advance(F.game_time())
         self.assertFalse(F.C.is_character_sleeping(name), "bed removal and canonical wake must share a commit")
         self.assertFalse(F.C.get_character_profile(name).get("place"))
-        F.C.set_is_sleeping(name, True)
+        # The new sleep is one IN PLACE (the case under test): without this the
+        # sleeper would walk to the fixture bed (``take_bed_to_sleep``, 2026-11-03).
+        with patch.object(A, "take_bed_to_sleep", return_value=None):
+            F.C.set_is_sleeping(name, True)
         replacement = F.C.get_character_profile(name)
         position = F.C.get_character_pos(name)
         with patch.object(A, "_PROCESS", "cleanup-restart"):

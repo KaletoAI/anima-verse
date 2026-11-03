@@ -470,6 +470,7 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                description=localized(action, "description", lang) or action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
                                available_targets=targets, effects=action.get("effects", []),
+                               ability=action.get("ability") or "",
                                # The body pose the action holds (ability "pose" only).
                                pose_key=(action.get("pose_key") or "") if action.get("ability") == "pose" else "",
                                # Its pose closes with a finale clip — the HUD marks it.
@@ -491,24 +492,37 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
     return result
 
 
+#: The pose key an asleep figure plays (``get_effective_pose_key``).
+SLEEP_POSE = "sleeping"
+
+
+def _nearest(row):
+    return row["distance_m"] if row["distance_m"] is not None else math.inf
+
+
+def beds_for_sleep(actor: str) -> list[dict]:
+    """The enabled solo SLEEP actions (ability ``sleep``) in ``actor``'s
+    room, nearest piece first: a bed that puts it to sleep. Read only."""
+    return sorted((o for o in offers(actor) if o["enabled"] and not o["required_partner"]
+                   and o.get("ability") == "sleep"), key=_nearest)
+
+
 def furniture_for_pose(actor: str, pose_key: str) -> list[dict]:
     """The enabled solo furniture actions in ``actor``'s room that put it in
     ``pose_key``: actions holding exactly that pose first, then those holding
     another pose of the same place group (a sofa that only knows "sitting"
-    for "lounging"); nearest piece first within each. Read only."""
+    for "lounging"); nearest piece first within each. For ``sleeping`` the
+    sleep actions (:func:`beds_for_sleep`) come first. Read only."""
     from app.core.pose_catalog import group_of
     key = (pose_key or "").strip().lower()
     group = group_of(key)
     rows = [o for o in offers(actor)
             if o["enabled"] and not o["required_partner"] and o.get("pose_key")]
-
-    def nearest(row):
-        return row["distance_m"] if row["distance_m"] is not None else math.inf
-
-    exact = sorted((o for o in rows if o["pose_key"] == key), key=nearest)
+    beds = beds_for_sleep(actor) if key == SLEEP_POSE else []
+    exact = sorted((o for o in rows if o["pose_key"] == key), key=_nearest)
     alike = sorted((o for o in rows if o["pose_key"] != key and group
-                    and group_of(o["pose_key"]) == group), key=nearest)
-    return exact + alike
+                    and group_of(o["pose_key"]) == group), key=_nearest)
+    return beds + exact + alike
 
 
 def strikable_pose_keys(actor: str, keys: list[str], *, keep: str = "") -> list[str]:

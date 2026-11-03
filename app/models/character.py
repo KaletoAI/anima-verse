@@ -4747,8 +4747,17 @@ def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = 
     asleep therefore hands the place out again (``places.assign``): the
     character finds a ``lie`` place in the room, or gives up the one it held.
     Whoever sleeps lies down.
+
+    Beds are furniture, and furniture is never handed out by ``assign``: a
+    character falling asleep in a room without a free room-owned ``lie``
+    place goes to bed instead (``prop_action_engine.take_bed_to_sleep``) —
+    the flag is NOT set here then, the sleep action sets it when the figure
+    lies in the bed. Asked again while on its way (a rule tick), nothing
+    happens. Without a bed in the room it sleeps where it is.
     """
     if not character_name:
+        return
+    if value and not _prop_execution and _goes_to_bed(character_name):
         return
     if not _prop_execution:
         _interrupt_prop_action(character_name, "sleep" if value else "awake")
@@ -4795,6 +4804,24 @@ def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = 
     # -> daily entry.
     if value != was:
         _note_sleep_transition(character_name, value)
+
+
+def _goes_to_bed(character_name: str) -> bool:
+    """True when falling asleep is handed to a bed's sleep action: already
+    on its way, or one was just started. Only for an awake character whose
+    room has no free room-owned lying place. Never raises."""
+    try:
+        if is_character_sleeping(character_name):
+            return False
+        from app.core import places, prop_action_engine
+        if prop_action_engine.going_to_bed(character_name):
+            return True
+        if not places.seat_missing(character_name, "sleeping"):
+            return False
+        return prop_action_engine.take_bed_to_sleep(character_name) is not None
+    except Exception as e:  # noqa: BLE001 — sleeping in place beats not sleeping
+        logger.warning("%s: no bed taken for sleep: %s", character_name, e)
+        return False
 
 
 def set_state_flag(character_name: str, flag: str, value) -> None:
