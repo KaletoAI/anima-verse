@@ -40,7 +40,7 @@
  *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { ClipPreview } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -165,6 +165,7 @@ export function ClipLibrary({
   poses,
   onReload,
   rootDropOf,
+  focus,
 }: {
   listing: ClipListing
   /** the pose catalog entries — the "Used by" column reads their `animation` */
@@ -175,6 +176,9 @@ export function ClipLibrary({
    *  sinks the figure that far under the calibration box's top, the way the
    *  server places it. Without it the figure would rest ON the bed. */
   rootDropOf?: (group: string) => number
+  /** a kind to open right away — the pose editor's "Open in library"; a new
+   *  `seq` opens it again even when the kind is the same */
+  focus?: { kind: string; seq: number } | null
 }) {
   const { t } = useI18n()
   const [search, setSearch] = useState('')
@@ -338,6 +342,25 @@ export function ClipLibrary({
     },
     [clips, heightBusy, orientBusy, resetDials],
   )
+
+  // Opened from a pose: every filter off so the row is in the list, the kind
+  // selected and scrolled into view — once per `seq`, after the listing is in.
+  const focused = useRef(0)
+  const tableRef = useRef<HTMLTableElement | null>(null)
+  useEffect(() => {
+    if (!focus?.kind || focus.seq === focused.current || !clips.length) return
+    focused.current = focus.seq
+    setSearch('')
+    setLibFilter('')
+    setSetFilter('*')
+    setOnlyUsed(false)
+    setOnlyUnused(false)
+    pick(focus.kind)
+    requestAnimationFrame(() => {
+      tableRef.current?.querySelector(`tr[data-kind="${CSS.escape(focus.kind)}"]`)
+        ?.scrollIntoView({ block: 'center' })
+    })
+  }, [clips.length, focus, pick])
 
   /** The file the dials act on: the previewed set's clip, and for a pair its
    *  A half — the server turns the B half with it, in one Blender run. */
@@ -834,7 +857,7 @@ export function ClipLibrary({
         </div>
 
         <div style={{ overflow: 'auto', minHeight: 0, flex: 1 }}>
-          <table className="ga-sched-table">
+          <table className="ga-sched-table" ref={tableRef}>
             <thead>
               <tr>
                 <th>{t('Clip kind')}</th>
@@ -853,6 +876,7 @@ export function ClipLibrary({
               {shown.map((r) => (
                 <tr
                   key={r.kind}
+                  data-kind={r.kind}
                   onClick={() => pick(r.kind)}
                   style={{
                     cursor: 'pointer',

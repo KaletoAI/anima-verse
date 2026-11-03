@@ -238,6 +238,13 @@ export function PosesTab() {
   const [expressionSet, setExpressionSet] = useState('humanoid')
   const [pendingSet, setPendingSet] = useState<string | null>(null)
   const [view, setView] = useState<View>('entries')
+  /** the kind the Library opens with, when a pose sent us there */
+  const [libraryFocus, setLibraryFocus] = useState<{ kind: string; seq: number; pose: string } | null>(null)
+  const openInLibrary = useCallback((kind: string, pose: string) => {
+    setAxis('pose')
+    setLibraryFocus((prev) => ({ kind, pose, seq: (prev?.seq || 0) + 1 }))
+    setView('library')
+  }, [])
   const [data, setData] = useState<CatalogData>({ entries: [], kinds: [], problems: [] })
   const loadCounter = useRef(0)
   // The installed clips — the Library view lives off this, and the entry
@@ -877,8 +884,15 @@ export function PosesTab() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
+        {libraryFocus?.pose ? (
+          <div style={{ marginBottom: 8 }}>
+            <button type="button" className="ga-btn ga-btn-sm" onClick={() => setView('entries')}>
+              ← {t('Back to the pose')} <code>{libraryFocus.pose}</code>
+            </button>
+          </div>
+        ) : null}
         <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary}
-          rootDropOf={rootDropOf} />
+          rootDropOf={rootDropOf} focus={libraryFocus} />
       </div>
     )
   }
@@ -1590,6 +1604,13 @@ export function PosesTab() {
                           {approveOf ? t('Generate new') : draft.animation ? t('Regenerate') : t('Generate animation')}
                         </button>
                       ) : null}
+                      {draft.animation && data.kinds.includes(draft.animation) ? (
+                        <button type="button" className="ga-btn ga-btn-sm"
+                          title={t('Show this clip in the Library — preview, orientation, heights')}
+                          onClick={() => openInLibrary(draft.animation, draft.key)}>
+                          {t('Open in library')}
+                        </button>
+                      ) : null}
                     </Field>
                     {/* Which figure sets actually have a file for the selected
                         kind — a kind that only exists as `female` leaves every
@@ -1634,6 +1655,16 @@ export function PosesTab() {
                           </option>
                         ) : null}
                       </select>
+                      {(() => {
+                        const finale = draft.finale_animation || draft.finale_auto || ''
+                        return finale && data.kinds.includes(finale) ? (
+                          <button type="button" className="ga-btn ga-btn-sm"
+                            title={t('Show this clip in the Library — preview, orientation, heights')}
+                            onClick={() => openInLibrary(finale, draft.key)}>
+                            {t('Open in library')}
+                          </button>
+                        ) : null
+                      })()}
                     </Field>
                     <Field
                       label={t('Follow pose')}
