@@ -30,7 +30,8 @@ import { ClipCatalog } from './ClipCatalog'
 import { ClipInbox } from './ClipInbox'
 import { ClipLibrary } from './ClipLibrary'
 import { ClipTransitions } from './ClipTransitions'
-import { PoseTransitionDialog } from './PoseTransitionDialog'
+import { PoseTransitionDialog, type TransitionRequest } from './PoseTransitionDialog'
+import { TransitionMisses } from './TransitionMisses'
 import { PoseTransitionChoice, type TransitionJob } from './PoseTransitionChoice'
 import { clipCoverage, setLabel } from './clipSets'
 import type { ClipListing } from './clipSets'
@@ -267,6 +268,8 @@ export function PosesTab() {
   const [renameOpen, setRenameOpen] = useState(false)
   const [animationDialog, setAnimationDialog] = useState<PoseAnimationRequest | null>(null)
   const [transitionOpen, setTransitionOpen] = useState(false)
+  /** The suggested transition the dialog opens with (null = the defaults). */
+  const [transitionPrefill, setTransitionPrefill] = useState<Partial<TransitionRequest> | null>(null)
   const [transitionJobs, setTransitionJobs] = useState<TransitionJob[]>([])
   const [transitionChoice, setTransitionChoice] = useState<TransitionJob | null>(null)
   const [transitionRefresh, setTransitionRefresh] = useState(0)
@@ -885,7 +888,12 @@ export function PosesTab() {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
         <div style={{ padding: 8 }}>
-          <button type="button" className="ga-btn ga-btn-primary" onClick={() => setTransitionOpen(true)}>{t('Generate transition')}</button>
+          <button type="button" className="ga-btn ga-btn-primary" onClick={() => { setTransitionPrefill(null); setTransitionOpen(true) }}>{t('Generate transition')}</button>
+          <TransitionMisses refresh={transitionRefresh} onPick={(m) => {
+            setTransitionPrefill({ start_pose: m.start_pose, target_pose: m.target_pose,
+              start_role: m.start_role, target_role: m.target_role, cset: m.cset })
+            setTransitionOpen(true)
+          }} />
           {transitionError ? <p role="alert">{t('Error')}: {transitionError}</p> : null}
           {transitionJobs.map((job) => <div key={job.task_id} style={{ display: 'flex', gap: 8, padding: 6, alignItems: 'center' }}>
             <span>{job.request.start_pose} → {job.request.target_pose} · {t(job.state || job.phase || job.status)}</span>
@@ -899,7 +907,8 @@ export function PosesTab() {
           </div>)}
         </div>
         <ClipTransitions key={transitionRefresh} poses={data.entries} onSaved={() => { void loadClips() }} />
-        {transitionOpen ? <PoseTransitionDialog poses={data.entries} listing={clipList} onClose={() => setTransitionOpen(false)}
+        {transitionOpen ? <PoseTransitionDialog poses={data.entries} listing={clipList} initial={transitionPrefill ?? undefined}
+          onClose={() => setTransitionOpen(false)}
           onStarted={() => { setTransitionOpen(false); setTransitionRefresh((n) => n + 1) }} /> : null}
         {transitionChoice ? <PoseTransitionChoice key={transitionChoice.task_id} job={transitionChoice} poses={data.entries} listing={clipList}
           onClose={() => setTransitionChoice(null)} onDecided={() => {

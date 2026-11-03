@@ -673,6 +673,8 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
     except Exception as e:                                   # pragma: no cover
         logger.debug("departure bridge for %s: %s", character_name, e)
         return "", 0.0
+    from app.core.transition_misses import note_switch
+    note_switch(character_name, pose_key, "walking")
     return exit_bridge_for_pose(pose_key)
 
 
@@ -1950,7 +1952,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         logger.debug("party arrival formation failed for %s", name,
                      exc_info=True)
     try:
-        clear_pose_intent(name)   # D6: arrival = location change
+        clear_pose_intent(name, arriving=True)   # D6: arrival = location change
     except Exception:
         logger.debug("clear pose on arrival failed for %s", name, exc_info=True)
     # …and the pose the character set off to strike there, if any. A
@@ -1961,7 +1963,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         from app.core.pose_catalog import PairPoseWithoutPartner
         from app.models.character import set_pose_intent
         try:
-            set_pose_intent(name, target_pose)
+            set_pose_intent(name, target_pose, arriving=True)
         except PairPoseWithoutPartner:
             logger.info("Journey arrival [%s]: pose '%s' needs a partner — "
                         "not set", name, target_pose)

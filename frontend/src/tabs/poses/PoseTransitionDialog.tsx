@@ -13,12 +13,16 @@ export interface TransitionRequest {
   forward_m: number; left_m: number; yaw_deg: number; variants: number; backend: string
 }
 
-export function PoseTransitionDialog({ poses, listing, onClose, onStarted }: {
+/** `initial`: fields to open with instead of the defaults — a suggested
+ *  transition (`TransitionMisses`) brings its poses, roles and set. */
+export function PoseTransitionDialog({ poses, listing, onClose, onStarted, initial }: {
   poses: TransitionPose[]; listing: ClipListing; onClose: () => void; onStarted: () => void
+  initial?: Partial<TransitionRequest>
 }) {
   const { t } = useI18n()
-  const [request, setRequest] = useState<TransitionRequest>({ start_pose: 'walking', target_pose: 'sitting',
-    start_role: '', target_role: '', cset: '', start_time_s: 0, target_time_s: 0, forward_m: -0.25, left_m: 0, yaw_deg: 0, variants: 3, backend: '' })
+  const [request, setRequest] = useState<TransitionRequest>(() => ({ start_pose: 'walking', target_pose: 'sitting',
+    start_role: '', target_role: '', cset: '', start_time_s: 0, target_time_s: 0, forward_m: -0.25, left_m: 0, yaw_deg: 0, variants: 3, backend: '',
+    ...initial }))
   const [guideEnabled, setGuideEnabled] = useState(false)
   const [guide, setGuide] = useState({ kind: '', time_s: 0, forward_m: 0, left_m: 0, yaw_deg: 0 })
   const [backends, setBackends] = useState<Array<{ name: string; available: boolean }>>([])

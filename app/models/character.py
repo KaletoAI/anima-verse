@@ -2189,7 +2189,7 @@ def get_character_pose_flavor(character_name: str) -> str:
 
 
 def set_pose_intent(character_name: str, pose: str, prefer: str = "",
-                    flavor: Optional[str] = None) -> bool:
+                    flavor: Optional[str] = None, *, arriving: bool = False) -> bool:
     """Canonical setter for 'character does X now'. Resolves the free text to
     a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets.
 
@@ -2222,6 +2222,9 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     key (catalog ``participants`` >= 2) and no running interaction names that key:
     such a pose on a single profile is an invalid state, and the caller is
     meant to redirect to the pair verb instead of writing it.
+
+    ``arriving``: the pose a journey's arrival strikes — the figure comes
+    out of walking, not out of the pose it held (``transition_misses``).
 
     Returns False when nothing was written for lack of a place (or without a
     name), True otherwise."""
@@ -2277,6 +2280,8 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     _interrupt_prop_action(character_name, "pose")
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
     old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
+    old_pose_key = ("walking" if arriving
+                    else get_effective_pose_key(character_name, profile=profile) or "standing")
     inter = profile.get("interaction")
     if isinstance(inter, dict) and inter.get("pose_key") != key:
         if prefer and key:
@@ -2318,6 +2323,9 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
             profile["pose_key"] = key
             profile["pose_flavor"] = flavor
             stored = save_character_profile(character_name, profile)
+        if stored:
+            from app.core.transition_misses import note_switch
+            note_switch(character_name, old_pose_key, key or "standing", profile=profile)
     _publish_activity_changed(character_name, flavor or key, old_display, key,
                               place, old_place, stored=stored)
     return True
@@ -2394,8 +2402,12 @@ def _seat_for_pose(character_name: str, key: str, prefer: str = "") -> Optional[
         return None
 
 
-def clear_pose_intent(character_name: str) -> None:
+def clear_pose_intent(character_name: str, *, arriving: bool = False) -> None:
     """Clears the pose (e.g. after a location/room change — it goes stale).
+
+    ``arriving``: a journey's arrival clears it — the figure left the pose
+    when it set off (``travel_engine.departure_bridge``), so standing up is
+    not a switch the clients play (``transition_misses``).
 
     Giving up a PLACE means standing up, and where the character stands then is
     the server's word since T4: ``room_stand.stand_up`` puts it on the free
@@ -2429,6 +2441,9 @@ def clear_pose_intent(character_name: str) -> None:
             profile["pose_flavor"] = ""
             profile["place"] = None          # the character stands up (§ 3.5)
             stored = save_character_profile(character_name, profile)
+    if changed and stored and old_pose_key and not arriving:
+        from app.core.transition_misses import note_switch
+        note_switch(character_name, old_pose_key, "standing", profile=profile)
     if changed:
         if old_place:
             # The seat and the pose it was held for: the pose's exit clip may

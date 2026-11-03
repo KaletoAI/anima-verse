@@ -513,6 +513,34 @@ async def transition_backends(_: Dict[str, Any] = Depends(require_admin)):
     return {"backends": await asyncio.to_thread(get_image_service().transition_backends)}
 
 
+@router.get("/transition-misses")
+async def transition_misses(_: Dict[str, Any] = Depends(require_admin)):
+    """The switches avatars and their partners made without a bridge clip
+    (``transition_misses.suggestions``) — the dialog's prefill per row."""
+    import asyncio
+    from app.core import transition_misses as misses
+    return {"misses": await asyncio.to_thread(misses.suggestions)}
+
+
+@router.post("/transition-misses/dismiss")
+async def dismiss_transition_miss(request: Request, _: Dict[str, Any] = Depends(require_admin)):
+    """Body ``{start_pose, target_pose, start_role?, target_role?, cset?}``:
+    hides that suggestion for good; 404 when there is none."""
+    import asyncio
+    from app.core import transition_misses as misses
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "invalid JSON body") from exc
+    fields = ("start_pose", "target_pose", "start_role", "target_role", "cset")
+    if (not isinstance(body, dict) or not body.get("start_pose") or not body.get("target_pose")
+            or any(not isinstance(body.get(f, ""), str) for f in fields)):
+        raise HTTPException(400, "start_pose and target_pose (strings) required")
+    if not await asyncio.to_thread(misses.dismiss, *(body.get(f, "") for f in fields)):
+        raise HTTPException(404, "no such suggestion")
+    return {"ok": True}
+
+
 @router.get("/transition-jobs/affected-rule")
 async def transition_affected_rule(start: str, target: str, start_role: str = '', target_role: str = '',
                                    _: Dict[str, Any] = Depends(require_admin)):

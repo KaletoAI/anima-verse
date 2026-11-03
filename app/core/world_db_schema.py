@@ -815,6 +815,25 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (day, point, endpoint, question)
     )""",
 
+    # ── Missing transition clips (app/core/transition_misses.py) ────────────
+    # One row per start pose × target pose × clip roles × animation set that
+    # an avatar (or someone in an interaction with one) switched between
+    # without a bridge clip. The Poses tab suggests them; dismissed = hidden.
+    """CREATE TABLE IF NOT EXISTS transition_misses (
+        start_pose   TEXT NOT NULL,
+        target_pose  TEXT NOT NULL,
+        start_role   TEXT NOT NULL DEFAULT '',
+        target_role  TEXT NOT NULL DEFAULT '',
+        cset         TEXT NOT NULL DEFAULT '',
+        count        INTEGER NOT NULL DEFAULT 0,
+        first_seen   TEXT NOT NULL,
+        last_seen    TEXT NOT NULL,
+        last_game_ts TEXT NOT NULL DEFAULT '',
+        names        TEXT NOT NULL DEFAULT '[]',
+        dismissed    INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (start_pose, target_pose, start_role, target_role, cset)
+    )""",
+
     # ── Party system (travelling together) ───────────────────────────────────
     # A party has one leader and N followers (JSON list). Only the leader
     # moves independently; followers move along (save_character_current_*).
