@@ -111,6 +111,12 @@ export function HouseBuildPanel({ base, prepareBase, onBuilt, onChanged }: {
         <Field label={t('Units')}><SliderInput value={spec.units} min={1} max={Math.min(8, Math.max(1, Math.floor((status.footprint_m?.[0] ?? 20) / 2.5)))} onChange={units => setSpec({ ...spec, units })} /></Field>
       </div>
       <SurfaceKindSelect label="Wall material" value={spec.wall} kinds={status.wall_kinds} emptyLabel="Style default" onChange={wall => setSpec({ ...spec, wall })} labelWidth={120} />
+      <SurfaceKindSelect label="Roof material" value={overrides.materials?.roof ?? ''} kinds={status.wall_kinds} emptyLabel="Style default" labelWidth={120} onChange={roof => {
+        const materials = { ...overrides.materials }
+        if (roof) materials.roof = roof
+        else delete materials.roof
+        patch({ materials: Object.keys(materials).length ? materials : undefined })
+      }} />
       <Field label={t('Door style')}><select aria-label={t('Door style')} className="ga-input" value={spec.door.style} onChange={e => setSpec({ ...spec, door: { ...spec.door, style: e.target.value } })}>
         <option value="">{t('Style default')}</option>{status.door_styles.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select></Field>
