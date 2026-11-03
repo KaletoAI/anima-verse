@@ -21,6 +21,11 @@ const routingSource = readFileSync('static/admin/settings-routing.js', 'utf8');
 const stored = new Map();
 const ctx = vm.createContext({console, localStorage: {getItem:k=>stored.get(k) || null, setItem:(k,v)=>stored.set(k,v)}});
 vm.runInContext(routingSource, ctx);
+// _itemLabel lives in settings.js, which the real page loads alongside.
+vm.runInContext(`function _itemLabel(item, labelField, fallback) {
+  for (const f of (Array.isArray(labelField) ? labelField : [labelField])) {
+    const v = item[f]; if (v !== undefined && v !== null && String(v).trim() !== '') return String(v); }
+  return String(fallback || ''); }`, ctx);
 vm.runInContext(`
 let messages = [];
 let CONFIG = {llm_routing: [{provider:'p',model:'old',tasks:[{task:'a',order:7}]}, {provider:'p',model:'new',tasks:[{task:'b',order:1}]}]};
@@ -131,11 +136,7 @@ console.log('PASS combobox filter, keyboard and click selection, free text, blur
 // [0 Venice/zeta, 1 DX10-02/beta(name), 2 DX10-02/alpha(model only),
 //  3 venice/Alpha] is 2 (DX10-02 alpha), 1 (DX10-02 beta), 3 (venice Alpha), 0 (Venice zeta);
 // case-insensitive, so venice/Venice sort as one provider.
-read(`function _itemLabel(item, labelField, fallback) {
-  for (const f of (Array.isArray(labelField) ? labelField : [labelField])) {
-    const v = item[f]; if (v !== undefined && v !== null && String(v).trim() !== '') return String(v); }
-  return String(fallback || ''); }
-OPEN_ITEMS = new Set(); rtProviderOff = () => false; rtPoolHeadText = () => ''; renderFields = () => '';`);
+read(`OPEN_ITEMS = new Set(); rtProviderOff = () => false; rtPoolHeadText = () => ''; renderFields = () => '';`);
 const llms = "[{provider:'Venice',model:'zeta'},{provider:'DX10-02',model:'x',name:'beta'},{provider:'DX10-02',model:'alpha'},{provider:'venice',model:'Alpha'}]";
 assert.deepEqual(JSON.parse(read(`JSON.stringify(rtLlmsOrder(${llms}, {item_label_field:['name','model']}))`)), [2, 1, 3, 0]);
 assert.match(read(`rtRenderEntryItem({item_label_field:['name','model']}, {}, {provider:'DX10-02',model:'x',name:'beta'}, 'llm_routing[1]', 1)`),
@@ -162,3 +163,12 @@ assert.match(modelElements.modelsBody.children[0].innerHTML, /2 refusals \/ 48h/
 assert.match(modelElements.modelsBody.children[0].innerHTML, /&lt;M&gt;/);
 assert.doesNotMatch(modelElements.modelsBody.children[0].innerHTML, /<M>/);
 console.log('PASS model and Tasks-page refusal badges and escaping');
+// Tasks page "Assign LLM" dropdown: same order as the LLMs page and the
+// provider first — options for [0 Venice/zeta, 1 DX10-02 beta(name), 2 DX10-02
+// alpha] read "DX10-02 · alpha", "DX10-02 · beta", "Venice · zeta"; an
+// excluded index (1) is left out.
+read(`CONFIG = {llm_routing: [{provider:'Venice',model:'zeta'},{provider:'DX10-02',model:'x',name:'beta'},{provider:'DX10-02',model:'alpha'}]};`);
+const opts = s => [...s.matchAll(/<option value="(\d+)">([^<]*)<\/option>/g)].map(m => m[1] + ':' + m[2]);
+assert.deepEqual(opts(read("rtEntrySelect('x', 'Assign', false)")), ['2:DX10-02 · alpha', '1:DX10-02 · beta', '0:Venice · zeta']);
+assert.deepEqual(opts(read("rtEntrySelect('x', 'Assign', false, new Set([1]))")), ['2:DX10-02 · alpha', '0:Venice · zeta']);
+console.log('PASS assign dropdown sorted by provider then name, provider first');

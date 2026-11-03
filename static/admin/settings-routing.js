@@ -263,7 +263,7 @@ function rtFmt(tpl, vars) {
 // How one LLM entry is named everywhere on this page (chain rows, dropdowns).
 function rtEntryLabel(entry, idx) {
     const e = entry || {};
-    return (e.name || e.model || ('#' + (idx + 1))) + ' · ' + (e.provider || '?');
+    return (e.provider || '?') + ' · ' + (e.name || e.model || ('#' + (idx + 1)));
 }
 
 function rtRouting() {
@@ -616,7 +616,9 @@ function rtEntrySelect(onchangeJs, placeholder, withNew, excludeIdx) {
     const routing = rtRouting();
     let html = '<select onchange="' + onchangeJs + '" style="background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:4px 6px; border-radius:4px; font-size:12px;">';
     html += '<option value="">' + esc(placeholder) + '</option>';
-    routing.forEach((e, i) => {
+    // Same order as the LLMs page: provider, then LLM name.
+    rtLlmsOrder(routing, { item_label_field: ['name', 'model'] }).forEach(i => {
+        const e = routing[i];
         if (excludeIdx && excludeIdx.has(i)) return;
         html += '<option value="' + i + '">' + esc(rtEntryLabel(e, i)) + (e && e.enabled === false ? ' ' + esc(RT_TEXT.entryDisabled) : '') + '</option>';
     });
