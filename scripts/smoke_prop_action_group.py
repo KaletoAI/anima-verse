@@ -75,7 +75,9 @@ from unittest.mock import patch
 import smoke_prop_action_runs as S
 from smoke_prop_action_runs import A, F, R, tick
 from smoke_prop_action_runs import clips, pose_catalog
-from app.core import hooks
+# Use the shared fixture's private world for the direct app imports below.
+F.paths.init(F.ROOT / "world")
+from app.core import hooks                                              # noqa: E402
 
 
 def authored_trio(genders=None, role_gender=None):

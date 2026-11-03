@@ -16,10 +16,15 @@ import json
 import math
 from pathlib import Path
 import sys
+import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+# _rotate is pure, but its module reaches the world DB: point storage at a
+# throwaway directory before importing it (smoke_scripts_storage_lint).
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="smoke_group_role_points_"))
 from app.core.interaction_engine import _rotate  # noqa: E402
 
 
