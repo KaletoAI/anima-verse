@@ -145,6 +145,22 @@ def _with_motion(actor, result):
     return dict(result, motion=engine.motion_for(actor, run))
 
 
+class CheckRequest(Input):
+    target: Target
+    action_id: StrictStr
+    revision: StrictStr
+    members: list[StrictStr] = []
+
+
+@router.post("/play/prop-actions/check")
+def check(body: CheckRequest, user=Depends(get_current_user)):
+    """Read-only preflight of one exact choice — the people a group action
+    was offered with ``candidates`` (G4); ``{enabled, reason}``, no claim,
+    no run."""
+    return engine.check(_avatar(user), body.target.model_dump(), body.action_id, body.revision,
+                        body.members, offer=True)
+
+
 @router.post("/play/prop-actions/respond")
 def respond(body: ResponseRequest, user=Depends(get_current_user)):
     actor = _avatar(user)

@@ -117,9 +117,10 @@ export interface HudGameActions {
   infoAction?: (id: string, kind: 'zoom' | 'lookInside' | 'closeView') => void;
   closeInfo?: () => void;
   closeOpenView?: () => void;
-  /** `consent` (pair actions): "ask" the partner first, or "react" — start at once. */
+  /** `consent` (pair actions): "ask" the partner first, or "react" — start at once.
+   *  `members`: the people picked for a group action (`partner` unset then). */
   pickPropAction?: (actionId: string, target: PropActionTarget, revision: string, partner?: string,
-                    consent?: PropActionConsent) => void | Promise<void>;
+                    consent?: PropActionConsent, members?: string[]) => void | Promise<void>;
   pickRoomPose?: (placeId: string, poseKey: string) => void | Promise<void>;
   closePlaceMenu?: () => void;
   respondPropAction?: (executionId: string, accept: boolean) => void | Promise<void>;

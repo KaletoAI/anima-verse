@@ -37,6 +37,14 @@ c slot 2. Hand-derived from ``prop_action_engine`` / ``interaction_engine``:
   [8] A wrong number of invitees (only B for a trio) -> "invalid_partner";
       "react" with two invitees -> "invalid_consent"; an invitee named
       twice -> "invalid_partner".
+  [10] The OFFER of the trio (G4) to A, with B and C awake in the room:
+      one row, participants 3, required_partner, candidates [B, C] (the
+      people A can pick), enabled, no per-partner targets. It is not in the
+      LLM's requestable list and a named request for it answers
+      "no_such_offer" (only the player starts a group). The preflight of the
+      exact choice [B, C] is enabled; [B] alone "invalid_partner"; the player
+      route ``POST /play/prop-actions/check`` answers the same. C asleep:
+      candidates [B], the row disabled "partners_missing".
   [9] Migration: a table with the old ``partner`` column, one open pair
       invitation (A -> B, plans/access keyed actor/partner) and one solo
       row: members [B] / [], plans and access re-keyed to A / B, consents
@@ -47,6 +55,7 @@ import json
 import sqlite3
 import sys
 import unittest
+from unittest.mock import patch
 
 import smoke_prop_action_runs as S
 from smoke_prop_action_runs import A, F, R, tick
@@ -182,6 +191,34 @@ class Group(unittest.TestCase):
         self.assertEqual(S.request(a, target, members=[b])["reason"], "invalid_partner")
         self.assertEqual(S.request(a, target, members=[b, c], consent="react")["reason"], "invalid_consent")
         self.assertEqual(S.request(a, target, members=[b, b])["reason"], "invalid_partner")
+
+    def test_10_the_group_offer(self):
+        (a, b, c), target = authored_trio()
+        from app.core import prop_actions as P
+        from app.routes import prop_actions as routes
+        print("[10] the trio is offered with its candidates, to the player only")
+        rows = [o for o in P.offers(a) if o["action_id"] == target["action_id"]]
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual((row["participants"], row["required_partner"], row["candidates"], row["enabled"],
+                          row["available_targets"]), (3, True, [b, c], True, []), row)
+        self.assertFalse([o for o in P._requestable(a) if o["label"] == row["label"]])
+        self.assertEqual(P._named_request(a, dict(furniture=row["prop_label"], action=row["label"],
+                                                  partner=b))["reason"], "no_such_offer")
+        exact = {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")}
+        self.assertEqual(A.check(a, exact, target["action_id"], target["definition_revision"], [b, c],
+                                 offer=True), dict(enabled=True, reason=""))
+        self.assertEqual(A.check(a, exact, target["action_id"], target["definition_revision"], [b],
+                                 offer=True)["reason"], "invalid_partner")
+        body = routes.CheckRequest(target=exact, action_id=target["action_id"],
+                                   revision=target["definition_revision"], members=[b, c])
+        with patch.object(routes, "_avatar", return_value=a):
+            self.assertEqual(routes.check(body, user={}), dict(enabled=True, reason=""))
+        profile = F.C.get_character_profile(c)
+        profile["is_sleeping"] = True
+        F.C.save_character_profile(c, profile)
+        row = next(o for o in P.offers(a) if o["action_id"] == target["action_id"])
+        self.assertEqual((row["candidates"], row["enabled"], row["reason"]), ([b], False, "partners_missing"))
 
 
 def test_9_migration():

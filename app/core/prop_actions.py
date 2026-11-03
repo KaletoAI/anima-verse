@@ -430,10 +430,7 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             if (target["placement_id"], action.get("id")) not in bound:
                 continue
             pair = action.get("participants") == 2
-            if (action.get("participants") or 1) > 2:
-                # A group action needs a choice of several people, which no
-                # offer carries yet (plan-gruppen-animationen.md G4).
-                continue
+            group = (action.get("participants") or 1) > 2
             # Not meant for this figure (no clip for its pose): not offered
             # at all, rather than shown and played as the group's fallback.
             if (not pair and action.get("ability") != "pair"
@@ -446,8 +443,18 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                         "prop_action", key, [actor], location_id, room_id)
                 if not actor_offered[key]:
                     continue
-            targets = []
-            if pair:
+            targets, candidates = [], []
+            if group:
+                # A group (plan-gruppen-animationen.md G4): the player picks
+                # the people from ``candidates``; whether that very choice
+                # fits is the preflight ``check`` with all of them — a verdict
+                # per combination would cost a plan per subset.
+                key = str(action.get("pose_key") or "") if action.get("presence") == "policy" else None
+                candidates = [n for n in present if _group_candidate(n, key, location_id, room_id, query)]
+                need = action["participants"] - 1
+                checked = (dict(enabled=True, reason="") if len(candidates) >= need
+                           else dict(enabled=False, reason="partners_missing"))
+            elif pair:
                 for partner in present:
                     checked = engine.check(actor, target, action["id"], revision, [partner], _query=query,
                                            offer=True)
@@ -468,8 +475,11 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                            if target["placement_id"] in distance else None),
                                target=target, label=localized(action, "name", lang) or action["name"],
                                description=localized(action, "description", lang) or action.get("description", ""),
-                               enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
-                               available_targets=targets, effects=action.get("effects", []),
+                               enabled=checked["enabled"], reason=checked["reason"],
+                               required_partner=pair or group, available_targets=targets,
+                               participants=action.get("participants") or 1,
+                               **({"candidates": candidates} if group else {}),
+                               effects=action.get("effects", []),
                                ability=action.get("ability") or "",
                                # The body pose the action holds (ability "pose" only).
                                pose_key=(action.get("pose_key") or "") if action.get("ability") == "pose" else "",
@@ -490,6 +500,19 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                 while len(_offers_cache) > 128:
                     _offers_cache.popitem(last=False)
     return result
+
+
+def _group_candidate(name: str, pose_key, location_id: str, room_id: str, query) -> bool:
+    """Whether ``name`` (in the actor's room) can be picked for a group
+    action: a person, awake, and — for a "policy" action (``pose_key`` not
+    None) — not ruled out by a package for this pose (``participation.
+    NOT_OFFERED``). Busy people stay pickable: the preflight names that."""
+    from app.core import participation
+    from app.core.model_refs import is_humanoid
+    profile = query.profile(name)
+    if profile.get("is_sleeping") or not is_humanoid(name, profile=profile):
+        return False
+    return pose_key is None or participation.offered("prop_action", pose_key, [name], location_id, room_id)
 
 
 #: The pose key an asleep figure plays (``get_effective_pose_key``).
@@ -555,6 +578,10 @@ def _requestable(actor: str) -> list:
     call. The player panel still shows them with their reason."""
     rows = []
     for offer in offers(actor):
+        if offer.get("participants", 1) > 2:
+            # Groups start only from the player's own menu (plan
+            # gruppen-animationen, decision 3) — no LLM is offered one.
+            continue
         if offer["required_partner"]:
             partners = [t["partner"] for t in offer["available_targets"] if t["enabled"]]
             if not partners:
@@ -684,7 +711,7 @@ def _named_request(actor: str, payload: dict) -> dict:
     partner = str(payload.get("partner") or "").strip()
     rows = [o for o in offers(actor)
             if (o["prop_label"] or "Furniture").strip().lower() == furniture
-            and o["label"].strip().lower() == action]
+            and o["label"].strip().lower() == action and o.get("participants", 1) <= 2]
     if not rows:
         return refused("no_such_offer", available=_piece_lines(_requestable(actor)))
 

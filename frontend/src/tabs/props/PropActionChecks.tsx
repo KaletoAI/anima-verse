@@ -81,7 +81,7 @@ export function PropActionChecks({ workspace, onIssue }: {
   const [roomId, setRoomId] = useState('')
   const [placementId, setPlacementId] = useState('')
   const [actor, setActor] = useState('')
-  const [partner, setPartner] = useState('')
+  const [partners, setPartners] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [roomError, setRoomError] = useState<CheckError | null>(null)
@@ -95,12 +95,14 @@ export function PropActionChecks({ workspace, onIssue }: {
   const room = targets?.rooms.find((entry) => entry.id === roomId)
   const placement = room?.placements.find((entry) => entry.target.placement_id === placementId)
   const savedAction = prop.actions.find((entry) => entry.id === selectedActionId)
-  const pair = savedAction?.participants === 2
+  // Everyone but the actor: one partner for a pair, up to four for a group.
+  const need = Math.max(0, (savedAction?.participants ?? 1) - 1)
+  const awake = (name: string) => room?.persons.some((person) => person.name === name && !person.sleeping && name !== actor)
   const actorPresent = room?.persons.some((person) => person.name === actor && !person.sleeping)
-  const partnerPresent = !pair || room?.persons.some((person) => person.name === partner && !person.sleeping && person.name !== actor)
+  const partnerPresent = partners.length === need && partners.every(awake)
   const request: PropPlacementCheckRequest | null = placement && savedAction && actorPresent && partnerPresent
     ? { target: placement.target, action_id: savedAction.id, revision: targets!.revision,
-      actor, members: pair ? [partner] : [] } : null
+      actor, members: partners } : null
   const requestKey = request ? JSON.stringify(request) : ''
   const savedReady = !dirtyCount && !saving && revisionReady && targets?.revision === prop.revision
   const missing = dirtyCount || saving ? 'Missing: save or discard the draft'
@@ -112,7 +114,7 @@ export function PropActionChecks({ workspace, onIssue }: {
               : !placement ? 'Missing: choose a placement'
                 : !savedAction ? 'Missing: choose a saved action'
                   : !actorPresent ? 'Missing: choose a person in the room'
-                    : !partnerPresent ? 'Missing: choose an available partner in the room'
+                    : !partnerPresent ? (need > 1 ? 'Missing: choose the other participants in the room' : 'Missing: choose an available partner in the room')
                       : !savedReady ? 'Missing: refresh the saved placement and revision' : ''
   const canCheck = !!request && savedReady && !loading && !busy
   const validating = !!validation && isCurrentPropConfigurationRequest(validation, configurationRequest.current)
@@ -124,7 +126,7 @@ export function PropActionChecks({ workspace, onIssue }: {
   useEffect(() => {
     sourceRequest.current += 1
     setLocations([]); setLocationsLoaded(false); setLocationId(''); setTargets(null)
-    setRoomId(''); setPlacementId(''); setActor(''); setPartner('')
+    setRoomId(''); setPlacementId(''); setActor(''); setPartners([])
     setConfiguration(null); setConfigurationError(null); setRoomError(null)
     setPlacementResult(null); setLoading(false)
   }, [prop.id])
@@ -179,7 +181,7 @@ export function PropActionChecks({ workspace, onIssue }: {
   async function loadTargets(id: string) {
     const token = ++sourceRequest.current
     setLocationId(id); setTargets(null); setRoomId(''); setPlacementId('')
-    setActor(''); setPartner(''); setRoomError(null)
+    setActor(''); setPartners([]); setRoomError(null)
     if (!id) { setLoading(false); return }
     setLoading(true)
     try {
@@ -247,7 +249,7 @@ export function PropActionChecks({ workspace, onIssue }: {
     {targets && targets.rooms.length > 0 && <>
       <Field label={t('Actual room')}>
         <select aria-label={t('Actual room')} className="ga-input" value={roomId} disabled={busy || loading}
-          onChange={(event) => { setRoomId(event.target.value); setPlacementId(''); setActor(''); setPartner('') }}>
+          onChange={(event) => { setRoomId(event.target.value); setPlacementId(''); setActor(''); setPartners([]) }}>
           <option value="">{t('Choose a room')}</option>
           {targets.rooms.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select>
@@ -267,7 +269,7 @@ export function PropActionChecks({ workspace, onIssue }: {
         </Field>
         <Field label={t('Actor in the room')}>
           <select aria-label={t('Actor in the room')} className="ga-input" value={actor} disabled={busy || loading}
-            onChange={(event) => { setActor(event.target.value); setPartner('') }}>
+            onChange={(event) => { setActor(event.target.value); setPartners([]) }}>
             <option value="">{t('Choose a person')}</option>
             {room.persons.map((person) => <option key={person.name} value={person.name} disabled={person.sleeping}>
               {person.name}{person.sleeping ? ` · ${t('sleeping; counts as present')}` : ''}
@@ -275,14 +277,26 @@ export function PropActionChecks({ workspace, onIssue }: {
           </select>
         </Field>
         {!room.persons.length && <p>{t('There are no people in this room. This check does not create or move test people.')}</p>}
-        {pair && <Field label={t('Partner in the room')}>
-          <select aria-label={t('Partner in the room')} className="ga-input" value={partner} disabled={busy || loading}
-            onChange={(event) => { setPartner(event.target.value) }}>
+        {need === 1 && <Field label={t('Partner in the room')}>
+          <select aria-label={t('Partner in the room')} className="ga-input" value={partners[0] ?? ''} disabled={busy || loading}
+            onChange={(event) => { setPartners(event.target.value ? [event.target.value] : []) }}>
             <option value="">{t('Choose a partner')}</option>
             {room.persons.filter((person) => person.name !== actor).map((person) => <option key={person.name} value={person.name} disabled={person.sleeping}>
               {person.name}{person.sleeping ? ` · ${t('sleeping; unavailable')}` : ''}
             </option>)}
           </select>
+        </Field>}
+        {need > 1 && <Field label={`${t('Other participants in the room')} (${partners.length}/${need})`}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {room.persons.filter((person) => person.name !== actor).map((person) => {
+              const on = partners.includes(person.name)
+              return <label key={person.name}>
+                <input type="checkbox" checked={on} disabled={busy || loading || person.sleeping || (!on && partners.length >= need)}
+                  onChange={() => setPartners((list) => on ? list.filter((name) => name !== person.name) : [...list, person.name])} />
+                {' '}{person.name}{person.sleeping ? ` · ${t('sleeping; unavailable')}` : ''}
+              </label>
+            })}
+          </div>
         </Field>}
       </>}
     </>}

@@ -3,6 +3,8 @@ const REASONS: Record<string, string> = {
   incompatible_prop_dependency: "The furniture setup does not support this action",
   invalid_support_chain: "This furniture needs a stable support",
   partner_required: "Needs a partner",
+  partners_missing: "Not enough people here for this action",
+  roles_unfit: "The people chosen do not fit this action's roles",
   start_not_walkable: "Step away from the furniture first",
   no_free_slot: "No free place",
   slot_occupied: "This place is occupied",

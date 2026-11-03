@@ -22,6 +22,14 @@
  *    action chips, no partner chip: partner Mia → "Cuddle ▸", "Dance ▸".
  *    In a place menu (nameProps false), solo chips have no piece hover text
  *    and a one-piece pair row offers just "Ask" and "Just do it".
+ * e. A GROUP action (G4, plan-gruppen-animationen.md): "Trio" for three on the
+ *    bed (2.5 m), candidates Mia, Ben, Ola. The top row gains "Trio ▸"; it
+ *    opens "Trio · choose 2:" with one chip per candidate and ✕, no Ask yet.
+ *    Mia and Ben picked: Ola is disabled, Core's preflight is asked once with
+ *    [Mia, Ben]; once it answers enabled the row offers "Bed · 2.5 m · Ask",
+ *    which picks the bed with members [Mia, Ben] and consent "ask". A
+ *    preflight refusal (roles_unfit) leaves "Ask" disabled with that reason.
+ *    A partner's own menu shows no group action.
  * Design: 976efe70 (compact rows), a1c5af11 (per-request consent choices).
  */
 import assert from 'node:assert/strict';
@@ -39,16 +47,25 @@ let states = [], cursor = 0;
 const useState = initial => {
   const i = cursor++;
   if (!(i in states)) states[i] = initial;
-  return [states[i], value => { states[i] = value }];
+  return [states[i], value => { states[i] = typeof value === 'function' ? value(states[i]) : value }];
 };
+// An effect runs when its deps changed since the last render at that position.
+let effects = [];
+const useEffect = (fn, deps) => {
+  const i = cursor++;
+  const key = JSON.stringify(deps);
+  if (effects[i] !== key) { effects[i] = key; fn() }
+};
+let checks = [], verdict = { enabled: true, reason: '' };
+const checkPropAction = (...args) => { checks.push(args); return Promise.resolve(verdict) };
 runInNewContext(ts.transpileModule(source, { compilerOptions: {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } }).outputText, { module, exports: module.exports, require: id => ({
-  react: { useState },
+  react: { useState, useEffect },
   'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
   './api': {}, './HoverHint': { HoverHint }, './I18nProvider': { useI18n: () => ({ t: text => text }) },
   './propActionReasons': { propActionReason: reason => `reason:${reason}` },
-  './usePropActions': {}, './propActions': {},
+  './usePropActions': {}, './propActions': { checkPropAction },
 })[id] ?? (() => { throw new Error(`Unexpected import ${id}`) })() });
 const { PropActionOffers } = module.exports;
 
@@ -158,3 +175,48 @@ const placePair = { offers: [offers[5]], partner: 'Mia', nameProps: false };
 click(render(placePair), 'Dance ▸');
 assert.deepEqual(rows(render(placePair))[1][1].map(b => b[0]), ['Ask', 'Just do it', '✕']);
 console.log('PASS d: a partner\'s own menu lists that partner\'s actions; the place menu names no piece');
+
+// e. a group action: pick the people, then ask them on a piece
+const trio = offer('Trio', 'Bed', 'g', 2.5, { participants: 3, required_partner: true, candidates: ['Mia', 'Ben', 'Ola'] });
+const groupOffers = [offer('Read', 'Armchair', 'd', 2.0), trio];
+const groupPicks = [];
+states = []; effects = [];
+const renderGroup = (props = {}) => {
+  cursor = 0;
+  const tree = PropActionOffers({ offers: groupOffers, onPick: (o, p, consent, members) => groupPicks.push([o.placement_id, p, consent, members]), ...props });
+  const picker = nodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'GroupPicker');
+  return { tree, picker: picker ? picker.type(picker.props) : null };
+};
+const pickerRow = picker => rows({ props: { children: [picker] } })[0];
+let view = renderGroup();
+assert.deepEqual(rows(view.tree)[0][1].map(b => b[0]), ['Read', 'Trio ▸']);
+assert.equal(view.picker, null);
+click(view.tree, 'Trio ▸');
+view = renderGroup();
+let [label, buttons] = pickerRow(view.picker);
+assert.equal(label, 'Trio · choose 2:');
+assert.deepEqual(buttons.map(b => [b[0], b[1]]), [['Mia', false], ['Ben', false], ['Ola', false], ['✕', false]]);
+buttons[0][3].props.onClick(); view = renderGroup();
+pickerRow(view.picker)[1][1][3].props.onClick(); view = renderGroup();
+// Arrays made inside the vm context: compared as JSON.
+assert.equal(JSON.stringify(checks.map(c => c[3])), JSON.stringify([['Mia', 'Ben']]));
+await Promise.resolve(); await Promise.resolve();
+view = renderGroup();
+[label, buttons] = pickerRow(view.picker);
+assert.deepEqual(buttons.map(b => [b[0], b[1]]), [['Mia', false], ['Ben', false], ['Ola', true],
+  ['Bed · 2.5 m · Ask', false], ['✕', false]]);
+buttons[3][3].props.onClick();
+assert.equal(JSON.stringify(groupPicks), JSON.stringify([['g', undefined, 'ask', ['Mia', 'Ben']]]));
+states = []; effects = []; checks = []; verdict = { enabled: false, reason: 'roles_unfit' };
+click(renderGroup().tree, 'Trio ▸');
+view = renderGroup();
+pickerRow(view.picker)[1][1][3].props.onClick(); view = renderGroup();
+pickerRow(view.picker)[1][2][3].props.onClick(); view = renderGroup();
+await Promise.resolve(); await Promise.resolve();
+buttons = pickerRow(renderGroup().picker)[1];
+assert.deepEqual(buttons.map(b => [b[0], b[1], b[2]]).slice(3), [
+  ['Bed · 2.5 m · Ask', true, 'reason:roles_unfit'], ['✕', false, undefined]]);
+assert.equal(checks.length, 1);
+states = []; effects = [];
+assert.deepEqual(rows(renderGroup({ partner: 'Mia' }).tree)[0][1].map(b => b[0]), []);
+console.log('PASS e: a group action picks its people, waits for the preflight, then asks them');

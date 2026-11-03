@@ -2813,7 +2813,7 @@ leere `poses`-Liste; dies ist kein alternatives Möbel-Aktionsangebot.
 Definitionsrevision, Aktion, Partnerauswahl und aktuelle Sperrgründe. Der
 Klick auf ein Prop-Mesh öffnet dieses Aktionsmenü, nicht eine aus der
 Markergruppe abgeleitete Posenliste. Gesperrte Angebote bleiben mit Grund
-sichtbar. `pickPropAction(actionId,target,revision,partner?)` fordert den
+sichtbar. `pickPropAction(actionId,target,revision,partner?,consent?,members?)` fordert den
 normalen Core-Executor an; eine erfolgreiche Anfrage bedeutet gegebenenfalls
 eine offene Zustimmung oder Anlauf, **nicht** sofortige Platznahme.
 Raum-Marker verwenden getrennt `pickRoomPose(placeId,poseKey)`.
@@ -8267,7 +8267,14 @@ no offer, 2026-10-31), including blocked ones. Each row includes `action_id`, `d
 `distance_m` (metres from the actor to the piece's nearest place, one decimal; `null`
 without an actor position — the player panel lists an action once and lets the player
 pick among the pieces offering it, nearest first), `label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
-(per-partner `{partner,enabled,reason}`), `ability` (`pose`/`combined`/`pair`/`sleep`/…) and declared `effects`. Checks cover every
+(per-partner `{partner,enabled,reason}`), `ability` (`pose`/`combined`/`pair`/`sleep`/…), `participants`
+(the head count, actor included) and declared `effects`. A GROUP action (`participants` 3..5, G4 of
+plan-gruppen-animationen.md) is offered once per piece with `required_partner` true, no
+`available_targets` and `candidates` — the people in the room the player may pick (awake persons, minus
+those a package rules out for a "policy" action; busy ones stay pickable). `enabled` only says whether
+there are enough of them (else `partners_missing`); one exact choice is judged by
+`POST /play/prop-actions/check`. Group actions are never offered to an LLM (`_requestable`, the named
+`PropAction` request answers `no_such_offer`): only the player starts a group. Checks cover every
 present person, awake/exact partners, effective requirements, exclusive claims,
 current revision/variant/bindings/capability, real collision route and measured
 entry asset. They do not reserve, start, wake, change profiles or queue media.
@@ -8279,6 +8286,8 @@ therefore leave furniture actions visibly blocked.
 Player routes require the authenticated user's current authorized avatar:
 
 - `GET /play/prop-actions` returns offers; body/query actor cannot select a figure.
+- `POST /play/prop-actions/check`: `{target,action_id,revision,members}` → `{enabled,reason}` — the
+  read-only preflight of one exact choice (a group's picked people); no claim, no run.
 - `POST /play/prop-actions/request`: `{target,action_id,revision,members?,request_id?,consent?}`.
   `members` (2026-11-03, replaces `partner`): the invitees in invitation order —
   exactly `participants - 1` distinct names other than the actor (one for a pair,
@@ -8593,7 +8602,8 @@ with a fabricated intro or long position correction.
 
 The browser host uses HUD bridge **v3** as a clean cutover.
 Old browser protocol versions are rejected; no browser furniture-pose alias remains.
-Besides `pickPropAction`, v3 carries `closePlaceMenu`,
+Besides `pickPropAction` (its sixth argument `members` carries the people picked for a group
+action — then `partner` is unset; a host requests with `members`, else `[partner]`), v3 carries `closePlaceMenu`,
 `pickRoomPose`, `respondPropAction(executionId,accept)` and
 `cancelPropAction(executionId)`. The bidirectional `prop-actions-changed`
 notification invalidates own action state and motion after a mutation attempt

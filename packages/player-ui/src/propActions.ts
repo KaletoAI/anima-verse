@@ -39,6 +39,11 @@ export interface PropActionOffer {
   reason: string
   required_partner: boolean
   available_targets: Array<PropActionChoice & { partner: string }>
+  /** How many people the action takes, the actor included (1 solo, 2 pair, 3..5 group). */
+  participants: number
+  /** A group action (participants > 2): the people in the room who can be
+   *  picked; whether one exact choice fits is `checkPropAction`. */
+  candidates?: string[]
   effects: PropActionEffect[]
   /** The action's pose has a finale clip (schnittstellen-3d § A8c) — the chip is marked. */
   finale?: boolean
@@ -263,6 +268,11 @@ export function requestPropAction(actionId: string, target: PropActionTarget, re
   consent?: PropActionConsent): Promise<PropActionResult> {
   return mutate('/play/prop-actions/request', { action_id: actionId, target, revision,
     ...(members.length ? { members } : {}), ...(members.length === 1 && consent === 'react' ? { consent } : {}) })
+}
+/** Read-only preflight of one exact choice of people (a group action). */
+export function checkPropAction(actionId: string, target: PropActionTarget, revision: string,
+  members: string[]): Promise<PropActionChoice> {
+  return apiPost<PropActionChoice>('/play/prop-actions/check', { action_id: actionId, target, revision, members })
 }
 export function respondPropAction(executionId: string, accept: boolean): Promise<PropActionResult> {
   return mutate('/play/prop-actions/respond', { execution_id: executionId, accept })

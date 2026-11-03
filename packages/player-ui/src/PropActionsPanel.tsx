@@ -4,8 +4,8 @@ import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
-import { cancelPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction,
-  type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
+import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction,
+  type PropActionChoice, type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
 interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
 interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
@@ -17,6 +17,7 @@ const pieceText = (offer: PropActionOffer) =>
 function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] {
   const groups = new Map<string, OfferGroup>()
   for (const offer of offers) {
+    if (offer.participants > 2) continue
     if (partner && !offer.required_partner) continue
     const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
       : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
@@ -32,6 +33,88 @@ function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] 
   for (const group of groups.values()) group.entries.sort((a, b) => Number(b.enabled) - Number(a.enabled)
     || (a.offer.distance_m ?? Infinity) - (b.offer.distance_m ?? Infinity))
   return [...groups.values()]
+}
+
+/** Group actions (more than two people), one per action name; never in a
+ *  menu that already belongs to one partner. */
+function groupActions(offers: PropActionOffer[], partner?: string): OfferGroup[] {
+  if (partner) return []
+  const groups = new Map<string, OfferGroup>()
+  for (const offer of offers) {
+    if (!(offer.participants > 2)) continue
+    const key = JSON.stringify(['group', offer.label])
+    const group = groups.get(key) ?? { key, label: offer.label, entries: [], usable: false }
+    group.entries.push({ offer, enabled: offer.enabled, reason: offer.reason })
+    group.usable ||= offer.enabled
+    groups.set(key, group)
+  }
+  for (const group of groups.values()) group.entries.sort((a, b) => Number(b.enabled) - Number(a.enabled)
+    || (a.offer.distance_m ?? Infinity) - (b.offer.distance_m ?? Infinity))
+  return [...groups.values()]
+}
+
+/** The open group action: pick the others (exactly participants − 1 of the
+ *  offer's `candidates`), then ask them on one piece. Each piece's button
+ *  waits for Core's preflight of that exact choice — its reason is the
+ *  hover text; everyone picked must agree before it starts. */
+function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
+  group: OfferGroup
+  busy: boolean
+  nameProps: boolean
+  onPick: (offer: PropActionOffer, members: string[]) => void
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const [picked, setPicked] = useState<string[]>([])
+  const [verdicts, setVerdicts] = useState<Record<string, PropActionChoice>>({})
+  const need = group.entries[0].offer.participants - 1
+  const candidates = [...new Set(group.entries.flatMap(entry => entry.offer.candidates ?? []))]
+  const complete = picked.length === need
+  const entryKey = (offer: PropActionOffer) => JSON.stringify([offer.target, offer.action_id])
+  const checkKey = complete ? JSON.stringify([picked, group.entries.map(entry => entryKey(entry.offer))]) : ''
+  useEffect(() => {
+    setVerdicts({})
+    if (!checkKey) return
+    let live = true
+    for (const entry of group.entries) {
+      const offer = entry.offer
+      if (!offer.enabled || !picked.every(name => offer.candidates?.includes(name))) continue
+      checkPropAction(offer.action_id, offer.target, offer.definition_revision, picked)
+        .then(verdict => { if (live) setVerdicts(v => ({ ...v, [entryKey(offer)]: verdict })) })
+        .catch((e: unknown) => {
+          if (live) setVerdicts(v => ({ ...v, [entryKey(offer)]: { enabled: false, reason: e instanceof Error ? e.message : String(e) } }))
+        })
+    }
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkKey])
+  const toggle = (name: string) => setPicked(list => list.includes(name) ? list.filter(n => n !== name)
+    : list.length < need ? [...list, name] : list)
+  return <div className="player-prop-offers-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+    <span style={{ opacity: 0.7 }}>{group.label} · {t('choose {n}').replace('{n}', String(need))}:</span>
+    {candidates.map(name => {
+      const on = picked.includes(name)
+      return <button key={`who:${name}`} type="button" className={`player-chip${on ? ' on' : ''}`} aria-pressed={on}
+        disabled={busy || (!on && complete)} onClick={() => toggle(name)}>{name}</button>
+    })}
+    {complete && group.entries.map(entry => {
+      const verdict = verdicts[entryKey(entry.offer)]
+      const fits = picked.every(name => entry.offer.candidates?.includes(name))
+      const enabled = entry.enabled && fits && !!verdict?.enabled
+      const reason = !entry.enabled ? entry.reason : !fits ? 'participant_unavailable'
+        : verdict && !verdict.enabled ? verdict.reason : ''
+      const piece = group.entries.length > 1 || nameProps ? `${pieceText(entry.offer)} · ` : ''
+      return <HoverHint key={`ask:${entryKey(entry.offer)}`}
+        text={reason ? propActionReason(reason, t) : t('Ask {name} first').replace('{name}', picked.join(', '))}>
+        <button type="button" className="player-chip" disabled={busy || !enabled} aria-disabled={!enabled ? true : undefined}
+          style={{ pointerEvents: !enabled ? 'none' : undefined }}
+          onClick={() => onPick(entry.offer, picked)}>
+          {piece}{verdict || reason ? t('Ask') : '…'}
+        </button>
+      </HoverHint>
+    })}
+    <button type="button" className="player-chip" aria-label={t('Close')} onClick={onClose}>✕</button>
+  </div>
 }
 
 /** Shared presentation for canvas menus and panels; verdicts are Core's, not UI rules.
@@ -51,19 +134,21 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
   nameProps?: boolean
   /** Standing actions and Stop share the first chip row on a character card. */
   leading?: ReactNode
-  onPick: (offer: PropActionOffer, partner?: string, consent?: PropActionConsent) => void
+  /** `members`: the people picked for a group action (then `partner` is unset). */
+  onPick: (offer: PropActionOffer, partner?: string, consent?: PropActionConsent, members?: string[]) => void
 }) {
   const { t } = useI18n()
   const [openPartner, setOpenPartner] = useState('')
   const [openAction, setOpenAction] = useState('')
   const groups = offerGroups(offers, partner)
+  const crowds = groupActions(offers, partner)
   // Grouped by partner only where the menu is not one partner's already.
-  const solo = groups.filter(group => partner || !group.partner)
+  const solo = [...groups.filter(group => partner || !group.partner), ...crowds]
   const partners = new Map<string, OfferGroup[]>()
   if (!partner) for (const group of groups) if (group.partner) partners.set(group.partner, [...partners.get(group.partner) ?? [], group])
   const shownPartner = partners.has(openPartner) ? openPartner : ''
   const visible = [...solo, ...partners.get(shownPartner) ?? []]
-  const opens = (group: OfferGroup) => group.entries.length > 1 || !!group.partner
+  const opens = (group: OfferGroup) => group.entries.length > 1 || !!group.partner || crowds.includes(group)
   const action = visible.find(group => group.key === openAction && opens(group))
 
   const chip = (group: OfferGroup) => {
@@ -112,7 +197,10 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
       <span style={{ opacity: 0.7 }}>{t('With')} {shownPartner}:</span>
       {partners.get(shownPartner)!.map(chip)}
     </>, () => { setOpenPartner(''); setOpenAction('') })}
-    {action && row(<>
+    {action && crowds.includes(action) && <GroupPicker key={action.key} group={action} busy={busy} nameProps={nameProps}
+      onPick={(offer, members) => { setOpenAction(''); onPick(offer, undefined, 'ask', members) }}
+      onClose={() => setOpenAction('')} />}
+    {action && !crowds.includes(action) && row(<>
       <span style={{ opacity: 0.7 }}>{action.label}{action.partner ? ` · ${action.partner}` : ''}:</span>
       {action.entries.map(entry => {
         const disabled = busy || !entry.enabled
@@ -182,7 +270,8 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
     : run.own_role === 'partner' ? `${run.actor}: ${run.label}`
     : t('{pose} with {name}').replace('{pose}', run.label).replace('{name}', run.members.join(', '))
   return <div className="player-prop-execution" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', padding: '4px 0' }}>
-    <span>{title} · {t(state)}</span>
+    <span>{title} · {t(state)}{run.status === 'awaiting_consent' && run.members.length > 1 && run.consents
+      ? ` (${Object.entries(run.consents).map(([name, answer]) => `${name} ${answer === 'yes' ? '✓' : '…'}`).join(', ')})` : ''}</span>
     {kind === 'incoming' && run.can_respond && <>
       <button type="button" className="player-chip" disabled={busy}
         onClick={() => perform(() => respondPropAction(run.execution_id, true))}>{t('Accept')}</button>
@@ -259,7 +348,7 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true,
     {groups.map(([kind, runs]) => runs.map(run => <PropActionExecutionRow key={`${kind}:${run.execution_id}`}
       run={run} kind={kind} busy={busy} perform={operation => { void perform(operation) }} />))}
     {showOffers && (data || leading) && <PropActionOffers offers={data?.offers ?? []} partner={partner} busy={busy || error != null} leading={leading}
-      onPick={(offer, selectedPartner, consent) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision,
-        selectedPartner ? [selectedPartner] : [], consent)) }} />}
+      onPick={(offer, selectedPartner, consent, members) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision,
+        members ?? (selectedPartner ? [selectedPartner] : []), consent)) }} />}
   </section>
 }
