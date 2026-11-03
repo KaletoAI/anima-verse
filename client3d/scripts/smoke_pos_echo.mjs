@@ -108,7 +108,7 @@ function reportFixture() {
   const sent = [], effects = [];
   class ApiError extends Error { status = 409; pos = { x: 0, z: 0 }; }
   const deps = {
-    ...m, effects,
+    ...m, effects, avatarChanging: false,
     ownedPropRun: () => null, propMutationPending: false, propStateUncertain: false,
     propPreparation: { pending: false }, manualPropRelease: false, lastMap: null,
     propPositionDrainActive: false, positionDrain: { begin: () => () => {} },

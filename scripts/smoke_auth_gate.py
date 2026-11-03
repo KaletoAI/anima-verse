@@ -237,6 +237,8 @@ def location(method, path, accept):
 
 
 print("A) default-deny gate (SEC-2)")
+check("anon POST /account/release-character", status("POST", "/account/release-character"), 401)
+check("user POST /account/release-character", status("POST", "/account/release-character", "user"), 200)
 check("anon GET /characters/list", status("GET", "/characters/list"), 401)
 check("anon GET /events/sync", status("GET", "/events/sync"), 401)
 check("user GET /events/sync", status("GET", "/events/sync", "user"), 200)

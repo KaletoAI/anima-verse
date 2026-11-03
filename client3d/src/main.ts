@@ -544,6 +544,7 @@ function mountHudFrame(): void {
 
 async function startApp(username: string, role: string) {
   let exitFlushing = false, exitReportsReady = false;
+  let avatarChanging = false;
   markBootStart();
   // --- Knowledge filter (stage 5): the ONE switch that decides which view is
   // fetched. Only an administrator may see the unfiltered map — a stored `1`
@@ -2236,7 +2237,15 @@ async function startApp(username: string, role: string) {
   // registered action, not a second call of `enterEmbodied`, so there stays ONE
   // way into the mode — the camera ride, the storey following and the takeover
   // all come with it.
+  gameActions.avatarChanging = changing => {
+    avatarChanging = changing;
+    if (changing) {
+      cancelPendingControl();
+      exitEmbodied(embody);
+    }
+  };
   gameActions.takeControl = () => {
+    if (!avatarName || avatarChanging) return;
     if (!bootDone) {
       pendingTakeControl = true;
       setBootNote({ kind: 'characters' });
@@ -2310,7 +2319,7 @@ async function startApp(username: string, role: string) {
   // Capture precedes Esc's embodied-mode handler and all ordinary scene keys.
   window.addEventListener('keydown', e => {
     if (!bootDone) return;
-    if (photo.keydown(e, getHudUiState().typing)) return;
+    if (avatarName && !avatarChanging && photo.keydown(e, getHudUiState().typing)) return;
     if (engine.photoMode && !isTypingTarget(e)) {
       // The engine still receives flight keys; game hotkeys (F/M) do not.
       if (['f', 'm'].includes(e.key.toLowerCase())) {
@@ -4163,6 +4172,7 @@ async function startApp(username: string, role: string) {
    *  a toast, or (the throttle) nothing at all. */
   async function reportPosWithSeq(x: number, z: number, seq: number, preparationDrain = false,
     yaw = positionYaw(npcs.yawOf(avatarName))): Promise<void> {
+    if (!avatarName || avatarChanging) return;
     // A reserved cancel number may remain unsent; later reports still acknowledge seq >= S.
     if (!preparationDrain && (manualPropGate.pending || propMutationPending || propStateUncertain || propPreparation.pending || ownedPropRun()
       || (!manualPropRelease && lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry))) return;
@@ -6837,6 +6847,7 @@ async function startApp(username: string, role: string) {
   }
 
   async function awaitArrivalMount(): Promise<string> {
+    if (!avatarName) return "";
     for (;;) {
       const currentId = () => (lastMap ?? firstMap).characters
         .find(c => c.name === avatarName)?.location_id ?? '';
@@ -6853,6 +6864,7 @@ async function startApp(username: string, role: string) {
   }
 
   async function placeAvatarOnArrival(): Promise<void> {
+    if (!avatarName) return;
     let locId: string;
     do {
       locId = await awaitArrivalMount();

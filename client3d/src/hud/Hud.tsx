@@ -176,6 +176,7 @@ export function Hud({ avatar, username, role }: {
 }) {
   useEffect(() => setPairFacing((phase, id, partner) => gameActions.pairFacing?.(phase, id, partner)), []);
   const { t } = useI18n();
+  const spectating = !avatar;
   const characterFormHost = useMemo<CharacterFormHost>(() => ({
     renderImageDialog: (ctl) => <PlayerProfileImageDialog ctl={ctl} />,
   }), []);
@@ -1075,10 +1076,16 @@ export function Hud({ avatar, username, role }: {
             aria-label={t('Connection')} title={game.connection === 'ok' ? t('Connected') : t('Backend unreachable')} />
           <span className="hud-clock" title={t('Game time')}>{game.clock ? `🕰 ${game.clock}` : ''}</span>
           <span className="hud-user">{avatar ? `${username} · ${t('Avatar')}: ${avatar}` : username}</span>
+          {spectating && <>
+            <span title={t('Take control to chat, act or take photos.')}>{t('Spectating')}</span>
+            <button className="player-chip" onClick={() => setOpen(o => ({ ...o, menu: true }))}>
+              {t('Take control')}
+            </button>
+          </>}
           <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
         </div>
       </div>
-      <div className="hud-notices"><NoticeBanner onOpenGallery={() => setOpen(o => ({ ...o, gallery: true }))} /></div>
+      {!spectating && <div className="hud-notices"><NoticeBanner onOpenGallery={() => setOpen(o => ({ ...o, gallery: true }))} /></div>}
       {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
         <span className="ovb-name">{game.openView}</span>
@@ -1118,10 +1125,11 @@ export function Hud({ avatar, username, role }: {
         </div>
       )}
 
-      <SceneTile scene={data ?? null} collapsed={dockOpen || !!game.info || narrow} railEl={railEl} />
+      {!spectating && <SceneTile scene={data ?? null} collapsed={dockOpen || !!game.info || narrow} railEl={railEl} />}
 
       <nav ref={setRailEl} className="hud-rail">
-        {PANELS.filter((p) => !p.requires || hasCapability(p.requires)).map((p) => (
+        {PANELS.filter((p) => (!spectating || p.id === 'menu' || p.id === 'news' || p.id === 'tasks')
+          && (!p.requires || hasCapability(p.requires))).map((p) => (
           <button key={p.id} className={open[p.id] ? 'on' : ''}
             onClick={() => toggle(p.id)} aria-pressed={open[p.id]}
             title={t(p.title)} aria-label={t(p.title)}>
@@ -1133,7 +1141,7 @@ export function Hud({ avatar, username, role }: {
         ))}
       </nav>
 
-      {open.chat && (
+      {!spectating && open.chat && (
         <section ref={chatRef}
           className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}
           style={{
@@ -1263,7 +1271,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.self && (
+          {!spectating && open.self && (
             <section className="hud-panel">
               {panelHead('self', 'self', avatarName || t('Self'))}
               <div className="hud-panel-body">
@@ -1271,7 +1279,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.others && (
+          {!spectating && open.others && (
             <section className="hud-panel">
               {panelHead('others', 'others', t('Others'))}
               <div className="hud-panel-body">
@@ -1284,7 +1292,7 @@ export function Hud({ avatar, username, role }: {
               is nothing to wire beyond the frame. Only one of them is ever
               mounted at a time (CONTENT_PANELS), which also keeps their polls
               from all running at once. */}
-          {open.belongings && (
+          {!spectating && open.belongings && (
             <section className="hud-panel">
               {panelHead('belongings', 'backpack', t('Inventory'))}
               <div className="hud-panel-body">
@@ -1292,7 +1300,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.mind && (
+          {!spectating && open.mind && (
             <section className="hud-panel">
               {panelHead('mind', 'brain', t('Mind'))}
               <div className="hud-panel-body">
@@ -1300,7 +1308,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.gallery && (
+          {!spectating && open.gallery && (
             <section className="hud-panel">
               {panelHead('gallery', 'gallery', t('Gallery'))}
               <div className="hud-panel-body">
@@ -1310,7 +1318,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.avatar && (
+          {!spectating && open.avatar && (
             <section className="hud-panel">
               {panelHead('avatar', 'avatar', t('Avatar'))}
               <div className="hud-panel-body">
@@ -1320,7 +1328,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.instagram && (
+          {!spectating && open.instagram && (
             <section className="hud-panel">
               {panelHead('instagram', 'instagram', t('Instagram'))}
               <div className="hud-panel-body">
@@ -1332,7 +1340,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.phone && (
+          {!spectating && open.phone && (
             <section className="hud-panel">
               {panelHead('phone', 'phone', t('Phone'))}
               <div className="hud-panel-body">
@@ -1348,7 +1356,7 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {open.quests && (
+          {!spectating && open.quests && (
             <section className="hud-panel">
               {panelHead('quests', 'scroll', t('Quests'))}
               <div className="hud-panel-body">

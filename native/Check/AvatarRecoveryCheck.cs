@@ -164,6 +164,16 @@ public static class AvatarRecoveryCheck
             int polls = source.AvatarMapRequests; Call(main, "TickEmbody"); Call(main, "TickEmbody");
             Is("refusal ends pending with no retry or poll", !Get<bool>(main, "_pendingTakeControl") && source.CharacterSwitchRequests.Count == 4 && source.AvatarMapRequests == polls);
 
+            // Task 111: explicit release must win over this scene's remembered identity.
+            var released = JsonNode.Parse(missing.GetRawText())!;
+            released["avatar_released"] = true;
+            figures.ApplyPolled(JsonSerializer.Deserialize<JsonElement>(released.ToJsonString()));
+            int beforeRelease = source.CharacterSwitchRequests.Count;
+            Call(main, "TickEmbody");
+            hud.Handlers["takeControl"](new JsonArray());
+            Is("released account does not recover old avatar", !Get<bool>(main, "_pendingTakeControl")
+                && source.CharacterSwitchRequests.Count == beforeRelease && !Get<EmbodyMode>(main, "_embody").Active);
+
             // A session with no remembered identity must not adopt a later map's character.
             recovery.Dispose();
             recovery = new AvatarRecovery(source, () => Task.CompletedTask);

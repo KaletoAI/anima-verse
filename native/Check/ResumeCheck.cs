@@ -55,6 +55,29 @@ public static class ResumeCheck
             { AutoTick = false, ClipFit = ClipFitMode.OnDemandSync, Slots = () => builder.Slots,
                 PrepareAvatarPlacement = builder.PrepareAvatarArrival };
             world.AddChild(manager); manager.SetProcess(false); await manager.InitAsync();
+            // Task 111: a released account starts in the world with no arrival or avatar writers.
+            var releasedNode = node.DeepClone();
+            releasedNode["avatar"] = "";
+            releasedNode["characters"] = new JsonArray();
+            using var releasedMap = JsonDocument.Parse(releasedNode.ToJsonString());
+            Is("spectator arrival is a no-op", builder.PrepareAvatarArrival(releasedMap.RootElement));
+            await manager.Apply(releasedMap.RootElement);
+            manager.Tick(.016);
+            Is("spectator boot has no avatar figure", manager.AvatarName == "" && manager.Figures.Count == 0);
+            var camera = new AnimaNative.Overview.OverviewControl();
+            var mode = new EmbodyMode(camera, () => null, () => null);
+            Is("spectator cannot embody and camera remains free", !mode.Enter() && camera.Follow is null && camera.ZoomCap is null);
+            using (var spectatorTransport = new PositionFixture())
+            using (var spectatorApi = new AnimaApi("http://fixture.invalid", spectatorTransport))
+            {
+                var spectatorSteering = new PlayerSteering(manager, builder);
+                using var spectatorPosition = new AvatarPositionController(manager, builder, spectatorSteering, spectatorApi);
+                spectatorPosition.Suspended = AvatarSession.Suspended(releasedMap.RootElement);
+                spectatorPosition.SetActive(false, releasedMap.RootElement);
+                manager.Tick(.25);
+                await spectatorPosition.FlushOnShutdownAsync();
+                Is("spectator never reports position", spectatorTransport.Paths.Count == 0);
+            }
             inn.Ready = false;
             await manager.Apply(map.RootElement);
             Is("unready room never renders the outdoor fallback", !manager.Figures.ContainsKey("Tess Vale"));
@@ -67,6 +90,8 @@ public static class ResumeCheck
             manager.SetPlayerDriven("Tess Vale"); manager.Tick(.016);
             Is("takeover starts no walking bridge", fig.Target == fig.Position && !fig.Bridging && fig.Waypoints.Count == 0);
             Is("first frame remains upstairs", Math.Abs(fig.Position.Y - 7.03) < .002);
+            Is("take control after spectator restores avatar", !AvatarSession.Suspended(map.RootElement)
+                && manager.AvatarName == "Tess Vale" && manager.Figures.ContainsKey("Tess Vale"));
 
             // Drive Main's actual shutdown barrier through the production API serializer/transport.
             using var transport = new PositionFixture();

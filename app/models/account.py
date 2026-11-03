@@ -302,14 +302,15 @@ def apply_presence_transition(old_avatar: str, new_avatar: str) -> None:
 
 def _active_for_user(user: Optional[dict]) -> str:
     """Resolve settings, legacy settings, allowed characters, then account profile."""
-    settings = user.get("settings", {}) if user else None
-    if settings is not None:
+    if user is not None:
+        settings = user.get("settings") or {}
+        if settings.get("avatar_released"):
+            return ""
         active = settings.get("active_character") or settings.get("current_character") or ""
-        if active:
+        allowed = user.get("allowed_characters") or []
+        if active and (user.get("role") == "admin" or active in allowed):
             return active
-        allowed = (user or {}).get("allowed_characters") or []
-        if allowed:
-            return allowed[0]
+        return allowed[0] if allowed else ""
     profile = get_user_profile()
     return profile.get("active_character") or profile.get("current_character") or ""
 
@@ -335,6 +336,8 @@ def get_active_character_for_user(user_id: str) -> str:
     if not user:
         return ""
     settings = user.get("settings") or {}
+    if settings.get("avatar_released"):
+        return ""
     active = settings.get("active_character") or settings.get("current_character") or ""
     allowed = user.get("allowed_characters") or []
     if active and (user.get("role") == "admin" or active in allowed):
@@ -346,6 +349,7 @@ def set_active_character(character_name: str):
     """Set which character this player controls."""
     old = _raw_active_character()
     if _update_current_user_settings({
+        "avatar_released": False,
         "active_character": character_name,
         "default_character": character_name,
         "current_character": character_name,
@@ -364,7 +368,7 @@ def set_active_character(character_name: str):
 
 
 def release_active_character() -> None:
-    """Release the current user's avatar (logout / end of session).
+    """Release control while keeping the default character for a later takeover.
 
     Clears ``active_character`` + ``current_character`` (so the character no
     longer counts as controlled) but keeps ``default_character`` for the next
@@ -378,14 +382,17 @@ def release_active_character() -> None:
     from app.core.auth_dependency import get_current_user_from_ctx
     if not get_current_user_from_ctx():
         return
-    old = _raw_active_character()
-    if not old:
-        return
-    if _update_current_user_settings({
-        "active_character": "",
-        "current_character": "",
-    }):
-        apply_presence_transition(old, "")
+    from app.core.keyed_lock import keyed_lock
+    old = get_active_character()
+    # Fence a position report already in flight: either it finishes first, or
+    # it observes the released identity before it can put the avatar back.
+    with keyed_lock("avatar_state", old):
+        if _update_current_user_settings({
+            "avatar_released": True,
+            "active_character": "",
+            "current_character": "",
+        }):
+            apply_presence_transition(old, "")
 
 
 def restore_avatar_on_login(user: Dict[str, Any]) -> None:
@@ -410,18 +417,15 @@ def restore_avatar_on_login(user: Dict[str, Any]) -> None:
             or settings.get("default_character")
             or ""
         ).strip()
-        if not resolved:
-            allowed = user.get("allowed_characters") or []
+        allowed = user.get("allowed_characters") or []
+        if not resolved or (user.get("role") != "admin" and resolved not in allowed):
             resolved = (allowed[0] if allowed else "").strip()
+        # A fresh login always ends spectator mode, even without an allowed avatar.
+        settings.update(avatar_released=False, active_character=resolved, current_character=resolved)
+        update_user(user["id"], settings=settings)
+        user["settings"] = settings
         if not resolved:
             return
-        # active_character konkret setzen (loest die allowed[0]-Maskierung auf).
-        if (settings.get("active_character") or "") != resolved or \
-           (settings.get("current_character") or "") != resolved:
-            settings["active_character"] = resolved
-            settings["current_character"] = resolved
-            update_user(user["id"], settings=settings)
-            user["settings"] = settings
         # Avatar-only Char zurueck in die Welt holen (idempotent — no-op wenn schon da).
         if _has_avatar_only_presence(resolved):
             from app.models.character import appear_in_world
@@ -552,10 +556,12 @@ def get_all_avatars() -> set:
     genutzt — funktioniert ohne Request-Kontext.
     """
     avatars: set = set()
+    has_users = False
     try:
         from app.core.db import get_connection
         conn = get_connection()
         rows = conn.execute("SELECT settings FROM users").fetchall()
+        has_users = bool(rows)
         for r in rows:
             settings_raw = r[0] if not hasattr(r, 'keys') else r["settings"]
             if not settings_raw:
@@ -564,12 +570,16 @@ def get_all_avatars() -> set:
                 s = json.loads(settings_raw)
             except Exception:
                 continue
+            if s.get("avatar_released"):
+                continue
             ac = (s.get("active_character") or s.get("current_character") or "").strip()
             if ac:
                 avatars.add(ac)
     except Exception:
         pass
-    # Legacy account.json fallback
+    # Registered users own control; an old shared row cannot keep a released avatar alive.
+    if has_users:
+        return avatars
     try:
         prof = get_user_profile()
         ac = (prof.get("active_character") or prof.get("current_character") or "").strip()

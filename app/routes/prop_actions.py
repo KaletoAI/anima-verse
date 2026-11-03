@@ -68,7 +68,7 @@ def _avatar(user):
     from app.models.account import get_active_character_for_user
     name = get_active_character_for_user(user["id"])
     if not name:
-        raise HTTPException(403, detail="No authorized active avatar")
+        raise HTTPException(409, detail={"reason": "no_avatar"})
     return name
 
 

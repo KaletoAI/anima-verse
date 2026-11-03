@@ -18,7 +18,7 @@ public sealed partial class WorldBuilder
     /// <summary>Reveal the authoritative room before the avatar's first placement, like browser placeAvatarOnArrival.</summary>
     public bool PrepareAvatarArrival(JsonElement map)
     {
-        if (PhotoMode) return true;
+        if (PhotoMode || AvatarSession.Suspended(map)) return true;
         string name = Json.Str(map, "avatar");
         foreach (var row in Json.Arr(map, "characters"))
         {

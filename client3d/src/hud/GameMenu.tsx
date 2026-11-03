@@ -38,10 +38,10 @@
  * comes back without the title gate.
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { useI18n } from '@anima/player-ui';
+import { ConfirmDialog, useI18n } from '@anima/player-ui';
 import { gameActions, getGameState, subscribeGameState } from './bus';
 import { isNativeHud } from './bridge';
-import { listPlayableCharacters, switchCharacter } from '../api';
+import { listPlayableCharacters, releaseCharacter, switchCharacter } from '../api';
 import { browserAntialias, checkScatterPrefs, DEFAULT_SCATTER_PREFS,
   effectiveRenderScale, renderScaleOf, RENDER_SCALES,
   pickBrowserAntiAliasing, SCATTER_PREF_MAX_M, SCATTER_PREF_MIN_M } from '../game/prefs';
@@ -249,6 +249,7 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
   const [activeChar, setActiveChar] = useState('');
   /** the character being taken over — locks every row while the server answers */
   const [switching, setSwitching] = useState('');
+  const [confirmRelease, setConfirmRelease] = useState(false);
   /** the server's own refusal text, shown unchanged; `''` = nothing wrong */
   const [charError, setCharError] = useState('');
 
@@ -271,6 +272,7 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
   const takeOver = async (name: string) => {
     setSwitching(name);
     setCharError('');
+    gameActions.avatarChanging?.(true);
     try {
       await switchCharacter(name);
       // The world that stands belongs to the character just left, so it is
@@ -282,6 +284,23 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
     } catch (e: unknown) {
       setCharError(e instanceof Error ? e.message : String(e));
       setSwitching('');
+      gameActions.avatarChanging?.(false);
+    }
+  };
+
+  const release = async () => {
+    setConfirmRelease(false);
+    setSwitching('release');
+    setCharError('');
+    gameActions.avatarChanging?.(true);
+    try {
+      await releaseCharacter();
+      gameActions.markResume?.();
+      location.reload();
+    } catch (e: unknown) {
+      setCharError(e instanceof Error ? e.message : String(e));
+      setSwitching('');
+      gameActions.avatarChanging?.(false);
     }
   };
 
@@ -492,6 +511,12 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
           loop and loads the world for the new one. */}
       <section className="hud-menu-section">
         <h3 className="hud-menu-head">{t('Character')}</h3>
+        {activeChar && <button type="button" className="player-chip" disabled={switching !== ''}
+          onClick={() => setConfirmRelease(true)}>{t('Release avatar')}</button>}
+        <ConfirmDialog open={confirmRelease} title={t('Release avatar')}
+          message={t('Your avatar leaves the map; you stay signed in.')}
+          confirmLabel={t('Release avatar')} onClose={() => setConfirmRelease(false)}
+          onConfirm={() => { if (!switching) void release(); }} />
         {chars === null && (
           <p className="hud-menu-hint">{t('Loading…')}</p>
         )}

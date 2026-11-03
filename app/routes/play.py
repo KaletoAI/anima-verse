@@ -25,7 +25,24 @@ from app.core.perception import STORYTELLER_SPEAKER
 
 logger = get_logger("play")
 
-router = APIRouter()
+def _spectator_lens(user: Dict[str, Any]) -> str:
+    """The released character whose knowledge a spectator's map shows: the
+    user's default character, if the user may still play it."""
+    settings = user.get("settings") or {}
+    name = (settings.get("default_character") or "").strip()
+    allowed = user.get("allowed_characters") or []
+    return name if name and (user.get("role") == "admin" or name in allowed) else ""
+
+
+def _avatar_write_guard(request: Request):
+    """World inspection stays available; character mutations require control."""
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {
+        "/play/bench-result", "/play/scene-preview",
+    }:
+        _require_avatar()
+
+
+router = APIRouter(dependencies=[Depends(_avatar_write_guard)])
 
 _SHELL = Path("static/client3d/index.html")
 
@@ -478,7 +495,7 @@ def _play_enter_room_sync(user, body: Any):
                if isinstance(body, dict) else "") or GROUND_ROOM_ID
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     # THE SAME LOCK THE POSITION REPORT TAKES (``_pos_lock``, namespace
     # ``avatar_state``): both routes write where this avatar is, and both run
     # in the threadpool since 2026-08-24. Without it a room change can land
@@ -634,7 +651,7 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="target_id required")
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     # Every player-facing sentence below is translated into the avatar's
     # language — a rule's own message arrives localized from the rule engine,
     # the ones this route words itself go through t().
@@ -732,7 +749,7 @@ def play_travel_cancel(user=Depends(get_current_user)):
     from app.models.world import get_location_name
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     j = get_journey(avatar)
     if not j:
         return {"ok": True, "cancelled": False, "target_id": "",
@@ -969,10 +986,10 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="x/z required")
     # REQUEST-SCOPED — resolved HERE, before the thread hop: the active
     # character comes out of the logged-in user's settings in the request
-    # context, and everything below only ever needs the resulting plain name.
+    # context. The locked writer rechecks fresh ownership to fence release.
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     return await asyncio.to_thread(_play_pos_sync, avatar, body)
 
 
@@ -1000,6 +1017,11 @@ def _play_pos_sync(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     if not lock.acquire(blocking=False):
         return {"ok": False, "superseded": True}
     try:
+        from app.core.auth_dependency import get_current_user_from_ctx
+        from app.models.account import get_active_character_for_user
+        user = get_current_user_from_ctx()
+        if user and get_active_character_for_user(user["id"]) != avatar:
+            raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
         return _play_pos_report(avatar, body)
     finally:
         lock.release()
@@ -1450,7 +1472,7 @@ async def play_scene_photo_prepare(request: Request, user=Depends(get_current_us
     from app.core.scene_photo import prepare_scene_photo
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     skill = _player_action_gate(avatar, "scene_photo")
     from pydantic import ValidationError
     try:
@@ -1477,7 +1499,7 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     from app.core.scene_photo_jobs import validate_request, accept_photo
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     skill = _player_action_gate(avatar, "scene_photo")
     try:
         body = await request.json()
@@ -1499,7 +1521,7 @@ async def play_scene_render(request: Request, user=Depends(get_current_user)):
     from app.core.scene_render import render_scene
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     force = False
     try:
         body = await request.json()
@@ -1901,7 +1923,7 @@ def _play_party_respond_sync(user, body: Any):
     from app.core.party_engine import get_invite, resolve_pending_invite
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     invite_id = str(body.get("invite_id") or "").strip() if isinstance(body, dict) else ""
     accept = body.get("accept") if isinstance(body, dict) else None
     if not isinstance(accept, bool):
@@ -1923,7 +1945,7 @@ def play_party_leave(user=Depends(get_current_user)):
     from app.core.party_engine import leave_party, clear_invites_for
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     res = leave_party(avatar)
     try:
         clear_invites_for(avatar)
@@ -2233,7 +2255,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
 
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
 
     if photo_filename:
         from app.core.scene_photo import resolve_scene_photo
@@ -2928,7 +2950,7 @@ def _play_read_sync(body: Any):
     from app.core.item_reading import read_page
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=409, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object required")
     try:
@@ -2972,7 +2994,7 @@ def _play_read_image_sync(body: Any, *, action: str = "prepare"):
     from app.imagegen.routing import NoRouteError
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=409, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object required")
     item_id, index = body.get("item_id"), body.get("index")
@@ -3043,7 +3065,7 @@ def _play_read_session_sync(body: Any, *, close: bool = False):
     from app.core.keyed_lock import keyed_lock
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=409, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object required")
     item_id = str(body.get("item_id") or "")
@@ -3359,7 +3381,7 @@ def play_item_detail(item_id: str, user=Depends(get_current_user)):
     from app.models.inventory import get_character_inventory, get_item
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     inv = (get_character_inventory(avatar) or {}).get("inventory") or []
     entry = next((e for e in inv if e.get("item_id") == item_id), None)
     if not entry:
@@ -3551,7 +3573,15 @@ def play_worldmap(user=Depends(get_current_user),
         raise HTTPException(status_code=403,
                             detail="all=1 is reserved for admins")
     avatar = (get_active_character() or "").strip()
-    payload = build_worldmap_payload(avatar, show_all=bool(show_all) and is_admin)
+    released = bool((user.get("settings") or {}).get("avatar_released"))
+    # A spectator (released avatar) sees the world through what the released
+    # character knows — never the unfiltered admin view — and nobody in the
+    # payload is marked as its own avatar.
+    lens = avatar or (_spectator_lens(user) if released else "")
+    payload = build_worldmap_payload(lens, show_all=bool(show_all) and is_admin)
+    if not avatar:
+        payload["avatar"] = ""
+    payload["avatar_released"] = released
     payload["sync"]["build_ms"] = round((time.monotonic() - t0) * 1000, 1)
     return _json_off_loop(payload)
 
@@ -3972,7 +4002,7 @@ def _require_avatar() -> str:
     from app.models.account import get_active_character
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     return avatar
 
 
@@ -4145,7 +4175,10 @@ def _play_places_sync() -> Dict[str, Any]:
     """
     from app.core import places
     from app.core.pose_catalog import get_catalog, poses_in_group
-    avatar = _require_avatar()
+    from app.models.account import get_active_character
+    avatar = get_active_character()
+    if not avatar:
+        return {"room_id": "", "places": []}
     loc, room = places.where(avatar)
     if not loc or not room:
         return {"room_id": "", "places": []}
@@ -4363,7 +4396,7 @@ def play_messages_read_all(user=Depends(get_current_user)):
     from app.models.chat import get_chat_history
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="No active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     count = 0
     for partner in _messaging_partners(avatar):
         hist = [m for m in (get_chat_history(avatar, partner_name=partner,
@@ -4383,7 +4416,7 @@ def play_messages_thread(partner: str, user=Depends(get_current_user)):
     from app.models.chat import get_chat_history
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="No active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     partner = (partner or "").strip()
     if not partner:
         raise HTTPException(status_code=400, detail="partner required")
@@ -4415,7 +4448,7 @@ def _play_messages_send_sync(user, body: Any):
     from app.core.timeutils import utc_now_iso
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="No active avatar")
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
     partner = (body.get("partner") or "").strip()
     content = (body.get("content") or "").strip()
     if not partner or not content:

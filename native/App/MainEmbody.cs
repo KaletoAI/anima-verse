@@ -38,6 +38,23 @@ public partial class Main
     private AvatarRecovery? _avatarRecovery;
     private Task _avatarIdentity = Task.CompletedTask;
 
+    private bool _avatarChanging;
+    private bool AvatarSuspended => AvatarSession.Suspended(_figures?.LatestMap ?? _builder?.FirstMap, _avatarChanging, _avatarRecovery?.OwnCharacter is not null);
+
+    private void SuspendAvatar(bool changing)
+    {
+        _avatarChanging = changing;
+        if (changing)
+        {
+            CancelPendingControl();
+            _avatarRecovery?.Cancel();
+            if (Embodied) _embody?.Exit();
+            _camera?.Control.ResetFirstPerson();
+            _figures?.SetPlayerDriven(null);
+        }
+        SyncPlayerSteering();
+    }
+
     private AvatarRecovery SessionAvatar()
     {
         if (_avatarRecovery is not null) return _avatarRecovery;
@@ -96,6 +113,7 @@ public partial class Main
         hud.Handlers["enterEmbodied"] = _ => TakeControl();
         hud.Handlers["exitEmbodied"] = _ => { CancelPendingControl(); _embody.Exit(); };
         hud.Handlers["takeControl"] = _ => TakeControl();
+        hud.Handlers["avatarChanging"] = args => SuspendAvatar(args.Count > 0 && args[0]?.GetValue<bool>() == true);
     }
 
     private void EmbodyToast(string message) => _hud?.SendUi("toast", message, true);
@@ -132,7 +150,7 @@ public partial class Main
 
     private void EnterEmbodied()
     {
-        if (Embodied || Leaving) return;
+        if (AvatarSuspended || Embodied || Leaving) return;
         if (AvatarWaitsForPlace())
         {
             if (!_pendingArrivalTakeControl) EmbodyToast("Loading this place…");
@@ -150,7 +168,7 @@ public partial class Main
     /// <summary>Self panel path: wait, fly to the map point (or tile centre) at min(distance,15), open, enter.</summary>
     private void TakeControl()
     {
-        if (Embodied || Leaving || _pendingTakeControl || _pendingArrivalTakeControl) return;
+        if (AvatarSuspended || Embodied || Leaving || _pendingTakeControl || _pendingArrivalTakeControl) return;
         _avatarRecovery?.Cancel();
         _pendingTakeControl = true;
         ContinueTakeControl();
@@ -202,8 +220,14 @@ public partial class Main
         using var hitch = AnimaNative.Ui.HitchLog.Time("Main.avatar controllers");
         if (InPhoto) return;
         if (Leaving) { CancelPendingControl(); _avatarRooms?.SetActive(false); _playerSteering?.SetActive(false); return; }
-        TryAutoTakeControl();
         SyncPlayerSteering();
+        if (AvatarSuspended)
+        {
+            CancelPendingControl();
+            if (Embodied) _embody?.Exit();
+            return;
+        }
+        TryAutoTakeControl();
         TickAvatarRooms();
         TickAvatarOffers();
         if (_pendingArrivalTakeControl && _avatarRecovery?.NeedsRecovery(_figures?.LatestMap ?? _builder?.FirstMap) == true)
@@ -285,8 +309,12 @@ public partial class Main
                 };
             _figures.BeforeTick += StepPlayerSteering;
         }
-        _playerSteering!.SetActive(Embodied);
-        _avatarPosition?.SetActive(Embodied, _figures.LatestMap ?? _builder.FirstMap);
+        bool suspended = AvatarSuspended || InPhoto;
+        if (_avatarPosition is not null) _avatarPosition.Suspended = suspended;
+        if (_avatarRooms is not null) _avatarRooms.Suspended = suspended;
+        if (_avatarOffers is not null) _avatarOffers.Suspended = suspended;
+        _playerSteering!.SetActive(Embodied && !suspended);
+        _avatarPosition?.SetActive(Embodied && !suspended, _figures.LatestMap ?? _builder.FirstMap);
     }
 
     /// <summary>Task 49: browser key names come from the shared camera key set; HUD-owned typing/overlay releases them.</summary>
@@ -294,7 +322,7 @@ public partial class Main
     {
         if (InPhoto) return;
         if (_playerSteering is null || _camera is null) return;
-        _playerSteering.SetActive(Embodied && !Leaving);
+        _playerSteering.SetActive(Embodied && !Leaving && !AvatarSuspended);
         _playerSteering.MovementLocked = _hud?.HudOwned("movementLocked")?.GetValue<bool>() == true;
         _avatarPosition?.BeforeSteering();
         if (_hud is { } hud && HudRouting.KeysToHud(hud.Ui)) _camera.Control.ReleaseKeys();

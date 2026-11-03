@@ -46,7 +46,16 @@ public sealed class AvatarRecovery : IDisposable
     {
         if (_identityResolved || login.ValueKind != JsonValueKind.Object) return;
         if (login.TryGetProperty("user", out var user) && user.ValueKind == JsonValueKind.Object
-            && user.TryGetProperty("settings", out var settings)) Remember(Text(settings, "active_character"));
+            && user.TryGetProperty("settings", out var settings))
+        {
+            if (settings.TryGetProperty("avatar_released", out var released) && released.ValueKind == JsonValueKind.True)
+            {
+                _identityResolved = true;
+                _identity = Task.CompletedTask;
+                return;
+            }
+            Remember(Text(settings, "active_character"));
+        }
     }
 
     public Task RememberFirstMapAsync(JsonElement map) => _identity ??= ResolveIdentityAsync(map);

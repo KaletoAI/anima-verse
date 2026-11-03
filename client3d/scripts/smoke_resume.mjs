@@ -218,7 +218,7 @@ assert.equal((await getWorldMap()).characters[0].yaw, null, 'worldmap parser pre
 let now = 330, renderedYaw = 0, delayedAnswer = null;
 const reports = [];
 const channel = await mainFunctions(['tickPosReport', 'markMoved', 'reserveReport', 'flushPendingReport', 'reportPosWithSeq'], {
-  avatarName: 'fixture-avatar', npcs: { yawOf: () => renderedYaw }, positionYaw, positionYawChanged,
+  avatarChanging: false, avatarName: 'fixture-avatar', npcs: { yawOf: () => renderedYaw }, positionYaw, positionYawChanged,
   pendingSnap: null, exitFlushing: false, avatarDrive: { kind: 'PLAYER' }, avatarSeated: false,
   manualPropGate: { pending: false }, propMutationPending: false, propStateUncertain: false,
   propPreparation: { pending: false }, ownedPropRun: () => null, manualPropRelease: false, lastMap: null,

@@ -3821,6 +3821,10 @@
     "Fog & horizon": "Nebel & Horizont",
     "Saves water effects and mirror reflection passes.": "Spart Wassereffekte und Spiegelreflexionen.",
     "Saves local lamp lighting and glow effects.": "Spart lokale Lampenbeleuchtung und Leuchteffekte.",
-    "Saves distance haze and distant mountain scenery.": "Spart Fernnebel und die Bergkulisse am Horizont."
+    "Saves distance haze and distant mountain scenery.": "Spart Fernnebel und die Bergkulisse am Horizont.",
+    "Release avatar": "Avatar abgeben",
+    "Your avatar leaves the map; you stay signed in.": "Dein Avatar verlässt die Karte; du bleibst angemeldet.",
+    "Spectating": "Zuschauen",
+    "Take control to chat, act or take photos.": "Übernimm einen Avatar, um zu sprechen, zu handeln oder Fotos zu machen."
   }
 }

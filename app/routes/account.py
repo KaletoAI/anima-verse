@@ -13,7 +13,8 @@ from app.models.account import (
     get_default_character,
     get_language_settings,
     save_language_settings,
-    set_active_character)
+    set_active_character,
+    release_active_character)
 from app.models.character import list_available_characters
 
 logger = get_logger("account")
@@ -94,6 +95,16 @@ async def switch_character(request: Request) -> Dict[str, Any]:
         "previous_character": previous,
         "active_character": character_name,
     }
+
+
+@router.post("/release-character")
+def release_character(user=Depends(get_current_user)) -> Dict[str, Any]:
+    """Release only this session's avatar while keeping the session signed in."""
+    from app.core import sync_topics
+    previous = get_active_character()
+    release_active_character()
+    sync_topics.rebind_user(user["id"])
+    return {"status": "success", "previous_character": previous, "active_character": ""}
 
 
 # --- Account language -------------------------------------------------------

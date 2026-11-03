@@ -4286,7 +4286,7 @@ def enter_offmap_sleep(character_name: str) -> bool:
         profile = get_character_profile(character_name) or {}
         current_loc = (profile.get("current_location") or "").strip()
         current_room = (profile.get("current_room") or "").strip()
-        if not current_loc and not current_room:
+        if not current_loc and not current_room and get_character_pos(character_name) is None:
             # Already off-map (or never assigned) — nothing to store.
             return False
         profile["_offmap_return_location"] = current_loc

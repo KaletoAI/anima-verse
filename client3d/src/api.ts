@@ -216,6 +216,12 @@ export async function switchCharacter(name: string): Promise<SwitchedCharacter> 
   return res.json() as Promise<SwitchedCharacter>;
 }
 
+/** Release control without ending the authenticated session. */
+export async function releaseCharacter(): Promise<SwitchedCharacter> {
+  const res = await fetch('/account/release-character', { method: 'POST' });
+  return json<SwitchedCharacter>(res);
+}
+
 // `avatarStep` lived here: one compass step of the avatar over
 // `POST /world/avatar/step`. The route was deleted with the grid world (E3)
 // and `postPos` below has replaced it (E4 task 5) — the client no longer asks

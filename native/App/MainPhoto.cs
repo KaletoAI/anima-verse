@@ -14,6 +14,7 @@ public partial class Main
 
     private bool HandlePhotoInput(InputEvent input)
     {
+        if (AvatarSuspended) return false;
         if (_photo is null)
         {
             if (input is not InputEventKey { Pressed:true, Echo:false, Keycode:Key.F2 }
@@ -36,9 +37,9 @@ public partial class Main
     {
         if (_figures is not null) _figures.PhotoMode=active;
         if (_builder is not null) _builder.PhotoMode=active;
-        if (_avatarPosition is not null) _avatarPosition.Suspended=active;
-        if (_avatarRooms is not null) _avatarRooms.Suspended=active;
-        if (_avatarOffers is not null) _avatarOffers.Suspended=active;
+        if (_avatarPosition is not null) _avatarPosition.Suspended=active || AvatarSuspended;
+        if (_avatarRooms is not null) _avatarRooms.Suspended=active || AvatarSuspended;
+        if (_avatarOffers is not null) _avatarOffers.Suspended=active || AvatarSuspended;
         if (active)
         {
             _avatarOffers?.Places.ClearHover(); _avatarRooms?.Picking.Clear();
