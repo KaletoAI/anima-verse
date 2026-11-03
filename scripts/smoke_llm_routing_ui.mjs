@@ -12,6 +12,7 @@
  * commits the literal name. Escape closes the list without choosing a row.
  * Opening a field that holds 'Beta' lists all three names (3 options), not
  * just Beta; reload() while another element has focus keeps the list hidden.
+ * LLMs page: see the expectations above the last block (provider, then name).
  */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -125,3 +126,18 @@ assert.equal(elements['model-list'].children.length, 3);
 key('Escape'); comboCtx.document.activeElement = {};
 await picker.reload(); assert.equal(elements['model-list'].hidden, true);
 console.log('PASS combobox filter, keyboard and click selection, free text, blur, Escape, full list on open, quiet reload');
+// LLMs page: entries listed by provider, then LLM name (name, else model);
+// the collapsed header reads "<provider> · <name>". Hand-derived order for
+// [0 Venice/zeta, 1 DX10-02/beta(name), 2 DX10-02/alpha(model only),
+//  3 venice/Alpha] is 2 (DX10-02 alpha), 1 (DX10-02 beta), 3 (venice Alpha), 0 (Venice zeta);
+// case-insensitive, so venice/Venice sort as one provider.
+read(`function _itemLabel(item, labelField, fallback) {
+  for (const f of (Array.isArray(labelField) ? labelField : [labelField])) {
+    const v = item[f]; if (v !== undefined && v !== null && String(v).trim() !== '') return String(v); }
+  return String(fallback || ''); }
+OPEN_ITEMS = new Set(); rtProviderOff = () => false; rtPoolHeadText = () => ''; renderFields = () => '';`);
+const llms = "[{provider:'Venice',model:'zeta'},{provider:'DX10-02',model:'x',name:'beta'},{provider:'DX10-02',model:'alpha'},{provider:'venice',model:'Alpha'}]";
+assert.deepEqual(JSON.parse(read(`JSON.stringify(rtLlmsOrder(${llms}, {item_label_field:['name','model']}))`)), [2, 1, 3, 0]);
+assert.match(read(`rtRenderEntryItem({item_label_field:['name','model']}, {}, {provider:'DX10-02',model:'x',name:'beta'}, 'llm_routing[1]', 1)`),
+             /class="title"[^>]*>DX10-02 · beta</);
+console.log('PASS LLMs page sorted by provider then name, provider in the collapsed title');

@@ -786,8 +786,9 @@ async function renderLlmRoutingLlmsPage(content) {
     html += '<button class="btn btn-sm" onclick="addArrayItem(\'llm_routing\', \'array\')">' + esc(RT_TEXT.addLlm) + '</button>';
     html += '</div>';
     html += '<div id="arr-llm_routing">';
-    routing.forEach((item, idx) => {
-        html += rtRenderEntryItem(def, fields, item || {}, 'llm_routing[' + idx + ']', idx);
+    // Listed by provider, then LLM name; the paths keep the real array index.
+    rtLlmsOrder(routing, def).forEach(idx => {
+        html += rtRenderEntryItem(def, fields, routing[idx] || {}, 'llm_routing[' + idx + ']', idx);
     });
     html += '</div>';
     if (!routing.length) html += '<div class="desc rt-muted">' + esc(RT_TEXT.ovNoEntries) + '</div>';
@@ -818,8 +819,21 @@ function rtEntryFields(def) {
 // One accordion item. Mirrors renderArrayItem() (settings.js) — kept separate
 // because the delete button must not reach removeItem() — an llm_routing
 // entry's removal has to renumber its tasks' chains (rtDeleteEntryConfirm).
+// Array indices of the LLM entries, sorted by provider, then LLM name
+// (name, else model); equal pairs keep their stored order.
+function rtLlmsOrder(routing, def) {
+    const cmp = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+    return routing
+        .map((item, idx) => ({ idx,
+            provider: String((item || {}).provider || ''),
+            name: _itemLabel(item || {}, def.item_label_field, 'Item ' + idx) }))
+        .sort((a, b) => cmp(a.provider, b.provider) || cmp(a.name, b.name) || a.idx - b.idx)
+        .map(o => o.idx);
+}
+
 function rtRenderEntryItem(def, fields, item, path, idx) {
-    const label = _itemLabel(item, def.item_label_field, 'Item ' + idx);
+    const name = _itemLabel(item, def.item_label_field, 'Item ' + idx);
+    const label = item.provider ? item.provider + ' · ' + name : name;
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
     const on = item.enabled !== false;
     const provOff = rtProviderOff(item.provider);
