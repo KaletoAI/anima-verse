@@ -295,3 +295,8 @@ def delete_model_capability(pattern: str) -> bool:
             _save_full_file(data)
             return True
         return False
+
+
+def is_uncensored(model_name: str) -> Optional[bool]:
+    """User-declared capability, using the usual longest substring match."""
+    return get_model_capabilities(model_name).get("uncensored")

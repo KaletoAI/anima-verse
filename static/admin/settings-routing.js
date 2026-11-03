@@ -322,6 +322,14 @@ function rtHasAssignment(task, tasks, chains, embeddingBackend, seen = new Set()
     const parent = tasks.find(t => t.id === task.fallback);
     return !!parent && rtHasAssignment(parent, tasks, chains, embeddingBackend, seen);
 }
+function rtRefusalBadge(entry) {
+    if (!entry || !(entry.count > 0)) return '';
+    const tooltip = (entry.recent || []).slice(0, 3).map(r =>
+        String(r.ts || '').slice(11, 16) + ' ' + r.model + ' — ' + r.excerpt).join('\n');
+    return ' <span class="rt-warn" title="' + esc(tooltip) + '">'
+        + esc(entry.count) + ' refusals / 48h</span>';
+}
+
 function rtGroupSummary(tasks, chains, embeddingBackend, category) {
     const missing = tasks.filter(t => (category === undefined || t.category === category) && !rtHasAssignment(t, tasks, chains, embeddingBackend));
     return missing.length ? missing.length + ' task(s) without LLM: ' + missing.map(t => t.label || t.id).join(', ') : 'all assigned';
@@ -518,7 +526,7 @@ async function renderLlmRoutingTasksPage(content) {
         html += '<div class="rt-card' + (nfo.problem ? ' problem' : '') + '" style="' + style + '">';
 
         html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
-        html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(t.label);
+        html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(t.label) + rtRefusalBadge(t.refusals_48h);
         if (t.category_label) {
             html += ' <span style="font-size:10px; color:' + cc.fg + '; font-weight:400; background:' + cc.bg
                  + '; padding:1px 6px; border-radius:8px; margin-left:4px;">' + esc(t.category_label) + '</span>';

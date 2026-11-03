@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core import config
+from app.core.llm_refusal import RefusalError, checks_refusals, detect_refusal, record_refusal
 from app.core.llm_client import AnthropicLLMClient, LLMClient, merge_extra_params
 from app.core.llm_queue import get_llm_queue
 from app.core.log import get_logger
@@ -345,7 +346,8 @@ async def preload_models() -> None:
     logger.info("Preload: alle Warmup-Requests abgeschlossen")
 
 
-def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = True) -> Optional[LLMInstance]:
+def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = True,
+                                uncensored_only: bool = False, exclude: frozenset = frozenset()) -> Optional[LLMInstance]:
     """Reads `llm_routing_overrides[task]` from character_config.
 
     Supported value formats:
@@ -372,6 +374,8 @@ def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = T
     if not instance:
         logger.warning("Character-Override '%s' fuer task=%s (agent=%s): Provider/Model nicht aufloesbar",
                        raw, task, agent_name)
+        return None
+    if not _refusal_candidate(instance.provider_name, instance.model, uncensored_only, exclude):
         return None
     if not instance.available:
         logger.info("Character-Override '%s' fuer task=%s (agent=%s): Provider unavailable — Fallback auf globales Routing",
@@ -516,8 +520,16 @@ def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
 _OVERFLOW_LOGGED: Dict[Tuple[str, str], float] = {}
 
 
+def _refusal_candidate(provider: str, model: str, uncensored_only: bool, exclude) -> bool:
+    """Eligibility shared by routing, overrides, overflow and quota waits."""
+    from app.core.model_capabilities import is_uncensored
+    return ((provider, model) not in exclude
+            and (not uncensored_only or is_uncensored(model) is True))
+
+
 def overflow_target(task: str, agent_name: str = "", *,
-                    exclude_pools: frozenset = frozenset(), reserve: bool = True) -> Optional[LLMInstance]:
+                    exclude_pools: frozenset = frozenset(), reserve: bool = True,
+                    uncensored_only: bool = False, exclude: frozenset = frozenset()) -> Optional[LLMInstance]:
     """Where a BACKGROUND call may move when its pool is full, or None
     (development_instructions/plan-lane-overflow.md § 4/§ 5).
 
@@ -549,6 +561,8 @@ def overflow_target(task: str, agent_name: str = "", *,
         return None
     manager = get_lane_manager()
     for _, entry in sorted(candidates, key=lambda item: item[0]):
+        if not _refusal_candidate(entry.get("provider"), entry.get("model"), uncensored_only, exclude):
+            continue
         pool = pool_key_for((entry.get("provider") or "").strip(),
                             (entry.get("model") or "").strip())
         if pool in exclude_pools or entry.get("accepts_overflow") is False:
@@ -564,7 +578,9 @@ def overflow_target(task: str, agent_name: str = "", *,
     return None
 
 
-def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False, reserve: bool = True) -> Optional[LLMInstance]:
+def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
+                reserve: bool = True, uncensored_only: bool = False,
+                exclude: frozenset = frozenset()) -> Optional[LLMInstance]:
     """Determines the LLM for a task from the llm_routing config.
 
     Order:
@@ -592,7 +608,7 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False, rese
 
     # 1. Character override
     if agent_name:
-        override_inst = _resolve_character_override(task, agent_name, reserve=reserve)
+        override_inst = _resolve_character_override(task, agent_name, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude)
         if override_inst is not None:
             return override_inst
 
@@ -606,11 +622,13 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False, rese
         parent = fallback_parent(task)
         if parent:
             logger.debug("resolve_llm(%s): no routing, falling back to '%s'", task, parent)
-            return resolve_llm(parent, agent_name=agent_name, overflow=overflow, reserve=reserve)
+            return resolve_llm(parent, agent_name=agent_name, overflow=overflow, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude)
         return None
 
     candidates.sort(key=lambda x: x[0])
     for order, entry in candidates:
+        if not _refusal_candidate(entry.get("provider"), entry.get("model"), uncensored_only, exclude):
+            continue
         provider = _usable(entry, task, quiet=not reserve)
         if provider is None:
             continue
@@ -621,7 +639,7 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False, rese
             if is_background(task) and configured_lane_rules().overflow_after > 0:
                 pool = pool_key_for(instance.provider_name, instance.model)
                 if get_lane_manager().pool_saturated(pool):
-                    alt = overflow_target(task, agent_name, exclude_pools={pool}, reserve=reserve)
+                    alt = overflow_target(task, agent_name, exclude_pools={pool}, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude)
                     if alt is not None:
                         now = time.monotonic()
                         key = (task, pool)
@@ -637,12 +655,12 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False, rese
         if instance is not None:
             return instance
 
-    if reserve and not quota_wait_seconds(task, agent_name):
+    if reserve and not quota_wait_seconds(task, agent_name, uncensored_only=uncensored_only, exclude=exclude):
         logger.warning("resolve_llm(%s): no available LLM in chain", task)
     return None
 
 
-def quota_wait_seconds(task: str, agent_name: str = "") -> float:
+def quota_wait_seconds(task: str, agent_name: str = "", *, uncensored_only: bool = False, exclude: frozenset = frozenset()) -> float:
     """Earliest slot ONLY when every candidate is blocked solely by quota.
 
     Read-only: no reservations and no sleep, safe from async callers too.
@@ -662,6 +680,8 @@ def quota_wait_seconds(task: str, agent_name: str = "") -> float:
     pm = get_provider_manager()
     off = disabled_providers()
     for _, entry in candidates:
+        if not _refusal_candidate(entry.get("provider"), entry.get("model"), uncensored_only, exclude):
+            continue
         name, model = entry.get("provider"), entry.get("model")
         provider = pm.get_provider(name)
         if not model or name in off or provider is None or not provider.available or _model_cooled_down(name, model):
@@ -688,7 +708,9 @@ def resolve_llm_wait(task: str, agent_name: str = "", **kwargs):
         instance = resolve_llm(task, agent_name, **kwargs)
         if instance is not None or _running_in_event_loop():
             return instance
-        wait = quota_wait_seconds(task, agent_name)
+        wait = quota_wait_seconds(task, agent_name,
+            uncensored_only=kwargs.get("uncensored_only", False),
+            exclude=kwargs.get("exclude", frozenset()))
         if not wait:
             return None
         time.sleep(wait)
@@ -701,7 +723,9 @@ async def resolve_llm_async(task: str, agent_name: str = "", **kwargs):
         instance = resolve_llm(task, agent_name, **kwargs)
         if instance is not None:
             return instance
-        wait = quota_wait_seconds(task, agent_name)
+        wait = quota_wait_seconds(task, agent_name,
+            uncensored_only=kwargs.get("uncensored_only", False),
+            exclude=kwargs.get("exclude", frozenset()))
         if not wait:
             return None
         await asyncio.sleep(wait)
@@ -933,26 +957,45 @@ def mark_model_unhealthy(provider_name: str, model: str,
                        provider_name, model, int(cooldown_seconds))
 
 
-def quota_fallback_call(task, client, call, *, agent_name=""):
-    """Retry a queued or direct call on the task chain after a key-level 429.
+def _response_refusal(response, task, routing_task, provider, model, agent_name):
+    content = getattr(response, "content", None)
+    # A chat call stays unchecked whether the submitted task or its routing
+    # task is the chat-category one (e.g. an unlisted task_type on a chat chain).
+    if isinstance(content, str) and checks_refusals(task) and checks_refusals(routing_task):
+        excerpt = detect_refusal(content)
+        if excerpt is not None:
+            routing = _load_routing()
+            while not _candidates(routing_task, routing):
+                parent = fallback_parent(routing_task)
+                if not parent:
+                    break
+                routing_task = parent
+            record_refusal(provider=provider, model=model, task=task,
+                           routing_task=routing_task, excerpt=excerpt, agent=agent_name)
+            return RefusalError(provider, model, task, excerpt)
+    return None
 
-    ``call`` owns execution/lane acquisition; this helper only changes clients.
-    Worker callers can wait on a quota-only chain. Sync event-loop callers
-    retain their immediate failure behavior instead of sleeping on that loop.
-    """
+
+def quota_fallback_call(task, client, call, *, agent_name="", task_type=None):
+    """Retry quota failures and refused non-chat answers on their routing chain."""
     from app.core.provider_quota import is_rate_limit_error, QuotaUnavailable
     last_error = None
+    last_refusal = None
+    excluded = set()
+
+    def next_instance():
+        return resolve_llm_wait(task, agent_name, uncensored_only=bool(excluded), exclude=excluded)
     for attempt in range(_LLM_CALL_MAX_ATTEMPTS):
         quota = getattr(client, "provider_quota", None)
         blocked = quota is not None and quota.wait_for_send(getattr(client, "quota_reservation", None))
         if blocked:
             quota.release(getattr(client, "quota_reservation", None))
-            instance = resolve_llm_wait(task, agent_name)
+            instance = next_instance()
             if instance is None:
-                raise last_error or QuotaUnavailable("Provider rate limit reached; no LLM available")
+                raise last_refusal or last_error or QuotaUnavailable("Provider rate limit reached; no LLM available")
             client = instance.create_llm()
         try:
-            return call(client)
+            response = call(client)
         except Exception as exc:
             if not is_rate_limit_error(exc):
                 raise
@@ -961,17 +1004,25 @@ def quota_fallback_call(task, client, call, *, agent_name=""):
             if quota is not None:
                 quota.exhaust(exc)
             else:
-                name = getattr(client, "provider_name", "")
-                provider = get_provider_manager().get_provider(name)
+                provider = get_provider_manager().get_provider(getattr(client, "provider_name", ""))
                 if provider is not None:
                     provider.quota.exhaust(exc)
             if attempt + 1 == _LLM_CALL_MAX_ATTEMPTS:
-                raise
-            instance = resolve_llm_wait(task, agent_name)
-            if instance is None:
-                raise
-            client = instance.create_llm()
-    raise last_error
+                raise last_refusal or exc
+        else:
+            error = _response_refusal(response, task_type or task, task,
+                getattr(client, "provider_name", ""), getattr(client, "model", ""), agent_name)
+            if error is None:
+                return response
+            last_refusal = error
+            excluded.add((error.provider, error.model))
+            if attempt + 1 == _LLM_CALL_MAX_ATTEMPTS:
+                raise error
+        instance = next_instance()
+        if instance is None:
+            raise last_refusal or last_error
+        client = instance.create_llm()
+    raise last_refusal or last_error
 
 
 def llm_call(
@@ -992,6 +1043,10 @@ def llm_call(
     ``caller_handles_failure()``, so the worker keeps a recoverable failure at
     WARNING, and the ERROR with the full traceback is written here — once,
     when the chain is exhausted.
+
+    Refused non-chat answers retry only user-marked uncensored models, with
+    already-refused provider/model pairs excluded and no cooldown. These
+    attempts share the upstream attempt budget. Exhaustion raises RefusalError.
 
     ``max_tokens`` caps the completion budget for THIS call (instead of the
     routing entry) — the anti-hallucination bound for tightly limited output
@@ -1018,15 +1073,20 @@ def llm_call(
 
     hop_limit = len(_load_routing()) + 1
     last_err: Optional[BaseException] = None
+    last_refusal = None
+    excluded = set()
     for attempt in range(1, _LLM_CALL_MAX_ATTEMPTS + 1):
-        instance = resolve_llm(task, agent_name=agent_name, overflow=True)
+        instance = resolve_llm(task, agent_name=agent_name, overflow=True, uncensored_only=bool(excluded), exclude=excluded)
         while instance is None and not _running_in_event_loop():
-            wait = quota_wait_seconds(task, agent_name)
+            wait = quota_wait_seconds(task, agent_name, uncensored_only=bool(excluded), exclude=excluded)
             if not wait:
                 break
             time.sleep(wait)
-            instance = resolve_llm(task, agent_name=agent_name, overflow=True)
+            instance = resolve_llm(task, agent_name=agent_name, overflow=True, uncensored_only=bool(excluded), exclude=excluded)
         if instance is None:
+            if last_refusal is not None:
+                logger.warning("llm_call: refusal fallback exhausted for %s", task)
+                raise last_refusal
             if last_err is not None:
                 # Nothing caught this one — the traceback the worker held back
                 # belongs in the log now: the queue chains its original
@@ -1050,7 +1110,7 @@ def llm_call(
                             agent_name or "-", attempt, _LLM_CALL_MAX_ATTEMPTS)
                 try:
                     with caller_handles_failure():
-                        return get_llm_queue().submit(
+                        response = get_llm_queue().submit(
                             task_type=task,
                             priority=priority,
                             llm=llm,
@@ -1058,13 +1118,35 @@ def llm_call(
                             agent_name=agent_name,
                             label=label,
                             overflow=overflow)
+                    error = _response_refusal(response, task, task, instance.provider_name,
+                                              instance.model, agent_name)
+                    if error is None:
+                        return response
+                    last_refusal = error
+                    excluded.add((error.provider, error.model))
+                    break
                 except LaneOverflow as ov:
                     instance._provider.quota.release(instance._quota_reservation)
                     if hop + 1 == hop_limit:
                         raise RuntimeError("llm_call: overflow hop limit exceeded") from ov
                     instance = ov.target
                     overflow = ov.overflow
+                    if not _refusal_candidate(instance.provider_name, instance.model, bool(excluded), excluded):
+                        instance._provider.quota.release(instance._quota_reservation)
+                        instance = overflow_target(task, agent_name,
+                            exclude_pools=overflow.left, uncensored_only=True, exclude=excluded)
+                        if instance is None:
+                            # No eligible free pool: wait on an eligible model instead
+                            # of bouncing back through the worker's unfiltered targets.
+                            instance = resolve_llm_wait(task, agent_name,
+                                uncensored_only=True, exclude=excluded)
+                            overflow = None
+                        if instance is None:
+                            logger.warning("llm_call: refusal fallback exhausted for %s", task)
+                            raise last_refusal
         except Exception as e:
+            if isinstance(e, RefusalError):
+                raise
             last_err = e
             from app.core.provider_quota import is_rate_limit_error
             if is_rate_limit_error(e):
@@ -1089,6 +1171,10 @@ def llm_call(
                     instance.provider_name, instance.model, str(e)[:200])
                 _cooldown_provider(instance.provider_name, f"upstream-fail: {str(e)[:120]}")
             # Loop continues; resolve_llm now skips the cooled-down model/provider.
+
+    if last_refusal is not None:
+        logger.warning("llm_call: refusal fallback exhausted for %s", task)
+        raise last_refusal
 
     # The fallback chain is used up — this failure is final, so it is logged
     # here with the traceback the queue worker left to the caller (the upstream

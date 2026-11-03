@@ -68,6 +68,36 @@ WORLD_GROUPS = [
 ]
 
 SECTIONS = {
+    "llm_refusal": {
+        "label": "LLM Refusals",
+        "scope": "instance",
+        "description": (
+            "A non-chat answer counts as a refusal when its first sentence contains a phrase "
+            "AND its first 400 characters contain a reason. The call then repeats on the next "
+            "model marked Uncensored in /admin/models."
+        ),
+        "fields": {
+            "phrases": {
+                "type": "text", "label": "Refusal phrases",
+                "description": "One literal entry per line, case insensitive. Empty disables detection.",
+                "default": (
+                    "I'm not able\nI am not able\nI'm unable\nI am unable\n"
+                    "I'm sorry\nI am sorry\nI cannot\nI can't\nI won't\nI must decline\nAs an AI\n"
+                    "kann ich nicht\nIch kann nicht\nIch kann leider nicht\nIch kann das nicht\n"
+                    "Ich kann dabei nicht\nwerde ich nicht\nEs tut mir leid\nLeider kann ich\n"
+                    "aus ethischen Gründen"
+                ),
+            },
+            "reasons": {
+                "type": "text", "label": "Refusal reasons",
+                "description": "One literal entry per line, case insensitive. Empty disables detection.",
+                "default": (
+                    "explicit\nsexual\nnud\nethic\npolicy\nguidelines\ninappropriate\n"
+                    "ethisch\nexplizit\nRichtlinie\nunangemessen\nsexuell"
+                ),
+            },
+        },
+    },
     "inventory": {
         "label": "Inventory",
         "scope": "world",

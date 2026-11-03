@@ -396,3 +396,8 @@ def get_config_path() -> Path:
 def get_lora_library_path() -> Path:
     """The instance-owned LoRA library file."""
     return get_instance_dir() / "lora_library.json"
+
+
+def get_llm_refusals_path() -> Path:
+    """Instance-wide refusal history alongside the other server logs."""
+    return _project_root / "logs" / "llm_refusals.jsonl"

@@ -1833,6 +1833,7 @@ class ImageService:
             from app.core.llm_queue import get_llm_queue, Priority
             response = get_llm_queue().submit(
                 task_type="image_analysis",
+                routing_task="image_recognition",
                 priority=Priority.NORMAL,
                 llm=llm,
                 messages_or_prompt=messages,
@@ -1902,6 +1903,7 @@ class ImageService:
 
             response = get_llm_queue().submit(
                 task_type="image_comment",
+                routing_task="image_recognition",
                 priority=Priority.NORMAL,
                 llm=llm,
                 messages_or_prompt=messages,
@@ -1976,6 +1978,7 @@ class ImageService:
                                                    request_timeout=30)
                 response = get_llm_queue().submit(
                     task_type="tool",
+                    routing_task="image_recognition",
                     priority=Priority.HIGH,
                     llm=llm,
                     messages_or_prompt=[

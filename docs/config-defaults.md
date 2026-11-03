@@ -536,3 +536,49 @@ on top of the static/dynamic deformation; they do not change volume compensation
 State editor hints are `live`. Resolved payloads always include numeric
 `stretch`, `spread`, `flatten_floor`, `length` and `girth`; all five affect only motion
 revision, leaving mesh fingerprints unchanged.
+
+## LLM Refusals (instance)
+
+`llm_refusal.phrases` and `llm_refusal.reasons` are multiline text fields, one literal, case-insensitive entry per line, read live. Empty lists disable detection.
+
+Default phrases:
+
+```text
+I'm not able
+I am not able
+I'm unable
+I am unable
+I'm sorry
+I am sorry
+I cannot
+I can't
+I won't
+I must decline
+As an AI
+kann ich nicht
+Ich kann nicht
+Ich kann leider nicht
+Ich kann das nicht
+Ich kann dabei nicht
+werde ich nicht
+Es tut mir leid
+Leider kann ich
+aus ethischen Gründen
+```
+
+Default reasons:
+
+```text
+explicit
+sexual
+nud
+ethic
+policy
+guidelines
+inappropriate
+ethisch
+explizit
+Richtlinie
+unangemessen
+sexuell
+```

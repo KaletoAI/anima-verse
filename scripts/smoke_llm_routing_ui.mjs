@@ -141,3 +141,24 @@ assert.deepEqual(JSON.parse(read(`JSON.stringify(rtLlmsOrder(${llms}, {item_labe
 assert.match(read(`rtRenderEntryItem({item_label_field:['name','model']}, {}, {provider:'DX10-02',model:'x',name:'beta'}, 'llm_routing[1]', 1)`),
              /class="title"[^>]*>DX10-02 · beta</);
 console.log('PASS LLMs page sorted by provider then name, provider in the collapsed title');
+
+// Refusal plan: task count 1 displays one badge, including escaped model and
+// excerpt in the tooltip; count zero displays no badge. Model count 2 displays
+// two refusals and escapes <M> in the actual rendered model row.
+read("RT_CATALOG.tasks[0].refusals_48h = {count:1,recent:[{ts:'2026-11-03T12:30:00Z',model:'<M>',excerpt:'<refused>'}]}; RT_FILTER.q = 'Alpha'");
+await read('renderLlmRoutingTasksPage(content)');
+assert.match(ctx.content.innerHTML, /1 refusals \/ 48h/);
+assert.match(ctx.content.innerHTML, /&lt;M&gt;/);
+assert.match(ctx.content.innerHTML, /&lt;refused&gt;/);
+const modelElements = {};
+const modelCtx = vm.createContext({console, document:{
+    getElementById(id) { return modelElements[id] ||= {innerHTML:'',children:[],appendChild(row){this.children.push(row);}}; },
+    createElement() {return {innerHTML:'',className:''};},
+    addEventListener() {}
+}, setInterval(){}, setTimeout(){}});
+vm.runInContext(readFileSync('static/admin/models.js','utf8').replace(/\nloadData\(\);\nsuitInit\(\);\s*$/, ''), modelCtx);
+vm.runInContext(`renderModels([{name:'<M>',provider:'P',capabilities:{uncensored:true},refusals_48h:{count:2,recent:[{ts:'2026-11-03T12:30:00Z',task:'image_prompt',excerpt:'<refused>'}]}}])`, modelCtx);
+assert.match(modelElements.modelsBody.children[0].innerHTML, /2 refusals \/ 48h/);
+assert.match(modelElements.modelsBody.children[0].innerHTML, /&lt;M&gt;/);
+assert.doesNotMatch(modelElements.modelsBody.children[0].innerHTML, /<M>/);
+console.log('PASS model and Tasks-page refusal badges and escaping');

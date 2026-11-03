@@ -62,7 +62,7 @@ function updateSortArrows() {
 }
 
 function getSortValue(m, field) {
-    if (field === 'tool_calling' || field === 'vision') {
+    if (field === 'tool_calling' || field === 'vision' || field === 'uncensored') {
         const v = (m.capabilities || {})[field];
         if (v === true) return 2;
         if (v === false) return 1;
@@ -97,7 +97,7 @@ function renderAll() {
     if (statusFilter === 'results') filtered = filtered.filter(m => m.has_result);
     if (statusFilter === 'unknown') filtered = filtered.filter(m => !m.has_result);
 
-    // Sortieren
+    // Sort models
     if (sortField && sortDir !== 0) {
         filtered.sort((a, b) => {
             const va = getSortValue(a, sortField);
@@ -115,6 +115,14 @@ function renderAll() {
     const withResult = allModels.filter(m => m.has_result).length;
     document.getElementById('countLabel').textContent =
         filtered.length + ' / ' + allModels.length + ' models · ' + withResult + ' with result';
+}
+
+function refusalBadge(entry) {
+    if (!entry || !(entry.count > 0)) return '';
+    const tooltip = (entry.recent || []).slice(0, 3).map(r =>
+        String(r.ts || '').slice(11, 16) + ' ' + r.task + ' — ' + r.excerpt).join('\n');
+    return ' <span class="badge-provider" title="' + esc(tooltip) + '">'
+        + esc(entry.count) + ' refusals / 48h</span>';
 }
 
 function renderModels(models) {
@@ -136,6 +144,7 @@ function renderModels(models) {
             <td><span class="badge-size">${sizeStr}</span></td>
             <td>${capToggle(m.name, 'tool_calling', caps.tool_calling, reported.tool_calling)}</td>
             <td>${capToggle(m.name, 'vision', caps.vision, reported.vision)}</td>
+            <td>${capToggle(m.name, 'uncensored', caps.uncensored)}${refusalBadge(m.refusals_48h)}</td>
             <td>${testBadge(caps, m.name)}</td>
             <td>${speedCell(caps)}</td>
             <td><input class="notes-input" data-model="${esc(m.name)}" value="${esc(caps.notes_de || '')}"
@@ -152,10 +161,10 @@ function renderModels(models) {
         detailRow.className = 'instruction-row';
         detailRow.id = instrId;
         detailRow.innerHTML = `
-            <td colspan="9">
+            <td colspan="10">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <label style="font-size:11px;color:#8b949e;">Tool Instruction (leer = Default):</label>
-                    <button class="btn-insert-default" onclick="insertDefault(this)" title="Default-Text einfuegen">Default einfuegen</button>
+                    <label style="font-size:11px;color:#8b949e;">Tool Instruction (empty = default):</label>
+                    <button class="btn-insert-default" onclick="insertDefault(this)" title="Insert default text">Insert default</button>
                 </div>
                 <textarea class="instruction-textarea" data-model="${esc(m.name)}"
                     onchange="saveRow(this)" onblur="saveRow(this)"
@@ -188,6 +197,7 @@ function renderUnmatched(entries) {
             <td><strong>${esc(e.pattern)}</strong></td>
             <td>${capToggle(e.pattern, 'tool_calling', caps.tool_calling)}</td>
             <td>${capToggle(e.pattern, 'vision', caps.vision)}</td>
+            <td>${capToggle(e.pattern, 'uncensored', caps.uncensored)}${refusalBadge(e.refusals_48h)}</td>
             <td><input class="notes-input" data-model="${esc(e.pattern)}" value="${esc(caps.notes_de || '')}"
                 onchange="saveRow(this)" onblur="saveRow(this)" /></td>
             <td>
@@ -202,10 +212,10 @@ function renderUnmatched(entries) {
         detailRow.className = 'instruction-row';
         detailRow.id = instrId;
         detailRow.innerHTML = `
-            <td colspan="5">
+            <td colspan="6">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <label style="font-size:11px;color:#8b949e;">Tool Instruction (leer = Default):</label>
-                    <button class="btn-insert-default" onclick="insertDefault(this)" title="Default-Text einfuegen">Default einfuegen</button>
+                    <label style="font-size:11px;color:#8b949e;">Tool Instruction (empty = default):</label>
+                    <button class="btn-insert-default" onclick="insertDefault(this)" title="Insert default text">Insert default</button>
                 </div>
                 <textarea class="instruction-textarea" data-model="${esc(e.pattern)}"
                     onchange="saveRow(this)" onblur="saveRow(this)"
@@ -347,7 +357,7 @@ async function saveFromElement(el) {
 
     // Find every element for this model (main row + detail row)
     const allEls = document.querySelectorAll('[data-model="' + CSS.escape(modelName) + '"]');
-    let tool_calling = null, vision = null, notes_de = '', tool_instruction = '';
+    let tool_calling = null, vision = null, uncensored = null, notes_de = '', tool_instruction = '';
 
     allEls.forEach(e => {
         if (e.classList.contains('cap-toggle')) {
@@ -355,6 +365,7 @@ async function saveFromElement(el) {
             const parsed = val === 'true' ? true : val === 'false' ? false : null;
             if (e.getAttribute('data-field') === 'tool_calling') tool_calling = parsed;
             if (e.getAttribute('data-field') === 'vision') vision = parsed;
+            if (e.getAttribute('data-field') === 'uncensored') uncensored = parsed;
         }
         if (e.classList.contains('notes-input')) notes_de = e.value;
         if (e.classList.contains('instruction-textarea')) tool_instruction = e.value;
@@ -363,7 +374,7 @@ async function saveFromElement(el) {
     const resp = await fetch('/admin/models/capabilities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pattern: modelName, tool_calling, vision, notes_de, tool_instruction }),
+        body: JSON.stringify({ pattern: modelName, tool_calling, vision, uncensored, notes_de, tool_instruction }),
     });
 
     if (resp.ok) {
@@ -376,7 +387,7 @@ async function saveFromElement(el) {
         const m = allModels.find(x => x.name === modelName);
         if (m) {
             m.has_custom_entry = true;
-            m.capabilities = { tool_calling, vision, notes_de, tool_instruction };
+            m.capabilities = { tool_calling, vision, uncensored, notes_de, tool_instruction };
         }
         // Highlight the instruction button when an instruction is set.
         const instrId = 'instr-' + cssId(modelName);
@@ -396,7 +407,7 @@ async function addPattern() {
     await fetch('/admin/models/capabilities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pattern, tool_calling: null, vision: null, notes_de: '' }),
+        body: JSON.stringify({ pattern, tool_calling: null, vision: null, uncensored: null, notes_de: '' }),
     });
     input.value = '';
     loadData();

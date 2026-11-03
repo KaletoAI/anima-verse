@@ -8,7 +8,7 @@ pages that edit that mapping.
 
 Routing is **task-based**: no code names a model. A caller passes a task id
 (`llm_call(task="…")`, `resolve_llm("…")`), and `app/core/llm_router.py`
-resolves it against the `llm_routing` list in the world's `config.json`.
+resolves it against the `llm_routing` list in the instance's `config.json`.
 
 `llm_routing` is a list of **LLM entries** — one per provider+model pair:
 
@@ -223,7 +223,7 @@ mutations of the UI model.
 
 ## Task catalog
 
-29 tasks, in the order they stand in
+30 tasks, in the order they stand in
 [`app/core/llm_tasks.py`](../app/core/llm_tasks.py).
 
 ### Streaming / RP
@@ -364,3 +364,28 @@ These run on image/audio backends, not on a language model, and are not part of
   the reasoning behind each requirements profile
 - [app/core/llm_router.py](../app/core/llm_router.py) — `resolve_llm`,
   `fallback_parent`, `explain_routing`
+
+## Refusals and uncensored models
+
+Non-chat answers are checked using the live instance settings in **LLM Refusals**
+(`llm_refusal.phrases` and `llm_refusal.reasons`, one literal entry per line).
+After trimming, JSON objects, arrays and fenced answers are excluded. One leading
+format label such as `CHECK:` is removed. A refusal requires a phrase in the first
+sentence (up to 300 characters) and a reason within the first 400 characters.
+Empty lists disable detection. Defaults are listed in [Config defaults](config-defaults.md).
+
+A refused call repeats on the first eligible model in its existing task chain
+marked **Uncensored: Yes** in `/admin/models`, excluding models that have already
+refused this call. This three-state capability is set only by the user. Refusal
+attempts share the normal attempt limit; exhausted chains raise `RefusalError`
+instead of returning refusal text. Refusals never put a provider or model into
+cooldown. Chat-category tasks, including plugin tasks, and stream objects are
+excluded. Routing, overflow and quota behavior are unchanged without a refusal.
+
+Every refusal appends a timestamp, provider, model, submitted task, routing task,
+agent and at most 200 answer characters to `logs/llm_refusals.jsonl`; prompts are
+never included. `/admin/models` displays counts by case-insensitive model name;
+LLM Routing → Tasks displays counts by task — a catalog task on its own row
+(`image_pose_check`, not the `image_prompt` chain it borrows), other call types
+(`image_analysis`, `tool`) on the task whose chain they used. Both cover the last 48 hours
+and show up to three recent cases in the badge tooltip.

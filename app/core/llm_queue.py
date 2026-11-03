@@ -180,7 +180,7 @@ class LLMQueue:
                 routing_task or task_type, llm,
                 lambda client: self._submit_once(task_type, priority, client,
                     messages_or_prompt, agent_name, label, overflow),
-                agent_name=agent_name)
+                agent_name=agent_name, task_type=task_type)
         return self._submit_once(task_type, priority, llm, messages_or_prompt,
                                  agent_name, label, overflow)
 

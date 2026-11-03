@@ -23,6 +23,7 @@ class CapabilityUpdate(BaseModel):
     pattern: str
     tool_calling: Optional[bool] = None
     vision: Optional[bool] = None
+    uncensored: Optional[bool] = None
     notes_de: str = ""
     tool_instruction: str = ""
 
@@ -48,6 +49,8 @@ def model_capabilities_page():
 def model_capabilities_data() -> Dict[str, Any]:
     """JSON API: every available model plus its capabilities and routing labels."""
     from app.core import config
+    from app.core.llm_refusal import refusal_counts
+    refusal_models = refusal_counts()["models"]
     pm = get_provider_manager()
     all_caps = get_all_capabilities()
     suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
@@ -82,7 +85,7 @@ def model_capabilities_data() -> Dict[str, Any]:
             # merged in — that claim is self-reported metadata, not something
             # anybody tested or documented here. Otherwise every vision model
             # would look documented and the short list would be pointless.
-            has_result = has_capability_info(caps) or bool(sd)
+            has_result = has_capability_info(caps) or caps.get("uncensored") is not None or bool(sd)
             # A vision answer in the last test beats the provider's claim
             # (DX10-02 lists qwen3.5-9b-heretic-v2-nvfp4 as text-only, yet it
             # answers images); a stored Yes/No beats both.
@@ -153,6 +156,11 @@ def model_capabilities_data() -> Dict[str, Any]:
             unmatched.append({"pattern": pattern, "capabilities": caps})
     unmatched.sort(key=lambda x: x["pattern"])
 
+    for row in models:
+        row["refusals_48h"] = refusal_models.get(row["name"].lower(), {"count": 0, "recent": []})
+    for row in unmatched:
+        row["refusals_48h"] = refusal_models.get(row["pattern"].lower(), {"count": 0, "recent": []})
+
     # Fetch the default tool instruction
     try:
         from app.core.tool_formats import _DEFAULT_TOOL_INSTRUCTION
@@ -186,6 +194,7 @@ def update_model_capability(body: CapabilityUpdate) -> Dict[str, Any]:
     caps = {k: v for k, v in existing.items() if k.startswith("tested_")}
     caps["tool_calling"] = body.tool_calling
     caps["vision"] = body.vision
+    caps["uncensored"] = body.uncensored
     caps["notes_de"] = body.notes_de
     if body.tool_instruction:
         caps["tool_instruction"] = body.tool_instruction
@@ -282,6 +291,7 @@ def _build_models_html() -> str:
                 <th class="sortable" data-sort="size_gb" onclick="sortBy('size_gb')">Size<span class="sort-arrow" id="arrow-size_gb"></span></th>
                 <th class="sortable" data-sort="tool_calling" onclick="sortBy('tool_calling')">Tool-Calling<span class="sort-arrow" id="arrow-tool_calling"></span></th>
                 <th class="sortable" data-sort="vision" onclick="sortBy('vision')">Vision<span class="sort-arrow" id="arrow-vision"></span></th>
+                <th class="sortable" data-sort="uncensored" onclick="sortBy('uncensored')">Uncensored<span class="sort-arrow" id="arrow-uncensored"></span></th>
                 <th class="sortable" data-sort="tested_score" onclick="sortBy('tested_score')">Test<span class="sort-arrow" id="arrow-tested_score"></span></th>
                 <th class="sortable" data-sort="speed" onclick="sortBy('speed')" title="Projected non-RP time per thought turn, from the last test">Speed<span class="sort-arrow" id="arrow-speed"></span></th>
                 <th class="sortable" data-sort="notes_de" onclick="sortBy('notes_de')">Notes<span class="sort-arrow" id="arrow-notes_de"></span></th>
@@ -299,6 +309,7 @@ def _build_models_html() -> str:
                 <th>Pattern</th>
                 <th>Tool calling</th>
                 <th>Vision</th>
+                <th>Uncensored</th>
                 <th>Notes</th>
                 <th></th>
             </tr>

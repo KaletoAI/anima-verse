@@ -1072,11 +1072,14 @@ def settings_llm_tasks(user=Depends(require_admin)):
         TASK_TYPES, CATEGORY_LABELS, REQUIREMENT_LABELS,
         REQUIREMENT_BADGE_LABELS, MODEL_CLASS_LABELS, is_task_gated_off)
     from app.core.llm_router import fallback_parent
+    from app.core.llm_refusal import refusal_counts
+    counts = refusal_counts()["tasks"]
     cfg = config.get_all()
     return {
         "tasks": [
             {
                 "id": tid,
+                "refusals_48h": counts.get(tid, {"count": 0, "recent": []}),
                 "label": t.get("label", tid),
                 "category": t.get("category", ""),
                 "category_label": CATEGORY_LABELS.get(str(t.get("category", "")), ""),

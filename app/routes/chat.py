@@ -259,6 +259,7 @@ def _analyze_chat_image(image_path: str, agent_name: str, user_text: str = "") -
         from app.core.llm_queue import get_llm_queue, Priority
         response = get_llm_queue().submit(
             task_type="image_recognition",
+            routing_task="image_recognition",
             priority=Priority.HIGH,
             llm=llm,
             messages_or_prompt=messages,
