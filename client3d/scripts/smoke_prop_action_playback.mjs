@@ -36,7 +36,7 @@ try {
   playPropEntry:(...args)=>{calls.push(['entry',...args]);return true},playPair:()=>true,
   update:dt=>calls.push(['update',dt]),setFirstPerson(){},resetSecondaryMotion(){}};
  const npc={name:'avatar',root,figure,target:new THREE.Vector3(),waypoints:[],route:null,entry:null,interaction:null,
- label:{},labelName:{},labelActivity:{},travelLine:null,travelKey:'',bubbleUntil:0};
+ label:{},labelName:{},labelActivity:{},labelBadges:{},travelLine:null,travelKey:'',bubbleUntil:0};
  manager.npcs.set('avatar',npc);manager.setRoomStandAt(()=>3.01);
  assert.equal(typeof manager.playOwnMotion,'function','manager accepts answer motion');
  manager.playOwnMotion('avatar',plan,'request');

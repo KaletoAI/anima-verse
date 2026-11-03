@@ -164,7 +164,7 @@ async function main() {
     root.position.copy(SEAT);
     const npc = {
       name, animation: 'idle', root, figure: stubFigure(travel), ring: null, sprite: null,
-      label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' },
+      label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' }, labelBadges: { textContent: '' },
       labelBubble: null, bubbleUntil: 0, target: SEAT.clone(), pace: 1, face: null,
       waypoints: [], ride: null, route: null, travelling: false, reckon: null,
       interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,

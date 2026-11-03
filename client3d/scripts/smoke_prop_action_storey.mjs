@@ -35,7 +35,7 @@ for (const floor of [9.4, undefined, 0]) {
   const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
   const root = new THREE.Group();
   const npc = { name: observer.name, root, target: new THREE.Vector3(), figure: null,
-    sprite: null, label: {}, labelName: {}, labelActivity: {}, waypoints: [],
+    sprite: null, label: {}, labelName: {}, labelActivity: {}, labelBadges: {}, waypoints: [],
     interaction: null, entry: null, bubbleUntil: 0, route: null, travelLine: null, travelKey: '' };
   mgr.npcs.set(observer.name, npc); mgr.update([state]);
   npc.route.receivedAt = performance.now() - 5000;
@@ -56,7 +56,7 @@ for (const floor of [9.4, null]) {
   const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
   const root = new THREE.Group();
   const npc = { name: walker.name, root, target: new THREE.Vector3(), figure: null,
-    sprite: null, label: {}, labelName: {}, labelActivity: {}, waypoints: [],
+    sprite: null, label: {}, labelName: {}, labelActivity: {}, labelBadges: {}, waypoints: [],
     interaction: null, entry: null, bubbleUntil: 0, route: null, travelLine: null, travelKey: '' };
   root.position.copy(state.pos);  // a figure appears where its first state puts it
   mgr.npcs.set(walker.name, npc); mgr.update([state]);
@@ -78,7 +78,7 @@ const figure = new Figure({ name: 'upper', template, scale: 1, height: 1.7,
   tier: 'full', noClips: false, libraryFits: true });
 root.add(figure.root);
 const npc = { name: char.name, root, figure, target: new THREE.Vector3(), waypoints: [], route: null,
-  entry: null, entryBlocked: false, propCommitKey: '', activity: '', labelActivity: {}, labelName: {},
+  entry: null, entryBlocked: false, propCommitKey: '', activity: '', labelActivity: {}, labelName: {}, labelBadges: {},
   settle: null, travelling: false, interaction: null, travelLine: null, travelKey: '', label: {} };
 mgr.npcs.set(char.name, npc);
 const active = read('worldmap_active.json').characters[0];

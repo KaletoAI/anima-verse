@@ -19,7 +19,7 @@ try {
  const figure={root:new THREE.Group(),playPair:()=>true,holdsTravel:false,update(){},
   faceTowards(dir,snap){assert.equal(snap,true);this.root.rotation.y=Math.atan2(dir.x,dir.z)},setYaw(yaw){this.root.rotation.y=yaw}};
  const npc={name:'avatar',root,figure,target:new THREE.Vector3(),waypoints:[],route:null,ride:null,interaction:null,
-  label:{},labelName:{},labelActivity:{},travelLine:null,travelKey:''};
+  label:{},labelName:{},labelActivity:{},labelBadges:{},travelLine:null,travelKey:''};
  mgr.npcs.set('avatar',npc);
  const state={stamp:1,interaction:{id:'one',kind:'handshake',role:'a',anchor:{x:5,z:7,yaw:2,place_id:'bench'},elapsed_s:0,rate:0,loop:true,clip_duration_s:2}};
  mgr.adoptInteraction(npc,state);

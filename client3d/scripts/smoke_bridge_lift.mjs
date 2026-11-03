@@ -491,7 +491,7 @@ async function main() {
       const name = `${rig.label}-${scenario}`;
       const npc = {
         name, animation: fromKind, root: owner, figure, ring: null, sprite: null,
-        label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' },
+        label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' }, labelBadges: { textContent: '' },
         labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
         waypoints: [], ride: null, route: null, travelling: false, reckon: null,
         interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
@@ -725,7 +725,7 @@ async function main() {
         const name = `${rig.label}-pair-control`;
         const npc = {
           name, animation: 'idle', root: owner, figure, ring: null, sprite: null,
-          label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' },
+          label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' }, labelBadges: { textContent: '' },
           labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(0, FLOOR, 0), pace: 1, face: null,
           waypoints: [], ride: null, route: null, travelling: false, reckon: null,
           interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0, settle: null,

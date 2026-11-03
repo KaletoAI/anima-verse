@@ -55,7 +55,7 @@ function placement(m, data) {
   const root = new THREE.Group();
   const npc = {
     name: 'A', animation: 'idle', root, figure, ring: null, sprite: null,
-    label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' },
+    label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' }, labelBadges: { textContent: '' },
     labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
     waypoints: [], ride: null, route: null, travelling: false, reckon: null,
     interaction: {

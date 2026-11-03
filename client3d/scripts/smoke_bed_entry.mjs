@@ -60,7 +60,7 @@ if(needed.some(k=>!existsSync(join(clips,k+'.fbx')))) {
   const figure=makeFigure(),owner=new THREE.Group();owner.add(figure.root);
   const manager=new NpcManager(null,{syncCounters:{},errWindow:{t:[],e:[]}});
   const npc={name:'avatar',root:owner,figure,target:new THREE.Vector3(),waypoints:[],route:null,entry:null,interaction:null,
-   label:{},labelName:{},labelActivity:{},travelLine:null,travelKey:'',bubbleUntil:0};
+   label:{},labelName:{},labelActivity:{},labelBadges:{},travelLine:null,travelKey:'',bubbleUntil:0};
   manager.npcs.set('avatar',npc);
   const plan={execution_id:'bed-86',journey_id:'bed-86',room_id:'',floor_y:0,waypoints:[[0,0],[0,0]],paces_m_s_real:[1],departure:null,
    access:{x:0,y:.01,z:0,yaw:45},anchor:{x:.46669,y:.4,z:-.34507,yaw:45,root_offset:0,place_id:'bed-86',slot:1},
