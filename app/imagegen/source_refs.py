@@ -48,8 +48,12 @@ def _inside_storage(path: Path) -> Optional[Path]:
     a meta value never reaches a file outside the world."""
     try:
         resolved = path.resolve()
-        resolved.relative_to(_storage())
+        relative = resolved.relative_to(_storage())
     except (ValueError, OSError):
+        return None
+    from app.core.screenshot_sources import SOURCE_DIR
+    if SOURCE_DIR in relative.parts:
+        # Composition inputs depict the scene, never a person's appearance.
         return None
     return resolved if resolved.is_file() else None
 

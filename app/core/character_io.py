@@ -184,12 +184,15 @@ def export_character_to_zip(
     file_entries: List[str] = []
 
     buf = io.BytesIO()
+    from app.core.screenshot_sources import SOURCE_DIR
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if char_dir.exists():
             for fp in sorted(char_dir.rglob("*")):
                 if not fp.is_file():
                     continue
                 rel = fp.relative_to(char_dir).as_posix()
+                if Path(rel).parts[:2] == ("images", SOURCE_DIR):
+                    continue
                 if Path(rel).name in _FILE_EXCLUDE_NAMES or _retired_model_file(rel):
                     continue
                 # Apply scope flags also to FS — chats/stories were never in FS

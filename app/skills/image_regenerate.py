@@ -82,7 +82,7 @@ def _save_analysis(output_path: str, analysis: str, character_name: str) -> None
             meta = load_image_meta(filename) or {}
             meta["image_analysis"] = analysis
             save_image_meta(filename, meta)
-            # Feed-Eintrag aktualisieren (image_meta.image_analysis)
+            # Update the feed entry (image_meta.image_analysis).
             feed = load_feed()
             for post in feed:
                 if post.get("image_filename") == filename:
@@ -256,28 +256,6 @@ def regenerate_image(character_name: str,
     final_prompt, _pose_checked = _pose_check.apply(
         occasion, final_prompt, override=pose_check, character=character_name)
 
-    # 4. Person detection (backend-independent) ALWAYS runs when
-    # character_name is present — the external post-processing needs
-    # appearances to resolve the persons.
-    screenshot_photo = (occasion == "photo" and use_source_as_reference
-                        and bool(source_image_path))
-    screenshot_subjects = screenshot_photo and character_names is not None
-    appearances: list = []
-    if character_name:
-        try:
-            from app.core.prompt_builder import PromptBuilder
-            _regen_builder_for_appearances = PromptBuilder(character_name)
-            if character_names is not None:
-                _persons = _regen_builder_for_appearances.detect_persons(final_prompt, character_names=character_names)
-                logger.info("Explicit character selection: %s", character_names)
-            else:
-                _persons = _regen_builder_for_appearances.detect_persons(final_prompt)
-            if not _persons and not screenshot_subjects:
-                _persons = _regen_builder_for_appearances.detect_persons("", character_names=[character_name])
-            appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
-        except Exception as _ape:
-            logger.warning("Appearance detection failed: %s", _ape)
-
     # The source image's meta: location/created_at for the new meta and, on
     # a regenerate, the reference images it was rendered with.
     _orig_filename = Path(output_path).name
@@ -295,6 +273,43 @@ def regenerate_image(character_name: str,
         except Exception:
             pass
     _orig_meta = _orig_meta or {}
+    if occasion == "photo":
+        # A fresh photo uses output_path as a name template, not as its source.
+        _orig_meta.pop("screenshot_source", None)
+
+    # The same composition mode handles initial uploads and gallery regenerates.
+    # Resolve even when unchecked: a new variant still owns a copy of its input.
+    _screenshot_source = None
+    if character_name and "/instagram/" not in output_path:
+        from app.core.screenshot_sources import resolve_screenshot_source
+        _screenshot_source = resolve_screenshot_source(character_name, _orig_filename, _orig_meta)
+    screenshot_photo = bool(use_source_as_reference and (
+        _screenshot_source or (occasion == "photo" and source_image_path)))
+    if screenshot_photo:
+        from app.core.scene_photo import _SCREENSHOT_SENTENCE, _SCREENSHOT_NEGATIVE
+        if _screenshot_source:
+            source_image_path = str(_screenshot_source)
+        final_prompt = final_prompt.replace(_SCREENSHOT_SENTENCE, "").strip()
+        final_prompt = f"{final_prompt}\n{_SCREENSHOT_SENTENCE}".strip()
+        negative_prompt_extra = f"{negative_prompt_extra}, {_SCREENSHOT_NEGATIVE}".strip(", ")
+    screenshot_subjects = screenshot_photo and character_names is not None
+
+    # Person detection is backend-independent; post-processing needs appearances.
+    appearances: list = []
+    if character_name:
+        try:
+            from app.core.prompt_builder import PromptBuilder
+            _regen_builder_for_appearances = PromptBuilder(character_name)
+            if character_names is not None:
+                _persons = _regen_builder_for_appearances.detect_persons(final_prompt, character_names=character_names)
+                logger.info("Explicit character selection: %s", character_names)
+            else:
+                _persons = _regen_builder_for_appearances.detect_persons(final_prompt)
+            if not _persons and not screenshot_subjects:
+                _persons = _regen_builder_for_appearances.detect_persons("", character_names=[character_name])
+            appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
+        except Exception as _ape:
+            logger.warning("Appearance detection failed: %s", _ape)
 
     _source_refs: Dict[str, Any] = {"persons": {}, "room": ""}
     if keep_source_references and _orig_meta and Path(output_path).exists():
@@ -388,7 +403,7 @@ def regenerate_image(character_name: str,
                     # Avatars are characters too. The is_user shortcut uses a
                     # profile image; photos need the same exact-outfit resolver
                     # as NPCs, without altering the normal slot priorities.
-                    ref_person = replace(p, is_user=False) if occasion == "photo" and p.is_user else p
+                    ref_person = replace(p, is_user=False) if (occasion == "photo" or screenshot_photo) and p.is_user else p
                     ref = (_source_refs["persons"].get(p.name)
                            or _regen_builder._resolve_person_ref_image(ref_person))
                     if ref:
@@ -554,6 +569,17 @@ def regenerate_image(character_name: str,
         Path(actual_output_path).write_bytes(images[0])
         logger.info(f"Image written ({len(images[0])} bytes, {_gen_duration:.1f}s)")
 
+        _companion_meta = {}
+        if create_new and _screenshot_source:
+            from app.core.screenshot_sources import store_screenshot_source, resolve_screenshot_source
+            _companion_meta["screenshot_source"] = store_screenshot_source(
+                character_name, Path(actual_output_path).name, _screenshot_source)
+            if screenshot_photo and "input_reference_image_1" in params.get("reference_images", {}):
+                # Persist the new image's own composition path, not its parent's.
+                own_source = resolve_screenshot_source(
+                    character_name, Path(actual_output_path).name, _companion_meta)
+                params["reference_images"]["input_reference_image_1"] = str(own_source)
+
         # Post-processing runs externally (pull model). The regeneration only
         # writes the image; an external service takes over the post-processing.
 
@@ -573,6 +599,7 @@ def regenerate_image(character_name: str,
             _location_val = get_character_current_location(character_name) or ""
 
         _regen_values = {
+            **_companion_meta,
             "prompt": final_prompt,
             "negative_prompt": negative_prompt,
             "backend": backend.name,

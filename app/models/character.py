@@ -4908,13 +4908,21 @@ def delete_character_daily_schedule(character_name: str) -> bool:
 
 def delete_character_image(character_name: str, image_filename: str) -> bool:
     """Delete an image and its metadata, and clean up chat references."""
+    from app.core.portrait_images import character_image_path
+    from app.core.screenshot_sources import resolve_screenshot_source
+    try:
+        character_image_path(character_name, image_filename)
+    except (ValueError, FileNotFoundError):
+        return False
     images_dir = get_character_images_dir(character_name)
     image_path = images_dir / image_filename
-
-    if not image_path.exists():
-        return False
+    companion = resolve_screenshot_source(
+        character_name, image_filename, _load_single_image_meta(character_name, image_filename))
 
     image_path.unlink()
+    if companion:
+        from app.core.media_cleanup import remove_files
+        remove_files([companion])
 
     changed = False
     # Reset the profile image if needed.
@@ -4989,4 +4997,3 @@ def _cleanup_image_from_chats(character_name: str, image_filename: str):
                 chat_file.write_text(json.dumps(messages, ensure_ascii=False, indent=2))
         except Exception:
             pass
-

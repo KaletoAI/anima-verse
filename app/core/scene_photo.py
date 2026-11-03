@@ -342,8 +342,13 @@ def take_scene_photo(avatar: str,
 
     filename = Path(actual_path).name
     from app.models.character import add_character_image_metadata
+    source_meta = {}
+    if source_path:
+        from app.core.screenshot_sources import store_screenshot_source
+        source_meta["screenshot_source"] = store_screenshot_source(avatar, filename, Path(source_path))
     add_character_image_metadata(avatar, filename, {
         "scene_photo": True, "secret": secret, "photo_subjects": subjects,
+        **source_meta,
         **({"photo_id": snapshot["photo_id"]} if snapshot is not None else {})})
     if reference_image_id:
         from app.core.chat_ops import delete_screenshot_upload
