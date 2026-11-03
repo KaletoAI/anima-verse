@@ -38,13 +38,13 @@ const offPreparation = actions.setPropActionPreparation(requestId => {
   preparedId = requestId;
   return new Promise(resolve => { releasePreparation = resolve; });
 });
-const heldRequest = actions.requestPropAction('rest', target, 'rev-7', 'Mira');
+const heldRequest = actions.requestPropAction('rest', target, 'rev-7', ['Mira']);
 await Promise.resolve();
 assert.equal(requests.length, 2, 'semantic HTTP must await position-writer drain');
 releasePreparation();
 assert.deepEqual(await heldRequest, response);
 offPreparation();
-assert.deepEqual(requests.at(-1), { path: '/play/prop-actions/request', body: { action_id: 'rest', target, revision: 'rev-7', partner: 'Mira' } });
+assert.deepEqual(requests.at(-1), { path: '/play/prop-actions/request', body: { action_id: 'rest', target, revision: 'rev-7', members: ['Mira'] } });
 assert.equal(requests.filter(r => r.path.endsWith('/respond')).length, 0, 'request must never accept on behalf of a partner');
 assert.equal(changes, 1, 'successful request invalidates before returning');
 assert.equal(finishIds[0], preparedId, 'mutation completion carries exact preparation correlation');

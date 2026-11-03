@@ -119,7 +119,7 @@ globalThis.fetch = async (path, init) => {
 const finishedIds = [];
 const offFinished = sceneSemantic.onPropActionChanged(id => finishedIds.push(id));
 try {
-  const mutation = hudSemantic.requestPropAction('share-coffee', exactTarget, 'revision-2', 'Ben');
+  const mutation = hudSemantic.requestPropAction('share-coffee', exactTarget, 'revision-2', ['Ben']);
   await Promise.resolve();
   assert.equal(typeof preparedId, 'string');
   assert.equal(sentRequests.length, 0, 'HTTP cannot overtake the host position write');
@@ -128,11 +128,11 @@ try {
   drainRelease();
   await mutation;
   assert.deepEqual(sentRequests, [{ path: '/play/prop-actions/request',
-    body: { action_id: 'share-coffee', target: exactTarget, revision: 'revision-2', partner: 'Ben' } }]);
+    body: { action_id: 'share-coffee', target: exactTarget, revision: 'revision-2', members: ['Ben'] } }]);
   assert.equal(finishedIds.at(-1), preparedId, 'settlement preserves the exact mutation barrier ID');
   assert.equal(sceneMessages.find(msg => msg.kind === 'prop-action-prepared').request_id, preparedId);
   scene.gameActions.preparePropAction = async () => { throw new Error('position write refused'); };
-  await assert.rejects(hudSemantic.requestPropAction('share-coffee', exactTarget, 'revision-2', 'Ben'), /position write refused/);
+  await assert.rejects(hudSemantic.requestPropAction('share-coffee', exactTarget, 'revision-2', ['Ben']), /position write refused/);
   assert.equal(sentRequests.length, 1, 'failed host preparation never sends HTTP');
   assert.equal(finishedIds.at(-1), hudMessages.filter(msg => msg.kind === 'prop-action-prepare').at(-1).request_id,
     'failed preparation also releases only its correlated barrier');

@@ -75,7 +75,8 @@ export interface PropActionMotion {
   anchor: { x: number; y: number; z: number; yaw: number; root_offset: number; place_id: string; slot: number }
   entry: { mode: 'bridge' | 'direct'; kind: string; pose_key: string; duration_s: number } | null
   height_cm: number | null
-  role: 'a' | 'b' | null
+  /** The clip role this figure plays (a..e; null for a solo action). */
+  role: 'a' | 'b' | 'c' | 'd' | 'e' | null
 }
 export interface PropActionResult {
   execution_id: string
@@ -90,13 +91,15 @@ export interface PropActionExecution extends PropActionResult {
   definition_revision: string
   target: PropActionTarget
   actor: string
-  partner: string
+  /** The invitees in invitation order; empty for a solo action. */
+  members: string[]
+  /** Whose view this row is. */
+  viewer: string
   phase: string
   phase_label: string
   label: string
+  /** Physical roles: clip role (a..e) -> name, name -> access role. */
   roles: {
-    actor: string
-    partner?: string
     clip: Record<string, string>
     access: Record<string, string>
   }
@@ -108,8 +111,12 @@ export interface PropActionExecution extends PropActionResult {
   meters?: PropActionMeter[]
   /** The viewer's side of the run. */
   own_role?: 'actor' | 'partner'
-  /** Pair runs: "ask" = the partner consents first, "react" = it starts and the partner reacts. */
-  partner_consent?: '' | 'ask' | 'react'
+  /** Runs with others: "ask" = every invitee consents first, "react" = a pair starts and the partner reacts. */
+  consent?: '' | 'ask' | 'react'
+  /** While it waits: each invitee's answer so far. */
+  consents?: Record<string, 'pending' | 'yes'>
+  /** The invitee whose "no" ended it. */
+  declined_by?: string
   /** A react run's partner reaction: pending / accepted / resisted / timeout / player / none. */
   reaction?: string
   /** The partner of a react run that has not begun may push it away. */
@@ -251,10 +258,11 @@ async function mutate(path: string, body: unknown): Promise<PropActionResult> {
 /** How a pair action begins, chosen per request: "ask" the partner first, or
  *  "react" — it starts at once and the partner reacts (may push it away). */
 export type PropActionConsent = 'ask' | 'react'
-export function requestPropAction(actionId: string, target: PropActionTarget, revision: string, partner?: string,
+/** ``members``: the invitees in invitation order (none for a solo action). */
+export function requestPropAction(actionId: string, target: PropActionTarget, revision: string, members: string[] = [],
   consent?: PropActionConsent): Promise<PropActionResult> {
   return mutate('/play/prop-actions/request', { action_id: actionId, target, revision,
-    ...(partner === undefined ? {} : { partner }), ...(partner && consent === 'react' ? { consent } : {}) })
+    ...(members.length ? { members } : {}), ...(members.length === 1 && consent === 'react' ? { consent } : {}) })
 }
 export function respondPropAction(executionId: string, accept: boolean): Promise<PropActionResult> {
   return mutate('/play/prop-actions/respond', { execution_id: executionId, accept })

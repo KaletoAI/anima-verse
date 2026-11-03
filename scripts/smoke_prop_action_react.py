@@ -103,7 +103,7 @@ class React(unittest.TestCase):
 
     def start(self):
         name, partner, target, pid = S.authored_pair()
-        result = request(name, target, partner=partner, consent="react")
+        result = request(name, target, members=[partner], consent="react")
         self.assertEqual(result["status"], "approaching", result)
         return name, partner, result["execution_id"]
 
@@ -123,7 +123,7 @@ class React(unittest.TestCase):
         told = [line for line in self.lines if name in line and partner in line]
         self.assertEqual(told, [f"{name} approaches {partner}: run-pair."])
         theirs, mine = self.row(partner, eid), self.row(name, eid)
-        self.assertEqual((theirs["own_role"], theirs["partner_consent"], theirs["can_resist"]),
+        self.assertEqual((theirs["own_role"], theirs["consent"], theirs["can_resist"]),
                          ("partner", "react", True))
         self.assertEqual((mine["own_role"], mine["reaction"], mine["can_resist"]), ("actor", "pending", False))
 
@@ -201,18 +201,18 @@ class React(unittest.TestCase):
 
     def test_8_wrong_partner_and_validation(self):
         name, partner, target, pid = S.authored_pair()
-        self.assertEqual(request(name, target, partner=partner, consent="maybe")["reason"], "invalid_request")
-        eid = request(name, target, partner=partner, consent="react")["execution_id"]
+        self.assertEqual(request(name, target, members=[partner], consent="maybe")["reason"], "invalid_request")
+        eid = request(name, target, members=[partner], consent="react")["execution_id"]
         self.assertEqual(A.react(name, eid, False)["reason"], "not_partner")
         A.cancel(name, eid)
-        self.assertEqual(request(name, target, partner=partner)["status"], "awaiting_consent")
+        self.assertEqual(request(name, target, members=[partner])["status"], "awaiting_consent")
 
     def test_11_naming_the_own_run_again(self):
         name, partner, target, pid = S.authored_pair()
-        eid = request(name, target, partner=partner, consent="react")["execution_id"]
+        eid = request(name, target, members=[partner], consent="react")["execution_id"]
         before = R.get(eid)
         for who, other in ((partner, name), (name, partner)):
-            answer = request(who, target, partner=other)
+            answer = request(who, target, members=[other])
             self.assertEqual((answer["execution_id"], answer["status"], answer.get("already")),
                              (eid, "approaching", True))
         self.assertEqual(len(R.claims()), 4)

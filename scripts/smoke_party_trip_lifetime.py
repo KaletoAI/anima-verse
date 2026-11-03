@@ -119,7 +119,7 @@ def main():
             accept(plan)
             assert party.is_party_follower(avatar)
             assert intents.get_intent(plan['id'])['status'] == 'active'
-            U.ended('Demo Guide', avatar, 'demo-activity')
+            U.ended('Demo Guide', ['Demo Guide', avatar], 'demo-activity')
             assert intents.get_intent(plan['id'])['status'] == 'done'
             assert party.get_party_of(avatar) is None
             print('PASS activity persists through arrival and releases on actual end')

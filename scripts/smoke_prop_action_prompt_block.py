@@ -97,8 +97,8 @@ def checks():
     print("PASS b: no ids, revisions, targets or distances")
 
     target = dict(location_id="l", room_id="r", placement_id="b", variant_uid="v")
-    state = dict(empty(), current=[dict(label="Doze", actor="Kai", partner="Mia", target=target)],
-                 outgoing=[dict(label="Kiss", actor="Kai", partner="Ben", target=target)])
+    state = dict(empty(), current=[dict(label="Doze", actor="Kai", members=["Mia"], target=target)],
+                 outgoing=[dict(label="Kiss", actor="Kai", members=["Ben"], target=target)])
     with patch.object(prop_actions, "offers", rows), pieces(), \
             patch.object(prop_action_engine, "state_for", lambda actor: state):
         own = prop_actions.prompt_block("Kai").split("\n")
@@ -151,7 +151,7 @@ def checks():
     assert (lie["status"], lie["reason"]) == ("refused", "presence_not_met"), lie
     assert unknown["reason"] == "no_such_offer"
     assert unknown["available"] == ["- Chair: Sit", "- Bed: Cuddle (with Mia)"], unknown
-    assert sent[1]["partner"] == "Mia" and sent[1]["target"]["placement_id"] == "b", sent[1]
+    assert sent[1]["members"] == ["Mia"] and sent[1]["target"]["placement_id"] == "b", sent[1]
     assert alone["reason"] == "partner_required" and len(sent) == 2, alone
     assert stop["reason"] == "nothing_to_stop"
     print("PASS f: a named request runs on the nearest usable piece, refusals say why")

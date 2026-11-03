@@ -86,35 +86,52 @@ def _refused(reason):
 
 
 def _members(run):
-    return [("actor", run["actor"])] + ([("partner", run["partner"])] if run["partner"] else [])
+    """``[(semantic role, name)]``: the initiator ``actor``, then every
+    invitee as ``partner`` (invitation order). The semantic role is what an
+    effect, requirement or access override targets; who plays which clip
+    role (a..e) is ``data.clip_roles``."""
+    return [("actor", run["actor"])] + [("partner", name) for name in run["members"]]
 
 
-#: How a pair run begins — chosen by whoever requests it, for every pair
-#: action: "ask" (the partner consents first) or "react" (it starts at once,
+def _targets(run, target):
+    """The names an effect or requirement ``target`` reaches: ``actor``, every
+    invitee (``partner``) or everyone (``both``)."""
+    if target == "both":
+        return store.people(run)
+    return [run["actor"]] if target == "actor" else list(run["members"])
+
+
+def _join(names):
+    from app.core.interaction_engine import join_names
+    return join_names(list(names))
+
+
+#: How a run with others begins — chosen by whoever requests it: "ask"
+#: (every invitee consents first) or "react" (a pair only: it starts at once,
 #: the partner reacts and may resist).
 CONSENTS = ("ask", "react")
 
 
 def _reacts(run):
     """A pair run that starts without consent: the partner REACTS instead."""
-    return bool(run.get("partner")) and run["data"].get("consent") == "react"
+    return len(run.get("members") or ()) == 1 and run["data"].get("consent") == "react"
 
 
-def _same_run(actor, target, action_id, partner):
+def _same_run(actor, target, action_id, members):
     """The live run ``actor`` already takes part in that this request names
-    again — the same action on the same piece with the same two people,
+    again — the same action on the same piece with the same people,
     whichever of them requested it. None otherwise."""
-    people = {actor, partner} - {""}
+    people = {actor, *members}
     held = store.held(store.person_key(actor))
     run = store.get(held) if held else None
     if (run and run["status"] not in store.TERMINAL and run["action_id"] == action_id
-            and run["target"] == target and {run["actor"], run["partner"]} - {""} == people):
+            and run["target"] == target and set(store.people(run)) == people):
         return run
     # An invitation holds no claims yet: the same question asked again is the
     # one already waiting for its answer.
     return next((r for r in store.live_runs() if r["status"] == "awaiting_consent"
                  and r["action_id"] == action_id and r["target"] == target
-                 and {r["actor"], r["partner"]} - {""} == people), None)
+                 and set(store.people(r)) == people), None)
 
 
 def _save(run):
@@ -165,8 +182,7 @@ def _commit(run, phases=(), *, runtime=None, now=None, catalogs=None):
                 for effect in run["definition"]["effects"]:
                     if effect["when"] != phase:
                         continue
-                    names = [run["actor"], run["partner"]] if effect["target"] == "both" else [run[effect["target"]]]
-                    for name in names:
+                    for name in _targets(run, effect["target"]):
                         reason = effects.validate_profile_effects(profiles[name], [effect], catalogs)
                         if reason and phase != "active":
                             raise ValueError(reason)
@@ -277,8 +293,7 @@ def _requirements(run, profiles):
     conditions = {f["id"] for f in load_filters() if f.get("enabled", True)}
     now = game_time()
     for req in run["definition"].get("requirements", []):
-        names = [run["actor"], run["partner"]] if req["target"] == "both" else [run[req["target"]]]
-        for name in names:
+        for name in _targets(run, req["target"]):
             profile = profiles[name]
             if req["type"] == "stat":
                 key = req["stat"]
@@ -378,7 +393,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
             from app.core import participation
             refused = participation.check(
                 "prop_action", str(definition.get("pose_key") or ""),
-                [n for n in (run["actor"], run.get("partner")) if n],
+                store.people(run),
                 run["target"]["location_id"], run["target"]["room_id"], offer=offer)
             if refused:
                 return refused["reason"]
@@ -390,7 +405,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
     if reason:
         return reason
     if require_claims:
-        for role, plan in run["data"]["plans"].items():
+        for name, plan in run["data"]["plans"].items():
             anchor = plan["entry_anchor"]
             key = store.slot_key(run["target"], anchor["marker_id"], anchor["slot"])
             if store.held(key, conn=conn) != run["execution_id"]:
@@ -414,51 +429,51 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
                 return "binding_not_supported"
             from app.core.prop_action_access import slot_access
             try:
-                point = _entry_point(run, role, place)
+                point = _entry_point(run, name, place)
             except ValueError:
                 return "approach_target_changed"
             current_access, access_reason = slot_access(
-                place, anchor["slot"], run["data"]["access_roles"][role],
-                definition, profiles[run[role]], point=point)
+                place, anchor["slot"], run["data"]["access_roles"][name],
+                definition, profiles[name], point=point)
             if access_reason:
                 return access_reason
             expected = point if point is not None else list(place["slots"][anchor["slot"]])
             if current_access != plan.get("bridge_access", plan["access"]) or expected != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
                 return "approach_target_changed"
-            if run["status"] == "approaching" and (run["phase"] == "entry" or run[role] in run["data"]["arrived"]):
-                pos = C.get_character_pos(run[role])
+            if run["status"] == "approaching" and (run["phase"] == "entry" or name in run["data"]["arrived"]):
+                pos = C.get_character_pos(name)
                 if not pos or math.dist((pos["x"], pos["z"]), (plan["access"]["x"], plan["access"]["z"])) > .05:
                     return "access_position_lost"
             if run["status"] in ("active", "sleeping"):
-                profile = profiles[run[role]]
+                profile = profiles[name]
                 field = profile.get("place") or {}
                 if field.get("execution_id") != run["execution_id"] or field.get("id") != anchor["place_id"] or field.get("slot") != anchor["slot"]:
                     return "owned_place_lost"
-                pos = C.get_character_pos(run[role])
+                pos = C.get_character_pos(name)
                 if not pos or math.dist((pos["x"], pos["z"]), (anchor["x"], anchor["z"])) > .05:
                     return "owned_position_lost"
     return ""
 
 
 def _shares_place(run) -> bool:
-    """A pair whose pose shares one place (catalog ``places`` 1)."""
+    """A pair or group whose pose shares one place (catalog ``places`` 1)."""
     from app.core.pose_catalog import pose_places
     definition = run["definition"]
     return definition["ability"] == "pair" and pose_places(definition["pose_key"]) == 1
 
 
-def _entry_point(run, role, place):
-    """The entry target of ``role`` on ``place`` when it is NOT its slot
-    position: a pair sharing one place (``_shares_place``) enters at its clip
-    role point (``interaction_engine.pair_role_point``), else None.
+def _entry_point(run, name, place):
+    """The entry target of ``name`` on ``place`` when it is NOT its slot
+    position: a pair or group sharing one place (``_shares_place``) enters
+    at its clip role point (``interaction_engine.role_point``), else None.
     Recomputed, never read back from a plan, so a revalidation compares the
     plan against today's place and catalog."""
     if not _shares_place(run):
         return None
     definition = run["definition"]
-    from app.core.interaction_engine import pair_role_point
-    clip_role = "a" if run["data"].get("clip_roles", {}).get("a") == run[role] else "b"
-    return list(pair_role_point(place, definition["pose_key"], clip_role))
+    from app.core.interaction_engine import role_point
+    clip_role = next(r for r, member in run["data"]["clip_roles"].items() if member == name)
+    return list(role_point(place, definition["pose_key"], clip_role))
 
 
 def _plan(run, *, conn, _query=None, replaces=()):
@@ -492,7 +507,7 @@ def _plan(run, *, conn, _query=None, replaces=()):
         if definition["ability"] == "pair":
             from app.core.interaction_engine import plan_interaction_at
             try:
-                allocation = plan_interaction_at(run["actor"], run["partner"], definition["pose_key"], place,
+                allocation = plan_interaction_at(store.people(run), definition["pose_key"], place,
                                                  profiles={name: query.profile(name) for _, name in _members(run)})
             except ValueError as exc:
                 last_reason = str(exc)
@@ -500,7 +515,7 @@ def _plan(run, *, conn, _query=None, replaces=()):
             if any(s not in free for s in allocation["slots"].values()):
                 continue
         else:
-            allocation = dict(clip_roles={}, access_roles={"actor": "actor"}, slots={"actor": free[0]})
+            allocation = dict(clip_roles={}, access_roles={run["actor"]: "actor"}, slots={run["actor"]: free[0]})
         pose = (definition["phases"][0]["pose_key"] if definition["ability"] == "combined"
                 else definition["pose_key"])
         _, entry_reason = _entry_capability(pose)
@@ -508,16 +523,16 @@ def _plan(run, *, conn, _query=None, replaces=()):
             last_reason = entry_reason
             continue
         allocations = ([allocation] if definition["ability"] == "pair" else
-                       [dict(clip_roles={}, access_roles={"actor": "actor"},
-                             slots={"actor": slot}) for slot in free])
+                       [dict(clip_roles={}, access_roles={run["actor"]: "actor"},
+                             slots={run["actor"]: slot}) for slot in free])
         for allocation in allocations:
             plans = {}
-            for role, name in _members(run):
-                slot = allocation["slots"][role]
-                point = (allocation.get("points") or {}).get(role)
+            for _role, name in _members(run):
+                slot = allocation["slots"][name]
+                point = (allocation.get("points") or {}).get(name)
                 plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot,
                                                 **({"point": point} if point else {})),
-                                     allocation["access_roles"][role], _query=query)
+                                     allocation["access_roles"][name], _query=query)
                 if plan["status"] != "ok":
                     last_reason = plan["reason"]
                     break
@@ -525,10 +540,10 @@ def _plan(run, *, conn, _query=None, replaces=()):
                 if not places.inside(target["location_id"], anchor["x"], anchor["z"]):
                     last_reason = "entry_anchor_outside_location"
                     break
-                plans[role] = plan
+                plans[name] = plan
             if len(plans) == len(_members(run)):
-                for role, name in _members(run):
-                    _, last_reason = _entry_spec(name, plans[role], pose, _query=query)
+                for _role, name in _members(run):
+                    _, last_reason = _entry_spec(name, plans[name], pose, _query=query)
                     if last_reason:
                         break
                 if last_reason:
@@ -577,20 +592,35 @@ def _revalidate_admission(run, conn, planned_state, replaces=()):
     return ""
 
 
-def request(actor: str, target: dict, action_id: str, revision: str, partner: str = "", request_id: str = "",
+def request(actor: str, target: dict, action_id: str, revision: str, members=(), request_id: str = "",
             consent: str = "ask") -> dict:
     """Public Core result remains unchanged; admission metadata stays internal."""
-    return request_with_creation(actor, target, action_id, revision, partner, request_id, consent)[0]
+    return request_with_creation(actor, target, action_id, revision, members, request_id, consent)[0]
+
+
+def _valid_members(actor, members):
+    """``members`` as a list when it names distinct people other than
+    ``actor`` (each a non-empty string), else None."""
+    if not isinstance(members, (list, tuple)):
+        return None
+    out = list(members)
+    if (any(not isinstance(m, str) or not m for m in out)
+            or len(set(out)) != len(out) or actor in out):
+        return None
+    return out
 
 
 def request_with_creation(actor: str, target: dict, action_id: str, revision: str,
-                          partner: str = "", request_id: str = "", consent: str = "ask") -> tuple[dict, bool]:
+                          members=(), request_id: str = "", consent: str = "ask") -> tuple[dict, bool]:
     """Return (result, created), with creation decided at the SQLite insert.
 
-    ``consent`` (pair requests): "ask" or "react" (``CONSENTS``). Naming the
-    run one already takes part in again — the partner's tool repeating the
-    action it just agreed to — answers that run, marked ``already``, instead
-    of refusing it as a busy participant.
+    ``members``: the invitees, in invitation order — as many as the action
+    takes beside the actor (``participants`` - 1), none for a solo action.
+    ``consent`` (requests with others): "ask" — every invitee consents
+    first — or "react", a pair only (``CONSENTS``). Naming the run one
+    already takes part in again — the partner's tool repeating the action it
+    just agreed to — answers that run, marked ``already``, instead of
+    refusing it as a busy participant.
 
     Adapters must not infer creation from a successful status: a replay has the
     same result. The second nonce lookup under BEGIN IMMEDIATE also handles a
@@ -598,15 +628,18 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     """
     if (not isinstance(actor, str) or not actor or not isinstance(target, dict) or set(target) != set(_TARGET)
             or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
-            or not all(isinstance(v, str) for v in (action_id, revision, partner, request_id))
+            or not all(isinstance(v, str) for v in (action_id, revision, request_id))
             or consent not in CONSENTS):
         return _refused("invalid_request"), False
-    fingerprint = store.encode([target, action_id, revision, partner] + ([consent] if consent != "ask" else []))
+    invitees = _valid_members(actor, members)
+    if invitees is None:
+        return _refused("invalid_partner"), False
+    fingerprint = store.encode([target, action_id, revision, invitees] + ([consent] if consent != "ask" else []))
     previous = store.by_request(actor, request_id)
     if previous:
         return (_result(previous) if previous["request_fingerprint"] == fingerprint
                 else _refused("request_id_conflict")), False
-    same = _same_run(actor, target, action_id, partner)
+    same = _same_run(actor, target, action_id, invitees)
     if same:
         return dict(_result(same), already=True), False
     if places.where(actor) != (target["location_id"], target["room_id"]):
@@ -616,22 +649,25 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     definition, reason = _definition(target, action_id, revision)
     if reason:
         return _refused(reason), False
-    if bool(partner) != (definition["participants"] == 2) or actor == partner:
+    if len(invitees) != definition["participants"] - 1:
         return _refused("invalid_partner"), False
+    if consent == "react" and len(invitees) != 1:
+        return _refused("invalid_consent"), False
     now = game_time().canonical()
-    asks = bool(partner) and consent != "react"
-    run = dict(execution_id=uuid.uuid4().hex, actor=actor, partner=partner, request_id=request_id or None,
+    asks = bool(invitees) and consent != "react"
+    run = dict(execution_id=uuid.uuid4().hex, actor=actor, members=invitees, request_id=request_id or None,
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
                status="awaiting_consent" if asks else "approaching", phase="", reason="", target=target,
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
                                                 last_game=now, elapsed=0.0, consent_elapsed=0.0,
-                                                **({"consent": consent} if partner else {})))
-    replaces = _replaced_runs(actor, partner, target, action_id)
+                                                **({"consent": consent} if invitees else {}),
+                                                **({"consents": {m: "pending" for m in invitees}} if asks else {})))
+    replaces = _replaced_runs(actor, invitees, target, action_id)
     if not replaces:
         return _admit(run, fingerprint)
     if asks:
-        # An invitation ends nothing yet: what the two are doing goes on
-        # until the partner agrees (respond), and on after a "no".
+        # An invitation ends nothing yet: what they are doing goes on until
+        # the last invitee agrees (respond), and on after a "no".
         return _admit(run, fingerprint, replaces=replaces)
     # Another action while seated: stand up and go there. Refusals that need
     # no route keep the current actions; a failed plan after that has ended
@@ -653,7 +689,7 @@ def _admit(run, fingerprint, *, replaces=(), direct=False):
     """Validate, plan, claim and start one new run (request_with_creation).
     ``replaces``: runs an invitation leaves running (they end on consent);
     ``direct``: the switch on the piece both already use (_settle_in_place)."""
-    actor, partner, request_id = run["actor"], run["partner"], run["request_id"] or ""
+    actor = run["actor"]
     marks = [("begin", time.perf_counter())]
     try:
         return _admit_timed(run, fingerprint, marks, replaces, direct)
@@ -667,7 +703,7 @@ def _admit(run, fingerprint, *, replaces=(), direct=False):
 
 
 def _admit_timed(run, fingerprint, marks, replaces, direct):
-    actor, partner, request_id = run["actor"], run["partner"], run["request_id"] or ""
+    actor, members, request_id = run["actor"], run["members"], run["request_id"] or ""
     with _lock(run["execution_id"]):
         marks.append(("lock", time.perf_counter()))
         query = places._GeometryQuery(cache_profiles=True)
@@ -687,7 +723,7 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
         run["data"]["plans"] = plans
         reacts = _reacts(run)
         if reacts:
-            run["data"].update(consented=True, reaction=_reaction_request(partner))
+            run["data"].update(consented=True, reaction=_reaction_request(members[0]))
         with _claim_transaction(run) as conn:
             previous = store.by_request(actor, request_id, conn=conn)
             if previous:
@@ -697,10 +733,10 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
             if reason:
                 return _refused(reason), False
             store.insert(conn, run)
-            if not partner or reacts:
+            if not members or reacts:
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
         marks.append(("claim", time.perf_counter()))
-        if not partner or reacts:
+        if not members or reacts:
             _launch(run, direct)
         marks.append(("start", time.perf_counter()))
     _notify(run)
@@ -708,29 +744,46 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
         _narrate(run, "{actor} approaches {partner}: {pose}.")
         if run["data"]["reaction"]["state"] == "pending":
             _ask_reaction(run)
-    elif partner:
-        _narrate(run, "{inviter} suggests {pose} to {invitee}.", inviter=actor, invitee=partner)
+    elif members:
+        _narrate(run, "{inviter} suggests {pose} to {invitee}.", inviter=actor, invitee=_join(members))
         # A decision/model or respond-lane request must never run inside an
-        # execution/profile/place lock or an SQLite transaction.
+        # execution/profile/place lock or an SQLite transaction. One question
+        # per invitee: each answers for itself.
         from app.core.hooks import emit
         from app.core.keyed_lock import _after_locks
-        _after_locks(lambda: emit("prop_action.invited", execution_id=run["execution_id"], inviter=actor, invitee=partner))
+        for member in members:
+            _after_locks(lambda member=member: emit("prop_action.invited", execution_id=run["execution_id"],
+                                                    inviter=actor, invitee=member))
     return _result(store.get(run["execution_id"])), True
+
+
+def _last_consent(run, name) -> bool:
+    """Whether ``name``'s "yes" is the one ``run`` still waits for: every
+    other invitee has agreed already."""
+    consents = run["data"].get("consents") or {}
+    return all(answer == "yes" for member, answer in consents.items() if member != name)
 
 
 def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) -> dict:
     with _lock(execution_id):
         run = store.get(execution_id)
-        if not run or run["partner"] != actor:
+        if not run or actor not in run["members"]:
             return _refused("not_invitee")
         if type(accept) is not bool:
             return _refused("invalid_response")
-        if run["status"] != "awaiting_consent":
+        if run["status"] != "awaiting_consent" or run["data"]["consents"].get(actor) != "pending":
             return _result(run)
         if not accept:
+            # One "no" ends the invitation for everyone, naming who said it.
+            run["data"]["declined_by"] = actor
             return _finish(run, "cancelled", "consent_declined")
         if is_world_frozen():
             return _refused("world_frozen")
+        if not _last_consent(run, actor):
+            # Agreed; the run waits for the others before anything is planned.
+            run["data"]["consents"][actor] = "yes"
+            _save(run)
+            return _result(run)
         query = places._GeometryQuery(cache_profiles=True)
         reason = _validate(run, _query=query)
         planned_state = _planning_state(run, query)
@@ -765,6 +818,7 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
                 store.save(conn, run)
                 return _result(run)
             run["data"].update(plans=plans, consented=True, last_game=game_time().canonical(), process=_PROCESS)
+            run["data"]["consents"][actor] = "yes"
             run["status"] = "approaching"
             store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
             store.save(conn, run)
@@ -786,13 +840,13 @@ def _start(run):
         run["data"]["journey_ids"][name] = uuid.uuid4().hex
     _save(run)  # Persist identity BEFORE the real journey write (crash recovery).
     deadline = 60.0
-    for role, name in _members(run):
-        anchor = run["data"]["plans"][role]["entry_anchor"]
+    for _role, name in _members(run):
+        anchor = run["data"]["plans"][name]["entry_anchor"]
         target = dict(run["target"], action_id=run["action_id"], definition_revision=run["definition_revision"],
                       marker_id=anchor["marker_id"], slot=anchor["slot"])
         if _shares_place(run):   # the planned clip role point, not the slot position
             target["point"] = [anchor["x"], anchor["z"]]
-        journey, reason = travel.start_approach_journey(name, target, run["data"]["access_roles"][role], execution_kind="prop_action",
+        journey, reason = travel.start_approach_journey(name, target, run["data"]["access_roles"][name], execution_kind="prop_action",
                             execution_ref=run["execution_id"], journey_id=run["data"]["journey_ids"][name])
         if not journey:
             _finish(run, "failed", reason)
@@ -800,7 +854,7 @@ def _start(run):
         delay = max(0, (GameTime.parse(journey["started_at_game"]) - game_time()).total_seconds)
         deadline = max(deadline, float(journey["waypoints"][-1][2]) + delay + 60)
         try:
-            snapshot = _motion_snapshot(run, role, name, journey)
+            snapshot = _motion_snapshot(run, name, journey)
         except Exception:
             # The owner's client then follows the worldmap travel block.
             logger.exception("Prop action motion snapshot failed: %s", run["execution_id"])
@@ -810,12 +864,12 @@ def _start(run):
     _save(run)
 
 
-def _motion_snapshot(run, role, name, journey):
+def _motion_snapshot(run, name, journey):
     """What the participant's OWN client plays, taken from the very journey
     and plan the server runs (B1: the server decides and plans, the owner
     plays it at once on its own clock). Stored with the run; paces are
     derived from the timed polyline when it is read."""
-    plan = run["data"]["plans"][role]
+    plan = run["data"]["plans"][name]
     definition = run["definition"]
     pose = definition["phases"][0]["pose_key"] if definition["ability"] == "combined" else definition["pose_key"]
     spec, reason = _entry_spec(name, plan, pose)
@@ -847,7 +901,7 @@ def _motion_snapshot(run, role, name, journey):
                             place_id=anchor["place_id"], slot=anchor["slot"]),
                 entry=entry, height_cm=cm,
                 role=next((r for r, member in run["data"].get("clip_roles", {}).items()
-                           if r in ("a", "b") and member == name), None))
+                           if member == name), None))
 
 
 def motion_for(name: str, run) -> dict | None:
@@ -858,7 +912,7 @@ def motion_for(name: str, run) -> dict | None:
     the zero-time seat leg when ``departure`` is set; ``paces_m_s_real`` are
     per segment (null = timeless), from the game clock right now.
     """
-    if not run or run["status"] != "approaching" or name not in (run["actor"], run["partner"]):
+    if not run or run["status"] != "approaching" or name not in store.people(run):
         return None
     snapshot = run["data"].get("motions", {}).get(name)
     if not snapshot:
@@ -874,10 +928,9 @@ def _own_journey(run, name, journey):
                and journey.get("journey_id") == run["data"]["journey_ids"].get(name))
     if not matches or "approach_target" not in journey:
         return matches  # A durable receipt has identity, not an approach body.
-    semantic_role = "actor" if name == run["actor"] else "partner"
-    plan = run["data"]["plans"][semantic_role]
+    plan = run["data"]["plans"][name]
     target = journey["approach_target"]
-    return (journey.get("approach_role") == run["data"]["access_roles"][semantic_role]
+    return (journey.get("approach_role") == run["data"]["access_roles"][name]
             and journey.get("entry_anchor") == plan["entry_anchor"]
             and target.get("marker_id") == plan["entry_anchor"]["marker_id"]
             and target.get("slot") == plan["entry_anchor"]["slot"])
@@ -1015,7 +1068,7 @@ def begin_finale(execution_id: str, name: str) -> dict:
         if not kind:
             return dict(ok=False, reason="no_finale")
         role = (next((r for r, member in run["data"].get("clip_roles", {}).items() if member == name), "")
-                if run["partner"] else "")
+                if run["members"] else "")
         duration = _finale_duration_s(kind, role, name)
         if duration <= 0:
             return dict(ok=False, reason="no_finale")
@@ -1129,7 +1182,7 @@ def _narrate(run, key, *, literal=False, **fmt):
             record_utterance(
                 speaker=STORYTELLER_SPEAKER,
                 content=key if literal else t(key, lang).format(
-                    actor=actor, partner=run["partner"], prop=prop, pose=pose, **fmt),
+                    actor=actor, partner=_join(run["members"]), prop=prop, pose=pose, **fmt),
                 volume=VOLUME_NORMAL, location_id=target["location_id"], room_id=target["room_id"],
                 source="prop_action", anchor=actor)
         except Exception as e:
@@ -1148,10 +1201,12 @@ def _narrate_finish(run, before, status, reason, kept):
     pair = run["definition"]["ability"] == "pair"
     if reason == "consent_declined":
         _narrate(run, "{invitee} does not feel like {pose} with {inviter} right now.",
-                 inviter=run["actor"], invitee=run["partner"])
+                 inviter=run["actor"], invitee=run["data"].get("declined_by") or _join(run["members"]))
     elif reason == "consent_expired":
+        consents = run["data"].get("consents") or {}
+        silent = [m for m in run["members"] if consents.get(m) != "yes"] or run["members"]
         _narrate(run, "{invitee} does not respond to the invitation from {inviter}.",
-                 inviter=run["actor"], invitee=run["partner"])
+                 inviter=run["actor"], invitee=_join(silent))
     elif before in ("active", "sleeping"):
         # A pair ends through end_interaction, which tells the room itself;
         # a seat kept for the actor's next place or follow pose is no getting up.
@@ -1327,7 +1382,7 @@ def _follow_up(run, follows):
             if not reason:
                 now = game_time().canonical()
                 fingerprint = store.encode([target, action["id"], revision, "", "follow", run["execution_id"]])
-                follow = dict(execution_id=uuid.uuid4().hex, actor=name, partner="", request_id=None,
+                follow = dict(execution_id=uuid.uuid4().hex, actor=name, members=[], request_id=None,
                               request_fingerprint=fingerprint, action_id=action["id"],
                               definition_revision=revision, status="approaching", phase="", reason="",
                               target=dict(target), definition=definition,
@@ -1386,13 +1441,13 @@ def _exit_motion(pose, before, after):
 def cancel(actor: str, execution_id: str) -> dict:
     with _lock(execution_id):
         run = store.get(execution_id)
-        if not run or actor not in (run["actor"], run["partner"]):
+        if not run or actor not in store.people(run):
             return _refused("not_participant")
         if run["status"] in store.TERMINAL:
             if run["data"].get("cleanup_pending"):
                 _cleanup(run)
             return _result(run)
-        if actor == run["partner"] and _reacts(run) and run["status"] == "approaching":
+        if actor in run["members"] and _reacts(run) and run["status"] == "approaching":
             # The partner of a react run pushes it away before it begins.
             run["data"].setdefault("reaction", {}).update(state="resisted", feeling=-1)
             _narrate(run, "{partner} pushes {actor} away.")
@@ -1453,24 +1508,24 @@ def _freed(run, replaces):
     return own
 
 
-def _partner_replaceable(partner, actor):
-    """The partner's own live run a pair request ends ("" = none): one that
-    involves nobody but the two of them — sitting alone, or the pair action
-    they already share. Asleep, or together with somebody else, it is busy."""
-    held = store.held(store.person_key(partner))
+def _member_replaceable(member, people):
+    """An invitee's own live run a request ends ("" = none): one that
+    involves nobody but ``people`` — sitting alone, or the action they
+    already share. Asleep, or together with somebody else, it is busy."""
+    held = store.held(store.person_key(member))
     old = store.get(held) if held else None
     if (not old or old["status"] in store.TERMINAL or old["status"] == "sleeping"
-            or {old["actor"], old["partner"]} - {""} - {actor, partner}):
+            or set(store.people(old)) - set(people)):
         return ""
     return held
 
 
-def _replaced_runs(actor, partner, target, action_id):
+def _replaced_runs(actor, members, target, action_id):
     """Every live run a request ends before its own begins: the actor's
-    (_replaceable) and, for a pair, the partner's (_partner_replaceable)."""
+    (_replaceable) and each invitee's (_member_replaceable)."""
+    people = [actor, *members]
     refs = [_replaceable(actor, target, action_id)]
-    if partner:
-        refs.append(_partner_replaceable(partner, actor))
+    refs += [_member_replaceable(member, people) for member in members]
     return tuple(dict.fromkeys(r for r in refs if r))
 
 
@@ -1495,7 +1550,7 @@ def _replacing(run, replaces):
         old = store.get(ref)
         if not old:
             continue
-        name = next((n for _, n in _members(run) if n in (old["actor"], old["partner"])), run["actor"])
+        name = next((n for _, n in _members(run) if n in store.people(old)), run["actor"])
         _replace(name, ref)
         owners.append((name, ref))
     try:
@@ -1524,10 +1579,10 @@ def _settle_in_place(run):
         for plan in data["plans"].values():
             plan["entry_mode"] = "direct"
         data["arrived"] = [name for _, name in _members(run)]
-        _commit(run, runtime={name: dict(pos_x=data["plans"][role]["access"]["x"],
-                                         pos_z=data["plans"][role]["access"]["z"],
+        _commit(run, runtime={name: dict(pos_x=data["plans"][name]["access"]["x"],
+                                         pos_z=data["plans"][name]["access"]["z"],
                                          pos_session=None, pos_seq=None)
-                              for role, name in _members(run)})
+                              for _role, name in _members(run)})
         _begin_entry(run)
     except Exception:
         logger.exception("Prop action switch in place failed: %s", run["execution_id"])
@@ -1569,7 +1624,7 @@ def interrupt(actor, reason, *, execution_id=""):
     if _INTERNAL_MUTATION.get():
         return
     for run in store.live_runs():
-        if actor not in (run["actor"], run["partner"]) or (execution_id and run["execution_id"] != execution_id):
+        if actor not in store.people(run) or (execution_id and run["execution_id"] != execution_id):
             continue
         if run["status"] == "awaiting_consent" and reason in _INVITATION_SURVIVES:
             continue
@@ -1609,7 +1664,7 @@ def owner_guard(actor, journey):
     ref = journey.get("execution_ref", "")
     with _lock(ref):
         run = store.get(ref)
-        allowed = bool(run and run["status"] == "approaching" and actor in dict((n, r) for r, n in _members(run))
+        allowed = bool(run and run["status"] == "approaching" and actor in store.people(run)
                        and _own_journey(run, actor, journey))
         if allowed:
             # On restart pause this ticker snapshot: _clock rewrites its exact
@@ -1729,8 +1784,8 @@ def _begin_entry(run):
     definition = run["definition"]
     pose = (definition["phases"][0]["pose_key"] if definition["ability"] == "combined" else definition["pose_key"])
     entries = {}
-    for role, name in _members(run):
-        spec, reason = _entry_spec(name, run["data"]["plans"][role], pose)
+    for _role, name in _members(run):
+        spec, reason = _entry_spec(name, run["data"]["plans"][name], pose)
         if reason:
             _finish(run, "failed", reason)
             return
@@ -1742,14 +1797,15 @@ def _begin_entry(run):
     _save(run)
     # Display actual bridge at exact access; no place/body anchor until it ends.
     from app.core.keyed_lock import keyed_lock
-    for role, name in _members(run):
+    for _role, name in _members(run):
         with keyed_lock("character_profile", name):
             profile = C.get_character_profile(name)
-            if run["data"]["plans"][role].get("entry_mode") == "direct":
+            plan = run["data"]["plans"][name]
+            if plan.get("entry_mode") == "direct":
                 profile.pop("prop_action_entry", None)
             else:
                 profile["prop_action_entry"] = dict(execution_id=run["execution_id"], **entries[name],
-                    access=run["data"]["plans"][role]["access"], anchor=run["data"]["plans"][role]["entry_anchor"])
+                    access=plan["access"], anchor=plan["entry_anchor"])
             C.save_character_profile(name, profile)
     if not any(e["duration_game_s"] for e in entries.values()):
         _activate(run)
@@ -1777,7 +1833,7 @@ def _activate(run):
         if ability == "pair":
             from app.core.interaction_engine import start_interaction_at
             try:
-                interaction = start_interaction_at(run["actor"], run["partner"], pose,
+                interaction = start_interaction_at(store.people(run), pose,
                                                    execution_id=run["execution_id"],
                                                    plans=run["data"]["plans"], commit_profiles=entered)
             except ValueError as exc:
@@ -1786,16 +1842,18 @@ def _activate(run):
                 _finish(run, "failed", str(exc))
                 return
             # The furniture counterpart of ``interaction.invite_started``: the
-            # pair is live. Consent was the run's, not an invitation's, so a
-            # package that starts a state with a pair pose listens here too
-            # (``interaction.ended`` already covers both endings).
+            # pair or group is live. Consent was the run's, not an
+            # invitation's, so a package that starts a state with a pair pose
+            # listens here too (``interaction.ended`` covers every ending).
+            # ``members``: everyone, the initiator first.
             from app.core.hooks import emit
             from app.core.keyed_lock import _after_locks
-            _after_locks(lambda: emit("prop_action.pair_started", execution_id=run["execution_id"],
-                                      interaction=interaction, actor=run["actor"], partner=run["partner"]))
+            _after_locks(lambda: emit("prop_action.group_started", execution_id=run["execution_id"],
+                                      interaction=interaction, actor=run["actor"],
+                                      members=store.people(run)))
         else:
             name = run["actor"]
-            anchor = run["data"]["plans"]["actor"]["entry_anchor"]
+            anchor = run["data"]["plans"][name]["entry_anchor"]
             place = dict(id=anchor["place_id"], slot=anchor["slot"],
                          room_id=run["target"]["room_id"], execution_id=run["execution_id"])
             entered({name: dict(pose_key=pose, pose_flavor="", place=place, prop_action_entry=None,
@@ -1874,7 +1932,7 @@ def advance(now: GameTime) -> int:
             invited = run["status"] == "awaiting_consent"
             reason = _validate(run, require_claims=not invited,
                                presence=run["status"] in ("awaiting_consent", "approaching") or run["definition"]["interrupt_on_presence_change"],
-                               replaces=_replaced_runs(run["actor"], run["partner"], run["target"], run["action_id"])
+                               replaces=_replaced_runs(run["actor"], run["members"], run["target"], run["action_id"])
                                if invited else ())
             if reason:
                 _finish(run, "failed", reason)
@@ -1904,7 +1962,7 @@ def advance(now: GameTime) -> int:
                     if data["elapsed"] > data.get("deadline", 60):
                         _finish(run, "failed", "approach_timeout")
                         continue
-                    for role, name in _members(run):
+                    for _role, name in _members(run):
                         if name in data["arrived"]:
                             continue
                         profile = C.get_character_profile(name)
@@ -1913,7 +1971,7 @@ def advance(now: GameTime) -> int:
                         receipt = profile.get("last_journey_result") or {}
                         if _own_journey(run, name, receipt) and receipt["status"] == "arrived":
                             # Actual durable arrival proof and exact floor point.
-                            access = data["plans"][role]["access"]
+                            access = data["plans"][name]["access"]
                             pos = C.get_character_pos(name)
                             if pos and math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) <= .02:
                                 data["arrived"].append(name)
@@ -2017,31 +2075,33 @@ def _notify(run):
     _after_locks(lambda: avatars(names, ("self", "scene")))
 
 
-def check(actor: str, target: dict, action_id: str, revision: str, partner: str = "", *, _query=None, include_plans: bool = False,
+def check(actor: str, target: dict, action_id: str, revision: str, members=(), *, _query=None, include_plans: bool = False,
           offer: bool = False) -> dict:
     """Read-only preflight; optional admin diagnostics reuse the actual successful plans."""
     if (not isinstance(target, dict) or set(target) != set(_TARGET)
             or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
-            or not all(isinstance(v, str) and v for v in (actor, action_id, revision))
-            or not isinstance(partner, str)):
+            or not all(isinstance(v, str) and v for v in (actor, action_id, revision))):
         return dict(enabled=False, reason="invalid_request")
+    invitees = _valid_members(actor, members)
+    if invitees is None:
+        return dict(enabled=False, reason="invalid_partner")
     query = _query if _query is not None else places._GeometryQuery()
     if places.where(actor, profile=query.profile(actor)) != (target["location_id"], target["room_id"]):
         return dict(enabled=False, reason="target_not_in_actor_room")
     definition, reason = _definition(target, action_id, revision, _query=query)
     if reason:
         return dict(enabled=False, reason=reason)
-    if bool(partner) != (definition["participants"] == 2) or actor == partner:
+    if len(invitees) != definition["participants"] - 1:
         return dict(enabled=False, reason="invalid_partner")
-    run = dict(execution_id="", actor=actor, partner=partner, action_id=action_id,
+    run = dict(execution_id="", actor=actor, members=invitees, action_id=action_id,
                definition_revision=revision, target=target, definition=definition,
-               status="awaiting_consent" if partner else "approaching",
+               status="awaiting_consent" if invitees else "approaching",
                data=dict(plans={}, journey_ids={}, access_roles={}))
     plans = {}
     # Preserve definition/partner/freeze/participant/requirement precedence.
     # Never build a route for an already refused offer.
-    # The two's own running actions are ended by the request, not a block.
-    replaces = _replaced_runs(actor, partner, target, action_id)
+    # Their own running actions are ended by the request, not a block.
+    replaces = _replaced_runs(actor, invitees, target, action_id)
     reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query, replaces=replaces,
                                                                  offer=offer)
     if not reason:
@@ -2060,7 +2120,7 @@ def state_for(actor: str) -> dict:
         return result
     cutoff = utc_now() - timedelta(minutes=30)
     rows = store.db.get_connection().execute(
-        "SELECT * FROM prop_action_runs WHERE actor=? OR partner=? ORDER BY created_at,execution_id",
+        "SELECT * FROM prop_action_runs WHERE " + store.TAKES_PART + " ORDER BY created_at,execution_id",
         (actor, actor)).fetchall()
     for raw in rows:
         terminal = raw["status"] in store.TERMINAL
@@ -2078,20 +2138,28 @@ def state_for(actor: str) -> dict:
             continue
         terminal = run["status"] in store.TERMINAL
         pending = run["status"] == "awaiting_consent"
+        invited = actor in run["members"]
+        consents = run["data"].get("consents") or {}
         row = {k: run[k] for k in ("execution_id", "action_id", "definition_revision",
-                                  "target", "actor", "partner", "status", "phase", "reason")}
+                                  "target", "actor", "members", "status", "phase", "reason")}
         row.update(label=run["definition"]["name"],
                    phase_label=(next((phase["label"] for phase in run["definition"]["phases"]
                                       if phase["id"] == run["phase"]), "")
                                 if run["definition"]["ability"] == "combined" else ""),
-                   roles={"actor": run["actor"], **({"partner": run["partner"]} if run["partner"] else {}),
-                          "clip": run["data"].get("clip_roles", {}),
+                   # Physical roles by NAME: clip role (a..e) and marker access.
+                   roles={"clip": run["data"].get("clip_roles", {}),
                           "access": run["data"].get("access_roles", {})},
-                   can_respond=pending and actor == run["partner"], can_cancel=not terminal,
-                   own_role="partner" if actor == run["partner"] else "actor",
-                   partner_consent=("react" if _reacts(run) else "ask") if run["partner"] else "",
+                   # Whose view this row is (a group has several invitees).
+                   viewer=actor,
+                   can_respond=pending and invited and consents.get(actor) == "pending",
+                   can_cancel=not terminal,
+                   own_role="partner" if invited else "actor",
+                   consent=("react" if _reacts(run) else "ask") if run["members"] else "",
+                   # Each invitee's answer so far (pending / yes) while it waits.
+                   consents=dict(consents) if pending else {},
+                   declined_by=run["data"].get("declined_by", ""),
                    reaction=(run["data"].get("reaction") or {}).get("state", ""),
-                   can_resist=(not terminal and actor == run["partner"] and _reacts(run)
+                   can_resist=(not terminal and invited and _reacts(run)
                                and run["status"] == "approaching"),
                    # The held pose closes with a finale clip, and the gauges a
                    # package fills toward it (``prop_action.meters`` provider:
@@ -2103,7 +2171,7 @@ def state_for(actor: str) -> dict:
             row["effects"] = run["data"].get("effect_results", {})
             result["recent_results"].append(row)
         elif pending:
-            result["incoming" if actor == run["partner"] else "outgoing"].append(row)
+            result["incoming" if invited else "outgoing"].append(row)
         else:
             row["motion"] = motion_for(actor, run)
             result["current"].append(row)
@@ -2183,7 +2251,7 @@ def _ask_reaction(run):
 
     def ask():
         try:
-            provider(execution_id=run["execution_id"], actor=run["actor"], partner=run["partner"])
+            provider(execution_id=run["execution_id"], actor=run["actor"], partner=run["members"][0])
         except Exception as e:
             logger.warning("pair_reaction provider failed for %s: %s", run["execution_id"], e)
 
@@ -2208,7 +2276,7 @@ def _awaits_reaction(run) -> bool:
         return True
     reaction["state"] = "timeout"
     logger.info("prop action %s: no reaction from %s within %.0f s — goes on",
-                run["execution_id"], run["partner"], REACTION_WAIT_S)
+                run["execution_id"], run["members"][0], REACTION_WAIT_S)
     return False
 
 
@@ -2217,7 +2285,7 @@ def _book_reaction(run, accepted, feeling, romantic):
     sentiment toward the actor by ``feeling``, romantic tension for a romantic
     action, and a resisted actor's own sentiment."""
     from app.core.keyed_lock import _after_locks
-    actor, partner, name = run["actor"], run["partner"], run["definition"]["name"]
+    actor, partner, name = run["actor"], run["members"][0], run["definition"]["name"]
 
     def book():
         try:
@@ -2254,7 +2322,7 @@ def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
         feeling = 0
     with _lock(execution_id):
         run = store.get(execution_id)
-        if not run or run["partner"] != partner or not _reacts(run):
+        if not run or run["members"] != [partner] or not _reacts(run):
             return _refused("not_partner")
         reaction = run["data"].get("reaction") or {}
         if run["status"] in store.TERMINAL or reaction.get("state") != "pending":
@@ -2276,13 +2344,14 @@ def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
 
 
 def respond(actor: str, execution_id: str, accept: bool) -> dict:
-    """The invitee's answer. A "yes" ends what the two were doing until now
-    (the runs the invitation left running) before the new one is planned."""
+    """One invitee's answer. The LAST "yes" ends what everyone was doing
+    until now (the runs the invitation left running) before the new one is
+    planned; an earlier "yes" is only recorded, one "no" ends the invitation."""
     run = store.get(execution_id)
     replaces = ()
-    if (accept is True and run and run["partner"] == actor and run["status"] == "awaiting_consent"
-            and not is_world_frozen()):
-        replaces = _replaced_runs(run["actor"], actor, run["target"], run["action_id"])
+    if (accept is True and run and actor in run["members"] and run["status"] == "awaiting_consent"
+            and _last_consent(run, actor) and not is_world_frozen()):
+        replaces = _replaced_runs(run["actor"], run["members"], run["target"], run["action_id"])
         if replaces and _validate(run, replaces=replaces):
             replaces = ()   # refused anyway: _respond says why, nothing ends
     direct = bool(replaces) and _switches_in_place(run, replaces)
@@ -2318,6 +2387,6 @@ def take_furniture_for_pose(actor: str, pose_key: str) -> dict | None:
 def has_semantic_action(actor: str) -> bool:
     """Implicit narration never overrides an explicit, still-owned action."""
     row = store.db.get_connection().execute(
-        "SELECT 1 FROM prop_action_runs WHERE (actor=? OR partner=?) "
+        "SELECT 1 FROM prop_action_runs WHERE " + store.TAKES_PART + " "
         "AND status NOT IN ('completed','cancelled','failed') LIMIT 1", (actor, actor)).fetchone()
     return row is not None

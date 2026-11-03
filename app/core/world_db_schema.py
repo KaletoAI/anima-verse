@@ -80,7 +80,7 @@ SCHEMA_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS prop_action_runs (
         execution_id TEXT PRIMARY KEY,
         actor TEXT NOT NULL,
-        partner TEXT NOT NULL DEFAULT '',
+        members TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(members)),
         request_id TEXT,
         request_fingerprint TEXT NOT NULL,
         action_id TEXT NOT NULL,

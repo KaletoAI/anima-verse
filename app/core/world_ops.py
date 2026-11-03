@@ -453,12 +453,11 @@ def _prop_action_entry(name, observer, profile, observer_profile, visible,
         with engine._lock(ref):
             run = store.get(ref)
             if (not run or run["status"] != "approaching" or run["phase"] != "entry"
-                    or name not in (run["actor"], run["partner"])
+                    or name not in store.people(run)
                     or room != (run["target"]["location_id"], run["target"]["room_id"])):
                 return None
             data = run["data"]
-            semantic_role = "actor" if name == run["actor"] else "partner"
-            plan, spec = data["plans"][semantic_role], data["entries"][name]
+            plan, spec = data["plans"][name], data["entries"][name]
             access, anchor = plan["access"], plan["entry_anchor"]
             if (name not in data["arrived"] or profile.get("journey")
                     or profile.get("place") or profile.get("interaction") or profile.get("is_sleeping")

@@ -20,13 +20,13 @@ function CorePlans({ plans, t }: { plans?: Record<string, CorePlan>; t: (text: s
   if (!plans || !Object.keys(plans).length) return null
   return <details><summary>{t('Computed Core paths and entry targets')}</summary>
     <p className="ga-hint">{t('World X/Z coordinates in metres. The line shows the computed walking path. Access and body anchor are separate targets; no straight entry path is assumed between them.')}</p>
-    {Object.entries(plans).map(([role, plan]) => {
+    {Object.entries(plans).map(([name, plan]) => {
       const points = [...plan.waypoints, [plan.access.x, plan.access.z], [plan.entry_anchor.x, plan.entry_anchor.z]]
       const xs = points.map(point => point[0]), zs = points.map(point => point[1])
       const x = Math.min(...xs) - .4, z = Math.min(...zs) - .4
       const width = Math.max(...xs) - x + .4, depth = Math.max(...zs) - z + .4
-      return <div key={role}>
-        <strong>{t(role === 'actor' ? 'Actor' : role === 'partner' ? 'Partner' : role)}</strong>
+      return <div key={name}>
+        <strong>{name}</strong>
         <svg role="img" aria-label={t('Computed walking path, access and body anchor')} viewBox={`${x} ${z} ${width} ${depth}`} width="240" height="160">
           <polyline points={plan.waypoints.map(point => point.join(',')).join(' ')} fill="none" stroke="currentColor" strokeWidth=".06" />
           <circle cx={plan.access.x} cy={plan.access.z} r=".12" fill="none" stroke="currentColor" strokeWidth=".05" />
@@ -100,7 +100,7 @@ export function PropActionChecks({ workspace, onIssue }: {
   const partnerPresent = !pair || room?.persons.some((person) => person.name === partner && !person.sleeping && person.name !== actor)
   const request: PropPlacementCheckRequest | null = placement && savedAction && actorPresent && partnerPresent
     ? { target: placement.target, action_id: savedAction.id, revision: targets!.revision,
-      actor, partner: pair ? partner : '' } : null
+      actor, members: pair ? [partner] : [] } : null
   const requestKey = request ? JSON.stringify(request) : ''
   const savedReady = !dirtyCount && !saving && revisionReady && targets?.revision === prop.revision
   const missing = dirtyCount || saving ? 'Missing: save or discard the draft'

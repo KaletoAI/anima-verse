@@ -382,7 +382,7 @@ class Effects(unittest.TestCase):
         F.C.save_character_profile(partner, profile)
         with patch.object(registration.decision, 'is_active', return_value=False), \
              patch.object(agent_loop, 'get_agent_loop', return_value=SimpleNamespace(bump_respond=lambda *a, **k: None)):
-            ref = S.request(name, target, partner=partner)['execution_id']
+            ref = S.request(name, target, members=[partner])['execution_id']
         self.assertEqual(R.get(ref)['status'], 'awaiting_consent')
         self.assertFalse(R.claims())
         skill = InteractSkill({}, PluginContext("interact"))
@@ -409,7 +409,7 @@ class Effects(unittest.TestCase):
         metadata['role_gender'] = dict(a='male', b='female')
         path.write_text(json.dumps(metadata))
         S.clips._clear_entries_cache()
-        ref = S.request(name, target, partner=partner)['execution_id']
+        ref = S.request(name, target, members=[partner])['execution_id']
         self.assertEqual(R.get(ref)['data']['clip_roles'], dict(a=partner, b=name))
         A.respond(partner, ref, True)
         S.tick(30)
@@ -425,9 +425,9 @@ class Effects(unittest.TestCase):
         room['layout']['props'].append(dict(id='other-device', prop_id=pid, at=[4, 5], yaw=0))
         F.W.upsert_location(location, sync_world=True)
         F.places.invalidate()
-        first = S.request(name, target, partner=partner)['execution_id']
+        first = S.request(name, target, members=[partner])['execution_id']
         other = dict(target, placement_id='other-device')
-        second = S.request(name, other, partner=partner)['execution_id']
+        second = S.request(name, other, members=[partner])['execution_id']
         self.assertTrue(first and second and first != second)
         self.assertEqual(A.respond(partner, second, True)['status'], 'approaching')
         self.assertEqual(R.get(first)['status'], 'awaiting_consent')
@@ -464,7 +464,7 @@ class Effects(unittest.TestCase):
                                                   distribution={answer: 1.0})})
             with patch.object(registration.decision, 'is_active', return_value=True), \
                  patch.object(registration.decision, 'decide', external_decision):
-                result = S.request(name, target, partner=partner)
+                result = S.request(name, target, members=[partner])
             self.assertEqual(result['status'], 'approaching' if answer == 'accept' else 'cancelled')
             self.assertEqual(bool(R.claims(result['execution_id'])), answer == 'accept')
 
@@ -480,7 +480,7 @@ class Effects(unittest.TestCase):
 
     def test_same_pose_other_object_is_not_consent_and_revision_change_invalidates(self):
         name, partner, target, pid = S.authored_pair()
-        ref = S.request(name, target, partner=partner)['execution_id']
+        ref = S.request(name, target, members=[partner])['execution_id']
         doc = F.props.read_sidecar(pid)
         doc['actions'][0]['description'] = 'A different revision of the same pose'
         F.props._write_sidecar(pid, doc)
@@ -489,7 +489,7 @@ class Effects(unittest.TestCase):
         self.assertFalse(F.C.get_character_profile(name).get('interaction'))
         target['definition_revision'] = F.props.get_prop(pid)['revision']
         other = dict(target, placement_id='not-the-accepted-object')
-        self.assertEqual(S.request(name, other, partner=partner)['reason'], 'placement_not_found')
+        self.assertEqual(S.request(name, other, members=[partner])['reason'], 'placement_not_found')
         self.assertFalse(R.claims())
 
     def test_normal_and_temporary_explicit_no_and_unanswered_question(self):
@@ -499,7 +499,7 @@ class Effects(unittest.TestCase):
             profile = F.C.get_character_profile(partner)
             profile['template'] = template
             F.C.save_character_profile(partner, profile)
-            ref = S.request(name, target, partner=partner)['execution_id']
+            ref = S.request(name, target, members=[partner])['execution_id']
             self.assertEqual(R.get(ref)['status'], 'awaiting_consent')
             self.assertFalse(R.claims())
             skill = InteractSkill({}, PluginContext('interact'))

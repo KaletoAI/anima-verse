@@ -123,7 +123,7 @@ def active_pair():
     name, partner, target, _ = RUNS.authored_pair()
     finale_clips()
     set_finale("run-pair", "run-pair-end")
-    result = RUNS.request(name, target, partner=partner)
+    result = RUNS.request(name, target, members=[partner])
     A.respond(partner, result["execution_id"], True)
     RUNS.tick(30)
     RUNS.tick(2)

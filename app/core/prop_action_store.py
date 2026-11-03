@@ -12,7 +12,7 @@ from app.core import db
 from app.core.timeutils import utc_now_iso
 
 TERMINAL = frozenset(("completed", "cancelled", "failed"))
-JSON_FIELDS = ("target", "definition", "data")
+JSON_FIELDS = ("members", "target", "definition", "data")
 
 
 def encode(value):
@@ -90,9 +90,18 @@ def held(key, *, conn=None):
     return row[0] if row else None
 
 
+def people(run):
+    """Everyone of ``run``: the initiator, then its invitees in invitation order."""
+    return [run["actor"], *run["members"]]
+
+
+#: SQL: the run names ``?`` as initiator or invitee (two parameters).
+TAKES_PART = "(actor=? OR EXISTS (SELECT 1 FROM json_each(members) WHERE value=?))"
+
+
 def acquire(conn, run, slots):
     """Caller rechecks guards under BEGIN IMMEDIATE before this all-or-none write."""
-    entries = [(person_key(n), "person", {"name": n}) for n in (run["actor"], run["partner"]) if n]
+    entries = [(person_key(n), "person", {"name": n}) for n in people(run)]
     entries += [(slot_key(run["target"], s["marker_id"], s["slot"]), "slot", s) for s in slots]
     seen = set()
     for key, kind, subject in entries:
@@ -122,6 +131,32 @@ def save(conn, run):
     if run["status"] in TERMINAL:
         conn.execute("DELETE FROM prop_action_claims WHERE execution_id=?", (run["execution_id"],))
     return True
+
+
+def migrate_members(conn):
+    """One-shot (db.init_schema): the old ``partner`` column becomes the
+    ``members`` list, and a run's per-person data is keyed by NAME instead
+    of the roles ``actor``/``partner`` — a group has several invitees. An
+    open pair invitation gets its one ``consents`` entry. Returns the number
+    of rows moved; 0 when the column is already gone."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(prop_action_runs)")}
+    if "partner" not in cols:
+        return 0
+    if "members" not in cols:
+        conn.execute("ALTER TABLE prop_action_runs ADD COLUMN members TEXT NOT NULL DEFAULT '[]'")
+    rows = conn.execute("SELECT execution_id, actor, partner, status, data FROM prop_action_runs").fetchall()
+    for execution_id, actor, partner, status, raw in rows:
+        data = json.loads(raw)
+        names = {"actor": actor, "partner": partner}
+        for key in ("plans", "access_roles"):
+            if isinstance(data.get(key), dict):
+                data[key] = {names.get(role) or role: value for role, value in data[key].items()}
+        if partner and status == "awaiting_consent":
+            data["consents"] = {partner: "pending"}
+        conn.execute("UPDATE prop_action_runs SET members=?, data=? WHERE execution_id=?",
+                     (encode([partner] if partner else []), encode(data), execution_id))
+    conn.execute("ALTER TABLE prop_action_runs DROP COLUMN partner")
+    return len(rows)
 
 
 def pending_cleanup():

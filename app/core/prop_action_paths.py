@@ -579,7 +579,7 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
             if not action:
                 reason = "binding_not_found"
                 continue
-            if role == "partner" and action.get("participants") != 2:
+            if role == "partner" and (action.get("participants") or 1) < 2:
                 reason = "missing_role_access"
                 continue
             slots = [target["slot"]] if "slot" in target else range(len(place["slots"]))

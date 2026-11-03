@@ -28,10 +28,12 @@ class ActionRequest(Input):
     target: Target
     action_id: StrictStr
     revision: StrictStr
-    partner: StrictStr = ""
+    #: The invitees, in invitation order: one for a pair, up to four for a
+    #: group, none for a solo action.
+    members: list[StrictStr] = []
     request_id: StrictStr = ""
-    #: Pair actions: "ask" the partner first, or start at once and let the
-    #: partner "react" (prop_action_engine.CONSENTS).
+    #: Actions with others: "ask" every invitee first, or (a pair only) start
+    #: at once and let the partner "react" (prop_action_engine.CONSENTS).
     consent: Literal["ask", "react"] = "ask"
 
 
@@ -75,7 +77,7 @@ def _answer(result):
 
 def _request(actor, body):
     return engine.request(actor, body.target.model_dump(), body.action_id, body.revision,
-                          body.partner, body.request_id, body.consent)
+                          body.members, body.request_id, body.consent)
 
 
 @router.get("/play/prop-actions")
@@ -124,7 +126,7 @@ def _request_route(body: ActionRequest, user):
             raise
         result, created = engine.request_with_creation(
             actor, body.target.model_dump(), body.action_id, body.revision,
-            body.partner, body.request_id, body.consent)
+            body.members, body.request_id, body.consent)
         result = _answer(result)
         if created and skill is not None and result["status"] not in ("failed", "cancelled"):
             from app.core.skill_gate import charge
@@ -227,5 +229,5 @@ def validate(prop_id: str, body: Document, user=Depends(require_admin)):
 @router.post("/world/props/{prop_id}/check-placement")
 def check_placement(prop_id: str, body: AdminCheck, user=Depends(require_admin)):
     _admin_target(prop_id, body)
-    return engine.check(body.actor, body.target.model_dump(), body.action_id, body.revision, body.partner,
+    return engine.check(body.actor, body.target.model_dump(), body.action_id, body.revision, body.members,
                         include_plans=True)

@@ -290,17 +290,21 @@ def payload_for(character_name: str, profile: Dict[str, Any],
 
 def pair_kind_for_pose(pose_key: str,
                        complete_pairs: Optional[Iterable[str]] = None) -> str:
-    """The pair clip kind a catalog pose names — "" when the pose is a solo
-    one or its clip is not a complete pair. ``complete_pairs`` lets a caller
-    that asks for many poses pass ``pair_kinds()`` once instead of having it
-    recomputed per pose."""
-    from app.core.animation_clips import pair_kinds
+    """The pair or group clip kind a catalog pose names — "" when the pose is
+    a solo one or its clip is not complete with one role per participant of
+    the pose (a pair a/b, a group of three a/b/c). ``complete_pairs`` lets a
+    caller that asks for many poses pass ``pair_kinds()`` once instead of
+    having it recomputed per pose — that answer knows pairs only."""
+    from app.core.animation_clips import role_counts
     from app.core.expression_pose_maps import is_partner_activity, resolve_pose_animation
+    from app.core.pose_catalog import get_catalog
     if not pose_key or not is_partner_activity(pose_key):
         return ""
     kind = resolve_pose_animation(pose_key)
-    pairs = pair_kinds() if complete_pairs is None else complete_pairs
-    return kind if kind in pairs else ""
+    if complete_pairs is not None:
+        return kind if kind in complete_pairs else ""
+    people = get_catalog("pose")[pose_key.strip().lower()].get("participants", 1)
+    return kind if role_counts().get(kind) == people else ""
 
 
 def partner_poses() -> List[Tuple[str, str]]:
@@ -473,10 +477,10 @@ def _held_frame(held: str, who_a: str, who_b: str, meta: Dict[str, Any],
     return {"x": ax, "z": az, "yaw": yaw}, points
 
 
-def pair_role_point(place: dict, pose_key: str, clip_role: str) -> Tuple[float, float]:
-    """Where clip role ``a``/``b`` of the pose's pair clip stands on ``place``:
-    the place centre plus the role's sidecar ``anchor_xz_m`` turned by
-    ``places.pair_yaw`` — the point both renderers draw it at
+def role_point(place: dict, pose_key: str, clip_role: str) -> Tuple[float, float]:
+    """Where clip role ``a``..``e`` of the pose's pair or group clip stands on
+    ``place``: the place centre plus the role's sidecar ``anchor_xz_m`` turned
+    by ``places.pair_yaw`` — the point both renderers draw it at
     (``pairPoints``). Raises ``ValueError("pair_geometry_missing")``."""
     from app.core.animation_clips import clip_meta
     from app.core import places
@@ -490,6 +494,47 @@ def pair_role_point(place: dict, pose_key: str, clip_role: str) -> Tuple[float, 
     return cx + dx, cz + dz
 
 
+def group_roles(names: List[str], profiles: Dict[str, Dict[str, Any]],
+                meta: Dict[str, Any]) -> Dict[str, str]:
+    """``{clip role: name}`` — who plays which role of a pair or group clip.
+    ``names``: the initiator first, then the invitees in invitation order.
+
+    A pair keeps :func:`assign_roles`, which never refuses. A group follows
+    the clip's ``role_gender``: each person of a gender the clip names takes
+    the first free role of that gender, in invitation order (a tie goes to
+    whoever was asked first); everyone else (no gender, or one the clip does
+    not name) then takes the first free role. Without a gender assignment the
+    roles go in invitation order, the initiator plays A. Raises
+    ``ValueError("roles_unfit")`` when the clip has another number of roles,
+    or a person finds no free role of their gender (three women for two
+    female roles)."""
+    from app.core.animation_clips import _meta_roles, clip_role_gender
+    gender = clip_role_gender(meta)
+
+    def sex(name):
+        return str((profiles.get(name) or {}).get("gender") or "").strip().lower()
+    if len(names) == 2:
+        a, b = assign_roles(names[0], names[1], sex(names[0]), sex(names[1]), gender)
+        return {"a": a, "b": b}
+    roles = _meta_roles(meta)
+    if len(roles) != len(names):
+        raise ValueError("roles_unfit")
+    if not gender:
+        return dict(zip(roles, names))
+    taken: Dict[str, str] = {}
+    for name in names:
+        if sex(name) in gender.values():
+            role = next((r for r in roles if r not in taken and gender[r] == sex(name)), None)
+            if role is None:
+                raise ValueError("roles_unfit")
+            taken[role] = name
+    rest = [n for n in names if n not in taken.values()]
+    for role in roles:
+        if role not in taken:
+            taken[role] = rest.pop(0)
+    return {role: taken[role] for role in roles}
+
+
 def shared_slot(place: dict) -> int:
     """The ONE slot a pair whose pose shares a place (catalog ``places`` 1)
     holds: the slot nearest the place centre — the marker itself on a single
@@ -500,75 +545,162 @@ def shared_slot(place: dict) -> int:
                key=lambda i: (math.dist(place["slots"][i], centre), i))
 
 
-def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict, *, profiles=None) -> dict:
+def plan_interaction_at(names: List[str], pose_key: str, place: dict, *, profiles=None) -> dict:
     """Shared clip-role allocation BEFORE a prop owner claims access/slots.
 
-    Binding access `actor` is clip A, `partner` is clip B. Semantic actor and
-    partner identities remain initiator/invitee, including effect targets.
+    ``names``: the initiator first, then the invitees in invitation order;
+    roles by :func:`group_roles`. Everything is keyed by NAME: ``slots``,
+    ``points`` and ``access_roles`` — the marker access of clip role A is
+    ``actor``, of every other role ``partner``. Semantic initiator/invitee
+    identities stay with the run, including effect targets.
 
-    A pose with ``places`` 2 needs one slot per role, each within 5 cm of its
-    role point. A pose with ``places`` 1 shares a place: both roles hold
-    :func:`shared_slot` and enter at their own role point, returned under
-    ``points`` (location metres) — the slot position would put both figures
-    on one spot.
+    A pose with ``places`` > 1 needs one slot per role, each within 5 cm of
+    its role point. A pose with ``places`` 1 shares a place: every role holds
+    :func:`shared_slot` and enters at its own role point, returned under
+    ``points`` (location metres) — the slot position would put them all on
+    one spot.
     """
-    from app.core.animation_clips import clip_meta, clip_role_gender
+    from app.core.animation_clips import clip_meta
     from app.core.pose_catalog import pose_places
     from app.models.character import get_character_profile
     meta = clip_meta(pair_kind_for_pose(pose_key)) or {}
-    profiles = profiles if profiles is not None else {n: get_character_profile(n) for n in (actor, partner)}
-    a, b = assign_roles(actor, partner,
-        str(profiles[actor].get("gender") or ""),
-        str(profiles[partner].get("gender") or ""), clip_role_gender(meta))
-    clip_roles = {"a": a, "b": b}
+    profiles = profiles if profiles is not None else {n: get_character_profile(n) for n in names}
+    clip_roles = group_roles(list(names), profiles, meta)
     shared = pose_places(pose_key) == 1
     slots, access_roles, points = {}, {}, {}
     for clip_role, name in clip_roles.items():
-        point = pair_role_point(place, pose_key, clip_role)
-        semantic = "actor" if name == actor else "partner"
-        access_roles[semantic] = "actor" if clip_role == "a" else "partner"
+        point = role_point(place, pose_key, clip_role)
+        access_roles[name] = "actor" if clip_role == "a" else "partner"
         if shared:
-            points[semantic] = [point[0], point[1]]
+            points[name] = [point[0], point[1]]
             continue
         matches = [i for i, p in enumerate(place["slots"]) if math.dist(p, point) <= .05]
         if len(matches) != 1:
             raise ValueError("pair_geometry_marker_mismatch")
-        slots[semantic] = matches[0]
+        slots[name] = matches[0]
     if shared:
         slot = shared_slot(place)
         return dict(clip_roles=clip_roles, access_roles=access_roles,
-                    slots={"actor": slot, "partner": slot}, points=points)
-    if len(set(slots.values())) != 2:
+                    slots={name: slot for name in names}, points=points)
+    if len(set(slots.values())) != len(names):
         raise ValueError("pair_geometry_marker_mismatch")
     return dict(clip_roles=clip_roles, access_roles=access_roles, slots=slots)
 
 
-def start_interaction_at(actor: str, partner: str, pose_key: str, *,
-                         execution_id: str, plans: dict, commit_profiles) -> Dict[str, Any]:
-    """Real shared pair entry at an executor's exact jointly claimed marker.
+def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
+                         plans: dict, commit_profiles) -> Dict[str, Any]:
+    """Real shared pair or group entry at an executor's exact jointly
+    claimed marker; ``names`` the initiator first, then the invitees.
 
     No invitation/automatic seat search: the prop run already owns consent,
-    both approaches and measured entry. Re-read its durable authority here.
+    every approach and the measured entry. Re-read its durable authority
+    here, check each role point against its plan, then write every member's
+    profile through ``commit_profiles`` under the sorted profile locks.
     """
-    from app.core import prop_action_store as runs
+    from app.core import places, prop_action_store as runs
+    from app.core.animation_clips import clip_loops, clip_meta
+    from app.core.pose_catalog import pose_places
+    from app.core.state_events import publish
+    from app.models.character import (get_character_current_location,
+                                      get_character_pos, get_character_profile)
+    names = list(names)
     run = runs.get(execution_id)
     if (not run or run["status"] != "approaching" or run["phase"] != "entry"
-            or run["actor"] != actor or run["partner"] != partner
-            or run["definition"]["pose_key"] != pose_key
+            or runs.people(run) != names or run["definition"]["pose_key"] != pose_key
             or run["data"]["plans"] != plans or not run["data"].get("consented")):
         raise ValueError("pair_execution_mismatch")
-    for role, name in (("actor", actor), ("partner", partner)):
-        anchor = plans[role]["entry_anchor"]
+    for name in names:
+        anchor = plans[name]["entry_anchor"]
         if (runs.held(runs.person_key(name)) != execution_id or
                 runs.held(runs.slot_key(run["target"], anchor["marker_id"], anchor["slot"])) != execution_id):
             raise ValueError("pair_claim_lost")
-    return start_interaction(actor, partner, pose_key, _reserved=run, _commit_profiles=commit_profiles)
+    kind = pair_kind_for_pose(pose_key)
+    if not kind:
+        raise ValueError(f"'{pose_key}' has no pair animation")
+    meta = clip_meta(kind) or {}
+    clip_duration = float(meta.get("duration_s") or 0.0)
+    if clip_duration <= 0:
+        raise ValueError(f"pair clip '{kind}' has no sidecar duration")
+    loop = clip_loops(meta)
+    # The pose-independent side of "can they pair up"; the run asked its
+    # furniture presence rule itself, so no pose goes to the packages here.
+    for other in names[1:]:
+        blocked = check_can_pair(names[0], other, "")
+        if blocked:
+            raise ValueError(blocked)
+    profiles = {n: get_character_profile(n) or {} for n in names}
+    clip_roles = run["data"]["clip_roles"]
+    try:
+        roles_now = group_roles(names, profiles, meta)
+    except ValueError:
+        roles_now = {}
+    if roles_now != clip_roles:
+        raise ValueError("pair_roles_changed")
+    anchors = [plans[n]["entry_anchor"] for n in names]
+    first = anchors[0]
+    # Distinct seats for a pose over several places; ONE shared seat otherwise.
+    if (any(a["place_id"] != first["place_id"] for a in anchors)
+            or len({a["slot"] for a in anchors}) != (1 if pose_places(pose_key) == 1 else len(names))):
+        raise ValueError("pair_marker_mismatch")
+    loc = get_character_current_location(names[0]) or ""
+    place = next((p for p in places._compose(loc).get(first["room_id"], [])
+                  if p["id"] == first["place_id"] and p.get("variant_uid") == first["variant_uid"]), None)
+    if place is None:
+        raise ValueError("pair_marker_lost")
+    yaw = places.pair_yaw(place, pose_key)
+    ax, az = places.centre_of(place)
+    anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4), "place_id": place["id"]}
+    roles_geometry = (meta.get("geometry") or {}).get("roles") or {}
+    for role, name in clip_roles.items():
+        plan = plans[name]
+        point = plan["entry_anchor"]
+        off = (roles_geometry.get(role) or {}).get("anchor_xz_m")
+        if not off:
+            raise ValueError("pair_geometry_missing")
+        dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
+        if math.dist((ax + dx, az + dz), (point["x"], point["z"])) > .05:
+            raise ValueError("pair_geometry_marker_mismatch")
+        current = get_character_pos(name)
+        access = plan["access"]
+        if not current or math.dist((current["x"], current["z"]), (access["x"], access["z"])) > .05:
+            raise ValueError("pair_access_lost")
+    inter_id = uuid.uuid4().hex[:12]
+    started = game_time().canonical()
+    from app.core.timeutils import utc_now_iso
+    started_sys = utc_now_iso("microseconds")
+    runtime = {}
+    # EVERY member's blob in ONE locked span, in sorted-name order (DATA-3).
+    with profile_locks(*names):
+        for role, name in clip_roles.items():
+            point = plans[name]["entry_anchor"]
+            interaction = {
+                "id": inter_id, "kind": kind, "role": role, "members": dict(clip_roles),
+                "pose_key": pose_key, "anchor": anchor,
+                "started_at_game": started, "started_at_sys": started_sys,
+                "clip_duration_s": round(clip_duration, 3), "loop": loop,
+                "execution_ref": execution_id, "execution_kind": "prop_action",
+            }
+            runtime[name] = dict(interaction=interaction,
+                                 place=dict(id=point["place_id"], slot=point["slot"],
+                                            room_id=point["room_id"], execution_id=execution_id),
+                                 pose_key=pose_key, pose_flavor="", prop_action_entry=None,
+                                 pos_x=point["x"], pos_z=point["z"], pos_session=None, pos_seq=None)
+        commit_profiles(runtime)
+    publish("interaction_started", names[0], members=dict(clip_roles), kind=kind,
+            interaction_id=inter_id, clip_duration_s=clip_duration)
+    from app.core import sync_topics
+    sync_topics.changed_at(names[0], loc)
+    # "A and B start …"; a group reads "A, B and C start …" off the same line.
+    _narrate(names[0], "{actor} and {partner} start {pose}.",
+             actor=", ".join(names[:-1]), partner=names[-1], pose_key=pose_key)
+    logger.info("interaction %s: %s play '%s' (%.1fs %s)", inter_id,
+                ", ".join(f"{n} ({r})" for r, n in clip_roles.items()), kind, clip_duration,
+                "cycle" if loop else "one-shot")
+    return runtime[names[0]]["interaction"]
 
 
 def start_interaction(actor: str, partner: str, pose_key: str, *,
-                      invite_id: str = "", arrived: bool = False,
-                      _reserved: Optional[dict] = None,
-                      _commit_profiles=None) -> Dict[str, Any]:
+                      invite_id: str = "", arrived: bool = False) -> Dict[str, Any]:
     """Binds ``actor`` (the initiator) and ``partner`` to the pair clip the
     pose names. Who plays which half follows the clip's gender assignment
     (``assign_roles``); without one the actor plays A. Raises ``ValueError``
@@ -583,7 +715,6 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     from app.core.animation_clips import clip_loops, clip_meta, clip_role_gender
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
-                                      get_character_current_room,
                                       get_character_pos, get_character_profile,
                                       save_character_profile, set_character_pos,
                                       set_pose_intent)
@@ -605,8 +736,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # The pose-independent side of "can these two pair up" — one definition,
     # asked here and by the invitation. Checked AFTER the clip: a pose with no
     # pair animation is the more useful answer than "he is asleep".
-    # A prop run (``_reserved``) asked its furniture presence rule already.
-    blocked = check_can_pair(actor, partner, "" if _reserved else pose_key)
+    blocked = check_can_pair(actor, partner, pose_key)
     if blocked:
         raise ValueError(blocked)
 
@@ -618,82 +748,40 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
                                 str(profiles[actor].get("gender") or ""),
                                 str(profiles[partner].get("gender") or ""),
                                 clip_role_gender(meta))
-    if _reserved:
-        allocated = _reserved["data"]["clip_roles"]
-        if allocated != {"a": who_a, "b": who_b}:
-            raise ValueError("pair_roles_changed")
-        who_a, who_b = allocated["a"], allocated["b"]
     loc_a = get_character_current_location(actor) or ""
     pa = get_character_pos(actor)
     pb = get_character_pos(partner)
     if not pa or not pb:
         raise ValueError("both characters need a map position")
     dist = math.dist((pa["x"], pa["z"]), (pb["x"], pb["z"]))
-    if not _reserved and dist > MAX_START_DISTANCE_M:
+    if dist > MAX_START_DISTANCE_M:
         raise TooFarApart(f"{partner} is too far away ({dist:.1f} m)")
 
-    # Furniture is exclusively an exact prop action capability. General
-    # invitations cannot choose a marker or bypass its action requirements.
-    from app.core import places
-    if _reserved:
-        a = _reserved["data"]["plans"]["actor"]["entry_anchor"]
-        b = _reserved["data"]["plans"]["partner"]["entry_anchor"]
-        from app.core.pose_catalog import pose_places
-        # Two seats for a two-place pose; ONE shared seat for a one-place pose.
-        if a["place_id"] != b["place_id"] or (a["slot"] == b["slot"]) != (pose_places(pose_key) == 1):
-            raise ValueError("pair_marker_mismatch")
-        place = next((p for p in places._compose(loc_a).get(a["room_id"], [])
-                      if p["id"] == a["place_id"] and p.get("variant_uid") == a["variant_uid"]), None)
-        if place is None:
-            raise ValueError("pair_marker_lost")
-        seated = (place, places.pair_yaw(place, pose_key))
+    # Furniture is exclusively an exact prop action capability
+    # (``start_interaction_at``). General invitations cannot choose a marker
+    # or bypass its action requirements.
+    from app.core.pose_catalog import group_of, needs_place
+    if needs_place(group_of(pose_key)):
+        raise ValueError("This pair action requires an explicit prop action.")
+    held = held_participant(actor, partner)
+    frame = _held_frame(held, who_a, who_b, meta, {actor: pa, partner: pb}) if held else None
+    if frame:
+        laid, points = frame
+        other = partner if held == actor else actor
+        here = pa if other == actor else pb
+        gap = math.dist((here["x"], here["z"]), points[other])
+        if gap > _STEP_IN_M and not arrived:
+            raise TooFarApart(f"{other} has to come over to {held} first ({gap:.1f} m)")
+        yaw = laid["yaw"]
+        anchor = {"x": round(laid["x"], 3), "z": round(laid["z"], 3),
+                  "yaw": round(yaw, 4), "place_id": None}
     else:
-        from app.core.pose_catalog import group_of, needs_place
-        if needs_place(group_of(pose_key)):
-            raise ValueError("This pair action requires an explicit prop action.")
-        seated = None
-    held = ""
-    if seated:
-        place, yaw = seated
-        ax, az = places.centre_of(place)
-        anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4),
-                  "place_id": place["id"]}
-    else:
-        held = held_participant(actor, partner)
-        frame = _held_frame(held, who_a, who_b, meta, {actor: pa, partner: pb}) if held else None
-        if frame:
-            laid, points = frame
-            other = partner if held == actor else actor
-            here = pa if other == actor else pb
-            gap = math.dist((here["x"], here["z"]), points[other])
-            if gap > _STEP_IN_M and not arrived:
-                raise TooFarApart(f"{other} has to come over to {held} first ({gap:.1f} m)")
-            yaw = laid["yaw"]
-            anchor = {"x": round(laid["x"], 3), "z": round(laid["z"], 3),
-                      "yaw": round(yaw, 4), "place_id": None}
-        else:
-            held = ""
-            p_a, p_b = (pa, pb) if who_a == actor else (pb, pa)
-            yaw = _yaw_from_to(p_a["x"], p_a["z"], p_b["x"], p_b["z"]) if dist > 1e-6 else 0.0
-            anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
-                      "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
-                      "place_id": None}
-    if _reserved:
-        roles_geometry = (meta.get("geometry") or {}).get("roles") or {}
-        for name, role in ((who_a, "a"), (who_b, "b")):
-            semantic_role = "actor" if name == actor else "partner"
-            plan = _reserved["data"]["plans"][semantic_role]
-            point = plan["entry_anchor"]
-            off = (roles_geometry.get(role) or {}).get("anchor_xz_m")
-            if not off:
-                raise ValueError("pair_geometry_missing")
-            dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
-            if math.dist((ax + dx, az + dz), (point["x"], point["z"])) > .05:
-                raise ValueError("pair_geometry_marker_mismatch")
-            current = get_character_pos(name)
-            access = plan["access"]
-            if not current or math.dist((current["x"], current["z"]), (access["x"], access["z"])) > .05:
-                raise ValueError("pair_access_lost")
+        held = ""
+        p_a, p_b = (pa, pb) if who_a == actor else (pb, pa)
+        yaw = _yaw_from_to(p_a["x"], p_a["z"], p_b["x"], p_b["z"]) if dist > 1e-6 else 0.0
+        anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
+                  "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
+                  "place_id": None}
     inter_id = uuid.uuid4().hex[:12]
     started = game_time().canonical()
     from app.core.timeutils import utc_now_iso
@@ -707,7 +795,6 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     stored = True
     with pair_profile_locks(who_a, who_b):
         for name, role, other in halves:
-            # Re-read: assign_pair just wrote the place into both profiles.
             prof = profiles[name] = get_character_profile(name) or {}
             prof["interaction"] = {
                 "id": inter_id, "kind": kind, "role": role, "members": {"a": who_a, "b": who_b},
@@ -717,27 +804,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             }
             if invite_id:
                 prof["interaction"]["invite_id"] = invite_id
-            if _reserved:
-                semantic_role = "actor" if name == actor else "partner"
-                point = _reserved["data"]["plans"][semantic_role]["entry_anchor"]
-                prof["interaction"]["execution_ref"] = _reserved["execution_id"]
-                prof["interaction"]["execution_kind"] = "prop_action"
-                prof["place"] = dict(id=point["place_id"], slot=point["slot"],
-                                     room_id=point["room_id"], execution_id=_reserved["execution_id"])
-                prof["pose_key"], prof["pose_flavor"] = pose_key, ""
-                prof.pop("prop_action_entry", None)
-            if not _commit_profiles and not save_character_profile(name, prof):
+            if not save_character_profile(name, prof):
                 stored = False
-        if _commit_profiles:
-            runtime = {}
-            for name, _role, _other in halves:
-                semantic_role = "actor" if name == actor else "partner"
-                point = _reserved["data"]["plans"][semantic_role]["entry_anchor"]
-                prof = profiles[name]
-                runtime[name] = dict(interaction=prof["interaction"], place=prof["place"],
-                                     pose_key=pose_key, pose_flavor="", prop_action_entry=None,
-                                     pos_x=point["x"], pos_z=point["z"], pos_session=None, pos_seq=None)
-            _commit_profiles(runtime)
     # OUTSIDE the locks: both of these write the profile themselves and reach
     # the places-lock (``set_pose_intent`` -> ``places.assign``), which by the
     # documented order comes BEFORE ``character_profile``. Neither reads the
@@ -746,19 +814,14 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     for name, role, other in halves:
         # The game-state position is where the clip holds the figure at the
         # anchor moment — perception, rules and the map all see them there.
-        # Unless that point lies outside the location (a marker authored
-        # past the footprint): the write would evict, so the figure stays
-        # where it is and only the seat is bookkept (`places.inside`).
         off = (roles.get(role) or {}).get("anchor_xz_m")
         if off and name != held:
             # The held avatar stays exactly where its player put it.
             dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
-            px, pz = anchor["x"] + dx, anchor["z"] + dz
-            if not _commit_profiles and (not anchor.get("place_id") or places.inside(loc_a, px, pz)):
-                set_character_pos(name, px, pz, preserve_movement_target=True)
-        if not _reserved:
-            set_pose_intent(name, pose_key)
-    publish("interaction_started", actor, partner=partner, kind=kind,
+            set_character_pos(name, anchor["x"] + dx, anchor["z"] + dz,
+                              preserve_movement_target=True)
+        set_pose_intent(name, pose_key)
+    publish("interaction_started", actor, members={"a": who_a, "b": who_b}, kind=kind,
             interaction_id=inter_id, clip_duration_s=clip_duration)
     from app.core import sync_topics
     if stored:
@@ -802,8 +865,8 @@ def end_interaction(character_name: str, reason: str = "ended", *,
     if not inter or (interaction_id and inter["id"] != interaction_id):
         return False
     members = members_of(inter)
-    names = list(dict.fromkeys(members.values()))
-    partner = partner_of(inter, character_name)
+    # Everyone in clip-role order (a first): the narration and the hook list.
+    names = list(dict.fromkeys(members[role] for role in sorted(members)))
     # EVERY profile under its lock, in sorted-name order (DATA-3). The
     # standing-up that follows is collected here and run AFTERWARDS:
     # ``clear_pose_intent`` and ``room_stand.stand_up`` write the profile
@@ -874,20 +937,17 @@ def end_interaction(character_name: str, reason: str = "ended", *,
                 stand_up(name, from_place=seat, from_pose_key=inter["pose_key"])
             else:
                 stand_up(name)
-    publish("interaction_ended", character_name, partner=partner,
+    publish("interaction_ended", character_name, members=members,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
     from app.core import sync_topics
     for name in saved_names:
         sync_topics.changed_at(name)
-    if stand and cleared:
-        actor, other = ((character_name, partner) if inter.get("role") == "a"
-                        else (partner, character_name))
+    if stand and cleared and len(names) >= 2:
         _narrate(character_name, "{actor} and {partner} stop {pose}.",
-                 actor=actor, partner=other, pose_key=inter["pose_key"])
-        _remember_pair(character_name, partner, inter, ended_invite_id,
-                       location_id, room_id, reason)
+                 actor=", ".join(names[:-1]), partner=names[-1], pose_key=inter["pose_key"])
+        _remember_together(names, character_name, inter, ended_invite_id, location_id, room_id, reason)
         from app.core.hooks import emit
-        emit("interaction.ended", character=character_name, partner=partner,
+        emit("interaction.ended", character=character_name, members=names,
              interaction_id=inter["id"], invite_id=ended_invite_id, reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)
     return True
@@ -980,14 +1040,16 @@ def expire_follow_poses() -> int:
     return ended
 
 
-def _remember_pair(character_name: str, partner: str, inter: Dict[str, Any],
-                   invite_id: str, location_id: str, room_id: str,
-                   reason: str) -> None:
-    """Both partners remember the pair; it counts as one relationship event.
+def _remember_together(names: List[str], character_name: str, inter: Dict[str, Any],
+                       invite_id: str, location_id: str, room_id: str,
+                       reason: str) -> None:
+    """Everyone remembers the pair or group (``names``, clip-role order); each
+    two of them count one relationship event, led by the inviter — without an
+    invitation by ``character_name``, whose end it was.
 
-    Runs once per really-ended pair, outside every profile lock and BEFORE the
-    ``interaction.ended`` hook. Never raises: a failed write must not keep the
-    hook (party, packages) from hearing that the pair is over.
+    Runs once per really-ended interaction, outside every profile lock and
+    BEFORE the ``interaction.ended`` hook. Never raises: a failed write must
+    not keep the hook (party, packages) from hearing that it is over.
     """
     try:
         from app.core.i18n import t
@@ -1003,21 +1065,24 @@ def _remember_pair(character_name: str, partner: str, inter: Dict[str, Any],
             "started_at_game": inter.get("started_at_game", ""),
             "ended_at_game": ended_at_game, "reason": reason,
         }
-        for name, other in ((character_name, partner), (partner, character_name)):
+        for name in names:
+            others = [n for n in names if n != name]
             lang = get_character_language(name)
             add_memory(
                 name, t("{pose} with {partner}.", lang).format(
-                    pose=pose_label(inter["pose_key"], lang), partner=other),
+                    pose=pose_label(inter["pose_key"], lang), partner=join_names(others)),
                 memory_type="episodic", importance=3 if inter.get("loop") else 2,
-                tags=["interaction"], related_character=other,
+                tags=["interaction"], related_character=others[0] if len(others) == 1 else "",
                 game_ts=ended_at_game, extra_meta=extra_meta)
         invite = get_invite(invite_id) if invite_id else None
-        char_a = invite["inviter"] if invite else character_name
-        char_b = partner if char_a == character_name else character_name
-        record_interaction(
-            char_a=char_a, char_b=char_b, interaction_type="together",
-            summary=f"{char_a} and {char_b}: {inter['pose_key']}",
-            sentiment_delta_a=0.05, sentiment_delta_b=0.05, strength_delta=3)
+        first = invite["inviter"] if invite else character_name
+        order = sorted(names, key=lambda n: n != first)
+        for i, char_a in enumerate(order):
+            for char_b in order[i + 1:]:
+                record_interaction(
+                    char_a=char_a, char_b=char_b, interaction_type="together",
+                    summary=f"{char_a} and {char_b}: {inter['pose_key']}",
+                    sentiment_delta_a=0.05, sentiment_delta_b=0.05, strength_delta=3)
     except Exception as e:
         logger.warning("remembering pair %s failed: %s", inter.get("id"), e)
 

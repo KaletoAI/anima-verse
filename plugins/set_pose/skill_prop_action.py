@@ -22,7 +22,7 @@ class PropActionSkill(PluginSkill):
         from app.core.prop_actions import offers
         from app.core.prop_action_store import live_runs
         if any(run["actor"] == facts.character or (
-                run["partner"] == facts.character and run["status"] != "awaiting_consent")
+                facts.character in run["members"] and run["status"] != "awaiting_consent")
                 for run in live_runs()):
             return None
         for offer in offers(facts.character):

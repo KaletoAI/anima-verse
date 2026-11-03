@@ -74,7 +74,7 @@ class InteractSkill(PluginSkill):
         from app.core.interaction_engine import pending_invites_for
         from app.core.prop_action_store import live_runs
         if pending_invites_for(facts.character) or any(
-                run["partner"] == facts.character and run["status"] == "awaiting_consent"
+                facts.character in run["members"] and run["status"] == "awaiting_consent"
                 for run in live_runs()):
             return None
         return "nobody present and no pending invitation"
@@ -84,7 +84,7 @@ class InteractSkill(PluginSkill):
         try:
             from app.core.interaction_engine import partner_poses
             from app.core.prop_action_store import live_runs
-            return bool(partner_poses() or any(run["partner"] == character_name and
+            return bool(partner_poses() or any(character_name in run["members"] and
                         run["status"] == "awaiting_consent" for run in live_runs()))
         except Exception:
             return False
@@ -230,7 +230,7 @@ class InteractSkill(PluginSkill):
         if not isinstance(ref, str):
             return "Cannot: invalid execution_id."
         run = runs.get(ref)
-        if not run or run["partner"] != actor:
+        if not run or actor not in run["members"]:
             return "Cannot: this exact prop invitation is not addressed to you."
         if data.get("partner") and data["partner"] != run["actor"]:
             return "Cannot: invitation partner mismatch."

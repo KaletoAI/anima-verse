@@ -44,7 +44,7 @@ def run_of(ability, pose="sitting", phase="", partner=""):
     definition = dict(ability=ability, pose_key=pose)
     if ability == "combined":
         definition["phases"] = [dict(id="p1", pose_key="sitting"), dict(id="p2", pose_key="kneeling")]
-    return dict(actor="Kai", partner=partner, definition=definition, phase=phase,
+    return dict(actor="Kai", members=[partner] if partner else [], definition=definition, phase=phase, data={},
                 target=dict(location_id="loc", room_id="room", placement_id="pl1", variant_uid="v"))
 
 

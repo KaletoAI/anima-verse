@@ -79,10 +79,10 @@ class Switch(unittest.TestCase):
         return name, partner
 
     def ask(self, name, action_id, partner="", **kw):
-        return A.request(name, self.target, action_id, self.revision, partner, **kw)
+        return A.request(name, self.target, action_id, self.revision, [partner] if partner else [], **kw)
 
     def check(self, name, action_id, partner=""):
-        return A.check(name, self.target, action_id, self.revision, partner)
+        return A.check(name, self.target, action_id, self.revision, [partner] if partner else [])
 
     def active_pair(self, name, partner):
         eid = self.ask(name, "rest", partner)["execution_id"]

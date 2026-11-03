@@ -167,7 +167,7 @@ def started(invite_id, interaction, inviter="", invitee=""):
         _observe(intent, {"status": "running", "interaction_id": interaction["id"]})
 
 
-def ended(character, partner, interaction_id, reason="ended", invite_id=""):
+def ended(character, members, interaction_id, reason="ended", invite_id=""):
     T = _runtime()
     if not interaction_id:
         return
@@ -180,7 +180,7 @@ def ended(character, partner, interaction_id, reason="ended", invite_id=""):
         if recorded_id != interaction_id and (
                 recorded_id or not invite_id or activity.get("request_id") != invite_id):
             continue
-        if {character, partner} != {candidate["owner"], state["invitee"]}:
+        if set(members) != {candidate["owner"], state["invitee"]}:
             continue
         with keyed_lock("intent_execution", candidate["id"]):
             intent = I.get_intent(candidate["id"])
@@ -192,7 +192,7 @@ def ended(character, partner, interaction_id, reason="ended", invite_id=""):
             if recorded_id != interaction_id and (
                     recorded_id or not invite_id or activity.get("request_id") != invite_id):
                 continue
-            if {character, partner} != {intent["owner"], state["invitee"]}:
+            if set(members) != {intent["owner"], state["invitee"]}:
                 continue
             if reason not in {"ended", "avatar"} or not T._arrived(intent):
                 T._terminate(intent, f"The agreed activity was interrupted ({reason}).")

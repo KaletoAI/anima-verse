@@ -56,7 +56,7 @@ def reaction_prompt(execution_id: str, actor: str, partner: str):
     from app.core.stat_effects import build_stat_list
     from app.models.character import get_character_language
     run = runs.get(execution_id)
-    if (not run or run["partner"] != partner or run["actor"] != actor
+    if (not run or run["members"] != [partner] or run["actor"] != actor
             or (run["data"].get("reaction") or {}).get("state") != "pending"):
         return None
     lang = get_character_language(actor)

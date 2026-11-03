@@ -118,7 +118,9 @@ export interface PropCheckTargets {
     persons: { name: string; sleeping: boolean }[] }[]
 }
 export interface PropPlacementCheckRequest {
-  target: PropCheckTarget; action_id: string; revision: string; actor: string; partner: string
+  target: PropCheckTarget; action_id: string; revision: string; actor: string
+  /** The invitees in invitation order; empty for a solo action. */
+  members: string[]
 }
 export interface PropPlacementCheckResult { enabled: boolean; reason: string }
 

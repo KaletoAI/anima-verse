@@ -185,7 +185,7 @@ def _on_prop_invited(execution_id: str = "", inviter: str = "", invitee: str = "
     from app.models.account import is_player_controlled
     run = runs.get(execution_id)
     if (not run or run["status"] != "awaiting_consent" or run["actor"] != inviter
-            or run["partner"] != invitee or is_player_controlled(invitee)):
+            or invitee not in run["members"] or is_player_controlled(invitee)):
         return
     from app.core.prop_actions import piece_label
     piece = piece_label(run["target"])

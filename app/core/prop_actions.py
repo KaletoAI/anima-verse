@@ -152,8 +152,10 @@ def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = 
         if ability not in ('pose', 'combined', 'sleep', 'pair'):
             issue(p + '.ability', 'unsupported_ability', 'Unknown ability')
         pair = ability == 'pair'
-        if type(action.get('participants')) is not int or action.get('participants') != (2 if pair else 1):
-            issue(p + '.participants', 'unsupported_combination', 'Pair actions require two participants; others one')
+        participants = action.get('participants')
+        if type(participants) is not int or not (2 <= participants <= 5 if pair else participants == 1):
+            issue(p + '.participants', 'unsupported_combination',
+                  'Pair and group actions take 2 to 5 participants; others one')
         if action.get('presence') not in ('any', 'alone', 'others', 'participants_only', 'policy'):
             issue(p + '.presence', 'invalid_presence', 'Unknown presence policy')
         phases = rows(action.get('phases'), p + '.phases')
@@ -428,6 +430,10 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             if (target["placement_id"], action.get("id")) not in bound:
                 continue
             pair = action.get("participants") == 2
+            if (action.get("participants") or 1) > 2:
+                # A group action needs a choice of several people, which no
+                # offer carries yet (plan-gruppen-animationen.md G4).
+                continue
             # Not meant for this figure (no clip for its pose): not offered
             # at all, rather than shown and played as the group's fallback.
             if (not pair and action.get("ability") != "pair"
@@ -443,7 +449,7 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             targets = []
             if pair:
                 for partner in present:
-                    checked = engine.check(actor, target, action["id"], revision, partner, _query=query,
+                    checked = engine.check(actor, target, action["id"], revision, [partner], _query=query,
                                            offer=True)
                     # A partner who cannot do this at all is no partner for it.
                     if checked["reason"] != participation.NOT_OFFERED:
@@ -587,14 +593,15 @@ def _own_lines(actor: str) -> list:
     from app.core.prop_action_engine import state_for
     state = state_for(actor)
     lines = []
+    from app.core.interaction_engine import join_names
     for run in state["current"]:
-        other = run["partner"] if run["actor"] == actor else run["actor"]
+        others = join_names([n for n in [run["actor"], *run["members"]] if n != actor])
         piece = piece_label(run["target"])
-        lines.append(f"You are doing: {run['label']}" + (f" with {other}" if other else "")
+        lines.append(f"You are doing: {run['label']}" + (f" with {others}" if others else "")
                      + (f" on {piece}" if piece else ""))
     for run in state["outgoing"]:
         piece = piece_label(run["target"])
-        lines.append(f"You asked {run['partner']} for {run['label']}"
+        lines.append(f"You asked {join_names(run['members'])} for {run['label']}"
                      + (f" on {piece}" if piece else "") + " — waiting for the answer")
     return lines
 
@@ -683,12 +690,12 @@ def _named_request(actor: str, payload: dict) -> dict:
     exact = dict(operation="request", action_id=row["action_id"], revision=row["definition_revision"],
                  target=row["target"])
     if row["required_partner"]:
-        exact["partner"] = next(t["partner"] for t in row["available_targets"]
-                                if t["partner"].lower() == partner.lower())
+        exact["members"] = [next(t["partner"] for t in row["available_targets"]
+                                 if t["partner"].lower() == partner.lower())]
     # The answer goes back to the LLM: what happened, in names.
     result = execute(actor, exact)
     return dict(status=result["status"], furniture=row["prop_label"], action=row["label"],
-                **({"partner": exact["partner"]} if "partner" in exact else {}),
+                **({"partner": exact["members"][0]} if "members" in exact else {}),
                 # Already part of that very run (agreed to it a moment ago).
                 **({"already": True} if result.get("already") else {}),
                 **({"reason": result["reason"]} if result.get("reason") else {}))
@@ -726,7 +733,7 @@ def execute(actor: str, payload: dict) -> dict:
             return refused
         return engine.cancel(actor, payload["execution_id"])
     if operation != "request" or set(payload) - {
-            "operation", "action_id", "revision", "target", "partner", "request_id", "consent"}:
+            "operation", "action_id", "revision", "target", "members", "request_id", "consent"}:
         return refused
     from app.core.skill_gate import blocked_reason, charge
     request_id = payload.get("request_id", "")
@@ -741,7 +748,7 @@ def execute(actor: str, payload: dict) -> dict:
                 return dict(status="refused", execution_id="", reason=reason)
         result, created = engine.request_with_creation(
             actor, payload.get("target"), payload.get("action_id"),
-            payload.get("revision"), payload.get("partner", ""), request_id,
+            payload.get("revision"), payload.get("members", []), request_id,
             payload.get("consent", "ask"))
         if created and result["status"] not in ("failed", "cancelled"):
             charge(actor, "prop_action")

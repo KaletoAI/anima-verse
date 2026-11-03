@@ -204,8 +204,8 @@ def _apply_on_connection(conn, run, phase, now, profiles, catalogs):
         if prior and phase == 'active' and not delta_s:
             outcomes[effect['id']] = receipt
             continue
-        names = [run['actor'], run['partner']] if effect['target'] == 'both' else [run[effect['target']]]
-        for name in names:
+        from app.core.prop_action_engine import _targets
+        for name in _targets(run, effect['target']):
             actual = dict(effect, source='prop_action:' + run['execution_id'])
             previous = receipt['targets'].get(name, {})
             from fractions import Fraction

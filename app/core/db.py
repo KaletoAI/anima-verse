@@ -457,6 +457,24 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("map icon column migration failed: %s", e)
 
+    # One-shot migration: a furniture run names its invitees as a list
+    # (plan-gruppen-animationen.md G2c) instead of one partner.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='prop_run_members_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            from app.core.prop_action_store import migrate_members
+            migrated = migrate_members(conn)
+            if migrated:
+                logger.info("prop runs: %d row(s) moved from partner to members", migrated)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('prop_run_members_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("prop run members migration failed: %s", e)
+
     # One-time migration: remove legacy keys from character_state.meta.
     # Plan section 8 (step-8 cleanup, May 2026):
     #   - runtime_outfit_skip -> outfit_intent.forbidden_slots (step 2)

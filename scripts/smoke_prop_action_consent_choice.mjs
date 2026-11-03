@@ -91,8 +91,10 @@ assert.deepEqual(picks.map(([offer, partner, consent]) => [offer.label, partner,
 const bodies = [];
 const source = await readFile(new URL('../packages/player-ui/src/propActions.ts', import.meta.url), 'utf8');
 const body = source.match(/export function requestPropAction[\s\S]*?mutate\('\/play\/prop-actions\/request', ([\s\S]*?)\)\n\}/)[1];
-const build = new Function('actionId', 'target', 'revision', 'partner', 'consent', `return ${body}`);
-bodies.push(build('hug', target, 'r1', 'Kira', 'react'), build('hug', target, 'r1', 'Kira', 'ask'), build('sit', target, 'r1'));
+const build = new Function('actionId', 'target', 'revision', 'members', 'consent', `return ${body}`);
+bodies.push(build('hug', target, 'r1', ['Kira'], 'react'), build('hug', target, 'r1', ['Kira'], 'ask'), build('sit', target, 'r1', []));
+assert.deepEqual(bodies[0].members, ['Kira']);
+assert(!('members' in bodies[2]));
 assert.equal(bodies[0].consent, 'react');
 assert(!('consent' in bodies[1]) && !('consent' in bodies[2]));
 console.log('prop action consent choice: PASS (pair chip opens, Ask/Just do it pick ask/react, solo picks at once, react only on the wire)');

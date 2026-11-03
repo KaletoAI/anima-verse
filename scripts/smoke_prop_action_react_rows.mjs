@@ -20,6 +20,8 @@
  *    consent", buttons Accept, Decline, Stop — unchanged except the name.
  * f. ask, Kai's view, outgoing: "Hug with Kira · Awaiting consent",
  *    "Withdraw". Solo run: just "Sit · Active", "Stop".
+ * f2. ask, Kai's view of a group (members Kira, Ben): "Hug with Kira, Ben ·
+ *    Awaiting consent".
  * g. A resisted run is not drawn here at all: it is terminal, state_for puts
  *    it in recent_results, which the panel does not list as a row.
  */
@@ -36,7 +38,7 @@ const calls = [];
 runInNewContext(ts.transpileModule(source, { compilerOptions: {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } }).outputText, { module, exports: module.exports, require: id => ({
-  react: { useState: initial => [initial, () => {}] },
+  react: { useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useEffect() {} },
   'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
   './api': { apiPost: () => calls.push('wake') }, './HoverHint': { HoverHint() {} },
   './I18nProvider': { useI18n: () => ({ t: text => text }) },
@@ -59,8 +61,8 @@ const view = (run, kind = 'current') => {
   const buttons = all.filter(n => n.type === 'button');
   return { label: text(all.find(n => n.type === 'span')), names: buttons.map(text), buttons };
 };
-const pair = (extra) => ({ execution_id: 'x1', actor: 'Kai', partner: 'Kira', label: 'Hug', status: 'approaching',
-  phase: '', reason: '', can_respond: false, can_cancel: true, partner_consent: 'react', ...extra });
+const pair = (extra) => ({ execution_id: 'x1', actor: 'Kai', members: ['Kira'], label: 'Hug', status: 'approaching',
+  phase: '', reason: '', can_respond: false, can_cancel: true, consent: 'react', ...extra });
 
 // a.
 let row = view(pair({ own_role: 'partner', reaction: 'pending', can_resist: true }));
@@ -82,18 +84,21 @@ row = view(pair({ own_role: 'partner', reaction: 'accepted', status: 'active', c
 assert.equal(row.label, 'Kai: Hug · Active');
 assert.deepEqual(row.names, ['Stop']);
 // e.
-row = view(pair({ partner_consent: 'ask', own_role: 'partner', reaction: '', status: 'awaiting_consent',
+row = view(pair({ consent: 'ask', own_role: 'partner', reaction: '', status: 'awaiting_consent',
   can_respond: true }), 'incoming');
 assert.equal(row.label, 'Kai: Hug · Awaiting consent');
 assert.deepEqual(row.names, ['Accept', 'Decline', 'Stop']);
 // f.
-row = view(pair({ partner_consent: 'ask', own_role: 'actor', reaction: '', status: 'awaiting_consent' }), 'outgoing');
+row = view(pair({ consent: 'ask', own_role: 'actor', reaction: '', status: 'awaiting_consent' }), 'outgoing');
 assert.equal(row.label, 'Hug with Kira · Awaiting consent');
 assert.deepEqual(row.names, ['Withdraw']);
-row = view({ execution_id: 's', actor: 'Kai', partner: '', label: 'Sit', status: 'active', phase: '', reason: '',
-  can_respond: false, can_cancel: true, own_role: 'actor', partner_consent: '', reaction: '', can_resist: false });
+row = view({ execution_id: 's', actor: 'Kai', members: [], label: 'Sit', status: 'active', phase: '', reason: '',
+  can_respond: false, can_cancel: true, own_role: 'actor', consent: '', reaction: '', can_resist: false });
 assert.equal(row.label, 'Sit · Active');
 assert.deepEqual(row.names, ['Stop']);
+// f2. A group row names every invitee for the one who started it.
+row = view(pair({ members: ['Kira', 'Ben'], consent: 'ask', own_role: 'actor', reaction: '', status: 'awaiting_consent' }), 'outgoing');
+assert.equal(row.label, 'Hug with Kira, Ben · Awaiting consent');
 // g. The panel lists only incoming/outgoing/current as rows.
 const listed = [...source.matchAll(/\['(\w+)', ownRuns\(data\.state\.(\w+)\)\]/g)].map(m => m[2]);
 assert.deepEqual(listed, ['incoming', 'outgoing', 'current']);

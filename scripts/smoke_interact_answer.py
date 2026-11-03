@@ -193,7 +193,7 @@ import app.core.prop_action_store as PAS  # noqa: E402
 import app.core.prop_actions as PA  # noqa: E402
 import plugins.interact.skill as SK  # noqa: E402
 TARGET = {"location_id": "l", "room_id": "r", "placement_id": "b", "variant_uid": "v"}
-RUN = {"execution_id": "r1", "actor": PARTNER, "partner": ACTOR, "label": "Cuddle", "target": TARGET,
+RUN = {"execution_id": "r1", "actor": PARTNER, "members": [ACTOR], "label": "Cuddle", "target": TARGET,
        "status": "awaiting_consent", "definition": {"name": "Cuddle"}}
 RESPONDS = []
 PAE.state_for = lambda name: dict(incoming=[dict(RUN)] if name == ACTOR else [], outgoing=[],

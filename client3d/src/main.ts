@@ -5444,7 +5444,7 @@ async function startApp(username: string, role: string) {
       propRequestDiagnostic.placement = target.placement_id;
       propRequestDiagnostic.sentAt = undefined;
       try {
-        const result = await api.requestPropAction(actionId, target, revision, partner, consent);
+        const result = await api.requestPropAction(actionId, target, revision, partner ? [partner] : [], consent);
         console.info(`[prop] request answered status=${result.status} ms=${Math.round(performance.now() - (propRequestDiagnostic.sentAt ?? at))}`);
         return result;
       } catch (e) { console.info(`[prop] request answered status=${propRequestDiagnostic.sentAt === undefined ? 'preparation-error' : 'error'} ms=${Math.round(performance.now() - (propRequestDiagnostic.sentAt ?? at))}`); throw e; }

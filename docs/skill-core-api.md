@@ -1147,11 +1147,11 @@ Events, die der Core heute feuert:
 | `character.entered_room` | `character`, `location_id`, `room_id`; once after a successful actual room change, including a location change into its arrival room. Same-room saves, departures to no room and failed writes emit nothing. Delivery waits until the emitting thread releases all world/keyed locks, including caller-held locks; multiple changes are delivered in order without coalescing. |
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
 | `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
-| `interaction.ended` | `character`, `partner`, `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair is cleared. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
+| `interaction.ended` | `character`, `members` (everyone, clip-role order), `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair or group is cleared, its memories and relationship rows written. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
 | `prop_action.active` | `execution_id`, `members` (Namen), `pose_key` (die gehaltene Pose), `delta_game_s`; einmal pro Scheduler-Schritt für jede aktive Möbel-Aktion (nicht Schlaf), die ONLINE Spielzeit verbracht hat — eine eingefrorene Welt und Offline-Zeit liefern keinen Takt. Nach allen Sperren |
 | `prop_action.started` / `prop_action.ended` | `execution_id`, `members`, `pose_key`; `started` zusätzlich `ability` (`pose`, `pair`, `combined`, `sleep`), wenn ein Lauf aktiv wird; `ended` zusätzlich `status`, `reason`, wenn ein AKTIVER Lauf endet (auch beim Wechsel auf eine andere Aktion: erst `ended`, dann `started`). Nach allen Sperren — der Ort, an dem ein Paket mit einer Solo-Aktion einen eigenen Zustand beginnt und beendet |
 | `prop_action.finale_started` / `prop_action.finale_done` | `execution_id`, `name`, `kind`, `pose_key`; Start nach `begin_finale`, Ende 4 s nach der Cliplänge (`FINALE_SHOW_S`) oder mit dem Ende der Aktion. Nach allen Sperren |
-| `prop_action.pair_started` | `execution_id`, `interaction`, `actor`, `partner`; emitted after a furniture pair action has started the real pair (consent was the run's, so there is no `invite_started`); delivered after all locks. Its end is the ordinary `interaction.ended` |
+| `prop_action.group_started` | `execution_id`, `interaction`, `actor`, `members` (everyone, the initiator first); emitted after a furniture pair or group action has started the real interaction (consent was the run's, so there is no `invite_started`); delivered after all locks. Its end is the ordinary `interaction.ended` |
 | `interaction.invite_failed` | `invite_id`, `inviter`, `invitee`, `pose_key`, `reason`; emitted by the core on every failed yes, retaining the actual cause for an owned undertaking |
 | `instagram.post_created` | `poster_name`, `post` |
 | `instagram.user_comment` | `character_name`, `post_id`, `commenter_name`, `comment_text`, `comment_id`, `post` |
@@ -1582,8 +1582,10 @@ rows used by the named-request validator. Repeated placements may share names.
 `outgoing`, `incoming` and `recent_results` to the participant. Current and
 outgoing rows include `target` and action `label`; incoming invitations belong
 in the open-questions block, not the proposal menu. Every row also carries
-`own_role` (`actor`/`partner`), `partner_consent` (`ask`/`react` — how the
-requester chose to begin it, empty for a solo run), `reaction` (a react run's partner reaction: `pending`, `accepted`,
+`actor`, `members` (the invitees, invitation order), `own_role`
+(`actor`/`partner`), `consent` (`ask`/`react` — how the requester chose to
+begin it, empty for a solo run), `consents` (`{name: pending|yes}` while it
+waits), `declined_by`, `reaction` (a react run's partner reaction: `pending`, `accepted`,
 `resisted`, `timeout`, `player`, `none`) and `can_resist`.
 
 `app.core.prop_actions.furniture_for_pose(actor, pose_key) -> list[dict]` lists

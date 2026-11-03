@@ -176,11 +176,11 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
     : run.status === 'approaching' && run.own_role === 'actor' && run.reaction === 'pending' ? 'Waiting for reaction'
     : ({ awaiting_consent: 'Awaiting consent', approaching: 'Approaching', active: 'Active', sleeping: 'Sleeping',
       completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed' } as Record<string, string>)[run.status] || run.status
-  // A pair row names the other person: "Kira: Hug" for the one it is done
-  // to, "Hug with Kira" for the one who started it.
-  const title = !run.partner ? run.label
+  // A row with others names them: "Kira: Hug" for one it is asked of or
+  // done to, "Hug with Kira, Ben" for the one who started it.
+  const title = !run.members.length ? run.label
     : run.own_role === 'partner' ? `${run.actor}: ${run.label}`
-    : t('{pose} with {name}').replace('{pose}', run.label).replace('{name}', run.partner)
+    : t('{pose} with {name}').replace('{pose}', run.label).replace('{name}', run.members.join(', '))
   return <div className="player-prop-execution" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', padding: '4px 0' }}>
     <span>{title} · {t(state)}</span>
     {kind === 'incoming' && run.can_respond && <>
@@ -194,7 +194,7 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
     {run.status === 'active' && run.meters?.map(meter => {
       const value = meterValue(meter)
       // Only the viewer's own gauge can be held back — the own side of the run.
-      const own = (run.own_role === 'partner' ? run.partner : run.actor) === meter.name
+      const own = run.viewer === meter.name
       return <span key={`meter:${meter.name}`} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
         <HoverHint text={`${meter.name} · ${meter.label || t('Finale')}: ${Math.round(value)} %`}>
           <span className="player-prop-meter-row" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
@@ -243,7 +243,7 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true,
     finally { await refresh(); setBusy(false) }
   }
   const ownRuns = (runs: PropActionExecution[]) => partner
-    ? runs.filter(run => run.actor === partner || run.partner === partner) : runs
+    ? runs.filter(run => run.actor === partner || run.members.includes(partner)) : runs
   const hasOffers = data?.offers.some(offer => !partner || (offer.required_partner && offer.available_targets.some(choice => choice.partner === partner)))
   const groups = data && showState ? [
     ['incoming', ownRuns(data.state.incoming)], ['outgoing', ownRuns(data.state.outgoing)],
@@ -259,6 +259,7 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true,
     {groups.map(([kind, runs]) => runs.map(run => <PropActionExecutionRow key={`${kind}:${run.execution_id}`}
       run={run} kind={kind} busy={busy} perform={operation => { void perform(operation) }} />))}
     {showOffers && (data || leading) && <PropActionOffers offers={data?.offers ?? []} partner={partner} busy={busy || error != null} leading={leading}
-      onPick={(offer, selectedPartner, consent) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision, selectedPartner, consent)) }} />}
+      onPick={(offer, selectedPartner, consent) => { void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision,
+        selectedPartner ? [selectedPartner] : [], consent)) }} />}
   </section>
 }

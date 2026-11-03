@@ -7812,7 +7812,7 @@ any marker of its group, a single seat included. Both partners hold ONE slot —
 the one nearest the place centre (`interaction_engine.shared_slot`), one claim —
 and each enters at its clip role point instead of the slot position: the place
 centre plus the role's `anchor_xz_m` turned by `pair_yaw`
-(`interaction_engine.pair_role_point`), the same point both renderers draw the
+(`interaction_engine.role_point`, roles `a`..`e`), the same point both renderers draw the
 pair half at (`pairPoints`). The planner passes it as `point` with the pinned
 slot (`plan_approach`, the journey's `approach_target`); automatic access is
 measured back from it; every revalidation recomputes it
@@ -8261,10 +8261,18 @@ therefore leave furniture actions visibly blocked.
 Player routes require the authenticated user's current authorized avatar:
 
 - `GET /play/prop-actions` returns offers; body/query actor cannot select a figure.
-- `POST /play/prop-actions/request`: `{target,action_id,revision,partner?,request_id?,consent?}`.
-  `consent` (pair actions, default `ask`): `ask` waits for the partner's consent,
-  `react` starts at once and the partner reacts and may push it away — every pair
-  action offers both, the requester chooses. A request naming the run the actor
+- `POST /play/prop-actions/request`: `{target,action_id,revision,members?,request_id?,consent?}`.
+  `members` (2026-11-03, replaces `partner`): the invitees in invitation order —
+  exactly `participants - 1` distinct names other than the actor (one for a pair,
+  2..4 for a group action), none for a solo action; anything else is
+  `invalid_partner`. `consent` (default `ask`): `ask` waits until EVERY invitee
+  has said yes (the run starts with the last "yes"; one "no" ends it as
+  `consent_declined`, the row's `declined_by` names who), `react` — pairs only,
+  else `invalid_consent` — starts at once and the partner reacts and may push it
+  away; every pair action offers both, the requester chooses. Clip roles follow
+  the clip's `role_gender` (a group: each gendered person takes the first free
+  role of their gender in invitation order, the rest fill up; no fitting role is
+  `roles_unfit`); every member claims its person and a slot. A request naming the run the actor
   already takes part in (same action, piece and pair) answers that run with
   `already: true` instead of refusing it as `participant_claimed`; an open
   invitation asked again is answered the same way.
@@ -8298,8 +8306,15 @@ Player routes require the authenticated user's current authorized avatar:
   Clients play it once per execution id across state and cancel answers.
 
   Rows contain `execution_id,action_id,definition_revision,label,target,actor,
-  partner,roles,status,phase,phase_label,reason,can_respond,can_cancel`. Roles distinguish
-  semantic actor/partner from physical clip/access roles. Incoming is only for
+  members,viewer,roles,status,phase,phase_label,reason,can_respond,can_cancel,own_role,
+  consent,consents,declined_by,reaction,can_resist`. `members` are the invitees
+  (invitation order), `viewer` whose view the row is; `own_role` is `actor` for the
+  initiator and `partner` for every invitee. `roles` are the physical roles by
+  name: `clip` `{a..e: name}`, `access` `{name: actor|partner}` (clip role A
+  enters at the `actor` access, every other role at `partner`). `consent` is
+  `ask`/`react` (empty for a solo run); `consents` `{name: pending|yes}` while the
+  run waits — `can_respond` is true for an invitee still `pending`. A row's
+  `motion.role` is the viewer's clip role `a`..`e` (`null` solo). Incoming is only for
   the exact recipient; outgoing is only the initiator's; current is participant
   only. Own terminal rows/effect results disappear after 30 **system** minutes.
   `phase` remains the machine ID (which may be a UUID); `phase_label` comes

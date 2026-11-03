@@ -89,7 +89,7 @@ class MotionPlan(unittest.TestCase):
         motion = result['motion']
         run = R.get(result['execution_id'])
         journey = F.C.get_character_profile(name)['journey']
-        plan = run['data']['plans']['actor']
+        plan = run['data']['plans'][name]
         self.assertEqual(motion['execution_id'], result['execution_id'])
         self.assertEqual(motion['journey_id'], journey['journey_id'])
         self.assertEqual(motion['room_id'], target['room_id'])
@@ -146,7 +146,7 @@ class MotionPlan(unittest.TestCase):
         profile = F.C.get_character_profile(name)
         self.assertIsNone(profile.get('journey'))
         self.assertEqual(profile['place']['execution_id'], here['execution_id'])
-        anchor = R.get(here['execution_id'])['data']['plans']['actor']['entry_anchor']
+        anchor = R.get(here['execution_id'])['data']['plans'][name]['entry_anchor']
         pos = F.C.get_character_pos(name)
         self.assertEqual((pos['x'], pos['z']), (anchor['x'], anchor['z']))
         seat = pos

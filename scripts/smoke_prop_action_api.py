@@ -336,7 +336,7 @@ class ApiContracts(unittest.TestCase):
         name, partner, target, _ = S.authored_pair()
         player, recipient = client(name), client(partner)
         stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': 5}})
-        asked = player.post('/play/prop-actions/request', json=payload(target, partner=partner))
+        asked = player.post('/play/prop-actions/request', json=payload(target, members=[partner]))
         self.assertEqual(asked.json()['status'], 'awaiting_consent')
         self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
         self.assertFalse(R.claims(), 'paying for a request is not partner consent')
@@ -421,7 +421,7 @@ class ApiContracts(unittest.TestCase):
         stranger = F.actor(target['location_id'], at=(3, 5))
         one, two, foreign, admin = client(name), client(partner), client(stranger), client(name, 'admin')
         self.assertEqual(TestClient(app()).get('/play/prop-actions').status_code, 401)
-        body = payload(target, partner=partner, request_id='private-nonce')
+        body = payload(target, members=[partner], request_id='private-nonce')
         forged = dict(body, target=dict(body['target'], location_id='unknown-secret-location'))
         with patch.object(F.places, '_compose', side_effect=AssertionError('foreign scene must not be composed')):
             blocked = one.post('/play/prop-actions/request', json=forged)
@@ -431,12 +431,12 @@ class ApiContracts(unittest.TestCase):
         bad = one.post('/play/prop-actions/request', json=dict(body, revision='stale'))
         self.assertEqual(bad.status_code, 409)
         self.assertEqual(bad.json()['detail']['reason'], 'stale_definition')
-        self.assertEqual(one.post('/play/prop-actions/request', json=dict(body, partner='missing')).status_code, 409)
+        self.assertEqual(one.post('/play/prop-actions/request', json=dict(body, members=['missing'])).status_code, 409)
         asked = one.post('/play/prop-actions/request', json=body)
         self.assertEqual(asked.status_code, 200, asked.text)
         ref = asked.json()['execution_id']
         self.assertEqual(one.post('/play/prop-actions/request', json=body).json(), asked.json())
-        self.assertEqual(one.post('/play/prop-actions/request', json=dict(body, partner=stranger)).json()['detail']['reason'], 'request_id_conflict')
+        self.assertEqual(one.post('/play/prop-actions/request', json=dict(body, members=[stranger])).json()['detail']['reason'], 'request_id_conflict')
         self.assertFalse(one.get('/play/prop-actions/state?actor=' + partner).json()['incoming'])
         self.assertEqual(two.get('/play/prop-actions/state').json()['incoming'][0]['execution_id'], ref)
         self.assertTrue(all(not rows for rows in foreign.get('/play/prop-actions/state').json().values()))
@@ -496,7 +496,7 @@ class ApiContracts(unittest.TestCase):
         name, partner, target, pid = S.authored_pair()
         admin = client(name, 'admin')
         base = '/world/props/' + pid
-        body = payload(target, actor=name, partner=partner)
+        body = payload(target, actor=name, members=[partner])
         doc = F.props.read_sidecar(pid)
         before = snapshot()
         with pure_tripwires():
@@ -514,14 +514,13 @@ class ApiContracts(unittest.TestCase):
                                         for point in roles.values()))
             checked = admin.post(base + '/check-placement', json=body).json()
             self.assertTrue(checked['enabled'])
-            self.assertEqual(set(checked['plans']), {'actor', 'partner'})
-            for role, plan in checked['plans'].items():
-                person = name if role == 'actor' else partner
+            self.assertEqual(set(checked['plans']), {name, partner})
+            for person, plan in checked['plans'].items():
                 position = F.C.get_character_pos(person)
                 self.assertEqual(plan['waypoints'][0], [position['x'], position['z']])
                 self.assertEqual(plan['waypoints'][-1], [plan['access']['x'], plan['access']['z']])
                 self.assertEqual(plan['entry_anchor']['placement_id'], target['placement_id'])
-            default_check = A.check(name, body['target'], body['action_id'], body['revision'], partner)
+            default_check = A.check(name, body['target'], body['action_id'], body['revision'], [partner])
             self.assertNotIn('plans', default_check)
             offers_response = admin.get('/play/prop-actions')
             self.assertEqual(offers_response.status_code, 200, offers_response.text)
@@ -859,7 +858,7 @@ class ApiContracts(unittest.TestCase):
         path.write_text(json.dumps(meta))
         observer = F.actor(target['location_id'], at=(3, 5))
         viewer = client(observer)
-        requested = S.request(name, target, partner=partner)
+        requested = S.request(name, target, members=[partner])
         ref = requested['execution_id']
         before = viewer.get('/play/worldmap').json()['characters']
         self.assertTrue(all(row['prop_action_entry'] is None for row in before))

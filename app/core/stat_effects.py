@@ -133,7 +133,7 @@ def _declarative_context(name: str) -> tuple:
     from app.core import prop_action_store
     context = []
     for run in prop_action_store.live_runs():
-        if run["status"] not in ("active", "sleeping") or name not in (run["actor"], run["partner"]):
+        if run["status"] not in ("active", "sleeping") or name not in prop_action_store.people(run):
             continue
         role = "actor" if name == run["actor"] else "partner"
         keys = tuple(sorted({effect["stat"] for effect in run["definition"]["effects"]

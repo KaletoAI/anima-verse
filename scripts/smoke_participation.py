@@ -22,8 +22,9 @@ more), no location. Fakes on ``participation.check``:
 [4] Inside a room (location "loc1", room "r1" for both): the call carries
     "loc1"/"r1".
 [5] start_interaction(A, B, "hug") with a stub pair clip raises ValueError
-    "not with others present"; with ``_reserved`` (a prop run that asked its
-    furniture rule already) the provider is not asked again.
+    "not with others present"; the pose-less check start_interaction_at
+    makes for a prop run (that asked its furniture rule already) does not
+    ask the provider again.
 [6] A refusal without a message falls back to its reason code; a provider
     answering a non-dict or an empty reason is no refusal.
 [7] offered(): no provider → True; a "privacy" refusal → True (listed,
@@ -123,11 +124,9 @@ def main():
             except ValueError as e:
                 check('refused', str(e), 'not with others present')
             calls.clear()
-            reserved = {'data': {'clip_roles': {'a': 'A', 'b': 'B'}}}
-            try:
-                IE.start_interaction('A', 'B', 'hug', _reserved=reserved)
-            except Exception:
-                pass  # what happens after the check is not this smoke's business
+            # A prop run asked its presence rule already: start_interaction_at
+            # checks the pair without a pose, which asks no package.
+            IE.check_can_pair('A', 'B', '')
             check('reserved run not asked again', calls, [])
 
         print('[6] answer shapes')

@@ -195,7 +195,7 @@ class Runs(unittest.TestCase):
         self.assertEqual(planned["entry_anchor"]["slot"], 1)
         answer = request(name, target)
         self.assertEqual(answer["status"], "approaching", answer)
-        plan = R.get(answer["execution_id"])["data"]["plans"]["actor"]
+        plan = R.get(answer["execution_id"])["data"]["plans"][name]
         self.assertEqual(plan["entry_anchor"]["slot"], 1)
 
     def test_automatic_bench_and_opposite_bed_entries(self):
@@ -280,7 +280,7 @@ class Runs(unittest.TestCase):
             for action_id in ("rest", "share-again", "share-third")}
         for action_id, checks in expected.items():
             for who, wanted in checks.items():
-                self.assertEqual(A.check(name, exact, action_id, revision, who), wanted)
+                self.assertEqual(A.check(name, exact, action_id, revision, [who]), wanted)
         before = {who: F.C.get_character_profile(who) for who in (name, partner, available, asleep)}
         with patch.object(F.places, "_compose", wraps=F.places._compose) as compose, \
                 patch.object(room_stand, "room_geometry", wraps=room_stand.room_geometry) as geometry:
@@ -316,7 +316,7 @@ class Runs(unittest.TestCase):
         changed = {row["action_id"]: row for row in prop_actions.offers(name)}
         self.assertFalse(changed["rest"]["enabled"], changed)
         self.assertTrue(changed["share-again"]["enabled"], changed)
-        self.assertEqual(A.check(name, exact, "share-again", revision, partner)["reason"], "stale_definition")
+        self.assertEqual(A.check(name, exact, "share-again", revision, [partner])["reason"], "stale_definition")
         location = F.W.get_location_by_id(target["location_id"])
         room = next(room for room in location["rooms"] if room["id"] == target["room_id"])
         room["layout"]["props"][0]["at"] = [40, 5]
@@ -331,18 +331,18 @@ class Runs(unittest.TestCase):
         exact = {k: target[k] for k in A._TARGET}
         definition, reason = A._definition(exact, target["action_id"], target["definition_revision"])
         self.assertFalse(reason)
-        run = dict(execution_id="", actor=name, partner=partner, action_id=target["action_id"],
+        run = dict(execution_id="", actor=name, members=[partner], action_id=target["action_id"],
                    definition_revision=target["definition_revision"], target=exact, definition=definition,
                    data=dict(plans={}, access_roles={}))
         plans, reason = A._plan(run, conn=R.db.get_connection())
         self.assertFalse(reason, plans)
         for role, who in (("actor", name), ("partner", partner)):
-            anchor = plans[role]["entry_anchor"]
+            anchor = plans[who]["entry_anchor"]
             fresh = prop_action_paths.plan_approach(who, dict(target, marker_id=anchor["marker_id"],
                                                              slot=anchor["slot"]),
-                                                     run["data"]["access_roles"][role])
-            self.assertEqual(plans[role], fresh)
-            access_x = 7.7 if run["data"]["access_roles"][role] == "actor" else 8.3
+                                                     run["data"]["access_roles"][who])
+            self.assertEqual(plans[who], fresh)
+            access_x = 7.7 if run["data"]["access_roles"][who] == "actor" else 8.3
             self.assertEqual(fresh["waypoints"], [[1, 5] if role == "actor" else [2, 5],
                                                  [access_x, 7]])
 
@@ -362,7 +362,7 @@ class Runs(unittest.TestCase):
         one = request(name, target, request_id="retry")
         self.assertEqual(one["status"], "approaching", one)
         self.assertEqual(request(name, target, request_id="retry"), one)
-        changed = request(name, target, request_id="retry", partner="other")
+        changed = request(name, target, request_id="retry", members=["other"])
         self.assertEqual(changed["reason"], "request_id_conflict")
         self.assertFalse(F.C.get_character_profile(name).get("place"))
 
@@ -426,14 +426,14 @@ class Runs(unittest.TestCase):
         self.assertEqual((row["status"], row["phase"]), ("approaching", "entry"), row)
         self.assertEqual(F.C.get_character_profile(name)["last_journey_result"]["status"], "arrived")
         self.assertIn(name, row["data"]["arrived"])
-        access = row["data"]["plans"]["actor"]["access"]
+        access = row["data"]["plans"][name]["access"]
         self.assertEqual(F.C.get_character_pos(name), {"x": access["x"], "z": access["z"]})
         self.assertFalse(F.C.get_character_profile(name).get("place"))
         self.assertEqual(row["data"]["entry_elapsed"], 0)
         tick(row["data"]["entries"][name]["duration_game_s"])
         activated = R.get(result["execution_id"])
         self.assertEqual(activated["status"], "active", activated)
-        anchor = activated["data"]["plans"]["actor"]["entry_anchor"]
+        anchor = activated["data"]["plans"][name]["entry_anchor"]
         self.assertEqual(F.C.get_character_pos(name), {"x": anchor["x"], "z": anchor["z"]})
         self.assertEqual(F.C.get_character_profile(name)["place"]["execution_id"], result["execution_id"])
 
@@ -520,14 +520,14 @@ class Runs(unittest.TestCase):
 
     def test_consent_has_no_claims_exact_invitee_and_both_arrivals_required(self):
         name, partner, target, _ = authored_pair()
-        result = request(name, target, partner=partner)
+        result = request(name, target, members=[partner])
         self.assertEqual(result["status"], "awaiting_consent", result)
         self.assertFalse(R.claims())
         self.assertEqual(A.respond(name, result["execution_id"], True)["reason"], "not_invitee")
         from app.core import hooks
         started = []
-        hooks.register("prop_action.pair_started", lambda **kw: started.append(kw), tag="smoke.pair_started")
-        self.addCleanup(hooks._hooks.pop, ("prop_action.pair_started", "smoke.pair_started"), None)
+        hooks.register("prop_action.group_started", lambda **kw: started.append(kw), tag="smoke.group_started")
+        self.addCleanup(hooks._hooks.pop, ("prop_action.group_started", "smoke.group_started"), None)
         accepted = A.respond(partner, result["execution_id"], True)
         self.assertEqual(accepted["status"], "approaching", accepted)
         self.assertEqual(len(R.claims()), 4)
@@ -548,9 +548,9 @@ class Runs(unittest.TestCase):
         self.assertEqual(a["interaction"]["id"], b["interaction"]["id"])
         self.assertEqual(a["interaction"]["execution_ref"], result["execution_id"])
         # The furniture start event: once, after the pair is live, naming it.
-        self.assertEqual([(kw["execution_id"], kw["actor"], kw["partner"], kw["interaction"]["id"])
+        self.assertEqual([(kw["execution_id"], kw["actor"], kw["members"], kw["interaction"]["id"])
                           for kw in started],
-                         [(result["execution_id"], name, partner, a["interaction"]["id"])])
+                         [(result["execution_id"], name, [name, partner], a["interaction"]["id"])])
         self.assertEqual((a["place"]["slot"], b["place"]["slot"]), (0, 1))
         self.assertEqual((a["place"]["id"], b["place"]["id"]), ("device/body", "device/body"))
         from app.core.interaction_engine import end_interaction
@@ -585,13 +585,13 @@ class Runs(unittest.TestCase):
             seat = preview_access(doc, prop_id=pid)[target["action_id"]][target["variant_uid"]][marker_id]["0"]["actor"]
         self.assertAlmostEqual((pa_["x"] + pb_["x"]) / 2, seat["x"], places=6)
         self.assertAlmostEqual((pa_["z"] + pb_["z"]) / 2, seat["z"], places=6)
-        result = request(name, target, partner=partner)
+        result = request(name, target, members=[partner])
         self.assertEqual(result["status"], "awaiting_consent", result)
         accepted = A.respond(partner, result["execution_id"], True)
         self.assertEqual(accepted["status"], "approaching", accepted)
         self.assertEqual(len(R.claims()), 3)
         plans = R.get(result["execution_id"])["data"]["plans"]
-        a, b = plans["actor"]["entry_anchor"], plans["partner"]["entry_anchor"]
+        a, b = plans[name]["entry_anchor"], plans[partner]["entry_anchor"]
         self.assertEqual((a["slot"], b["slot"]), (0, 0))
         self.assertAlmostEqual(F.math.dist((a["x"], a["z"]), (b["x"], b["z"])), .188, places=6)
         place = next(p for p in places._GeometryQuery().room_places(target["location_id"], target["room_id"])
@@ -794,8 +794,8 @@ class Runs(unittest.TestCase):
     def test_competing_pair_consent_cannot_claim_shared_participant_twice(self):
         name, partner, target, _ = authored_pair()
         third = F.actor(target["location_id"], at=(3, 5))
-        first = request(name, target, partner=partner)
-        second = request(third, target, partner=partner)
+        first = request(name, target, members=[partner])
+        second = request(third, target, members=[partner])
         self.assertFalse(R.claims())
         self.assertEqual(A.respond(partner, first["execution_id"], True)["status"], "approaching")
         refused = A.respond(partner, second["execution_id"], True)
@@ -811,7 +811,7 @@ class Runs(unittest.TestCase):
             else:
                 F.C.save_character_current_room(partner, "adjacent")
             before = F.C.get_character_profile(name)
-            answer = request(name, target, partner=partner)
+            answer = request(name, target, members=[partner])
             self.assertEqual(answer["reason"], "participant_asleep" if asleep else "target_not_in_actor_room")
             self.assertEqual(F.C.get_character_profile(name), before)
             self.assertFalse(R.claims())
@@ -872,7 +872,7 @@ class Runs(unittest.TestCase):
     def test_pair_end_callback_defers_past_outer_profile_lock_during_restart(self):
         from app.core.keyed_lock import keyed_lock
         name, partner, target, _ = authored_pair()
-        result = request(name, target, partner=partner)
+        result = request(name, target, members=[partner])
         A.respond(partner, result["execution_id"], True)
         tick(30)
         tick(2)
@@ -1044,12 +1044,12 @@ class Runs(unittest.TestCase):
         meta = json.loads(path.read_text())
         meta["role_gender"] = {"a": "male", "b": "female"}
         path.write_text(json.dumps(meta))
-        result = request(name, target, partner=partner)
+        result = request(name, target, members=[partner])
         A.respond(partner, result["execution_id"], True)
         run = R.get(result["execution_id"])
         self.assertEqual(run["data"]["clip_roles"], {"a": partner, "b": name})
-        self.assertEqual(run["data"]["plans"]["actor"]["entry_anchor"]["slot"], 1)
-        self.assertEqual(run["data"]["plans"]["partner"]["entry_anchor"]["slot"], 0)
+        self.assertEqual(run["data"]["plans"][name]["entry_anchor"]["slot"], 1)
+        self.assertEqual(run["data"]["plans"][partner]["entry_anchor"]["slot"], 0)
         self.assertEqual(F.E.get_journey(name)["approach_role"], "partner")
         self.assertEqual(F.E.get_journey(partner)["approach_role"], "actor")
         tick(30)
@@ -1058,7 +1058,7 @@ class Runs(unittest.TestCase):
         self.assertEqual(run["status"], "active", run)
         self.assertEqual((F.C.get_character_profile(name)["interaction"]["role"],
                           F.C.get_character_profile(partner)["interaction"]["role"]), ("b", "a"))
-        self.assertEqual((run["actor"], run["partner"]), (name, partner))
+        self.assertEqual((run["actor"], run["members"]), (name, [partner]))
 
     def test_restart_preserves_travel_checkpoint_ahead_of_run_tick_and_reanchor_crash(self):
         name, target, _ = setup_run()
@@ -1102,7 +1102,7 @@ class Runs(unittest.TestCase):
 
     def test_acceptance_enforces_consent_expiry_without_periodic_tick(self):
         name, partner, target, _ = authored_pair()
-        result = request(name, target, partner=partner)
+        result = request(name, target, members=[partner])
         F.set_game_time(F.game_time() + GameDuration.of(seconds=299))
         A.advance(F.game_time())
         self.assertEqual(R.get(result["execution_id"])["data"]["consent_elapsed"], 299)

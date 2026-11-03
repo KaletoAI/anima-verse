@@ -104,7 +104,7 @@ def with_sit_action(pid, target):
 def active_pair(shared=False):
     name, partner, target, pid = (RUNS.authored_shared_pair() if shared else RUNS.authored_pair())
     with_sit_action(pid, target)
-    result = RUNS.request(name, target, partner=partner)
+    result = RUNS.request(name, target, members=[partner])
     A.respond(partner, result["execution_id"], True)
     for _ in range(40):
         RUNS.tick(2)
@@ -187,7 +187,7 @@ class FollowPose(unittest.TestCase):
             profile = F.C.get_character_profile(person)
             self.assertEqual(profile["pose_key"], "sitting")
             self.assertEqual(profile["place"]["execution_id"], follow["execution_id"])
-            anchor = follow["data"]["plans"]["actor"]["entry_anchor"]
+            anchor = follow["data"]["plans"][person]["entry_anchor"]
             self.assertLess(F.math.dist((anchor["x"], anchor["z"]),
                                         (before[person]["x"], before[person]["z"])), .05)
             slots.add(anchor["slot"])
