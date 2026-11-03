@@ -34,7 +34,7 @@ public class PropActionApiTests
         using var target=JsonDocument.Parse("""{"location_id":"loc-props","room_id":"r-props","placement_id":"bench-56","variant_uid":"variant-56"}""");
         using var offers=await api.GetPropActionsAsync(); using var state=await api.GetPropActionStateAsync();
         using var solo=await api.RequestPropActionAsync("pose-56",target.RootElement,"revision-56");
-        using var pair=await api.RequestPropActionAsync("pair-56",target.RootElement,"revision-56","fixture-npc");
+        using var pair=await api.RequestPropActionAsync("pair-56",target.RootElement,"revision-56",new[]{"fixture-npc"},"react");
         using var accept=await api.RespondPropActionAsync("execution-56-invite",true);
         using var cancel=await api.CancelPropActionAsync("execution-56-solo");
         Assert.Equal(6,transport.Requests.Count);
@@ -42,7 +42,10 @@ public class PropActionApiTests
         Assert.Equal(("GET","/play/prop-actions/state"),(transport.Requests[1].Method,transport.Requests[1].Path));
         var r=transport.Requests[2]; Assert.Equal("POST",r.Method); Assert.Equal("/play/prop-actions/request",r.Path);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"action_id":"pose-56","target":{"location_id":"loc-props","room_id":"r-props","placement_id":"bench-56","variant_uid":"variant-56"},"revision":"revision-56"}"""),r.Body));
-        Assert.Equal("fixture-npc",transport.Requests[3].Body!["partner"]!.GetValue<string>());
+        // G2c: members list replaces partner; "react" only with exactly one member.
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""["fixture-npc"]"""),transport.Requests[3].Body!["members"]));
+        Assert.Equal("react",transport.Requests[3].Body!["consent"]!.GetValue<string>());
+        Assert.False(transport.Requests[3].Body!.AsObject().ContainsKey("partner"));
         Assert.Equal("/play/prop-actions/respond",transport.Requests[4].Path);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"execution_id":"execution-56-invite","accept":true}"""),transport.Requests[4].Body));
         Assert.Equal("/play/prop-actions/cancel",transport.Requests[5].Path);
@@ -53,5 +56,16 @@ public class PropActionApiTests
         int unauthorized=0; api.Unauthorized+=()=>unauthorized++;
         transport.Status=401; await Assert.ThrowsAsync<ApiException>(()=>api.CancelPropActionAsync("execution-56-solo"));
         Assert.Equal(1,unauthorized);
+    }
+    [Fact]
+    public void RequestSendsConsentOnlyForExactlyOneMember()
+    {
+        using var target=JsonDocument.Parse("{}");
+        var solo=JsonNode.Parse(PropActionRequest.Request("a",target.RootElement,"r",null,"react").GetRawText())!.AsObject();
+        Assert.False(solo.ContainsKey("members")); Assert.False(solo.ContainsKey("consent"));
+        var group=JsonNode.Parse(PropActionRequest.Request("a",target.RootElement,"r",new[]{"X","Y"},"react").GetRawText())!.AsObject();
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""["X","Y"]"""),group["members"])); Assert.False(group.ContainsKey("consent"));
+        var ask=JsonNode.Parse(PropActionRequest.Request("a",target.RootElement,"r",new[]{"X"},"ask").GetRawText())!.AsObject();
+        Assert.False(ask.ContainsKey("consent"));
     }
 }

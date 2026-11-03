@@ -225,7 +225,7 @@ public partial class FigureManager
                 playback.Phase=phase; return;
             }
             string role=PropActionMotion.Text(plan["role"]);
-            if(role is "a" or "b" && !pose.EndsWith("__"+role,StringComparison.Ordinal)) pose+="__"+role;
+            if(role is "a" or "b" or "c" or "d" or "e" && !pose.EndsWith("__"+role,StringComparison.Ordinal)) pose+="__"+role;
             string poseKey=$"{pose}|{figure.Player?.GetInstanceId()}";
             var finale=!playback.Cancel && figure.Finale is { Role:null } ? StepFinale(figure,dt,WorldFrozen) : null;
             if(finale is { } solo && figure.PlayPair(solo.Clip,solo.T,WorldFrozen,false,restart:solo.Start,frameStep:solo.Start ? 0 : dt)) playback.FinaleOn=true;

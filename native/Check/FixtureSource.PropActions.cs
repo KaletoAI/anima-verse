@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Text.Json;
@@ -38,8 +39,8 @@ public sealed partial class FixtureSource
     }
     public Task<JsonDocument> GetPropActionsAsync()=>Task.FromResult(PropStep("GET","/play/prop-actions"));
     public Task<JsonDocument> GetPropActionStateAsync()=>Task.FromResult(PropStep("GET","/play/prop-actions/state"));
-    public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,CancellationToken ct=default)
-    { ct.ThrowIfCancellationRequested(); return Task.FromResult(PropStep("POST","/play/prop-actions/request",PropActionRequest.Request(actionId,target,revision,partner))); }
+    public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,IReadOnlyList<string>? members=null,string? consent=null,CancellationToken ct=default)
+    { ct.ThrowIfCancellationRequested(); return Task.FromResult(PropStep("POST","/play/prop-actions/request",PropActionRequest.Request(actionId,target,revision,members,consent))); }
     public Task<JsonDocument> RespondPropActionAsync(string executionId,bool accept,CancellationToken ct=default)
     { ct.ThrowIfCancellationRequested(); return Task.FromResult(PropStep("POST","/play/prop-actions/respond",PropActionRequest.Respond(executionId,accept))); }
     public Task<JsonDocument> CancelPropActionAsync(string executionId,CancellationToken ct=default)

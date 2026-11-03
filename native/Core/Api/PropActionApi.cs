@@ -13,7 +13,7 @@ public partial interface IWorldSource
     bool SupportsPropActions => false;
     Task<JsonDocument> GetPropActionsAsync() => Task.FromException<JsonDocument>(new ApiException(404,"/play/prop-actions"));
     Task<JsonDocument> GetPropActionStateAsync() => Task.FromException<JsonDocument>(new ApiException(404,"/play/prop-actions/state"));
-    Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,CancellationToken ct=default)
+    Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,IReadOnlyList<string>? members=null,string? consent=null,CancellationToken ct=default)
         => Task.FromException<JsonDocument>(new ApiException(404,"/play/prop-actions/request"));
     Task<JsonDocument> RespondPropActionAsync(string executionId,bool accept,CancellationToken ct=default)
         => Task.FromException<JsonDocument>(new ApiException(404,"/play/prop-actions/respond"));
@@ -21,13 +21,17 @@ public partial interface IWorldSource
         => Task.FromException<JsonDocument>(new ApiException(404,"/play/prop-actions/cancel"));
 }
 
-/// <summary>Task 57: exact request objects shared with the strict fixture replayer; partner is absent unless supplied.</summary>
+/// <summary>
+/// Task 57: exact request objects shared with the strict fixture replayer. G2c: <c>members</c> are the invitees in
+/// invitation order (absent for a solo action); <c>consent: "react"</c> only with exactly one member (propActions.ts).
+/// </summary>
 public static class PropActionRequest
 {
-    public static JsonElement Request(string actionId,JsonElement target,string revision,string? partner=null)
+    public static JsonElement Request(string actionId,JsonElement target,string revision,IReadOnlyList<string>? members=null,string? consent=null)
     {
         var body=new Dictionary<string,object> { ["action_id"]=actionId,["target"]=target,["revision"]=revision };
-        if(partner is not null) body["partner"]=partner;
+        if(members is { Count:>0 }) body["members"]=members;
+        if(members is { Count:1 } && consent=="react") body["consent"]=consent;
         return JsonSerializer.SerializeToElement(body);
     }
     public static JsonElement Respond(string executionId,bool accept)=>JsonSerializer.SerializeToElement(new { execution_id=executionId,accept });
@@ -39,8 +43,8 @@ public sealed partial class AnimaApi
     public bool SupportsPropActions => true;
     public Task<JsonDocument> GetPropActionsAsync()=>GetJson("/play/prop-actions");
     public Task<JsonDocument> GetPropActionStateAsync()=>GetJson("/play/prop-actions/state");
-    public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,CancellationToken ct=default)
-        =>PostPropAction("/play/prop-actions/request",PropActionRequest.Request(actionId,target,revision,partner),ct);
+    public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,IReadOnlyList<string>? members=null,string? consent=null,CancellationToken ct=default)
+        =>PostPropAction("/play/prop-actions/request",PropActionRequest.Request(actionId,target,revision,members,consent),ct);
     public Task<JsonDocument> RespondPropActionAsync(string executionId,bool accept,CancellationToken ct=default)
         =>PostPropAction("/play/prop-actions/respond",PropActionRequest.Respond(executionId,accept),ct);
     public Task<JsonDocument> CancelPropActionAsync(string executionId,CancellationToken ct=default)

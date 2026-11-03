@@ -95,7 +95,7 @@ actor selection is never part of a player request.
 | Scenario | Ordered route answers |
 |---|---|
 | `solo` | GET offers → POST request exact solo action/target/revision → GET state current approaching `execution-56-solo` → GET worldmap own approach → GET worldmap entry → GET state entry phase → GET worldmap held place → GET state active |
-| `pair-request` | POST request exact pair/partner `fixture-npc` → `execution-56-outgoing`, awaiting_consent → GET state outgoing (cannot respond) → GET idle worldmap; requesting is not acceptance |
+| `pair-request` | POST request exact pair with members `["fixture-npc"]` → `execution-56-outgoing`, awaiting_consent → GET state outgoing (cannot respond) → GET idle worldmap; requesting is not acceptance |
 | `pair-accept` | GET state incoming `execution-56-invite` from NPC (can respond) → POST respond accept true → approaching → GET state current with exact physical roles → GET worldmap two approaches |
 | `pair-decline` | Same incoming state → POST respond accept false → cancelled/consent_declined → GET state recent result, cannot cancel → GET idle worldmap |
 | `cancel` | From own running solo: POST cancel `execution-56-solo` → cancelled/cancelled → GET state recent result → GET mid-route cancelled worldmap |

@@ -83,7 +83,9 @@ public sealed partial class AvatarOffersController
             if(args.Count<3 || args[1] is not JsonObject target) return;
             PreviewPropTarget(target);
             PendingPropAction=MutatePropAsync(()=>RequestLoggedAsync(PropActionMotion.Text(args[0]),target,
-                PropActionMotion.Text(args[2]),args.Count>3 ? args[3]?.GetValue<string>() : null));
+                PropActionMotion.Text(args[2]),
+                args.Count>3 && args[3] is JsonValue p && p.TryGetValue<string>(out var partner) && partner.Length>0 ? new[]{partner} : null,
+                args.Count>4 && args[4] is JsonValue c && c.TryGetValue<string>(out var consent) ? consent : null));
         };
         _hud.Handlers["respondPropAction"]=args=> {
             if(args.Count<2 || args[1] is not JsonValue b || !b.TryGetValue<bool>(out var accept)) return;
@@ -135,12 +137,12 @@ public sealed partial class AvatarOffersController
     public Func<double> PropPollPeriod { get; set; }=()=>AnimaNative.Sync.PollSpec.Worldmap3d.IntervalMs;
     private double PropPollInterval=>PropPollPeriod();
     private void PublishPropSnapshot() { if(!_disposed && PropActions is { } props) _hud.SetState("propActionSnapshot",new JsonObject { ["offers"]=_semanticOffers.DeepClone(),["state"]=props.State }); }
-    private async Task<JsonDocument> RequestLoggedAsync(string action,JsonObject target,string revision,string? partner)
+    private async Task<JsonDocument> RequestLoggedAsync(string action,JsonObject target,string revision,IReadOnlyList<string>? members,string? consent)
     {
         var timer=System.Diagnostics.Stopwatch.StartNew();
         LogProp($"request sent action={JsonSerializer.Serialize(action)} placement={JsonSerializer.Serialize(PropActionMotion.Text(target["placement_id"]))}");
         try {
-            var answer=await _source.RequestPropActionAsync(action,JsonSerializer.SerializeToElement(target),revision,partner,_lifetime.Token);
+            var answer=await _source.RequestPropActionAsync(action,JsonSerializer.SerializeToElement(target),revision,members,consent,_lifetime.Token);
             LogProp($"request answered status={answer.RootElement.GetProperty("status").GetString()} ms={timer.ElapsedMilliseconds}");
             return answer;
         } catch { LogProp($"request answered status=error ms={timer.ElapsedMilliseconds}"); throw; }

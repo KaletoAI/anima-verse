@@ -107,7 +107,7 @@ public static partial class PropActionsCheck
             hud.Handlers["pickPropAction"](new JsonArray(action["action_id"]!.DeepClone(),action["target"]!.DeepClone(),action["definition_revision"]!.DeepClone()));
             await offers.PendingPropAction!;
             Is("HUD dispatch exact body",source.Request?["action_id"]?.GetValue<string>()=="pose-56" && source.Request?["revision"]?.GetValue<string>()=="revision-56"
-                && source.Request?["target"]?["placement_id"]?.GetValue<string>()=="bench-56" && !source.Request!.AsObject().ContainsKey("partner"));
+                && source.Request?["target"]?["placement_id"]?.GetValue<string>()=="bench-56" && !source.Request!.AsObject().ContainsKey("members"));
             Is("refusal resumes preparation",!steering.PropPreparationPending && !position.Channel.ReportsPaused);
             foreach(var row in source.Offers) row!["target"]!["variant_uid"]="wrong";
             await offers.RefreshSemanticOffersAsync();
@@ -145,8 +145,8 @@ public static partial class PropActionsCheck
         public Task<JsonDocument> GetPropActionsAsync() { OfferRequests++; return PendingOffers?.Task ?? Task.FromResult(JsonDocument.Parse(Offers.ToJsonString())); }
         public Task<JsonDocument> GetPropActionStateAsync() { StateRequests++; return PendingState?.Task ?? Task.FromResult(JsonDocument.Parse(StateOverride?.ToJsonString() ?? "{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}")); }
         public Task<JsonDocument> GetPlacesAsync()=>Task.FromResult(JsonDocument.Parse("{\"room_id\":\"r-props\",\"places\":[]}"));
-        public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,System.Threading.CancellationToken ct=default)
-        { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,partner).GetRawText()); return PendingRequest?.Task ?? Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
+        public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,IReadOnlyList<string>? members=null,string? consent=null,System.Threading.CancellationToken ct=default)
+        { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,members,consent).GetRawText()); return PendingRequest?.Task ?? Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
         public Task<JsonDocument> RespondPropActionAsync(string id,bool accept,System.Threading.CancellationToken ct=default)=>Task.FromResult(JsonDocument.Parse(RespondAnswer?.ToJsonString() ?? "{\"status\":\"refused\"}"));
         public Task<JsonDocument> GetWorldMapAsync() { WorldRequests++; return MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json"); }
         public Task<JsonDocument> GetHeightfieldAsync()=>_fixture.GetHeightfieldAsync();

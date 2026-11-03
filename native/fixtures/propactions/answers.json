@@ -52,15 +52,15 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-avatar",
-              "partner": "",
+              "members": [],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture solo pose",
               "roles": {
-                "actor": "fixture-avatar",
                 "clip": {},
                 "access": {
-                  "actor": "actor"
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": false,
@@ -106,15 +106,15 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-avatar",
-              "partner": "",
+              "members": [],
+              "viewer": "fixture-avatar",
               "phase": "entry",
               "phase_label": "",
               "label": "Fixture solo pose",
               "roles": {
-                "actor": "fixture-avatar",
                 "clip": {},
                 "access": {
-                  "actor": "actor"
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": false,
@@ -153,15 +153,15 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-avatar",
-              "partner": "",
+              "members": [],
+              "viewer": "fixture-avatar",
               "phase": "active",
               "phase_label": "",
               "label": "Fixture solo pose",
               "roles": {
-                "actor": "fixture-avatar",
                 "clip": {},
                 "access": {
-                  "actor": "actor"
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": false,
@@ -185,7 +185,9 @@
             "variant_uid": "variant-56"
           },
           "revision": "revision-56",
-          "partner": "fixture-npc"
+          "members": [
+            "fixture-npc"
+          ]
         },
         "status": 200,
         "body": {
@@ -215,20 +217,21 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-avatar",
-              "partner": "fixture-npc",
+              "members": [
+                "fixture-npc"
+              ],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture paired pose",
               "roles": {
-                "actor": "fixture-avatar",
-                "partner": "fixture-npc",
                 "clip": {
                   "a": "fixture-avatar",
                   "b": "fixture-npc"
                 },
                 "access": {
-                  "actor": "actor",
-                  "partner": "partner"
+                  "fixture-avatar": "actor",
+                  "fixture-npc": "partner"
                 }
               },
               "can_respond": false,
@@ -268,20 +271,21 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-npc",
-              "partner": "fixture-avatar",
+              "members": [
+                "fixture-avatar"
+              ],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture paired pose",
               "roles": {
-                "actor": "fixture-npc",
-                "partner": "fixture-avatar",
                 "clip": {
                   "a": "fixture-avatar",
                   "b": "fixture-npc"
                 },
                 "access": {
-                  "actor": "partner",
-                  "partner": "actor"
+                  "fixture-npc": "partner",
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": true,
@@ -329,20 +333,21 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-npc",
-              "partner": "fixture-avatar",
+              "members": [
+                "fixture-avatar"
+              ],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture paired pose",
               "roles": {
-                "actor": "fixture-npc",
-                "partner": "fixture-avatar",
                 "clip": {
                   "a": "fixture-avatar",
                   "b": "fixture-npc"
                 },
                 "access": {
-                  "actor": "partner",
-                  "partner": "actor"
+                  "fixture-npc": "partner",
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": false,
@@ -381,20 +386,21 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-npc",
-              "partner": "fixture-avatar",
+              "members": [
+                "fixture-avatar"
+              ],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture paired pose",
               "roles": {
-                "actor": "fixture-npc",
-                "partner": "fixture-avatar",
                 "clip": {
                   "a": "fixture-avatar",
                   "b": "fixture-npc"
                 },
                 "access": {
-                  "actor": "partner",
-                  "partner": "actor"
+                  "fixture-npc": "partner",
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": true,
@@ -443,20 +449,21 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-npc",
-              "partner": "fixture-avatar",
+              "members": [
+                "fixture-avatar"
+              ],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture paired pose",
               "roles": {
-                "actor": "fixture-npc",
-                "partner": "fixture-avatar",
                 "clip": {
                   "a": "fixture-avatar",
                   "b": "fixture-npc"
                 },
                 "access": {
-                  "actor": "partner",
-                  "partner": "actor"
+                  "fixture-npc": "partner",
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": false,
@@ -511,15 +518,15 @@
                 "variant_uid": "variant-56"
               },
               "actor": "fixture-avatar",
-              "partner": "",
+              "members": [],
+              "viewer": "fixture-avatar",
               "phase": "",
               "phase_label": "",
               "label": "Fixture solo pose",
               "roles": {
-                "actor": "fixture-avatar",
                 "clip": {},
                 "access": {
-                  "actor": "actor"
+                  "fixture-avatar": "actor"
                 }
               },
               "can_respond": false,

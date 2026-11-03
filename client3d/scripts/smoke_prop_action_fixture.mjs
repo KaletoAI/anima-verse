@@ -63,7 +63,7 @@ for (const [name,steps] of Object.entries(answers.scenarios)) for (const step of
   assert.ok(['GET','POST'].includes(step.method) && step.path.startsWith('/play/'));
   if (step.method === 'GET') assert.equal(step.request,null);
   else {
-    const fields = step.path.endsWith('/request') ? ['action_id','revision','target',...(step.request.partner ? ['partner'] : [])]
+    const fields = step.path.endsWith('/request') ? ['action_id','revision','target',...(step.request.members ? ['members'] : []),...(step.request.consent ? ['consent'] : [])]
       : step.path.endsWith('/respond') ? ['execution_id','accept'] : ['execution_id'];
     assert.deepEqual(Object.keys(step.request).sort(),fields.sort(),name);
   }
@@ -72,8 +72,9 @@ for (const [name,steps] of Object.entries(answers.scenarios)) for (const step of
     check(Object.keys(body).sort(),['incoming','outgoing','current','recent_results'].sort(),`${name} private state`);
     for (const row of Object.values(body).flat()) {
       check(row.target,target,`${name} lifecycle target`);
-      assert.equal(row.can_respond, row.status === 'awaiting_consent' && row.partner === 'fixture-avatar');
-      for (const key of ['execution_id','action_id','definition_revision','actor','partner','roles','phase','phase_label','label','reason','can_cancel'])
+      // G2c: members (invitees, list) and viewer replace partner; access is keyed by name.
+      assert.equal(row.can_respond, row.status === 'awaiting_consent' && row.members.includes(row.viewer));
+      for (const key of ['execution_id','action_id','definition_revision','actor','members','viewer','roles','phase','phase_label','label','reason','can_cancel'])
         assert.ok(Object.hasOwn(row,key),`${name}: ${key}`);
     }
   }
@@ -87,8 +88,8 @@ check(rows('pair-request')[1].outgoing[0].can_respond,false,'initiator cannot co
 check(rows('pair-accept')[0].incoming[0].can_respond,true,'only exact invitee can consent');
 check(rows('pair-accept')[1],{execution_id:'execution-56-invite',status:'approaching',reason:''},'accepted invitation starts approach');
 check(rows('pair-accept')[2].current[0].roles,
-  {actor:'fixture-npc',partner:'fixture-avatar',clip:{a:'fixture-avatar',b:'fixture-npc'},
-    access:{actor:'partner',partner:'actor'}},'semantic participants differ from physical clip/access roles');
+  {clip:{a:'fixture-avatar',b:'fixture-npc'},access:{'fixture-npc':'partner','fixture-avatar':'actor'}},
+  'semantic participants differ from physical clip/access roles');
 check(rows('pair-decline')[1],{execution_id:'execution-56-invite',status:'cancelled',reason:'consent_declined'},'declined invitation');
 check(rows('cancel')[0],{execution_id:'execution-56-solo',status:'cancelled',reason:'cancelled'},'explicit awaited cancellation');
 check(rows('stale-revision')[0],{detail:{execution_id:'',status:'refused',reason:'stale_definition'}},'HTTP refusal envelope');
