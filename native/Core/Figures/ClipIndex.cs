@@ -68,9 +68,9 @@ public interface IClipCommitOps<C>
 /// </summary>
 public static class ClipLibraryRules
 {
-    private static readonly Regex PairName = new("__[a-e]$", RegexOptions.CultureInvariant);
+    private static readonly Regex PairName = new("__[a-e](~[a-z0-9][a-z0-9-]*)?$", RegexOptions.CultureInvariant);
 
-    /// <summary><c>isPairClipName</c>: a role half <c>&lt;kind&gt;__a</c> … <c>__e</c> (pair or group clip).</summary>
+    /// <summary><c>isPairClipName</c>: a role half <c>&lt;kind&gt;__a</c> … <c>__e</c> (pair or group clip), optionally an alt half <c>~&lt;alt&gt;</c> (G6).</summary>
     public static bool IsPairName(string kind) => PairName.IsMatch(kind);
 
     /// <summary>
