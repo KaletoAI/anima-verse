@@ -33,6 +33,14 @@ Throwaway storage, no server, no LLM. Hand-derived expectations:
       shape of 2026-11-03, fails on 988d0107) alone → "" and it ran with
       that JSON; after "Gern." on its own line → "Gern." and it ran.
 
+  (d) single mode with a tool LLM and an open question naming the verb
+      ``Answer`` (provider ``tool_decision.open_questions``): a prose-only
+      reply → a second submit (the tool LLM), offered ``["Answer"]`` alone;
+      its answer ``SetActivity`` + ``Answer yes`` runs only Answer (fails on
+      2a28d1a1: one submit, nothing ran — the 2026-11-03 invitation that
+      expired). A reply carrying the inline Answer → one submit, Answer runs
+      once. No open question → one submit, nothing runs.
+
 Usage:  ./.venv/bin/python scripts/smoke_respond_single_tools.py
 """
 import os
@@ -215,6 +223,83 @@ reply = chat_engine.run_chat_turn("", "Gast", "Kai", "Prost", "in_person",
 check("rp_first: the tag is stripped too", reply, "Prosa.")
 check("rp_first without a tool LLM: no inline execution",
       wait_for(lambda: bool(CALLS), timeout=0.5), False)
+
+# ── (d) single mode: an open question the prose reply left unanswered ──────
+print("(d) run_chat_turn (single): an open question goes to the tool LLM, its verb only")
+from types import SimpleNamespace  # noqa: E402
+from app.core import hooks, tool_step_prompt  # noqa: E402
+
+QUESTION = {"Gast": ['Kai invited Gast to "x". Yes: Answer {"answer": "yes"}. '
+                     'No: Answer {"answer": "no"}.']}
+hooks.register_provider("tool_decision.open_questions",
+                        lambda name, tools: QUESTION.get(name, []) if "Answer" in tools else [],
+                        owner="smoke", multiple=True)
+OFFERED = []
+
+
+def fake_step_prompt(character, *, tools, **_kw):
+    OFFERED.append(sorted(t.name for t in tools))
+    return SimpleNamespace(system="s", user="u")
+
+
+tool_step_prompt.build_tool_step_prompt = fake_step_prompt
+streaming.tool_step_presence = lambda name: ()
+
+
+class ScriptQueue(FakeQueue):
+    """First submit = the chat reply, every further one = the tool LLM."""
+
+    def __init__(self, *answers):
+        super().__init__("")
+        self.answers = list(answers)
+
+    def submit(self, **kwargs):
+        self.submits.append(kwargs)
+        return FakeResponse(self.answers[min(len(self.submits), len(self.answers)) - 1])
+
+
+def question_ctx():
+    c = fake_ctx()
+    c["tool_llm"] = object()
+    c["tools_dict"] = {"SetActivity": lambda inp: CALLS.append(("SetActivity", inp)),
+                       "Answer": lambda inp: CALLS.append(("Answer", inp))}
+    c["agent_tools"] = [SimpleNamespace(name="SetActivity"), SimpleNamespace(name="Answer")]
+    return c
+
+
+chat_engine.build_chat_context = lambda *a, **k: question_ctx()
+TOOL_ANSWER = ('<tool name="SetActivity">{"pose": "lying"}</tool>'
+               '<tool name="Answer">{"answer": "yes"}</tool>')
+
+CALLS.clear(); OFFERED.clear()
+Q = ScriptQueue("Ich ziehe ihn zu mir herunter.", TOOL_ANSWER)
+llm_queue_mod.get_llm_queue = lambda: Q
+reply = chat_engine.run_chat_turn("", "Gast", "Kai", "x?", "in_person",
+                                  "character_talk", False, room_stream=[{"x": 1}])
+check("the prose reply goes out", reply, "Ich ziehe ihn zu mir herunter.")
+check("the answer ran (fails on 2a28d1a1: never)",
+      wait_for(lambda: ("Answer", '{"answer": "yes"}') in CALLS), True)
+check("the tool LLM was asked once more", len(Q.submits), 2)
+check("offered only the question's verb", OFFERED, [["Answer"]])
+check("another verb in its answer does not run", [c for c in CALLS if c[0] == "SetActivity"], [])
+
+CALLS.clear(); OFFERED.clear()
+Q = ScriptQueue('Ja.\n<tool name="Answer">{"answer": "yes"}</tool>', TOOL_ANSWER)
+llm_queue_mod.get_llm_queue = lambda: Q
+reply = chat_engine.run_chat_turn("", "Gast", "Kai", "x?", "in_person",
+                                  "character_talk", False, room_stream=[{"x": 1}])
+check("an inline answer: no second call",
+      (wait_for(lambda: bool(CALLS)), len(Q.submits), OFFERED), (True, 1, []))
+check("the inline answer ran once", wait_for(lambda: CALLS == [("Answer", '{"answer": "yes"}')]), True)
+
+CALLS.clear(); OFFERED.clear()
+QUESTION.clear()
+Q = ScriptQueue("Prost.", TOOL_ANSWER)
+llm_queue_mod.get_llm_queue = lambda: Q
+reply = chat_engine.run_chat_turn("", "Gast", "Kai", "Prost", "in_person",
+                                  "character_talk", False, room_stream=[{"x": 1}])
+check("no open question: no tool LLM call",
+      (wait_for(lambda: bool(CALLS), timeout=0.5), len(Q.submits)), (False, 1))
 
 # ── result ──────────────────────────────────────────────────────────────────
 print()

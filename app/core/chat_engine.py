@@ -1012,8 +1012,27 @@ def run_chat_turn(
         ctx.get("mode") == "rp_first"
         and ctx.get("tool_llm") is not None and ctx.get("tools_dict"))
 
-    def _run_tool_phase() -> str:
-        """rp_first tool phase — returns the extracted fallback markers."""
+    # SINGLE mode, an open question (an invitation waiting for its exact
+    # yes/no call) and a reply without that call: an RP model answers in
+    # prose only, and the invitation expired unanswered (2026-11-03). The
+    # tool LLM reads the reply once, offered only the verbs the question
+    # names — the decision an rp_first character gets, never a keyword match.
+    _question_tools: Dict[str, Any] = {}
+    if (ctx.get("mode") == "single" and ctx.get("tool_llm") is not None
+            and ctx.get("tools_dict")):
+        try:
+            from app.core.streaming import open_questions_note
+            _note = open_questions_note(responder, ctx["tools_dict"], indent="")
+            _named = {n: f for n, f in ctx["tools_dict"].items() if f"{n} {{" in _note}
+            if _named and not any(n in _named for n, _ in _inline_matches):
+                _question_tools = _named
+        except Exception as _qe:  # noqa: BLE001 — the answer still goes out
+            logger.debug("run_chat_turn[%s]: open questions unreadable: %s", responder, _qe)
+
+    def _run_tool_phase(only: Optional[Dict[str, Any]] = None) -> str:
+        """rp_first tool phase — returns the extracted fallback markers.
+        ``only`` limits the offered and accepted verbs (the open-question
+        pass of a single-mode reply)."""
         try:
             from app.core.tool_formats import find_tool_calls
             from app.core.streaming import (
@@ -1028,6 +1047,8 @@ def run_chat_turn(
             tools = decision_tools(
                 ctx["agent_tools"],
                 suppress_in_person=ctx.get("medium") == "in_person")
+            if only is not None:
+                tools = [t for t in tools if getattr(t, "name", t) in only]
             prompt = build_tool_step_prompt(
                 responder, mode="respond", rp_response=clean,
                 user_input=incoming_message, tools=tools,
@@ -1044,6 +1065,8 @@ def run_chat_turn(
                 label=f"Tool: {speaker} → {responder}")
             _ttext = getattr(_tresp, "content", "") or ""
             _matches = find_tool_calls(ctx.get("tool_format", "tag"), _ttext, ctx["tools_dict"])
+            if only is not None:
+                _matches = [m for m in _matches if m[0] in only]
             _execute_tools_with_correction(ctx, responder, _matches, rp_text=clean,
                                  incoming_message=incoming_message)
             return _extract_markers(_ttext, clean, rp_first=True) or ""
@@ -1111,7 +1134,7 @@ def run_chat_turn(
     # regeneration, history summary — opt-in, player chat via the loop only).
     # plan-room-conversation-feature-parity §D.
     _needs_inline_tools = bool(_inline_matches)
-    if _needs_tool_phase or _needs_inline_tools or post_process:
+    if _needs_tool_phase or _needs_inline_tools or _question_tools or post_process:
         try:
             import contextvars
             import threading
@@ -1133,6 +1156,8 @@ def run_chat_turn(
                 with bind_stat_sources(_stat_collector):
                     _markers = (_caller_ctx.run(_run_tool_phase)
                                 if _needs_tool_phase else "")
+                    if _question_tools:
+                        _caller_ctx.run(_run_tool_phase, _question_tools)
                 if _needs_inline_tools:
                     # Single mode: the fallback markers (**I do …**) sit
                     # in the chat text itself, so they are read from the
