@@ -10112,6 +10112,15 @@ A pair writes its shared `<kind>.json` once; both halves use that correction,
 even when either half has its own sidecar. `partner_shift_cm` remains the
 independent baked adjustment of B against A.
 
+**Finale clips follow (2026-11-03).** Every `…/orient` edit (angles, lift,
+`partner_shift_cm`, `shift_cm`) and every `height_offsets_cm` PATCH of a clip is
+applied the same way to its finale clips — the `finale_animation` (or the
+package-derived finale) of every pose whose `animation` is that clip, in the same
+library and set and of the same shape (a pair's finale a pair). The answer's
+`clips` lists them too. A finale that cannot be changed after the clip was
+written fails the request naming both. A finale continues its pose; turned
+alone, it started 90° or 180° off.
+
 Both clients apply this exactly once to the visible body after placing its
 root: with placement yaw `a`, `s = side / 100`, `f = forward / 100`, the world
 correction is `(s cos(a) + f sin(a), 0, −s sin(a) + f cos(a))`. These are

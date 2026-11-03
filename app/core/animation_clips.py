@@ -1286,6 +1286,52 @@ def _kind_files(directory: Path, kind: str) -> List[Path]:
             and parse_clip_role(p.name)[0] == kind]
 
 
+def finale_kinds_of(kind: str) -> List[str]:
+    """The finale clip kinds of the poses that play ``kind``: a pose's own
+    ``finale_animation``, else what a package derives for it
+    (``prop_action_engine.auto_finale``). Unchecked against the files."""
+    from app.core.pose_catalog import get_catalog
+    from app.core.prop_action_engine import auto_finale
+    out: List[str] = []
+    for key, entry in get_catalog("pose").items():
+        if (entry or {}).get("animation") != kind:
+            continue
+        finale = (entry.get("finale_animation") or auto_finale(key, entry) or "").strip().lower()
+        if finale and finale != kind and finale not in out:
+            out.append(finale)
+    return out
+
+
+def _finale_files(path: Path) -> List[Path]:
+    """The finale clips that follow ``path``'s orientation and heights: those
+    of :func:`finale_kinds_of` lying in the same directory (library and set)
+    in the same shape — a pair's finale is a pair, one file names all its
+    roles; a solo clip's finale variants each. ``[]`` when the pose catalog
+    cannot be read (no world): the clip itself is still edited."""
+    kind, role = parse_clip_role(path.name)
+    try:
+        finales = finale_kinds_of(kind)
+    except Exception as e:  # noqa: BLE001 — a missing catalog must not block the edit
+        logger.warning("finale clips of %s not looked up: %s", kind, e)
+        return []
+    roles = len(_role_siblings(path)) + 1 if role else 0
+    out: List[Path] = []
+    for finale in finales:
+        files = _kind_files(path.parent, finale)
+        if role:
+            first = next((f for f in files if parse_clip_role(f.name)[1] == "a"), None)
+            if first is not None and len(_role_siblings(first)) + 1 == roles:
+                out.append(first)
+        else:
+            out.extend(f for f in files if not parse_clip_role(f.name)[1])
+    return out
+
+
+def _rel_in(path: Path, library: str) -> str:
+    """``[<set>/]<file>`` of a file inside one library."""
+    return path.resolve().relative_to(library_root(library).resolve()).as_posix()
+
+
 def _own_sidecar(path: Path) -> Optional[Path]:
     """The sidecar belonging to THIS file alone — ``walk_02.json`` next to
     ``walk_02.fbx``. None when the stem IS the kind (then the sidecar is the
@@ -1608,8 +1654,12 @@ def set_clip_role_gender(library: str, rel: str,
 
 @_library_writer
 def set_clip_height_offsets(library: str, rel: str,
-                            height_offsets_cm: Any) -> List[Dict[str, Any]]:
+                            height_offsets_cm: Any, *,
+                            with_finales: bool = True) -> List[Dict[str, Any]]:
     """Merge absolute per-surface corrections without touching animation bytes.
+
+    ``with_finales``: the same corrections go to the clip's finale clips
+    (:func:`_finale_files`) — a finale that starts at another height jumps.
 
     Solo variants use their own sidecar when present, otherwise the shared
     kind sidecar. Inheriting a root variant sidecar creates a local own
@@ -1675,7 +1725,12 @@ def set_clip_height_offsets(library: str, rel: str,
     # A shared solo sidecar also affects its variants; report all of them.
     if not role and sidecar.name == f"{kind}.json":
         files = _kind_files(path.parent, kind)
-    return [_view_of(p, cset, library) for p in files]
+    views = [_view_of(p, cset, library) for p in files]
+    if with_finales:
+        for finale in _finale_files(path):
+            views += set_clip_height_offsets(library, _rel_in(finale, library), patch,
+                                             with_finales=False)
+    return views
 
 
 # ── Turning a clip AFTER the import (plan-clip-library-…-ausrichtung U2) ──
@@ -1751,7 +1806,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 tilt_deg: float = 0.0, roll_deg: float = 0.0,
                 height_cm: float = 0.0,
                 partner_shift_cm: Optional[Sequence[float]] = None,
-                shift_cm: Optional[Sequence[float]] = None) -> List[Dict[str, Any]]:
+                shift_cm: Optional[Sequence[float]] = None,
+                with_finales: bool = True) -> List[Dict[str, Any]]:
     """Turns and lifts a clip IN THE FILE — the import dial, after the fact.
 
     ``yaw_deg`` / ``tilt_deg`` / ``roll_deg`` are the rigid rotation
@@ -1786,6 +1842,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
 
     All dials at 0 is a no-op (no Blender start). Returns the touched
     clips as listing views.
+
+    ``with_finales``: the clip's finale clips (:func:`_finale_files`) get the
+    same dials in the same call — the finale continues the pose, and a pose
+    turned without its finale switched into a finale standing 90° or 180°
+    off (2026-11-03). A finale that fails after the clip was written raises,
+    naming both, so the mismatch is never silent.
     """
     from app.blender import runner
 
@@ -1921,7 +1983,19 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 f"{cset}/" if cset else "", kind, library, yaw, tilt, roll,
                 height, shift if shifted else "-", horizontal, ", ".join(p.name for p in targets),
                 (data.get("src_0") or {}).get("floor_min_cm_after"))
-    return [_view_of(p, cset, library) for p in targets]
+    views = [_view_of(p, cset, library) for p in targets]
+    if with_finales:
+        for finale in _finale_files(path):
+            try:
+                views += orient_clip(library, _rel_in(finale, library), yaw_deg=yaw, tilt_deg=tilt,
+                                     roll_deg=roll, height_cm=height,
+                                     partner_shift_cm=shift if shifted else None,
+                                     shift_cm=horizontal, with_finales=False)
+            except ClipLibraryError as e:
+                raise ClipLibraryError(
+                    f"'{kind}' was changed, but its finale '{parse_clip_role(finale.name)[0]}' "
+                    f"was not: {e}") from e
+    return views
 
 
 def _xz_m(xyz: Any) -> List[float]:

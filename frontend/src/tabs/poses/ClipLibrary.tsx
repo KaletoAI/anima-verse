@@ -69,6 +69,12 @@ function relOf(c: ApiClipRow): string {
   return c.set ? `${c.set}/${file}` : file
 }
 
+/** The kinds among ``clips`` other than ``kind`` — the finale clips an
+ *  orientation or height edit changed along with the clip itself. */
+function otherKinds(clips: { kind: string }[] | undefined, kind: string): string[] {
+  return Array.from(new Set((clips ?? []).map((c) => c.kind).filter((k) => k && k !== kind)))
+}
+
 function clipPath(c: ApiClipRow): string {
   const rel = relOf(c)
     .split('/')
@@ -209,6 +215,8 @@ export function ClipLibrary({
   const [orientBusy, setOrientBusy] = useState(false)
   const [orientError, setOrientError] = useState('')
   const [orientSeconds, setOrientSeconds] = useState<number | null>(null)
+  /** Finale clips the server changed along with the last apply/save. */
+  const [finalesTouched, setFinalesTouched] = useState<string[]>([])
 
   const clips = useMemo(() => listing.clips || [], [listing.clips])
   const pairKinds = useMemo(
@@ -312,6 +320,7 @@ export function ClipLibrary({
     setHeightDraft({})
     setOrientError('')
     setOrientSeconds(null)
+    setFinalesTouched([])
   }, [])
 
   const pick = useCallback(
@@ -357,12 +366,13 @@ export function ClipLibrary({
     setOrientBusy(true)
     setOrientError('')
     try {
-      const res = await apiPost<{ seconds?: number }>(`${clipPath(orientTarget)}/orient`, {
+      const res = await apiPost<{ seconds?: number; clips?: { kind: string }[] }>(`${clipPath(orientTarget)}/orient`, {
         yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
         ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
         ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
       })
       setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
+      setFinalesTouched(otherKinds(res.clips, orientTarget.kind))
       setYawDeg(0)
       setTiltDeg(0)
       setRollDeg(0)
@@ -385,7 +395,8 @@ export function ClipLibrary({
     setHeightBusy(true)
     setOrientError('')
     try {
-      await apiPatch(clipPath(orientTarget), { height_offsets_cm: heightDraft })
+      const res = await apiPatch<{ clips?: { kind: string }[] }>(clipPath(orientTarget), { height_offsets_cm: heightDraft })
+      setFinalesTouched(otherKinds(res.clips, orientTarget.kind))
       invalidateAnimationPreviewClips()
       await onReload()
       setHeightDraft({})
@@ -1115,6 +1126,14 @@ export function ClipLibrary({
                       {orientSeconds !== null && !orientBusy ? (
                         <span className="ga-hint">{`${t('written in')} ${orientSeconds.toFixed(1)} s`}</span>
                       ) : null}
+                    </div>
+                    {finalesTouched.length ? (
+                      <div className="ga-form-hint">
+                        {`${t('Its finale clips were changed the same way')}: ${finalesTouched.join(', ')}`}
+                      </div>
+                    ) : null}
+                    <div className="ga-form-hint">
+                      {t('Orientation and surface heights also apply to the clip\'s finale clips (the finale of every pose that plays it).')}
                     </div>
                     <div className="ga-form-hint">
                       {orientTarget.has_sidecar === false

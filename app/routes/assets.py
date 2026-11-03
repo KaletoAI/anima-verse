@@ -265,6 +265,8 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     Blender run, the sidecar's angles add up and a
     pair's root geometry is re-measured on the written file. Needs Blender
     (503 when the host has none), answers the touched clips plus the run time.
+    The clip's finale clips get the same edit (``orient_clip``'s
+    ``with_finales``) and are among the touched clips.
     """
     try:
         body = await request.json()
