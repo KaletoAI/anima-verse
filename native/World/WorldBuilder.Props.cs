@@ -104,7 +104,7 @@ public sealed partial class WorldBuilder
     /// </summary>
     public void TickProps(double dt, Camera3D? camera, Vector3 focus, double night, Vector3? avatar = null, string avatarRoom = "", string groundRoom = "")
     {
-        PropLights?.Tick(dt, focus, night, VisibleLightRooms());
+        if (PropLights is { Visible: true } pool) pool.Tick(dt, focus, night, VisibleLightRooms());
         if (camera is not null) Mirrors?.Tick(camera);
         // Task 51 / E7-T6 §0.9: avatar proximity in ALL modes; light/camera focus never stands for the avatar.
         foreach (var slot in _slots.Values)

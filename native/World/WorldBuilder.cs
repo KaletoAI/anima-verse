@@ -521,6 +521,7 @@ public sealed partial class WorldBuilder
         Ground = ground;
         Terrain?.SetMaterials(ground.Material, ground.WaterMaterial);
         Waterfalls?.Rebuild(ground.Catalog);
+        if (WaterExtrasSuppressed) ground.WaterMaterial?.SetShaderParameter("tw_ripple_on", 0f);
     }
 
     /// <summary>What became of the water: drawn by the wet program, or why not.</summary>

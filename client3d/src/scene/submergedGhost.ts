@@ -82,6 +82,13 @@ export const WATER_GHOST_OPACITY = 0.4;
  *  not a per-object flag: the switch is world-wide, and something created while
  *  it is on must come up ghost-less too. */
 let ghostOff = false;
+let graphicsOff = false;
+
+/** Cosmetic duplicate only; the cut height and swimming inputs stay intact. */
+export function setWaterGhostGraphicsOff(off: boolean): void {
+  graphicsOff = off;
+  for (const ghost of live) ghost.reapply();
+}
 
 /** Every ghost that currently exists, so toggle 22 reaches the ones that are
  *  already standing. A figure re-gates itself every frame and would correct
@@ -160,7 +167,7 @@ export class SubmergedGhost {
   /** Re-decide visibility from the level the caller asked for and the state of
    *  toggle 22. Called by `set` and by the toggle itself. */
   reapply(): void {
-    const want = this.level !== null && !ghostOff;
+    const want = this.level !== null && !ghostOff && !graphicsOff;
     // The waterline first, and OUTSIDE the early-out below: a ghost that is
     // already standing still has to follow a rising lake.
     if (want) this.cut.value = this.level as number;

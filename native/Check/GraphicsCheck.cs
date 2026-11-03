@@ -36,7 +36,8 @@ public static class GraphicsCheck
             {
                 "loadGraphicsPrefs" => Prefs(GraphicsPrefs.Load(a[0]?.GetValue<string>())),
                 "saveGraphicsPrefs" => JsonValue.Create(GraphicsPrefs.Save(GraphicsPrefs.Load(a[0]!.ToJsonString()))),
-                "checkGraphicsPrefs" => Check(GraphicsPrefs.Check(a[0], a[1], a.Count > 2 ? a[2] : null)),
+                "checkGraphicsPrefs" => Check(GraphicsPrefs.Check(a[0], a[1], a.Count > 2 ? a[2] : null,
+            a.Count > 3 ? a[3] : null, a.Count > 4 ? a[4] : null, a.Count > 5 ? a[5] : null)),
                 "autoRenderScale" => JsonValue.Create(GraphicsPrefs.AutoRenderScale(a[0]!.GetValue<double>(), a[1]!.GetValue<double>())),
                 "effectiveRenderScale" => JsonValue.Create(GraphicsPrefs.EffectiveRenderScale(GraphicsPrefs.RenderScaleOf(a[0]), a[1]!.GetValue<double>(), a[2]!.GetValue<double>())),
                 "msaaSamplesOf" => JsonValue.Create(GraphicsPrefs.MsaaSamplesOf(a[0]!.GetValue<string>())),
@@ -52,13 +53,16 @@ public static class GraphicsCheck
         foreach (var aa in GraphicsPrefs.Levels)
         foreach (var shadows in new[] { true, false })
         foreach (var scale in GraphicsPrefs.RenderScales)
+        foreach (var water in new[] { true, false })
+        foreach (var lamps in new[] { true, false })
+        foreach (var fog in new[] { true, false })
         {
-            var prefs = new GraphicsPrefs(aa, shadows, scale);
+            var prefs = new GraphicsPrefs(aa, shadows, scale, water, lamps, fog);
             Require("prefs round trip", GraphicsPrefs.Load(GraphicsPrefs.Save(prefs)) == prefs);
             var wire = HudProtocol.Parse(new JsonObject { ["v"] = HudProtocol.Version, ["kind"] = "action",
                 ["name"] = "applyGraphicsPrefs", ["args"] = new JsonArray(Prefs(prefs)) }.ToJsonString(), out _);
             var p = wire!.Args![0]!;
-            Require("bridge graphics round trip", GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"]).Prefs == prefs);
+            Require("bridge graphics round trip", GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"], p["waterMirrors"], p["lampLights"], p["fogHorizon"]).Prefs == prefs);
         }
         var viewport = new SubViewport { Size = new Vector2I(3840, 1080) };
         host.AddChild(viewport);
@@ -121,7 +125,7 @@ public static class GraphicsCheck
             && hitch.Contains(" gc ") && hitch.Contains(" gpu ") && hitch.Contains(" ms, render scale ")
             && hitch.Contains(" process ") && hitch.Contains(" physics ") && hitch.Contains(" continuations ")
             && hitch.Contains(" render cpu ") && hitch.Contains(" rest "));
-        return $"graphics vectors={count} round_trips=36 bridge=36 viewport=auto/fixed/resize/root-window hitch=process/physics/continuations/render-cpu/gpu/rest/scale vsync=logged boot/cef=pass";
+        return $"graphics vectors={count} round_trips=288 bridge=288 viewport=auto/fixed/resize/root-window hitch=process/physics/continuations/render-cpu/gpu/rest/scale vsync=logged boot/cef=pass";
     }
 
     private static JsonNode Check(GraphicsPrefsCheck check) => check.Prefs is { } p

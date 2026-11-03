@@ -394,6 +394,15 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
           <p className="hud-menu-hint">
             {t('The shadows the sun casts. Switching them off buys frame rate.')}
           </p>
+          <Choice label={t('Water & mirrors')} value={graphicsPrefs.waterMirrors} options={onOff}
+            onPick={(v) => onGraphicsChange({ ...graphicsPrefs, waterMirrors: v })} />
+          <p className="hud-menu-hint">{t('Saves water effects and mirror reflection passes.')}</p>
+          <Choice label={t('Lamp light')} value={graphicsPrefs.lampLights} options={onOff}
+            onPick={(v) => onGraphicsChange({ ...graphicsPrefs, lampLights: v })} />
+          <p className="hud-menu-hint">{t('Saves local lamp lighting and glow effects.')}</p>
+          <Choice label={t('Fog & horizon')} value={graphicsPrefs.fogHorizon} options={onOff}
+            onPick={(v) => onGraphicsChange({ ...graphicsPrefs, fogHorizon: v })} />
+          <p className="hud-menu-hint">{t('Saves distance haze and distant mountain scenery.')}</p>
         </section>
         {detailDistances}
         {clientCache !== null && (

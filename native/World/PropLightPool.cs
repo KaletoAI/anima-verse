@@ -105,6 +105,7 @@ public sealed partial class PropLightPool : Node3D
     /// </summary>
     public void Tick(double dt, Vector3 focus, double night, ISet<string> visibleRooms)
     {
+        if (!Visible) return;
         var (slots, halos) = State.Update(dt, new CoreVec3(focus.X, focus.Y, focus.Z), night, visibleRooms);
         LastSlots = slots;
         for (int i = 0; i < _lamps.Length; i++)

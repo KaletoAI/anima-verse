@@ -139,7 +139,8 @@ public partial class Main : Node3D
             Log("applyGraphicsPrefs: no prefs object — ignored");
             return;
         }
-        var check = GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"]);
+        var check = GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"],
+            p["waterMirrors"], p["lampLights"], p["fogHorizon"]);
         if (check.Prefs is not { } prefs)
         {
             Log($"applyGraphicsPrefs refused ({check.Error}): {p.ToJsonString()}");
@@ -154,6 +155,18 @@ public partial class Main : Node3D
     }
 
     private Ui.RenderResolution? _renderResolution;
+    private GraphicsPrefs _graphicsPrefs = GraphicsPrefs.Defaults;
+    private readonly Bench.GraphicsFeatureSwitches _graphicsFeatures = new();
+
+    private void ApplyGraphicsFeatures()
+    {
+        if (_world is null || _builder is null) return;
+        _graphicsFeatures.Apply(_graphicsPrefs, new Bench.BenchSwitchContext
+        {
+            Stage = _stage, Fog = _stage?.Fog, Builder = _builder,
+            Backdrop = () => _backdrop, Figures = _figures,
+        });
+    }
 
     /// <summary>
     /// The Graphics tab onto the frame: the viewport's 3D MSAA (<c>Viewport.msaa_3d</c>, settable at runtime) unless
@@ -162,6 +175,8 @@ public partial class Main : Node3D
     /// </summary>
     private void ApplyGraphics(GraphicsPrefs prefs, string from)
     {
+        _graphicsPrefs = prefs;
+        ApplyGraphicsFeatures();
         (_renderResolution ??= new Ui.RenderResolution(GetViewport(), Log)).Apply(prefs.RenderScale);
         var msaa = _options!.Msaa ?? CliOptions.MsaaOfSamples(GraphicsPrefs.MsaaSamplesOf(prefs.AntiAliasing));
         if (GetViewport().Msaa3D != msaa) GetViewport().Msaa3D = msaa;

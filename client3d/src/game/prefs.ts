@@ -331,6 +331,9 @@ export interface GraphicsPrefs {
   /** the sun casts shadows at all */
   shadows: boolean;
   renderScale: RenderScale;
+  waterMirrors: boolean;
+  lampLights: boolean;
+  fogHorizon: boolean;
 }
 
 /** Stable storage key: additive fields fall back individually for older prefs. */
@@ -347,6 +350,9 @@ export const DEFAULT_GRAPHICS_PREFS: GraphicsPrefs = {
   antiAliasing: '2x',
   shadows: true,
   renderScale: 'auto',
+  waterMirrors: true,
+  lampLights: true,
+  fogHorizon: true,
 };
 
 function antiAliasingOf(raw: unknown): AntiAliasing | null {
@@ -360,17 +366,20 @@ function antiAliasingOf(raw: unknown): AntiAliasing | null {
  * same strictness as `flag` above. The scene side runs every incoming
  * `applyGraphicsPrefs` through this: the bridge is a wire, and a malformed
  * message must leave the picture alone rather than half-apply. The additive
- * renderScale field defaults to auto when absent or invalid.
+ * renderScale field defaults to auto when absent or invalid; the additive
+ * feature switches default to true individually and accept only booleans.
  */
 export type GraphicsPrefsCheck =
   | { ok: true; prefs: GraphicsPrefs }
   | { ok: false; error: 'antiAliasing' | 'shadows' };
 
-export function checkGraphicsPrefs(antiAliasing: unknown, shadows: unknown, renderScale?: unknown): GraphicsPrefsCheck {
+export function checkGraphicsPrefs(antiAliasing: unknown, shadows: unknown, renderScale?: unknown,
+  waterMirrors?: unknown, lampLights?: unknown, fogHorizon?: unknown): GraphicsPrefsCheck {
   const aa = antiAliasingOf(antiAliasing);
   if (aa === null) return { ok: false, error: 'antiAliasing' };
   if (typeof shadows !== 'boolean') return { ok: false, error: 'shadows' };
-  return { ok: true, prefs: { antiAliasing: aa, shadows, renderScale: renderScaleOf(renderScale) } };
+  return { ok: true, prefs: { antiAliasing: aa, shadows, renderScale: renderScaleOf(renderScale),
+    waterMirrors: flag(waterMirrors, true), lampLights: flag(lampLights, true), fogHorizon: flag(fogHorizon, true) } };
 }
 
 /**
@@ -396,13 +405,17 @@ export function loadGraphicsPrefs(raw: string | null): GraphicsPrefs {
     antiAliasing: antiAliasingOf(p.antiAliasing) ?? DEFAULT_GRAPHICS_PREFS.antiAliasing,
     shadows: flag(p.shadows, DEFAULT_GRAPHICS_PREFS.shadows),
     renderScale: renderScaleOf(p.renderScale),
+    waterMirrors: flag(p.waterMirrors, true),
+    lampLights: flag(p.lampLights, true),
+    fogHorizon: flag(p.fogHorizon, true),
   };
 }
 
 /** `GraphicsPrefs` → the string to store; `loadGraphicsPrefs` of it returns
  *  the same prefs. Fixed key order, so both clients write the same bytes. */
 export function saveGraphicsPrefs(p: GraphicsPrefs): string {
-  return JSON.stringify({ antiAliasing: p.antiAliasing, shadows: p.shadows, renderScale: renderScaleOf(p.renderScale) });
+  return JSON.stringify({ antiAliasing: p.antiAliasing, shadows: p.shadows, renderScale: renderScaleOf(p.renderScale),
+    waterMirrors: flag(p.waterMirrors, true), lampLights: flag(p.lampLights, true), fogHorizon: flag(p.fogHorizon, true) });
 }
 
 /** The MSAA sample count a level asks for — what the native client hands to

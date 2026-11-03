@@ -3815,6 +3815,12 @@
     "Shift forward": "Nach vorne verschieben",
     "side / forward shift": "Verschiebung seitlich / vorwärts",
     "Apply orientation writes angles into the clip file and saves horizontal shifts separately. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.": "Ausrichtung anwenden schreibt Winkel in die Clip-Datei und speichert horizontale Verschiebungen separat. Flächenhöhen werden separat gespeichert und gelten auch im Spiel. Beide Hälften eines Paares bleiben zusammen.",
-    "Moves the whole clip, including both pair halves. Positive sideways is the clip’s left (+X); positive forward is +Z. Applied horizontally at the place’s yaw, independently of turn, tilt and roll.": "Verschiebt den gesamten Clip einschließlich beider Paarhälften. Positiv seitlich ist links im Clip (+X), positiv vorwärts ist +Z. Wirkt horizontal mit der Platzausrichtung, unabhängig von Drehung, Neigung und Rollen."
+    "Moves the whole clip, including both pair halves. Positive sideways is the clip’s left (+X); positive forward is +Z. Applied horizontally at the place’s yaw, independently of turn, tilt and roll.": "Verschiebt den gesamten Clip einschließlich beider Paarhälften. Positiv seitlich ist links im Clip (+X), positiv vorwärts ist +Z. Wirkt horizontal mit der Platzausrichtung, unabhängig von Drehung, Neigung und Rollen.",
+    "Water & mirrors": "Wasser & Spiegel",
+    "Lamp light": "Lampenlicht",
+    "Fog & horizon": "Nebel & Horizont",
+    "Saves water effects and mirror reflection passes.": "Spart Wassereffekte und Spiegelreflexionen.",
+    "Saves local lamp lighting and glow effects.": "Spart lokale Lampenbeleuchtung und Leuchteffekte.",
+    "Saves distance haze and distant mountain scenery.": "Spart Fernnebel und die Bergkulisse am Horizont."
   }
 }

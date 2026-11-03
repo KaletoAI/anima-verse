@@ -858,6 +858,7 @@ ${waterSdGlsl()}${waterGateGlsl()}${waterKindGlsl()}${waterFlowGlsl()}
 // are \`waterAbsorb\` and \`waterSurface\`.
 float twA;
 float twS;
+uniform float uWaterExtras;
 float twFoam;
 float twSkyMix;
 vec3 twN;
@@ -1035,10 +1036,12 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   // an opaque ground has nowhere else to put. See waterFoamAt: without it a
   // hand's width of water at the rim is painted 6.26× as white as the surface
   // this replaced, which is the white edge and the white lattice corner.
-  float rawFoam = 1.0 - twSmooth( d / ${WATER_FOAM_BAND_M} );
-  twFoam = rawFoam * min( shore + rawFoam * ${WATER_FOAM_MIN_COVER}, 1.0 ) * rim;
   twSkyMix = look0.w;
-  twN = twRipple( vTlodXZ, gx, gy, max( look1.x, 0.05 ), look1.y, look1.z );
+  if ( uWaterExtras > 0.5 ) {
+    float rawFoam = 1.0 - twSmooth( d / ${WATER_FOAM_BAND_M} );
+    twFoam = rawFoam * min( shore + rawFoam * ${WATER_FOAM_MIN_COVER}, 1.0 ) * rim;
+    twN = twRipple( vTlodXZ, gx, gy, max( look1.x, 0.05 ), look1.y, look1.z );
+  }
   // THE ABSORPTION, on the ALBEDO and not on the finished light: the bed the
   // compositor painted is blended toward the water's tint here, so the lighting
   // model shades the water itself — with the water's roughness and the water's

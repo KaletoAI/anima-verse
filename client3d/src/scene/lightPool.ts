@@ -166,6 +166,21 @@ export class LightPool {
     }
   }
 
+  private enabled = true;
+
+  /** Detaching all six lamps removes their shader terms. three recompiles once
+   * when the light count changes; source handles remain valid while off. */
+  setEnabled(on: boolean): void {
+    if (on === this.enabled) return;
+    this.enabled = on;
+    for (const { lamp } of this.slots) {
+      if (on) this.scene.add(lamp);
+      else lamp.removeFromParent();
+    }
+    for (const source of this.sources.values()) if (source.halo) source.halo.visible = false;
+    this.elapsed = .2;
+  }
+
   /** Register independently of mesh availability so a failed model still emits light. */
   register(light: Light, pos: Point, room_id?: string, ownHalo?: (sprite: THREE.Sprite) => () => void): LightHandle {
     const id = String(++this.serial);
@@ -179,6 +194,7 @@ export class LightPool {
         depthWrite: false, fog: true,
       });
       source.halo = new THREE.Sprite(material);
+      source.halo.visible = this.enabled;
       source.halo.scale.setScalar(2 * light.glow_m);
       source.halo.position.copy(pos);
       this.scene.add(source.halo);
@@ -203,6 +219,7 @@ export class LightPool {
 
   /** Select at 5 Hz, but fade and flicker each frame so slot changes stay smooth. */
   update(dt: number, focus: Point, night: number, visibleRooms: Set<string>): void {
+    if (!this.enabled) return;
     this.time += dt;
     this.elapsed += dt;
     if (this.elapsed >= .2) {

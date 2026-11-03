@@ -619,10 +619,15 @@ export function attachMirror(
 /** Reflector.js's per-frame work, on a mesh whose plane is a stored value
  *  instead of "my local +z". Runs for EVERY material the mesh draws; only the
  *  ones marked `__mirror` do anything. */
+let mirrorsEnabled = true
+
+/** Skip reflection targets entirely, including a newly mounted pane's first pass. */
+export function setMirrorsEnabled(on: boolean): void { mirrorsEnabled = on }
+
 function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGLRenderer,
                       scene: Scene, camera: Camera, material: Material): void {
   const slot = (material as Material & { userData: { __mirror?: string } }).userData?.__mirror
-  if (!slot || inMirrorPass) return
+  if (!mirrorsEnabled || !slot || inMirrorPass) return
   const state = meshStates.get(mesh)?.get(slot)
   if (!state) return
   const uniforms = (material as ShaderMaterial).uniforms

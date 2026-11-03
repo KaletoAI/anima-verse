@@ -38,6 +38,7 @@
  * (`ground.clearAreas`).
  */
 import * as THREE from 'three';
+import { gateWaterExtra } from '@anima/scene-render';
 import { surfaceTimeUniform, surfaceWaveNormal } from '@anima/scene-render';
 import type { Waterfall } from '@anima/scene-render';
 import { WATER_FOAM_STRENGTH } from './waterPlaneMath';
@@ -331,5 +332,5 @@ export function buildWaterfall(fall: Waterfall,
   foam.receiveShadow = false;
   foam.castShadow = false;
 
-  return [curtain, foam];
+  return [gateWaterExtra(curtain), gateWaterExtra(foam)];
 }

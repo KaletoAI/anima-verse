@@ -160,7 +160,7 @@
  */
 import * as THREE from 'three';
 import { finestStep, heightAt, latticeSample, surfaceSkyUniform,
-  surfaceTimeUniform, surfaceWaveNormal, tileKeyAt } from '@anima/scene-render';
+  waterExtrasUniform, surfaceTimeUniform, surfaceWaveNormal, tileKeyAt } from '@anima/scene-render';
 import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { rasterFlowAt, rasterKindAt, rasterLevelAt, rasterSdAt, waterBilinear,
   WATER_SD_DRY } from './waterRaster';
@@ -2739,6 +2739,7 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
       // once per frame by the engine, so the terrain's water can never drift
       // into a second time of day.
       u.uTlodTime = surfaceTimeUniform;
+      u.uWaterExtras = waterExtrasUniform;
       u.uTlodSky = surfaceSkyUniform;
       // WHICH KIND a water pixel stands in — the water raster's own per-texel
       // kind, resolved to a LOOK ROW on the CPU (`buildKindRows`) and shipped on

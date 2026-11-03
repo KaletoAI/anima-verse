@@ -905,9 +905,10 @@ async function loadLod() {
     };
     await writeFile(join(dir, 'three.mjs'), THREE_STUB, 'utf8');
     await writeFile(join(dir, 'sceneRender.mjs'),
-      "export * from './worldHeight.mjs';\nexport * from './materials.mjs';\n", 'utf8');
+      "export * from './worldHeight.mjs';\nexport * from './materials.mjs';\nexport * from './waterExtras.mjs';\n", 'utf8');
     await ts(join(ROOT, 'packages/scene-render/src/worldHeight.ts'), 'worldHeight');
     await ts(join(ROOT, 'packages/scene-render/src/materials.ts'), 'materials');
+    await ts(join(ROOT, 'packages/scene-render/src/waterExtras.ts'), 'waterExtras');
     await ts(join(ROOT, 'client3d/src/scene/waterRaster.ts'), 'waterRaster');
     await ts(join(ROOT, 'client3d/src/scene/waterPlaneMath.ts'), 'waterPlaneMath');
     await ts(join(ROOT, 'client3d/src/scene/waterShade.ts'), 'waterShade');
@@ -928,6 +929,7 @@ async function loadLod() {
       water: await import(`file://${join(dir, 'waterRaster.mjs')}`),
       shade: await import(`file://${join(dir, 'waterShade.mjs')}`),
       mats: await import(`file://${join(dir, 'materials.mjs')}`),
+      extras: await import(`file://${join(dir, 'waterExtras.mjs')}`),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -983,7 +985,7 @@ function checkEq(label, actual, expected) {
   }
 }
 
-const { lod, height, water, shade, mats } = await loadLod();
+const { lod, height, water, shade, mats, extras } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
   MAX_RANGE_WIDENING,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
@@ -4255,6 +4257,14 @@ checkBelow('RED: …i.e. the threshold IS one this fixture can fail',
 // that stopped matching three's chunk name. So the whole path is pinned here as
 // TEXT, on `wetShader.fragmentShader` — the source three would compile — and
 // not on the generator's return value.
+console.log('\n[110] the graphics switch reaches existing wet programs');
+checkEq('wet shader holds the shared extras uniform', wetShader.uniforms.uWaterExtras === extras.waterExtrasUniform, true);
+extras.setWaterExtrasEnabled(false);
+checkEq('off changes the existing program without replacing the water material', wetShader.uniforms.uWaterExtras.value, 0);
+extras.setWaterExtrasEnabled(true);
+checkEq('on restores the existing program', wetShader.uniforms.uWaterExtras.value, 1);
+checkEq('foam and normal-map reads are inside the extras branch',
+  /if \( uWaterExtras > 0\.5 \) \{[\s\S]*float rawFoam[\s\S]*twN = twRipple/.test(wetFrag), true);
 console.log('\n[24] the drift chain reaches the compiled fragment');
 checkEq('the wet fragment declares the shared clock',
   wetFrag.includes('uniform float uTlodTime;'), true);

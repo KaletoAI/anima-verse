@@ -20,7 +20,8 @@ public readonly record struct GraphicsPrefsCheck(GraphicsPrefs? Prefs, string? E
 /// <see cref="Load"/> and takes every change from the HUD's <c>applyGraphicsPrefs</c> through <see cref="Check"/>,
 /// so a malformed message leaves the picture alone. Vectors: shared/test-vectors/graphics_prefs.json.
 /// </summary>
-public readonly record struct GraphicsPrefs(string AntiAliasing, bool Shadows, double? RenderScale = null)
+public readonly record struct GraphicsPrefs(string AntiAliasing, bool Shadows, double? RenderScale = null,
+    bool WaterMirrors = true, bool LampLights = true, bool FogHorizon = true)
 {
     /// <summary><c>GRAPHICS_PREFS_KEY</c>.</summary>
     public const string Key = "av3d.view.graphics.v1";
@@ -44,11 +45,13 @@ public readonly record struct GraphicsPrefs(string AntiAliasing, bool Shadows, d
     /// <c>checkGraphicsPrefs(antiAliasing, shadows)</c>: values from outside (a bridge message) → the prefs, or the
     /// refused field. The level is checked first; missing or invalid renderScale defaults to auto.
     /// </summary>
-    public static GraphicsPrefsCheck Check(JsonNode? antiAliasing, JsonNode? shadows, JsonNode? renderScale = null)
+    public static GraphicsPrefsCheck Check(JsonNode? antiAliasing, JsonNode? shadows, JsonNode? renderScale = null,
+        JsonNode? waterMirrors = null, JsonNode? lampLights = null, JsonNode? fogHorizon = null)
     {
         if (LevelOf(antiAliasing) is not { } aa) return new GraphicsPrefsCheck(null, "antiAliasing");
         if (FlagOf(shadows) is not { } on) return new GraphicsPrefsCheck(null, "shadows");
-        return new GraphicsPrefsCheck(new GraphicsPrefs(aa, on, RenderScaleOf(renderScale)), null);
+        return new GraphicsPrefsCheck(new GraphicsPrefs(aa, on, RenderScaleOf(renderScale),
+            FlagOf(waterMirrors) ?? true, FlagOf(lampLights) ?? true, FlagOf(fogHorizon) ?? true), null);
     }
 
     /// <summary>
@@ -68,12 +71,14 @@ public readonly record struct GraphicsPrefs(string AntiAliasing, bool Shadows, d
             return Defaults;
         }
         if (parsed is not JsonObject p) return Defaults;
-        return new GraphicsPrefs(LevelOf(p["antiAliasing"]) ?? Defaults.AntiAliasing, FlagOf(p["shadows"]) ?? Defaults.Shadows, RenderScaleOf(p["renderScale"]));
+        return new GraphicsPrefs(LevelOf(p["antiAliasing"]) ?? Defaults.AntiAliasing, FlagOf(p["shadows"]) ?? Defaults.Shadows, RenderScaleOf(p["renderScale"]),
+            FlagOf(p["waterMirrors"]) ?? true, FlagOf(p["lampLights"]) ?? true, FlagOf(p["fogHorizon"]) ?? true);
     }
 
     /// <summary><c>saveGraphicsPrefs</c>: fixed key order, no spaces — the same bytes the HUD writes.</summary>
     public static string Save(GraphicsPrefs p)
-        => new JsonObject { ["antiAliasing"] = p.AntiAliasing, ["shadows"] = p.Shadows, ["renderScale"] = RenderScaleJson(p.RenderScale) }.ToJsonString();
+        => new JsonObject { ["antiAliasing"] = p.AntiAliasing, ["shadows"] = p.Shadows, ["renderScale"] = RenderScaleJson(p.RenderScale),
+            ["waterMirrors"] = p.WaterMirrors, ["lampLights"] = p.LampLights, ["fogHorizon"] = p.FogHorizon }.ToJsonString();
 
     public const int RenderPixelBudget = 1920 * 1080;
     // Null represents "auto"; fixed values stay JSON numbers on the shared wire.

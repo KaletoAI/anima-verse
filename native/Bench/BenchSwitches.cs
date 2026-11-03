@@ -23,6 +23,29 @@ public sealed class BenchSwitchContext
 /// <summary>A switch in force: whether it found anything to switch, what it did, and how to put it back.</summary>
 public sealed record BenchSwitch(string Variant, bool Applied, string Detail, Action Restore);
 
+/// <summary>Persistent graphics gates reuse the matrix's runtime switches.
+/// Repeated off messages retain the original restore; on releases it once.</summary>
+public sealed class GraphicsFeatureSwitches
+{
+    private readonly Dictionary<string, BenchSwitch> _active = new();
+
+    public void Apply(Overview.GraphicsPrefs prefs, BenchSwitchContext context)
+    {
+        Set("no-water-extras", !prefs.WaterMirrors, context);
+        Set("no-mirrors", !prefs.WaterMirrors, context);
+        Set("no-prop-lights", !prefs.LampLights, context);
+        Set("no-fog-pass", !prefs.FogHorizon, context);
+        Set("no-veil", !prefs.FogHorizon, context);
+        Set("no-backdrop", !prefs.FogHorizon, context);
+    }
+
+    private void Set(string variant, bool off, BenchSwitchContext context)
+    {
+        if (off && !_active.ContainsKey(variant)) _active.Add(variant, BenchSwitches.Apply(variant, context));
+        else if (!off && _active.Remove(variant, out var sw)) sw.Restore();
+    }
+}
+
 /// <summary>
 /// The runtime feature switches of <c>--bench-matrix</c> (Task 26b, <see cref="BenchMatrix"/>): each variant switches
 /// exactly one feature off on the LIVE world — a node hidden, a uniform zeroed, a light's flag, a renderer setting — and
@@ -188,6 +211,14 @@ public static class BenchSwitches
             sheet.Visible = false;
             sheets++;
             restore.Add(() => { if (GodotObject.IsInstanceValid(sheet)) sheet.Visible = true; });
+        }
+        // A graphics setting outlives this frame: cover streamed placements and
+        // replacement water materials too. Restore the current tier of new sheets.
+        if (c.Builder is { } builder)
+        {
+            bool was = builder.WaterExtrasSuppressed;
+            builder.WaterExtrasSuppressed = true;
+            restore.Insert(0, () => builder.WaterExtrasSuppressed = was);
         }
         bool applied = ripple + ghosts + sheets + falls > 0;
         return new("no-water-extras", applied, $"ripple off on {ripple} water material, {ghosts} ghosts, {falls} waterfalls, {sheets} prop water sheets hidden",

@@ -89,6 +89,10 @@
  *   key      'av3d.view.graphics.v1'
  *   levels   ['off', '2x', '4x'] — the menu order of the native choice
  *   defaults { antiAliasing: '2x', shadows: true }
+ *   Task 110: waterMirrors, lampLights and fogHorizon default true, accept only
+ *   JSON booleans, and fall back independently on missing/invalid values. Every
+ *   off case preserves AA/shadows/scale; each invalid case keeps a different
+ *   valid switch off (hand-derived in graphics_prefs.json).
  *   renderScale defaults to 'auto'; its JSON fixed values are numbers.
  *   [9] Missing/invalid scale -> auto; [10] auto uses a 1920*1080 budget,
  *   floor(sqrt(budget/pixels)*20)/20, clamped to [.5,1]. Hand derivations
@@ -150,15 +154,18 @@ const fresh = P.loadGraphicsPrefs(null);
 fresh.shadows = false;
 check('[1] the defaults come back as a copy', P.DEFAULT_GRAPHICS_PREFS.shadows === true
   && P.loadGraphicsPrefs(null).shadows === true);
-// The round trip holds for all 36 combinations, including automatic and every fixed scale.
+// 3 AA × 2 shadows × 6 scales × 2³ feature combinations = 288 round trips.
 let roundTrips = 0;
 for (const aa of ['off', '2x', '4x']) {
-  for (const shadows of [true, false]) for (const renderScale of ['auto', 1, 0.85, 0.75, 0.66, 0.5]) {
-    const back = P.loadGraphicsPrefs(P.saveGraphicsPrefs({ antiAliasing: aa, shadows, renderScale }));
-    if (back.antiAliasing === aa && back.shadows === shadows && back.renderScale === renderScale) roundTrips += 1;
+  for (const shadows of [true, false]) for (const renderScale of ['auto', 1, 0.85, 0.75, 0.66, 0.5])
+  for (const waterMirrors of [true, false]) for (const lampLights of [true, false])
+  for (const fogHorizon of [true, false]) {
+    const back = P.loadGraphicsPrefs(P.saveGraphicsPrefs({ antiAliasing: aa, shadows, renderScale, waterMirrors, lampLights, fogHorizon }));
+    if (back.antiAliasing === aa && back.shadows === shadows && back.renderScale === renderScale
+      && back.waterMirrors === waterMirrors && back.lampLights === lampLights && back.fogHorizon === fogHorizon) roundTrips += 1;
   }
 }
-check('[4] save → load returns all 36 valid prefs unchanged', roundTrips === 36);
+check('[4] save → load returns all 288 valid prefs unchanged', roundTrips === 288);
 // The browser pick never lands on a level the browser would show differently:
 // Off stays off, On stays on.
 let picks = 0;

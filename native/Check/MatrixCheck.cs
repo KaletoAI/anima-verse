@@ -115,8 +115,37 @@ public static class MatrixCheck
                 string after = Snapshot(ctx, cuts);
                 Expect($"M2 {v.Name} restores everything", after == before, $"\nbefore {before}\nafter  {after}");
             }
+            // Task 110: the production graphics action path must equal the matrix
+            // variants, then restore the full baseline. Expectations use the live
+            // numeric snapshot above, including veil alpha, mirror grants and lamps.
+            var graphics = new GraphicsFeatureSwitches();
+            foreach (var field in new[] { "waterMirrors", "lampLights", "fogHorizon" })
+            {
+                string[] variants = field == "waterMirrors" ? new[] { "no-water-extras", "no-mirrors" }
+                    : field == "lampLights" ? new[] { "no-prop-lights" }
+                    : new[] { "no-fog-pass", "no-veil", "no-backdrop" };
+                var switches = variants.Select(v => BenchSwitches.Apply(v, ctx)).ToArray();
+                string expected = Snapshot(ctx, cuts);
+                foreach (var sw in switches.Reverse()) sw.Restore();
+                var prefs = JsonNode.Parse(Overview.GraphicsPrefs.Save(Overview.GraphicsPrefs.Defaults))!.AsObject();
+                prefs[field] = false;
+                var wire = Hud.HudProtocol.Parse(new JsonObject { ["v"] = Hud.HudProtocol.Version, ["kind"] = "action",
+                    ["name"] = "applyGraphicsPrefs", ["args"] = new JsonArray(prefs) }.ToJsonString(), out _);
+                var action = wire!.Args![0]!;
+                var parsed = Overview.GraphicsPrefs.Check(action["antiAliasing"], action["shadows"], action["renderScale"],
+                    action["waterMirrors"], action["lampLights"], action["fogHorizon"]);
+                graphics.Apply(parsed.Prefs!.Value, ctx);
+                Expect($"G110 {field} action equals matrix variants", Snapshot(ctx, cuts) == expected, expected);
+                graphics.Apply(parsed.Prefs.Value, ctx); // A repeated off must not capture a disabled baseline.
+                builder.TickProps(0.2, camera, focus, 1);
+                if (field == "waterMirrors") Expect("G110 mirrors stay suspended", mirrors.LastGrants == 0, "");
+                graphics.Apply(Overview.GraphicsPrefs.Defaults, ctx);
+                // TickProps can advance fades and mirror counters, neither belongs
+                // to this snapshot; the persistent feature state must be exact.
+                Expect($"G110 {field} on restores baseline", Snapshot(ctx, cuts) == before, Snapshot(ctx, cuts));
+            }
             return $"matrix M0..M3 ok ({BenchMatrix.Variants.Count} variants, {schedule.Count} passes interleaved, {applied.Count} "
-                   + $"switched on the props world: {string.Join(" ", applied)}; fog-pass n/a headless, every restore = the snapshot before)";
+                   + $"switched on the props world: {string.Join(" ", applied)}; fog-pass n/a headless, every restore = the snapshot before; G110 3 graphics actions equal matrix off/on)";
         }
         finally
         {

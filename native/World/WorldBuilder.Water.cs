@@ -23,6 +23,26 @@ public sealed partial class WorldBuilder
     /// <summary>The world props' sheets and ghosts (one record per placed row with either).</summary>
     public List<(SceneModelSpec Spec, Node3D? Node, List<MeshInstance3D> Sheets, SubmergedGhost? Ghost)> WorldPropWater { get; } = new();
 
+    private bool _waterExtrasSuppressed;
+    /// <summary>The graphics/matrix gate, including effects mounted after a toggle.</summary>
+    public bool WaterExtrasSuppressed
+    {
+        get => _waterExtrasSuppressed;
+        set
+        {
+            _waterExtrasSuppressed = value;
+            Ground?.WaterMaterial?.SetShaderParameter("tw_ripple_on", value ? 0f : 1f);
+            foreach (var slot in Slots.Values)
+                foreach (var rec in slot.Placements)
+                    if (rec.WaterSheets is { } sheets)
+                        foreach (var sheet in sheets) if (GodotObject.IsInstanceValid(sheet)) sheet.Visible = !value;
+            foreach (var row in WorldPropWater)
+                foreach (var sheet in row.Sheets) if (GodotObject.IsInstanceValid(sheet)) sheet.Visible = !value;
+            // The world layer owns its current culling tier.
+            if (WorldProps is { } props) props.WaterSuppressed = value;
+        }
+    }
+
     /// <summary>The falls of the ground's terrain payload, rebuilt with every new ground (<c>rebuildAreas</c>).</summary>
     private int RebuildWaterfalls(Node3D root)
     {
@@ -54,6 +74,7 @@ public sealed partial class WorldBuilder
                 lock (_waterCounts) _waterCounts.Sheets += rec.WaterSheets.Count;
             }
             else PropWaterSheets.Relift(rec.WaterSheets, rec.Spec.Water, rec.Lift);
+            foreach (var sheet in rec.WaterSheets) sheet.Visible = !WaterExtrasSuppressed;
         }
         if (rec.Node is not { } node || !GodotObject.IsInstanceValid(node)) return;
         var g = group.Position;

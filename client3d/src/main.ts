@@ -103,6 +103,7 @@ import { mountHud, mountTitle } from './hud/mount';
 import { setBoot, escTarget, keyForScene, getHudUiState, gameActions, getGameState, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import { createGround } from './scene/ground';
+import { GraphicsFeatures } from './scene/graphicsFeatures';
 import { createBackdrop } from './scene/backdrop';
 import { createWorldProps } from './scene/worldProps';
 import { ageAtReceiptS, createErrWindow, maxErr, clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
@@ -556,7 +557,8 @@ async function startApp(username: string, role: string) {
   // can only be chosen when the WebGL context is created — a change in the
   // menu is stored and waits for the next page load. The shadows are only the
   // starting value; `applyGraphicsPrefs` switches them in the running world.
-  const graphics = loadGraphicsPrefs(localStorage.getItem(GRAPHICS_PREFS_KEY));
+  let graphicsFeatures: GraphicsFeatures | undefined;
+  let graphics = loadGraphicsPrefs(localStorage.getItem(GRAPHICS_PREFS_KEY));
   const engine = new Engine(app, {
     antialias: browserAntialias(graphics), shadows: graphics.shadows, renderScale: graphics.renderScale,
   });
@@ -564,11 +566,13 @@ async function startApp(username: string, role: string) {
     // The prefs may have crossed a wire (the HUD runs in its own realm behind
     // the bridge), so they are checked like any input; a malformed message
     // changes nothing rather than half of the picture.
-    const checked = checkGraphicsPrefs(p?.antiAliasing, p?.shadows, p?.renderScale);
+    const checked = checkGraphicsPrefs(p?.antiAliasing, p?.shadows, p?.renderScale, p?.waterMirrors, p?.lampLights, p?.fogHorizon);
     if (!checked.ok) {
       console.warn('[graphics] refused graphics prefs', checked.error, p);
       return;
     }
+    graphics = checked.prefs;
+    graphicsFeatures?.apply(graphics);
     engine.setShadows(checked.prefs.shadows);
     engine.setRenderScale(checked.prefs.renderScale);
   };
@@ -861,6 +865,8 @@ async function startApp(username: string, role: string) {
   // horizon.
   const backdrop = createBackdrop();
   engine.scene.add(backdrop.group);
+  graphicsFeatures = new GraphicsFeatures(engine.scene, engine.lightPool, backdrop.group);
+  graphicsFeatures.apply(graphics);
   engine.addFrameHook(() => {
     backdrop.group.position.set(engine.target.x, 0, engine.target.z);
   });

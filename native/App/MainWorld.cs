@@ -93,6 +93,7 @@ public partial class Main : Node3D
             _world = world;
             // main.ts takeBackdrop(firstMap): the mountain rings of § A17, then every poll below.
             TakeBackdrop(world, builder.FirstMap!.Value);
+            if (!_options.Bench) ApplyGraphicsFeatures();
             // The CSS2D label layer: location names now, name tags once the figures are there. Under the HUD (layer 5).
             _placeLabels = new LocationLabels();
             SyncPlaceLabels();

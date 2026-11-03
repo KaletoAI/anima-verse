@@ -70,13 +70,17 @@ public class HudProtocolV4Tests
     public void GraphicsRenderScaleSurvivesTheV4Wire()
     {
         foreach (var scale in AnimaNative.Overview.GraphicsPrefs.RenderScales)
+        foreach (var water in new[] { true, false })
+        foreach (var lamps in new[] { true, false })
+        foreach (var fog in new[] { true, false })
         {
-            var prefs = new AnimaNative.Overview.GraphicsPrefs("2x", false, scale);
+            var prefs = new AnimaNative.Overview.GraphicsPrefs("2x", false, scale, water, lamps, fog);
             var json = "{\"v\":4,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\",\"args\":["
                 + AnimaNative.Overview.GraphicsPrefs.Save(prefs) + "]}";
             var wire = HudProtocol.Parse(json, out _)!;
             var p = wire.Args![0]!;
-            Assert.Equal(prefs, AnimaNative.Overview.GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"]).Prefs);
+            Assert.Equal(prefs, AnimaNative.Overview.GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"],
+                p["waterMirrors"], p["lampLights"], p["fogHorizon"]).Prefs);
         }
     }
 

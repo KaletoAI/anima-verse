@@ -166,6 +166,9 @@ export { cutPlaneData } from './depthCutMath'
 export { surfaceFinish } from './materials'
 export type { VerifyPoint, VerifyBox, VerifyMeasurement, VerifyResult } from './verify'
 
+export { gateWaterExtra, setWaterExtrasEnabled, waterExtrasUniform } from './waterExtras'
+export { setMirrorsEnabled } from './mirrorSurface'
+
 export { buildPropWater } from './propWater'
 export type { ScenePropWater } from './types'
 

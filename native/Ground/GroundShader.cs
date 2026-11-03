@@ -437,10 +437,12 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 			float shore = tw_smooth(d / max(look1.w, 1e-3));
 			tw_s = rim * mix({L(WaterShade.ShallowSurfaceMin)}, 1.0, shore);
 			tw_a = shore * rim;
-			float raw_foam = 1.0 - tw_smooth(d / {L(WaterShade.FoamBandM)});
-			tw_foam = raw_foam * min(shore + raw_foam * {L(WaterShade.FoamMinCover)}, 1.0) * rim;
 			tw_skymix = look0.w;
-			if (tw_ripple_on > 0.5) tw_n = tw_ripple(p, dpdx, dpdy, max(look1.x, 0.05), look1.y, look1.z, mod(TIME, 3600.0));
+			if (tw_ripple_on > 0.5) {{
+				float raw_foam = 1.0 - tw_smooth(d / {L(WaterShade.FoamBandM)});
+				tw_foam = raw_foam * min(shore + raw_foam * {L(WaterShade.FoamMinCover)}, 1.0) * rim;
+				tw_n = tw_ripple(p, dpdx, dpdy, max(look1.x, 0.05), look1.y, look1.z, mod(TIME, 3600.0));
+			}}
 			alb = mix(alb, look0.rgb, tw_a);
 			rough = mix(rough, look2.x, tw_s);
 			metal = mix(metal, look2.y, tw_s);

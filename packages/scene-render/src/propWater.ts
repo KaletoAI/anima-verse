@@ -1,6 +1,7 @@
 import type { Material, Object3D } from 'three'
 import type { ScenePropWater } from './types'
 import { surfaceMaterial } from './materials'
+import { gateWaterExtra } from './waterExtras'
 
 type THREE = typeof import('three')
 // Module-owned looks survive placement teardown; only geometry belongs to mounts.
@@ -25,6 +26,6 @@ export function buildPropWater(T: THREE, block: ScenePropWater, lift: number): O
     const mesh = new T.Mesh(geometry, material)
     mesh.position.y = region.y + lift
     mesh.receiveShadow = true
-    return mesh
+    return gateWaterExtra(mesh)
   })
 }

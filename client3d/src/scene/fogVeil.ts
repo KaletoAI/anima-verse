@@ -141,9 +141,15 @@ let camHeightM = 0;
 let fogged = true;
 /** The isolation panel's toggle 20 (`debug3d.ts`). */
 let debugOff = false;
+let graphicsOff = false;
+
+export function setFogVeilGraphicsOff(off: boolean): void {
+  graphicsOff = off;
+  pushAlpha();
+}
 
 function pushAlpha(): void {
-  uFogAlpha.value = (debugOff || !fogged)
+  uFogAlpha.value = (debugOff || graphicsOff || !fogged)
     ? 0 : FOG_ALPHA_MAX * fogHeightAlpha(camHeightM);
 }
 
