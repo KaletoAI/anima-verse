@@ -271,6 +271,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .rt-warn { color: #d29922; }
 .rt-muted { color: #6e7681; }
 .rt-ok { color: #3fb950; }
+/* Uncensored flag tags (LLM Routing Tasks/Overview): green = uncensored, red = censored. */
+.rt-censor { display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 8px; margin-left: 4px; vertical-align: 1px; }
+.rt-censor-off { color: #3fb950; background: rgba(63, 185, 80, 0.15); border: 1px solid rgba(63, 185, 80, 0.5); }
+.rt-censor-on { color: #f85149; background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.5); }
 /* One task assignment of an LLM entry, read-only (LLMs + Overview page). */
 .rt-taskchip {
     display: inline-block; font-size: 11px; background: #21262d; color: #8b949e;

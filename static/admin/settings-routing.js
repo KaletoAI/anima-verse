@@ -266,16 +266,17 @@ function rtEntryLabel(entry, idx) {
     return (e.provider || '?') + ' · ' + (e.name || e.model || ('#' + (idx + 1)));
 }
 
-// The user's Uncensored flag from /admin/models as a small lock: 🔓 = marked
-// uncensored, 🔒 = marked censored, nothing = not set. Tasks page reads it from
-// the catalog (uncensored_models), the Overview from its chain rows.
+// The user's Uncensored flag from /admin/models as a small coloured tag:
+// green "uncensored", red "censored", nothing = not set. Tasks page reads it
+// from the catalog (uncensored_models), the Overview from its chain rows.
 function rtCensorIcon(flag) {
-    if (flag === true) return ' <span class="rt-censor" title="Uncensored (set in /admin/models)">🔓</span>';
-    if (flag === false) return ' <span class="rt-censor" title="Censored (set in /admin/models)">🔒</span>';
+    if (flag === true) return ' <span class="rt-censor rt-censor-off" title="Marked Uncensored in /admin/models">uncensored</span>';
+    if (flag === false) return ' <span class="rt-censor rt-censor-on" title="Marked censored in /admin/models">censored</span>';
     return '';
 }
+// Plain-text form for <option> labels, which cannot hold markup.
 function rtCensorText(flag) {
-    return flag === true ? ' 🔓' : flag === false ? ' 🔒' : '';
+    return flag === true ? ' (uncensored)' : flag === false ? ' (censored)' : '';
 }
 function rtModelUncensored(model) {
     const map = (RT_CATALOG && RT_CATALOG.uncensored_models) || {};
