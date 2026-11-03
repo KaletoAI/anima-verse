@@ -2705,6 +2705,40 @@ mit mehr Figuren:
   in `scripts/smoke_group_role_points.py`.
 - Der Abschluss (§ A8c) einer Gruppe nennt die Rolle des Mitglieds, `a`..`e`.
 
+**Alt-Hälften (G6, 2026-11-03).** Eine Rolle eines Paars oder einer Gruppe darf
+Ersatz-Hälften haben, die mit derselben Szene aufgenommen wurden (eine andere
+Bewegung derselben Rolle):
+- Datei `<kind>__<role>~<alt>.fbx` neben den Hälften der Szene, `alt` aus
+  `[a-z0-9-]`. Sie liegt im Rahmen der Szene: gleicher Anker, gleicher Boden,
+  gleicher Kontaktversatz wie ihre Rolle. Ein `~` ohne Rolle davor ist kein
+  Alt, sondern Teil eines Kind-Namens.
+- Das Sidecar der Szene nennt sie in `alts: {"<role>": ["<alt>", …]}`, die
+  Wurzel in `geometry.alts."<role>~<alt>"` (`start_xz_m`, `anchor_xz_m`).
+- Import: `fbx_import.import_alt(kind, role, alt, {name, take})` rechnet die
+  Szene aus ihren Quellen neu und prüft, dass jeder Rollenpunkt auf 5 mm
+  wiederkommt. Geschrieben wird nur die Alt-Datei.
+- `GET /assets/animation-clips` führt sie NICHT in `clips`, sondern in
+  `alt_clips` (Clip-Zeile plus `alt`); `pairs.<kind>.alts` und
+  `groups.<kind>.alts` nennen die vorhandenen pro Rolle. Kein anderer Leser
+  (Posen, Rollenzahl, Übergänge) sieht sie.
+- Ein Client indexiert eine Alt-Hälfte unter `<kind>__<role>~<alt>` und zieht
+  ihre Wurzel wie bei jeder Hälfte aus dem rohen Clip.
+- Die Interaktion trägt pro Figur `alt` (`""` = die eigene Hälfte der Rolle).
+  Die Figur spielt dann `<kind>__<role>~<alt>`, am selben Anker, mit derselben
+  Phase. Fehlt die Alt-Hälfte auf dem Rig, spielt sie `<kind>__<role>`.
+- Der Server setzt die Spielposition der Figur auf `anchor + R(yaw)·`
+  `geometry.alts."<role>~<alt>".anchor_xz_m`.
+- Wählen: `POST /play/prop-actions/alt {execution_id, alt}` (Avatar des
+  Spielers); `GET /play/prop-actions/state` gibt der eigenen aktiven Zeile
+  `alt: {current, options: [{id, label}]}` (erste Option `""`), sonst `null`.
+- Abschluss (§ A8c): Hat der Abschluss-Clip dieselbe Alt-Hälfte für die
+  Rolle, schließt die Figur in ihr (`finale.alt`), sonst in der eigenen Hälfte.
+- Testvektor: `pair_clip_geometry.json` [1] (`x__b~wave` ist eine
+  Rollen-Datei, `x__b~`, `x~wave` und `x__f~wave` sind keine).
+  `client3d/scripts/smoke_finale_clip.mjs` [9] prüft den Abschluss-Namen,
+  `scripts/smoke_prop_action_group.py` [11] die Auswahl, die Position und den
+  Abschluss.
+
 Erzeugung: `scripts/clip_import_cmu.py` (CMU-Mocap → Mixamo-Skelett, Blender
 headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
 
@@ -2751,7 +2785,8 @@ Bild (s. u.).
   "members": {"a": "Ann", "b": "Bob"},
   "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
-  "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "rate": 1.0
+  "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "rate": 1.0,
+  "alt": ""
 }
 ```
 `members` = Rolle → Name ALLER Beteiligten, die eigene Figur eingeschlossen
@@ -2856,7 +2891,7 @@ name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt d
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `finale` | `{id, kind, role, elapsed_s, duration_s}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Cliplänge |
+| `finale` | `{id, kind, role, alt, elapsed_s, duration_s}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `alt` = deren Alt-Hälfte (§ A8a, G6; `""` = keine, dann `<kind>__<role>`); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Cliplänge |
 
 Der Client spielt den Abschluss **einmal pro `id`, von vorn, sobald er das Feld zum ersten Mal sieht** — die
 Clips dauern um eine Sekunde, ein Poll alle 3 s: ein Abspielen ab `elapsed_s` zeigte meist nichts, und ein
@@ -5831,6 +5866,7 @@ sie produziert.
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
+| `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`) |
 | `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
 | `client3d/scripts/smoke_pair_storey.mjs` | die HÖHE eines Paares (§ A8a): ohne Platz steht es auf dem Boden SEINES Raums (`tiles.roomStandY` — Obergeschoss, Keller, Flur), nicht auf dem Gelände unter dem Haus; nur der Grund des Ortes nimmt das Gelände, ein Platz seine Slot-Höhe |
 | `client3d/scripts/smoke_marker_floor.mjs` | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |

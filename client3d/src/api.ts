@@ -578,6 +578,16 @@ export interface ApiClip {
    *  carry the figure along `travel_m` (clip frame: +Z forward, +X the
    *  figure's left, metres of the reference rig). `null`/missing = in place. */
   root_motion?: { mode: string; travel_m?: number[] | null } | null;
+  /** an ALT half of `role` (`<kind>__<role>~<alt>`, § A8a, G6) */
+  alt?: string;
+}
+
+/** The name a clip is indexed and asked for under: `<kind>__<role>` for a
+ *  pair or group half, `<kind>__<role>~<alt>` for an alt half, `<kind>`
+ *  for a solo clip. */
+export function clipIndexName(c: { kind: string; role?: string; alt?: string }): string {
+  if (!c.role) return c.kind;
+  return c.alt ? `${c.kind}__${c.role}~${c.alt}` : `${c.kind}__${c.role}`;
 }
 
 /** Server clip library, resolved movement poses and clip-keyed transitions. */
@@ -597,7 +607,10 @@ export async function getAnimationClips(): Promise<ApiClipLibrary> {
     const res = await fetch('/assets/animation-clips');
     if (!res.ok) return empty;
     const data = await res.json();
-    return {ok: true, revision: data.revision, clips: (data.clips ?? []) as ApiClip[],
+    // The alt halves ride in the same list: a figure loads them like any
+    // pair half, under `clipIndexName`.
+    const clips = [...(data.clips ?? []), ...(data.alt_clips ?? [])] as ApiClip[];
+    return {ok: true, revision: data.revision, clips,
       movement_poses: data.movement_poses && typeof data.movement_poses === 'object'
         ? data.movement_poses : null,
       transition_clips: Array.isArray(data.transition_clips) ? data.transition_clips : []};

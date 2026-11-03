@@ -21,7 +21,7 @@ import {
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
-import { getAnimationClips, getCharacterModel } from '../api';
+import { clipIndexName, getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, steerCancelsBridge, clipTransition, poseClip, setClipTransitions,
   setMovementPoses } from '../game/walk';
 import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn, toWorld, travelAt,
@@ -741,7 +741,8 @@ function relockOnRig(charName: string, clips: readonly THREE.AnimationClip[],
 /** `<kind>__a` … `<kind>__e` — a role file of a pair or group clip (contract
  *  § A8a; a group continues the letters up to `__e`). Never a solo kind. */
 export function isPairClipName(name: string): boolean {
-  return /__[a-e]$/.test(name);
+  // a role half, or an ALT half of a role (`<kind>__<role>~<alt>`, G6)
+  return /__[a-e](~[a-z0-9][a-z0-9-]*)?$/.test(name);
 }
 
 /** The horizontal root path of a PAIR clip half: hips XZ per keyframe in
@@ -949,7 +950,8 @@ export class FigureLibrary {
       // model (bone names rewritten, mixamorig prefix mapping).
       const serverClips = library.clips;
       // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
-      // an interaction asks for; a solo clip keeps its plain kind. The listing's
+      // an interaction asks for; an alt half under `<kind>__<role>~<alt>`
+      // (G6); a solo clip keeps its plain kind. The listing's
       // loop flag rides along PER FILE: it belongs to the kind in ITS set.
       // So does the ROOT-MOTION flag: a file imported with `keep`/`foot_lock`
       // carries a travel in its hips track that the figure is to follow
@@ -957,7 +959,7 @@ export class FigureLibrary {
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null }> =
         serverClips.map((c) => ({
-          kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
+          kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop,
           rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
           rootMotionMode: c.root_motion?.mode,
@@ -1022,7 +1024,7 @@ export class FigureLibrary {
         isPair: isPairClipName,
         pairRoot: extractRootPath,
       });
-      this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${c.role ? `${c.kind}__${c.role}` : c.kind}\0${c.set ?? ''}`, JSON.stringify(c)]));
+      this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${clipIndexName(c)}\0${c.set ?? ''}`, JSON.stringify(c)]));
       this.clipIndex = committed.index;
       this.pairRoots = committed.pairRoots as Map<string, RootPath>;
       if (opts.only) await this.ensureFallbackPool(opts);
@@ -1080,7 +1082,7 @@ export class FigureLibrary {
       const index = new Map<string, Map<string, THREE.AnimationClip>>();
       const roots = new Map<string, RootPath>();
       for (const source of this.clipListing) {
-        const kind = source.role ? `${source.kind}__${source.role}` : source.kind;
+        const kind = clipIndexName(source);
         const set = source.set ?? '';
         const previous = this.clipListingAtLoad.get(`${kind}\0${set}`);
         let clip = previous === JSON.stringify(source) ? this.clipIndex.get(kind)?.get(set) : undefined;
@@ -1105,7 +1107,7 @@ export class FigureLibrary {
       }
       this.clipIndex = index;
       this.pairRoots = roots;
-      this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${c.role ? `${c.kind}__${c.role}` : c.kind}\0${c.set ?? ''}`, JSON.stringify(c)]));
+      this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${clipIndexName(c)}\0${c.set ?? ''}`, JSON.stringify(c)]));
     })();
   }
   private clipListingAtLoad = new Map<string, string>();

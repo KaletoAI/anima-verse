@@ -29,6 +29,12 @@
  * [8] A GROUP member (G3, plan-gruppen-animationen.md): role c plays its own
  *     half `standing-dancer-climax__c`, role e `…__e`; a role outside a..e
  *     (`f`) is no role — the plain kind, like a solo block.
+ * [9] An ALT half (G6): role c with alt `wave` plays
+ *     `standing-dancer-climax__c~wave`, base `standing-dancer-climax__c` (what
+ *     a rig without the alt plays); alt "" plays the base, base = clip. A solo
+ *     block has no role, so an alt on it is dropped (alt "", clip
+ *     `resting-mast-climax`); an alt name outside [a-z0-9-] (`Wave!`) is
+ *     dropped too.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -46,7 +52,7 @@ const block = (id, extra = {}) => ({ id, kind: 'standing-dancer-climax', role: '
 
 // [1]
 let { play, seen } = adoptFinale(null, '', block('f1'), true);
-assert.deepEqual(play, { id: 'f1', kind: 'standing-dancer-climax', role: 'b', t: 0, duration: 1.033 });
+assert.deepEqual(play, { id: 'f1', kind: 'standing-dancer-climax', role: 'b', alt: '', t: 0, duration: 1.033 });
 assert.equal(seen, 'f1');
 
 // [2]
@@ -58,7 +64,7 @@ close(step.t, 0.5);
 step = stepFinale(step.play, 0.5, false);
 close(step.t, 1.0);
 step = stepFinale(step.play, 0.04, false);
-assert.deepEqual(step, { play: null, clip: null, t: 0 });
+assert.deepEqual(step, { play: null, clip: null, base: null, t: 0 });
 play = step.play;
 
 // [3]
@@ -83,7 +89,7 @@ assert.deepEqual(adoptFinale(null, '', block(''), true), { play: null, seen: '' 
 assert.deepEqual(adoptFinale(null, '', block('f4', { duration_s: 0 }), true), { play: null, seen: 'f4' });
 
 // [7]
-step = stepFinale({ id: 'x', kind: 'k', role: 'a', t: 0.9, duration: 1.0 }, 0.0995, false);
+step = stepFinale({ id: 'x', kind: 'k', role: 'a', alt: '', t: 0.9, duration: 1.0 }, 0.0995, false);
 close(step.t, 0.999);
 
 // [8]
@@ -94,4 +100,16 @@ for (const role of ['c', 'e']) {
 assert.equal(stepFinale(adoptFinale(null, '', block('gf', { role: 'f' }), true).play, 0.1, false).clip,
   'standing-dancer-climax');
 
-console.log('PASS smoke_finale_clip [1]-[8]');
+// [9]
+const alt = stepFinale(adoptFinale(null, '', block('a1', { role: 'c', alt: 'wave' }), true).play, 0.1, false);
+assert.equal(alt.clip, 'standing-dancer-climax__c~wave');
+assert.equal(alt.base, 'standing-dancer-climax__c');
+const plain = stepFinale(adoptFinale(null, '', block('a2', { role: 'c', alt: '' }), true).play, 0.1, false);
+assert.equal(plain.clip, 'standing-dancer-climax__c');
+assert.equal(plain.base, plain.clip);
+const soloAlt = adoptFinale(null, '', block('a3', { kind: 'resting-mast-climax', role: null, alt: 'wave' }), true);
+assert.equal(soloAlt.play.alt, '');
+assert.equal(stepFinale(soloAlt.play, 0.1, false).clip, 'resting-mast-climax');
+assert.equal(adoptFinale(null, '', block('a4', { role: 'c', alt: 'Wave!' }), true).play.alt, '');
+
+console.log('PASS smoke_finale_clip [1]-[9]');

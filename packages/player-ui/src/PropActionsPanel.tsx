@@ -4,7 +4,7 @@ import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
-import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction,
+import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction, setPropActionAlt,
   type PropActionChoice, type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
 interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
@@ -303,6 +303,16 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
         </HoverHint>}
       </span>
     })}
+    {run.status === 'active' && run.alt && run.alt.options.length > 1 && <span role="group"
+      aria-label={t('Your part')} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+      <span>{t('Your part')}:</span>
+      {run.alt.options.map(option => <button key={`alt:${option.id}`} type="button"
+        className={`player-chip${run.alt!.current === option.id ? ' on' : ''}`} disabled={busy}
+        aria-pressed={run.alt!.current === option.id}
+        onClick={() => run.alt!.current !== option.id && perform(() => setPropActionAlt(run.execution_id, option.id))}>
+        {option.id ? option.label : t('Default')}
+      </button>)}
+    </span>}
     {run.status === 'sleeping' && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(async () => {
         // Existing player wake path; Core clears sleep and semantic bed ownership.

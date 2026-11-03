@@ -24,7 +24,9 @@
  *       client indexes them as `greeting-handshake__a` / `__b`
  *       (`isPairClipName` true; `idle` false; a group continues the role
  *       letters, so `x__c` is a role file too, while `x__f` — no role letter
- *       a..e — is not).
+ *       a..e — is not; an ALT half of a role, `x__b~wave` / `x__c~arm-down`
+ *       (G6), is a role file, while `x__b~` (no name), `x~wave` (no role)
+ *       and `x__f~wave` are not).
  *
  *   [2] the root path of each half, read from the raw hips position track in
  *       Mixamo centimetres → metres: at `anchor_s` A sits at x = −d/2 = −0.367 and

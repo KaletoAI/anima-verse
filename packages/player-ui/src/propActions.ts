@@ -61,6 +61,13 @@ export interface PropActionMeter {
   holdable?: boolean
   held?: boolean
 }
+/** The viewer's ALT halves in a running action with others (G6): what its
+ *  clip role may play instead of its own half. Option `id` "" = the role's
+ *  own half; `current` the one playing now. */
+export interface PropActionAlt {
+  current: string
+  options: { id: string; label: string }[]
+}
 export interface PropActionDeparture {
   stand_yaw_deg?: number | null
   seat: [number, number]
@@ -114,6 +121,8 @@ export interface PropActionExecution extends PropActionResult {
   has_finale?: boolean
   /** Gauges of the participants, one bar each. */
   meters?: PropActionMeter[]
+  /** The viewer's alt halves while active; null/missing = its role has none. */
+  alt?: PropActionAlt | null
   /** The viewer's side of the run. */
   own_role?: 'actor' | 'partner'
   /** Runs with others: "ask" = every invitee consents first, "react" = a pair starts and the partner reacts. */
@@ -279,6 +288,12 @@ export function respondPropAction(executionId: string, accept: boolean): Promise
 }
 export function cancelPropAction(executionId: string): Promise<PropActionResult> {
   return mutate('/play/prop-actions/cancel', { execution_id: executionId })
+}
+
+/** The own avatar plays an alt half of its role ("" = its own half again). */
+export async function setPropActionAlt(executionId: string, alt: string): Promise<void> {
+  await apiPost('/play/prop-actions/alt', { execution_id: executionId, alt })
+  notifyPropActionChanged()
 }
 
 /** The own avatar holds its gauge back in a running action (or lets go). */

@@ -44,7 +44,7 @@ assert.doesNotMatch(plain, /player-chip-finale|With finale/);
 const unnamed = render(PropActionOffers, { offers: [{ ...offer, finale: true }], nameProps: false, onPick() {} });
 assert.match(unnamed, /data-hint="With finale"/);
 
-const execution = { execution_id: 'run-8', action_id: 'rest', definition_revision: 'rev-7', target, actor: 'Player', partner: 'Mira', status: 'active', phase: '', phase_label: '', reason: '', label: 'Rest', roles: { actor: 'Player', partner: 'Mira', clip: {}, access: {} }, can_respond: false, can_cancel: true };
+const execution = { execution_id: 'run-8', action_id: 'rest', definition_revision: 'rev-7', target, actor: 'Player', members: ['Mira'], viewer: 'Player', status: 'active', phase: '', phase_label: '', reason: '', label: 'Rest', roles: { actor: 'Player', partner: 'Mira', clip: {}, access: {} }, can_respond: false, can_cancel: true };
 const row = changes => render(PropActionExecutionRow, { run: { ...execution, ...changes }, kind: 'current', busy: false, perform() {} });
 const gauged = row({ has_finale: true, meters: [{ name: 'Player', value: 42.4, label: '' }, { name: 'Mira', value: 130, label: 'Heat' }] });
 assert.equal([...gauged.matchAll(/role="meter"/g)].length, 2);
@@ -55,12 +55,23 @@ assert.match(gauged, /width:100%/);
 assert.match(row({ meters: [{ name: 'Player', value: -3, label: '' }] }), /aria-valuenow="0"/);
 assert.doesNotMatch(row({ status: 'approaching', meters: [{ name: 'Player', value: 10, label: '' }] }), /role="meter"/);
 assert.doesNotMatch(row({}), /role="meter"/);
-// Hold back: a toggle only on the viewer's OWN holdable gauge (own_role picks
-// the side), pressed while held; never on the partner's row.
+// Hold back: a toggle only on the viewer's OWN holdable gauge (the row's
+// `viewer` names it), pressed while held; never on the partner's.
 const holding = row({ own_role: 'actor', meters: [{ name: 'Player', value: 20, label: '', holdable: true, held: true }, { name: 'Mira', value: 30, label: '', holdable: true }] });
 assert.equal([...holding.matchAll(/>Hold back<\/button>/g)].length, 1);
 assert.match(holding, /class="player-chip on"[^>]*aria-pressed="true"[^>]*>Hold back</);
 assert.match(holding, /class="player-prop-meter held"/);
-assert.equal([...row({ own_role: 'partner', meters: [{ name: 'Player', value: 20, label: '', holdable: true }, { name: 'Mira', value: 30, label: '', holdable: true }] }).matchAll(/aria-pressed="false"/g)].length, 1);
+assert.equal([...row({ own_role: 'partner', viewer: 'Mira', meters: [{ name: 'Player', value: 20, label: '', holdable: true }, { name: 'Mira', value: 30, label: '', holdable: true }] }).matchAll(/aria-pressed="false"/g)].length, 1);
 assert.doesNotMatch(row({ own_role: 'actor', meters: [{ name: 'Player', value: 20, label: '' }] }), /Hold back/);
-console.log('PASS finale chip mark, per-participant gauges and the hold toggle');
+// Alt halves (G6): the viewer's active row offers one chip per option, ""
+// reads "Default", the current one is pressed; none without options beyond
+// the own half, none while not active.
+const alts = { current: 'wave', options: [{ id: '', label: 'Default' }, { id: 'wave', label: 'Wave' }] };
+const choosing = row({ alt: alts });
+assert.match(choosing, /aria-label="Your part"/);
+assert.match(choosing, /class="player-chip"[^>]*aria-pressed="false"[^>]*>Default</);
+assert.match(choosing, /class="player-chip on"[^>]*aria-pressed="true"[^>]*>Wave</);
+assert.doesNotMatch(row({ alt: { current: '', options: [{ id: '', label: 'Default' }] } }), /Your part/);
+assert.doesNotMatch(row({ alt: null }), /Your part/);
+assert.doesNotMatch(row({ status: 'approaching', alt: alts }), /Your part/);
+console.log('PASS finale chip mark, per-participant gauges, the hold toggle and the alt chips');

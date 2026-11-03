@@ -40,7 +40,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.blender import runner
 from app.core import cmu_import
-from app.core.animation_clips import (CLIP_ROLES, clip_entries, clip_role_gender,
+from app.core.animation_clips import (ALT_NAME_RE, ALT_SEPARATOR, CLIP_ROLES,
+                                     ROLE_SEPARATOR, clip_entries, clip_role_gender,
                                      library_write_lock, reload_clip_caches)
 from app.core.clip_catalog import ClipKindExists, existing_kinds
 from app.core.cmu_import import ClipImportError
@@ -1077,6 +1078,176 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
                        + entry["rel"],
             },
         }
+
+
+#: Whole take names (letters only, lowercase) that mean "reference pose".
+_REST_TAKE_NAMES = frozenset({"tpose", "apose", "rest", "restpose", "bind", "bindpose"})
+
+#: How far a recomputed role point may lie from the scene's stored one before
+#: an alt import refuses: the frame the alt is put into has to be the scene's.
+ALT_FRAME_TOLERANCE_M = 0.005
+
+
+def _scene_source(name: str) -> Path:
+    """An inbox file a scene's sidecar names. The inbox may have been sorted
+    into folders since (``Pack/x.fbx`` → ``Adult/Pack/x.fbx``): then the ONE
+    inbox file with that name, never a guess between several."""
+    p = inbox_path(name)
+    if p.is_file():
+        return p
+    base = Path(name).name.lower()
+    hits = [f for f in inbox_files() if f.name.lower() == base]
+    if len(hits) != 1:
+        raise ClipImportError(
+            f"the scene's source {name} is "
+            + ("not in the inbox any more" if not hits else "in the inbox more than once"))
+    return hits[0]
+
+
+def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
+               target: str = "licensed", timeout_s: int = 900) -> Dict[str, Any]:
+    """Import an ALT half of a pair or group clip already in the library
+    (plan-gruppen-animationen.md, G6): ``file`` (``{name, take}``) plays
+    ``role`` of ``kind`` differently — a replacement recorded with the same
+    scene, e.g. a waiting role in another motion.
+
+    The scene is converted AGAIN from the sources its sidecar names (files,
+    takes, reference pose, per-role offsets, anchor time, dial), because its
+    frame of reference — anchor frame, turn, origin, floor, contact shift —
+    is defined by its own takes and stored nowhere as a transform. The alt
+    take rides along in that frame and is the only file written:
+    ``<kind>__<role>~<alt>.fbx``. The scene's halves stay untouched; that the
+    frame was met is CHECKED, every recomputed role point has to lie within
+    ``ALT_FRAME_TOLERANCE_M`` of the stored one, otherwise nothing is written.
+    The sidecar gains ``alts.<role>`` (the names) and ``geometry.alts``
+    (the alt's root at start and anchor frame)."""
+    kind = cmu_import.validate_kind(kind)
+    role = str(role or "").strip().lower()
+    alt = str(alt or "").strip().lower()
+    if not ALT_NAME_RE.match(alt):
+        raise ClipImportError("an alt name is lowercase letters, digits and '-'")
+    target = str(target or "licensed").strip().lower()
+    if target not in ("free", "licensed"):
+        raise ClipImportError("target must be 'free' or 'licensed'")
+    cset = str(clip_set or "").strip().lower()
+    if cset and ("/" in cset or "\\" in cset or cset in (".", "..")):
+        raise ClipImportError("set must be a plain directory name")
+    out = target_dir(target) / cset if cset else target_dir(target)
+    sidecar = out / f"{kind}.json"
+    try:
+        meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipImportError(f"'{kind}' has no readable sidecar in the {target} library: {e}")
+    roles = list(meta.get("roles") or (["a", "b"] if meta.get("pair") else []))
+    if len(roles) < 2:
+        raise ClipImportError(f"'{kind}' is a solo clip — an alt replaces a role of a pair or group")
+    if role not in roles:
+        raise ClipImportError(f"'{kind}' has the roles {', '.join(roles)}, not '{role}'")
+    if not (out / f"{kind}{ROLE_SEPARATOR}{role}.fbx").is_file():
+        raise ClipImportError(f"'{kind}' has no file for role {role}")
+    source = meta.get("source") or {}
+    geometry = meta.get("geometry") or {}
+    files, takes = list(source.get("files") or []), list(source.get("takes") or [])
+    if source.get("format") != "fbx" or len(files) != len(roles) or len(takes) != len(roles):
+        raise ClipImportError(f"'{kind}' was not imported from FBX takes per role — "
+                              "its frame cannot be rebuilt")
+
+    paths_in: List[Path] = []
+    take_specs: List[Dict[str, Any]] = []
+    family = ""
+    for name, take in zip(files, takes):
+        path = _scene_source(name)
+        fam, spec = _prepare_source(path, take, name=name, src_family=family)
+        family = family or fam
+        paths_in.append(path)
+        take_specs.append(spec)
+    alt_name, alt_take = file_spec(file)
+    alt_path = inbox_path(alt_name)
+    if not alt_path.is_file():
+        raise ClipImportError(f"no such file in the inbox: {alt_name}")
+    _fam, alt_spec = _prepare_source(alt_path, alt_take, name=alt_name, src_family=family)
+
+    rest_path: Optional[Path] = None
+    rest_spec: Dict[str, Any] = {}
+    if source.get("rest_file"):
+        rest_name = str(source["rest_file"])
+        rest_path = next((p for p in paths_in if p.name == Path(rest_name).name), None) \
+            or _scene_source(rest_name)
+        rest_take = source.get("rest_take")
+        if rest_take is None:
+            # Sidecars before 2026-11-03 name the file only: the take whose
+            # WHOLE name is a reference pose ("Tpose" — not "…_Pose0", a
+            # held frame of a scene) — exactly one, or the import stops.
+            hits = [t["index"] for t in _cached_takes(rest_path)
+                    if re.sub(r"[^a-z]", "", t["name"].lower()) in _REST_TAKE_NAMES]
+            if len(hits) != 1:
+                raise ClipImportError(
+                    f"{rest_path.name}: the scene's reference take is not recorded and "
+                    f"{len(hits)} takes look like one")
+            rest_take = hits[0]
+        rest_spec = _prepare_rest(rest_path, int(rest_take), family, name=rest_path.name)
+    offsets = dict(source.get("offsets_m") or {})
+    if source.get("offset_b_m"):
+        offsets["b"] = list(source["offset_b_m"])
+    head = geometry.get("head_pitch_deg")
+    inputs, params = _prepare_job(
+        kind, paths_in, take_specs, [str(f) for f in files], rest_path, rest_spec,
+        fps=int(meta.get("fps") or 30), loops=bool(meta.get("loop")),
+        offsets_m=offsets, speed=float(meta.get("speed") or 1.0),
+        yaw_deg=float(geometry.get("yaw_deg") or 0.0),
+        level_head=bool(head and any(v is not None for v in head)))
+    params["anchor_s"] = geometry.get("anchor_s")
+    slot = next((k for k, v in inputs.items() if k != "rig" and v == alt_path), "")
+    if not slot:
+        slot = "alt_0"
+        inputs[slot] = alt_path
+    params["takes"] = list(params["takes"]) + [alt_spec]
+    params["alts"] = [{"role": role, "name": alt}]
+    params["alt_sources"] = [slot]
+    params["export"] = "alts"
+    stem = f"{kind}{ROLE_SEPARATOR}{role}{ALT_SEPARATOR}{alt}"
+
+    import shutil
+    from app.core.http_files import atomic_replace, sibling_stage
+    with library_write_lock(out):
+        with tempfile.TemporaryDirectory(prefix=".clip-alt-", dir=out) as temporary:
+            res = runner.run("fbx_clip", inputs=inputs, params=params,
+                             out_dir=Path(temporary), timeout_s=timeout_s)
+            if not res["ok"]:
+                raise ClipImportError(str(res.get("error") or "blender run failed"))
+            data = res.get("data") or {}
+            got = (data.get("geometry") or {}).get("roles") or {}
+            want = geometry.get("roles") or {}
+            drift = {r: math.dist(got[r]["anchor_xz_m"], want[r]["anchor_xz_m"])
+                     for r in roles if r in got and r in want}
+            if len(drift) != len(roles) or max(drift.values()) > ALT_FRAME_TOLERANCE_M:
+                raise ClipImportError(
+                    f"the frame of '{kind}' could not be rebuilt from its sources "
+                    f"(role points off by {', '.join(f'{r} {d:.3f} m' for r, d in drift.items())}) "
+                    "— nothing was written")
+            produced = Path((res.get("outputs") or {}).get(stem) or "")
+            if not produced.is_file():
+                raise ClipImportError(f"the Blender run wrote no {stem}.fbx")
+            dest = out / f"{stem}.fbx"
+            with sibling_stage(dest) as stage:
+                shutil.copy2(produced, stage)
+                atomic_replace(stage, dest)
+        names = [n for n in (meta.get("alts") or {}).get(role) or [] if n != alt]
+        meta.setdefault("alts", {})[role] = names + [alt]
+        alt_geo = ((data.get("geometry") or {}).get("alts") or {}).get(f"{role}{ALT_SEPARATOR}{alt}")
+        if alt_geo:
+            meta.setdefault("geometry", {}).setdefault("alts", {})[f"{role}{ALT_SEPARATOR}{alt}"] = alt_geo
+        meta.setdefault("source", {}).setdefault("alt_takes", {})[f"{role}{ALT_SEPARATOR}{alt}"] = \
+            {"file": alt_name, "take": alt_take}
+        with sibling_stage(sidecar) as stage:
+            stage.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+            atomic_replace(stage, sidecar)
+        reload_clip_caches()
+    logger.info("clip alt imported: %s take %s -> %s%s (%s, %.1fs)", alt_name, alt_take,
+                f"{cset}/" if cset else "", stem, target, res.get("seconds") or 0.0)
+    return {"kind": kind, "role": role, "alt": alt, "set": cset, "target": target,
+            "file": f"{stem}.fbx", "alts": meta["alts"], "drift_m": {r: round(d, 4) for r, d in drift.items()},
+            "seconds": res.get("seconds") or 0.0}
 
 
 def _prepare_source(path: Path, take: Optional[int], *, name: Optional[str] = None,

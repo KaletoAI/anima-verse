@@ -32,6 +32,14 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
                             ("set the male model to -0.3 on the forward
                             axis": {"b": [0, 0, -0.3]})
              source_name    free text for the sidecar (file names)
+             alts           OPTIONAL replacement halves of single roles of a
+                            pair or group: [{"role": "c", "name": "wave"}],
+                            their takes follow the roles' in ``takes`` and
+                            their slots are named in ``alt_sources``; each
+                            comes out as <kind>__<role>~<name>.fbx in the
+                            frame of the scene (``cmu_clip.run_takes``)
+             export         "alts" = write only the alt halves and no
+                            sidecar (the scene is already in the library)
 
 How it works — positions, not rotations
 ---------------------------------------
@@ -1114,6 +1122,11 @@ def run(job):
     entries = ([("", inputs["src"])] if "src" in inputs
                else [(role, inputs[slots[i]]) for i, role in enumerate(roles)])
     entries = [(role, path) + _pick(i) for i, (role, path) in enumerate(entries)]
+    # Alt halves: their takes come after the roles' in ``takes``; the role
+    # key "<role>~<name>" is what run_takes tells them apart by.
+    alt_slots = list(args.get("alt_sources") or [])
+    alt_entries = [(f"{v['role']}~{v['name']}", inputs[alt_slots[i]]) + _pick(len(entries) + i)
+                   for i, v in enumerate(args.get("alts") or [])]
     mix_pos, mix_frames = _mixamo_rest(args["rig"])
 
     # The reference pose is either its own input, or a TAKE of one of the
@@ -1130,7 +1143,7 @@ def run(job):
     # to the animation files, which carry no mesh of their own. A file that is
     # both the rest source and an animation source is opened once for both.
     order = ([rest_path] if rest_path else [])
-    for _role, path, _t, _c, _n in entries:
+    for _role, path, _t, _c, _n in entries + alt_entries:
         if path not in order:
             order.append(path)
 
@@ -1151,25 +1164,27 @@ def run(job):
             # "already measured" — would rob B of its measurement, and B is a
             # different body.
             palm = src.palm
-        for role, p, take, count, name in entries:
+        for role, p, take, count, name in entries + alt_entries:
             if p != path:
                 continue
             src.select(take, count, name)
             sampled[role] = src.sample()
 
     takes = []
+    alt_takes = []
     src_fps = None
     offsets = {role: [float(v) for v in off][:3]
                for role, off in (args.get("offsets_m") or {}).items() if any(off)}
-    for role, _path, _t, _c, _n in entries:
+    for role, _path, _t, _c, _n in entries + alt_entries:
         sfps, (f0, f1), by_frame, rot_frame = sampled[role]
         src_fps = src_fps or sfps
-        off = offsets.get(role)
+        # an alt stands where its base role was recorded: same offset
+        off = offsets.get(role.split("~", 1)[0])
         if off:
             shift = Vector((off[0] * 100.0, off[1] * 100.0, off[2] * 100.0))
             by_frame = [{k: v + shift for k, v in P.items()} for P in by_frame]
-        takes.append(_build_take(role, fps, sfps, by_frame, mix_pos, mix_frames, args,
-                                 rot_frame, rest))
+        (alt_takes if "~" in role else takes).append(
+            _build_take(role, fps, sfps, by_frame, mix_pos, mix_frames, args, rot_frame, rest))
     args["source_fps"] = src_fps
     source = {"format": "fbx", "bone_map": used,
               "files": list(args.get("source_name")
@@ -1178,8 +1193,12 @@ def run(job):
               "fingers": any("LeftHandIndex1" in t.sk.bones for t in takes),
               "rotation_mode": "rest-delta" if rest else "positional",
               "offsets_m": offsets,
-              "rest_file": str(args.get("rest_name") or "")}
-    return cmu_clip.run_takes(takes, args, fps, source)
+              "rest_file": str(args.get("rest_name") or ""),
+              # the reference TAKE too — an alt import rebuilds the frame from it
+              "rest_take": rest_pick[0] if rest else None}
+    if alt_takes:
+        source["alt_takes"] = {r: t for r, _p, t, _c, _n in alt_entries}
+    return cmu_clip.run_takes(takes, args, fps, source, alt_takes)
 
 
 if __name__ == "__main__":

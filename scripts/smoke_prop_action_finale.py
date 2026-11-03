@@ -24,7 +24,8 @@ EXPECTATIONS, DERIVED BY HAND
     solo pose.
 [2] PAIR FINALE. Both active, `begin_finale(run, partner)` -> ok. The
     partner's block at t0 + 0.4 s is
-        {id <12 hex>, kind run-pair-end, role <its clip role>, elapsed_s 0.4, duration_s 1.5}
+        {id <12 hex>, kind run-pair-end, role <its clip role>, alt "" (no alt half),
+        elapsed_s 0.4, duration_s 1.5}
     and the actor has none (the partner alone closes, the actor plays on).
     A second begin for the partner -> `finale_playing`; an outsider ->
     `not_participant`. `prop_action.finale_started` fired once, with the pose
@@ -58,7 +59,7 @@ EXPECTATIONS, DERIVED BY HAND
 [6] THE RUN ENDS -> the finale ends. Cancelling the run while the partner's
     finale plays drops it at once and fires `finale_done`.
 [7] SOLO. The pose action on `sitting` (finale `run-end`): `begin_finale`
-    -> ok, block {kind run-end, role None, duration_s 0.8}; the offer of the
+    -> ok, block {kind run-end, role None, alt "", duration_s 0.8}; the offer of the
     action carries `finale` true, and false once the pose names no finale.
 [8] AUTOMATIC. Without the catalog field a provider `pose.finale_animation`
     answering "<animation>-end" (asked with participants 2) makes `run-pair`
@@ -164,7 +165,7 @@ class Finale(RUNS.Runs):
             block = A.finale_for(partner)
             first = block.pop("id")
             self.assertRegex(first, r"^[0-9a-f]{12}$")
-            self.assertEqual(block, dict(kind="run-pair-end", role=role, elapsed_s=0.4, duration_s=1.5))
+            self.assertEqual(block, dict(kind="run-pair-end", role=role, alt="", elapsed_s=0.4, duration_s=1.5))
             self.assertIsNone(A.finale_for(name))
         started = events("prop_action.finale_started")
         self.assertEqual(len(started), 1)
@@ -256,7 +257,7 @@ class Finale(RUNS.Runs):
         with clock(0.2):
             block = A.finale_for(name)
             block.pop("id")
-            self.assertEqual(block, dict(kind="run-end", role=None, elapsed_s=0.2, duration_s=0.8))
+            self.assertEqual(block, dict(kind="run-end", role=None, alt="", elapsed_s=0.2, duration_s=0.8))
         A.cancel(name, result["execution_id"])
         set_finale("sitting", "")
         P._offers_cache.clear()

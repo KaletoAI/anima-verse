@@ -1072,11 +1072,20 @@ def begin_finale(execution_id: str, name: str) -> dict:
         duration = _finale_duration_s(kind, role, name)
         if duration <= 0:
             return dict(ok=False, reason="no_finale")
+        # Playing an alt half: the finale closes in that alt when its clip
+        # has one for the role, else in the role's own half.
+        alt = ""
+        if role:
+            from app.core.animation_clips import clip_alts
+            from app.core.interaction_engine import get_interaction
+            current = str((get_interaction(name) or {}).get("alt") or "")
+            if current and current in (clip_alts(kind).get(role) or []):
+                alt = current
         with _finales_mutex:
             if _finale_live(_finales.get(name)):
                 return dict(ok=False, reason="finale_playing")
             _finales[name] = dict(id=uuid.uuid4().hex[:12], execution_id=execution_id,
-                                  kind=kind, role=role or None,
+                                  kind=kind, role=role or None, alt=alt,
                                   pose_key=pose, started=utc_now(), duration_s=duration)
         _notify(run)
     _after_locks(lambda: emit("prop_action.finale_started", execution_id=execution_id,
@@ -1091,16 +1100,18 @@ def _finale_live(finale) -> bool:
 
 def finale_for(name: str) -> dict | None:
     """The worldmap row's ``finale`` block of ``name`` (§ A8c):
-    ``{id, kind, role, elapsed_s, duration_s}`` — the half (``role`` a..e,
-    None for a solo clip) a client plays ONCE per ``id``, then back to the
-    action's own clip. Shown until ``FINALE_SHOW_S`` past the clip's end, so
-    a polling bystander sees it too; ``elapsed_s`` in SYSTEM seconds."""
+    ``{id, kind, role, alt, elapsed_s, duration_s}`` — the half (``role``
+    a..e, None for a solo clip; ``alt`` its alt half, ``""`` none) a client
+    plays ONCE per ``id``, then back to the action's own clip. Shown until
+    ``FINALE_SHOW_S`` past the clip's end, so a polling bystander sees it
+    too; ``elapsed_s`` in SYSTEM seconds."""
     with _finales_mutex:
         finale = _finales.get(name)
         if not _finale_live(finale):
             return None
         elapsed = (utc_now() - finale["started"]).total_seconds()
         return dict(id=finale["id"], kind=finale["kind"], role=finale["role"],
+                    alt=finale.get("alt") or "",
                     elapsed_s=round(max(0.0, elapsed), 3), duration_s=round(finale["duration_s"], 3))
 
 
@@ -1114,6 +1125,26 @@ def _emit_lifecycle(event, run, **extra):
     payload = dict(execution_id=run["execution_id"], members=[n for _, n in _members(run)],
                    pose_key=_held_pose(run), **extra)
     _after_locks(lambda: emit(event, **payload))
+
+
+def set_alt(execution_id: str, name: str, alt: str) -> dict:
+    """``name`` plays the alt half ``alt`` of its clip role in its running
+    action (``""`` = the role's own half again) — ``{ok, reason}``; refused
+    for a run that is not active and a non-participant, the rest is
+    ``interaction_engine.set_alt``."""
+    from app.core import interaction_engine
+    if not isinstance(execution_id, str) or not isinstance(name, str) or not isinstance(alt, str):
+        return dict(ok=False, reason="invalid")
+    with _lock(execution_id):
+        run = store.get(execution_id)
+        if run is None or run["status"] != "active":
+            return dict(ok=False, reason="not_active")
+        if name not in [member for _, member in _members(run)]:
+            return dict(ok=False, reason="not_participant")
+        result = interaction_engine.set_alt(name, alt)
+        if result["ok"]:
+            _notify(run)
+    return result
 
 
 def hold_meter(execution_id: str, name: str, hold: bool) -> dict:
@@ -2166,6 +2197,10 @@ def state_for(actor: str) -> dict:
                    # ``[{name, value 0..100, label}]`` per participant).
                    has_finale=bool(finale_kind(_held_pose(run))),
                    meters=_meters(run) if not terminal and not pending else [])
+        # The viewer's own alt halves (``set_alt``): None when its role has none.
+        if not terminal and not pending and run["status"] == "active":
+            from app.core.interaction_engine import alt_choices
+            row["alt"] = alt_choices(actor)
         if terminal:
             row["motion"] = run["data"].get("exit_motions", {}).get(actor)
             row["effects"] = run["data"].get("effect_results", {})

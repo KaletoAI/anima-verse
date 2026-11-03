@@ -51,6 +51,11 @@ class HoldRequest(Input):
     hold: StrictBool
 
 
+class AltRequest(Input):
+    execution_id: StrictStr
+    alt: StrictStr
+
+
 class AdminCheck(ActionRequest):
     actor: StrictStr
 
@@ -176,6 +181,15 @@ def cancel(body: CancelRequest, user=Depends(get_current_user)):
 def hold(body: HoldRequest, user=Depends(get_current_user)):
     """The player's avatar holds its own gauge back (schnittstellen-3d § A8c)."""
     result = engine.hold_meter(body.execution_id, _avatar(user), body.hold)
+    if not result["ok"]:
+        raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=result)
+    return result
+
+
+@router.post("/play/prop-actions/alt")
+def alt(body: AltRequest, user=Depends(get_current_user)):
+    """The player's avatar plays an alt half of its role (§ A8a), ``""`` = its own."""
+    result = engine.set_alt(body.execution_id, _avatar(user), body.alt)
     if not result["ok"]:
         raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=result)
     return result

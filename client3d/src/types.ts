@@ -354,6 +354,9 @@ export interface MapInteraction {
   loop?: boolean;
   /** GAME seconds per REAL second right now (0 = frozen world) */
   rate: number;
+  /** the ALT half this figure plays instead of its role's own (G6): the clip
+   *  is `<kind>__<role>~<alt>`; "" or missing = the role's own half */
+  alt?: string;
 }
 
 export interface MapEvent {

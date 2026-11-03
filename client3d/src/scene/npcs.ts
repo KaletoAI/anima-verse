@@ -234,8 +234,11 @@ export interface TravelRoute {
 export interface PairPlay {
   blend?: { from: PairPose; at: number };
   id: string;
-  /** `<kind>__<role>` — the clip half this figure plays */
+  /** `<kind>__<role>` — the clip half this figure plays; `<kind>__<role>~<alt>`
+   *  when the server names an ALT half (G6) */
   clip: string;
+  /** `<kind>__<role>` — the role's own half, played when this rig lacks the alt */
+  base: string;
   /** `placeId`: the place the server seated the pair on (§ A8a) — the
    *  figures stand at its slot height, not on the ground; null = halfway
    *  on the ground. */
@@ -1310,7 +1313,8 @@ export class NpcManager {
       npc.interaction = null;
       return;
     }
-    const clip = `${it.kind}__${it.role}`;
+    const base = `${it.kind}__${it.role}`;
+    const clip = it.alt ? `${base}~${it.alt}` : base;
     const stamp = st.stamp ?? 0;
     if (!npc.interaction || npc.interaction.id !== it.id || npc.interaction.clip !== clip) {
       const rate = it.rate ?? 0;
@@ -1321,7 +1325,7 @@ export class NpcManager {
         from: { ...npc.root.position, yaw: npc.figure?.root.rotation.y ?? 0 }, at: performance.now(),
       };
       npc.interaction = {
-        blend, id: it.id, clip,
+        blend, id: it.id, clip, base,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, rate, stamp,
         clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, clipDurationS: clipDuration }).clipT,
@@ -1368,17 +1372,24 @@ export class NpcManager {
       elapsedGameS: null, rate: it.rate, loop: it.loop,
       clipDurationS: it.clipDuration, localClipT: it.clipT,
     });
+    // An ALT half (G6) this rig lacks plays as the role's own half — the
+    // same anchor and phase, only the motion differs.
+    const usable = (name: string, t: number) =>
+      !!this.figures!.pairRootAt(name, t) && npc.figure!.hasClip(name);
+    let clip = it.base && it.clip !== it.base && !usable(it.clip, loopPhase) ? it.base : it.clip;
     // This person's finale (§ A8c): its own half of the closing pair at the
     // same anchor, once; the loop phase above keeps counting under it. A half
-    // this rig lacks drops the finale, never the action.
-    let clip = it.clip;
+    // this rig lacks drops the finale, never the action; a missing alt half
+    // falls back to the role's own.
     let phase = loopPhase;
     let loop = it.loop;
     if (npc.finale?.role) {
       const step = stepFinale(npc.finale, dt, it.rate <= 0);
       npc.finale = step.play;
-      if (step.clip && this.figures.pairRootAt(step.clip, step.t) && npc.figure.hasClip(step.clip)) {
-        clip = step.clip;
+      const closing = step.clip && usable(step.clip, step.t) ? step.clip
+        : step.base && usable(step.base, step.t) ? step.base : null;
+      if (closing) {
+        clip = closing;
         phase = step.t;
         loop = false;
       } else {

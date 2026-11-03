@@ -26,6 +26,9 @@
  *   POST   /assets/clips-inbox/upload    (multipart, field "files")
  *   DELETE /assets/clips-inbox/{name}   (name = the relative path)
  *   POST   /assets/clips-inbox/import    {kind, files, rest_file, set, …}
+ *   POST   /assets/clips-inbox/import-alt {kind, role, alt, file} — the
+ *          selected take as an ALT half of one role of a pair or group
+ *          already in the library (schnittstellen-3d.md § A8a, G6)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipPreview } from './ClipPreview'
@@ -252,6 +255,12 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [clips, setClips] = useState<ClipEntry[]>([])
+  /** pair and group kinds -> their roles: what an alt half can replace */
+  const [scenes, setScenes] = useState<Record<string, string[]>>({})
+  const [altKind, setAltKind] = useState('')
+  const [altRole, setAltRole] = useState('')
+  const [altName, setAltName] = useState('')
+  const [altImporting, setAltImporting] = useState(false)
   const [sets, setSets] = useState<string[]>([])
 
   const [selected, setSelected] = useState('')
@@ -294,9 +303,14 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
 
   const loadClips = useCallback(async () => {
     try {
-      const r = await apiGet<{ clips?: ClipEntry[]; sets?: string[] }>('/assets/animation-clips')
+      const r = await apiGet<{ clips?: ClipEntry[]; sets?: string[]; pairs?: Record<string, unknown>;
+        groups?: Record<string, { roles?: string[] }> }>('/assets/animation-clips')
       setClips(r.clips || [])
       setSets(r.sets || [])
+      setScenes({
+        ...Object.fromEntries(Object.keys(r.pairs || {}).map((k) => [k, ['a', 'b']])),
+        ...Object.fromEntries(Object.entries(r.groups || {}).map(([k, g]) => [k, g.roles || []])),
+      })
     } catch {
       setClips([])
     }
@@ -453,6 +467,30 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       : tk.pair != null ? [tk.pair] : null
     if (rest) setOthers((prev) => rest.map((i, n) => roleSource(selected, String(i), prev[n])))
   }, [selected, take, takes])
+
+  // An alt take names its motion in brackets ("…_Loop0(Arm Down)" -> arm-down).
+  useEffect(() => {
+    const tk = takes.find((x) => String(x.index) === take)
+    const m = tk && /\(([^)]+)\)\s*$/.exec(tk.name)
+    if (m) setAltName(m[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''))
+  }, [take, takes])
+
+  const runAltImport = useCallback(async () => {
+    if (!selected || !altKind || !altRole || !altName || altImporting) return
+    setAltImporting(true)
+    try {
+      const r = await apiPost<{ file: string; seconds: number }>('/assets/clips-inbox/import-alt', {
+        kind: altKind, role: altRole, alt: altName,
+        file: { name: selected, take: take === '' ? null : Number(take) },
+      })
+      toast(`${t('Imported as')} ${r.file} (${(r.seconds || 0).toFixed(1)} s)`)
+      await loadClips()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setAltImporting(false)
+    }
+  }, [altImporting, altKind, altName, altRole, loadClips, selected, t, take, toast])
 
   const kindExists = existingKinds.has(kind.trim().toLowerCase())
   const unknownRig = !!entry && !entry.probe.skeleton_family
@@ -1064,6 +1102,40 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
             {imported ? (
               <ClipPreview key={`${imported.kind}:${imported.seq}`} kind={imported.kind} height={300} />
             ) : null}
+
+            <details>
+              <summary>{t('Import as an alt half of a scene')}</summary>
+              <div className="ga-hint">
+                {t('The selected take replaces ONE role of a pair or group already in the library — another motion recorded with the same scene. The scene is converted again from its own sources, and only the alt file is written.')}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span className="ga-hint">{t('Scene')}</span>
+                  <select className="ga-input" value={altKind}
+                    onChange={(e) => { setAltKind(e.target.value); setAltRole('') }}>
+                    <option value="">—</option>
+                    {Object.keys(scenes).sort().map((k) => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span className="ga-hint">{t('Role')}</span>
+                  <select className="ga-input" value={altRole} onChange={(e) => setAltRole(e.target.value)}>
+                    <option value="">—</option>
+                    {(scenes[altKind] || []).map((r) => <option key={r} value={r}>{r.toUpperCase()}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span className="ga-hint">{t('Alt name')}</span>
+                  <input className="ga-input" value={altName} placeholder="arm-down"
+                    onChange={(e) => setAltName(e.target.value.toLowerCase())} />
+                </label>
+                <button type="button" className="ga-btn"
+                  disabled={altImporting || !entry || !altKind || !altRole || !/^[a-z0-9][a-z0-9-]*$/.test(altName)}
+                  onClick={() => void runAltImport()}>
+                  {altImporting ? t('Converting…') : t('Import alt half')}
+                </button>
+              </div>
+            </details>
           </div>
         )}
       </section>

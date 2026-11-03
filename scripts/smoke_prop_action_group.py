@@ -45,6 +45,21 @@ c slot 2. Hand-derived from ``prop_action_engine`` / ``interaction_engine``:
       exact choice [B, C] is enabled; [B] alone "invalid_partner"; the player
       route ``POST /play/prop-actions/check`` answers the same. C asleep:
       candidates [B], the row disabled "partners_missing".
+  [11] ALT halves (G6): the trio's clip has ``run-trio__c~wave`` on disk and
+      lists ``alts {b: [gone], c: [wave]}`` with ``geometry.alts["c~wave"]
+      anchor_xz_m [0.6, -0.5]`` (role c itself sits at [0.6, 0]); its finale
+      ``run-trio-climax`` has the three roles plus ``__c~wave``. Once active:
+      C's row offers ``{current "", options ["" Default, "wave" Wave]}``; A
+      (role a, none) and B ("gone" has no file) get null. The library lists
+      the alt apart: role_counts run-trio 3, clip_entries holds no alt,
+      alt_entries holds exactly ``(run-trio, c, wave)``. C picks "wave": ok,
+      the profile and the worldmap block say alt "wave", and C's position
+      moves by R(yaw)·(0, -0.5) — 0.5 m from where it was, and
+      sqrt(0.6² + 0.5²) = 0.781 m from the anchor, whatever the yaw. C's
+      finale then closes in the alt (finale block alt "wave"), B's in its
+      own half (alt ""). "nope" and B's "gone" are "unknown_alt", someone
+      outside the run "not_participant"; "" puts C back on [0.6, 0] — 0.6 m
+      from the anchor, 0 m from where it started.
   [9] Migration: a table with the old ``partner`` column, one open pair
       invitation (A -> B, plans/access keyed actor/partner) and one solo
       row: members [B] / [], plans and access re-keyed to A / B, consents
@@ -240,6 +255,72 @@ def test_9_migration():
                                        consents=dict(Ben="pending"))), rows["p"]
     assert rows["s"] == ([], dict(plans=dict(Ann=dict(x=3)), access_roles=dict(Ann="actor"))), rows["s"]
     assert R.migrate_members(conn) == 0
+
+
+class Alts(unittest.TestCase):
+    def tearDown(self):
+        for run in R.live_runs():
+            A.cancel(run["actor"], run["execution_id"])
+        F.assert_no_external_work()
+
+    def test_11_alt_halves(self):
+        import math
+        from app.core import interaction_engine as I
+        (a, b, c), target = authored_trio()
+        directory = F.ROOT / "clips"
+        (directory / "run-trio__c~wave.fbx").write_bytes(b"private alt fixture")
+        meta = json.loads((directory / "run-trio.json").read_text())
+        meta["alts"] = {"b": ["gone"], "c": ["wave"]}
+        meta["geometry"]["alts"] = {"c~wave": {"anchor_xz_m": [.6, -.5]}}
+        (directory / "run-trio.json").write_text(json.dumps(meta))
+        for role in ("a", "b", "c", "c~wave"):
+            (directory / f"run-trio-climax__{role}.fbx").write_bytes(b"private finale fixture")
+        (directory / "run-trio-climax.json").write_text(json.dumps(dict(
+            kind="run-trio-climax", pair=True, duration_s=1, roles=["a", "b", "c"], alts={"c": ["wave"]})))
+        clips._clear_entries_cache()
+        entries = pose_catalog.world_entries("pose")
+        entries["run-trio"]["finale_animation"] = "run-trio-climax"
+        pose_catalog.replace_world_entries("pose", entries)
+        pose_catalog.reload_catalogs()
+        eid = S.request(a, target, members=[b, c])["execution_id"]
+        A.respond(b, eid, True)
+        A.respond(c, eid, True)
+        S.tick(30)
+        tick(2)
+        tick(2)
+        self.assertEqual(R.get(eid)["status"], "active", R.get(eid))
+
+        print("[11] the alt halves of a running group")
+        self.assertEqual(row(c, eid)["alt"], {"current": "", "options": [
+            {"id": "", "label": "Default"}, {"id": "wave", "label": "Wave"}]})
+        self.assertIsNone(row(a, eid)["alt"])
+        self.assertIsNone(row(b, eid)["alt"])
+        self.assertEqual(clips.role_counts().get("run-trio"), 3)
+        self.assertFalse([e for e in clips.clip_entries() if "~" in e["rel"]])
+        self.assertEqual([(e["kind"], e["role"], e["alt"]) for e in clips.alt_entries()
+                          if e["kind"] == "run-trio"], [("run-trio", "c", "wave")])
+        inter = F.C.get_character_profile(c)["interaction"]
+        ax, az = inter["anchor"]["x"], inter["anchor"]["z"]
+        before = F.C.get_character_pos(c)
+        self.assertEqual(A.set_alt(eid, c, "wave"), {"ok": True, "reason": ""})
+        self.assertEqual(F.C.get_character_profile(c)["interaction"]["alt"], "wave")
+        from app.core.timeutils import game_time
+        self.assertEqual(I.payload_for(c, F.C.get_character_profile(c), game_time())["alt"], "wave")
+        moved = F.C.get_character_pos(c)
+        self.assertAlmostEqual(math.dist((moved["x"], moved["z"]), (before["x"], before["z"])), .5, places=3)
+        self.assertAlmostEqual(math.dist((moved["x"], moved["z"]), (ax, az)), math.hypot(.6, .5), places=3)
+        self.assertEqual(A.begin_finale(eid, c), {"ok": True, "reason": ""})
+        self.assertEqual(A.finale_for(c)["alt"], "wave")
+        self.assertEqual(A.begin_finale(eid, b), {"ok": True, "reason": ""})
+        self.assertEqual(A.finale_for(b)["alt"], "")
+        self.assertEqual(A.set_alt(eid, c, "nope")["reason"], "unknown_alt")
+        self.assertEqual(A.set_alt(eid, b, "gone")["reason"], "unknown_alt")
+        self.assertEqual(A.set_alt(eid, "Nobody", "wave")["reason"], "not_participant")
+        self.assertEqual(A.set_alt(eid, c, ""), {"ok": True, "reason": ""})
+        self.assertNotIn("alt", F.C.get_character_profile(c)["interaction"])
+        back = F.C.get_character_pos(c)
+        self.assertAlmostEqual(math.dist((back["x"], back["z"]), (ax, az)), .6, places=3)
+        self.assertAlmostEqual(math.dist((back["x"], back["z"]), (before["x"], before["z"])), 0, places=3)
 
 
 if __name__ == "__main__":

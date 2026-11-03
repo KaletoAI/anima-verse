@@ -287,8 +287,13 @@ def _with_yaw(geometry, args):
     return geometry
 
 
-def _frame_takes(takes, args):
+def _frame_takes(takes, args, alts=()):
     """Puts the takes into the clip's frame of reference; returns sidecar geometry.
+
+    ``alts`` are ALT takes of a pair or group (a replacement half of one
+    role, ``role`` = ``"<role>~<name>"``): they take the frame the scene's
+    own takes define — the same anchor frame, turn, origin and floor — and
+    never move it, so the scene halves come out exactly as without them.
 
     ``yaw_deg`` turns the finished frame further about the vertical — the
     importer's ORIENTATION DIAL. The normalisation below is only meaningful
@@ -327,6 +332,9 @@ def _frame_takes(takes, args):
                                   args.get("yaw_deg") or 0.0)
     for t in takes:
         _apply_rigid(t, theta, (-m[0], -m[1]), floor, False)
+    for t in alts:
+        t.poses = t.poses[:n]
+        _apply_rigid(t, theta, (-m[0], -m[1]), floor, False)
     dist = math.dist(by_role["a"].root_xz(ai), by_role["b"].root_xz(ai))
     return _with_yaw({
         "anchor_frame": ai,
@@ -336,6 +344,9 @@ def _frame_takes(takes, args):
         "roles": {t.role: {"start_xz_m": [round(v / 100, 3) for v in t.root_xz(0)],
                            "anchor_xz_m": [round(v / 100, 3) for v in t.root_xz(ai)]}
                   for t in takes},
+        **({"alts": {t.role: {"start_xz_m": [round(v / 100, 3) for v in t.root_xz(0)],
+                              "anchor_xz_m": [round(v / 100, 3) for v in t.root_xz(ai)]}
+                     for t in alts}} if alts else {}),
     }, args)
 
 
@@ -854,12 +865,25 @@ def run(job):
     return run_takes(takes, args, fps, source)
 
 
-def run_takes(takes, args, fps, source):
+def run_takes(takes, args, fps, source, alts=()):
     """Everything after the takes exist — shared by every source format
     (CMU ASF/AMC here, foreign FBX in ``fbx_clip.py``): loop cut, frame of
     reference, solve/bake/export per take, sidecar. A take is anything with
     ``role``, ``sk`` (bones with direction/length, ``unit_cm``) and ``poses``
-    (``_cmu.Pose``: world rotation from rest + position per bone)."""
+    (``_cmu.Pose``: world rotation from rest + position per bone).
+
+    ``alts`` (pair or group only) are replacement halves of single roles,
+    ``role`` = ``"<role>~<name>"``: framed, floored and contact-shifted
+    exactly like their base role, exported as ``<kind>__<role>~<name>.fbx``.
+    With ``args["export"] == "alts"`` only those files are written and no
+    sidecar — the scene's own halves are computed (they define the frame) but
+    the library copies stay untouched; the caller merges the result."""
+    alts = list(alts)
+    only_alts = args.get("export") == "alts"
+    if alts and len(takes) < 2:
+        raise ValueError("alts need a pair or group: a solo clip has no roles")
+    if only_alts and not alts:
+        raise ValueError("export=alts without an alt take")
     loop_min = args.get("loop_s")
     loop = loop_min is not None and len(takes) == 1
     mode = _root_motion_mode(args) if len(takes) == 1 else "strip"
@@ -877,7 +901,10 @@ def run_takes(takes, args, fps, source):
     # median that is taken out has to be the median of the frames the clip
     # actually keeps (``_cmu.level_head``).
     head_pitch = [_cmu.level_head(t.poses) for t in takes] if args.get("level_head") else []
-    geometry = _frame_takes(takes, args)
+    if args.get("level_head"):
+        for t in alts:
+            _cmu.level_head(t.poses)
+    geometry = _frame_takes(takes, args, alts)
     if any(v is not None for v in head_pitch):
         # a list per take, like ``hips_scale`` below — every actor has a head
         geometry["head_pitch_deg"] = head_pitch
@@ -893,6 +920,10 @@ def run_takes(takes, args, fps, source):
     for take in takes:
         arm = _load_rig(args["rig"])
         solved.append(_solve(arm, take))
+    solved_alt = []
+    for take in alts:
+        arm = _load_rig(args["rig"])
+        solved_alt.append(_solve(arm, take))
     # LEG RATIO per take (from the rest geometry, see _solve): the rig's leg
     # over the actor's. The hips translation is multiplied by it, so a deep knee bend
     # lowers the rig as far as it lowered the actor (salsa finding: the rig,
@@ -929,8 +960,11 @@ def run_takes(takes, args, fps, source):
                        "rig_distance_m": round(c["rig_cm"] / 100, 3),
                        "shift_m": round(c["shift_cm"] / 100, 3)}
                 for role, c in contacts.items()}
-        for take, off in zip(takes, offsets):
-            r = geometry["roles"][take.role]
+        # An alt moves with its base role — the contact fit is the scene's,
+        # measured on the scene's own halves.
+        alt_offsets = [moved[t.role.split("~", 1)[0]] for t in alts]
+        for take, off in zip(list(takes) + alts, offsets + alt_offsets):
+            r = (geometry["roles"] if "~" not in take.role else geometry["alts"])[take.role]
             r["start_xz_m"] = [round(r["start_xz_m"][0] + off[0] / 100, 3),
                                round(r["start_xz_m"][1] + off[1] / 100, 3)]
             r["anchor_xz_m"] = [round(r["anchor_xz_m"][0] + off[0] / 100, 3),
@@ -952,7 +986,11 @@ def run_takes(takes, args, fps, source):
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
     geometry["rig_floor_min_cm"] = round(lows[0] - floor_cm, 2) if lows else 0.0
     spikes = {}
-    for take, sol, k, off, stand in zip(takes, solved, scales, offsets, stands):
+    bakes = [] if only_alts else list(zip(takes, solved, scales, offsets, stands))
+    if alts:
+        bakes += zip(alts, solved_alt, [sol[4][0] for sol in solved_alt],
+                     alt_offsets, [sol[4][1] for sol in solved_alt])
+    for take, sol, k, off, stand in bakes:
         fixed = {}
         DRIVEN.clear()
         DRIVEN.update(m for m, c in BONE_MAP.items() if c in take.sk.bones)
@@ -991,6 +1029,12 @@ def run_takes(takes, args, fps, source):
     if spikes:
         # provenance: role ("solo" for one take) -> bone -> repaired frames
         geometry["despiked"] = spikes
+    if alts:
+        # role -> its alt names, in import order
+        alt_names = {}
+        for t in alts:
+            role, name = t.role.split("~", 1)
+            alt_names.setdefault(role, []).append(name)
     sidecar = {
         "kind": kind,
         # "pair" = the clip has role halves (2..5 roles, a group included);
@@ -1013,6 +1057,10 @@ def run_takes(takes, args, fps, source):
     if args.get("role_gender") and len(takes) >= 2:
         # who plays which role, read off the source names by the server
         sidecar["role_gender"] = dict(args["role_gender"])
+    if alts:
+        sidecar["alts"] = alt_names
+    if only_alts:
+        return sidecar, outputs
     side = out_dir / f"{kind}.json"
     side.write_text(json.dumps(sidecar, indent=1), encoding="utf-8")
     outputs["sidecar"] = str(side)

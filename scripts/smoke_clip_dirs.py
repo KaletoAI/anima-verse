@@ -190,7 +190,7 @@ def test_listing() -> None:
     check("the lowercased set is used in the URL, not the directory case",
           "/assets/animation-clips/lady/dance_02.fbx" in urls)
     check("the payload shape",
-          set(data) == {"clips", "kinds", "pair_kinds", "pairs", "groups", "clip_sets",
+          set(data) == {"clips", "alt_clips", "kinds", "pair_kinds", "pairs", "groups", "clip_sets",
                         "sets", "movement_poses", "transitions", "transition_clips",
                         "revision"},
           str(sorted(data)))

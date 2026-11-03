@@ -91,8 +91,15 @@ ROOT_MOTION_MODES = ("strip", "keep", "foot_lock")
 KIND_RE = re.compile(r"^[a-z0-9][a-z0-9 _-]*$")
 # A set is a DIRECTORY name — same alphabet without spaces; "" is the root.
 SET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-# ``<kind>__<role>[_<n>]`` — the parts a rename has to keep apart.
-_STEM_RE = re.compile(r"^(?P<kind>.*?)(?:__(?P<role>[a-e]))?(?P<num>_\d+)?$")
+# ``<kind>__<role>[~<alt>][_<n>]`` — the parts a rename has to keep apart; an
+# ALT half keeps its ``~<alt>`` inside the role part.
+_STEM_RE = re.compile(r"^(?P<kind>.*?)(?:__(?P<role>[a-e](?:~[a-z0-9][a-z0-9-]*)?))?(?P<num>_\d+)?$")
+# An ALT half of a pair or group clip (plan-gruppen-animationen.md, G6): a
+# replacement for ONE role, recorded in the scene's frame —
+# ``<kind>__<role>~<alt>.fbx`` beside the scene's own halves, its names in
+# the sidecar's ``alts: {role: [alt, …]}``.
+ALT_SEPARATOR = "~"
+ALT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # The variant numbering — cut from a file stem, refused inside a kind.
 _NUM_SUFFIX_RE = re.compile(r"_\d+$")
 
@@ -139,9 +146,23 @@ def parse_clip_role(filename: str) -> Tuple[str, str]:
     stem = Path(filename).stem.strip().lower()
     stem = _NUM_SUFFIX_RE.sub("", stem) or stem
     head, sep, tail = stem.rpartition(ROLE_SEPARATOR)
-    if sep and head and tail in CLIP_ROLES:
-        return head, tail
+    role, _alt_sep, alt = tail.partition(ALT_SEPARATOR)
+    if sep and head and role in CLIP_ROLES and (not _alt_sep or ALT_NAME_RE.match(alt)):
+        return head, role
     return stem, ""
+
+
+def parse_clip_alt(filename: str) -> str:
+    """The ALT name of a role half (``kiss__b~wave.fbx`` → ``"wave"``), ``""``
+    for every other file — a plain half, a solo clip, or a ``~`` that does not
+    follow a role (then the whole stem is a solo kind, as before)."""
+    stem = Path(filename).stem.strip().lower()
+    stem = _NUM_SUFFIX_RE.sub("", stem) or stem
+    head, sep, tail = stem.rpartition(ROLE_SEPARATOR)
+    role, alt_sep, alt = tail.partition(ALT_SEPARATOR)
+    if sep and head and role in CLIP_ROLES and alt_sep and ALT_NAME_RE.match(alt):
+        return alt
+    return ""
 
 
 # ── The entry cache ──────────────────────────────────────────────────────
@@ -222,8 +243,12 @@ def _scan_library(root: Path, source: str) -> List[Dict[str, Any]]:
                 continue
             kind, role = parse_clip_role(p.name)
             rel = f"{cset}/{p.name}" if cset else p.name
-            out.append({"kind": kind, "role": role, "set": cset,
-                        "source": source, "rel": rel, "path": p})
+            entry = {"kind": kind, "role": role, "set": cset,
+                     "source": source, "rel": rel, "path": p}
+            alt = parse_clip_alt(p.name)
+            if alt:
+                entry["alt"] = alt
+            out.append(entry)
         return out
 
     found = _files_of(root, "")
@@ -249,7 +274,10 @@ def _scan_entries(libraries: List[Tuple[Path, str]]) -> List[Dict[str, Any]]:
 
 
 def clip_entries() -> List[Dict[str, Any]]:
-    """Every clip of both libraries as ``{kind, role, set, source, rel, path}``.
+    """Every clip of both libraries as ``{kind, role, set, source, rel, path}``
+    — without the ALT halves (:func:`alt_entries`): they replace a role only
+    where a running interaction names them, and every other reader (pose
+    dropdowns, role counts, transitions) keeps seeing exactly the scene.
 
     Per library: the root (set "") plus exactly ONE level of subdirectories
     (the directory name, lowercased, is the set). Hidden files and
@@ -260,6 +288,43 @@ def clip_entries() -> List[Dict[str, Any]]:
     Cached behind a directory-mtime fingerprint (see above); every call gets
     its own copies, so a caller may modify what it receives.
     """
+    return [e for e in _all_entries() if "alt" not in e]
+
+
+def alt_entries() -> List[Dict[str, Any]]:
+    """The ALT halves of both libraries: entries like :func:`clip_entries`'
+    plus ``alt`` (the name), ``kind``/``role`` being the scene and the role
+    they replace."""
+    return [e for e in _all_entries() if "alt" in e]
+
+
+def clip_alts(kind: str) -> Dict[str, List[str]]:
+    """``{role: [alt, …]}`` — the alt halves of a pair or group clip that
+    EXIST as files (any set, either library), in the order the sidecar lists
+    them, unlisted files after it alphabetically. ``{}`` without any."""
+    have: Dict[str, set] = {}
+    for e in alt_entries():
+        if e["kind"] == kind:
+            have.setdefault(e["role"], set()).add(e["alt"])
+    if not have:
+        return {}
+    listed = (clip_meta(kind) or {}).get("alts")
+    listed = listed if isinstance(listed, dict) else {}
+    out: Dict[str, List[str]] = {}
+    for role in sorted(have):
+        order = [n for n in (listed.get(role) or []) if n in have[role]]
+        out[role] = order + sorted(have[role] - set(order))
+    return out
+
+
+def alt_label(alt: str) -> str:
+    """How an alt reads in a menu: ``arm-down`` → ``Arm down``."""
+    words = str(alt or "").replace("-", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+def _all_entries() -> List[Dict[str, Any]]:
+    """Every clip file, alts included — the cached scan behind both lists."""
     global _ENTRIES_CACHE
     libraries = [(Path(root), source) for root, source in get_animation_clips_dirs()]
     # Taken BEFORE the scan: a change during the scan shows up next time.
@@ -1251,7 +1316,8 @@ def resolve_clip(library: str, rel: str) -> Path:
 
 def _split_stem(stem: str) -> Tuple[str, str, str]:
     """``(kind, role, numbering)`` of a file stem — ``hug__a_02`` →
-    ``("hug", "a", "_02")``. The three parts a rename recombines."""
+    ``("hug", "a", "_02")``. The three parts a rename recombines; an alt
+    half's role carries its alt (``hug__b~wave`` → ``("hug", "b~wave", "")``)."""
     m = _STEM_RE.match(stem.strip().lower())
     if not m:                                                # pragma: no cover
         return stem.strip().lower(), "", ""
@@ -1263,6 +1329,7 @@ def _role_siblings(path: Path) -> List[Path]:
     ``x__b`` → ``x__a``, ``x__c``), in role order; ``[]`` for a solo clip.
     Only files that exist."""
     kind, role, num = _split_stem(path.stem)
+    role = role.split(ALT_SEPARATOR)[0]
     if not role:
         return []
     out = []
@@ -1284,6 +1351,16 @@ def _kind_files(directory: Path, kind: str) -> List[Path]:
     return [p for p in sorted(directory.iterdir())
             if p.is_file() and p.suffix.lower() in CLIP_EXTS
             and parse_clip_role(p.name)[0] == kind]
+
+
+def _alt_files(path: Path) -> List[Path]:
+    """The ALT halves of the pair or group clip ``path`` belongs to, in the
+    same directory — they move, turn and go with the scene's own halves.
+    ``[]`` for a solo clip."""
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        return []
+    return [p for p in _kind_files(path.parent, kind) if parse_clip_alt(p.name)]
 
 
 def finale_kinds_of(kind: str) -> List[str]:
@@ -1319,7 +1396,8 @@ def _finale_files(path: Path) -> List[Path]:
     for finale in finales:
         files = _kind_files(path.parent, finale)
         if role:
-            first = next((f for f in files if parse_clip_role(f.name)[1] == "a"), None)
+            first = next((f for f in files if parse_clip_role(f.name)[1] == "a"
+                          and not parse_clip_alt(f.name)), None)
             if first is not None and len(_role_siblings(first)) + 1 == roles:
                 out.append(first)
         else:
@@ -1427,7 +1505,7 @@ def delete_clip(library: str, rel: str) -> Dict[str, Any]:
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
 
-    targets = [path] + _role_siblings(path)
+    targets = [path] + _role_siblings(path) + _alt_files(path)
     sidecars_removed = []
     for p in targets:
         own = _own_sidecar(p)
@@ -1492,7 +1570,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     dest_dir = library_root(new_library).resolve() / new_set if new_set \
         else library_root(new_library).resolve()
 
-    sources = [src] + _role_siblings(src)
+    sources = [src] + _role_siblings(src) + _alt_files(src)
 
     moves: List[Tuple[Path, Path]] = []
     replaced: List[Path] = []
@@ -1888,7 +1966,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         geometry = {}
         meta["geometry"] = geometry
 
-    targets = [path] + siblings
+    # The alt halves turn with the scene — they live in its frame.
+    targets = [path] + siblings + (_alt_files(path) if siblings else [])
     slots = {f"src_{i}": p for i, p in enumerate(targets)}
     baked = any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift))
     data: Dict[str, Any] = {}
@@ -1898,7 +1977,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         inputs.update(slots)
         # Only the B half moves; the addressed file may be either half.
         shifted = {slot: shift for slot, target in slots.items()
-                   if any(abs(v) > 1e-9 for v in shift) and _split_stem(target.stem)[1] == "b"}
+                   if any(abs(v) > 1e-9 for v in shift)
+                   and _split_stem(target.stem)[1].split(ALT_SEPARATOR)[0] == "b"}
         with tempfile.TemporaryDirectory(prefix="clip-orient-") as tmp:
             res = runner.run("clip_orient", inputs=inputs, params={
                 "yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
@@ -1956,10 +2036,16 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             geometry["roles"] = roles
         for slot, target in slots.items():
             _k, role, _num = _split_stem(target.stem)
-            entry = roles.get(role)
+            # an alt half's root is kept apart from the scene's roles
+            book = roles
+            if ALT_SEPARATOR in role:
+                book = geometry.get("alts")
+                if not isinstance(book, dict):
+                    book = geometry["alts"] = {}
+            entry = book.get(role)
             if not isinstance(entry, dict):
                 entry = {}
-                roles[role] = entry
+                book[role] = entry
             d = data.get(slot) or {}
             entry["start_xz_m"] = _xz_m(d.get("root_after"))
             entry["anchor_xz_m"] = _xz_m(d.get("root_after_anchor"))

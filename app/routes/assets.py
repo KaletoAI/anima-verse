@@ -51,7 +51,7 @@ from app.blender import runner as blender_runner
 from app.core import clip_catalog, fbx_import
 from app.core.animation_clips import (CLIP_EXTS, CLIP_ROLES, ClipExists,
                                       ClipLibraryError, ClipNotFound,
-                                      clip_entries, clip_meta,
+                                      alt_entries, clip_alts, clip_entries, clip_meta,
                                       clip_role_gender, clip_view, delete_clip,
                                       annotated_transitions, client_transition_rules,
                                       orient_clip, pair_kinds, rename_clip, role_counts,
@@ -82,6 +82,10 @@ def list_animation_clips() -> Dict[str, Any]:
     is just a new file or directory, nothing is hardcoded. ``pairs`` maps every
     complete pair kind to its sidecar (duration, fps, anchor geometry) — the
     data a client needs to play both halves at one anchor (§ A8a).
+    ``alt_clips`` are the ALT halves of pairs and groups (G6), each a clip
+    view plus ``alt`` — a client indexes one as ``<kind>__<role>~<alt>``, the
+    name an interaction's ``alt`` asks for; ``pairs``/``groups`` name them per
+    role in ``alts``. They are not in ``clips``: no other reader sees them.
 
     For the library view every clip also carries what its sidecar knows —
     ``duration_s`` / ``fps`` / ``frames`` (``null`` without a sidecar),
@@ -108,6 +112,7 @@ def list_animation_clips() -> Dict[str, Any]:
             "geometry": meta.get("geometry") or {},
             # Which gender plays which half ({} = the initiator plays A).
             "role_gender": clip_role_gender(meta),
+            "alts": clip_alts(kind),
         }
     # Group clips (three to five roles, plan-gruppen-animationen.md): the
     # same facts plus how many roles play.
@@ -123,8 +128,11 @@ def list_animation_clips() -> Dict[str, Any]:
             "frames": meta.get("frames"),
             "geometry": meta.get("geometry") or {},
             "role_gender": clip_role_gender(meta),
+            "alts": clip_alts(kind),
         }
+    alt_clips = [clip_view(e) | {"alt": e["alt"]} for e in alt_entries()]
     return {"clips": clips, "revision": library_revision(),
+            "alt_clips": alt_clips,
             "kinds": sorted({c["kind"] for c in clips}),
             "pair_kinds": sorted(pairs),
             "pairs": pairs,
@@ -733,6 +741,30 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
             target=target, redistributable=redistributable, preview=preview)
     except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except ClipImportError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/clips-inbox/import-alt")
+async def post_clips_inbox_import_alt(request: Request,
+                                      _: Dict[str, Any] = Depends(require_admin)
+                                      ) -> Dict[str, Any]:
+    """Imports one inbox take as an ALT half of a pair or group already in the
+    library (schnittstellen-3d.md § A8a, G6): ``{kind, role, alt, file: {name,
+    take}, set?, target?}``. The scene is converted again from the sources its
+    sidecar names and only ``<kind>__<role>~<alt>.fbx`` is written — refused
+    (422) when the scene's frame does not come back to within 5 mm
+    (``fbx_import.import_alt``)."""
+    import asyncio
+    from app.core import fbx_import
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object expected")
+    try:
+        return await asyncio.to_thread(
+            fbx_import.import_alt, str(body.get("kind") or ""), str(body.get("role") or ""),
+            str(body.get("alt") or ""), body.get("file"),
+            clip_set=str(body.get("set") or ""), target=str(body.get("target") or "licensed"))
     except ClipImportError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

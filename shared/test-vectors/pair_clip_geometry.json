@@ -137,6 +137,51 @@
       "eps": 1e-09
     },
     {
+      "label": "[1] x__b~wave",
+      "fn": "isPairClipName",
+      "args": [
+        "x__b~wave"
+      ],
+      "expect": true,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] x__c~arm-down",
+      "fn": "isPairClipName",
+      "args": [
+        "x__c~arm-down"
+      ],
+      "expect": true,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] x__b~",
+      "fn": "isPairClipName",
+      "args": [
+        "x__b~"
+      ],
+      "expect": false,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] x~wave",
+      "fn": "isPairClipName",
+      "args": [
+        "x~wave"
+      ],
+      "expect": false,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] x__f~wave",
+      "fn": "isPairClipName",
+      "args": [
+        "x__f~wave"
+      ],
+      "expect": false,
+      "eps": 1e-09
+    },
+    {
       "label": "[4] before",
       "fn": "pairRootPathValue",
       "args": [

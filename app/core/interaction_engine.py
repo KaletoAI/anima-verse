@@ -18,6 +18,8 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
         "started_at_sys": "2026-10-30T20:00:00.000000+00:00",  # SYSTEM stamp, ordering only
         "clip_duration_s": 2.533,     # the clip's own length, from the sidecar
         "loop": True,                 # repeat the clip, or hold its last frame
+        "alt": "wave",                # optional: this one plays the ALT half
+                                      # <kind>__<role>~<alt> (``set_alt``)
     }
 
 Like a journey its POSITION in time is a pure function of the GAME clock:
@@ -283,7 +285,81 @@ def payload_for(character_name: str, profile: Dict[str, Any],
         "clip_duration_s": float(inter.get("clip_duration_s") or 0.0),
         "loop": bool(inter.get("loop")),
         "rate": round(float(rate or 0.0), 4),
+        # the ALT half this one plays instead of its role's own ("" = none):
+        # the clip is <kind>__<role>~<alt>, same anchor, same phase (§ A8a)
+        "alt": str(inter.get("alt") or ""),
     }
+
+
+def alt_choices(character_name: str,
+                profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """What ``character_name`` may play instead of its role's own half in
+    its running interaction: ``{current, options: [{id, label}]}``, the
+    first option ``""`` = the role's own half. None without an interaction
+    or without an alt for its role."""
+    from app.core.animation_clips import alt_label, clip_alts
+    inter = get_interaction(character_name, profile)
+    if not inter:
+        return None
+    alts = clip_alts(inter["kind"]).get(inter["role"]) or []
+    if not alts:
+        return None
+    return {"current": str(inter.get("alt") or ""),
+            "options": [{"id": "", "label": "Default"}]
+                       + [{"id": a, "label": alt_label(a)} for a in alts]}
+
+
+def alt_point(meta: Dict[str, Any], role: str, alt: str = "") -> Optional[Tuple[float, float]]:
+    """The clip-frame root (metres) of ``role`` at the anchor frame — of its
+    ALT half when ``alt`` names one the sidecar measured, else of the role's
+    own half. None without geometry."""
+    geometry = meta.get("geometry") or {}
+    off = None
+    if alt:
+        off = ((geometry.get("alts") or {}).get(f"{role}~{alt}") or {}).get("anchor_xz_m")
+    if not off:
+        off = ((geometry.get("roles") or {}).get(role) or {}).get("anchor_xz_m")
+    return (float(off[0]), float(off[1])) if off else None
+
+
+def set_alt(character_name: str, alt: str) -> Dict[str, Any]:
+    """``character_name`` plays the ALT half ``alt`` of its role from now on
+    (``""`` = back to the role's own half) — ``{ok, reason}``. Its game-state
+    position moves to the alt's root at the anchor, so perception, rules and
+    the map see it where the clip shows it. Everyone else in the
+    interaction is untouched. Refused: no interaction (``not_interacting``),
+    an alt the role does not have as a file (``unknown_alt``)."""
+    from app.core.animation_clips import clip_alts, clip_meta
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (_write_character_pos, get_character_current_location,
+                                      get_character_profile, save_character_profile)
+    alt = str(alt or "").strip().lower()
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        inter = get_interaction(character_name, profile)
+        if not inter:
+            return {"ok": False, "reason": "not_interacting"}
+        if alt and alt not in (clip_alts(inter["kind"]).get(inter["role"]) or []):
+            return {"ok": False, "reason": "unknown_alt"}
+        if str(inter.get("alt") or "") == alt:
+            return {"ok": True, "reason": ""}
+        if alt:
+            inter["alt"] = alt
+        else:
+            inter.pop("alt", None)
+        if not save_character_profile(character_name, profile):
+            return {"ok": False, "reason": "not_saved"}
+        anchor = inter.get("anchor") or {}
+        point = alt_point(clip_meta(inter["kind"]) or {}, inter["role"], alt)
+        if point and anchor.get("x") is not None:
+            dx, dz = _rotate(point[0], point[1], float(anchor.get("yaw") or 0.0))
+            _write_character_pos(character_name, round(float(anchor["x"]) + dx, 3),
+                                 round(float(anchor["z"]) + dz, 3))
+    from app.core import sync_topics
+    sync_topics.changed_at(character_name, get_character_current_location(character_name) or "")
+    logger.info("interaction %s: %s plays %s", inter["id"], character_name,
+                f"the alt '{alt}' of role {inter['role']}" if alt else f"role {inter['role']} again")
+    return {"ok": True, "reason": ""}
 
 
 # ------------------------------------------------------------------ kinds
