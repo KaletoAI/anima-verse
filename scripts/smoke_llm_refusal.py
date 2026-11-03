@@ -2,7 +2,9 @@
 """Refusal fallback smoke. Usage: ./.venv/bin/python scripts/smoke_llm_refusal.py
 
 Hand-derived expectations from plan-llm-refusal-fallback.md:
-Task 1: five prose refusals have both a first-sentence phrase and a reason
+Task 1: with no llm_refusal section stored (untouched instance) the schema
+defaults apply and the live 12:45 enhance refusal is caught; a cleared phrases
+field disables detection. Five prose refusals have both a first-sentence phrase and a reason
 within 400 characters; six normal/JSON answers do not. Empty phrases disable
 checks; replacing them with 'nope' takes effect immediately. Chat is excluded.
 Of three log rows aged 47, 49 and 1 hours, only two fall within 48 hours,
@@ -50,6 +52,20 @@ def detector(root):
     from app.core.config_schema import SECTIONS
     from app.core.timeutils import utc_now
     defaults = {k: v['default'] for k, v in SECTIONS['llm_refusal']['fields'].items()}
+    # An untouched instance stores NO llm_refusal section (only deviations from
+    # the shipped default are saved): detection must fall back to the schema
+    # defaults. Live case 2026-11-03 12:45 from the image dialog's enhance call,
+    # which the server let through while it read the absent section as empty.
+    live = ("\n\nI'm not able to help with this request. The prompt asks for explicit sexual "
+            "imagery of real, named individuals, which raises serious concerns about consent")
+    saved = config._CONFIG.pop('llm_refusal', None)
+    try:
+        assert refusal.detect_refusal(live), 'absent section must use the schema defaults'
+        with patch.dict(config._CONFIG, {'llm_refusal': {'phrases': ''}}):
+            assert refusal.detect_refusal(live) is None, 'a cleared field disables detection'
+    finally:
+        if saved is not None:
+            config._CONFIG['llm_refusal'] = saved
     with patch.dict(config._CONFIG, {'llm_refusal': defaults}):
         for text in POSITIVE:
             assert refusal.detect_refusal(text), text

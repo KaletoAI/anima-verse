@@ -22,6 +22,17 @@ class RefusalError(RuntimeError):
         super().__init__(f"LLM refusal: {provider}/{model} task={task} — {self.excerpt}")
 
 
+def _setting(name: str) -> str:
+    """The live value, else the schema default: the instance config stores
+    only deviations from the shipped default, so an untouched field is absent.
+    A field the user cleared is stored as '' and disables detection."""
+    value = config.get('llm_refusal.' + name)
+    if value is None:
+        from app.core.config_schema import field_default
+        value = field_default('llm_refusal', name)
+    return value if isinstance(value, str) else ''
+
+
 def detect_refusal(text: str) -> Optional[str]:
     text = text.strip()
     if text.startswith(('{', '[', '```')):
@@ -29,8 +40,8 @@ def detect_refusal(text: str) -> Optional[str]:
     text = re.sub(r'^[A-Z][A-Za-z ]{0,15}:\s*', '', text, count=1)
     first = re.split(r'[.!?\n]', text[:300], maxsplit=1)[0].casefold()
     start = text[:400].casefold()
-    phrases = config.get('llm_refusal.phrases', '') or ''
-    reasons = config.get('llm_refusal.reasons', '') or ''
+    phrases = _setting('phrases')
+    reasons = _setting('reasons')
     if (any(p.strip().casefold() in first for p in phrases.splitlines() if p.strip())
             and any(r.strip().casefold() in start for r in reasons.splitlines() if r.strip())):
         return text[:200]
