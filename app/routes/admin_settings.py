@@ -1073,9 +1073,17 @@ def settings_llm_tasks(user=Depends(require_admin)):
         REQUIREMENT_BADGE_LABELS, MODEL_CLASS_LABELS, is_task_gated_off)
     from app.core.llm_router import fallback_parent
     from app.core.llm_refusal import refusal_counts
+    from app.core.model_capabilities import is_uncensored
     counts = refusal_counts()["tasks"]
     cfg = config.get_all()
+    # The user's Uncensored flag (/admin/models) of every routed model, for the
+    # lock icons on the Tasks page; unset models are left out.
+    routed_models = sorted({str(e["model"]) for e in (cfg.get("llm_routing") or [])
+                            if isinstance(e, dict) and e.get("model")})
+    uncensored_models = {m: flag for m in routed_models
+                         if (flag := is_uncensored(m)) is not None}
     return {
+        "uncensored_models": uncensored_models,
         "tasks": [
             {
                 "id": tid,

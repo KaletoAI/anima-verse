@@ -172,3 +172,12 @@ const opts = s => [...s.matchAll(/<option value="(\d+)">([^<]*)<\/option>/g)].ma
 assert.deepEqual(opts(read("rtEntrySelect('x', 'Assign', false)")), ['2:DX10-02 · alpha', '1:DX10-02 · beta', '0:Venice · zeta']);
 assert.deepEqual(opts(read("rtEntrySelect('x', 'Assign', false, new Set([1]))")), ['2:DX10-02 · alpha', '0:Venice · zeta']);
 console.log('PASS assign dropdown sorted by provider then name, provider first');
+// Uncensored lock icons (flag from /admin/models): the catalog map marks
+// 'alpha' true and 'x' (entry "beta") false, 'zeta' is not set. Dropdown
+// options read "DX10-02 · alpha 🔓", "DX10-02 · beta 🔒", "Venice · zeta";
+// an Overview chain row with uncensored true shows 🔓, with null nothing.
+read(`RT_CATALOG = {tasks: [], uncensored_models: {alpha: true, x: false}};`);
+assert.deepEqual(opts(read("rtEntrySelect('x', 'Assign', false)")), ['2:DX10-02 · alpha 🔓', '1:DX10-02 · beta 🔒', '0:Venice · zeta']);
+assert.match(read("rtOverviewChainRow({index:1,order:1,provider:'p',model:'m',uncensored:true}, null)"), /p \/ m <span class="rt-censor" title="Uncensored[^"]*">🔓<\/span>/);
+assert.doesNotMatch(read("rtOverviewChainRow({index:1,order:1,provider:'p',model:'m',uncensored:null}, null)"), /rt-censor/);
+console.log('PASS uncensored lock icons in the assign dropdown and the Overview chain');

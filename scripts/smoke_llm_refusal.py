@@ -17,6 +17,7 @@ back to refused A or unmarked B, without exhausting the hop limit. An unrouted
 extraction_probe borrows extraction and logs that parent as its routing task.
 Task 3: one M-One refusal yields count 1; updating uncensored preserves
 existing tested fields. Model and task badges display exactly their counts.
+The Tasks catalog maps routed M-One to its flag False and leaves unset Other out.
 All storage and capabilities writes are redirected to temporary directories.
 """
 import json
@@ -191,6 +192,12 @@ def admin_counts(root):
         from app.routes.admin_settings import settings_llm_tasks
         tasks = settings_llm_tasks()['tasks']
         assert next(t for t in tasks if t['id'] == 'image_prompt')['refusals_48h']['count'] == 1
+        # Lock icons on the Tasks page: the catalog carries the user's flag per
+        # routed model (m-one was just set to False above); an unset model is absent.
+        from app.core import config as cfg_mod
+        routed = {'llm_routing': [{'provider': 'P', 'model': 'M-One'}, {'provider': 'P', 'model': 'Other'}]}
+        with patch.object(cfg_mod, 'get_all', return_value=routed):
+            assert settings_llm_tasks()['uncensored_models'] == {'M-One': False}
     print('PASS Task 3 admin API and capability persistence')
 
 

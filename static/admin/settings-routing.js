@@ -266,6 +266,22 @@ function rtEntryLabel(entry, idx) {
     return (e.provider || '?') + ' · ' + (e.name || e.model || ('#' + (idx + 1)));
 }
 
+// The user's Uncensored flag from /admin/models as a small lock: 🔓 = marked
+// uncensored, 🔒 = marked censored, nothing = not set. Tasks page reads it from
+// the catalog (uncensored_models), the Overview from its chain rows.
+function rtCensorIcon(flag) {
+    if (flag === true) return ' <span class="rt-censor" title="Uncensored (set in /admin/models)">🔓</span>';
+    if (flag === false) return ' <span class="rt-censor" title="Censored (set in /admin/models)">🔒</span>';
+    return '';
+}
+function rtCensorText(flag) {
+    return flag === true ? ' 🔓' : flag === false ? ' 🔒' : '';
+}
+function rtModelUncensored(model) {
+    const map = (RT_CATALOG && RT_CATALOG.uncensored_models) || {};
+    return Object.prototype.hasOwnProperty.call(map, model) ? map[model] : null;
+}
+
 function rtRouting() {
     return Array.isArray(CONFIG.llm_routing) ? CONFIG.llm_routing : [];
 }
@@ -562,7 +578,7 @@ async function renderLlmRoutingTasksPage(content) {
             nfo.rows.forEach((r, i) => {
                 html += '<div class="rt-chain-row' + (r.off || r.providerOff ? ' off' : '') + '">';
                 html += '<span class="rt-muted" style="min-width:20px;">' + r.order + '.</span>';
-                html += '<span>' + esc(rtEntryLabel(r.cfg, r.entry)) + '</span>';
+                html += '<span>' + esc(rtEntryLabel(r.cfg, r.entry)) + rtCensorIcon(rtModelUncensored((r.cfg || {}).model)) + '</span>';
                 if (r.off) html += '<span class="rt-warn" style="text-decoration:none;">' + esc(RT_TEXT.entryDisabled) + '</span>';
                 if (r.providerOff) {
                     html += '<span class="rt-warn" style="text-decoration:none;" title="' + esc(RT_TEXT.providerOffHint) + '">'
@@ -620,7 +636,7 @@ function rtEntrySelect(onchangeJs, placeholder, withNew, excludeIdx) {
     rtLlmsOrder(routing, { item_label_field: ['name', 'model'] }).forEach(i => {
         const e = routing[i];
         if (excludeIdx && excludeIdx.has(i)) return;
-        html += '<option value="' + i + '">' + esc(rtEntryLabel(e, i)) + (e && e.enabled === false ? ' ' + esc(RT_TEXT.entryDisabled) : '') + '</option>';
+        html += '<option value="' + i + '">' + esc(rtEntryLabel(e, i) + rtCensorText(rtModelUncensored((e || {}).model))) + (e && e.enabled === false ? ' ' + esc(RT_TEXT.entryDisabled) : '') + '</option>';
     });
     if (withNew) html += '<option value="__new__">' + esc(RT_TEXT.newLlm) + '</option>';
     html += '</select>';
@@ -1231,7 +1247,7 @@ function rtOverviewChainRow(row, resolved) {
     // Rows after the selected one have not been tried yet.
     const skipped = row.skipped && (!resolved || (row.order < resolved.order || (row.order === resolved.order && row.index < resolved.index)));
     return '<div class="rt-chain-row' + (picked ? ' rt-ok' : skipped ? ' rt-muted' : '') + '"' + (skipped ? ' style="opacity:0.55"' : '') + '>'
-        + esc(row.order) + '. ' + esc(row.provider || '?') + ' / ' + esc(row.model || '?')
+        + esc(row.order) + '. ' + esc(row.provider || '?') + ' / ' + esc(row.model || '?') + rtCensorIcon(row.uncensored)
         + (picked ? ' ← now' : skipped ? ' (' + esc(row.skipped) + ')' : '') + '</div>';
 }
 

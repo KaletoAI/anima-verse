@@ -743,6 +743,7 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
     """
     from app.core.llm_lanes import lane_count_in
     from app.core.llm_tasks import TASK_TYPES, CATEGORY_LABELS, is_task_gated_off
+    from app.core.model_capabilities import is_uncensored
 
     routing = [e for e in (cfg.get("llm_routing") or []) if isinstance(e, dict)]
     provider_rows = []
@@ -812,6 +813,7 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
                 skip = None
             chain.append({"index": idx, "order": order, "provider": entry.get("provider") or "",
                           "model": entry.get("model") or "", "skipped": skip,
+                          "uncensored": is_uncensored(entry.get("model") or ""),
                           "accepts_overflow": entry.get("accepts_overflow") is not False})
             if skip is None and resolved is None:
                 resolved = {"index": idx, "provider": entry.get("provider") or "",
