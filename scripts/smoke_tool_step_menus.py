@@ -5,9 +5,13 @@ Usage: ./.venv/bin/python scripts/smoke_tool_step_menus.py
 
 Hand-derived expectations: the fake room has Bench/Rest (solo), Bench/Read
 (pair with Sam), blocked Chair/Sit and blocked Bed/Nap. Two Bench placements
-must yield only two lines. Both listed requests pass the real named-request
+must yield only two lines, each ending in its finished input:
+'Bench: Rest = {"furniture": "Bench", "action": "Rest"}' and
+'Bench: Read, with Sam = {"furniture": "Bench", "action": "Read", "partner": "Sam"}'
+(the bare "Bench | Read | with partner" had the tool LLM send the action
+"Read | with partner", 2026-11-03). Both inputs pass the real named-request
 validator; only the execution boundary is stubbed. A running Bench/Rest
-adds the stop line FIRST. Free pair keys wave and greet are valid with Sam;
+adds the stop line FIRST, ending in {"stop": true}. Free pair keys wave and greet are valid with Sam;
 a busy or absent Sam yields no keys. The thought prompt must contain both
 exact menu blocks. Twenty-five distinct offers/keys yield twenty lines,
 including the running line in the furniture cap. An open pair invitation and an
@@ -75,20 +79,18 @@ def main():
             stack.enter_context(patch.object(PE, "state_for", return_value=state))
             stack.enter_context(patch.object(PA, "piece_label", return_value="Bench"))
             poses = stack.enter_context(patch.object(IE, "partner_poses", return_value=[("wave", "wave_pair"), ("greet", "greet_pair")]))
-            expected = ["Bench | Rest", "Bench | Read | with partner"]
+            expected = ['Bench: Rest = {"furniture": "Bench", "action": "Rest"}',
+                        'Bench: Read, with Sam = {"furniture": "Bench", "action": "Read", "partner": "Sam"}']
             assert prop.decision_menu("Alex") == expected, prop.decision_menu("Alex")
             # Run the actual skill and named validation, stubbing only execution.
             with patch.object(PE, "request_with_creation", return_value=(dict(status="walking", execution_id="test", reason=""), False)):
                 for line in expected:
-                    piece, action, *_ = line.split(" | ")
-                    data = dict(agent_name="Alex", furniture=piece, action=action)
-                    if "with partner" in line:
-                        data["partner"] = "Sam"
+                    data = dict(json.loads(line.split(" = ", 1)[1]), agent_name="Alex")
                     result = json.loads(prop.execute(json.dumps(data)))
                     assert result["status"] != "refused", result
             print("[1] PASS: exact requestable furniture menu; real skill validation accepts every entry")
             state["current"] = [dict(actor="Alex", partner="", target={}, label="Rest")]
-            running = 'running now: Bench | Rest - to get up or leave it, the whole input is {"stop": true}'
+            running = 'running now: Bench: Rest - to get up or leave it = {"stop": true}'
             assert prop.decision_menu("Alex") == [running, *expected]
             assert "get" in prop.brief and '{"stop":true}' in prop.brief
             assert "get" in meta["action_hint"] and '{"stop":true}' in meta["action_hint"]
@@ -130,7 +132,8 @@ def main():
                 rendered = build_tool_step_prompt("Alex", mode="thought", rp_response="I get up from the bench and wave to Sam.",
                     user_input="", tools=[prop, pair], facts=TurnFacts("Alex", "thought", ("Sam",)), tool_format="json")
             for skill in (prop, pair):
-                block = f"{skill.name} takes these names — copy one exactly:\n" + "".join(f"- {line}\n" for line in skill.decision_menu("Alex"))
+                heading = skill.decision_menu_heading or "takes these names — copy one exactly"
+                block = f"{skill.name} {heading}:\n" + "".join(f"- {line}\n" for line in skill.decision_menu("Alex"))
                 assert block.rstrip() in rendered.user, rendered.user
             print("[4] PASS: thought user part includes both exact menu blocks")
             print("RENDERED USER PART\n" + rendered.user + "\nEND USER PART")

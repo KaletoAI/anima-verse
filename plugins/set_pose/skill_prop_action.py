@@ -33,25 +33,37 @@ class PropActionSkill(PluginSkill):
                 return None
         return "no requestable furniture action or own running action"
 
+    #: Each menu line ends in its finished input. Bare "piece | action | with
+    #: partner" names had the tool LLM copy " | with partner" into the action
+    #: name (no_such_offer, 2026-11-03).
+    decision_menu_heading = "takes these inputs — copy the object after = exactly"
+
     def decision_menu(self, character_name: str) -> list[str]:
-        """Exact requestable names, plus the participant's own stop action."""
+        """Each requestable action with its exact input (one line per
+        available partner of a pair action), plus the participant's own stop."""
         from app.core.prop_actions import offers, piece_label
         from app.core.prop_action_engine import state_for
+
+        def call(**data):
+            return json.dumps(data, ensure_ascii=False)
 
         lines = []
         state = state_for(character_name)
         for run in state["current"] + state["outgoing"]:
             piece = piece_label(run["target"]) or "Furniture"
-            lines.append(f"running now: {piece} | {run['label']} - to get up or leave it, "
-                         'the whole input is {"stop": true}')
+            lines.append(f"running now: {piece}: {run['label']} - to get up or leave it = "
+                         + call(stop=True))
         for row in offers(character_name):
-            pair = row["required_partner"]
-            usable = (any(target["enabled"] for target in row["available_targets"])
-                      if pair else row["enabled"])
-            if usable:
-                line = f"{row['prop_label'] or 'Furniture'} | {row['label']}"
-                if pair:
-                    line += " | with partner"
+            piece = row["prop_label"] or "Furniture"
+            if row["required_partner"]:
+                options = [(f"{piece}: {row['label']}, with {target['partner']}",
+                            call(furniture=piece, action=row["label"], partner=target["partner"]))
+                           for target in row["available_targets"] if target["enabled"]]
+            else:
+                options = ([(f"{piece}: {row['label']}", call(furniture=piece, action=row["label"]))]
+                           if row["enabled"] else [])
+            for label, data in options:
+                line = f"{label} = {data}"
                 if line not in lines:
                     lines.append(line)
         return lines[:20]
