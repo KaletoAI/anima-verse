@@ -45,8 +45,19 @@ public sealed class FinaleClipTests
     {
         var solo = FinaleClip.Adopt(null, "", new("s1", "fixture-solo", null, .9, 1.333), true);
         Assert.Equal("fixture-solo", FinaleClip.Step(solo.Play, .1, false).Clip);
-        var invalid = FinaleClip.Adopt(null, "", Block("s2") with { Role = "c" }, true);
+        var invalid = FinaleClip.Adopt(null, "", Block("s2") with { Role = "f" }, true);
         Assert.Null(invalid.Play!.Role);
+        Assert.Equal("fixture-finale", FinaleClip.Step(invalid.Play, .1, false).Clip);
+    }
+
+    [Theory]
+    [InlineData("c")]
+    [InlineData("e")]
+    public void GroupMemberPlaysItsOwnHalf(string role)
+    {
+        // smoke_finale_clip.mjs [8] (G3): roles c..e are clip roles, not solo.
+        var group = FinaleClip.Adopt(null, "", Block("g" + role) with { Role = role }, true);
+        Assert.Equal("fixture-finale__" + role, FinaleClip.Step(group.Play, .1, false).Clip);
     }
 
     [Fact]

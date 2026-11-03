@@ -168,7 +168,7 @@ public sealed record CharacterRow(
     {
         if (!c.TryGetProperty("finale", out var f) || f.ValueKind != JsonValueKind.Object) return null;
         string role = Json.Str(f, "role");
-        return new FinaleBlock(Json.Str(f, "id"), Json.Str(f, "kind"), role is "a" or "b" ? role : null,
+        return new FinaleBlock(Json.Str(f, "id"), Json.Str(f, "kind"), FinaleClip.IsRole(role) ? role : null,
                                Json.NumOrNull(f, "elapsed_s") ?? 0, Json.NumOrNull(f, "duration_s") ?? 0);
     }
 

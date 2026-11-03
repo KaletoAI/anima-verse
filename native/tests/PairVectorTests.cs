@@ -87,7 +87,7 @@ internal static class PairVectorAdapters
         string? room = d["room"] is { } r ? Str(r) : null;
         var play = new PairPlay
         {
-            Id = "p1", Clip = "handshake__a",
+            Id = "p1", Clip = d["clip"] is { } clip ? Str(clip) : "handshake__a",
             Anchor = new PairAnchor(N(anchor["x"]), N(anchor["z"]), N(anchor["yaw"]), d["placeId"] is { } pid ? Str(pid) : null),
             Elapsed = 0, ClipT = 0, ClipDuration = 2, Loop = true, Rate = 1, Stamp = 0,
         };
@@ -174,6 +174,20 @@ internal static class PairVectorAdapters
         ["pairPlacementValue"] = a => Axis(Placement(Arity(a, 2, 2)[0]), a[1]),
         ["anchorFigureBindValue"] = a => AnchorBind(Arity(a, 1, 1)[0]),
     };
+}
+
+/// <summary>shared/test-vectors/group_role_points.json (G3; hand derivations: client3d/scripts/smoke_group_role_points.mjs).</summary>
+public class GroupRolePointVectorTests
+{
+    private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("group_role_points"));
+    public static TheoryData<string> Cases => VectorFile.Labels("group_role_points");
+
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void Case(string label) => File.Value.AssertCase(label, PairVectorAdapters.Dispatch);
+
+    [Fact]
+    public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(PairVectorAdapters.Dispatch));
 }
 
 /// <summary>shared/test-vectors/pair_clip_phase.json (hand derivations: client3d/scripts/smoke_pair_realtime.mjs).</summary>

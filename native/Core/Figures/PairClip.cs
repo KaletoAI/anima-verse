@@ -58,7 +58,7 @@ public static class PairClip
         return loop ? clipT % clipDurationS : Math.Min(clipT, clipDurationS);
     }
 
-    /// <summary><c>isPairClipName</c>: a <c>&lt;kind&gt;__a</c> / <c>__b</c> half.</summary>
+    /// <summary><c>isPairClipName</c>: a <c>&lt;kind&gt;__a</c> … <c>__e</c> role half (pair or group).</summary>
     public static bool IsPairClipName(string name) => ClipLibraryRules.IsPairName(name);
 
     private static readonly Regex MixamoPrefix = new("^mixamorig:?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

@@ -10,13 +10,16 @@ public sealed record FinalePlay(string Id, string Kind, string? Role, double T, 
 /// <summary>Pure port of client3d/game/finaleClip.ts; elapsed_s is deliberately never used to seek.</summary>
 public static class FinaleClip
 {
+    /// <summary>§ A8a/A8c: a clip role of a pair or group is <c>a</c>..<c>e</c> (G3); anything else is no role.</summary>
+    public static bool IsRole(string? role) => role is "a" or "b" or "c" or "d" or "e";
+
     /// <summary>Consume a new id once, starting at zero; losing the action ends any current finale.</summary>
     public static (FinalePlay? Play, string Seen) Adopt(FinalePlay? current, string seen, FinaleBlock? block, bool inAction)
     {
         var play = inAction ? current : null;
         if (block is null || string.IsNullOrEmpty(block.Id) || block.Id == seen) return (play, seen);
         if (inAction && !string.IsNullOrEmpty(block.Kind) && double.IsFinite(block.DurationS) && block.DurationS > 0)
-            play = new FinalePlay(block.Id, block.Kind, block.Role is "a" or "b" ? block.Role : null, 0, block.DurationS);
+            play = new FinalePlay(block.Id, block.Kind, IsRole(block.Role) ? block.Role : null, 0, block.DurationS);
         return (play, block.Id);
     }
 
