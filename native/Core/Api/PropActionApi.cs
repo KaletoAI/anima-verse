@@ -34,6 +34,23 @@ public static class PropActionRequest
         if(members is { Count:1 } && consent=="react") body["consent"]=consent;
         return JsonSerializer.SerializeToElement(body);
     }
+    /// <summary>
+    /// HUD bridge <c>pickPropAction(actionId, target, revision, partner?, consent?, members?)</c> → the request's
+    /// members (G4): the group pick in <c>args[5]</c> when present, else <c>[partner]</c>, else none (main.ts
+    /// <c>members ?? (partner ? [partner] : [])</c>). Non-string or empty names are dropped.
+    /// </summary>
+    public static IReadOnlyList<string>? BridgeMembers(System.Text.Json.Nodes.JsonArray args)
+    {
+        if (args.Count>5 && args[5] is System.Text.Json.Nodes.JsonArray picked)
+        {
+            var names=new List<string>();
+            foreach (var n in picked)
+                if (n is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var name) && name.Length>0) names.Add(name);
+            return names;
+        }
+        return args.Count>3 && args[3] is System.Text.Json.Nodes.JsonValue p && p.TryGetValue<string>(out var partner) && partner.Length>0
+            ? new[]{partner} : null;
+    }
     public static JsonElement Respond(string executionId,bool accept)=>JsonSerializer.SerializeToElement(new { execution_id=executionId,accept });
     public static JsonElement Cancel(string executionId)=>JsonSerializer.SerializeToElement(new { execution_id=executionId });
 }

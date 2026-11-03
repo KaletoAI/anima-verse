@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -67,5 +68,16 @@ public class PropActionApiTests
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""["X","Y"]"""),group["members"])); Assert.False(group.ContainsKey("consent"));
         var ask=JsonNode.Parse(PropActionRequest.Request("a",target.RootElement,"r",new[]{"X"},"ask").GetRawText())!.AsObject();
         Assert.False(ask.ContainsKey("consent"));
+    }
+    [Fact]
+    public void BridgeMembersPreferTheGroupPickOverThePartner()
+    {
+        // G4: main.ts members ?? (partner ? [partner] : []).
+        JsonArray Args(params JsonNode?[] rest)=>new JsonArray(new JsonNode?[]{"act",new JsonObject(),"rev"}.Concat(rest).ToArray());
+        Assert.Null(PropActionRequest.BridgeMembers(Args()));
+        Assert.Null(PropActionRequest.BridgeMembers(Args("")));
+        Assert.Equal(new[]{"Bob"},PropActionRequest.BridgeMembers(Args("Bob","ask")));
+        Assert.Equal(new[]{"Ann","Cy"},PropActionRequest.BridgeMembers(Args("",null,new JsonArray("Ann",7,"","Cy"))));
+        Assert.Empty(PropActionRequest.BridgeMembers(Args("",null,new JsonArray()))!);
     }
 }

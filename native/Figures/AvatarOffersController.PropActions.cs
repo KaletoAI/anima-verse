@@ -84,7 +84,7 @@ public sealed partial class AvatarOffersController
             PreviewPropTarget(target);
             PendingPropAction=MutatePropAsync(()=>RequestLoggedAsync(PropActionMotion.Text(args[0]),target,
                 PropActionMotion.Text(args[2]),
-                args.Count>3 && args[3] is JsonValue p && p.TryGetValue<string>(out var partner) && partner.Length>0 ? new[]{partner} : null,
+                AnimaNative.Api.PropActionRequest.BridgeMembers(args),
                 args.Count>4 && args[4] is JsonValue c && c.TryGetValue<string>(out var consent) ? consent : null));
         };
         _hud.Handlers["respondPropAction"]=args=> {
