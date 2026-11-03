@@ -160,11 +160,11 @@ def _format_presence_block(location_name: str, presence_lines: list,
                             in_the_open: bool = False) -> str:
     """Plain-text presence block (replaces former sections/presence.md).
 
-    Room-scoped (2026-07-30): the block used to assert everyone at the
+    Scoped (2026-07-30): the block used to assert everyone at the
     LOCATION as present and invite TalkTo — which made NPCs stage physical
     scenes with people two rooms away who could never hear them. Now it
-    lists the ROOM's people as present and everyone else at the location
-    as explicitly out of reach.
+    lists the shared room + open-air circle as reachable and everyone else
+    at the location as explicitly out of reach.
 
     An omitted block reads as "no information" to an LLM, never as "nobody is
     here" — which is how absent people get pulled into a scene. So the empty
@@ -189,100 +189,59 @@ def _format_presence_block(location_name: str, presence_lines: list,
                 "NO other characters are near you out here. "
                 "Do NOT invent interactions with absent persons.")
         return "\n".join(parts)
-    parts = [f"In your room at '{location_name}':"]
-    parts.extend(presence_lines or ["- nobody else, you are alone in this room"])
+    parts = [f"In your room or within earshot in the open at '{location_name}':"]
+    parts.extend(presence_lines or ["- nobody else is within reach"])
     if anyone_nearby:
-        parts.append("You can talk to the people in your room (TalkTo).")
+        parts.append("You can talk to the people listed here (TalkTo).")
         parts.append(
-            "IMPORTANT: ONLY the people listed for your room are with you. "
+            "IMPORTANT: ONLY the people listed here are within reach. "
             "Do NOT invent further attendees.")
     else:
         parts.append(
-            "NO other characters are in this room with you. "
+            "NO other characters are in your room or within earshot in the open. "
             "Do NOT invent interactions with absent persons.")
     if elsewhere_lines:
-        parts.append("Elsewhere at this location (NOT in your room — they "
+        parts.append("Elsewhere at this location (outside your reach — they "
                      "cannot see or hear you):")
         parts.extend(elsewhere_lines)
         parts.append(
             "To reach someone elsewhere at this location: go to them first "
             "with SetLocation, which takes a room of your current location "
-            "as its target, or use SendMessage — TalkTo does NOT reach "
-            "other rooms.")
+            "as its target, or use SendMessage — TalkTo does NOT reach these "
+            "people from here.")
     return "\n".join(parts)
 
 
 def _load_presence(character_name: str, location_id: str) -> tuple:
-    """Build ``(presence_lines, elsewhere_lines, anyone_in_room)`` for the
-    active world. ``presence_lines`` = people in the character's ROOM,
-    ``elsewhere_lines`` = people in OTHER rooms of this location. The
-    location's ground is a room like any other (``world.GROUND_ROOM_ID``),
-    so plain room equality decides both.
+    """Build presence using the shared room + open-air addressability rule.
 
-    WITHOUT a location (E6) the hearing radius takes the room's place: the
-    people inside it are the presence lines, there is no "elsewhere" out
-    there, and a character the map places nowhere yields ([], [], False) —
-    the only remaining "we do not know" case."""
+    Unreachable people at this location remain in the elsewhere block. Without
+    a location, the existing open/unknown distinction still applies.
+    """
     if not location_id:
         return _load_presence_in_the_open(character_name)
 
-    from app.models.character import (
-        list_available_characters,
-        get_character_current_location,
-        get_character_current_room,
-        get_character_language)
+    from app.core.thought_context import location_presence_split
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room)
     from app.models.account import get_active_character
-    from app.models.world import get_room_name
 
-    lang = get_character_language(character_name) or "de"
-    my_room = get_character_current_room(character_name) or ""
+    here, elsewhere = location_presence_split(
+        character_name, location_id, get_character_current_room(character_name) or "")
     player_char = get_active_character()
-
-    candidates: list = []
-    for other in list_available_characters():
-        if other == character_name or other == player_char:
-            continue
-        other_loc = get_character_current_location(other)
-        if not other_loc or other_loc != location_id:
-            continue
-        other_room = get_character_current_room(other) or ""
-        candidates.append((other, other_room))
-
-    player_loc = get_character_current_location(player_char) if player_char else ""
-    player_room = get_character_current_room(player_char) or "" if player_char else ""
-    player_at_location = bool(player_loc and player_loc == location_id)
-    if player_char and player_at_location:
-        candidates.insert(0, (player_char, player_room))
-
-    same_room = [name for name, room in candidates if room == my_room]
-    elsewhere = [(name, room) for name, room in candidates if room != my_room]
-    player_present = bool(player_char) and player_char in same_room
-    others_in_room = [o for o in same_room if o != player_char]
-    anyone_in_room = player_present or bool(others_in_room)
-
     lines: list = []
-    elsewhere_lines: list = []
-    if player_present:
+    if player_char and player_char in here:
         lines.append(f"- {player_char} is present")
-    elif player_char and not player_at_location:
+    elif player_char and get_character_current_location(player_char) != location_id:
         lines.append(
             f"- {player_char} is NOT here "
             f"(do NOT react as if {player_char} were present, "
-            f"do NOT imagine an interaction with {player_char})"
-        )
-
-    for other in others_in_room:
-        # Display text again (flavor or catalog key, "Sleeping" when asleep) —
-        # what the others SEE, never the key an image or clip is picked with —
-        # plus the place they hold ("in the bed"; a standing spot names nothing).
-        lines.append(f"- {other} is here{_presence_suffix(other)}")
-
-    # Every room resolves by name, the location's ground among them.
-    for other, other_room in elsewhere:
-        elsewhere_lines.append(
-            f"- {other} — in: {get_room_name(location_id, other_room, lang)}")
-
-    return lines, elsewhere_lines, anyone_in_room
+            f"do NOT imagine an interaction with {player_char})")
+    for other in here:
+        if other != player_char:
+            lines.append(f"- {other} is here{_presence_suffix(other)}")
+    elsewhere_lines = [f"- {name} — in: {room}" for name, room in elsewhere]
+    return lines, elsewhere_lines, bool(here)
 
 
 def _load_presence_in_the_open(character_name: str) -> tuple:

@@ -754,9 +754,9 @@ class AgentLoop:
         # (``perception.addressable_for``) answer with. Without the radius half
         # inside a location, an NPC waiting in front of the gate could be
         # addressed and would perceive the line, but nobody would ever bump it
-        # to answer. The radius list holds only location-less characters, so
-        # the two halves never overlap; the speaker is part of the room list
-        # and not of the radius list, and every consumer filters it out anyway.
+        # to answer. The radius list includes grounds and outdoor rooms too;
+        # merge without duplicates, keeping room members first. The speaker
+        # is excluded from the radius list and filtered by consumers below.
         #
         # A WHISPER stays inside the walls (same rule as ``compute_earshot``):
         # spoken from inside a location it reaches nobody out there.

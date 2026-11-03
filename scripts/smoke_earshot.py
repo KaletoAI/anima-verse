@@ -24,7 +24,7 @@ Seed (all distances hand-derived, radius default 20 m):
                                    bystander line in the open)
   npc_e  wilderness at (0, 17)   — hypot(0, 17) = 17  <= 20  → in A's earshot,
                                    and only 5 m from the inn
-  npc_d  INSIDE "Smoke Inn", centre (0, 12), footprint side 6 → the square
+  npc_d  INSIDE "Smoke Inn" / indoor Taproom, centre (0, 12), footprint side 6 → the square
          x ∈ [-3, 3], z ∈ [9, 15]. None of the four wilderness points falls
          inside it (a: z=0, b: x=15, c: x=30, e: z=17), which case [0]
          asserts rather than assumes.
@@ -32,7 +32,7 @@ Seed (all distances hand-derived, radius default 20 m):
 Wall distances, all WITHIN the 20 m radius. THE WALL IS ONE-WAY (task 4 of
 plan-npc-leben-bugs): a line spoken OUTSIDE never reaches somebody inside a
 location — the room lists are the only way in, and ``_nearby_in_the_open``
-answers with location-less characters only. A line spoken INSIDE carries out
+excludes indoor rooms and corridors. A line spoken INSIDE carries out
 to the circle around the speaker, because somebody waiting in front of the
 gate is within shouting distance and the player can address them
 (``perception.addressable_for``); the gate that offers an addressee and the
@@ -261,7 +261,8 @@ def perceptions_of(uid):
 
 
 # ── Seed ────────────────────────────────────────────────────────────────
-inn = add_location(name="Smoke Inn", description="earshot smoke")
+inn = add_location(name="Smoke Inn", description="earshot smoke", rooms=[
+    {"id": "taproom", "name": "Taproom", "indoor": "indoor"}])
 INN_ID = inn["id"]
 # Right next door, not far away: the wall cases have to run at a distance the
 # radius would otherwise bridge (see the docstring).
@@ -276,6 +277,10 @@ set_character_pos("npc_b", 15, 0)
 set_character_pos("npc_c", 30, 0)
 set_character_pos("npc_e", 0, 17)
 save_character_current_location("npc_d", INN_ID)
+# The wall probes require an actual indoor room; a location's ground is open.
+# Seed state directly to avoid recording an unrelated room-entry narration.
+with db.transaction() as conn:
+    conn.execute("UPDATE character_state SET current_room='taproom' WHERE character_name='npc_d'")
 
 print("[0] seed")
 check("npc_a pos", get_character_pos("npc_a"), {"x": 0.0, "z": 0.0})

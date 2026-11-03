@@ -1232,35 +1232,28 @@ def away_mentioned(texts: Iterable[str], exclude: Iterable[str] = ()) -> List[Tu
 
 def location_presence_split(character_name: str, location_id: str,
                             room_id: str) -> Tuple[List[str], List[Tuple[str, str]]]:
-    """Split the location's characters by room, excluding self.
+    """Shared addressable people plus unreachable people elsewhere on site.
 
-    Returns ``(here_names, elsewhere_pairs)``: names in the SAME room (plain
-    ``current_room`` equality, matching the perception model — the location's
-    ground is a room like any other, ``world.GROUND_ROOM_ID``) and
-    ``(name, room_label)`` pairs for the other rooms of this location. The
-    ONE computation behind the prompt presence blocks and the thought
-    journal's ``nearby`` snapshot — no second SQL path.
-
-    Raises on lookup failure (callers decide what "unknown" means —
-    _build_presence must not render a failed lookup as "you are alone").
+    The room + open-air circle comes from ``addressable_for``. Only people
+    outside that roster are labelled elsewhere, so a ground/outdoor neighbour
+    is never simultaneously offered to TalkTo and declared out of reach.
+    Lookup failures propagate; callers decide how to represent unknown presence.
     """
+    from app.core.perception import addressable_for
     from app.models.group_chat import get_characters_at_location
     from app.models.character import (get_character_current_room,
                                       get_character_language)
     from app.models.world import get_room_name
-    here: List[str] = []
+    here = addressable_for(character_name)
+    reachable = set(here) | {character_name}
     elsewhere: List[Tuple[str, str]] = []
     lang = get_character_language(character_name) or "de"
-    my_room = room_id or ""
     for p in (get_characters_at_location(location_id) or [])[:16]:
         n = (p.get("name") or "").strip()
-        if not n or n == character_name:
+        if not n or n in reachable:
             continue
         other_room = get_character_current_room(n) or ""
-        if other_room == my_room:
-            here.append(n)
-        else:
-            elsewhere.append((n, get_room_name(location_id, other_room, lang)))
+        elsewhere.append((n, get_room_name(location_id, other_room, lang)))
     return here, elsewhere
 
 

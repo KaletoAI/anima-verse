@@ -165,14 +165,19 @@ def main():
                        side_effect=lambda name: rooms.get(name, '')), \
                  patch('app.models.character.list_available_characters',
                        return_value=names + ['Ada Example', 'Avatar Example', 'Elsewhere Example']), \
+                 patch('app.models.world.get_location', return_value={
+                     'id': 'home', 'rooms': [
+                         {'id': 'kitchen', 'name': 'Kitchen'},
+                         {'id': 'cellar', 'name': 'Cellar'}]}), \
                  patch('app.models.account.get_active_character', return_value='Avatar Example'):
                 assert streaming.tool_step_presence('Ada Example') == tuple(['Avatar Example'] + names)
                 locations['Ada Example'] = ''
-                with patch('app.models.character.get_character_pos', return_value={'x': 1, 'y': 2}), \
-                     patch('app.core.perception.nearby_in_the_open',
-                           return_value=['Earshot Example']) as nearby:
+                with patch('app.models.character.get_character_pos', return_value={'x': 1, 'z': 2}), \
+                     patch('app.models.character.list_available_characters',
+                           return_value=['Ada Example', 'Earshot Example']), \
+                     patch('app.core.perception._nearby_in_the_open',
+                           return_value=['Earshot Example']):
                     assert streaming.tool_step_presence('Ada Example') == ('Earshot Example',)
-                    nearby.assert_called_once_with('Ada Example', {'x': 1, 'y': 2})
             print('[9] PASS rp_first markers, supplied prompt and room/earshot names')
             from app.core import chat_engine
             from types import SimpleNamespace

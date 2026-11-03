@@ -291,27 +291,16 @@ def present_partners(name: str) -> List[Dict[str, str]]:
     """The OTHER temporary NPCs this one could address right now:
     ``{name, role, task, activity}`` each.
 
-    Earshot follows the perception model — the same room inside a location
-    (``room_entry.characters_in_room``), the hearing circle outside
-    (``perception.nearby_in_the_open``). Only temporary NPCs: avatars and
+    Earshot follows ``perception.addressable_for`` — the room plus the
+    open-air hearing circle. Only temporary NPCs: avatars and
     ordinary characters are never offered (spec § 8). Asleep, travelling or
     mid-interaction ones are left out — they could not answer.
     """
-    from app.models.character import (get_character_current_location,
-                                      get_character_current_room,
-                                      get_character_profile,
+    from app.models.character import (get_character_profile,
                                       get_effective_activity,
                                       is_character_sleeping, is_temporary_npc)
-    loc = get_character_current_location(name) or ""
-    if loc:
-        room = get_character_current_room(name) or ""
-        if not room:
-            return []
-        from app.core.room_entry import characters_in_room
-        names = characters_in_room(loc, room, exclude=name)
-    else:
-        from app.core.perception import nearby_in_the_open
-        names = nearby_in_the_open(name)
+    from app.core.perception import addressable_for
+    names = addressable_for(name)
     out: List[Dict[str, str]] = []
     for other in names:
         if other == name or not is_temporary_npc(other):

@@ -13,16 +13,17 @@ Volume = range, inside a location:
 
 Outside every location the walls are gone, so the room rules have nothing to
 work on: the wilderness is an invisible room around the speaker with the radius
-``game.hearing_radius_m`` (see ``get_hearing_radius_m``). Everyone location-less
+``game.hearing_radius_m`` (see ``get_hearing_radius_m``). Everyone in the open
 inside that circle hears the line (kind ``nearby``); a whisper reaches its
 addressee alone — with no room to carry it, there is no bystander line.
 
 That circle is computed for a speaker INSIDE a location too, and added to the
 room lists: somebody waiting in front of the gate is within shouting distance
-of the taproom. It can only ever add location-less characters, so the room
-rules above are untouched. The one exception is the whisper: inside a location
-it stays inside the walls and reaches nobody out there. Who may be ADDRESSED
-follows the same union (``addressable_for``) — the gate and the fan-out must
+of the taproom. The open set includes location-less characters, location
+grounds and explicitly outdoor rooms; indoor rooms and corridors stay out.
+Room membership still takes precedence. The one exception is the whisper:
+inside a location it stays inside the walls and reaches nobody out there.
+Who may be ADDRESSED follows the same union (``addressable_for``) — the gate and the fan-out must
 answer with one roster, or the player picks an addressee who never hears them.
 
 AND THE ADDRESSED LINE ALWAYS ARRIVES: whoever is named as an addressee and
@@ -188,9 +189,9 @@ def compute_earshot(*, speaker: str, volume: str,
         addressees:       those spoken to directly (always receive content).
         room_members:     names in the same room (the speaker may be among them).
         location_others:  names in OTHER rooms of the same location.
-        nearby:           names within the hearing radius in the open. These
-                          are always LOCATION-LESS characters, so the list
-                          never overlaps the two room lists — but it is filled
+        nearby:           names within the hearing radius in the open (including
+                          location grounds and outdoor rooms). May overlap the
+                          room lists; room membership takes precedence. Filled
                           for a speaker inside a location too: somebody
                           standing in front of the gate is within shouting
                           distance of the taproom, which is exactly what
@@ -280,9 +281,10 @@ def _resolve_presence(location_id: str, room_id: str, *, speaker: str = "",
 
     The two worlds are NOT exclusive any more. Without a location only the
     circle answers; WITH one, the room lists answer AND the circle is computed
-    on top of them — ``_nearby_in_the_open`` only ever returns location-less
-    characters, so the lists never overlap, and somebody standing in front of
-    the gate belongs in the earshot of the taproom. That is the same union
+    on top of them — ``_nearby_in_the_open`` includes grounds and outdoor
+    rooms too. The lists can overlap; ``compute_earshot`` deduplicates them
+    with room membership first. Somebody standing in front of the gate
+    belongs in the earshot of the taproom. That is the same union
     ``addressable_for`` offers the player: the gate that lets an addressee be
     picked and the fan-out that delivers the line have to answer with one
     roster, or a player addresses somebody who never hears them.
@@ -307,7 +309,10 @@ def _resolve_presence(location_id: str, room_id: str, *, speaker: str = "",
 
 def _nearby_in_the_open(speaker: str,
                         speaker_pos: Optional[Dict[str, float]]) -> List[str]:
-    """Location-less characters within ``get_hearing_radius_m`` of the speaker.
+    """Open-air characters within ``get_hearing_radius_m`` of the speaker.
+
+    ``list_open_air_positions`` owns what counts as open (wilderness, ground,
+    outdoor room), using one state query and cached location metadata.
 
     A speaker without a point has no circle at all — nobody hears it, which is
     the honest answer for a character the map does not place anywhere.
@@ -320,9 +325,9 @@ def _nearby_in_the_open(speaker: str,
     except (KeyError, TypeError, ValueError):
         return []
     radius = get_hearing_radius_m()
-    from app.models.character import list_wilderness_positions
+    from app.models.character import list_open_air_positions
     out: List[str] = []
-    for entry in list_wilderness_positions():
+    for entry in list_open_air_positions():
         name = entry.get("name") or ""
         if not name or name == speaker:
             continue
@@ -415,12 +420,12 @@ def anchor_pos(anchor: Optional[Anchor]) -> Optional[Dict[str, float]]:
 
 def nearby_in_the_open(character_name: str,
                        pos: Optional[Dict[str, float]] = None) -> List[str]:
-    """Public earshot roster for a LOCATION-LESS character: everyone else
-    without a location within ``get_hearing_radius_m`` metres of them.
+    """Public earshot roster: everyone else in the open (wilderness, ground,
+    outdoor rooms) within ``get_hearing_radius_m`` metres of this character.
 
-    The ONE wilderness-presence computation — the prompt builders, the
-    reaction dispatch and TalkTo all ask this instead of each inventing a
-    distance rule (the room paths likewise share ``characters_in_room``).
+    The ONE open-air circle computation — prompt builders, reaction dispatch
+    and addressability all share it instead of inventing separate distance
+    rules (the room paths likewise share ``characters_in_room``).
     Empty for a character the map does not place; callers that must tell
     "nobody around" from "we do not know" read the point themselves and pass
     it in, which also saves the second lookup.
@@ -480,7 +485,8 @@ def addressable_for(character_name: str) -> List[str]:
     * the ROOM, when the character is inside a location — same rule, same
       helper, same room-id/room-name tolerance as every other room path;
     * the EARSHOT CIRCLE around the character's own metre point: everybody
-      location-less within ``game.hearing_radius_m``. That half applies
+      in the open (wilderness, ground, outdoor rooms) within
+      ``game.hearing_radius_m``. That half applies
       INSIDE a location too — the point is the truth, and somebody standing
       in front of the gate is within shouting distance of the taproom.
 

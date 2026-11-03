@@ -1918,6 +1918,50 @@ def list_wilderness_positions() -> List[Dict[str, Any]]:
             for r in rows if _is_real_character(r[0])]
 
 
+def list_open_air_positions() -> List[Dict[str, Any]]:
+    """Placed characters in the open: wilderness, ground, or outdoor rooms.
+
+    One positions/state SELECT, no profile loads. Location rows come from the
+    generation-invalidated world cache and are resolved once per location in
+    this call. Room names are accepted just like ``characters_in_room``.
+    Corridors stay enclosed even if their metadata says otherwise; an unset
+    room flag does not inherit an outdoor location's flag.
+    """
+    from app.models.world import (GROUND_ROOM_ID, get_location_by_id,
+                                  is_floor_room, resolve_indoor_flag)
+
+    rows = get_connection().execute(
+        "SELECT character_name, pos_x, pos_z, current_location, current_room "
+        "FROM character_state WHERE pos_x IS NOT NULL AND pos_z IS NOT NULL"
+    ).fetchall()
+    rooms_by_location: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    out: List[Dict[str, Any]] = []
+    for name, x, z, location_id, room_id in rows:
+        if not _is_real_character(name):
+            continue
+        room_id = (room_id or "").strip()
+        if location_id and room_id != GROUND_ROOM_ID:
+            if is_floor_room(room_id):
+                continue
+            if location_id not in rooms_by_location:
+                location = get_location_by_id(location_id) or {}
+                rooms = location.get("rooms") or []
+                # IDs take precedence over historical display names.
+                index = {r["name"]: r for r in rooms if r.get("name")}
+                index.update({r["id"]: r for r in rooms if r.get("id")})
+                rooms_by_location[location_id] = index
+            room = rooms_by_location[location_id].get(room_id)
+            if not room:
+                continue
+            if is_floor_room(room.get("id", "")):
+                continue
+            if (room.get("id") != GROUND_ROOM_ID
+                    and resolve_indoor_flag(None, room) != "outdoor"):
+                continue
+        out.append({"name": name, "x": float(x), "z": float(z)})
+    return out
+
+
 def list_character_positions() -> List[Dict[str, Any]]:
     """EVERYONE with a metre point, inside a location or not —
     ``[{"name": ..., "x": ..., "z": ...}, ...]``.

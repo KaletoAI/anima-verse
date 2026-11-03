@@ -261,6 +261,11 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     answers, and the answer never appears on the player's screen because its
     utterance carries no location. It is the reply to something this character
     said; it belongs in its scene.
+
+    The same applies to a named addressee heard as ``nearby`` across outdoor
+    areas: the perception exists, but the speaker's room/location can differ
+    from the listener's. Use the stored addressee list, never a new distance
+    check. Ambient lines retain the existing room/wilderness scope.
     """
     conn = get_connection()
     # Include u.volume (whisper/normal/shout) — NOT secret content, just the
@@ -268,12 +273,15 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     # u.game_ts travels with it so a stream row carries the WORLD time it was
     # spoken at, not just the system stamp in p.ts.
     source_column = ", json_extract(u.meta, '$.source') AS source" if include_source else ""
+    addressed_scope = (
+        "p.kind='addressed' OR (p.kind='nearby' AND EXISTS "
+        "(SELECT 1 FROM json_each(u.addressees) a WHERE a.value=p.perceiver))")
     if location_id:
         rows = conn.execute(
             f"SELECT p.*, u.volume AS volume, u.game_ts AS game_ts{source_column} "
             "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
-            "WHERE p.perceiver=? AND (p.kind='addressed' "
+            f"WHERE p.perceiver=? AND ({addressed_scope} "
             "                         OR (u.location_id=? AND u.room_id=?)) "
             "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
             (perceiver, location_id, room_id, limit)).fetchall()
@@ -282,7 +290,7 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
             f"SELECT p.*, u.volume AS volume, u.game_ts AS game_ts{source_column} "
             "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
-            "WHERE p.perceiver=? AND (p.kind='addressed' OR u.location_id='') "
+            f"WHERE p.perceiver=? AND ({addressed_scope} OR u.location_id='') "
             "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
             (perceiver, limit)).fetchall()
     out = [_row_to_dict(r) for r in reversed(rows)]

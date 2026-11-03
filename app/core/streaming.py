@@ -392,26 +392,16 @@ def decision_tools(tools, *, suppress_in_person: bool):
 
 
 def tool_step_presence(character: str) -> tuple[str, ...]:
-    """Exact names from the legacy thought tool context's room/earshot list."""
-    from app.models.character import (
-        get_character_current_location, get_character_current_room,
-        list_available_characters, get_character_pos,
-    )
+    """The shared room + open-air addressability roster for tool availability."""
+    from app.core.perception import addressable_for
     from app.models.account import get_active_character
-
-    location = get_character_current_location(character) or ""
-    if not location:
-        from app.core.perception import nearby_in_the_open
-        pos = get_character_pos(character)
-        return tuple(nearby_in_the_open(character, pos)) if pos else ()
-    room = get_character_current_room(character) or ""
+    names = addressable_for(character)
     avatar = get_active_character()
-    candidates = ([avatar] if avatar and avatar != character else []) + [
-        name for name in list_available_characters()
-        if name != character and name != avatar]
-    return tuple(name for name in candidates
-                 if get_character_current_location(name) == location
-                 and (get_character_current_room(name) or "") == room)
+    # Preserve the tool prompt's avatar-first presentation without changing
+    # membership or imposing a second presence gate.
+    if avatar in names:
+        names = [avatar] + [name for name in names if name != avatar]
+    return tuple(names)
 
 
 def turn_tools(tools, facts: TurnFacts, *, rp_first: bool) -> tuple[list, dict[str, str]]:
