@@ -1770,7 +1770,7 @@ export function PosesTab() {
                         {draft.animation ? null : (
                           <Field
                             label={t('Yaw offset')}
-                            hint={t('Degrees the pair clip’s frame turns against the marker facing.')}
+                            hint={t('Degrees the pair or group clip’s frame turns against the marker facing.')}
                           >
                             <input
                               className="ga-input"
@@ -1789,8 +1789,9 @@ export function PosesTab() {
 
                     {/* Below the select, not inside the Field: .ga-field-control
                         is a flex ROW and would put the canvas beside the select.
-                        A PAIR is previewed on a virtual marker of its place type
-                        and carries the yaw dial; a solo pose never turns against
+                        A PAIR or GROUP is previewed on a virtual marker of its
+                        place type (a group on a double bed) and carries the yaw
+                        dial; a solo pose never turns against
                         a marker, so it gets no `onYawOffset`. */}
                     {draft.animation ? (
                       <ClipPreview

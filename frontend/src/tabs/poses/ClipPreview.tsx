@@ -94,6 +94,25 @@ function soloBox(group?: string): MarkerBox | undefined {
   return SOLO_BOX[(group || '').trim().toLowerCase()]
 }
 
+/** The body a GROUP (three roles and more) is seated on — seated exactly like
+ *  a pair (`pair_yaw`: the clip's +X along the facing, then `yaw_offset`),
+ *  but on the double bed a group actually plays on: measured on Anima
+ *  Divide's "modern double bed" (2.10 × 2.02 m, facing south, its sleepers'
+ *  slots across the facing — so the head end is the BACK, like `SOLO_BOX`).
+ *  The surface height stays the pair marker's, so `root_drop` reads the
+ *  same. */
+const GROUP_BOX: Record<string, MarkerBox> = {
+  seat: MARKER_BOX.seat,
+  lie: { size: [2.1, 0.1, 2.0] },
+}
+
+/** The seating body for a clip of `roles` roles: a pair's marker, a group's
+ *  bed, nothing for a solo clip. */
+function seatBox(roles: number, group?: string): MarkerBox | undefined {
+  if (roles < 2) return undefined
+  return roles > 2 ? GROUP_BOX[(group || '').trim().toLowerCase()] : markerBox(group)
+}
+
 interface ApiClip {
   kind: string; role?: string; set?: string; url: string
   height_offsets_cm?: ClipHeightOffsetsCm
@@ -236,13 +255,12 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   roleShiftRef.current = roleShiftM
   const dialled = importYaw !== undefined || importTilt !== undefined
     || importRoll !== undefined || importHeightM !== undefined
-  const box = markerBox(group)
-  // Does the loaded clip actually have exactly two halves? Only then is there
-  // a pair to seat — a kind without an A/B pair plays solo whatever the pose
-  // says, and a group (three roles and more) plays on the ground plane.
-  const [pairClip, setPairClip] = useState(false)
-  // A marker to turn against: a pair clip AND a place type with a body.
-  const seated = pairClip && !!box
+  // How many roles the loaded clip actually has: two or more is a pair or a
+  // group to seat — a kind without halves plays solo whatever the pose says.
+  const [roleCount, setRoleCount] = useState(0)
+  const box = seatBox(roleCount, group)
+  // A body to turn against: a pair or group clip AND a place type with one.
+  const seated = !!box
 
   useEffect(() => {
     const host = hostRef.current
@@ -256,7 +274,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     const disposers: Array<() => void> = []
     setStatus(t('Loading…'))
     setInfo(null)
-    setPairClip(false)
+    setRoleCount(0)
     void (async () => {
       try {
         const THREE = await import('three')
@@ -334,7 +352,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         // the whole point of the dials.
         //
         //  * a PAIR on a place type with a marker — the couple's seating,
-        //    `MARKER_BOX`;
+        //    `MARKER_BOX`; a GROUP the same way on its bed, `GROUP_BOX`;
         //  * a SOLO clip with a `footprint` — the calibration body the
         //    orientation dials are set against, `SOLO_BOX`, which is the same
         //    slab turned 90° because a solo figure lies ALONG the facing. A
@@ -342,9 +360,9 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         //    height against (E3): the figure has to be seen resting ON
         //    something.
         //
-        // A pair being seated wins, so nothing is ever drawn twice.
-        setPairClip(parts.length === 2)
-        const seat = parts.length === 2 ? markerBox(group) : undefined
+        // A pair or group being seated wins, so nothing is ever drawn twice.
+        setRoleCount(parts.length)
+        const seat = seatBox(parts.length, group)
         const calib = seat || (footprint ? soloBox(footprint) : undefined)
         if (calib) {
           const [bw, bh, bd] = calib.size
@@ -378,7 +396,9 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           const surfaceGroup = (seat ? group : footprint)?.trim().toLowerCase()
           if (surfaceGroup === 'lie' || surfaceGroup === 'seat') {
             const pillow = surfaceGroup === 'lie'
-            const across = pillow && !!seat
+            // a pair's marker lies across the facing; a group's bed and a
+            // solo body have their head end at the back
+            const across = pillow && !!seat && parts.length === 2
             const aidGeom = pillow
               ? new THREE.BoxGeometry(across ? 0.32 : bw * 0.8, 0.09, across ? bd * 0.8 : 0.32)
               : new THREE.BoxGeometry(bw, 0.55, 0.07)
@@ -586,7 +606,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           <SliderInput
             label={t('Yaw offset')}
             unit="°"
-            title={t('Degrees the pair clip’s frame turns against the marker facing. The preview’s marker faces south, so the couple turns exactly as it will on the real bench.')}
+            title={t('Degrees the pair or group clip’s frame turns against the marker facing. The preview’s marker faces south, so the pair or group turns exactly as it will on the real bench or bed.')}
             min={-180}
             max={180}
             step={5}
