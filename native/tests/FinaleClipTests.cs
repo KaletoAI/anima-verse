@@ -33,7 +33,7 @@ public sealed class FinaleClipTests
         step = FinaleClip.Step(step.Play, .5, false);
         Assert.Equal(1, step.T, 9);
         step = FinaleClip.Step(step.Play, .04, false);
-        Assert.Equal((null, null, 0d), step);
+        Assert.Equal((null, null, null, 0d), step);
         Assert.Equal((null, "f1"), FinaleClip.Adopt(step.Play, seen, Block("f1") with { ElapsedS = 3.2 }, true));
         (play, seen) = FinaleClip.Adopt(null, seen, Block("f2"), true);
         Assert.Equal(0, play!.T);
@@ -90,7 +90,46 @@ public sealed class FinaleClipTests
         Assert.Equal("k__a", step.Clip);
         foreach (double dt in new[] { 0, -1, double.NaN })
             Assert.Equal(.9, FinaleClip.Step(play, dt, false).T, 9);
-        Assert.Equal((null, null, 0d), FinaleClip.Step(null, .1, false));
+        Assert.Equal((null, null, null, 0d), FinaleClip.Step(null, .1, false));
+    }
+
+    [Theory]
+    [InlineData("c", "wave", "fixture-finale__c~wave")]
+    [InlineData("e", "arm-down", "fixture-finale__e~arm-down")]
+    [InlineData("c", "", "fixture-finale__c")]
+    [InlineData("c", "Wave!", "fixture-finale__c")]
+    [InlineData("c", "-wave", "fixture-finale__c")]
+    [InlineData("c", "wave\n", "fixture-finale__c")]
+    [InlineData(null, "wave", "fixture-finale")]
+    public void WorldmapFinaleAlternativeUsesRoleHalfAndStartsFromZero(string? role, string alt, string clip)
+    {
+        using var map = JsonDocument.Parse(JsonSerializer.Serialize(new { characters = new[] {
+            new { name = "Alt", finale = new { id = "a1", kind = "fixture-finale", role, alt, elapsed_s = .9, duration_s = 1.033 } }
+        }}));
+        var block = CharacterRow.ParseList(map.RootElement)[0].Finale;
+        var adopted = FinaleClip.Adopt(null, "", block, true);
+        var step = FinaleClip.Step(adopted.Play, .1, false);
+        Assert.Equal(clip, step.Clip);
+        Assert.Equal(.1, step.T, 9);
+    }
+
+    [Theory]
+    [InlineData(true, true, "fixture-finale__c~wave")]
+    [InlineData(false, true, "fixture-finale__c")]
+    [InlineData(false, false, null)]
+    public void AlternativeFinaleOffersBaseFallbackWithoutChangingItsClock(bool haveAlt, bool haveBase, string? expected)
+    {
+        // Browser smoke [9]: role c / wave, elapsed .9, duration 1.033; first frame .1.
+        var play = FinaleClip.Adopt(null, "", Block("a1") with { Role = "c", Alt = "wave" }, true).Play!;
+        var step = FinaleClip.Step(play, .1, false);
+        Assert.Equal("fixture-finale__c~wave", step.Clip);
+        Assert.Equal("fixture-finale__c", step.Base);
+        bool Usable(string name) => name == "fixture-finale__c~wave" ? haveAlt : name == "fixture-finale__c" && haveBase;
+        Assert.Equal(expected, step.Play!.ResolveClip(Usable));
+        Assert.Equal(.1, step.T, 9);
+        var frozen = FinaleClip.Step(step.Play, .5, true);
+        Assert.Equal(.1, frozen.T, 9);
+        Assert.Equal(expected, frozen.Play!.ResolveClip(Usable));
     }
 
     [Fact]

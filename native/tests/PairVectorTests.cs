@@ -318,6 +318,22 @@ public class PairPlayTests
         Assert.Equal(5, p.Place((0, 0), (_, _, _) => null, (_, _) => 5, (_, _) => 1).Y, 12);
     }
 
+    [Theory]
+    [InlineData("wave", "greeting-hug__b~wave")]
+    [InlineData("", "greeting-hug__b")]
+    public void WorldmapInteractionSelectsAlternativeHalf(string alt, string clip)
+    {
+        using var map = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new { characters = new[] {
+            new { name = "B", interaction = new { id = "p1", kind = "greeting-hug", role = "b", alt,
+                anchor = new { x = 10, z = 22, yaw = 0 }, elapsed_s = 3, rate = 1, loop = true, clip_duration_s = 2 } }
+        }}));
+        var row = CharacterRow.ParseList(map.RootElement)[0];
+        var play = PairPlay.Adopt(null, row.Interaction, 1, out _)!;
+        Assert.Equal(clip, play.Clip);
+        Assert.Equal(1, play.Advance(0), 9);
+        Assert.Equal(new PairAnchor(10, 22, 0, null), play.Anchor);
+    }
+
     [Fact]
     public void NativeRootPathIsInMetresAlready()
     {

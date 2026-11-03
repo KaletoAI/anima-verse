@@ -570,7 +570,7 @@ public partial class FigureManager : Node3D
         fig.Waypoints.Clear();
         fig.Ride = null;
         // The half is asked for now (Task 35b): its fit runs while the poll's other work goes on.
-        if (fig.Pair is { } pair) fig.EnsureClip(pair.Clip);
+        if (fig.Pair is { } pair && pair.ResolveClip(fig.HasClip) is { } clip) fig.EnsureClip(clip);
     }
 
     private static void AdoptFinale(Figure fig, CharacterRow row)
@@ -581,12 +581,13 @@ public partial class FigureManager : Node3D
     private (string Clip, double T, bool Start)? StepFinale(Figure fig, double dt, bool frozen)
     {
         if (fig.Finale is not { } finale) return null;
-        string clip = finale.Role is { } role ? $"{finale.Kind}__{role}" : finale.Kind;
-        if (!fig.HasClip(clip) || (finale.Role is not null && Clips.PairRootAt(clip, 0) is null))
+        string? clip = finale.ResolveClip(name => fig.HasClip(name)
+            && (finale.Role is null || Clips.PairRootAt(name, 0) is not null));
+        if (clip is null)
         {
             // Initial model work can still supply the figure's action table.
             if (fig.Loading) return null;
-            _log($"[figures] finale skipped {fig.CharacterName} {finale.Kind} role={finale.Role ?? "null"} id={finale.Id}: missing clip {clip}");
+            _log($"[figures] finale skipped {fig.CharacterName} {finale.Kind} role={finale.Role ?? "null"} id={finale.Id}: missing clip {finale.Clip}");
             fig.Finale = null;
             return null;
         }
@@ -600,7 +601,7 @@ public partial class FigureManager : Node3D
             fig.FinaleStartedId = finale.Id;
             _log($"[figures] finale {fig.CharacterName} {finale.Kind} role={finale.Role ?? "null"} id={finale.Id}");
         }
-        return (step.Clip, step.T, start);
+        return (clip, step.T, start);
     }
 
     /// <summary>
@@ -848,7 +849,7 @@ public partial class FigureManager : Node3D
         var it = fig.Pair!;
         if (fig.Player is null || fig.Portrait is not null) return false;
         double phase = it.Advance(dt);
-        string clip = it.Clip;
+        string? clip = it.ResolveClip(name => fig.HasClip(name) && Clips.PairRootAt(name, phase) is not null);
         bool loop = it.Loop, restart = false;
         double? finaleFrame = null;
         if (fig.Finale is { Role: not null } && StepFinale(fig, dt, it.Rate <= 0) is { } finale)
@@ -856,7 +857,7 @@ public partial class FigureManager : Node3D
             clip = finale.Clip; phase = finale.T; loop = false; restart = finale.Start;
             finaleFrame = restart ? 0 : dt;
         }
-        if (Clips.PairRootAt(clip, phase) is not { } root) return false;
+        if (clip is null || Clips.PairRootAt(clip, phase) is not { } root) return false;
         if (fig.ClipPending(clip))
         {
             // Lazy (Task 35b): the half is being fitted — the figure holds where it stands, playing what it played.
@@ -1463,11 +1464,10 @@ public partial class FigureManager : Node3D
         foreach (var raw in new[] { fig.Activity, fig.WantedClip.Kind, fig.CurrentKind })
             if (raw.Length > 0) list.Add(ResolveAction(raw, kinds));
         if (fig.CurrentClip.Length > 0 && kinds.Contains(fig.CurrentClip)) list.Add(fig.CurrentClip);
-        if (fig.Pair is { } pair && kinds.Contains(pair.Clip)) list.Add(pair.Clip);
+        if (fig.Pair is { } pair && pair.ResolveClip(kinds.Contains) is { } half) list.Add(half);
         if (fig.Finale is { } finale)
         {
-            string clip = finale.Role is { } role ? $"{finale.Kind}__{role}" : finale.Kind;
-            if (kinds.Contains(clip)) list.Add(clip);
+            if (finale.ResolveClip(kinds.Contains) is { } clip) list.Add(clip);
         }
         return list.Where(a => a.Length > 0).Distinct().ToList();
     }

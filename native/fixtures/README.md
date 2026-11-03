@@ -1619,6 +1619,18 @@ Only fixture clips are used; they demonstrate protocol playback without requirin
 The prop-action checks cover the private arrived avatar: solo returns to its authored held pose, and a
 synthetic pair half with root (.25,.5) uses its private anchor height .129, plays once, then loops again.
 
+**Task 112 alternatives** (`pairs/worldmap_alt.json`, Q112): the listing's `alt_clips` adds
+`greeting-hug__a~wave`, explicitly mapped to the existing hug role-a FBX as an offline alias;
+no additional published animation asset is required. Cy requests `wave`, Dee requests an absent
+`missing` alt and plays role b's base. At elapsed .5 plus .5 frame seconds both clocks reach **1**;
+the hug roots remain **(63.788104, 4.096875, 131)** and **(64.211896, 4.096875, 131)**.
+The check also removes the alt from one rig's available actions, removes its root, then removes only
+the base root to prove fallback and actual-clip root lookup without changing the anchor or entry blend.
+Each participant receives a 1.033-second hug finale over handshake actions: Cy plays the alt, Dee
+falls back, both start at zero despite elapsed .9, and .5 + .54 ends them while action time reaches
+**2.04**. Cy returns to handshake root **(63.633258, 4.096875, 131)**. Missing both alt and base
+for comforting role a leaves ordinary placement, despite role b's available root.
+
 **Q8 loop flag per figure** (Task 35): Ann and Hal both wear Test3_mia, so their players bind the SAME
 `greeting-hug__a` Animation; the listing calls the hug a cycle (`loop` absent → Linear), length **4.0333 s**. Called
 directly (no manager tick, which would put their handshakes back): Hal `playPair(hug, 0.2, loop: false)`, then Ann

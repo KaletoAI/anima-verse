@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Json = AnimaNative.World.Json;
 
 namespace AnimaNative.Figures;
 
@@ -72,6 +73,43 @@ public static class ClipLibraryRules
 
     /// <summary><c>isPairClipName</c>: a role half <c>&lt;kind&gt;__a</c> … <c>__e</c> (pair or group clip), optionally an alt half <c>~&lt;alt&gt;</c> (G6).</summary>
     public static bool IsPairName(string kind) => PairName.IsMatch(kind);
+
+    /// <summary>The listing and playback name of a solo, role half or alternative role half (G6).</summary>
+    public static string IndexName(string kind, string? role = null, string? alt = null)
+        => string.IsNullOrEmpty(role) ? kind : $"{kind}__{role}" + (string.IsNullOrEmpty(alt) ? "" : $"~{alt}");
+
+    /// <summary>Prefer the requested half; a missing alt uses its own role's base, never another role.</summary>
+    public static string? SelectClip(string clip, string baseClip, Func<string, bool> usable)
+        => usable(clip) ? clip : clip != baseClip && usable(baseClip) ? baseClip : null;
+
+    /// <summary>Append alt_clips after clips, retaining source flags and the listing's set precedence.</summary>
+    public static List<ClipSourceEntry> ParseEntries(JsonElement root)
+    {
+        var entries = new List<ClipSourceEntry>();
+        foreach (var c in Json.Arr(root, "clips").Concat(Json.Arr(root, "alt_clips")))
+        {
+            if (c.ValueKind != JsonValueKind.Object) continue;
+            var url = Json.Str(c, "url");
+            if (url.Length == 0) continue;
+            var kind = Json.Str(c, "kind");
+            var role = Json.Str(c, "role");
+            bool? loop = c.TryGetProperty("loop", out var l) && l.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? l.ValueKind == JsonValueKind.True : null;
+            // `!!c.root_motion && c.root_motion.mode !== 'strip'`
+            bool rootMotion = c.TryGetProperty("root_motion", out var rm) && rm.ValueKind == JsonValueKind.Object
+                              && !(rm.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "strip");
+            entries.Add(new ClipSourceEntry(IndexName(kind, role, Json.Str(c, "alt")), Json.Str(c, "set"), url, loop, rootMotion)
+            {
+                KeepFacing = rootMotion && rm.TryGetProperty("mode", out var facingMode) && facingMode.ValueKind == JsonValueKind.String && facingMode.GetString() == "keep",
+                HeightOffsets = (c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default) with
+                {
+                    Shift = c.TryGetProperty("orientation", out var orientation) && orientation.ValueKind == JsonValueKind.Object
+                        && orientation.TryGetProperty("shift_cm", out var horizontal) ? ClipShift.Parse(horizontal) : default,
+                },
+            });
+        }
+        return entries;
+    }
 
     /// <summary>
     /// <c>commitInListOrder(sources, results, ops)</c>: downloads may finish in any order, the LISTING owns

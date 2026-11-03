@@ -169,7 +169,7 @@ public sealed record CharacterRow(
         if (!c.TryGetProperty("finale", out var f) || f.ValueKind != JsonValueKind.Object) return null;
         string role = Json.Str(f, "role");
         return new FinaleBlock(Json.Str(f, "id"), Json.Str(f, "kind"), FinaleClip.IsRole(role) ? role : null,
-                               Json.NumOrNull(f, "elapsed_s") ?? 0, Json.NumOrNull(f, "duration_s") ?? 0);
+                               Json.NumOrNull(f, "elapsed_s") ?? 0, Json.NumOrNull(f, "duration_s") ?? 0) { Alt = Json.Str(f, "alt") };
     }
 
     /// <summary>
@@ -186,7 +186,7 @@ public sealed record CharacterRow(
         return new PairInteraction(Json.Str(it, "id"), Json.Str(it, "kind"), Json.Str(it, "role"), ParseMembers(it),
                                    new PairAnchor(Json.Num(a, "x"), Json.Num(a, "z"), Json.Num(a, "yaw"), place),
                                    Json.NumOrNull(it, "elapsed_s") ?? double.NaN, Json.NumOrNull(it, "clip_duration_s") ?? 0,
-                                   loop, Json.NumOrNull(it, "rate") ?? 0);
+                                   loop, Json.NumOrNull(it, "rate") ?? 0) { Alt = Json.Str(it, "alt") };
     }
 }
 

@@ -150,28 +150,7 @@ public sealed class ClipLibrary
             root.TryGetProperty("movement_poses", out var poses) ? poses.GetRawText() : "",
             root.TryGetProperty("transition_clips", out var transitions) ? transitions.GetRawText() : "");
         Entries.Clear();
-        foreach (var c in Json.Arr(root, "clips"))
-        {
-            if (c.ValueKind != JsonValueKind.Object) continue;
-            var url = Json.Str(c, "url");
-            if (url.Length == 0) continue;
-            var kind = Json.Str(c, "kind");
-            var role = Json.Str(c, "role");
-            bool? loop = c.TryGetProperty("loop", out var l) && l.ValueKind is JsonValueKind.True or JsonValueKind.False
-                ? l.ValueKind == JsonValueKind.True : null;
-            // `!!c.root_motion && c.root_motion.mode !== 'strip'`
-            bool rootMotion = c.TryGetProperty("root_motion", out var rm) && rm.ValueKind == JsonValueKind.Object
-                              && !(rm.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "strip");
-            Entries.Add(new ClipSourceEntry(role.Length > 0 ? $"{kind}__{role}" : kind, Json.Str(c, "set"), url, loop, rootMotion)
-            {
-                KeepFacing = rootMotion && rm.TryGetProperty("mode", out var facingMode) && facingMode.ValueKind == JsonValueKind.String && facingMode.GetString() == "keep",
-                HeightOffsets = (c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default) with
-                {
-                    Shift = c.TryGetProperty("orientation", out var orientation) && orientation.ValueKind == JsonValueKind.Object
-                        && orientation.TryGetProperty("shift_cm", out var horizontal) ? ClipShift.Parse(horizontal) : default,
-                },
-            });
-        }
+        Entries.AddRange(ClipLibraryRules.ParseEntries(root));
         Poses = FigureClips.ResolveMovementPoses(root.TryGetProperty("movement_poses", out var mp) ? mp : null);
         Transitions = FigureClips.ResolveClipTransitions(root.TryGetProperty("transition_clips", out var tc) ? tc : null);
     }

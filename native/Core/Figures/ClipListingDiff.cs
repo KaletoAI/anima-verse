@@ -10,8 +10,9 @@ public sealed record ClipListingDiff(bool RevisionChanged, IReadOnlyList<string>
     public static ClipListingDiff Compare(JsonObject oldListing, JsonObject newListing)
     {
         static Dictionary<string, JsonNode[]> Kinds(JsonObject listing) =>
-            (listing["clips"] as JsonArray ?? new JsonArray()).OfType<JsonObject>()
-            .GroupBy(c => (string?)c["kind"] + ((string?)c["role"] is { Length: > 0 } role ? "__" + role : ""))
+            (listing["clips"] as JsonArray ?? new JsonArray())
+            .Concat(listing["alt_clips"] as JsonArray ?? new JsonArray()).OfType<JsonObject>()
+            .GroupBy(c => ClipLibraryRules.IndexName((string?)c["kind"] ?? "", (string?)c["role"], (string?)c["alt"]))
             .ToDictionary(g => g.Key, g => g.Cast<JsonNode>().ToArray());
         var old = Kinds(oldListing);
         var next = Kinds(newListing);

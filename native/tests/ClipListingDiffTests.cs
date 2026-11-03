@@ -23,4 +23,15 @@ public class ClipListingDiffTests
         => Assert.Equal(new[] { "pair__a" }, ClipListingDiff.Compare(
             Listing("a", """[{"kind":"pair","role":"a","set":"x","url":"/a?v=1"},{"kind":"pair","role":"b","url":"/b"}]"""),
             Listing("b", """[{"kind":"pair","role":"a","set":"x","url":"/a?v=2"},{"kind":"pair","role":"b","url":"/b"}]""")).ChangedUrls);
+    [Fact]
+    public void AlternativeAdditionsAndUpdatesAreIndexedSeparatelyFromBase()
+    {
+        var old = Listing("a", """[{"kind":"pair","role":"b","url":"/base"}]""");
+        var next = (JsonObject)old.DeepClone();
+        next["alt_clips"] = JsonNode.Parse("""[{"kind":"pair","role":"b","alt":"wave","url":"/wave?v=1"}]""");
+        Assert.Equal(new[] { "pair__b~wave" }, ClipListingDiff.Compare(old, next).AddedKinds);
+        var changed = (JsonObject)next.DeepClone();
+        changed["alt_clips"]![0]!["url"] = "/wave?v=2";
+        Assert.Equal(new[] { "pair__b~wave" }, ClipListingDiff.Compare(next, changed).ChangedUrls);
+    }
 }

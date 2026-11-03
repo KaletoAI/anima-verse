@@ -1070,13 +1070,22 @@ figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase
 
 A row's `finale` (§ A8c, Task 96) plays once per id, starting at frame zero regardless of `elapsed_s`.
 `Core/Figures/FinaleClip.cs` owns its independent frame clock (frozen with the world); `FinaleClipTests`
-uses the same hand-derived numbers as browser smoke [1]–[7]. A pair half uses its own root path at the
+uses the same hand-derived numbers as browser smoke [1]–[9]. A pair half uses its own root path at the
 interaction anchor while the action clock continues underneath. A solo temporarily replaces the place pose;
 the arrived own B1 avatar uses seeked playback and returns to its held clip. Finales use the figure's set
 chain without stand-ins, play without looping, and wait at frame zero for an on-demand fit. A missing clip
 skips only the finale; losing both interaction and place ends it immediately. One `[figures] finale …` line
 records each start, and one `finale skipped …: missing clip …` line records a missing clip. The pairs and
 prop-actions checks cover these paths without a server or world database.
+
+Alternative halves (G6, Task 112) are appended from the listing's `alt_clips` under
+`<kind>__<role>~<alt>`, with their own raw root paths and normal per-rig lazy fitting.
+Both interactions and finales prefer that exact half; if this rig lacks it or its root,
+they use the role's own `<kind>__<role>`. Placement always reads the root of the clip
+actually played at the same anchor and phase. Missing both halves retains ordinary
+placement. `--check pairs` Q112 covers imported alternatives, missing-alt fallback,
+rig/root availability and alternative finales; the shared geometry vector runner
+consumes all 28 current cases, including the G6 name cases.
 
 ### Clip memory and figure cost (Task 35, ruling P3-R11)
 

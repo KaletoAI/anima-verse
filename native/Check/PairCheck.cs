@@ -300,8 +300,9 @@ public static class PairCheck
             NearD("Q84 steering wins over a late refusal", Wrap(avatar.Yaw), 0, 1e-6);
 
             await CheckFinale(mgr, dir, logs);
+            await CheckAlternatives(mgr, dir);
 
-            var report = $"pairs Q0..Q9 + Task96 finale ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
+            var report = $"pairs Q0..Q9 + Q112 alternatives + Task96 finale ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
                          + $"hug ±{-ha.X:0.000} m; seat 4.097, loft 7.03; resync Δ {resyncMs:0.0} ms; "
                          + $"frozen 12 frames; Task84 blend/freeze/reseek/facing ok; solo Eve; loop twin Hal once / Ann cycle; {memory})";
             GD.Print($"[check-pairs] {report}");
@@ -404,6 +405,83 @@ public static class PairCheck
         await Poll(); mgr.Tick(0);
         Expect("F96 disappearing action ends finale immediately", cy.Finale is null && cy.CurrentClip != "greeting-hug__a" && cy.Pair is null, cy.CurrentClip);
         Expect("F96 partner stays in its loop", dee.CurrentClip == "greeting-handshake__b", dee.CurrentClip);
+    }
+
+    /// <summary>G6: fixture alt import, same phase/anchor, rig/root fallback and independent alt finales.</summary>
+    private static async Task CheckAlternatives(FigureManager mgr, string dir)
+    {
+        const string alt = "greeting-hug__a~wave", own = "greeting-hug__a";
+        var map = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "worldmap_alt.json")))!.AsObject();
+        var rows = map["characters"]!.AsArray();
+        Task Poll() => mgr.Apply(JsonSerializer.SerializeToElement(map));
+        var empty = map.DeepClone(); empty["characters"] = new JsonArray();
+        await mgr.Apply(JsonSerializer.SerializeToElement(empty));
+        await Poll(); mgr.Tick(0); mgr.Tick(.5);
+        var cy = mgr.Figures["Cy Seat"]; var dee = mgr.Figures["Dee Seat"];
+        Expect("Q112 listing appends the alternative with its full name", mgr.Clips.Entries.Any(e => e.Kind == alt), "missing entry");
+        RootNear(mgr, alt, 1, -.212, 0);
+        Expect("Q112 available alt plays; missing alt uses own base", cy.CurrentClip == alt && dee.CurrentClip == "greeting-hug__b",
+            $"{cy.CurrentClip}, {dee.CurrentClip}");
+        NearD("Q112 alternative and fallback keep the same phase", cy.ClipTime - dee.ClipTime, 0, ClipTol);
+        NearD("Q112 alternative clock uses elapsed .5 plus frame .5", cy.Pair!.ClipT, 1, 1e-9);
+        NearV("Q112 alternative keeps its role root at the seat anchor", cy.Position, 63.788104, 4.096875, 131, PosTol);
+        NearV("Q112 fallback uses its own role root at the seat anchor", dee.Position, 64.211896, 4.096875, 131, PosTol);
+        var blend = cy.Pair.Blend;
+
+        // An imported alternative can be unavailable on this particular rig.
+        var refresh = cy.RefreshClipKinds;
+        var withoutAlt = cy.ClipKinds.Where(k => k != alt).ToArray();
+        cy.RefreshClipKinds = () => withoutAlt; mgr.Tick(0);
+        Expect("Q112 rig without alt falls back to base", cy.CurrentClip == own, cy.CurrentClip);
+        NearD("Q112 rig fallback keeps clip clock", cy.Pair.ClipT, 1, 1e-9);
+        NearV("Q112 rig fallback keeps root and anchor", cy.Position, 63.788104, 4.096875, 131, PosTol);
+        cy.RefreshClipKinds = refresh; mgr.Tick(0);
+
+        // Root availability participates in selection, and the selected clip owns the lookup.
+        var roots = mgr.Clips.Index.PairRoots;
+        var altRoot = roots[alt]; roots.Remove(alt); mgr.Tick(0);
+        Expect("Q112 alt without root falls back to base", cy.CurrentClip == own, cy.CurrentClip);
+        roots[alt] = altRoot;
+        var baseRoot = roots[own]; roots.Remove(own); mgr.Tick(0);
+        Expect("Q112 alt plays using its own root even without base root", cy.CurrentClip == alt, cy.CurrentClip);
+        NearV("Q112 actual alt root places the figure", cy.Position, 63.788104, 4.096875, 131, PosTol);
+        roots[own] = baseRoot;
+        Expect("Q112 fallback does not restart entry blend", cy.Pair.Blend == blend, "restarted");
+
+        // Finales use the same alternative/base choice, start at zero and return to the uninterrupted action.
+        for (int i = 0; i < 2; i++)
+        {
+            rows[i]!["interaction"]!["kind"] = "greeting-handshake";
+            rows[i]!["interaction"]!["alt"] = "missing";
+            rows[i]!["interaction"]!["elapsed_s"] = 1;
+            rows[i]!["interaction"]!["clip_duration_s"] = 3.533;
+            rows[i]!["finale"] = new JsonObject { ["id"] = "alt-finale-112-" + i, ["kind"] = "greeting-hug",
+                ["role"] = i == 0 ? "a" : "b", ["alt"] = i == 0 ? "wave" : "missing", ["elapsed_s"] = .9, ["duration_s"] = 1.033 };
+        }
+        await Poll(); mgr.Tick(0);
+        Expect("Q112 finale chooses alt and missing-alt fallback", cy.CurrentClip == alt && dee.CurrentClip == "greeting-hug__b",
+            $"{cy.CurrentClip}, {dee.CurrentClip}");
+        NearD("Q112 alt finale starts at zero", cy.ClipTime, 0, ClipTol);
+        NearD("Q112 fallback finale starts at zero", dee.ClipTime, 0, ClipTol);
+        mgr.Tick(.5);
+        NearD("Q112 alternative finale advances exactly once", cy.ClipTime, .5, ClipTol);
+        NearD("Q112 fallback finale advances exactly once", dee.ClipTime, .5, ClipTol);
+        NearV("Q112 alt finale uses its own root", cy.Position, 63.788104, 4.096875, 131, PosTol);
+        mgr.Tick(.54);
+        Expect("Q112 finale returns to both base action halves", cy.CurrentClip == "greeting-handshake__a"
+            && dee.CurrentClip == "greeting-handshake__b", $"{cy.CurrentClip}, {dee.CurrentClip}");
+        NearD("Q112 action clock kept running under the finale", cy.Pair!.ClipT, 2.04, 1e-9);
+        NearV("Q112 return uses actual base action root", cy.Position, 63.633258, 4.096875, 131, PosTol);
+
+        // Neither alt nor base exists for comforting role a: do not borrow role b or take the anchor.
+        rows[0]!["finale"] = null;
+        rows[0]!["interaction"]!["id"] = "missing-half-112";
+        rows[0]!["interaction"]!["kind"] = "comforting";
+        rows[0]!["interaction"]!["anchor"]!["x"] = 90;
+        await Poll(); mgr.Tick(.5);
+        Expect("Q112 no alt and no base leaves ordinary placement", cy.CurrentClip != "comforting__b"
+            && !cy.CurrentClip.StartsWith("comforting__a") && Math.Abs(cy.Position.X - 90) > 1, cy.CurrentClip);
+        GD.Print("[check-pairs] Q112 alt import/playback, rig/root fallback, own roots/anchor/phase and finales ok");
     }
 
     /// <summary>Two animations with the same tracks and keys, bit for bit (times, transitions, values).</summary>

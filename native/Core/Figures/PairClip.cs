@@ -114,8 +114,11 @@ public static class PairClip
 public sealed record PairInteraction(string Id, string Kind, string Role, IReadOnlyDictionary<string, string> Members, PairAnchor Anchor, double ElapsedS,
                                      double ClipDurationS, bool Loop, double Rate)
 {
-    /// <summary>The clip half this figure plays: <c>&lt;kind&gt;__&lt;role&gt;</c>.</summary>
-    public string Clip => $"{Kind}__{Role}";
+    public string Alt { get; init; } = "";
+    /// <summary>The role's own half, used when this rig lacks the alternative.</summary>
+    public string Base => ClipLibraryRules.IndexName(Kind, Role);
+    /// <summary>The requested half, including the optional alternative suffix.</summary>
+    public string Clip => ClipLibraryRules.IndexName(Kind, Role, Alt);
 }
 
 /// <summary>The pair's anchor: world x/z, the yaw of the clip frame (three's Y rotation) and the place it sits on (null = ground).</summary>
@@ -130,8 +133,12 @@ public sealed class PairPlay
 {
     public (PairPose From, double At)? Blend { get; set; }
     public required string Id { get; init; }
-    /// <summary><c>&lt;kind&gt;__&lt;role&gt;</c>.</summary>
+    /// <summary><c>&lt;kind&gt;__&lt;role&gt;</c>, optionally followed by <c>~&lt;alt&gt;</c>.</summary>
     public required string Clip { get; init; }
+    public string Base { get; init; } = "";
+
+    public string? ResolveClip(Func<string, bool> usable)
+        => ClipLibraryRules.SelectClip(Clip, Base.Length > 0 ? Base : Clip, usable);
     public PairAnchor Anchor { get; set; }
     /// <summary>Interaction time in GAME seconds as of the last poll, advanced by dt·rate between polls.</summary>
     public double Elapsed { get; set; }
@@ -159,7 +166,7 @@ public sealed class PairPlay
             return new PairPlay
             {
                 Blend = cur?.Id == it.Id ? cur.Blend : null,
-                Id = it.Id, Clip = clip, Anchor = it.Anchor, Elapsed = it.ElapsedS, Rate = it.Rate, Stamp = stamp,
+                Id = it.Id, Clip = clip, Base = it.Base, Anchor = it.Anchor, Elapsed = it.ElapsedS, Rate = it.Rate, Stamp = stamp,
                 ClipT = PairClip.Phase(new PairClipInput(it.ElapsedS, it.Rate, it.Loop, it.ClipDurationS)).ClipT,
                 ClipDuration = it.ClipDurationS, Loop = it.Loop,
             };
