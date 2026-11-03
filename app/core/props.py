@@ -6048,6 +6048,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
             "markers": variant_markers(meta, primary),
             "light": sanitize_light(_variant_entry(meta, primary).get("light")),
             "has_source": has_source,
+            # Any variant saved in Build from Blender carries a house spec;
+            # inherited footprint_m alone (add/reset-footprint) does not count.
+            "house_build": bool(any((e.get("house") or {}).get("spec") for e in entries)),
             "created_at": meta.get("created_at") or "",
             "source": meta.get("source") or "",
             "backend": run.get("backend") or "",

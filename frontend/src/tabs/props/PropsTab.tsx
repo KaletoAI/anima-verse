@@ -111,6 +111,7 @@ export function PropsTab() {
   // them (plan-furnish-v2.md § 2 B3).
   const [estimatedOnly, setEstimatedOnly] = useState(false)
   const [missingModelOnly, setMissingModelOnly] = useState(false)
+  const [houseBuildOnly, setHouseBuildOnly] = useState(false)
   const [actionsOnly, setActionsOnly] = useState(false)
   const [unmatchedPlacesOnly, setUnmatchedPlacesOnly] = useState(false)
   // Selection mode for the bulk publish: a click on a row ticks it instead of
@@ -235,13 +236,14 @@ export function PropsTab() {
         : mountFilter && p.mount !== mountFilter) return false
       if (estimatedOnly && !p.dims_estimated) return false
       if (missingModelOnly && p.has_model) return false
+      if (houseBuildOnly && !p.house_build) return false
       if (actionsOnly && !(p.actions || []).length) return false
       if (unmatchedPlacesOnly && !hasUnmatchedActionPlaces(p)) return false
       if (!q) return true
       return p.name.toLowerCase().includes(q)
         || p.tags.some((tag) => tag.toLowerCase().includes(q))
     })
-  }, [props, query, catFilter, mountFilter, estimatedOnly, missingModelOnly, actionsOnly, unmatchedPlacesOnly])
+  }, [props, query, catFilter, mountFilter, estimatedOnly, missingModelOnly, houseBuildOnly, actionsOnly, unmatchedPlacesOnly])
 
   /** How many props have no mount yet — what the classify run would work on,
    *  and the number its confirmation states. */
@@ -349,6 +351,7 @@ export function PropsTab() {
             {t("Estimated dimensions")}
           </label>
           <label title={t("Missing model")}><input type="checkbox" checked={missingModelOnly} onChange={(event) => setMissingModelOnly(event.target.checked)} /> {t("Without model")}</label>
+          <label title={t("Built from Blender")}><input type="checkbox" checked={houseBuildOnly} onChange={(event) => setHouseBuildOnly(event.target.checked)} /> {t("Blender build")}</label>
           <label title={t("Has actions")}><input type="checkbox" checked={actionsOnly} onChange={(event) => setActionsOnly(event.target.checked)} /> {t("With actions")}</label>
           <label title={t("No matching action places")}><input type="checkbox" checked={unmatchedPlacesOnly} onChange={(event) => setUnmatchedPlacesOnly(event.target.checked)} /> {t("No matching places")}</label>
         </div>

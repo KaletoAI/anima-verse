@@ -142,6 +142,8 @@ export interface PropFull {
   markers?: PropMarker[]
   light?: PropLight | null
   has_source?: boolean
+  /** Whether any variant has a saved Blender house spec. */
+  house_build?: boolean
   created_at?: string
   source?: string
   backend?: string
