@@ -75,6 +75,16 @@ try:
 except Exception as _coe:
     logger.warning("catalog overlay migration failed: %s", _coe)
 
+# Boot sweep (2026-11-05): pooled temporary NPCs come back as strangers — their
+# own summaries and explored map go, as pool_npc now cuts them on the way in.
+try:
+    from app.core.npc_pool import forget_pooled_history
+    _ph = forget_pooled_history()
+    if _ph:
+        logger.info("NPC pool: own history cut for %d pooled sheet(s): %s", len(_ph), _ph)
+except Exception as _phe:
+    logger.warning("NPC pool history sweep failed: %s", _phe)
+
 # Boot migration (2026-11-03): a running interaction names its members, not a partner.
 from app.core.interaction_engine import migrate_members_once
 _im = migrate_members_once()

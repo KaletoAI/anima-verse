@@ -13,10 +13,13 @@ the profile survives:
 
 * what the other characters remember about the NPC (``cleanup_npc_traces``) —
   the decision from plan-temporary-npcs.md § 10.4 is unchanged by pooling;
-* the NPC's own conversation rows. A pooled NPC comes back as a stranger,
-  possibly in another town; carrying yesterday's tavern talk into the room
-  perception stream would give a disposable NPC exactly the continuity the
-  whole temp-NPC design switches off.
+* the NPC's own history: its conversation rows, its daily/weekly summaries
+  and its explored map. A pooled NPC comes back as a stranger, possibly in
+  another town; carrying yesterday's tavern talk into the room perception
+  stream — or a weekly summary of it into the prompt — would give a
+  disposable NPC exactly the continuity the whole temp-NPC design switches
+  off. ``forget_pooled_history`` applies the same cut at boot to sheets that
+  were pooled before the summaries and the map were part of it.
 
 The pool has its own size (``npc.max_pool_size``, default 50) — how much
 finished work a world keeps in stock is a different question from how crowded
@@ -45,16 +48,19 @@ def max_pool_size() -> int:
 # Into the pool
 # ---------------------------------------------------------------------------
 
-def _forget_own_conversation(name: str) -> Dict[str, int]:
-    """Delete the NPC's own chat/perception rows.
+def _forget_own_history(name: str) -> Dict[str, int]:
+    """Delete the NPC's own chat/perception rows, summaries and explored map.
 
     ``delete_character`` would take these along; pooling keeps the row, so the
-    conversation has to be cut explicitly. Utterances cascade into perceptions
+    history has to be cut explicitly. Utterances cascade into perceptions
     via the FK, but the perceptions the NPC HEARD hang off other speakers'
-    utterances and are removed by perceiver.
+    utterances and are removed by perceiver. Summaries go only where the NPC
+    is the OWNER — another character's summary with the NPC as ``partner`` is
+    that character's memory and is ``cleanup_npc_traces``' business.
     """
     from app.core.db import transaction
-    removed = {"chat_messages": 0, "utterances": 0, "perceptions": 0}
+    removed = {"chat_messages": 0, "utterances": 0, "perceptions": 0,
+               "summaries": 0, "explored_cells": 0}
     try:
         with transaction() as conn:
             def _has(table: str) -> bool:
@@ -74,9 +80,34 @@ def _forget_own_conversation(name: str) -> Dict[str, int]:
                 cur = conn.execute("DELETE FROM utterances WHERE speaker=?",
                                    (name,))
                 removed["utterances"] = int(cur.rowcount or 0)
+            if _has("summaries"):
+                cur = conn.execute("DELETE FROM summaries WHERE character_name=?",
+                                   (name,))
+                removed["summaries"] = int(cur.rowcount or 0)
+            if _has("explored_cells"):
+                cur = conn.execute("DELETE FROM explored_cells WHERE character_id=?",
+                                   (name,))
+                removed["explored_cells"] = int(cur.rowcount or 0)
     except Exception as e:  # noqa: BLE001
-        logger.warning("pool: conversation cleanup for %s failed: %s", name, e)
+        logger.warning("pool: history cleanup for %s failed: %s", name, e)
     return removed
+
+
+def forget_pooled_history() -> Dict[str, Dict[str, int]]:
+    """Boot sweep: cut the own history of every sheet already in the pool.
+
+    Sheets pooled before 2026-11-05 kept their summaries and explored map.
+    Idempotent — a pool that is already clean deletes nothing — so it simply
+    runs on every start. Returns ``{name: removed counts}`` for the sheets
+    where something was removed.
+    """
+    from app.models.character import list_pooled_characters
+    cleaned: Dict[str, Dict[str, int]] = {}
+    for name in list_pooled_characters():
+        removed = _forget_own_history(name)
+        if any(removed.values()):
+            cleaned[name] = {k: v for k, v in removed.items() if v}
+    return cleaned
 
 
 def _unplace(name: str) -> None:
@@ -128,7 +159,7 @@ def pool_npc(name: str, reason: str = "") -> bool:
         cleanup_npc_traces(name)
     except Exception as e:  # noqa: BLE001
         logger.warning("pool: trace cleanup for %s failed: %s", name, e)
-    _forget_own_conversation(name)
+    _forget_own_history(name)
 
     # 2) Out of every running mechanic that assumes a present character.
     for step in (lambda: _end_party(name), lambda: _end_journey(name),
