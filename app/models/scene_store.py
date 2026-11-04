@@ -142,11 +142,17 @@ def mark_consolidated(scene_id: int, summary: str) -> None:
 
 
 def get_scene_utterances(scene: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Raw utterances of a scene (room + time window started..last_activity)."""
+    """Raw utterances of a scene (room + time window started..last_activity).
+
+    Private lines are left out: the summary built from these rows becomes a
+    memory of EVERY participant, and a private line belongs only to its
+    recipients."""
+    from app.models.perception_store import NOT_PRIVATE_SQL
     conn = get_connection()
     rows = conn.execute(
         "SELECT id, ts, speaker, addressees, content FROM utterances "
-        "WHERE location_id=? AND room_id=? AND ts>=? AND ts<=? ORDER BY id",
+        "WHERE location_id=? AND room_id=? AND ts>=? AND ts<=? "
+        f"AND {NOT_PRIVATE_SQL} ORDER BY id",
         (scene["location_id"], scene.get("room_id", ""),
          scene["started_ts"], scene["last_activity_ts"])).fetchall()
     return [dict(r) for r in rows]

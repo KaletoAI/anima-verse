@@ -661,7 +661,10 @@ def record_private_line(*, recipients: Sequence[str], content: str,
     location/room pair only scopes the line to that room's stream.
 
     No room reactions, no scene touch: a private line is something the
-    recipients notice, not a public event of the room. Returns the utterance
+    recipients notice, not a public event of the room. The utterance is
+    marked ``private``, so the room/scene readers without a perceiver (scene
+    consolidation, conversation pairs, NPC scenes, silence check) never see
+    it; only the admin observer's god view still shows it. Returns the utterance
     id, or None when there is no recipient or the write failed (never raises).
     """
     from app.core.timeutils import utc_now_iso
@@ -678,6 +681,10 @@ def record_private_line(*, recipients: Sequence[str], content: str,
             umeta["source"] = source
         if perception_meta:
             umeta.update(perception_meta)
+        # Always set, after the caller's meta: the room/scene readers that
+        # have no perceiver (scene summary, conversation pairs, NPC scenes)
+        # skip it — see perception_store.NOT_PRIVATE_SQL.
+        umeta["private"] = True
         try:
             from app.core.timeutils import game_time
             game_stamp = game_time().canonical()

@@ -48,6 +48,24 @@ Hand-derived expectations:
         * with only the selective consumer left, "hello" → None.
         * the provider receives the keywords avatar, content, volume,
           addressees, location_id, room_id exactly as passed.
+
+  (d) The private line never reaches a reader WITHOUT a perceiver. In the
+      same room a normal storyteller line N ("public") is recorded with
+      ``record_utterance`` next to the private line U from (a). The utterance
+      meta of U carries ``private: True`` even when the caller passes
+      ``perception_meta={"private": False}`` (P, a second private line — the
+      marker is set last). Then, for loc/taproom:
+        scene_store.get_scene_utterances({loc, room, window "0".."9"})
+            → ids contain N, contain neither U nor P
+        perception_store.get_room_utterances(loc, room)     → N, not U/P
+        perception_store.get_room_utterances(loc, room, include_private=True)
+            → N, U and P (the admin observer's god view)
+        perception_store.recent_room_utterances(loc, room)  → "public" in the
+            contents, "x" not (this reader returns no ids)
+        perception_store.get_room_utterances_since(loc, room, 0) → N, not U/P
+      The window "0".."9" brackets every ISO stamp ("2026-…" sorts between
+      them), so the time filter keeps all rows and only the private filter
+      can remove one.
 """
 import os
 import sys
@@ -140,6 +158,7 @@ def main() -> int:
               f"(a) perception meta has speaker + marker ({pmeta})")
         check(sync_calls == [(["Cara", "Kim"], "scene")],
               f"(a) sync notifies exactly the recipients ({sync_calls})")
+        check(umeta.get("private") is True, "(a) utterance meta marked private")
 
         # ---- (b) empty / blank / duplicate recipients ----------------------
         before = utterance_count()
@@ -196,6 +215,44 @@ def main() -> int:
         finally:
             for owner in ("smoke-a", "smoke-b", "smoke-c"):
                 hooks.unregister_owned_providers(owner)
+
+        # ---- (d) readers without a perceiver skip private lines -----------
+        from app.models import perception_store, scene_store
+        priv2 = perception.record_private_line(
+            recipients=["Cara"], content="x", location_id=loc, room_id=room,
+            perception_meta={"private": False})
+        pmeta2 = json.loads(conn.execute("SELECT meta FROM utterances WHERE id=?",
+                                         (priv2,)).fetchone()[0])
+        check(pmeta2.get("private") is True,
+              "(d) private marker survives perception_meta private=False")
+        pub = perception.record_utterance(
+            speaker=perception.STORYTELLER_SPEAKER, content="public",
+            location_id=loc, room_id=room, source="smoke")
+        check(isinstance(pub, int), f"(d) normal line recorded ({pub!r})")
+        private_ids = {uid, priv2}
+
+        def ids(rows):
+            return {r.get("id") for r in rows}
+
+        scene = {"location_id": loc, "room_id": room,
+                 "started_ts": "0", "last_activity_ts": "9"}
+        got = ids(scene_store.get_scene_utterances(scene))
+        check(pub in got and not (got & private_ids),
+              f"(d) get_scene_utterances: normal in, private out ({got})")
+        got = ids(perception_store.get_room_utterances(loc, room))
+        check(pub in got and not (got & private_ids),
+              f"(d) get_room_utterances: normal in, private out ({got})")
+        got = ids(perception_store.get_room_utterances(loc, room,
+                                                       include_private=True))
+        check({pub} | private_ids <= got,
+              f"(d) get_room_utterances(include_private=True): all in ({got})")
+        contents = [r.get("content") for r in
+                    perception_store.recent_room_utterances(loc, room)]
+        check("public" in contents and "x" not in contents,
+              f"(d) recent_room_utterances: normal in, private out ({contents})")
+        got = ids(perception_store.get_room_utterances_since(loc, room, 0))
+        check(pub in got and not (got & private_ids),
+              f"(d) get_room_utterances_since: normal in, private out ({got})")
 
     if FAILS:
         print(f"FAILED: {len(FAILS)} check(s)")

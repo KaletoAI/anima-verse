@@ -111,21 +111,33 @@ def get_utterance_delivery(utterance_id: int) -> Optional[Tuple[Dict[str, Any], 
     return _row_to_dict(row), [dict(perception) for perception in perceptions]
 
 
+# A PRIVATE utterance (``perception.record_private_line``) reaches only the
+# perceivers it was written for. Every reader that reads ``utterances`` by
+# room or scene WITHOUT a perceiver must leave it out — otherwise a line meant
+# for two characters lands in a shared scene summary or another character's
+# prompt. Readers that join ``perceptions`` for one perceiver need no filter.
+NOT_PRIVATE_SQL = "COALESCE(json_extract(meta, '$.private'), 0) = 0"
+
+
 def get_room_utterances(location_id: str, room_id: str = "",
-                        limit: int = 100) -> List[Dict[str, Any]]:
+                        limit: int = 100, *,
+                        include_private: bool = False) -> List[Dict[str, Any]]:
     """Objective room view (god view): raw speech acts, oldest first.
 
     An empty ``room_id`` means the whole location (all rooms).
+    ``include_private`` keeps private lines (see ``NOT_PRIVATE_SQL``) — only
+    for the admin observer, never for anything that feeds a prompt.
     """
     conn = get_connection()
+    private = "" if include_private else f" AND {NOT_PRIVATE_SQL}"
     if room_id:
         rows = conn.execute(
-            "SELECT * FROM utterances WHERE location_id=? AND room_id=? "
+            f"SELECT * FROM utterances WHERE location_id=? AND room_id=?{private} "
             "ORDER BY ts DESC, id DESC LIMIT ?",
             (location_id, room_id, limit)).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM utterances WHERE location_id=? "
+            f"SELECT * FROM utterances WHERE location_id=?{private} "
             "ORDER BY ts DESC, id DESC LIMIT ?",
             (location_id, limit)).fetchall()
     return [_row_to_dict(r) for r in reversed(rows)]
@@ -147,7 +159,7 @@ def get_room_utterances_since(location_id: str, room_id: str,
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM utterances WHERE location_id=? AND room_id=? AND id>? "
-        "ORDER BY id ASC LIMIT ?",
+        f"AND {NOT_PRIVATE_SQL} ORDER BY id ASC LIMIT ?",
         (location_id or "", room_id or "", int(after_id), limit)).fetchall()
     return [_row_to_dict(r) for r in rows]
 
@@ -170,7 +182,7 @@ def recent_room_utterances(location_id: str, room_id: str,
         rows = conn.execute(
             "SELECT speaker, addressees, content, ts, game_ts, volume "
             "FROM utterances WHERE location_id=? AND room_id=? "
-            "ORDER BY ts DESC, id DESC LIMIT ?",
+            f"AND {NOT_PRIVATE_SQL} ORDER BY ts DESC, id DESC LIMIT ?",
             (location_id or "", room_id or "", int(limit))).fetchall()
     except Exception as e:  # noqa: BLE001
         logger.debug("recent_room_utterances(%s/%s) failed: %s",
