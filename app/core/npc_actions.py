@@ -335,12 +335,14 @@ def _recent_conversation(name: str) -> List[Dict[str, str]]:
     for row in rows:
         if row.get("source") == "movement":
             continue
-        speaker = (row.get("meta") or {}).get("speaker") or ""
+        meta = row.get("meta") or {}
+        speaker = meta.get("speaker") or ""
         line = row.get("content") or ""
         if not line.strip():
             continue
         recent.append({
-            "speaker": "Narrator" if speaker == STORYTELLER_SPEAKER else speaker,
+            "speaker": ("Narrator" if speaker == STORYTELLER_SPEAKER
+                        else meta.get("speaker_shown") or speaker),
             "line": line,
         })
     return recent[-_RECENT_LINES:]

@@ -47,6 +47,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
+from app.core import identity_view
 from app.core.log import get_logger
 
 logger = get_logger("perception")
@@ -646,6 +647,37 @@ def inattentive_listeners(room_members: Sequence[str]) -> List[str]:
     return result
 
 
+def _identity_snapshot(subjects: Sequence[str]) -> Dict[str, str]:
+    """``{subject: alias}`` for the distinct ``subjects`` that wear a persona
+    right now (``identity_view.identity_snapshot``); empty without a provider.
+    Never raises — a line is recorded with real names rather than not at all."""
+    try:
+        return identity_view.identity_snapshot(
+            dict.fromkeys(s for s in subjects if s))
+    except Exception as e:
+        logger.debug("identity snapshot failed (real names used): %s", e)
+        return {}
+
+
+def _observer_view(perceiver: str, speaker: str, addressees: Sequence[str],
+                   identity: Mapping[str, str], pmeta: Dict[str, Any]) -> None:
+    """Add ``speaker_shown`` / ``addressees_shown`` to a perceiver row's meta —
+    only when the perceiver's view differs from the real names. Only subjects
+    in ``identity`` (transformed right now) are asked; the rest are real."""
+    def shown(subject: str) -> str:
+        if subject not in identity:
+            return subject
+        return identity_view.shown_name(perceiver, subject)
+
+    sp = shown(speaker)
+    if sp != speaker:
+        pmeta["speaker_shown"] = sp
+    if addressees:
+        shown_addr = [shown(a) for a in addressees]
+        if shown_addr != list(addressees):
+            pmeta["addressees_shown"] = shown_addr
+
+
 def record_private_line(*, recipients: Sequence[str], content: str,
                         speaker: str = STORYTELLER_SPEAKER,
                         location_id: str = "", room_id: str = "",
@@ -809,6 +841,16 @@ def record_utterance(*, speaker: str, content: str,
         avatar_audience = {name for name in content_targets if is_player_controlled(name)}
         _umeta["stat_avatar_audience"] = sorted(avatar_audience)
         _umeta["stat_avatar_targets"] = sorted(set(addr) & avatar_audience)
+        # Who wears a persona right now among everyone this line concerns:
+        # speaker, addressees, the narration anchor and every perceiver. The
+        # canonical row keeps it (the public view of shared readers); the
+        # perceiver rows below derive each observer's view from it.
+        _subjects = [speaker, *addr, *(t.perceiver for t in targets)]
+        if isinstance(anchor, str) and anchor:
+            _subjects.append(anchor)
+        identity = _identity_snapshot(_subjects)
+        if identity:
+            _umeta["identity"] = identity
         # The STORED point stays a wilderness column (see insert_utterance):
         # inside a location the location/room pair already says where the line
         # was spoken. The circle above needs the point regardless — the two
@@ -836,16 +878,25 @@ def record_utterance(*, speaker: str, content: str,
             # and whom they address). Only the content is secret — and it is
             # empty for all CONTENTLESS_KINDS. That lets the subjective view render
             # "X says: …" without whispered content ever leaking.
+            # ``speaker``/``addressees`` stay the REAL names (keys for repeat
+            # checks, chime picks, reactions); the perceiver's view of a
+            # transformed character rides along as ``*_shown``.
             pmeta = {"speaker": speaker}
             if addr:
                 pmeta["addressees"] = addr
             if perception_meta:
                 pmeta.update(perception_meta)
+            row_content = content if t.gets_content else ""
+            if identity:
+                _observer_view(t.perceiver, speaker, addr, identity, pmeta)
+                if speaker == STORYTELLER_SPEAKER and row_content:
+                    row_content = identity_view.rewrite_names(
+                        t.perceiver, row_content, identity)
             rows.append({
                 "perceiver": t.perceiver,
                 "ts": stamp,
                 "kind": t.kind,
-                "content": content if t.gets_content else "",
+                "content": row_content,
                 "meta": pmeta,
             })
         perception_store.insert_perceptions(uid, rows)

@@ -88,6 +88,11 @@ def _messages_from_room_stream(responder: str,
     Without it a character cannot tell a line meant for it from one it merely
     overheard. The responder's own lines stay role "assistant" with no prefix.
     Whisper meta (no content) is dropped.
+
+    Names are the responder's VIEW: ``meta.speaker_shown`` /
+    ``meta.addressees_shown`` (a transformed character's alias, written by
+    ``perception.record_utterance``) win over the real names, which still
+    decide "own line" and "you".
     """
     out: List[Dict[str, str]] = []
     for row in stream or []:
@@ -100,14 +105,19 @@ def _messages_from_room_stream(responder: str,
         if sp and sp == responder:
             out.append({"role": "assistant", "content": content})
         else:
-            addressees = [str(a).strip() for a in (meta.get("addressees") or [])
-                          if str(a).strip()]
+            sp_shown = (meta.get("speaker_shown") or sp).strip()
+            real = [str(a).strip() for a in (meta.get("addressees") or [])]
+            shown_addr = meta.get("addressees_shown")
+            if not isinstance(shown_addr, list) or len(shown_addr) != len(real):
+                shown_addr = real
+            addressees = [(a, str(s).strip() or a)
+                          for a, s in zip(real, shown_addr) if a]
             if addressees:
-                shown = ", ".join("you" if a == responder else a
-                                  for a in addressees)
-                prefix = f"{sp or '?'} (to {shown})"
+                shown = ", ".join("you" if a == responder else s
+                                  for a, s in addressees)
+                prefix = f"{sp_shown or '?'} (to {shown})"
             else:
-                prefix = sp or "?"
+                prefix = sp_shown or "?"
             out.append({"role": "user", "content": f"{prefix}: {content}"})
     return out
 
