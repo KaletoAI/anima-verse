@@ -2721,6 +2721,26 @@ def memory_wipe(character_name: str,
     return character_ops.wipe_character_memory(character_name)
 
 
+class FreshStartBody(BaseModel):
+    """The text of the one memory the character starts with (may be empty)."""
+    intro: str = ""
+
+
+@router.post("/{character_name}/fresh-start")
+def fresh_start(character_name: str, body: FreshStartBody,
+                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Re-initialize an existing character in place: everything it lived
+    through in this world goes — memories, the day timeline, correspondence,
+    knowledge, relationships in both directions, intents, the room record of
+    its conversations, the explored map — and ``intro`` becomes its one
+    memory. Identity (profile, authored soul files, outfits, inventory,
+    secrets, routine, gallery) stays.
+
+    Runs ``character_reset.reset_character`` at scope ``reinit`` — the same
+    implementation the character import's fresh mode runs."""
+    return character_ops.fresh_start_character(character_name, body.intro)
+
+
 @router.post("/{character_name}/memory/consolidate")
 async def memory_consolidate_now(character_name: str,
                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

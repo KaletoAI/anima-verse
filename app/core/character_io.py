@@ -548,15 +548,8 @@ def import_character_from_zip(
     # Fresh start: seed one intro memory (identity kept, world history dropped).
     if fresh and (intro_text or "").strip():
         try:
-            from app.models.memory import add_memory
-            add_memory(
-                character_name,
-                (intro_text or "").strip(),
-                memory_type="semantic",
-                importance=4,
-                tags=["intro", "fresh_start"],
-            )
-            db_stats["intro_memory"] = 1
+            from app.core.character_reset import seed_intro_memory
+            db_stats["intro_memory"] = seed_intro_memory(character_name, intro_text)
         except Exception as e:
             logger.warning("Fresh import: intro memory seed failed for %s: %s", character_name, e)
 

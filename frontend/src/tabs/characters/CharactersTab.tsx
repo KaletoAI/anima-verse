@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../lib/api'
 import { setUnsavedGuard } from '../../lib/unsavedGuard'
@@ -201,6 +202,10 @@ export function CharactersTab() {
   const [deleting, setDeleting] = useState(false)
   const [confirmWipe, setConfirmWipe] = useState(false)
   const [wiping, setWiping] = useState(false)
+  // "Fresh start" dialog: open state, the intro text, and the running flag.
+  const [freshOpen, setFreshOpen] = useState(false)
+  const [freshIntro, setFreshIntro] = useState('')
+  const [freshing, setFreshing] = useState(false)
   const [consolidating, setConsolidating] = useState(false)
 
   useEffect(() => {
@@ -369,6 +374,33 @@ export function CharactersTab() {
       setConsolidating(false)
     }
   }, [selected, consolidating, t, toast])
+
+  // Fresh start: re-initialize the character in place (same re-init as the
+  // import's fresh mode). Everything it lived through in this world goes —
+  // memories, day timeline, chats, knowledge, relationships, intents, the room
+  // record of its conversations — and the intro text becomes its one memory.
+  const freshStart = useCallback(async () => {
+    if (!selected || freshing) return
+    setFreshing(true)
+    try {
+      const r = await apiPost<{ errors?: { store: string; error: string }[] }>(
+        `/characters/${encodeURIComponent(selected)}/fresh-start`, { intro: freshIntro.trim() })
+      if (r.errors?.length) {
+        toast(t('Fresh start incomplete: {n} reset errors')
+          .replace('{n}', String(r.errors.length)) + ': ' +
+          r.errors.map(e => `${e.store}: ${e.error}`).join('; '), 'error')
+      } else {
+        toast(t('{name} starts fresh').replace('{name}', selected))
+      }
+      setFreshOpen(false)
+      setFreshIntro('')
+      reloadCurrent(selected)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setFreshing(false)
+    }
+  }, [selected, freshing, freshIntro, t, toast, reloadCurrent])
 
   // Memory wipe (admin test tool for the consolidation pipeline): clears the
   // character's derived memory artifacts — memories, summaries + rollups, the
@@ -884,6 +916,48 @@ export function CharactersTab() {
                       🧹 {t('Wipe memory')}
                     </button>
                   )}
+                  <button
+                    className="ga-btn ga-btn-sm"
+                    title={t('Re-initialize this character in place: it keeps its identity but forgets everything it lived through in this world. You give it one starting memory.')}
+                    onClick={() => { setFreshIntro(''); setFreshOpen(true) }}
+                  >
+                    🌱 {t('Fresh start')}
+                  </button>
+                  {freshOpen ? createPortal(
+                    <div className="ga-modal-backdrop" role="presentation">
+                      <div className="ga-modal" role="dialog" aria-modal="true"
+                        aria-label={t('Fresh start')} style={{ maxWidth: 560 }}>
+                        <div className="ga-modal-header">
+                          <h3>{t('Fresh start for {name}').replace('{name}', selected)}</h3>
+                        </div>
+                        <div className="ga-modal-body">
+                          <p style={{ marginTop: 0 }}>
+                            {t('Deleted: memories, summaries and the whole day timeline, chat history, knowledge, relationships in both directions, intents, schedules, party/group/story membership, the explored map, notifications, derived beliefs/lessons/goals, and the room record of its conversations (lines it spoke or that were addressed to it, and the scenes it took part in). Its position falls back to the profile.')}
+                          </p>
+                          <p>
+                            {t('Kept: profile, authored soul files, outfits, inventory, manual secrets, daily routine, gallery. Other characters keep their own memories of it.')}
+                          </p>
+                          <label style={{ display: 'block', fontSize: '0.85em', opacity: 0.8, marginBottom: 4 }}>
+                            {t('Starting memory')}
+                          </label>
+                          <textarea className="ga-input" rows={4} style={{ width: '100%' }}
+                            value={freshIntro} disabled={freshing}
+                            onChange={(e) => setFreshIntro(e.target.value)}
+                            placeholder={t('What does the character know and intend at the start? Becomes its only memory.')} />
+                        </div>
+                        <div className="ga-modal-footer">
+                          <button className="ga-btn" disabled={freshing} onClick={() => setFreshOpen(false)}>
+                            {t('Cancel')}
+                          </button>
+                          <button className="ga-btn ga-btn-danger" disabled={freshing}
+                            onClick={() => { void freshStart() }}>
+                            {freshing ? t('Resetting…') : t('Fresh start — irreversible')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body,
+                  ) : null}
                   {confirmDel ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: '0.82em', color: '#e0a356' }}>

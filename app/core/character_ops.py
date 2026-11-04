@@ -3189,6 +3189,32 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
     return reset_character(character_name, scope=SCOPE_MEMORY)
 
 
+def fresh_start_character(character_name: str, intro_text: str = "") -> Dict[str, Any]:
+    """Game-Admin "Fresh start" for an EXISTING character: the same re-init the
+    character import runs in fresh mode, in place, plus the one intro memory.
+
+    Identity stays (profile, authored soul files, outfits, inventory, manual
+    secrets, routine, gallery); everything the character lived through in this
+    world goes — see ``character_reset`` scope ``reinit``. The result carries
+    the per-store counts, ``errors`` and the scope description (``mode_doc``).
+    """
+    from app.models.character import list_available_characters
+    if character_name not in list_available_characters():
+        raise HTTPException(status_code=404,
+                            detail=f"Character '{character_name}' not found")
+
+    from app.core.character_reset import (SCOPE_REINIT, describe_scope,
+                                          reset_character, seed_intro_memory)
+    result = reset_character(character_name, scope=SCOPE_REINIT)
+    try:
+        result["intro_memory"] = seed_intro_memory(character_name, intro_text)
+    except Exception as e:
+        result["intro_memory"] = None
+        result["errors"].append({"store": "intro_memory", "error": str(e)})
+    result["mode_doc"] = describe_scope(SCOPE_REINIT)
+    return result
+
+
 def build_stat_history(character_name: str, limit: int = 50, *,
                        include_rule_details: bool = False) -> dict:
     """Return the newest effects rows with recorded causes, game stamps and labels."""

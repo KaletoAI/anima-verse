@@ -12,11 +12,14 @@ Two callers, two scopes, one implementation and one declarative store list:
     the room stream is other minds' truth as much as this character's.
 
 ``reinit``
-    The character import's "Fresh start" (re-initialize). Everything ``memory``
-    erases PLUS every other world-bound store: correspondence, knowledge,
-    relationships in BOTH directions, obligations, schedules, party/group/story
-    membership, the explored map, notifications, reading history —
-    and the mechanical state, which falls back to the profile's own values.
+    "Fresh start" (re-initialize) — the character import's fresh mode and the
+    Game-Admin "Fresh start" button. Everything ``memory`` erases PLUS every
+    other world-bound store: correspondence, knowledge, relationships in BOTH
+    directions, obligations, schedules, party/group/story membership, the
+    explored map, notifications, reading history, the room record of the
+    character's conversations (speech acts spoken by or addressed to them and
+    the scenes they took part in) — and the mechanical state, which falls back
+    to the profile's own values.
 
 Doctrine (why a store is on a list or not)
 ------------------------------------------
@@ -26,10 +29,16 @@ Re-init means "this character starts fresh in THIS world".
   character's own record of a bond, so a re-init drops it in both directions —
   the fixation on a rival from the previous world is exactly what must not
   survive.
-* WORLD facts about them held by OTHERS stay. Another character's memories,
-  another character's daily summary about them (``summaries.partner``), the
-  utterances they spoke into a room that others heard — other minds are not
-  this character's state, and erasing them would rewrite somebody else's past.
+* WORLD facts about them held by OTHERS stay. Another character's memories and
+  another character's daily summary about them (``summaries.partner``) — other
+  minds are not this character's state, and erasing them would rewrite
+  somebody else's past.
+* The ROOM RECORD of their conversations does not stay (user decision
+  2026-11-04: a fresh start keeps no room protocols). Utterances they spoke or
+  that were addressed to them go, and with them — ``ON DELETE CASCADE`` — the
+  perceptions every listener held of exactly those lines; scenes they took
+  part in go as a whole. Otherwise the room stream (``recent_room_utterances``,
+  scene summaries) would hand the old conversations straight back.
 * Mechanical state (position, room, activity, pose) resets to the imported
   profile's values instead of being carried over.
 * Identity stays: profile, authored soul/personality, outfits, inventory, manual secrets,
@@ -140,8 +149,21 @@ STORES: Tuple[Store, ...] = (
           (SCOPE_REINIT,), "1:1 correspondence, both as owner and as partner",
           params=2),
     Store("perceptions", "perceptions", "perceiver=?", (SCOPE_REINIT,),
-          "what this character heard (the utterances themselves stay — "
-          "they are the room's record, which other characters share)"),
+          "what this character heard"),
+    # Room record. ``addressees``/``participants`` are JSON lists; a malformed
+    # value counts as an empty list instead of failing the whole store.
+    Store("utterances", "utterances",
+          "speaker=? OR EXISTS (SELECT 1 FROM json_each(CASE WHEN "
+          "json_valid(utterances.addressees) THEN utterances.addressees "
+          "ELSE '[]' END) WHERE value=?)", (SCOPE_REINIT,),
+          "speech acts spoken by or addressed to this character — the "
+          "listeners' perceptions of those lines go with them (cascade)",
+          params=2),
+    Store("scenes", "scenes",
+          "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid("
+          "scenes.participants) THEN scenes.participants ELSE '[]' END) "
+          "WHERE value=?)", (SCOPE_REINIT,),
+          "room scenes this character took part in, with their summaries"),
     Store("knowledge", "knowledge", "character_name=?", (SCOPE_REINIT,),
           "facts learned in the previous world"),
     Store("relationships", "relationships", "from_char=? OR to_char=?",
@@ -187,9 +209,6 @@ KEPT: Dict[str, Tuple[str, ...]] = {
         "inventory, outfits, gallery, daily routine",
     ),
     SCOPE_REINIT: (
-        "utterances — this character's speech acts are the room's record and "
-        "other characters' perception history references them",
-        "scenes — shared room truth of ALL participants",
         "summaries where this character is another one's `partner` — that is "
         "the other character's memory of them",
         "other characters' memories mentioning them — other minds are not "
@@ -464,6 +483,26 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
     logger.info("Character reset [%s] scope=%s: %s", name, scope,
                 {k: v for k, v in result.items() if k not in ("kept", "character")})
     return result
+
+
+def seed_intro_memory(character_name: str, intro_text: str) -> int:
+    """Seed the ONE memory a fresh start begins with. Returns 1 when a memory
+    was written, 0 for an empty text. Raises on a failed write — the caller
+    decides whether that is fatal."""
+    text = (intro_text or "").strip()
+    if not text:
+        return 0
+    from app.core.db import get_connection
+    from app.models.memory import add_memory
+    add_memory(character_name, text, memory_type="semantic", importance=4,
+               tags=["intro", "fresh_start"])
+    # add_memory logs and swallows a DB error — check the row really landed,
+    # or a failed seed would be reported as a fresh start with an intro.
+    if not get_connection().execute(
+            "SELECT 1 FROM memories WHERE character_name=? AND content=? LIMIT 1",
+            (character_name, text)).fetchone():
+        raise RuntimeError("intro memory was not written")
+    return 1
 
 
 def describe_scope(scope: str) -> Dict[str, Any]:

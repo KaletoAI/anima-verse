@@ -3841,6 +3841,17 @@
     "Release avatar": "Avatar abgeben",
     "Your avatar leaves the map; you stay signed in.": "Dein Avatar verlässt die Karte; du bleibst angemeldet.",
     "Spectating": "Zuschauen",
-    "Take control to chat, act or take photos.": "Übernimm einen Avatar, um zu sprechen, zu handeln oder Fotos zu machen."
+    "Take control to chat, act or take photos.": "Übernimm einen Avatar, um zu sprechen, zu handeln oder Fotos zu machen.",
+    "Fresh start incomplete: {n} reset errors": "Neustart unvollständig: {n} Reset-Fehler",
+    "{name} starts fresh": "{name} startet neu",
+    "Re-initialize this character in place: it keeps its identity but forgets everything it lived through in this world. You give it one starting memory.": "Charakter neu initialisieren: Er behält seine Identität, vergisst aber alles, was er in dieser Welt erlebt hat. Du gibst ihm eine Start-Erinnerung mit.",
+    "Fresh start": "Neustart",
+    "Fresh start for {name}": "Neustart für {name}",
+    "Deleted: memories, summaries and the whole day timeline, chat history, knowledge, relationships in both directions, intents, schedules, party/group/story membership, the explored map, notifications, derived beliefs/lessons/goals, and the room record of its conversations (lines it spoke or that were addressed to it, and the scenes it took part in). Its position falls back to the profile.": "Gelöscht: Erinnerungen, Zusammenfassungen und der gesamte Tagesverlauf, Chat-Verlauf, Wissen, Beziehungen in beide Richtungen, Vorhaben, Zeitpläne, Party-/Gruppen-/Story-Mitgliedschaft, die erkundete Karte, Benachrichtigungen, abgeleitete Überzeugungen/Lektionen/Ziele sowie das Raumprotokoll seiner Gespräche (was er gesagt hat oder was an ihn gerichtet war, und die Szenen, an denen er beteiligt war). Die Position fällt auf das Profil zurück.",
+    "Kept: profile, authored soul files, outfits, inventory, manual secrets, daily routine, gallery. Other characters keep their own memories of it.": "Bleibt: Profil, verfasste Seelendateien, Outfits, Inventar, manuelle Geheimnisse, Tagesablauf, Galerie. Andere Charaktere behalten ihre eigenen Erinnerungen an ihn.",
+    "Starting memory": "Start-Erinnerung",
+    "What does the character know and intend at the start? Becomes its only memory.": "Was weiß und will der Charakter zum Start? Wird seine einzige Erinnerung.",
+    "Resetting…": "Setze zurück…",
+    "Fresh start — irreversible": "Neustart — unwiderruflich"
   }
 }

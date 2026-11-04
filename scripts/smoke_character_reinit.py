@@ -22,7 +22,8 @@ Doctrine under test (re-init = "this character starts fresh in THIS world"):
   * the character's OWN memory, relations and history go — relationship edges
     in BOTH directions, so a rival cannot survive on the partner's row;
   * WORLD facts about them held by OTHERS stay — the second character's own
-    memories, and its daily summary about them (``summaries.partner``);
+    memories, and its daily summary about them (``summaries.partner``) — but
+    NOT the room record of their conversations (see below);
   * mechanical state (position/room/activity/pose) falls back to the profile.
 
 Runs against THROWAWAY storage directories — never touches a real world.
@@ -50,8 +51,17 @@ Sections, each a hand-derived expectation:
       catalog is a character export ZIP and must offer the identical re-init.
   [6] The admin "Wipe memory" button (`wipe_character_memory`): the whole day
       timeline goes — diary entries, thoughts, state history, the action log —
-      while correspondence, knowledge and relationships stay. That timeline
-      surviving the button was the reported gap.
+      while correspondence, knowledge, relationships and the room record stay.
+      That timeline surviving the button was the reported gap.
+  [8] The Game-Admin "Fresh start" button (`fresh_start_character`) on an
+      existing character: the re-init scope in place, the intro text as the one
+      memory, a 404 for an unknown name.
+
+Room record (user decision 2026-11-04 — a fresh start keeps no room
+protocols): utterances SPOKEN BY or ADDRESSED TO the character go, the
+listeners' perceptions of exactly those lines go with them (FK cascade), and
+every scene the character took part in goes. An utterance between two OTHER
+characters and a scene without the character are untouched.
 
 Usage:  ./.venv/bin/python scripts/smoke_character_reinit.py
 """
@@ -188,6 +198,29 @@ def seed_stores(name):
         utt_id = c.execute("SELECT id FROM utterances WHERE speaker=?", (name,)).fetchone()[0]
         c.execute("INSERT INTO perceptions (perceiver, utterance_id, ts, kind, content) "
                   "VALUES (?,?,?,?,?)", (name, utt_id, "2026-01-01T11:00:00", "in_room", "heard"))
+        # The room record around `name`: OTHER heard `name`'s line, OTHER
+        # spoke TO `name`, and a scene had both of them in it.
+        c.execute("INSERT INTO perceptions (perceiver, utterance_id, ts, kind, content) "
+                  "VALUES (?,?,?,?,?)", (OTHER, utt_id, "2026-01-01T11:00:00", "in_room",
+                                         "OTHER heard demo"))
+        c.execute("INSERT INTO utterances (ts, speaker, volume, addressees, content) "
+                  "VALUES (?,?,?,?,?)", ("2026-01-01T11:01:00", OTHER, "normal",
+                                         json.dumps([name]), "Spoken to demo."))
+        c.execute("INSERT INTO scenes (location_id, started_ts, last_activity_ts, "
+                  "participants, status, summary) VALUES (?,?,?,?,?,?)",
+                  ("old_town", "2026-01-01T11:00:00", "2026-01-01T11:05:00",
+                   json.dumps(["Storyteller", name, OTHER]), "consolidated",
+                   "demo and demo_other argued."))
+        # Room record WITHOUT `name` — must survive. Re-seeded idempotently.
+        c.execute("DELETE FROM utterances WHERE content='Between others.'")
+        c.execute("INSERT INTO utterances (ts, speaker, volume, addressees, content) "
+                  "VALUES (?,?,?,?,?)", ("2026-01-01T12:00:00", OTHER, "normal",
+                                         json.dumps(["third"]), "Between others."))
+        c.execute("DELETE FROM scenes WHERE summary='Only others here.'")
+        c.execute("INSERT INTO scenes (location_id, started_ts, last_activity_ts, "
+                  "participants, status, summary) VALUES (?,?,?,?,?,?)",
+                  ("old_town", "2026-01-01T12:00:00", "2026-01-01T12:05:00",
+                   json.dumps([OTHER, "third"]), "consolidated", "Only others here."))
         c.execute("INSERT INTO knowledge (character_name, content, ts) VALUES (?,?,?)",
                   (name, "The old town square floods in spring.", "2026-01-01T11:00:00"))
         # BOTH directions — a rival that survives on the partner's row is
@@ -304,7 +337,7 @@ EXPECTED_REINIT = EXPECTED_MEMORY | {
     "scheduler_jobs", "stories", "events", "party_invites", "explored_cells",
     "intents", "story_arcs", "group_chats", "parties", "notifications",
     "item_reading_sessions", "item_reads", "item_caught_today", "item_discoveries",
-    "reading_secret_membership"}
+    "reading_secret_membership", "utterances", "scenes"}
 for scope, expected in (("memory", EXPECTED_MEMORY), ("reinit", EXPECTED_REINIT)):
     check(f"independent {scope} inventory covered", expected - {
         row["store"] for row in character_reset.describe_scope(scope)["cleared"]}, set())
@@ -454,9 +487,24 @@ check("[home] the other character's summary ABOUT demo is untouched",
       db.get_connection().execute(
           "SELECT COUNT(*) FROM summaries WHERE character_name=? AND partner=?",
           (OTHER, NAME)).fetchone()[0], 1)
-check("[home] the room record (utterances) is untouched — others heard it",
+check("[home] demo's own lines are gone",
       db.get_connection().execute("SELECT COUNT(*) FROM utterances WHERE speaker=?",
-                                  (NAME,)).fetchone()[0], 1)
+                                  (NAME,)).fetchone()[0], 0)
+check("[home] the line addressed to demo is gone",
+      db.get_connection().execute("SELECT COUNT(*) FROM utterances "
+                                  "WHERE content='Spoken to demo.'").fetchone()[0], 0)
+check("[home] the listener's perception of demo's line went with it (cascade)",
+      db.get_connection().execute("SELECT COUNT(*) FROM perceptions "
+                                  "WHERE content='OTHER heard demo'").fetchone()[0], 0)
+check("[home] the scene demo took part in is gone",
+      db.get_connection().execute("SELECT COUNT(*) FROM scenes "
+                                  "WHERE summary='demo and demo_other argued.'").fetchone()[0], 0)
+check("[home] a line between OTHER characters is untouched",
+      db.get_connection().execute("SELECT COUNT(*) FROM utterances "
+                                  "WHERE content='Between others.'").fetchone()[0], 1)
+check("[home] a scene without demo is untouched",
+      db.get_connection().execute("SELECT COUNT(*) FROM scenes "
+                                  "WHERE summary='Only others here.'").fetchone()[0], 1)
 # JSON-participant stores: shared rows are pruned, not deleted.
 check("[home] the shared story arc survived, without demo",
       json.loads(db.get_connection().execute(
@@ -519,6 +567,9 @@ check("[button] day cursor reset", wipe["day_cursor"], "reset")
 check("[button] correspondence stays",
       db.get_connection().execute("SELECT COUNT(*) FROM chat_messages "
                                   "WHERE character_name=?", (NAME,)).fetchone()[0], 1)
+check("[button] the room record stays (memory scope only)",
+      db.get_connection().execute("SELECT COUNT(*) FROM utterances "
+                                  "WHERE speaker=?", (NAME,)).fetchone()[0] > 0, True)
 check("[button] knowledge stays",
       db.get_connection().execute("SELECT COUNT(*) FROM knowledge "
                                   "WHERE character_name=?", (NAME,)).fetchone()[0], 1)
@@ -655,6 +706,51 @@ try:
 finally:
     with db.transaction() as conn:
         conn.execute("DROP TRIGGER smoke_cursor_failure")
+
+
+# ---------------------------------------------------------------------------
+# [8] The Game-Admin "Fresh start" button on an existing character
+# ---------------------------------------------------------------------------
+
+print("\n[8] Fresh start button: re-init in place + the intro as the one memory")
+
+for probe in ("smoke_failure", "smoke_locked"):
+    character_reset._HANDLERS.pop(probe, None)
+from fastapi import HTTPException  # noqa: E402
+from app.core.character_ops import fresh_start_character  # noqa: E402
+
+seed_stores(NAME)
+seed_soul(NAME)
+fresh = fresh_start_character(NAME, "  " + INTRO + "\n")
+check("[fresh] no reset errors", fresh["errors"], [])
+check("[fresh] scope", fresh["scope"], "reinit")
+check("[fresh] intro memory reported", fresh["intro_memory"], 1)
+check("[fresh] the result describes the scope",
+      {"utterances", "scenes", "relationships"}
+      <= {row["store"] for row in fresh["mode_doc"]["cleared"]}, True)
+assert_reinit_cleared("[fresh]", NAME, seeded_intro=True)
+check("[fresh] the intro (trimmed) is the only memory",
+      [r[0] for r in db.get_connection().execute(
+          "SELECT content FROM memories WHERE character_name=?", (NAME,)).fetchall()],
+      [INTRO])
+check("[fresh] the rival line is nowhere on disk", rival_on_disk(NAME), [])
+check("[fresh] identity survived: profile",
+      (get_character_profile(NAME) or {}).get("height"), 170)
+check("[fresh] the other character's OWN memory is untouched",
+      db.get_connection().execute("SELECT COUNT(*) FROM memories WHERE character_name=?",
+                                  (OTHER,)).fetchone()[0], 1)
+
+seed_stores(NAME)
+empty = fresh_start_character(NAME, "   ")
+check("[fresh] an empty intro seeds nothing", empty["intro_memory"], 0)
+check("[fresh] …and leaves no memory at all",
+      db.get_connection().execute("SELECT COUNT(*) FROM memories WHERE character_name=?",
+                                  (NAME,)).fetchone()[0], 0)
+try:
+    fresh_start_character("nobody_here", INTRO)
+    check("[fresh] unknown character is a 404", "no raise", 404)
+except HTTPException as e:
+    check("[fresh] unknown character is a 404", e.status_code, 404)
 
 
 # ---------------------------------------------------------------------------
