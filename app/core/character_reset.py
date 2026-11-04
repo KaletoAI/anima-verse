@@ -273,9 +273,11 @@ def _prune_json_members(conn, store: Store, character_name: str) -> int:
             members = _json.loads(raw or "[]")
         except Exception:
             members = []
-        # `intents.participants` is a dict {role: name}; everything else a list.
+        # `intents.participants` is a dict keyed by participant NAME
+        # ({name: {"role", "progress"}}, `app/models/intents.py`); everything
+        # else a list of names.
         if isinstance(members, dict):
-            names = [str(v) for v in members.values()]
+            names = [str(k) for k in members.keys()]
         elif isinstance(members, list):
             names = [str(v) for v in members]
         else:
@@ -292,7 +294,7 @@ def _prune_json_members(conn, store: Store, character_name: str) -> int:
             continue
         if isinstance(members, dict):
             new_members: Any = {k: v for k, v in members.items()
-                                if str(v).strip().lower() != lowered}
+                                if str(k).strip().lower() != lowered}
         else:
             new_members = rest
         conn.execute(

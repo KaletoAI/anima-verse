@@ -160,7 +160,8 @@ def count_rows(store, name):
             members = json.loads(row[0] or "[]")
         except Exception:
             members = []
-        names = ([str(v) for v in members.values()] if isinstance(members, dict)
+        # intents.participants is keyed by participant NAME.
+        names = ([str(k) for k in members.keys()] if isinstance(members, dict)
                  else [str(v) for v in members])
         owner = (row[1] or "") if extra else ""
         if lowered in {n.lower() for n in names} or owner.lower() == lowered:
@@ -241,8 +242,18 @@ def seed_stores(name):
                   "VALUES (?,?,?,?)", ("pi1", name, OTHER, "t"))
         c.execute("INSERT OR REPLACE INTO explored_cells (character_id, cx, cz) VALUES (?,?,?)",
                   (name, 3, 4))
+        # The real participant shape ({name: {role, progress}}, as
+        # app/models/intents.py writes it): one intent `name` owns, and one
+        # OTHER owns with `name` as a participant — before 2026-11-04 the
+        # pruner read the dict VALUES as names and never matched the second.
         c.execute("INSERT OR REPLACE INTO intents (id, owner, participants, created_at, updated_at) "
-                  "VALUES (?,?,?,?,?)", ("i1", name, json.dumps({"target": OTHER}), "t", "t"))
+                  "VALUES (?,?,?,?,?)", ("i1", name, json.dumps(
+                      {name: {"role": "", "progress": []},
+                       OTHER: {"role": "invited", "progress": []}}), "t", "t"))
+        c.execute("INSERT OR REPLACE INTO intents (id, owner, participants, created_at, updated_at) "
+                  "VALUES (?,?,?,?,?)", ("i2", OTHER, json.dumps(
+                      {OTHER: {"role": "", "progress": []},
+                       name: {"role": "OTHER promised this to you", "progress": []}}), "t", "t"))
         c.execute("INSERT OR REPLACE INTO story_arcs (id, title, participants, created_at, updated_at) "
                   "VALUES (?,?,?,?,?)", ("sa1", "Feud", json.dumps([name, OTHER]), "t", "t"))
         c.execute("INSERT OR REPLACE INTO group_chats (id, participants, messages, created_at, updated_at) "
@@ -509,6 +520,12 @@ check("[home] a scene without demo is untouched",
 check("[home] the shared story arc survived, without demo",
       json.loads(db.get_connection().execute(
           "SELECT participants FROM story_arcs WHERE id='sa1'").fetchone()[0]), [OTHER])
+check("[home] OTHER's intent survived, without demo as participant",
+      json.loads(db.get_connection().execute(
+          "SELECT participants FROM intents WHERE id='i2'").fetchone()[0]),
+      {OTHER: {"role": "", "progress": []}})
+check("[home] the intent demo owned is gone",
+      db.get_connection().execute("SELECT COUNT(*) FROM intents WHERE id='i1'").fetchone()[0], 0)
 check("[home] the party demo led is gone entirely",
       db.get_connection().execute("SELECT COUNT(*) FROM parties").fetchone()[0], 0)
 
