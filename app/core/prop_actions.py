@@ -614,35 +614,42 @@ def piece_label(target: dict, lang: str = "en") -> str:
     return localized(read_sidecar(pid, read_only=True) or {}, "name", lang) or pid
 
 
-def _piece_lines(rows: list) -> list:
+def _piece_lines(rows: list, viewer: str = "") -> list:
     """One line per furniture NAME with its action names (a pair action with
     its partners) — what an LLM decides on. Several pieces of one name are
     one line: which of them is used is the server's choice (the nearest
-    usable one, :func:`execute`)."""
+    usable one, :func:`execute`). Partners are named as ``viewer``
+    perceives them (``identity_view.shown_name``); :func:`_named_request`
+    takes that label back."""
+    from app.core.identity_view import shown_name
     pieces: dict = {}
     for row in rows:
         labels = pieces.setdefault(row.get("prop_label") or "Furniture", {})
         partners = labels.setdefault(row.get("label") or "", [])
-        partners += [p for p in row.get("partners", []) if p not in partners]
+        shown = [shown_name(viewer, p) if viewer else p for p in row.get("partners", [])]
+        partners += [p for p in shown if p not in partners]
     return [f"- {prop}: " + ", ".join(f"{label} (with {', '.join(partners)})" if partners else label
                                       for label, partners in labels.items())
             for prop, labels in pieces.items()]
 
 
 def _own_lines(actor: str) -> list:
-    """The actor's own running or waiting furniture actions, in words."""
+    """The actor's own running or waiting furniture actions, in words —
+    the others named as the actor perceives them."""
+    from app.core.identity_view import shown_names
     from app.core.prop_action_engine import state_for
     state = state_for(actor)
     lines = []
     from app.core.interaction_engine import join_names
     for run in state["current"]:
-        others = join_names([n for n in [run["actor"], *run["members"]] if n != actor])
+        others = join_names(shown_names(
+            actor, [n for n in [run["actor"], *run["members"]] if n != actor]))
         piece = piece_label(run["target"])
         lines.append(f"You are doing: {run['label']}" + (f" with {others}" if others else "")
                      + (f" on {piece}" if piece else ""))
     for run in state["outgoing"]:
         piece = piece_label(run["target"])
-        lines.append(f"You asked {join_names(run['members'])} for {run['label']}"
+        lines.append(f"You asked {join_names(shown_names(actor, run['members']))} for {run['label']}"
                      + (f" on {piece}" if piece else "") + " — waiting for the answer")
     return lines
 
@@ -657,7 +664,7 @@ def narrative_block(actor: str) -> str:
         - Bed: Cuddle (with Mia)
 
     ``""`` when nothing can be requested and nothing is running."""
-    lines = _piece_lines(_requestable(actor)) + _own_lines(actor)
+    lines = _piece_lines(_requestable(actor), actor) + _own_lines(actor)
     if not lines:
         return ""
     return "\n".join(["Furniture here (just describe what you do with it):", *lines])
@@ -669,7 +676,7 @@ def prompt_block(actor: str) -> str:
     stay with the server, which resolves a named request at execution
     (:func:`execute`); an earlier version carried them all and grew to
     15 KB per prompt."""
-    lines = _piece_lines(_requestable(actor)) or ["(none available right now)"]
+    lines = _piece_lines(_requestable(actor), actor) or ["(none available right now)"]
     return "\n".join([
         "<prop_actions_contract>",
         'Furniture actions here. Use one: PropAction {"furniture": "<name>", "action": "<action>", '
@@ -713,12 +720,21 @@ def _named_request(actor: str, payload: dict) -> dict:
             if (o["prop_label"] or "Furniture").strip().lower() == furniture
             and o["label"].strip().lower() == action and o.get("participants", 1) <= 2]
     if not rows:
-        return refused("no_such_offer", available=_piece_lines(_requestable(actor)))
+        return refused("no_such_offer", available=_piece_lines(_requestable(actor), actor))
+
+    from app.core.identity_view import identity_key, shown_name
+    wanted = partner.lower()
+
+    def named(real: str) -> bool:
+        # The real name, or the name the prompt showed (the alias / the
+        # "<alias> (<name>)" label of a persona) — the lines above print it.
+        return wanted in {real.lower(), shown_name(actor, real).lower(),
+                          identity_key(real).lower()}
 
     def verdict(row):
         if not row["required_partner"]:
             return row["enabled"], row["reason"]
-        choice = next((t for t in row["available_targets"] if t["partner"].lower() == partner.lower()), None)
+        choice = next((t for t in row["available_targets"] if named(t["partner"])), None)
         if choice is None:
             return False, "partner_required" if not partner else "partner_not_available"
         return choice["enabled"], choice["reason"]
@@ -732,11 +748,12 @@ def _named_request(actor: str, payload: dict) -> dict:
                  target=row["target"])
     if row["required_partner"]:
         exact["members"] = [next(t["partner"] for t in row["available_targets"]
-                                 if t["partner"].lower() == partner.lower())]
-    # The answer goes back to the LLM: what happened, in names.
+                                 if named(t["partner"]))]
+    # The answer goes back to the LLM: what happened, in names (the
+    # partner as the actor perceives them).
     result = execute(actor, exact)
     return dict(status=result["status"], furniture=row["prop_label"], action=row["label"],
-                **({"partner": exact["members"][0]} if "members" in exact else {}),
+                **({"partner": shown_name(actor, exact["members"][0])} if "members" in exact else {}),
                 # Already part of that very run (agreed to it a moment ago).
                 **({"already": True} if result.get("already") else {}),
                 **({"reason": result["reason"]} if result.get("reason") else {}))

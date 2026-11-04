@@ -150,7 +150,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # to this character: it never reaches anyone else's prompt.
         "recent_thoughts": recent_thoughts_block(character_name),
         "outfit_self_block": _build_outfit_block(character_name, "Your outfit"),
-        "outfit_avatar_block": _build_avatar_outfit_block(),
+        "outfit_avatar_block": _build_avatar_outfit_block(character_name),
         "known_secrets_block": _build_known_secrets_block(character_name),
         "room_items_block": _build_room_items_block(location_id, room_id, character_name, profile=profile),
         "inventory_block": _build_inventory_block(character_name),
@@ -248,12 +248,16 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
          if key not in excluded and isinstance(value, str)]))
     ctx["away_block"] = away_block(ctx["away_people"])
     from app.models.account import get_active_character
+    from app.core.identity_view import shown_names
     avatar = (get_active_character() or "").strip()
     ctx["absent_block"] = "\n".join(
         f"- {name} (avatar)" if name == avatar else f"- {name}"
         for name in ctx["absent_people"])
     presence = room_presence_names(character_name, location_id, room_id)
-    ctx["room_presence_names"] = presence[0] if presence is not None else None
+    # Labels for the prompt (the observer's view of each present person);
+    # ``presence`` itself stays real names for the absent-people lookup below.
+    ctx["room_presence_names"] = (shown_names(character_name, presence[0])
+                                  if presence is not None else None)
     # Alone, the own last turns waiting for an absent person lead an RP model
     # to narrate that person entering. Only the journal's own mentions count:
     # every prompt names the avatar (its outfit block), and a name in the chat
@@ -847,6 +851,7 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
     """
     try:
         from app.core.db import get_connection
+        from app.core.identity_view import stamped_name
         from app.models.unified_chat import UnifiedChatManager
         conn = get_connection()
         # Find the latest partner in either storage direction.
@@ -881,6 +886,11 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
             if not content:
                 continue
             speaker = partner if role == "user" else character_name
+            # Said while a persona was worn → the persona's name, from this
+            # character's view (the message's identity stamp); unstamped
+            # messages keep the stored name.
+            speaker = stamped_name(character_name, speaker,
+                                   getattr(msg, "metadata", None))
             if len(content) > 400:
                 content = content[:400].rstrip() + " […]"
             lines.append(f"  {speaker}: {content}")
@@ -911,14 +921,19 @@ def _build_outfit_block(character_name: str, label: str) -> str:
         return ""
 
 
-def _build_avatar_outfit_block() -> str:
-    """Avatar outfit. Returns 'Avatar outfit (<name>): ...' or ''."""
+def _build_avatar_outfit_block(observer: str = "") -> str:
+    """Avatar outfit. Returns 'Avatar outfit (<name>): ...' or ''.
+
+    ``<name>`` is the observer's view of the avatar (the alias of a persona
+    the observer is not in on)."""
     try:
+        from app.core.identity_view import shown_name
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
         if not avatar:
             return ""
-        return _build_outfit_block(avatar, f"Avatar outfit ({avatar})")
+        label = shown_name(observer, avatar) if observer else avatar
+        return _build_outfit_block(avatar, f"Avatar outfit ({label})")
     except Exception as e:
         logger.debug("avatar outfit block failed: %s", e)
         return ""
@@ -999,6 +1014,7 @@ def _build_tracker_block(character_name: str, current_location_id: str) -> str:
     requires SetLocation.
     """
     try:
+        from app.core.identity_view import masked_description
         from app.models.inventory import get_character_inventory, get_item
         from app.models.character import get_character_current_location
         from app.models.world import get_location_name
@@ -1023,7 +1039,10 @@ def _build_tracker_block(character_name: str, current_location_id: str) -> str:
             seen_targets.add(target)
             target_loc = get_character_current_location(target) or ""
             item_name = (item.get("name") or iid).strip()
-            if not target_loc:
+            # A target hidden behind a persona this carrier is not in on
+            # cannot be found: pinpointing "Cara is here" next to a stranger
+            # would give the persona away.
+            if not target_loc or masked_description(character_name, target) is not None:
                 lines.append(f"- Your {item_name} reaches for {target}, but cannot find them right now.")
                 continue
             if target_loc == current_location_id:
@@ -1151,6 +1170,7 @@ def _build_presence(character_name: str, location_id: str,
     character the map does not place at all: without a point there is no
     circle to be empty."""
     try:
+        from app.core.identity_view import shown_name
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
         presence = _room_presence(character_name, location_id, room_id)
@@ -1158,11 +1178,16 @@ def _build_presence(character_name: str, location_id: str,
             return "", "", False
         here_names, elsewhere_pairs = presence
         here = [(n, f"{n} (avatar)" if n == avatar else n) for n in here_names]
-        elsewhere = [
-            f"- {n} (avatar) — in: {room}" if n == avatar else f"- {n} — in: {room}"
-            for n, room in elsewhere_pairs]
+        # Names as this character perceives them (identity view): a persona
+        # it is not in on is its alias, also in another room.
+        elsewhere = []
+        for n, room in elsewhere_pairs:
+            label = shown_name(character_name, n)
+            elsewhere.append(f"- {label} (avatar) — in: {room}" if n == avatar
+                             else f"- {label} — in: {room}")
         room_block = present_people_details(
-            here[:8], location_id, with_activity=True) if here else ""
+            here[:8], location_id, with_activity=True,
+            observer=character_name) if here else ""
         return room_block, "\n".join(elsewhere[:8]), not here
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)

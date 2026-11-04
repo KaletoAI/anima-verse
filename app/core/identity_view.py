@@ -218,6 +218,55 @@ def identity_snapshot(names: Iterable[str]) -> Dict[str, str]:
     return out
 
 
+def pair_stamp(a: str, b: str) -> Dict[str, Any]:
+    """The identity stamp for one message between ``a`` and ``b``, saved now.
+
+    ``{"identity": {subject: alias}, "identity_shown": {subject: label}}`` for
+    the side(s) that wear a persona right now, where ``label`` is
+    :func:`shown_name` of that subject as the OTHER side sees it — a pairwise
+    message has exactly these two readers. ``{}`` when neither is transformed
+    (or no provider is registered)."""
+    sides = [n for n in (a, b) if n]
+    snap = identity_snapshot(sides)
+    if not snap:
+        return {}
+    shown: Dict[str, str] = {}
+    for subject in snap:
+        other = b if subject == a else a
+        shown[subject] = shown_name(other, subject)
+    return {"identity": snap, "identity_shown": shown}
+
+
+def stamped_name(observer: str, subject: str, stamp: Any) -> str:
+    """The name ``observer`` reads for ``subject`` on a message that carries
+    ``stamp`` (a :func:`pair_stamp` result inside the message metadata).
+
+    No alias stamped for the subject (an older message, or one spoken
+    undisguised) → the real name, as before. Stamped and the subject still
+    wears that alias → the live :func:`shown_name` (a later reveal counts).
+    Stamped and the persona is no longer worn → the label stamped at saving
+    time: what was said as the persona stays the persona's, also after the
+    revert. The subject herself always reads her real name; with no provider
+    registered every stamp is ignored (deletion test: real names)."""
+    if not subject or _same(observer, subject) or not isinstance(stamp, dict):
+        return subject
+    identity = stamp.get("identity")
+    alias = identity.get(subject) if isinstance(identity, dict) else None
+    if not isinstance(alias, str) or not alias.strip():
+        return subject
+    from app.core.hooks import get_provider
+    if get_provider(PROVIDER_ACTIVE) is None:
+        return subject
+    persona = active_persona(subject)
+    if persona is not None and _same(persona.alias, alias):
+        return _label(observer, subject, persona)
+    shown = stamp.get("identity_shown")
+    label = shown.get(subject) if isinstance(shown, dict) else None
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    return alias.strip()
+
+
 def rewrite_names(observer: str, text: str, subjects: Iterable[str]) -> str:
     """Replace each transformed subject's real name in ``text`` by
     :func:`shown_name` for ``observer`` — whole words, case-sensitive, in one

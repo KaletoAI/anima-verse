@@ -802,6 +802,7 @@ def _group_lines(location_id: str, room_id: str,
     "Anywhere here" line below can leave them out instead of naming the same
     pose twice. A row with no free slot offers nothing and therefore covers
     nothing — a standing spot that is taken must not stop anyone standing."""
+    from app.core.identity_view import shown_name
     from app.core.pose_catalog import activity_catalog, poses_in_group
     occ = occupancy(location_id, room_id, exclude=viewer)
     cat = activity_catalog()
@@ -818,7 +819,9 @@ def _group_lines(location_id: str, room_id: str,
         row["free"] += n_free
         row["max_free"] = max(row["max_free"], 0 if _has_pair(taken) else n_free)
         row["cap"] += p["capacity"]
-        row["who"] += [n for n, _ in taken]
+        # Names as the viewer perceives them (a persona's alias for a
+        # non-knower) — display only, nothing resolves these back.
+        row["who"] += [shown_name(viewer, n) if viewer else n for n, _ in taken]
     lines: List[str] = []
     covered: Set[str] = set()
     for row in rows.values():

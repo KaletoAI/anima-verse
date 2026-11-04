@@ -22,9 +22,10 @@ def build_tool_step_prompt(
 ) -> ToolStepPrompt:
     """Filter tools once; put all situation-dependent declarations in the turn."""
     from app.core.dependencies import get_skill_manager
+    from app.core.identity_view import shown_name
     from app.core.streaming import (
         turn_tools, decision_menu_note, open_questions_note,
-        tool_decision_guardrails, speech_turn_note,
+        tool_decision_guardrails, speech_turn_note, tool_step_presence_labels,
     )
     from app.models.intents import build_open_intents_brief
     from app.routes.chat import _marker_travel_refusal
@@ -54,8 +55,13 @@ def build_tool_step_prompt(
     )
     user = prompt_templates.render(
         'chat/tool_step_turn.md', character=character, mode=mode,
-        rp_response=rp_response, user_input=user_input, present=facts.present,
-        partner=facts.partner, tools=declarations,
+        rp_response=rp_response, user_input=user_input,
+        # Names as the character perceives them; facts keep the real names
+        # for availability (turn_tools) and the label is mapped back when
+        # the tool LLM answers with it.
+        present=tool_step_presence_labels(character, facts.present),
+        partner=shown_name(character, facts.partner) if facts.partner else facts.partner,
+        tools=declarations,
         speech_note=speech_turn_note(tool_map, is_thought=mode != 'respond'),
         menu_note=decision_menu_note(character, tool_map, indent=''),
         questions_note=open_questions_note(character, tool_map, indent=''),

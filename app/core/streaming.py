@@ -404,6 +404,17 @@ def tool_step_presence(character: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+def tool_step_presence_labels(character: str, names=None) -> list[str]:
+    """The tool-step roster as ``character`` perceives it — the labels the
+    prompt prints (``identity_view.shown_name``: a persona's alias for a
+    non-knower, ``"<alias> (<name>)"`` for a knower). ``names`` defaults to
+    :func:`tool_step_presence`, which keeps answering real names for its
+    non-prompt callers (availability, partner checks)."""
+    from app.core.identity_view import shown_names
+    roster = tool_step_presence(character) if names is None else names
+    return shown_names(character, roster)
+
+
 def turn_tools(tools, facts: TurnFacts, *, rp_first: bool) -> tuple[list, dict[str, str]]:
     """Apply package-declared availability to one turn without changing inventory."""
     from app.core.dependencies import get_skill_manager
@@ -942,7 +953,7 @@ class ToolResultEvent:
 
 @dataclass
 class ToolErrorEvent:
-    """Tool-Fehler."""
+    """A tool call failed."""
     tool_name: str
     error: str
 

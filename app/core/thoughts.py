@@ -537,8 +537,11 @@ class ThoughtRunner:
             presence = room_presence_names(character_name, loc, room)
             absent, away = split_away(
                 absent_named_people(character_name, loc, room, [system_prompt]))
+            from app.core.identity_view import shown_names
             ctx = {
-                "room_presence_names": presence[0] if presence is not None else None,
+                # The observer's view of each present person (labels).
+                "room_presence_names": (shown_names(character_name, presence[0])
+                                        if presence is not None else None),
                 "location_name": prompt_place(character_name, loc)[0],
                 "room_name": get_room_name(loc, room, get_character_language(character_name) or "de")
                              if loc and room else "",

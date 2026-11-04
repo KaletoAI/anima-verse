@@ -234,6 +234,8 @@ URLs, DB keys other than the identity key) stay the real name.
 | `resolve_name(observer, token)` | Roster name (exact, then casefold) → itself as stored; casefolded alias of an ACTIVE persona → its subject; else `None`. A `"<alias> (<name>)"` label is the caller's to split. |
 | `is_persona_name(name)` | Casefolded membership in `identity.persona_names`. `app.core.character_name.validate_character_name` refuses such a name with code `reserved` (creation/import only). |
 | `identity_snapshot(names)` | `{subject: alias}` for the transformed ones. |
+| `pair_stamp(a, b)` | `{"identity": {subject: alias}, "identity_shown": {subject: label the other side sees}}` for the side(s) of a pairwise message that wear a persona now, else `{}`. `UnifiedChatManager.save_message` stores it in an in-person message's `metadata` (never on a phone message). |
+| `stamped_name(observer, subject, stamp)` | The name O reads for C on a stamped message: no alias stamped → C; C still wears the stamped alias → `shown_name`; persona no longer worn → the stamped label (said as the persona stays the persona's); no provider → C. |
 | `rewrite_names(observer, text, subjects)` | Each transformed subject's real name (whole word, case-sensitive, one pass) → `shown_name(observer, subject)`. For system/storyteller text only, never a character's own speech. |
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
