@@ -5,6 +5,8 @@ description: A character holding a power item transforms into a persona with its
 capability_label: Transformation
 capability_description: The character can transform into a persona through a power item it holds, and back.
 on_load: register.py
+templates:
+  llm: templates/llm
 config_schema:
   transformation_personas:
     label: Transformation personas

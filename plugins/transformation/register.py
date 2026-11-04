@@ -1,8 +1,10 @@
-"""on_load: tables, the three identity providers and the reset store.
+"""on_load: tables, the three identity providers, the reset store and the
+expiry tick.
 
 Executed again on every package (re)load, so everything here is idempotent:
 ``CREATE TABLE IF NOT EXISTS``, providers replaced under the same owner, the
-reset handler replaced under the same key, both caches dropped.
+reset handler replaced under the same key, the ``world_tick`` callback
+replaced under the same tag, both caches dropped.
 """
 from contextlib import contextmanager
 
@@ -11,7 +13,7 @@ from app.core.character_reset import SCOPE_REINIT, register_reset_store
 from app.core.identity_view import PROVIDER_ACTIVE, PROVIDER_KNOWS, PROVIDER_NAMES
 from app.models.inventory import get_item
 
-from plugins.transformation import definitions, knowers, store
+from plugins.transformation import definitions, engine, knowers, store
 
 OWNER = "transformation"
 
@@ -68,3 +70,5 @@ register_reset_store(
     "transformation", store.delete_character_rows, (SCOPE_REINIT,),
     what="active transformation and persona cooldowns",
     lock=_invalidate_after_commit)
+
+hooks.register("world_tick", engine.tick, tag="transformation.tick")

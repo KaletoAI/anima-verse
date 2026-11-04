@@ -125,6 +125,12 @@ in [LLM templates](llm-templates.md#chat-state-extraction-contract). The generic
 activity/nonchat situations. Hourly drift, activity ticks, item effects, rewards
 and skill costs do not acquire Influence multipliers or the chat budget.
 
+## Character effects — `app.core.effect_application` ⚠
+
+| Function | Contract |
+|---|---|
+| `apply_character_effects(name, effects, now, *, source='') -> dict` | Apply typed effects to one character's profile under its `keyed_lock("character_profile", name)` (takes the lock itself; re-entrant, so a caller may already hold it). `effects` is a list of dicts with `id` and `type`: `stat_delta` (`stat`, `amount`; only an existing template stat, clamped 0–100), `mood` (`mood`), `condition_add` (`condition_id`, `duration_game_s` — 0 = never expires on its own, `repeat` `refresh`/`ignore`, `source`) and `condition_remove` (`condition_id`). `now` is the `GameTime` stamped into a new condition. An effect naming an unknown stat or a condition id that is not an enabled prompt filter (`load_filters`) is silently dropped. Returns `{profile, changes, results}` (`results` keyed by effect `id`, each with `applied`); the state-change record and sync are delivered after all locks are released |
+
 ## Stat rules — `app.core.stat_rules` ⚠
 
 Rules resolve template seeds, whole-entry world overrides and character config.
