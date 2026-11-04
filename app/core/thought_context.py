@@ -222,7 +222,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 
     # Join package contributions; rule gates own skill availability.
     ctx["skill_context_blocks"] = "\n\n".join(
-        text for _, text in _build_skill_context_blocks(character_name))
+        [text for _, text in _build_skill_context_blocks(character_name)]
+        + _build_event_context_blocks(character_name))
 
     # State-driven filters: drop blocks + inject modifier text based on
     # active conditions/stats (drunk, exhausted, …). Replaces the old
@@ -358,6 +359,21 @@ def _build_skill_context_blocks(character_name: str) -> List[Tuple[str, str]]:
                 pass
         parts.append((pkg_id, block))
     return parts
+
+
+def _build_event_context_blocks(character_name: str) -> List[str]:
+    """Sections packages append through the ``character.thought_context``
+    event — for volatile state that does not hang on one of the character's
+    verbs (a verb's ``thought_context_block`` only reaches characters who
+    have that verb). Each block is a full section with its own header;
+    blank ones are dropped. Joined after the verbs' blocks."""
+    blocks: List[str] = []
+    try:
+        from app.core.hooks import emit
+        emit("character.thought_context", character_name=character_name, blocks=blocks)
+    except Exception as e:
+        logger.debug("thought context event failed for %s: %s", character_name, e)
+    return [b.strip() for b in blocks if isinstance(b, str) and b.strip()]
 
 
 def _build_events_block(location_id: str, character_name: str = "") -> str:

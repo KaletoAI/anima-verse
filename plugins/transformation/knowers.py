@@ -8,7 +8,7 @@ read-modify-write of the secret runs under ``keyed_lock("secrets", bearer)``.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.keyed_lock import keyed_lock
 from app.models import secrets
@@ -50,6 +50,20 @@ def knows(observer: str, bearer: str, persona_id: str) -> bool:
     if found is None:
         return False
     return any(isinstance(k, str) and _fold(k) == folded for k in found.get("known_by") or [])
+
+
+def knower_names(bearer: str, persona_id: str) -> List[str]:
+    """The knowers listed on the bearer's secret, as stored (stripped,
+    deduplicated casefold, the bearer herself left out)."""
+    found = _find(bearer, persona_id)
+    out: List[str] = []
+    seen = {_fold(bearer)}
+    for name in (found or {}).get("known_by") or []:
+        if not isinstance(name, str) or _fold(name) in seen:
+            continue
+        seen.add(_fold(name))
+        out.append(name.strip())
+    return out
 
 
 def add(observer: str, bearer: str, persona_id: str) -> bool:

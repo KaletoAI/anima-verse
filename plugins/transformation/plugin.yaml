@@ -5,6 +5,26 @@ description: A character holding a power item transforms into a persona with its
 capability_label: Transformation
 capability_description: The character can transform into a persona through a power item it holds, and back.
 on_load: register.py
+skills:
+  - skill_id: transform
+    class: TransformationSkill
+    params: {verb: transform}
+    always_load: true
+    default_enabled: true
+  - skill_id: revert
+    class: TransformationSkill
+    params: {verb: revert}
+    always_load: true
+    default_enabled: true
+  - skill_id: reveal_identity
+    class: TransformationSkill
+    params: {verb: reveal_identity}
+    always_load: true
+    default_enabled: true
+state_flags:
+  - flag: is_transformed
+    cleared_by: revert
+    prompt_when_set: "You are transformed and wear your persona. To be your ordinary self again — where nobody who is not in on the secret is watching — use {clear_tool}."
 templates:
   llm: templates/llm
 config_schema:

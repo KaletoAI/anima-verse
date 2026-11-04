@@ -1,10 +1,11 @@
-"""on_load: tables, the three identity providers, the reset store and the
+"""on_load: tables, the three identity providers, the avatar's phrase
+intercept, the identity lines of the scene state, the reset store and the
 expiry tick.
 
 Executed again on every package (re)load, so everything here is idempotent:
 ``CREATE TABLE IF NOT EXISTS``, providers replaced under the same owner, the
-reset handler replaced under the same key, the ``world_tick`` callback
-replaced under the same tag, both caches dropped.
+reset handler replaced under the same key, the event callbacks replaced
+under the same tags, both caches dropped.
 """
 from contextlib import contextmanager
 
@@ -13,9 +14,11 @@ from app.core.character_reset import SCOPE_REINIT, register_reset_store
 from app.core.identity_view import PROVIDER_ACTIVE, PROVIDER_KNOWS, PROVIDER_NAMES
 from app.models.inventory import get_item
 
-from plugins.transformation import definitions, engine, knowers, store
+from plugins.transformation import definitions, engine, intercept, knowers, prompt_lines, store
 
 OWNER = "transformation"
+#: The /play/say intercept capability (app.routes.play.SAY_INTERCEPT_CAPABILITY).
+SAY_INTERCEPT = "play.say_intercept"
 
 store.ensure_schema()
 store.invalidate()
@@ -54,6 +57,11 @@ def persona_names():
 hooks.register_provider(PROVIDER_ACTIVE, active_persona, owner=OWNER)
 hooks.register_provider(PROVIDER_KNOWS, knows, owner=OWNER)
 hooks.register_provider(PROVIDER_NAMES, persona_names, owner=OWNER)
+hooks.register_provider(SAY_INTERCEPT, intercept.say_intercept, owner=OWNER, multiple=True)
+hooks.register("character.prompt_context", prompt_lines.on_prompt_context,
+               tag="transformation.lines")
+hooks.register("character.thought_context", prompt_lines.on_thought_context,
+               tag="transformation.thought_lines")
 
 
 @contextmanager
