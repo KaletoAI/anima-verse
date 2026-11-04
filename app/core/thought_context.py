@@ -1046,7 +1046,8 @@ def _visible_activity(name: str) -> str:
 
 
 def present_people_details(entries, location_id: str = "",
-                           with_activity: bool = False) -> str:
+                           with_activity: bool = False, *,
+                           observer: str = "") -> str:
     """Visible-detail lines for present characters. ``entries`` =
     [(name, display_label)]. Shared by the thought context AND the chat
     scene state (R5): what a character can SEE of the people around it.
@@ -1058,9 +1059,18 @@ def present_people_details(entries, location_id: str = "",
     Both used to ride at the end of the capped description, where the cap
     cut them off ("exposed large breasts, expos…"). A state's NAME never
     goes in: it is an internal label ("Drunk — clouded memory"), what
-    others see of it is its image_modifier."""
+    others see of it is its image_modifier.
+
+    ``observer``: who looks. With it, the leading name of each label becomes
+    ``identity_view.shown_name(observer, name)`` (a caller's suffix such as
+    " (avatar)" stays) and the description is the observer's view
+    (``person_description(..., observer=)`` — a persona's description for a
+    non-knower). ``""`` = real names and appearance."""
+    from app.core.identity_view import shown_name
     lines = []
     for n, label in entries[:8]:
+        if observer and label.startswith(n):
+            label = shown_name(observer, n) + label[len(n):]
         details = []
         try:
             from app.core.prompt_filters import (apply_image_replacements,
@@ -1069,12 +1079,13 @@ def present_people_details(entries, location_id: str = "",
         except Exception:
             replacements, additive = [], []
         try:
-            # The REAL person description (appearance + body-slot fragments +
-            # worn outfit) — same composition the scene renderer uses for
-            # text persons; the state replacements rewrite it the same way.
+            # The person description (appearance + body-slot fragments +
+            # worn outfit; the observer's view of the appearance) — same
+            # composition the scene renderer uses for text persons; the
+            # state replacements rewrite it the same way.
             from app.core.prompt_builder import person_description
             desc = person_description(n, include_outfit=True, include_exposed=False,
-                                      apply_state_modifiers=False)
+                                      apply_state_modifiers=False, observer=observer)
             desc = " ".join(apply_image_replacements(desc, replacements).split()).strip()
             if desc:
                 if len(desc) > 180:

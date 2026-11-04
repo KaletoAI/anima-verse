@@ -1099,7 +1099,7 @@ LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
 
 | Function | Contract |
 |---|---|
-| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
+| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. `observer=` (keyword, default `""`) gives what that character sees: for a person wearing a persona the observer is not in on, the persona description replaces appearance and body slots (the outfit stays); without it, the real appearance (image prompts). Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
 | `app.core.prompt_compose.compose(*, use_case, subject, backend, hints=None, negative_extra="", style_override=None, conditions="")` | Compose the selected backend family's use-case style and negative prompt. Returns `.prompt`, `.negative`, `.warnings`, `.meta`. Call inside the routing callback so each fallback backend gets its own composition. |
 | `app.core.llm_json.parse_json(raw: str) -> dict \| None` | Extract a JSON object from a queued LLM answer, tolerating code fences; returns None when it cannot be parsed. A bare array is returned under `_list`. Validate task-specific fields in the caller. |
 
