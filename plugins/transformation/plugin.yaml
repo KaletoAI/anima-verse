@@ -1,0 +1,75 @@
+name: transformation
+version: "1.0.0"
+category: skill
+description: A character holding a power item transforms into a persona with its own alias; whoever is not in on the secret sees only the alias.
+capability_label: Transformation
+capability_description: The character can transform into a persona through a power item it holds, and back.
+on_load: register.py
+config_schema:
+  transformation_personas:
+    label: Transformation personas
+    scope: world
+    is_array: true
+    item_label_field: alias
+    description: >-
+      Each entry binds a persona to a power item. Whoever holds the item can transform into the persona;
+      every character who is not in on the secret then perceives only the alias. Who knows the secret is
+      edited per bearer in Characters → Secrets (the secret "I am secretly <alias>." lists its knowers).
+    fields:
+      id:
+        type: str
+        label: ID
+        required: true
+        description: Unique, stable id of this persona. Changing it starts a new persona — knowers and cooldowns of the old id no longer apply.
+      enabled:
+        type: bool
+        label: Enabled
+        default: true
+        description: Disable to take this persona out of the world without deleting it; its alias is then free again.
+      item_id:
+        type: str
+        label: Power item ID
+        required: true
+        description: ID of the inventory item that grants the transformation. Whoever holds it can transform.
+      alias:
+        type: str
+        label: Alias
+        required: true
+        description: The name everyone who is not in on the secret perceives. Must not be the name of an existing character; no character can be created under it while it is configured.
+      description:
+        type: text
+        label: Persona description
+        description: What others perceive of the persona — replaces the real appearance for everyone who is not in on the secret.
+      activation_phrase:
+        type: str
+        label: Activation phrase
+        description: Phrase the avatar says to transform.
+      revert_phrase:
+        type: str
+        label: Revert phrase
+        description: Phrase the avatar says to return to the ordinary self.
+      suit_items:
+        type: str
+        label: Suit item IDs
+        description: Comma-separated IDs of the outfit items worn while transformed. The outfit worn before is restored on revert.
+      condition_id:
+        type: str
+        label: Condition ID
+        description: Condition applied while transformed (its prompt, image and stat modifiers). Empty = none.
+      max_duration_minutes:
+        type: int
+        label: Maximum duration (game minutes)
+        default: 60
+        min: 0
+        description: GAME minutes after which the transformation ends by itself. 0 = until reverted.
+      cooldown_minutes:
+        type: int
+        label: Cooldown (game minutes)
+        default: 30
+        min: 0
+        description: GAME minutes after a revert before the same bearer can transform into this persona again.
+      transform_activity:
+        type: str
+        label: Transform activity
+        default: transforming
+        description: Activity shown while the transformation takes place.

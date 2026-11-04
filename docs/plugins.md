@@ -1168,6 +1168,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `sleep` | `sleep`, `wakeup` | Schlaf-Flag setzen und den Charakter währenddessen von der Karte nehmen |
 | `take_photo` | `image_generation` | Der Charakter macht ein Foto / erzeugt ein Bild (Verb über den Core-Bild-Service) |
 | `talk_to` | `talk_to` | Dialog von Angesicht zu Angesicht, in Hörweite |
+| `transformation` | — | Transformation through a power item into a persona with an alias; non-knowers perceive only the alias. Personas are the world config list `skills.transformation_personas` (an `is_array` package subsection); `on_load` creates the `transformation_*` tables and registers the `identity.active_persona` / `identity.knows` / `identity.persona_names` providers and a reinit reset store. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in Characters → Secrets |
 | `undress` | `undress`, `get_dressed` | Aus-/Anziehen für Freitext-Garderoben |
 | `wet` | `enter_water`, `dry_off` | Nässe-Zustand — Schwimm-Ausnahme solange nass, Auto-Trocknung per TTL |
 

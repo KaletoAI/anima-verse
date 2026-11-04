@@ -250,8 +250,10 @@ def _list_default(parts: Tuple[str, ...]) -> Tuple[bool, Any]:
 
 def _fields_node(parts: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
     """The schema section or subsection at ``parts`` — a node whose keys are
-    fields. ``None`` for anything else: an array section, a sub_array, a key
-    the schema does not know (page-written data such as ``routing``)."""
+    fields. ``None`` for anything else: an array section or array subsection
+    (``is_array`` — its fields belong to each ITEM, the node's value is a
+    list), a sub_array, a key the schema does not know (page-written data
+    such as ``routing``)."""
     if not parts:
         return None
     node = _schema_view().get(parts[0])
@@ -259,7 +261,7 @@ def _fields_node(parts: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
         return None
     for seg in parts[1:]:
         node = (node.get("subsections") or {}).get(seg)
-        if not isinstance(node, dict):
+        if not isinstance(node, dict) or node.get("is_array"):
             return None
     return node
 
