@@ -646,6 +646,65 @@ def inattentive_listeners(room_members: Sequence[str]) -> List[str]:
     return result
 
 
+def record_private_line(*, recipients: Sequence[str], content: str,
+                        speaker: str = STORYTELLER_SPEAKER,
+                        location_id: str = "", room_id: str = "",
+                        source: str = "",
+                        perception_meta: Optional[Dict[str, Any]] = None
+                        ) -> Optional[int]:
+    """A line only the named ``recipients`` perceive.
+
+    One utterance row plus one ``in_room`` perception (with content) per
+    recipient — nobody else gets a row, not even the contentless whisper
+    meta, and the speaker gets no ``spoken_self`` row. Presence is NOT
+    resolved: the recipients are the audience, wherever they stand; the
+    location/room pair only scopes the line to that room's stream.
+
+    No room reactions, no scene touch: a private line is something the
+    recipients notice, not a public event of the room. Returns the utterance
+    id, or None when there is no recipient or the write failed (never raises).
+    """
+    from app.core.timeutils import utc_now_iso
+    from app.models import perception_store
+
+    names = [n for n in dict.fromkeys(str(r or "").strip() for r in recipients
+                                      or ()) if n]
+    if not names or not speaker:
+        return None
+    stamp = utc_now_iso()
+    try:
+        umeta: Dict[str, Any] = {}
+        if source:
+            umeta["source"] = source
+        if perception_meta:
+            umeta.update(perception_meta)
+        try:
+            from app.core.timeutils import game_time
+            game_stamp = game_time().canonical()
+        except Exception as _ge:
+            logger.debug("game stamp for private line failed: %s", _ge)
+            game_stamp = ""
+        uid = perception_store.insert_utterance(
+            ts=stamp, speaker=speaker, location_id=location_id or "",
+            room_id=room_id or "", volume=VOLUME_NORMAL, addressees=[],
+            content=content, meta=umeta, game_ts=game_stamp)
+        rows = []
+        for name in names:
+            pmeta: Dict[str, Any] = {"speaker": speaker}
+            if perception_meta:
+                pmeta.update(perception_meta)
+            rows.append({"perceiver": name, "ts": stamp, "kind": KIND_IN_ROOM,
+                         "content": content, "meta": pmeta})
+        perception_store.insert_perceptions(uid, rows)
+        from app.core import sync_topics
+        sync_topics.avatars(names, "scene")
+        return uid
+    except Exception as e:
+        logger.error("record_private_line failed (speaker=%s, loc=%s, room=%s): %s",
+                     speaker, location_id, room_id, e)
+        return None
+
+
 def record_utterance(*, speaker: str, content: str,
                      volume: str = VOLUME_NORMAL,
                      addressees: Optional[Sequence[str]] = None,

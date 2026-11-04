@@ -2230,6 +2230,36 @@ async def _storyteller_after_silence(actor: str, text: str, location_id: str,
         logger.warning("storyteller silence check failed: %s", e)
 
 
+SAY_INTERCEPT_CAPABILITY = "play.say_intercept"
+
+
+def _run_say_intercepts(*, avatar: str, content: str, volume: str,
+                        addressees: List[str], location_id: str,
+                        room_id: str) -> Optional[Dict[str, Any]]:
+    """Offer the avatar's message to every ``play.say_intercept`` provider.
+
+    Providers run in registration order with the same keywords; the first
+    answer ``{"consumed": True, "result": {...}}`` wins and its ``result``
+    (``{}`` when missing) is returned. ``None`` = nobody consumed it, the
+    message goes the ordinary way. A raising provider is logged and skipped.
+    Blocking — the async route calls it through ``asyncio.to_thread``.
+    """
+    from app.core import hooks
+    for fn in hooks.get_providers(SAY_INTERCEPT_CAPABILITY):
+        try:
+            answer = fn(avatar=avatar, content=content, volume=volume,
+                        addressees=list(addressees), location_id=location_id,
+                        room_id=room_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("say intercept provider %s failed: %s",
+                           getattr(fn, "__qualname__", fn), e)
+            continue
+        if isinstance(answer, dict) and answer.get("consumed"):
+            result = answer.get("result")
+            return dict(result) if isinstance(result, dict) else {}
+    return None
+
+
 @router.post("/play/say")
 async def play_say(request: Request, user=Depends(get_current_user)):
     """Record the avatar's room utterance immediately.
@@ -2292,6 +2322,17 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     if _dropped:
         logger.info("play_say: out-of-reach addressees dropped: %s", _dropped)
     addressees = [a for a in addressees if a in present and a != avatar]
+
+    # A package may consume the message before anything is recorded (e.g. a
+    # spoken trigger phrase). A consumed message is not broadcast: no
+    # utterance, no spell detection, no room reactions.
+    import asyncio
+    if content.strip():
+        intercepted = await asyncio.to_thread(
+            _run_say_intercepts, avatar=avatar, content=content, volume=volume,
+            addressees=addressees, location_id=loc, room_id=room)
+        if intercepted is not None:
+            return {"ok": True, "intercepted": intercepted}
 
     # Analyze an attached image before fan-out so listeners see its description.
     # Keep the visible utterance text clean: the thumbnail travels in
