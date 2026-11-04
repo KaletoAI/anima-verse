@@ -195,6 +195,41 @@ entry without an icon dropped. Answer `[]` for a character the badge does not
 concern — this runs on every 3-second poll for every character, so keep it to
 profile reads (no DB query per call).
 
+## Identity view — `app.core.identity_view` ✅
+
+"How does observer O see character C": a character may wear a persona (an alias
+with its own description) that every non-knower perceives as a separate person.
+The core names no package; three singleton providers answer it, registered with
+`app.core.hooks.register_provider(capability, fn, *, owner=None, multiple=False)`
+and an `owner` (the package id):
+
+| Capability (constant) | Called with → answer |
+|---|---|
+| `identity.active_persona` (`PROVIDER_ACTIVE`) | `subject` → `{"persona_id", "alias", "description", "portrait_url"}` while C is transformed, else `None` |
+| `identity.knows` (`PROVIDER_KNOWS`) | `observer, subject` → `bool`: O is in on C's current persona |
+| `identity.persona_names` (`PROVIDER_NAMES`) | nothing → iterable of every configured alias, transformed or not |
+
+With no provider every function answers the real name (deletion test). A
+provider that raises is logged once at debug and treated as absent for that
+answer; nothing is cached in the core, the provider caches. Call these where a
+text NAMES a character to an observer; technical identifiers (payload keys,
+URLs, DB keys other than the identity key) stay the real name.
+
+| Function | Semantics |
+|---|---|
+| `Persona(subject, persona_id, alias, description, portrait_url)` | Frozen dataclass of the persona C wears. |
+| `active_persona(subject)` | `Persona` or `None` (not transformed, no/raising provider, answer without alias). |
+| `knows(observer, subject)` | True when O is C (casefold), C wears no persona, or the provider says so; a raising provider counts as True. |
+| `shown_name(observer, subject)` | `C` when no persona or O is C; `"<alias> (<C>)"` for a knower; the alias otherwise. |
+| `shown_names(observer, subjects)` | `shown_name` per subject, in order. |
+| `identity_key(subject)` | Alias while transformed, else C — observer-independent key for relationship rows and memory `related_character`. |
+| `public_label(subject)` | Alias while transformed, else C — the public view for shared texts (scene summaries). |
+| `masked_description(observer, subject)` | The persona description (may be `""`) when O is a non-knower of C's active persona — it replaces the real appearance; else `None`. |
+| `resolve_name(observer, token)` | Roster name (exact, then casefold) → itself as stored; casefolded alias of an ACTIVE persona → its subject; else `None`. A `"<alias> (<name>)"` label is the caller's to split. |
+| `is_persona_name(name)` | Casefolded membership in `identity.persona_names`. `app.core.character_name.validate_character_name` refuses such a name with code `reserved` (creation/import only). |
+| `identity_snapshot(names)` | `{subject: alias}` for the transformed ones. |
+| `rewrite_names(observer, text, subjects)` | Each transformed subject's real name (whole word, case-sensitive, one pass) → `shown_name(observer, subject)`. For system/storyteller text only, never a character's own speech. |
+
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
 | Function / value | Semantics |

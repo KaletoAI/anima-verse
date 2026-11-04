@@ -19,7 +19,9 @@ The rule
     * No leading/trailing space or period (surrounding whitespace is stripped
       first, as every caller did before), no two spaces in a row, no ``..``.
     * 1..60 characters, at least one letter or digit.
-    * Not a reserved name (case-insensitive) — see the sets below.
+    * Not a reserved name (case-insensitive) — see the sets below — and not
+      a configured persona alias (``identity_view.is_persona_name``, looked up
+      lazily inside the validator).
 
 This module is also the single source of truth for the reserved-name sets:
 ``app.models.character``, ``app.models.account`` and ``app.core.auth_dependency``
@@ -169,6 +171,15 @@ def validate_character_name(name: str) -> str:
             "Character name must contain at least one letter or digit.")
 
     if normalized.casefold() in _RESERVED_ALL:
+        raise CharacterNameError(
+            "reserved",
+            '"{name}" is a reserved name and cannot be used for a character.',
+            {"name": normalized})
+
+    # A configured persona alias (``identity.persona_names`` provider) is taken
+    # too, transformed or not. Imported here so the module stays import-light.
+    from app.core.identity_view import is_persona_name
+    if is_persona_name(normalized):
         raise CharacterNameError(
             "reserved",
             '"{name}" is a reserved name and cannot be used for a character.',
