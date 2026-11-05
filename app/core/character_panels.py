@@ -1,4 +1,5 @@
-"""Package character panels — a package's own editor on a character's Skills tab.
+"""Package character panels — a package's own editor on a character's Skills tab
+(or on a character sub-tab of its own).
 
 A skill package that needs more than flat per-character config fields (a list
 of entries with pickers, a test button, ...) registers a PANEL PROVIDER from its
@@ -25,6 +26,21 @@ renders the answer generically (``frontend/src/tabs/characters/PackagePanel.tsx`
   — an action that declares ``input`` (``{"label", "placeholder"?,
   "message"?}``: the panel asks for one line of text first) receives the
   entered, stripped, non-empty text as the keyword argument ``value``
+
+Two OPTIONAL provider methods make the panel a TOP-LEVEL character sub-tab
+instead of a block in the Skills tab (``list_panel_tabs``):
+
+- ``tab_label(lang) -> str`` — non-empty = the panel is its own sub-tab of the
+  character sheet with this label; the Skills tab keeps only the skill's
+  on/off switch and points at the tab
+- ``tab_visible(character) -> bool`` — whether the tab shows for this
+  character (absent = always; raising = hidden, logged)
+
+A panel may group its cards into ``sections`` (sub-tabs inside the panel:
+``{"id", "label", "hint"?, "core_block"?}``); a card, a panel-level action and
+the create form name theirs with ``section``. ``core_block`` embeds a block the
+CORE renders (``CORE_BLOCKS``) above the section's cards — e.g.
+``linked_characters`` = the link editor of ``app.core.linked_characters``.
 
 Every string the provider answers is shown as it stands: the provider
 translates its own labels with ``app.core.i18n.t(en, lang)``. The core never
@@ -61,6 +77,13 @@ FIELD_TYPES = frozenset({
     "text", "textarea", "int", "bool", "item", "items", "condition", "characters",
     "backend", "loras", "select",
 })
+
+#: Blocks the core renders inside a panel section (``section.core_block``):
+#: ``linked_characters`` = the link state of the character
+#: (``app.core.linked_characters.describe`` + the ``/characters/{c}/link``
+#: routes: leader, shared soul sections, unlink, its bodies, link an existing
+#: character as a body).
+CORE_BLOCKS = frozenset({"linked_characters"})
 
 #: Presentation-only field attributes: handed to the renderer exactly as the
 #: provider gave them (only when given), never checked here.
@@ -189,6 +212,7 @@ def _action(raw: Any, where: str) -> Dict[str, Any]:
         raise PanelContractError(f"{where}: action without id")
     out = {"id": _s(raw.get("id")).strip(), "label": _s(raw.get("label")) or _s(raw.get("id")),
            "confirm": _s(raw.get("confirm")), "primary": bool(raw.get("primary"))}
+    _keep_section(raw, out)
     inp = raw.get("input")
     if inp:
         if not isinstance(inp, dict):
@@ -197,6 +221,12 @@ def _action(raw: Any, where: str) -> Dict[str, Any]:
                         "placeholder": _s(inp.get("placeholder")),
                         "message": _s(inp.get("message"))}
     return out
+
+
+def _keep_section(raw: Dict[str, Any], out: Dict[str, Any]) -> None:
+    """``section`` is presentation only: handed through when given."""
+    if _s(raw.get("section")).strip():
+        out["section"] = _s(raw.get("section")).strip()
 
 
 def _actions(raw: Any, where: str) -> List[Dict[str, Any]]:
@@ -224,7 +254,7 @@ def _card(raw: Any) -> Dict[str, Any]:
     badges = raw.get("badges") or []
     if not isinstance(badges, (list, tuple)):
         raise PanelContractError(f"{where}: badges is not a list")
-    return {
+    out = {
         "id": cid, "title": _s(raw.get("title")), "subtitle": _s(raw.get("subtitle")),
         "badges": [_s(b) for b in badges if _s(b)],
         "fields": _fields(raw.get("fields"), where), "values": dict(values),
@@ -233,6 +263,8 @@ def _card(raw: Any) -> Dict[str, Any]:
         "deletable": bool(raw.get("deletable")),
         "delete_confirm": _s(raw.get("delete_confirm")),
     }
+    _keep_section(raw, out)
+    return out
 
 
 def _tabs(raw: Any) -> List[Dict[str, Any]]:
@@ -252,6 +284,27 @@ def _tabs(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _sections(raw: Any) -> List[Dict[str, Any]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PanelContractError("sections is not a list")
+    out: List[Dict[str, Any]] = []
+    for sec in raw:
+        if not isinstance(sec, dict) or not _s(sec.get("id")).strip():
+            raise PanelContractError("section without id")
+        sid = _s(sec.get("id")).strip()
+        block = _s(sec.get("core_block")).strip()
+        if block and block not in CORE_BLOCKS:
+            raise PanelContractError(f"section {sid!r} names unknown core block {block!r}")
+        out.append({"id": sid, "label": _s(sec.get("label")) or sid,
+                    "hint": _s(sec.get("hint")), "core_block": block})
+    ids = [sec["id"] for sec in out]
+    if len(set(ids)) != len(ids):
+        raise PanelContractError("duplicate section ids")
+    return out
+
+
 def normalize_panel(raw: Any) -> Dict[str, Any]:
     """A provider's ``describe`` answer reduced to the contract.
 
@@ -259,7 +312,10 @@ def normalize_panel(raw: Any) -> Dict[str, Any]:
     a field type outside ``FIELD_TYPES`` or a wrong container type raise
     ``PanelContractError``. The layout attributes ``tab``/``width``/``rows`` of
     a field pass through untouched (the renderer falls back on its own).
-    ``actions`` are the panel-level actions (no card)."""
+    ``actions`` are the panel-level actions (no card). ``sections`` (``[]``
+    when absent) must have unique ids and name only a ``CORE_BLOCKS`` block;
+    the ``section`` of a card / panel action / the create form passes through
+    when given."""
     if not isinstance(raw, dict):
         raise PanelContractError("describe() did not answer an object")
     cards = raw.get("cards") or []
@@ -276,8 +332,10 @@ def normalize_panel(raw: Any) -> Dict[str, Any]:
             raise PanelContractError("create is not an object")
         norm_create = {"label": _s(create.get("label")),
                        "fields": _fields(create.get("fields"), "create")}
+        _keep_section(create, norm_create)
     return {"title": _s(raw.get("title")), "intro": _s(raw.get("intro")),
-            "tabs": _tabs(raw.get("tabs")), "actions": _actions(raw.get("actions"), "panel"),
+            "tabs": _tabs(raw.get("tabs")), "sections": _sections(raw.get("sections")),
+            "actions": _actions(raw.get("actions"), "panel"),
             "cards": norm_cards, "create": norm_create}
 
 
@@ -409,6 +467,46 @@ def _call(provider: Any, method: str, *args: Any, **kwargs: Any) -> Any:
     if not callable(fn):
         raise PanelContractError(f"provider has no {method}()")
     return fn(*args, **kwargs)
+
+
+def list_panel_tabs(character: str, lang: str = "en") -> List[Dict[str, Any]]:
+    """The panels that are a character sub-tab of their own, in registration
+    order: ``[{"package", "label", "visible"}]``.
+
+    A provider is listed when its ``tab_label(lang)`` answers a non-empty
+    label. ``visible`` = its ``tab_visible(character)`` (absent → ``True``; a
+    raising one → ``False``, logged). Hidden tabs are listed too: the Skills
+    tab names the tab of a skill whose panel lives there even while the tab
+    is hidden. Unknown character → ``PanelNotFound``."""
+    lang = normalize_lang(lang)
+    from app.models.character import character_exists
+    if not character_exists(character):
+        raise PanelNotFound(f"Character '{character}' not found")
+    out: List[Dict[str, Any]] = []
+    for cap in hooks.capabilities_with_prefix(CAPABILITY_PREFIX):
+        package_id = cap[len(CAPABILITY_PREFIX):]
+        provider = hooks.get_provider(cap)
+        label_fn = getattr(provider, "tab_label", None)
+        if not callable(label_fn):
+            continue
+        try:
+            label = _s(label_fn(lang)).strip()
+        except Exception as e:  # noqa: BLE001
+            logger.error("panel tab label of %s failed: %s", package_id, e, exc_info=True)
+            continue
+        if not label:
+            continue
+        visible_fn = getattr(provider, "tab_visible", None)
+        visible = True
+        if callable(visible_fn):
+            try:
+                visible = bool(visible_fn(character))
+            except Exception as e:  # noqa: BLE001
+                logger.error("panel tab visibility of %s for %s failed: %s", package_id,
+                             character, e, exc_info=True)
+                visible = False
+        out.append({"package": package_id, "label": label, "visible": visible})
+    return out
 
 
 def describe_panel(package_id: str, character: str, lang: str = "en") -> Dict[str, Any]:

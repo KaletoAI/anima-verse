@@ -1112,14 +1112,14 @@ in `shared/languages/de.json`):
 
 | Method | Answer |
 |---|---|
-| describe — `(character, lang)` | `{"title", "intro", "tabs"?: [tab], "actions"?: [action], "cards": [card], "create": {"label", "fields": [field]} \| None}` |
+| describe — `(character, lang)` | `{"title", "intro", "tabs"?: [tab], "sections"?: [section], "actions"?: [action], "cards": [card], "create": {"label", "fields": [field], "section"?} \| None}` |
 | save — `(character, card_id, values, lang)` | `{"ok", "error"?, "card_id"?}`; `card_id` `None` = create from `create.fields` |
 | delete — `(character, card_id, lang)` | `{"ok", "error"?}` |
 | action — `(character, card_id, action_id, lang)` (+ keyword `value` for an action with `input`) | `{"ok", "message"?, "error"?, "open_character"?}` |
 
 A **card** is `{"id", "title", "subtitle", "badges": [str], "fields": [field],
-"values": {key: value}, "status", "actions": [action], "deletable", "delete_confirm"?}`;
-an **action** is `{"id", "label", "confirm"?, "primary"?, "input"?}`; a **field** is `{"key", "type",
+"values": {key: value}, "status", "actions": [action], "deletable", "delete_confirm"?, "section"?}`;
+an **action** is `{"id", "label", "confirm"?, "primary"?, "input"?, "section"?}`; a **field** is `{"key", "type",
 "label", "hint"?, "required"?, "min"?, "max"?, "unit"?, "filter"?,
 "placeholder"?, "tab"?, "width"?, "rows"?, "options"?}`. `confirm` on an action / `delete_confirm` on a card make the
 panel ask first (in-app dialog). An action with `input` = `{"label", "placeholder"?, "message"?}` asks
@@ -1173,6 +1173,27 @@ delete or action is no HTTP error: `{"ok": false, "error": "..."}` is shown
 inline in the card. Routes (admin-only): `GET /characters/{name}/panels/{package}`,
 `POST …/save` body `{card_id|null, values}`, `POST …/delete` body `{card_id}`,
 `POST …/action` body `{card_id, action_id, value?}`, each with `?lang=` the UI language.
+
+**A panel as its own character tab.** By default the panel lives in the Skills tab. A provider
+that also answers `tab_label(lang) -> str` (non-empty) becomes a **top-level sub-tab of the character
+sheet** with that label instead; the optional `tab_visible(character) -> bool` decides per character
+whether the tab shows (absent = always; one that raises = hidden, logged). The Skills tab then shows
+only the skill's on/off switch and "Configured in the <label> tab.", and every toggle there makes the
+sheet re-ask which tabs are visible — so a tab can follow a skill's enabled state. The listing is
+`GET /characters/{name}/panel-tabs?lang=` → `{"tabs": [{"package", "label", "visible"}]}`
+(`app.core.character_panels.list_panel_tabs`, registration order, hidden tabs included); the tab's
+content is the same panel, rendered by the same routes.
+
+**Sections and core blocks.** `sections` = `[{"id", "label", "hint"?, "core_block"?}]` splits a panel
+into sub-tabs (a bar under the title when there are two or more; switching away from unsaved edits
+asks first). A card, a panel-level action and the create form name their section with `section`
+(missing or unknown → the first section); the section's `hint` and its actions sit in one row under
+the bar. `core_block` names a block the CORE renders above the section's cards — the package brings
+the place, the core the editor; the core refuses a name outside `CORE_BLOCKS` (a contract error, 500):
+
+| `core_block` | What the core renders |
+|---|---|
+| `linked_characters` | The link editor of `app.core.linked_characters` for the panel's character (`GET`/`PUT`/`DELETE /characters/{name}/link`): on a body its leader (with "Open"), its status, the shared soul sections and "Unlink"; otherwise the leader select (link this character as a body), its bodies (each opens in the editor) and "Link an existing character" (`describe(name)["body_candidates"]`, linked as a body with the default shared sections after an in-app confirmation). Creating a NEW body is not part of the block — that is the embedding package's action (`create_linked`, e.g. with `open_character`) |
 
 ## PluginContext API
 
@@ -1256,7 +1277,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `sleep` | `sleep`, `wakeup` | Schlaf-Flag setzen und den Charakter währenddessen von der Karte nehmen |
 | `take_photo` | `image_generation` | Der Charakter macht ein Foto / erzeugt ein Bild (Verb über den Core-Bild-Service) |
 | `talk_to` | `talk_to` | Dialog von Angesicht zu Angesicht, in Hörweite |
-| `transformation` | `transform`, `revert`, `reveal_identity` | Transformation through a power item into a persona: the trigger (item, phrases, cooldown, duration, a condition and a transform activity while it lasts) — nothing masks a name or a look. Personas are rows of the package table `transformation_definitions`, edited in the package's character panel (Game-Admin → Characters → <character> → Skills → Transformation); `on_load` creates the `transformation_*` tables and registers the avatar's phrase intercept (`play.say_intercept`), the panel provider `character_panel:transformation`, a reinit reset store and the expiry tick. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in the same panel (details: [Package `transformation`](#package-transformation)) |
+| `transformation` | `transform`, `revert`, `reveal_identity` | Transformation through a power item into a persona: the trigger (item, phrases, cooldown, duration, a condition and a transform activity while it lasts) — nothing masks a name or a look. Personas are rows of the package table `transformation_definitions`, edited in the package's character panel (Game-Admin → Characters → <character> → **Transformation**, a sub-tab of its own); `on_load` creates the `transformation_*` tables and registers the avatar's phrase intercept (`play.say_intercept`), the panel provider `character_panel:transformation`, a reinit reset store and the expiry tick. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in the same panel (details: [Package `transformation`](#package-transformation)) |
 | `undress` | `undress`, `get_dressed` | Aus-/Anziehen für Freitext-Garderoben |
 | `wet` | `enter_water`, `dry_off` | Nässe-Zustand — Schwimm-Ausnahme solange nass, Auto-Trocknung per TTL |
 
@@ -1278,21 +1299,27 @@ spoken phrases, cooldown and GAME-time duration, the state flag `is_transformed`
 body while it lasts, a private narrator line for the present knowers, and who knows the secret. Nothing
 masks a name, an appearance or an image; the body's character name is the label everywhere.
 
-**Editor** — Game-Admin → Characters → <leader> → Skills → **Transformation** (the package's character
-panel, `panel.py`; contract in [Character panels](#character-panels)). On a LEADER: one card per
-definition the character leads — those whose power item it holds first, badge "holds the item" — in two
-tabs: **Transformation** (the linked character to become — a `select` of `bodies_of(leader)` —, power
-item, enabled; transform/revert phrase; max duration, cooldown, activity, effect on the body; short
-fields side by side on the 12-column grid) and **Knowers** (character checkboxes: who knows that the body
-is the leader). The panel-level action **Create linked character** asks only for a name
-(`create_linked(leader, name)`: a new dormant body from the leader's template); the new character opens
-in the editor right away (`open_character`) so its appearance can be filled in, and it is selectable on
-the leader's cards. Status line (ordinary self / transformed into <body> since … / on cooldown until …) and test
+**Editor** — Game-Admin → Characters → <character> → **Transformation**, a character sub-tab of its own
+(the package's character panel, `panel.py`, with `tab_label`; contract in [Character panels](#character-panels)).
+`transform` is **opt-in**: no per-character setting = off (`default_enabled_for` and the manifest's
+`default_enabled: false`; `revert` and `reveal_identity` stay on by default, so a body can always turn
+back). The tab shows when `transform` is enabled for the character in its Skills tab, or — on a linked
+body — for its leader (`tab_visible`); never for a temporary NPC. On a LEADER three sections:
+**Transformations** — one card per definition the character leads, those whose power item it holds
+first, badge "holds the item" (the linked character to become — a `select` of `bodies_of(leader)` —,
+power item, enabled; transform/revert phrase; max duration, cooldown, activity, effect on the body;
+short fields side by side on the 12-column grid); **Linked characters** — the core block
+`linked_characters` (its bodies, link an existing character) plus the action **Create linked character**,
+which asks only for a name (`create_linked(leader, name)`: a new dormant body from the leader's template);
+the new character opens in the editor right away (`open_character`) so its appearance can be filled in,
+and it is selectable on the definition cards; **Knowers** — one card `knowers:<body>` per body
+(character checkboxes: who knows that the body is the leader). Status line (ordinary self / transformed into <body> since … / on cooldown until …) and test
 actions: **Transform now** (engine source `admin`, `ignore_cooldown=True` — the admin overrides a running
 cooldown; any other refusal, including a swap refusal state, shows its reason), **Revert now** (shows a
 swap refusal's reason), **Give <item> to <leader>** (moves the item from its current holder). On a linked
-BODY the panel shows only one status card per definition that turns its leader into it, **Revert now**
-while it stands in the world, and a pointer to the leader's panel.
+BODY the tab has one section: the core block (its leader with "Open", shared soul sections, unlink) above
+one status card per definition that turns its leader into it, with **Revert now** while it stands in the
+world.
 
 **Storage** — three package tables in `world.db`; the leader sits in the column `character_name` of all
 three, so the core's character-deletion sweep removes a deleted leader's rows. A table of the earlier

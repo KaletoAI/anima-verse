@@ -10,7 +10,7 @@ skills:
     class: TransformationSkill
     params: {verb: transform}
     always_load: true
-    default_enabled: true
+    default_enabled: false   # opt-in per leader (Skills tab); shows the Transformation tab
   - skill_id: revert
     class: TransformationSkill
     params: {verb: revert}

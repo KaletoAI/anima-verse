@@ -40,6 +40,15 @@ def _body(body: Any) -> Dict[str, Any]:
     return body
 
 
+@router.get("/{character_name}/panel-tabs")
+def list_character_panel_tabs(character_name: str, lang: str = Query("en"),
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The package panels that are a character sub-tab of their own:
+    ``{"tabs": [{"package", "label", "visible"}]}`` (hidden ones included)."""
+    return {"tabs": _run("tabs", "*", character_name,
+                         lambda: panels.list_panel_tabs(character_name, lang))}
+
+
 @router.get("/{character_name}/panels/{package_id}")
 def get_character_panel(character_name: str, package_id: str, lang: str = Query("en"),
                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

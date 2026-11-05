@@ -1,21 +1,26 @@
-"""The Transformation panel on Game-Admin → Characters → <character> → Skills.
+"""The Transformation tab on Game-Admin → Characters → <character>.
 
 The panel provider of the package (``character_panel:transformation``,
 registered in ``register.py``; contract: ``docs/plugins.md`` → "Character
-panels").
+panels"). ``tab_label`` makes it a character sub-tab of its own;
+``tab_visible`` shows it when the ``transform`` skill is enabled for the
+character (opt-in, ``skill.transform_enabled``) or for the leader of a body.
 
-On a LEADER (any character that is not a linked body): one card per
-definition the character leads — those whose power item it holds first — in
-two tabs: **Transformation** (the linked character to become, picked from the
-leader's bodies; power item, enabled; phrases; durations, activity, effect on
-the body — short fields side by side) and **Knowers** (who knows that the body
-is the leader). A panel-level action **Create linked character** asks only for
-a name (``app.core.linked_characters.create_linked``); the new body opens in
-the editor right away (``open_character``) and is selectable on the cards. Test actions per card: Transform now (ignores the cooldown),
-Revert now, Give <item> to <leader>.
+On a LEADER (any character that is not a linked body) three sections:
+**Transformations** — one card per definition the character leads (those
+whose power item it holds first): the linked character to become, picked from
+the leader's bodies; power item, enabled; phrases; durations, activity,
+effect on the body — short fields side by side; test actions Transform now
+(ignores the cooldown), Revert now, Give <item> to <leader>.
+**Linked characters** — the core block ``linked_characters`` (its bodies,
+link an existing character) plus the action **Create linked character**,
+which asks only for a name (``app.core.linked_characters.create_linked``);
+the new body opens in the editor right away (``open_character``).
+**Knowers** — one card per body: who knows that the body is the leader.
 
-On a linked BODY: only status + "Revert now" per definition that turns its
-leader into it, and a pointer to the leader's panel (the intro).
+On a linked BODY one section: the core block (its leader with "Open", the
+shared soul sections, unlink) above one status card + "Revert now" per
+definition that turns its leader into it.
 
 The core has already reduced the submitted values to the declared fields and
 coerced their types (``app.core.character_panels.coerce_values`` — including
@@ -35,7 +40,7 @@ from app.core.keyed_lock import keyed_lock
 from app.core.linked_characters import bodies_of, create_linked, leader_of
 from app.core.log import get_logger
 from app.core.timeutils import game_time
-from app.models.character import DORMANT_STATUS, get_character_status
+from app.models.character import DORMANT_STATUS, get_character_status, is_temporary_npc
 from app.models.inventory import (add_to_inventory, find_item_location, get_carried_item_ids,
                                   get_item, remove_from_inventory)
 
@@ -43,6 +48,7 @@ from plugins.transformation import definitions, engine, knowers, store
 from plugins.transformation.definitions import (DEFAULT_COOLDOWN_MINUTES,
                                                 DEFAULT_MAX_DURATION_MINUTES,
                                                 DEFAULT_TRANSFORM_ACTIVITY)
+from plugins.transformation.skill import transform_enabled
 
 logger = get_logger("transformation")
 
@@ -55,6 +61,27 @@ _EDITABLE = ("body", "item_id", "enabled", "activation_phrase", "revert_phrase",
              "max_duration_minutes", "cooldown_minutes", "transform_activity", "condition_id")
 _TEXT = ("body", "item_id", "activation_phrase", "revert_phrase", "transform_activity",
          "condition_id")
+
+#: Card id prefix of a knowers card: ``knowers:<body>``.
+KNOWERS_PREFIX = "knowers:"
+
+
+# ---------------------------------------------------------------------------
+# The tab
+# ---------------------------------------------------------------------------
+
+def tab_label(lang: str) -> str:
+    """The panel is the character sub-tab "Transformation"."""
+    return t("Transformation", lang)
+
+
+def tab_visible(character: str) -> bool:
+    """Shown when ``transform`` is enabled for the character, or — on a
+    linked body — for its leader. A body's own setting does not count: a
+    body never transforms."""
+    if is_temporary_npc(character):
+        return False
+    return transform_enabled(leader_of(character) or character)
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +114,10 @@ def _item_name(item: Optional[Dict[str, Any]], item_id: str, lang: str) -> str:
     return str(localized(item, "name", lang) or item_id) if item else item_id
 
 
-def _tabs(lang: str) -> List[Dict[str, Any]]:
-    return [{"id": "transform", "label": t("Transformation", lang)},
+def _sections(lang: str) -> List[Dict[str, Any]]:
+    return [{"id": "transformations", "label": t("Transformations", lang)},
+            {"id": "linked", "label": t("Linked characters", lang),
+             "core_block": "linked_characters"},
             {"id": "knowers", "label": t("Knowers", lang)}]
 
 
@@ -104,50 +133,52 @@ def _item_field(lang: str) -> Dict[str, Any]:
             "hint": t("Needed to transform and to turn back.", lang)}
 
 
-def _fields(leader: str, body: str, lang: str) -> List[Dict[str, Any]]:
+def _fields(leader: str, lang: str) -> List[Dict[str, Any]]:
     unit = t("min", lang)
 
-    def on(tab: str, width: str, field: Dict[str, Any]) -> Dict[str, Any]:
-        field.update(tab=tab, width=width)
+    def w(width: str, field: Dict[str, Any]) -> Dict[str, Any]:
+        field["width"] = width
         return field
 
     return [
-        on("transform", "m", _body_field(leader, lang)),
-        on("transform", "m", _item_field(lang)),
-        on("transform", "s", {"key": "enabled", "type": "bool", "label": t("Enabled", lang),
-                              "hint": t("Off: this transformation cannot start.", lang)}),
-        on("transform", "l", {"key": "activation_phrase", "type": "text",
-                              "label": t("Transform phrase", lang),
-                              "hint": t("When the avatar says it, the avatar transforms.", lang)}),
-        on("transform", "l", {"key": "revert_phrase", "type": "text",
-                              "label": t("Revert phrase", lang),
-                              "hint": t("When the transformed avatar says it, it turns back.",
-                                        lang)}),
-        on("transform", "s", {"key": "max_duration_minutes", "type": "int",
-                              "label": t("Max duration", lang), "unit": unit, "min": 0,
-                              "hint": t("0 = until reverted", lang)}),
-        on("transform", "s", {"key": "cooldown_minutes", "type": "int",
-                              "label": t("Cooldown", lang), "unit": unit, "min": 0,
-                              "hint": t("Wait after turning back before the next "
-                                        "transformation.", lang)}),
-        on("transform", "s", {"key": "transform_activity", "type": "text",
-                              "label": t("Activity while transforming", lang),
-                              "placeholder": DEFAULT_TRANSFORM_ACTIVITY}),
-        on("transform", "s", {"key": "condition_id", "type": "condition",
-                              "label": t("Condition while transformed", lang),
-                              "hint": t("Condition on the body while transformed.", lang)}),
-        on("knowers", "full", {"key": "knowers", "type": "characters",
-                               "label": t("Knowers", lang),
-                               "hint": t("They know that {body} is {leader}.", lang).format(
-                                   body=body or "…", leader=leader)}),
+        w("m", _body_field(leader, lang)),
+        w("m", _item_field(lang)),
+        w("s", {"key": "enabled", "type": "bool", "label": t("Enabled", lang),
+                "hint": t("Off: this transformation cannot start.", lang)}),
+        w("l", {"key": "activation_phrase", "type": "text",
+                "label": t("Transform phrase", lang),
+                "hint": t("When the avatar says it, the avatar transforms.", lang)}),
+        w("l", {"key": "revert_phrase", "type": "text",
+                "label": t("Revert phrase", lang),
+                "hint": t("When the transformed avatar says it, it turns back.", lang)}),
+        w("s", {"key": "max_duration_minutes", "type": "int",
+                "label": t("Max duration", lang), "unit": unit, "min": 0,
+                "hint": t("0 = until reverted", lang)}),
+        w("s", {"key": "cooldown_minutes", "type": "int",
+                "label": t("Cooldown", lang), "unit": unit, "min": 0,
+                "hint": t("Wait after turning back before the next transformation.", lang)}),
+        w("s", {"key": "transform_activity", "type": "text",
+                "label": t("Activity while transforming", lang),
+                "placeholder": DEFAULT_TRANSFORM_ACTIVITY}),
+        w("s", {"key": "condition_id", "type": "condition",
+                "label": t("Condition while transformed", lang),
+                "hint": t("Condition on the body while transformed.", lang)}),
     ]
 
 
 def _values(row: Dict[str, Any]) -> Dict[str, Any]:
     """The card values under the panel keys, every field filled."""
-    out = {key: row[key] for key in _EDITABLE}
-    out["knowers"] = knowers.knower_names(row["body"]) if row["body"] else []
-    return out
+    return {key: row[key] for key in _EDITABLE}
+
+
+def _knowers_card(leader: str, body: str, lang: str) -> Dict[str, Any]:
+    """The knowers of one body — who knows that ``body`` is ``leader``."""
+    return {"id": KNOWERS_PREFIX + body, "title": body, "section": "knowers",
+            "fields": [{"key": "knowers", "type": "characters", "label": t("Knowers", lang),
+                        "width": "full",
+                        "hint": t("They know that {body} is {leader}.", lang).format(
+                            body=body, leader=leader)}],
+            "values": {"knowers": knowers.knower_names(body)}}
 
 
 def _leader_status(leader: str, row: Dict[str, Any], lang: str) -> str:
@@ -165,6 +196,7 @@ def _leader_status(leader: str, row: Dict[str, Any], lang: str) -> str:
 
 def _create_action(leader: str, lang: str) -> Dict[str, Any]:
     return {"id": "create_linked", "label": t("Create linked character", lang),
+            "section": "linked",
             "input": {"label": t("Name", lang),
                       "message": t("A new character linked to {name}, built from {name}'s "
                                    "template. It opens for editing right away.", lang).format(
@@ -192,11 +224,14 @@ def _describe_body(body: str, leader: str, lang: str) -> Dict[str, Any]:
             status = t("Not transformed", lang)
         cards.append({"id": row["id"], "title": t("From {leader}", lang).format(leader=leader),
                       "subtitle": "", "badges": [] if row["enabled"] else [t("disabled", lang)],
-                      "fields": [], "values": {}, "status": status, "actions": actions})
+                      "fields": [], "values": {}, "status": status, "actions": actions,
+                      "section": "body"})
     return {
         "title": t("Transformation", lang),
-        "intro": t("{body} is a linked character of {leader} — set the transformation up on "
-                   "{leader}'s panel.", lang).format(body=body, leader=leader),
+        "intro": t("{body} is a linked character of {leader} — the transformation is set up in "
+                   "{leader}'s Transformation tab.", lang).format(body=body, leader=leader),
+        "sections": [{"id": "body", "label": t("Transformation", lang),
+                      "core_block": "linked_characters"}],
         "cards": cards,
         "create": None,
     }
@@ -239,7 +274,8 @@ def describe(character: str, lang: str) -> Dict[str, Any]:
         body = row["body"]
         cards.append(((0 if holds else 1, _fold(body or did)), {
             "id": did, "title": body or did, "subtitle": subtitle, "badges": badges,
-            "fields": _fields(character, body, lang), "values": _values(row),
+            "section": "transformations",
+            "fields": _fields(character, lang), "values": _values(row),
             "status": _leader_status(character, row, lang), "actions": actions,
             "deletable": True,
             "delete_confirm": t("The transformation into {body} is removed for good, with its "
@@ -252,10 +288,10 @@ def describe(character: str, lang: str) -> Dict[str, Any]:
         "title": t("Transformation", lang),
         "intro": t("{name} turns into a linked character through a power item.", lang).format(
             name=character),
-        "tabs": _tabs(lang),
+        "sections": _sections(lang),
         "actions": [_create_action(character, lang)],
-        "cards": [c for _, c in cards],
-        "create": ({"label": t("New transformation", lang),
+        "cards": [c for _, c in cards] + [_knowers_card(character, b, lang) for b in bodies],
+        "create": ({"label": t("New transformation", lang), "section": "transformations",
                     "fields": [_body_field(character, lang), _item_field(lang)]}
                    if bodies else None),
     }
@@ -299,10 +335,23 @@ def _check(leader: str, record: Dict[str, Any], own: Optional[Dict[str, Any]],
     return ""
 
 
+def _save_knowers(leader: str, card_id: str, values: Dict[str, Any],
+                  lang: str) -> Dict[str, Any]:
+    body = card_id[len(KNOWERS_PREFIX):]
+    if not body or leader_of(body) != leader:
+        return {"ok": False, "error": t("This entry no longer exists.", lang)}
+    if "knowers" in values:
+        wanted = [n for n in values.get("knowers") or [] if isinstance(n, str)]
+        knowers.set_knowers(body, wanted)
+    return {"ok": True, "card_id": card_id}
+
+
 def save(character: str, card_id: Optional[str], values: Dict[str, Any],
          lang: str) -> Dict[str, Any]:
     if leader_of(character):
         return {"ok": False, "error": t("This entry no longer exists.", lang)}
+    if card_id and card_id.startswith(KNOWERS_PREFIX):
+        return _save_knowers(character, card_id, values, lang)
     with keyed_lock(*_LOCK_KEY):
         own = store.get_definition(card_id) if card_id else None
         if card_id and (own is None or own["leader"] != character):
@@ -347,9 +396,6 @@ def save(character: str, card_id: Optional[str], values: Dict[str, Any],
             logger.exception("transformation definition not saved")
             return {"ok": False, "error": t("This item already turns {leader} into another "
                                             "character.", lang).format(leader=character)}
-    if "knowers" in values and record["body"]:
-        wanted = [n for n in values.get("knowers") or [] if isinstance(n, str)]
-        knowers.set_knowers(record["body"], wanted)
     return {"ok": True, "card_id": did}
 
 

@@ -64,6 +64,14 @@ def on_cooldown(character: str, d: Definition) -> bool:
         return False
 
 
+def transform_enabled(character: str) -> bool:
+    """Whether the ``transform`` verb is switched on for ``character``: its
+    explicit per-character setting, else off (opt-in, see
+    ``TransformationSkill.default_enabled_for``)."""
+    from app.models.character import get_character_skill_config
+    return bool((get_character_skill_config(character, "transform") or {}).get("enabled", False))
+
+
 def present_body_row(character: str):
     """The active row that put ``character`` into the world, or ``None``."""
     row = store.active_of_body(character)
@@ -101,10 +109,12 @@ class TransformationSkill(PluginSkill):
     # ── visibility ──────────────────────────────────────────────────────────
 
     def default_enabled_for(self, character_name: str) -> bool:
-        """On without a character setting: whoever leads a definition and
-        carries its item can use it (``visible_for`` gates the rest); an
-        explicit per-character setting still wins."""
-        return True
+        """Without a character setting: ``transform`` is OFF (opt-in — the
+        admin switches it on per leader in the Skills tab, which also shows
+        the Transformation tab); ``revert`` and ``reveal_identity`` are on, so
+        a body that never got a setting can still turn back (``visible_for``
+        gates them). An explicit per-character setting always wins."""
+        return self._verb != "transform"
 
     def visible_for(self, character_name: str) -> bool:
         if self._verb == "revert":

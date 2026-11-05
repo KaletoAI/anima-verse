@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Smoke: the Transformation panel (``plugins/transformation/panel.py``) — the
-transformation editor on Game-Admin → Characters → <character> → Skills —
-and the two generic panel additions it needs (a panel-level action with a
-text input, a ``select`` field).
+transformation editor on Game-Admin → Characters → <character> → its own
+"Transformation" sub-tab — and the generic panel additions it needs (a
+panel-level action with a text input, a ``select`` field, a top-level tab with
+a visibility rule, sections, the core block ``linked_characters``).
 
 Usage:  ./.venv/bin/python scripts/smoke_transformation_panel.py
 
@@ -14,13 +15,18 @@ admin routes call (``app.core.character_panels``: describe / save / delete /
 action — so the core's generic coercion runs first, as in production).
 
 THE SPEC (``docs/superpowers/specs/2026-11-05-linked-characters-design.md`` →
-"Transformation package"): the panel on the LEADER has one card per
-definition, tab "Transformation" (body select from the leader's linked
-characters, item, phrases, durations, activity, condition, enabled — short
-fields side by side on the 12-column grid) and tab "Knowers"; a "Create
-linked character" action asks only for a name (``create_linked``) and the new
-body is selectable afterwards. On a linked character the panel shows only
-status + "Revert now" and a pointer to the leader. Status "Transformed into
+"Transformation package", user decision 2026-11-06 "one Transformation tab"):
+the panel is the character sub-tab "Transformation", shown when the
+``transform`` skill is ENABLED for the character (opt-in: no setting = off)
+or when the character is a body whose leader has it enabled. On the LEADER
+three sections: "Transformations" (one card per definition: body select from
+the leader's linked characters, item, phrases, durations, activity,
+condition, enabled — short fields side by side on the 12-column grid),
+"Linked characters" (the core block ``linked_characters`` + the action
+"Create linked character" asking only for a name (``create_linked``); the new
+body is selectable afterwards) and "Knowers" (one card per body). On a linked
+character ONE section with the core block (leader, shared soul, unlink, open
+the leader) above status + "Revert now". Status "Transformed into
 <body>", the knower secret "<body> is secretly <leader>.". The admin's
 "Transform now" ignores the cooldown; "Revert now" shows a swap refusal.
 
@@ -30,52 +36,72 @@ FIXTURE
     amulet. GAME clock stopped at T0 = Y0002-D100T12:00:00 (factor 0).
 
 THE RULES, and what follows BY HAND
+[K] The tab: tab_label en "Transformation", de "Verwandlung". The manifest
+    seeds revert + reveal_identity for new characters but NOT transform
+    (default_enabled false); the skill's default_enabled_for is False for
+    transform, True for revert and reveal_identity. Without any setting
+    tab_visible is False for Tilda, Glut, Obs. After
+    save_character_skill_config(Tilda, transform, {enabled: True}): Tilda
+    True, Glut True (its leader has it), Obs False; list_panel_tabs(Tilda)
+    has {package transformation, label Transformation, visible True}. Obs
+    with only revert enabled: still False. Tilda {enabled: False}: False;
+    back to True for the rest.
 [A] describe(Tilda): title "Transformation", intro "Tilda turns into a linked
-    character through a power item."; tabs [transform "Transformation",
-    knowers "Knowers"]; panel actions [create_linked "Create linked
-    character", input {label "Name", placeholder "", message "A new character
-    linked to Tilda, built from Tilda's template. It opens for editing right
-    away."}];
-    no cards; create form [body (select, required, options [Glut]),
-    item_id (item, required)]. describe(Obs) (no bodies): no create form, the
-    same action. German title "Verwandlung".
+    character through a power item."; no field tabs; sections
+    [transformations "Transformations", linked "Linked characters" with
+    core_block "linked_characters", knowers "Knowers"]; panel actions
+    [create_linked "Create linked character", section "linked", input
+    {label "Name", placeholder "", message "A new character linked to Tilda,
+    built from Tilda's template. It opens for editing right away."}];
+    cards = only the knowers card of the one body: id "knowers:Glut", title
+    "Glut", section "knowers", one field knowers (characters, width full,
+    hint "They know that Glut is Tilda."), values {knowers: []}, not
+    deletable; create form (section "transformations") [body (select,
+    required, options [Glut]), item_id (item, required)]. describe(Obs) (no
+    bodies): no create form, no cards, the same action. German title
+    "Verwandlung".
 [B] Panel action create_linked on Tilda (card_id ""):
     value "Ember" -> ok, message "Ember was created as a linked character of
     Tilda.", open_character "Ember" (Game-Admin opens it for editing — review
     fix round 1); bodies_of(Tilda) == [Ember, Glut], Ember dormant; the create
-    form's body options are now [Ember, Glut].
+    form's body options are now [Ember, Glut]; knowers cards [knowers:Ember,
+    knowers:Glut]; Ember got revert seeded but no transform setting.
     value "" -> core error "Name is required."; value "Glut" -> the core's
     'A character named "Glut" already exists.'.
 [C] Create, refusals first: body "Nobody" -> core "Linked character:
     invalid selection."; item "nope" -> "This item does not exist.";
     Glut/amulet -> ok, card_id "glut"; Ember/amulet -> "This item already
     turns Tilda into Glut."; Ember/ring -> ok "ember".
-[D] describe(Tilda): cards [glut, ember] (glut first: Tilda holds its item).
+[D] describe(Tilda): cards in section "transformations" [glut, ember] (glut
+    first: Tilda holds its item), then the knowers cards.
     glut: title "Glut", badges ["holds the item"], subtitle "Held by Tilda",
     actions [transform "Transform now"], status "Ordinary self".
-    Fields (key, type, tab, width):
-      body select transform m, item_id item transform m, enabled bool
-      transform s, activation_phrase text transform l, revert_phrase text
-      transform l, max_duration_minutes int transform s, cooldown_minutes int
-      transform s, transform_activity text transform s, condition_id
-      condition transform s, knowers characters knowers full.
+    Fields (key, type, width; no field tab any more):
+      body select m, item_id item m, enabled bool s, activation_phrase text l,
+      revert_phrase text l, max_duration_minutes int s, cooldown_minutes int
+      s, transform_activity text s, condition_id condition s.
     -> row widths 4+4+3, 6+6, 3+3+3+3 (short fields side by side).
     Values: body Glut, item amulet, enabled True, phrases "", max 60, cooldown
-    30, activity "transforming", condition "", knowers [].
+    30, activity "transforming", condition "".
     ember: subtitle "Nobody holds the item", actions [give "Give Ring to
     Tilda"] (no confirm: nobody loses it).
-[E] Update glut: knowers [Kim, Glut, Tilda] -> ok; stored knowers [Kim] (the
-    family always knows); Tilda's mind holds "Glut is secretly Tilda." (body
-    Glut). max "-5" -> core "Max duration: at least 0."; the provider called
+[E] Update the card knowers:Glut: knowers [Kim, Glut, Tilda] -> ok, card_id
+    "knowers:Glut"; stored knowers [Kim] (the family always knows); Tilda's
+    mind holds "Glut is secretly Tilda." (body Glut). Card "knowers:Kim" (not
+    a body): the core refuses "This entry no longer exists."; the provider
+    called directly refuses the same. max "-5" -> core "Max duration: at least 0."; the provider called
     directly with cooldown -1 -> "Minutes cannot be negative."
 [F] Actions: transform glut -> ok "Tilda is now Glut."; glut status
     "Transformed into Glut since <T0 label>", actions [revert "Revert now"];
     delete glut -> "Revert first: Tilda is transformed into Glut."; transform
     again -> "Tilda is already transformed.".
-    describe(Glut): intro "Glut is a linked character of Tilda — set the
-    transformation up on Tilda's panel."; no tabs, no create, no panel
-    actions; one card glut, title "From Tilda", no fields, status "Glut stands
-    in the world for Tilda since <T0 label>", actions [revert].
+    describe(Glut): intro "Glut is a linked character of Tilda — the
+    transformation is set up in Tilda's Transformation tab."; no field tabs,
+    no create, no panel actions; sections [body "Transformation" with
+    core_block "linked_characters"]; one card glut, section "body", title
+    "From Tilda", no fields, status "Glut stands in the world for Tilda since
+    <T0 label>", actions [revert]. Glut has NO setting for revert and gets
+    the revert tool anyway (default on, its visible_for gates it).
     Glut gets a movement_target -> revert from Glut's panel -> error
     SWAP_REFUSAL_TEXT["journey"], still active; target cleared -> ok "Glut has
     turned back into Tilda."; Tilda's glut status "On cooldown until <T0 +
@@ -85,8 +111,8 @@ THE RULES, and what follows BY HAND
     exists." (not Obs's).
 [G] give on ember -> ok "Tilda now holds Ring."; unknown action ->
     "Unknown action.".
-[H] Delete ember -> ok, stored ids [glut]. German: tab labels
-    ["Verwandlung", "Eingeweihte"].
+[H] Delete ember -> ok, stored ids [glut]. German: section labels
+    ["Verwandlungen", "Verknüpfte Charaktere", "Eingeweihte"].
 [J] Deletion test: providers of "transformation" unregistered -> has_panel
     False, describe_panel raises PanelNotFound.
 """
@@ -207,26 +233,67 @@ def label(stamp):
     return GameTime.parse(stamp).display_label("en")
 
 
+# ── [K] the tab, opt-in ─────────────────────────────────────────────────────
+print("[K] the Transformation tab, transform opt-in")
+from app.core.dependencies import get_skill_manager  # noqa: E402
+_mgr = get_skill_manager()
+check("tab label", (panel.tab_label("en"), panel.tab_label("de")),
+      ("Transformation", "Verwandlung"))
+_seeded = registry.default_enabled_skill_ids()
+check("manifest seeds", ("transform" in _seeded, "revert" in _seeded,
+                         "reveal_identity" in _seeded), (False, True, True))
+check("default_enabled_for", tuple(_mgr.get_skill(v).default_enabled_for("Tilda")
+                                   for v in ("transform", "revert", "reveal_identity")),
+      (False, True, True))
+check("hidden without a setting", [panel.tab_visible(n) for n in ("Tilda", "Glut", "Obs")],
+      [False, False, False])
+ch.save_character_skill_config("Tilda", "transform", {"enabled": True})
+check("visible once enabled (+ its body)",
+      [panel.tab_visible(n) for n in ("Tilda", "Glut", "Obs")], [True, True, False])
+check("listed by the core", [x for x in cp.list_panel_tabs("Tilda", "en")
+                             if x["package"] == PKG],
+      [{"package": PKG, "label": "Transformation", "visible": True}])
+ch.save_character_skill_config("Obs", "revert", {"enabled": True})
+check("revert alone shows no tab", panel.tab_visible("Obs"), False)
+ch.save_character_skill_config("Tilda", "transform", {"enabled": False})
+check("explicitly off", (panel.tab_visible("Tilda"), panel.tab_visible("Glut")),
+      (False, False))
+ch.save_character_skill_config("Tilda", "transform", {"enabled": True})
+
 # ── [A] empty panel ─────────────────────────────────────────────────────────
 print("[A] describe, no definitions")
 _p = describe()
 check("title", _p["title"], "Transformation")
 check("intro", _p["intro"], "Tilda turns into a linked character through a power item.")
-check("tabs", _p["tabs"], [{"id": "transform", "label": "Transformation", "hint": ""},
-                           {"id": "knowers", "label": "Knowers", "hint": ""}])
+check("no field tabs", _p["tabs"], [])
+check("sections", _p["sections"], [
+    {"id": "transformations", "label": "Transformations", "hint": "", "core_block": ""},
+    {"id": "linked", "label": "Linked characters", "hint": "",
+     "core_block": "linked_characters"},
+    {"id": "knowers", "label": "Knowers", "hint": "", "core_block": ""}])
 CREATE_ACTION = {"id": "create_linked", "label": "Create linked character", "confirm": "",
                  "primary": False,
                  "input": {"label": "Name", "placeholder": "",
                            "message": "A new character linked to Tilda, built from Tilda's "
-                                      "template. It opens for editing right away."}}
+                                      "template. It opens for editing right away."},
+                 "section": "linked"}
 check("panel actions", _p["actions"], [CREATE_ACTION])
-check("no cards", _p["cards"], [])
+check("only the knowers card", [(c["id"], c["title"], c.get("section")) for c in _p["cards"]],
+      [("knowers:Glut", "Glut", "knowers")])
+_kc = _p["cards"][0] if _p["cards"] else {}
+check("knowers card", ([(f["key"], f["type"], f.get("width"), f["hint"])
+                        for f in _kc.get("fields", [])], _kc.get("values"),
+                       _kc.get("deletable")),
+      ([("knowers", "characters", "full", "They know that Glut is Tilda.")],
+       {"knowers": []}, False))
+check("create section", (_p["create"] or {}).get("section"), "transformations")
 _cf = (_p["create"] or {}).get("fields") or []
 check("create fields", [(f["key"], f["type"], f["required"]) for f in _cf],
       [("body", "select", True), ("item_id", "item", True)])
 check("body options", _cf[0].get("options") if _cf else None, [{"value": "Glut", "label": "Glut"}])
 _po = describe("Obs")
 check("Obs: no create form without bodies", _po["create"], None)
+check("Obs: no cards", _po["cards"], [])
 check("Obs: the create action", [a["id"] for a in _po["actions"]], ["create_linked"])
 check("German title", describe(lang="de")["title"], "Verwandlung")
 
@@ -239,6 +306,11 @@ check("bodies", lc.bodies_of("Tilda"), ["Ember", "Glut"])
 check("Ember dormant", ch.get_character_status("Ember"), "dormant")
 check("options now", [o["value"] for o in describe()["create"]["fields"][0]["options"]],
       ["Ember", "Glut"])
+check("knowers cards now", [c["id"] for c in describe()["cards"]],
+      ["knowers:Ember", "knowers:Glut"])
+check("Ember seeded: revert yes, transform no",
+      (ch.get_character_skill_config("Ember", "revert").get("enabled"),
+       "enabled" in ch.get_character_skill_config("Ember", "transform")), (True, False))
 check("empty name", act("", "create_linked", value=""),
       {"ok": False, "error": "Name is required."})
 check("taken name", act("", "create_linked", value="Glut")["error"],
@@ -260,23 +332,24 @@ check("ember", save({"body": "Ember", "item_id": "ring"}),
 # ── [D] cards ───────────────────────────────────────────────────────────────
 print("[D] cards")
 _p = describe()
-check("card order", [c["id"] for c in _p["cards"]], ["glut", "ember"])
+check("card order", [(c["id"], c.get("section")) for c in _p["cards"]],
+      [("glut", "transformations"), ("ember", "transformations"),
+       ("knowers:Ember", "knowers"), ("knowers:Glut", "knowers")])
 _g = _p["cards"][0]
 check("glut head", (_g["title"], _g["badges"], _g["subtitle"], _g["status"]),
       ("Glut", ["holds the item"], "Held by Tilda", "Ordinary self"))
 check("glut actions", [(a["id"], a["label"]) for a in _g["actions"]],
       [("transform", "Transform now")])
 check("glut fields", [(f["key"], f["type"], f.get("tab"), f.get("width")) for f in _g["fields"]], [
-    ("body", "select", "transform", "m"), ("item_id", "item", "transform", "m"),
-    ("enabled", "bool", "transform", "s"),
-    ("activation_phrase", "text", "transform", "l"), ("revert_phrase", "text", "transform", "l"),
-    ("max_duration_minutes", "int", "transform", "s"), ("cooldown_minutes", "int", "transform", "s"),
-    ("transform_activity", "text", "transform", "s"), ("condition_id", "condition", "transform", "s"),
-    ("knowers", "characters", "knowers", "full")])
+    ("body", "select", None, "m"), ("item_id", "item", None, "m"),
+    ("enabled", "bool", None, "s"),
+    ("activation_phrase", "text", None, "l"), ("revert_phrase", "text", None, "l"),
+    ("max_duration_minutes", "int", None, "s"), ("cooldown_minutes", "int", None, "s"),
+    ("transform_activity", "text", None, "s"), ("condition_id", "condition", None, "s")])
 check("glut values", _g["values"], {
     "body": "Glut", "item_id": "amulet", "enabled": True, "activation_phrase": "",
     "revert_phrase": "", "max_duration_minutes": 60, "cooldown_minutes": 30,
-    "transform_activity": "transforming", "condition_id": "", "knowers": []})
+    "transform_activity": "transforming", "condition_id": ""})
 _e = _p["cards"][1]
 check("ember head", (_e["title"], _e["subtitle"]), ("Ember", "Nobody holds the item"))
 check("ember actions", [(a["id"], a["label"], a["confirm"]) for a in _e["actions"]],
@@ -284,13 +357,18 @@ check("ember actions", [(a["id"], a["label"], a["confirm"]) for a in _e["actions
 
 # ── [E] knowers + numbers ───────────────────────────────────────────────────
 print("[E] update")
-check("knowers saved", save({"knowers": ["Kim", "Glut", "Tilda"]}, "glut"),
-      {"ok": True, "error": "", "card_id": "glut"})
+check("knowers saved", save({"knowers": ["Kim", "Glut", "Tilda"]}, "knowers:Glut"),
+      {"ok": True, "error": "", "card_id": "knowers:Glut"})
 check("stored knowers", knowers.knower_names("Glut"), ["Kim"])
 _sec = [s for s in secrets.list_secrets("Tilda") if s.get("source_ref") == "transformation:Glut"]
 check("the knower secret", [(s.get("content"), s.get("body")) for s in _sec],
       [("Glut is secretly Tilda.", "Glut")])
-check("card shows them", card("glut")["values"]["knowers"], ["Kim"])
+check("card shows them", card("knowers:Glut")["values"]["knowers"], ["Kim"])
+check("no knowers card for a non-body", save({"knowers": ["Obs"]}, "knowers:Kim"),
+      {"ok": False, "error": "This entry no longer exists."})
+check("provider refuses a non-body too",
+      panel.save("Tilda", "knowers:Kim", {"knowers": ["Obs"]}, "en"),
+      {"ok": False, "error": "This entry no longer exists."})
 check("negative max", save({"max_duration_minutes": "-5"}, "glut"),
       {"ok": False, "error": "Max duration: at least 0."})
 _vals = dict(card("glut")["values"])
@@ -312,10 +390,18 @@ check("transform again", act("glut", "transform"),
       {"ok": False, "error": "Tilda is already transformed."})
 _b = describe("Glut")
 check("body intro", _b["intro"],
-      "Glut is a linked character of Tilda — set the transformation up on Tilda's panel.")
+      "Glut is a linked character of Tilda — the transformation is set up in Tilda's "
+      "Transformation tab.")
 check("body: no tabs/create/actions", (_b["tabs"], _b["create"], _b["actions"]), ([], None, []))
-check("body cards", [(c["id"], c["title"], c["fields"]) for c in _b["cards"]],
-      [("glut", "From Tilda", [])])
+check("body section", _b["sections"], [{"id": "body", "label": "Transformation", "hint": "",
+                                        "core_block": "linked_characters"}])
+check("body cards", [(c["id"], c["title"], c["fields"], c.get("section")) for c in _b["cards"]],
+      [("glut", "From Tilda", [], "body")])
+check("Glut has no revert setting", "enabled" in ch.get_character_skill_config("Glut", "revert"),
+      False)
+check("Glut still gets the revert tool",
+      _mgr.get_skill("revert").name in {getattr(x, "name", x) for x in
+                                        _mgr.get_agent_tools("Glut", check_limits=False)}, True)
 check("body status", _b["cards"][0]["status"],
       f"Glut stands in the world for Tilda since {label(T0.canonical())}")
 check("body actions", [a["id"] for a in _b["cards"][0]["actions"]], ["revert"])
@@ -345,8 +431,8 @@ check("unknown action", act("ember", "fly"), {"ok": False, "error": "Unknown act
 print("[H] delete")
 check("delete ember", cp.delete_panel_card(PKG, "Tilda", "ember", "en"), {"ok": True, "error": ""})
 check("stored ids", [d["id"] for d in store.list_definitions()], ["glut"])
-check("German tabs", [t["label"] for t in describe(lang="de")["tabs"]],
-      ["Verwandlung", "Eingeweihte"])
+check("German sections", [t["label"] for t in describe(lang="de")["sections"]],
+      ["Verwandlungen", "Verknüpfte Charaktere", "Eingeweihte"])
 
 # ── [J] deletion test ───────────────────────────────────────────────────────
 print("[J] deletion test")

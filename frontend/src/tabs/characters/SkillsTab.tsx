@@ -20,6 +20,11 @@ import { PackagePanel } from './PackagePanel'
  * option always means "world default", and a stored value the source no
  * longer offers stays selectable, marked "(unavailable)" — the server flags
  * it via `value_unavailable`. No skill id appears in this file.
+ *
+ * A skill whose package panel is a character sub-tab of its own (`panelTabs`,
+ * GET /characters/{c}/panel-tabs) shows only its on/off switch here plus a
+ * pointer to that tab; every toggle reports `onSkillsChanged` so the sheet
+ * can re-ask which panel tabs are visible.
  */
 
 interface ConfigField {
@@ -60,13 +65,23 @@ interface LocationOpt {
   id: string
   name: string
 }
+/** A package panel that is a character sub-tab of its own. */
+export interface PanelTabInfo {
+  package: string
+  label: string
+  visible: boolean
+}
 
 export function SkillsTab({
-  character, onOpenCharacter,
+  character, onOpenCharacter, panelTabs, onSkillsChanged,
 }: {
   character: string
   /** Opens another character in the editor (a package panel action may ask for it). */
   onOpenCharacter?: (name: string) => void
+  /** Package panels living in a sub-tab of their own (shown hidden or not). */
+  panelTabs?: PanelTabInfo[]
+  /** A skill was switched on or off. */
+  onSkillsChanged?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -116,8 +131,9 @@ export function SkillsTab({
           prev.map((s) => (s.skill_id === skill.skill_id ? { ...s, enabled: !enabled } : s)),
         )
       }
+      onSkillsChanged?.()
     },
-    [character, t, toast],
+    [character, onSkillsChanged, t, toast],
   )
 
   // Capability group: all verbs of the package on/off together
@@ -139,8 +155,9 @@ export function SkillsTab({
         toast(t('Error') + ': ' + (e as Error).message, 'error')
         reload()
       }
+      onSkillsChanged?.()
     },
-    [character, reload, t, toast],
+    [character, onSkillsChanged, reload, t, toast],
   )
 
   // Update the field value locally (so inputs stay controlled), then persist
@@ -212,6 +229,10 @@ export function SkillsTab({
   }
 
   const fields = current?.config_fields ? Object.entries(current.config_fields) : []
+  // The current skill's panel lives in a character sub-tab of its own.
+  const ownTab = current?.panel_package
+    ? (panelTabs || []).find((x) => x.package === current.panel_package)
+    : undefined
   const idHint = current ? membersOf(current).map((m) => m.skill_id).join(' + ') : ''
 
   return (
@@ -277,7 +298,11 @@ export function SkillsTab({
                 {current.capability_description || current.description}
               </div>
             )}
-            {current.panel_package ? (
+            {current.panel_package && ownTab ? (
+              <div className="ga-placeholder" style={{ marginTop: 12 }}>
+                {t('Configured in the {tab} tab.').replace('{tab}', ownTab.label)}
+              </div>
+            ) : current.panel_package ? (
               <PackagePanel character={character} packageId={current.panel_package}
                 onOpenCharacter={onOpenCharacter} />
             ) : null}

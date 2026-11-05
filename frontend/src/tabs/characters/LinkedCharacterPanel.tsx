@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
+import { apiDelete, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
 /**
- * Characters → Linked: one mind in several bodies (app/core/linked_characters.py).
+ * The core block `linked_characters` of a package panel section
+ * (docs/plugins.md → "Character panels"): one mind in several bodies
+ * (app/core/linked_characters.py).
  *
  * A LINKED character (a body) names its leading character; the leader owns the
  * mind (memories, thoughts, secrets, the shared soul sections) and the body
  * reads gender and age live from it. Only one family member stands in the
  * world — the others are DORMANT. The server decides everything (candidates,
- * refusals); this panel only shows and asks.
+ * refusals); this block only shows and asks.
  *   GET    /characters/{c}/link     → LinkState
  *   PUT    /characters/{c}/link     {leader, shared_soul_sections}
+ *   PUT    /characters/{body}/link  {leader: c} (link an existing character as a body of c)
  *   DELETE /characters/{c}/link     (unlink a dormant body)
- *   POST   /characters/{c}/linked   {name} (create a dormant body for a leader)
+ * Creating a NEW body is the embedding package's action (core `create_linked`).
  * Admin-only world authoring.
  */
 
@@ -26,6 +29,8 @@ interface LinkState {
   status: string
   shareable: string[]
   candidates: string[]
+  /** Who may be linked to this character as a body. */
+  body_candidates: string[]
 }
 
 const SECTION_LABELS: Record<string, string> = {
@@ -54,10 +59,11 @@ export function LinkedCharacterPanel({
   const [state, setState] = useState<LinkState | null>(null)
   const [leader, setLeader] = useState('')
   const [shared, setShared] = useState<string[]>([])
-  const [newName, setNewName] = useState('')
+  const [newBody, setNewBody] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmLink, setConfirmLink] = useState(false)
+  const [confirmBody, setConfirmBody] = useState(false)
 
   const apply = useCallback((s: LinkState) => {
     setState(s)
@@ -76,7 +82,7 @@ export function LinkedCharacterPanel({
   }, [character, apply])
 
   useEffect(() => {
-    setNewName('')
+    setNewBody('')
     load()
   }, [load])
 
@@ -200,22 +206,19 @@ export function LinkedCharacterPanel({
                 )}
               </div>
               <div className="ga-pp-f ga-pp-w6">
-                <span className="ga-pp-label">{t('New linked character')}</span>
+                <span className="ga-pp-label">{t('Link an existing character')}</span>
                 <span className="ga-pp-inline">
-                  <input className="ga-input" value={newName} disabled={busy}
-                    placeholder={t('Name')} onChange={(e) => setNewName(e.target.value)} />
-                  <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !newName.trim()}
-                    onClick={() => run(async () => {
-                      const r = await apiPost<{ character: string }>(`/characters/${enc}/linked`,
-                        { name: newName.trim() })
-                      setNewName('')
-                      onOpen(r.character)
-                      return null
-                    }, 'Created')}>
-                    {t('Create')}
+                  <select className="ga-input" value={newBody} disabled={busy}
+                    onChange={(e) => setNewBody(e.target.value)}>
+                    <option value="">{t('— select —')}</option>
+                    {(state.body_candidates || []).map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !newBody}
+                    onClick={() => setConfirmBody(true)}>
+                    {t('Link')}
                   </button>
                 </span>
-                <span className="ga-pp-hint">{t("Built from this character's template and created dormant.")}</span>
+                <span className="ga-pp-hint">{t('It becomes a linked character of this one and goes dormant.')}</span>
               </div>
             </>
           ) : null}
@@ -231,6 +234,23 @@ export function LinkedCharacterPanel({
         confirmLabel={t('Link')}
         onConfirm={() => { setConfirmLink(false); void save() }}
         onClose={() => setConfirmLink(false)}
+      />
+      <ConfirmDialog
+        open={confirmBody}
+        title={t('Link {name}?').replace('{name}', newBody)}
+        message={t('{name} becomes dormant and leaves the world. Its own memories, thoughts and secrets stay stored but are not read while it is linked.').replace('{name}', newBody)}
+        confirmLabel={t('Link')}
+        onConfirm={() => {
+          setConfirmBody(false)
+          const body = newBody
+          // The answer is the BODY's link state — reload this character's own.
+          void run(async () => {
+            await apiPut(`/characters/${encodeURIComponent(body)}/link`, { leader: character })
+            setNewBody('')
+            return null
+          }, 'Linked')
+        }}
+        onClose={() => setConfirmBody(false)}
       />
     </div>
   )

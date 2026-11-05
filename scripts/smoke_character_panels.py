@@ -105,6 +105,37 @@ J) ``select`` FIELD, PANEL-LEVEL ACTIONS, ACTION ``input`` — a third fake prov
    panel action ``nope`` → "This entry no longer exists." without a call;
    ``plain`` on ``s1`` → the provider is called WITHOUT a value (``value``
    param stays at its default ``None``).
+
+K) TOP-LEVEL CHARACTER TABS, SECTIONS, CORE BLOCKS — the panel-contract
+   extension (``docs/plugins.md`` → "Character panels" → "A panel as its own
+   character tab"). Fake provider ``smoke-panel-pkg4`` answers ``tab_label(lang)``
+   = ``"Tab4"`` (``de`` → ``"Reiter4"``) and ``tab_visible(c)`` = ``c == "Ada"``;
+   ``smoke-panel-pkg5`` answers ``tab_label`` ``"Tab5"`` and has NO ``tab_visible``
+   (default: visible); ``smoke-panel-pkg6`` has a ``tab_visible`` that raises
+   (→ hidden, logged); ``smoke-panel-pkg3``-style providers without ``tab_label``
+   are no tab. Registration order 4, 5, 6 → by the rule "registration order":
+   ``list_panel_tabs("Ada", "en")`` = ``[{"package": pkg4, "label": "Tab4",
+   "visible": True}, {"package": pkg5, "label": "Tab5", "visible": True},
+   {"package": pkg6, "label": "Tab6", "visible": False}]``; for ``Bea`` pkg4 is
+   ``visible False``; ``de`` gives pkg4 the label ``"Reiter4"``. The route
+   ``list_character_panel_tabs`` depends on ``require_admin``, answers
+   ``{"tabs": <the same list>}`` and 404 for ``Nobody``.
+   SECTIONS: pkg4's ``describe`` answers ``sections`` = ``[{"id": "a", "label":
+   "A"}, {"id": "b", "label": "B", "hint": "h", "core_block": "linked_characters"}]``
+   → normalized ``[{"id": "a", "label": "A", "hint": "", "core_block": ""},
+   {"id": "b", "label": "B", "hint": "h", "core_block": "linked_characters"}]``;
+   card ``k1`` with ``section "a"`` keeps it, card ``k2`` without one carries no
+   ``section`` key; the panel action ``mk`` with ``section "b"`` keeps it; the
+   create form with ``section "a"`` keeps it. ``CORE_BLOCKS`` is exactly
+   ``{"linked_characters"}``: a section naming ``"nope"`` → 500, duplicate
+   section ids → 500. A panel without ``sections`` answers ``sections == []``
+   (checked on pkg3's answer above: C/J stay unchanged).
+   THE CORE BLOCK's data: ``linked_characters.describe`` carries
+   ``body_candidates`` = who may be linked to the character as a body (not
+   itself, not linked, leading nobody, no temporary NPC; none for a body).
+   World: Ada, Bea → ``describe("Ada")["body_candidates"] == ["Bea"]``; after
+   ``link("Bea", "Ada")`` Ada's list is ``[]`` (Bea is linked now) and Bea's
+   is ``[]`` (a body leads nobody).
 """
 import inspect
 import os
@@ -524,10 +555,99 @@ try:
     check("card action without input gets no value", sp.calls[-1],
           ("action", "Ada", "s1", "plain", "en", None))
     hooks.unregister_owned_providers(PKG3)
+
+    # ── K) top-level tabs, sections, core blocks ──────────────────────────
+    print("K) top-level character tabs, sections, core blocks")
+    from app.core import character_panels as cp
+
+    class TabProvider:
+        def __init__(self, label, visible=None, boom=False, sections=None):
+            self._label, self._visible, self._boom = label, visible, boom
+            self.sections = sections
+            if visible is not None or boom:
+                self.tab_visible = self._tab_visible
+
+        def tab_label(self, lang):
+            return {"de": "Reiter" + self._label[-1]}.get(lang, self._label)
+
+        def _tab_visible(self, character):
+            if self._boom:
+                raise RuntimeError("visibility exploded")
+            return self._visible(character)
+
+        def describe(self, character, lang):
+            return {"title": self._label, "sections": self.sections,
+                    "actions": [{"id": "mk", "label": "Mk", "section": "b"}],
+                    "cards": [{"id": "k1", "title": "K1", "section": "a"},
+                              {"id": "k2", "title": "K2"}],
+                    "create": {"label": "New", "fields": [], "section": "a"}}
+
+        def save(self, character, card_id, values, lang):
+            return {"ok": True}
+
+        def delete(self, character, card_id, lang):
+            return {"ok": True}
+
+        def action(self, character, card_id, action_id, lang):
+            return {"ok": True}
+
+    PKG4, PKG5, PKG6 = "smoke-panel-pkg4", "smoke-panel-pkg5", "smoke-panel-pkg6"
+    assert save_character_profile("Bea", {"character_name": "Bea",
+                                          "template": "human-roleplay"}, create_new=True)
+    p4 = TabProvider("Tab4", visible=lambda c: c == "Ada",
+                     sections=[{"id": "a", "label": "A"},
+                               {"id": "b", "label": "B", "hint": "h",
+                                "core_block": "linked_characters"}])
+    hooks.register_provider(panel_capability(PKG4), p4, owner=PKG4)
+    hooks.register_provider(panel_capability(PKG5), TabProvider("Tab5"), owner=PKG5)
+    hooks.register_provider(panel_capability(PKG6), TabProvider("Tab6", boom=True), owner=PKG6)
+    hooks.register_provider(panel_capability(PKG3), SelectProvider(), owner=PKG3)
+    want = [{"package": PKG4, "label": "Tab4", "visible": True},
+            {"package": PKG5, "label": "Tab5", "visible": True},
+            {"package": PKG6, "label": "Tab6", "visible": False}]
+    check("tabs for Ada", cp.list_panel_tabs("Ada", "en"), want)
+    check("pkg4 hidden for Bea", [(x["package"], x["visible"])
+                                  for x in cp.list_panel_tabs("Bea", "en")][0], (PKG4, False))
+    check("German tab label", cp.list_panel_tabs("Ada", "de")[0]["label"], "Reiter4")
+    deps = [p.default.dependency
+            for p in inspect.signature(routes.list_character_panel_tabs).parameters.values()
+            if hasattr(p.default, "dependency")]
+    check("tab route depends on require_admin", require_admin in deps, True)
+    check("tab route answer", routes.list_character_panel_tabs("Ada", lang="en", _={}),
+          {"tabs": want})
+    check("tab route unknown character → 404",
+          status_of(routes.list_character_panel_tabs, "Nobody", lang="en", _={}), 404)
+    check("CORE_BLOCKS", cp.CORE_BLOCKS, frozenset({"linked_characters"}))
+    panel = routes.get_character_panel("Ada", PKG4, lang="en", _={})
+    check("sections normalized", panel.get("sections"),
+          [{"id": "a", "label": "A", "hint": "", "core_block": ""},
+           {"id": "b", "label": "B", "hint": "h", "core_block": "linked_characters"}])
+    check("card section kept / absent", [(c["id"], c.get("section", "-")) for c in panel["cards"]],
+          [("k1", "a"), ("k2", "-")])
+    check("panel action section kept", panel["actions"][0].get("section"), "b")
+    check("create section kept", (panel.get("create") or {}).get("section"), "a")
+    check("no sections → []", routes.get_character_panel("Ada", PKG3, lang="en",
+                                                          _={}).get("sections"), [])
+    p4.sections = [{"id": "a", "label": "A", "core_block": "nope"}]
+    check("unknown core block → 500", status_of(routes.get_character_panel, "Ada", PKG4,
+                                                lang="en", _={}), 500)
+    p4.sections = [{"id": "a", "label": "A"}, {"id": "a", "label": "A2"}]
+    check("duplicate section ids → 500", status_of(routes.get_character_panel, "Ada", PKG4,
+                                                   lang="en", _={}), 500)
+    for _pkg in (PKG3, PKG4, PKG5, PKG6):
+        hooks.unregister_owned_providers(_pkg)
+    check("no tabs after unregister", cp.list_panel_tabs("Ada", "en"), [])
+    from app.core import linked_characters as lc
+    check("body candidates of Ada", lc.describe("Ada").get("body_candidates"), ["Bea"])
+    check("link Bea to Ada", lc.link("Bea", "Ada")["ok"], True)
+    check("after linking: Ada / Bea", (lc.describe("Ada").get("body_candidates"),
+                                        lc.describe("Bea").get("body_candidates")), ([], []))
 finally:
     hooks.unregister_owned_providers(PKG)
     hooks.unregister_owned_providers("smoke-panel-pkg2")
     hooks.unregister_owned_providers("smoke-panel-pkg3")
+    for _pkg in ("smoke-panel-pkg4", "smoke-panel-pkg5", "smoke-panel-pkg6"):
+        hooks.unregister_owned_providers(_pkg)
 
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
 if FAILURES:

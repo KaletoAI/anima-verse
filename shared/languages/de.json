@@ -3913,7 +3913,6 @@
     "{body} stands in the world for {leader} since {time}": "{body} steht seit {time} für {leader} in der Welt",
     "Dormant — {leader} stands in the world.": "Ruhend — {leader} steht in der Welt.",
     "From {leader}": "Von {leader}",
-    "{body} is a linked character of {leader} — set the transformation up on {leader}'s panel.": "{body} ist ein verknüpfter Charakter von {leader} — die Verwandlung wird bei {leader} eingerichtet.",
     "{name} turns into a linked character through a power item.": "{name} verwandelt sich durch einen Kraft-Gegenstand in einen verknüpften Charakter.",
     "The transformation into {body} is removed for good, with its cooldowns. Who knows that {body} is {leader} stays.": "Die Verwandlung in {body} wird endgültig entfernt, samt Abklingzeiten. Wer weiß, dass {body} {leader} ist, bleibt eingeweiht.",
     "{body} is not a linked character of {leader}.": "{body} ist kein verknüpfter Charakter von {leader}.",
@@ -3968,8 +3967,6 @@
     "Goals are never shared: every body has its own.": "Ziele werden nie geteilt: Jeder Körper hat eigene.",
     "Linked characters": "Verknüpfte Charaktere",
     "None yet.": "Noch keine.",
-    "New linked character": "Neuer verknüpfter Charakter",
-    "Built from this character's template and created dormant.": "Aus der Vorlage dieses Charakters erstellt und ruhend angelegt.",
     "Link {name}?": "{name} verknüpfen?",
     "{name} becomes dormant and leaves the world. Its own memories, thoughts and secrets stay stored but are not read while it is linked.": "{name} wird ruhend und verlässt die Welt. Eigene Erinnerungen, Gedanken und Geheimnisse bleiben gespeichert, werden aber nicht gelesen, solange er verknüpft ist.",
     "Unlinked": "Verknüpfung gelöst",
@@ -3977,6 +3974,11 @@
     "A linked character reads this field from its leading character.": "Ein verknüpfter Charakter liest dieses Feld von seinem führenden Charakter.",
     "from {name}": "von {name}",
     "A linked character reads this section from its leading character; edit it there.": "Ein verknüpfter Charakter liest diesen Abschnitt von seinem führenden Charakter; dort bearbeiten.",
-    "Pick another avatar for {user} first: {name} is their active character.": "Wähle zuerst einen anderen Avatar für {user}: {name} ist dessen aktiver Charakter."
+    "Pick another avatar for {user} first: {name} is their active character.": "Wähle zuerst einen anderen Avatar für {user}: {name} ist dessen aktiver Charakter.",
+    "Transformations": "Verwandlungen",
+    "{body} is a linked character of {leader} — the transformation is set up in {leader}'s Transformation tab.": "{body} ist ein verknüpfter Charakter von {leader} — die Verwandlung wird im Reiter „Verwandlung“ von {leader} eingerichtet.",
+    "Configured in the {tab} tab.": "Wird im Reiter „{tab}“ eingerichtet.",
+    "Link an existing character": "Vorhandenen Charakter verknüpfen",
+    "It becomes a linked character of this one and goes dormant.": "Er wird ein verknüpfter Charakter dieses Charakters und ruht ab sofort."
   }
 }

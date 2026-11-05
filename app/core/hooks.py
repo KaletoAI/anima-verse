@@ -87,6 +87,12 @@ def get_provider(capability: str) -> Optional[Callable]:
     return _providers.get(capability)
 
 
+def capabilities_with_prefix(prefix: str) -> list[str]:
+    """Registered single-provider capabilities starting with ``prefix``, in
+    registration order (e.g. every ``character_panel:<package>``)."""
+    return [cap for cap in list(_providers) if cap.startswith(prefix)]
+
+
 def get_providers(capability: str) -> list[Callable]:
     """Return all implementations in registration order, including a singleton."""
     single = get_provider(capability)

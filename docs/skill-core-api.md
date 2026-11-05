@@ -1158,6 +1158,7 @@ Queue; das Verb antwortet dem LLM sofort, was es angestoßen hat.
 | `unregister_owned_providers(owner) -> None` | Remove only providers still owned by this package; a replacement owned by someone else is retained |
 | `get_providers(capability) -> list[Callable]` | All registered implementations for aggregation; the consumer isolates failures |
 | `get_provider(capability) -> Optional[Callable]` | Look up the implementation; absence handling belongs to each capability contract |
+| `capabilities_with_prefix(prefix) -> list[str]` | The registered single-provider capabilities starting with `prefix`, in registration order (e.g. every `character_panel:<package>`) |
 
 Event subscriptions have no `unregister`; keep their `(event, tag)`
 registration idempotent. Capability providers do support owner-bound removal.
@@ -1566,7 +1567,9 @@ remain unlimited. All secret read-modify-write operations serialize through
 A package that needs a real editor on a character (a list of entries with item,
 condition and character pickers, a test button) registers a PANEL PROVIDER from
 its `on_load` module; Game-Admin → Characters → Skills renders it generically
-under the package's capability entry. The provider contract (its four methods,
+under the package's capability entry — or, when the provider has a
+`tab_label` method (given the UI language), as a character sub-tab of its own,
+shown per its optional `tab_visible` method (given the character). The provider contract (its four methods,
 the card and field shapes, the field types) is in `docs/plugins.md` →
 "Character panels". The core names no package: with no provider the routes
 answer 404 and the Skills tab shows no panel (deletion test).
@@ -1577,6 +1580,8 @@ answer 404 and the Skills tab shows no panel (deletion test).
 | `has_panel(package_id)` | Whether a provider is registered for the package |
 | `get_panel_provider(package_id)` | The registered provider or `None` |
 | `FIELD_TYPES` | The renderer's whole field vocabulary: `text`, `textarea`, `int`, `bool`, `item`, `items`, `condition`, `characters`, `backend`, `loras`, `select` |
+| `CORE_BLOCKS` | The blocks a panel section may embed with `core_block`: `linked_characters` (the link editor of `app.core.linked_characters`; `docs/plugins.md` → "Sections and core blocks"). Any other name is a contract error |
+| `list_panel_tabs(character, lang="en")` | `[{"package", "label", "visible"}]` — every provider whose `tab_label` method answers a non-empty label for `lang`, in registration order; `visible` = its `tab_visible` method for the character (absent → `True`, raising → `False`). Unknown character → `PanelNotFound`. Route `GET /characters/{name}/panel-tabs?lang=` (admin) |
 
 Every save goes through the core first: the submitted values are reduced to the
 keys the card (or the create form) declares, coerced to the field's type
@@ -1623,7 +1628,7 @@ any of this — it asks here. Spec:
 | `swap_presence(from_name, to_name, *, items=(), reason="")` | `{"ok", "error"}` (+ `refusal` = the `swap_refusal` code of a refused swap, `items` = the ids that moved). One family, `from_name` present, `to_name` dormant, `from_name` in no refusal state (error = `SWAP_REFUSAL_TEXT[code]`). `to_name` gets `from_name`'s location, room, point, yaw, activity, pose key/flavor, feeling and seat; `from_name` becomes dormant (no placement, seat or off-map marker) and keeps its placement under `dormant_from` for the repair — both in ONE transaction. Then `items` move with force (`transferable` does not block; worn clothing never moves, another equipped item is unequipped first), every user controlling `from_name` controls `to_name` and is allowed it, and `location_changed` + `sync_topics.moved` go out for both. `reason` is only logged. The transformation package's transform/revert is this call |
 | `repair_families()` | Number of families repaired — "exactly one present member per family": none present → the expected member stands at its own `dormant_from`, else at the most recent one of any member (never an invented location); two present → all but the expected member (else the leader) become dormant; users controlling a dormant member are switched to the present one. Runs at boot (after the packages loaded) and every 60 s in the periodic tick (not while the world is frozen or the queue paused) |
 | `EXPECTED_PRESENT_PROVIDER` | `"linked.expected_present"` — an optional provider (`hooks.register_provider`): a callable given the leader that returns the member that SHOULD stand in the world (the transformation package answers with the body while transformed). Absent, `None` or a name outside the family = the leader |
-| `describe(name)` | `{leader, bodies: [{name, status}], shared_soul_sections, status: "dormant"/"present", shareable, candidates}` — the editor payload of `GET /characters/{name}/link` |
+| `describe(name)` | `{leader, bodies: [{name, status}], shared_soul_sections, status: "dormant"/"present", shareable, candidates, body_candidates}` — the editor payload of `GET /characters/{name}/link`; `candidates` = whom `name` may be linked to, `body_candidates` = who may be linked to `name` as a body (not linked, leading nobody, no temporary NPC; `[]` for a body) |
 | `invalidate()` | Drop the cached link map. `save_character_profile` calls `note_saved(name, linked_to, shared)` after every committed write and `delete_character` invalidates — a writer of `linked_to` outside those needs it |
 | `note_saved(name, linked_to, shared)` | The save hook: invalidates the map only when the stored link differs from it |
 

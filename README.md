@@ -181,11 +181,13 @@ stops acting autonomously).
   along, and joining is an LLM tool call, never a keyword match.
 - **Linked characters:** one mind in several bodies — a linked character is a full character of its own
   whose memories, thoughts, secrets, diary entries and own feelings belong to its leader's mind; only one
-  member of a family stands in the world, the others are dormant (Game-Admin → Characters → Linked).
+  member of a family stands in the world, the others are dormant (linked and unlinked in a character's
+  Transformation tab).
 - **Transformation:** a character who carries a power item turns into one of its **linked characters**
   — a body swap: the linked character, a full character of its own with one shared mind, stands exactly
-  where the leader stood (the `transformation` package; set up on the leader in Game-Admin → Characters →
-  Skills → Transformation, including "Create linked character") — with a cooldown, a GAME-time duration
+  where the leader stood (the `transformation` package; switch the Transform skill on for the leader, then
+  set it up in Game-Admin → Characters → <leader> → Transformation, including "Create linked character")
+  — with a cooldown, a GAME-time duration
   and a condition on the body while it lasts; who knows that the body is the leader is kept as a secret
   of the mind. The avatar transforms by saying a phrase, NPCs by a tool call
   ([details](docs/plugins.md#package-transformation)).

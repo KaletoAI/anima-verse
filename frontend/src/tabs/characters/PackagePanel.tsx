@@ -6,6 +6,7 @@ import { apiGet, apiPost } from '../../lib/api'
 import { isGeneratorBackend } from '../../lib/imageBackends'
 import { loadCharacters } from '../../lib/refs'
 import { useToast } from '../../lib/Toast'
+import { LinkedCharacterPanel } from './LinkedCharacterPanel'
 import {
   PanelFieldControl,
   type CharacterOpt,
@@ -16,7 +17,8 @@ import {
 } from './PackagePanelFields'
 
 /**
- * Package character panel (Characters → Skills → <capability>): the generic
+ * Package character panel (Characters → Skills → <capability>, or a character
+ * sub-tab of its own when the package declares `tab_label`): the generic
  * renderer of a skill package's own editor. The package answers the whole
  * panel — title, intro, cards with fields/values/status/actions, an optional
  * create form — through
@@ -35,6 +37,12 @@ import {
  * `width`. The draft lives per shown card, so a tab switch keeps it; a card
  * switch with unsaved edits asks first. Panel-level actions (no card) sit in
  * the top bar; an action with `input` asks for one line of text first.
+ *
+ * Sections: a panel may group its cards into `sections` (a sub-tab bar inside
+ * the panel). A card, a panel-level action and the create form name theirs
+ * with `section` (missing/unknown → the first). A section's `core_block` is a
+ * block the CORE renders above its cards — `linked_characters` =
+ * LinkedCharacterPanel. A section switch with unsaved edits asks first.
  */
 
 interface PanelAction {
@@ -44,6 +52,14 @@ interface PanelAction {
   primary: boolean
   /** Ask for one line of text first; it is sent as `value`. */
   input?: { label: string; placeholder: string; message: string }
+  section?: string
+}
+interface PanelSection {
+  id: string
+  label: string
+  hint: string
+  /** A block the core renders above the section's cards ('' = none). */
+  core_block: string
 }
 interface PanelTab {
   id: string
@@ -61,15 +77,18 @@ interface PanelCard {
   actions: PanelAction[]
   deletable: boolean
   delete_confirm: string
+  section?: string
 }
 interface Panel {
   title: string
   intro: string
   tabs?: PanelTab[]
+  /** Sub-tabs of the panel; cards/actions/create name theirs with `section`. */
+  sections?: PanelSection[]
   /** Panel-level actions, not bound to a card (run with card_id ""). */
   actions?: PanelAction[]
   cards: PanelCard[]
-  create: { label: string; fields: PanelField[] } | null
+  create: { label: string; fields: PanelField[]; section?: string } | null
 }
 interface OpResult {
   ok: boolean
@@ -113,12 +132,17 @@ function fieldSpan(f: PanelField): number {
 }
 
 export function PackagePanel({
-  character, packageId, onOpenCharacter,
+  character, packageId, onOpenCharacter, onShowCharacter, onRosterChanged,
 }: {
   character: string
   packageId: string
   /** Opens a character in the editor — an action result's `open_character`. */
   onOpenCharacter?: (name: string) => void
+  /** Switches the editor to another character on the same sub-tab (a core
+   *  block's "Open"); falls back to `onOpenCharacter`. */
+  onShowCharacter?: (name: string) => void
+  /** The character roster changed (a core block linked or unlinked someone). */
+  onRosterChanged?: () => void
 }) {
   const { t, lang } = useI18n()
   const { toast } = useToast()
@@ -131,8 +155,10 @@ export function PackagePanel({
   // The open tab — kept here so a save (which remounts the card) or a card
   // switch stays on the same tab.
   const [activeTab, setActiveTab] = useState('')
+  // The open section ('' = the first).
+  const [section, setSection] = useState('')
   const [dirty, setDirty] = useState(false)
-  const [pendingSwitch, setPendingSwitch] = useState<{ to: string | null } | null>(null)
+  const [pendingSwitch, setPendingSwitch] = useState<{ to: string | null; section?: string } | null>(null)
   // A panel-level action waiting for its confirmation or its input.
   const [panelPending, setPanelPending] = useState<PanelAction | null>(null)
   const [panelBusy, setPanelBusy] = useState(false)
@@ -165,15 +191,32 @@ export function PackagePanel({
     reload()
   }, [reload])
 
-  // Keep the selection valid: a deleted card (or none chosen yet) falls back
-  // to the first card.
+  // What the open section shows: its cards, its panel actions, its create
+  // form (no sections = everything).
+  const view = useMemo(() => {
+    if (!panel) return null
+    const sections = panel.sections || []
+    const cur = sections.length ? (sections.find((x) => x.id === section) || sections[0]) : null
+    const home = (sec?: string) => (sec && sections.some((x) => x.id === sec) ? sec : sections[0]?.id)
+    const here = (sec?: string) => !cur || home(sec) === cur.id
+    return {
+      sections,
+      cur,
+      cards: panel.cards.filter((c) => here(c.section)),
+      actions: (panel.actions || []).filter((a) => here(a.section)),
+      create: panel.create && here(panel.create.section) ? panel.create : null,
+    }
+  }, [panel, section])
+
+  // Keep the selection valid: a deleted card, a card of another section (or
+  // none chosen yet) falls back to the first card of the open section.
   useEffect(() => {
-    if (!panel) return
-    if (selected === CREATE && panel.create) return
-    if (selected && panel.cards.some((c) => c.id === selected)) return
-    const first = panel.cards[0]?.id ?? null
+    if (!view) return
+    if (selected === CREATE && view.create) return
+    if (selected && view.cards.some((c) => c.id === selected)) return
+    const first = view.cards[0]?.id ?? null
     if (first !== selected) setSelected(first)
-  }, [panel, selected])
+  }, [view, selected])
 
   // Reference lists — only the ones some field of this panel needs.
   const needs = useMemo(() => {
@@ -254,46 +297,85 @@ export function PackagePanel({
     if (dirty) setPendingSwitch({ to })
     else setSelected(to)
   }
+  const openSection = (id: string) => {
+    if (id === view?.cur?.id) return
+    if (dirty) setPendingSwitch({ to: null, section: id })
+    else { setSection(id); setPanelError('') }
+  }
 
   if (gone) return null
   if (loadError && !panel) {
     return <div className="ga-pp-error" style={{ marginTop: 14 }}>{t('Failed to load')}: {loadError}</div>
   }
-  if (!panel) return <div className="ga-loading" style={{ marginTop: 14 }}>{t('Loading…')}</div>
+  if (!panel || !view) return <div className="ga-loading" style={{ marginTop: 14 }}>{t('Loading…')}</div>
 
   const tabs = panel.tabs || []
-  const panelActions = panel.actions || []
-  const createLabel = panel.create?.label || t('New')
-  const card = selected && selected !== CREATE ? panel.cards.find((c) => c.id === selected) : undefined
-  const creating = selected === CREATE && !!panel.create
+  const panelActions = view.actions
+  const cards = view.cards
+  const sectionCreate = view.create
+  const createLabel = sectionCreate?.label || t('New')
+  const card = selected && selected !== CREATE ? cards.find((c) => c.id === selected) : undefined
+  const creating = selected === CREATE && !!sectionCreate
+  const block = view.cur?.core_block || ''
+  const emptyCreate = !!sectionCreate && cards.length === 0 && !creating
+  const headButtons = panelActions.length || emptyCreate ? (
+    <div className="ga-pp-head-btns">
+      {panelActions.map((a) => (
+        <button key={a.id} type="button" disabled={panelBusy}
+          className={'ga-btn ga-btn-sm' + (a.primary ? ' ga-btn-primary' : '')}
+          onClick={() => startPanelAction(a)}>{a.label}</button>
+      ))}
+      {emptyCreate ? (
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => select(CREATE)}>
+          + {createLabel}
+        </button>
+      ) : null}
+    </div>
+  ) : null
+  const showCharacter = onShowCharacter || onOpenCharacter
 
   return (
     <div className="ga-pp">
-      {panel.title || panel.intro || panelActions.length || (panel.create && panel.cards.length === 0 && !creating) ? (
+      {panel.title || panel.intro || (!view.cur && headButtons) ? (
         <div className="ga-pp-top">
           <div style={{ minWidth: 0 }}>
             {panel.title ? <div className="ga-fieldset-title" style={{ margin: 0 }}>{panel.title}</div> : null}
             {panel.intro ? <div className="ga-pp-muted">{panel.intro}</div> : null}
           </div>
-          <div className="ga-pp-head-btns">
-            {panelActions.map((a) => (
-              <button key={a.id} type="button" disabled={panelBusy}
-                className={'ga-btn ga-btn-sm' + (a.primary ? ' ga-btn-primary' : '')}
-                onClick={() => startPanelAction(a)}>{a.label}</button>
-            ))}
-            {panel.create && panel.cards.length === 0 && !creating ? (
-              <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => select(CREATE)}>
-                + {createLabel}
-              </button>
-            ) : null}
-          </div>
+          {!view.cur ? headButtons : null}
+        </div>
+      ) : null}
+
+      {view.sections.length >= 2 ? (
+        <div className="ga-pp-tabs" role="tablist">
+          {view.sections.map((x) => (
+            <button key={x.id} type="button" role="tab" aria-selected={x.id === view.cur?.id}
+              className={'ga-tab' + (x.id === view.cur?.id ? ' is-active' : '')}
+              onClick={() => openSection(x.id)}>
+              {x.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {view.cur && (view.cur.hint || headButtons) ? (
+        <div className="ga-pp-top">
+          <div className="ga-pp-muted" style={{ minWidth: 0 }}>{view.cur.hint}</div>
+          {headButtons}
         </div>
       ) : null}
       {panelError ? <div className="ga-pp-error">{panelError}</div> : null}
 
-      {panel.cards.length > 0 ? (
+      {block === 'linked_characters' ? (
+        <LinkedCharacterPanel
+          character={character}
+          onOpen={(name) => showCharacter?.(name)}
+          onChanged={() => { void reload(); onRosterChanged?.() }}
+        />
+      ) : null}
+
+      {cards.length > 0 ? (
         <div className="ga-pp-selector" role="tablist">
-          {panel.cards.map((c) => (
+          {cards.map((c) => (
             <button key={c.id} type="button" role="tab" aria-selected={c.id === selected}
               className={'ga-pp-sel' + (c.id === selected ? ' ga-pp-sel-on' : '')}
               title={c.subtitle || c.title} onClick={() => select(c.id)}>
@@ -301,7 +383,7 @@ export function PackagePanel({
               {c.badges.map((b) => <span key={b} className="ga-tag ga-tag-tier">{b}</span>)}
             </button>
           ))}
-          {panel.create ? (
+          {sectionCreate ? (
             <button type="button" role="tab" aria-selected={creating}
               className={'ga-pp-sel ga-pp-sel-add' + (creating ? ' ga-pp-sel-on' : '')}
               onClick={() => select(CREATE)}>+ {createLabel}</button>
@@ -309,12 +391,12 @@ export function PackagePanel({
         </div>
       ) : null}
 
-      {creating && panel.create ? (
+      {creating && sectionCreate ? (
         <CardForm
           key={CREATE}
           character={character}
           title={createLabel}
-          fields={panel.create.fields}
+          fields={sectionCreate.fields}
           values={{}}
           tabs={tabs}
           activeTab={activeTab}
@@ -331,11 +413,11 @@ export function PackagePanel({
             }
             return r
           }}
-          onCancel={() => { setDirty(false); setSelected(panel.cards[0]?.id ?? null) }}
+          onCancel={() => { setDirty(false); setSelected(cards[0]?.id ?? null) }}
         />
       ) : null}
 
-      {panel.cards.length === 0 && !creating ? (
+      {cards.length === 0 && !creating && !block ? (
         <div className="ga-placeholder">{t('Nothing here yet.')}</div>
       ) : null}
 
@@ -397,6 +479,7 @@ export function PackagePanel({
           setPendingSwitch(null)
           if (!p) return
           setDirty(false)
+          if (p.section !== undefined) { setSection(p.section); setPanelError('') }
           setSelected(p.to)
         }}
         onClose={() => setPendingSwitch(null)}

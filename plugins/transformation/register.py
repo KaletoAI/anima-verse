@@ -1,6 +1,6 @@
 """on_load: tables, the expected-present answer of a linked family, the
 avatar's phrase intercept, the secrecy lines of the scene state, the
-Transformation panel on the character's Skills tab, the reset store and the
+Transformation panel (a character sub-tab of its own), the reset store and the
 expiry tick.
 
 Executed again on every package (re)load, so everything here is idempotent:

@@ -28,11 +28,11 @@ import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
 import { SecretsEditor } from './SecretsEditor'
-import { SkillsTab } from './SkillsTab'
+import { SkillsTab, type PanelTabInfo } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
 import { KnownLocationsEditor } from './KnownLocationsEditor'
 import { RelationshipAddresses } from './RelationshipAddresses'
-import { LinkedCharacterPanel } from './LinkedCharacterPanel'
+import { PackagePanel } from './PackagePanel'
 import { NewCharacterDialog } from './NewCharacterDialog'
 import { NewNpcDialog } from './NewNpcDialog'
 import { FieldSet } from './FieldSet'
@@ -102,8 +102,11 @@ const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'skills', label: 'Skills' },
   { id: 'wardrobe', label: 'Wardrobe' },
   { id: 'secrets', label: 'Secrets' },
-  { id: 'linked', label: 'Linked' },
 ]
+
+/** Sub-tab id prefix of a package panel that is a character tab of its own
+ *  (GET /characters/{c}/panel-tabs; docs/plugins.md → "Character panels"). */
+const PANEL_TAB = 'pkg:'
 
 interface TmplSectionRaw extends TmplSection {
   special?: unknown
@@ -225,6 +228,20 @@ export function CharactersTab() {
     return () => { alive = false }
   }, [selected, confirmWipe, freshOpen])
   const [consolidating, setConsolidating] = useState(false)
+  // Package panels that are a sub-tab of their own (hidden ones included —
+  // the Skills tab points at them). The previous list stays until the next
+  // one arrives, so a character switch keeps an open panel tab.
+  const [panelTabs, setPanelTabs] = useState<PanelTabInfo[]>([])
+  const [panelTabsRev, setPanelTabsRev] = useState(0)
+  useEffect(() => {
+    if (!selected) return
+    let alive = true
+    apiGet<{ tabs?: PanelTabInfo[] }>(
+      `/characters/${encodeURIComponent(selected)}/panel-tabs?lang=${encodeURIComponent(lang)}`)
+      .then((d) => { if (alive) setPanelTabs(d.tabs || []) })
+      .catch(() => { if (alive) setPanelTabs([]) })
+    return () => { alive = false }
+  }, [selected, lang, panelTabsRev])
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -717,7 +734,7 @@ export function CharactersTab() {
   // Order: field tabs (General/Appearance), then directly Image · Wardrobe ·
   // Secrets, then the remaining field tabs (Configuration) and special tabs.
   // Requested: Image behind Appearance, Wardrobe+Secrets between Image and Config.
-  const subTabs = useMemo(() => {
+  const subTabs = useMemo((): Array<{ id: string; label: string; translated?: boolean }> => {
     // Special tabs whose whole subject a template can switch off — same
     // truth as the section gates above. No entry = always visible.
     const specialGate: Record<string, string> = {
@@ -737,9 +754,6 @@ export function CharactersTab() {
       // edit leaves the previous ones behind. For that sheet the tab hangs on
       // HAVING pictures, not on being allowed to make new ones.
       if (id === 'expressions' && isTempNpc) return true
-      // A temporary NPC is never linked (one mind in several bodies is for
-      // full characters only).
-      if (id === 'linked' && isTempNpc) return false
       const f = specialGate[id]
       return !f || features[f] !== false
     }
@@ -749,7 +763,7 @@ export function CharactersTab() {
       { id: 'secrets', label: 'Secrets' },
     ].filter((s) => gateOk(s.id))
     const placed = new Set(['image', 'wardrobe', 'secrets'])
-    const out: Array<{ id: string; label: string }> = []
+    const out: Array<{ id: string; label: string; translated?: boolean }> = []
     let inserted = false
     for (const ft of fieldTabs) {
       out.push({ id: ft.id, label: ft.label })
@@ -760,8 +774,11 @@ export function CharactersTab() {
     }
     if (!inserted) out.push(...afterAussehen)
     out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id) && gateOk(s.id)))
+    // Package panels with a tab of their own; the label comes translated.
+    out.push(...panelTabs.filter((p) => p.visible)
+      .map((p) => ({ id: PANEL_TAB + p.package, label: p.label, translated: true })))
     return out
-  }, [fieldTabs, template, isTempNpc])
+  }, [fieldTabs, template, isTempNpc, panelTabs])
 
   // KEEP the selected tab across a character switch. Jump to the first field
   // tab only when the current tab does not exist for this character at all
@@ -772,6 +789,18 @@ export function CharactersTab() {
       setSubTab(fieldTabs[0].id)
     }
   }, [subTabs, subTab, fieldTabs])
+
+  /** A package panel action created/named a character (`open_character`):
+   *  refresh the list and open it on its first field tab for editing. */
+  const openFromPanel = useCallback((name: string) => {
+    const open = () => {
+      onSelect(name)
+      if (fieldTabs.length) setSubTab(fieldTabs[0].id)
+    }
+    loadCharacters()
+      .then((list) => { setCharacters(list); open() })
+      .catch(open)
+  }, [onSelect, fieldTabs])
 
   // Animation sets: the base sets (female/male/animal — they follow from
   // gender + the humanoid feature) plus every set found in the clips. The
@@ -1025,7 +1054,7 @@ export function CharactersTab() {
                   className={`ga-btn ga-btn-sm${subTab === tab.id ? ' ga-btn-primary' : ''}`}
                   onClick={() => setSubTab(tab.id)}
                 >
-                  {t(tab.label)}
+                  {tab.translated ? tab.label : t(tab.label)}
                 </button>
               ))}
             </nav>
@@ -1113,30 +1142,25 @@ export function CharactersTab() {
             ) : subTab === 'skills' ? (
               <SkillsTab
                 character={selected}
-                onOpenCharacter={(name) => {
-                  // A panel action created/named a character: refresh the
-                  // list and open it on its first field tab for editing.
-                  const open = () => {
-                    onSelect(name)
-                    if (fieldTabs.length) setSubTab(fieldTabs[0].id)
-                  }
-                  loadCharacters()
-                    .then((list) => { setCharacters(list); open() })
-                    .catch(open)
+                onOpenCharacter={openFromPanel}
+                panelTabs={panelTabs}
+                onSkillsChanged={() => setPanelTabsRev((n) => n + 1)}
+              />
+            ) : subTab.startsWith(PANEL_TAB) ? (
+              <PackagePanel
+                character={selected}
+                packageId={subTab.slice(PANEL_TAB.length)}
+                onOpenCharacter={openFromPanel}
+                onShowCharacter={onSelect}
+                onRosterChanged={() => {
+                  loadCharacters().then(setCharacters).catch(() => undefined)
+                  setPanelTabsRev((n) => n + 1)
                 }}
               />
             ) : subTab === 'wardrobe' ? (
               <WardrobeTab key={selected} character={selected} />
             ) : subTab === 'secrets' ? (
               <SecretsEditor character={selected} />
-            ) : subTab === 'linked' ? (
-              <LinkedCharacterPanel
-                character={selected}
-                onOpen={onSelect}
-                onChanged={() => {
-                  loadCharacters().then(setCharacters).catch(() => undefined)
-                }}
-              />
             ) : (
               <div className="ga-form">
                 <div className="ga-placeholder">

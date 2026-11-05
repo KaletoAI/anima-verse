@@ -990,11 +990,14 @@ def create_linked(leader: str, name: str) -> Dict[str, Any]:
 
 def describe(name: str) -> Dict[str, Any]:
     """The link state for the editor: ``{leader, bodies, shared_soul_sections,
-    status, shareable, candidates}``.
+    status, shareable, candidates, body_candidates}``.
 
     ``bodies`` = ``[{name, status}]`` of a leader; ``status`` is ``dormant`` or
     ``present``; ``candidates`` = the characters ``name`` may be linked to (none
-    for a leader or a temporary NPC).
+    for a leader or a temporary NPC); ``body_candidates`` = the characters that
+    may be linked to ``name`` as its bodies (not linked, leading nobody, no
+    temporary NPC; none when ``name`` is itself a body or a temporary NPC).
+    ``link`` still has the last word (an avatar, a refusal state).
     """
     from app.models.character import (DORMANT_STATUS, get_character_status,
                                       is_temporary_npc, list_available_characters)
@@ -1005,9 +1008,14 @@ def describe(name: str) -> Dict[str, Any]:
     leader = leader_of(name)
     bodies = bodies_of(name)
     candidates: List[str] = []
-    if not bodies and not is_temporary_npc(name):
-        candidates = [c for c in list_available_characters(include_dormant=True)
-                      if c != name and not is_linked(c) and not is_temporary_npc(c)]
+    body_candidates: List[str] = []
+    if not is_temporary_npc(name):
+        others = [c for c in list_available_characters(include_dormant=True)
+                  if c != name and not is_linked(c) and not is_temporary_npc(c)]
+        if not bodies:
+            candidates = others
+        if not leader:
+            body_candidates = [c for c in others if not bodies_of(c)]
     return {
         "leader": leader or "",
         "bodies": [{"name": b, "status": _st(b)} for b in bodies],
@@ -1015,4 +1023,5 @@ def describe(name: str) -> Dict[str, Any]:
         "status": _st(name),
         "shareable": list(SHAREABLE_SOUL_SECTIONS),
         "candidates": candidates,
+        "body_candidates": body_candidates,
     }
