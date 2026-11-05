@@ -4,7 +4,7 @@ When proposing to go to another place or room with someone, you MUST use this st
 Set optional action to {"type":"travel_together","target":"<present name>","destination":{"location_id":"<listed id>","room_id":"<listed room id>"},"scope":"pair","line":"<short spoken invitation>"}.
 Use scope="party" ONLY if you explicitly intend to include all existing followers. Pair scope never removes or absorbs extra companions.
 {% if shared_activities %}For a shared undertaking with an activity at the destination, also include "after_arrival":{"type":"pair","pose_key":"<exact key>"} in action. Available keys: {{ shared_activities | join(', ') }}. This requires exactly two participants. The invitation's line must name BOTH the destination and the activity. Arrival alone does not finish the undertaking; the normal paired-action invitation follows, and it can still be refused.{% endif %}
-Use only a present partner: {% for partner in present %}{{ partner.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+Use only a present partner: {{ present_names | join(', ') }}.
 Destinations known to {{ npc_name }}:
 {% for destination in destinations %}- {{ destination.name }} (location_id={{ destination.location_id }}): {% for room in destination.rooms %}{{ room.name }} (room_id={{ room.room_id }}){% if not loop.last %}, {% endif %}{% endfor %}
 {% endfor %}

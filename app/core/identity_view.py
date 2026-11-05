@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -192,6 +192,85 @@ def resolve_name(observer: str, token: str) -> Optional[str]:
         if persona is not None and persona.alias.casefold() == folded:
             return name
     return None
+
+
+#: ``"<head> (<inner>)"`` — a knower's label ``"<alias> (<name>)"``, or a
+#: name with a suffix a prompt line carried (``"<name> (avatar)"``).
+_LABEL_RE = re.compile(r"^(?P<head>.*?\S)\s*\((?P<inner>[^()]*)\)\s*$")
+
+
+def _split_label(token: str) -> Optional[Tuple[str, str]]:
+    """``(head, inner)`` of a ``"<head> (<inner>)"`` token, else ``None``."""
+    m = _LABEL_RE.match(token or "")
+    if not m:
+        return None
+    return m.group("head").strip(), m.group("inner").strip()
+
+
+def _match(observer: str, token: str) -> Tuple[Optional[str], bool]:
+    """``(subject, by_alias)`` for one token: :func:`resolve_name`, plus
+    whether the token named the subject by an alias rather than by name."""
+    subject = resolve_name(observer, token)
+    if subject is None:
+        return None, False
+    return subject, not _same(subject, token)
+
+
+def resolve_present(observer: str, token: str) -> Optional[str]:
+    """The real character ``observer`` means with ``token`` — for a resolver
+    that reaches someone IN PERSON (talk, walk over, invite, interact).
+
+    The token may be a roster name, the alias of an active persona, or a
+    label ``"<alias> (<name>)"`` / ``"<name> (<suffix>)"`` (resolved by the
+    part before the parenthesis). The real name of a character who wears a
+    persona right now resolves only for an observer who :func:`knows` her:
+    for everyone else the real person is not here — ``None``, the
+    resolver's ordinary unknown/not-present path. Presence itself is still
+    the caller's check. With no provider this is :func:`resolve_name`.
+    """
+    tok = (token or "").strip()
+    if not tok:
+        return None
+    subject, by_alias = _match(observer, tok)
+    if subject is None:
+        parts = _split_label(tok)
+        if parts is not None:
+            subject, by_alias = _match(observer, parts[0])
+    if subject is None:
+        return None
+    if not by_alias and not knows(observer, subject):
+        return None
+    return subject
+
+
+def resolve_remote(observer: str, token: str) -> Tuple[Optional[str], str]:
+    """``(real name, "")`` for a resolver that reaches someone REMOTELY
+    (messages): the real name works for every observer — the message reaches
+    her as herself — and so does a label ``"<alias> (<name>)"`` through its
+    name part. A persona has no contact: a token that names the subject only
+    by an active alias answers ``(None, "Error: <alias> cannot be reached
+    that way.")``. Anything else ``(None, "")`` — the caller's unknown path.
+    """
+    tok = (token or "").strip()
+    if not tok:
+        return None, ""
+    candidates = [tok]
+    parts = _split_label(tok)
+    if parts is not None:
+        candidates += [parts[1], parts[0]]
+    alias = ""
+    for cand in candidates:
+        subject, by_alias = _match(observer, cand)
+        if subject is None:
+            continue
+        if not by_alias:
+            return subject, ""
+        if not alias:
+            persona = active_persona(subject)
+            alias = persona.alias if persona else cand
+    if alias:
+        return None, f"Error: {alias} cannot be reached that way."
+    return None, ""
 
 
 def is_persona_name(name: str) -> bool:

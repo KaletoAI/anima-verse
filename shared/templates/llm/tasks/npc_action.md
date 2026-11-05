@@ -17,7 +17,7 @@ placeholders:
   arrival_reason: Why it is here (may be empty)
   dialogue_style: How it speaks (may be empty)
   talk_allowed: True when the answer may open a conversation (present is non-empty then)
-  present: Other background characters within earshot — list of {name, role, task, activity}; empty unless talk_allowed
+  present: Other background characters within earshot — list of {name, shown, role, task, activity} (`shown` = the name as this NPC perceives the person; the answer's names resolve back to `name`); empty unless talk_allowed
   pair_keys: Catalog keys of two-person poses the answer's `pair` may name; empty unless talk_allowed
   extension_prompt: Optional package-provided structured proposals; empty when no capability is installed
   recent: Recent spoken lines at the current place, movement traces excluded, oldest first — list of {speaker, line}; empty when talking is not allowed
@@ -99,7 +99,7 @@ Time: {{ game_time_label }}
 Pose keys: {{ pose_keys | join(", ") }}
 
 {% if talk_allowed %}Within earshot:
-{% for p in present %}- Name (JSON string): {{ p.name | tojson }}; role (not part of the name): {{ p.role | tojson }}{{ " — " ~ p.task if p.task else "" }}{{ "; right now: " ~ p.activity if p.activity else "" }}
+{% for p in present %}- Name (JSON string): {{ p.shown | tojson }}; role (not part of the name): {{ p.role | tojson }}{{ " — " ~ p.task if p.task else "" }}{{ "; right now: " ~ p.activity if p.activity else "" }}
 {% endfor %}{% if pair_keys %}Pair pose keys: {{ pair_keys | join(", ") }}
 {% endif %}{% endif %}
 Decide what the character named {{ npc_name | tojson }} is doing now.
@@ -114,7 +114,7 @@ Rooms of this place:
 Pose keys: {{ pose_keys | join(", ") }}
 
 {% if talk_allowed %}Within earshot:
-{% for p in present %}- Name (JSON string): {{ p.name | tojson }}; role (not part of the name): {{ p.role | tojson }}{{ " — " ~ p.task if p.task else "" }}{{ "; right now: " ~ p.activity if p.activity else "" }}
+{% for p in present %}- Name (JSON string): {{ p.shown | tojson }}; role (not part of the name): {{ p.role | tojson }}{{ " — " ~ p.task if p.task else "" }}{{ "; right now: " ~ p.activity if p.activity else "" }}
 {% endfor %}{% if pair_keys %}Pair pose keys: {{ pair_keys | join(", ") }}
 {% endif %}{% endif %}
 Decide where the character named {{ npc_name | tojson }} is now and what they are doing.

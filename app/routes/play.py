@@ -2640,17 +2640,27 @@ def _present_characters(avatar: str) -> list:
 def _require_present_target(avatar: str, raw_target) -> str:
     """Gate for every targeted player action: the target must be a character
     the avatar can reach — in its room, or standing within earshot out in the
-    open. Exact name match only — no first-/last-name resolution (house
-    rule)."""
+    open. No first-/last-name resolution (house rule).
+
+    The HUD posts the REAL name as the target key (display-only secrecy), so
+    an exact present name is accepted as it is. Any other token is read from
+    the avatar's view (``identity_view.resolve_present``): the alias of a
+    persona or a knower's label reaches the real character. The refusal
+    names the reachable people as the avatar perceives them."""
     target = str(raw_target or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="target required")
     present = _present_characters(avatar)
-    if target not in present:
-        detail = (f"{target} is not here. You can only reach characters within reach"
-                  + (f": {', '.join(present)}." if present else " — and nobody else is here."))
-        raise HTTPException(status_code=400, detail=detail)
-    return target
+    if target in present:
+        return target
+    from app.core.identity_view import resolve_present, shown_names
+    resolved = resolve_present(avatar, target)
+    if resolved in present:
+        return resolved
+    shown = shown_names(avatar, present)
+    detail = (f"{target} is not here. You can only reach characters within reach"
+              + (f": {', '.join(shown)}." if shown else " — and nobody else is here."))
+    raise HTTPException(status_code=400, detail=detail)
 
 
 @router.get("/play/others")

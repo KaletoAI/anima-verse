@@ -722,14 +722,14 @@ def _named_request(actor: str, payload: dict) -> dict:
     if not rows:
         return refused("no_such_offer", available=_piece_lines(_requestable(actor), actor))
 
-    from app.core.identity_view import identity_key, shown_name
-    wanted = partner.lower()
+    from app.core.identity_view import resolve_present, shown_name
+    # The partner as the actor names them: the name the prompt showed (the
+    # alias / the "<alias> (<name>)" label of a persona) reaches the real
+    # character; the real name of a transformed person only for a knower.
+    wanted = resolve_present(actor, partner) if partner else None
 
     def named(real: str) -> bool:
-        # The real name, or the name the prompt showed (the alias / the
-        # "<alias> (<name>)" label of a persona) — the lines above print it.
-        return wanted in {real.lower(), shown_name(actor, real).lower(),
-                          identity_key(real).lower()}
+        return wanted is not None and wanted == real
 
     def verdict(row):
         if not row["required_partner"]:
