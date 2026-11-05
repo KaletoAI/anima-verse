@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '@anima/player-ui'
+import { PackagePanel } from './PackagePanel'
 
 /**
  * Per-character skill manager (Characters → Skills), ported from the legacy
@@ -51,6 +52,9 @@ interface SkillInfo {
   // is disabled while the skill is off; the backend refuses enabling too.
   blocked_reason?: string
   config_fields: Record<string, ConfigField> | null
+  // Package id with a character panel (docs/plugins.md → "Character
+  // panels"); set on every verb of that package, "" = none.
+  panel_package?: string
 }
 interface LocationOpt {
   id: string
@@ -267,6 +271,9 @@ export function SkillsTab({ character }: { character: string }) {
                 {current.capability_description || current.description}
               </div>
             )}
+            {current.panel_package ? (
+              <PackagePanel character={character} packageId={current.panel_package} />
+            ) : null}
             {current.enabled && fields.length > 0 && (
               <div className="ga-form" style={{ marginTop: 14, gap: 8 }}>
                 {fields.map(([fieldName, field]) => (
@@ -282,12 +289,12 @@ export function SkillsTab({ character }: { character: string }) {
                 ))}
               </div>
             )}
-            {current.enabled && fields.length === 0 && (
+            {current.enabled && fields.length === 0 && !current.panel_package && (
               <div style={{ opacity: 0.45, fontSize: '0.85em', marginTop: 12 }}>
                 {t('No settings for this skill.')}
               </div>
             )}
-            {!current.enabled && (
+            {!current.enabled && (fields.length > 0 || !current.panel_package) && (
               <div style={{ opacity: 0.45, fontSize: '0.85em', marginTop: 12 }}>
                 {t('Enable this skill to configure it.')}
               </div>

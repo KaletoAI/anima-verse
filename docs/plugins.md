@@ -1086,6 +1086,64 @@ Optionale Überschreibungen aus `BaseSkill`, die der Core generisch abfragt:
 `tool_intent_payload(raw_input)`, `get_usage_instructions(format_name, character_name)`.
 Details in `docs/skill-core-api.md` → „Skill-Hooks".
 
+### Character panels
+
+When flat per-character config fields are not enough — a list of entries with
+item, condition and character pickers, a test button — a package registers a
+**character panel**. Game-Admin → Characters → <character> → Skills shows it
+in the detail pane of the package's capability entry, above the config fields
+(every verb of the package carries `panel_package: "<package id>"` in
+`GET /characters/{name}/skills/available`). The core names no package: remove
+the package and the panel is gone, its routes answer 404.
+
+Registration, from the `on_load` module:
+
+```python
+from app.core import hooks
+from app.core.character_panels import panel_capability
+from plugins.<package> import panel
+
+hooks.register_provider(panel_capability("<package id>"), panel, owner="<package id>")
+```
+
+The provider is an object or module with four methods; every string it answers
+is shown as it stands, so it translates with `app.core.i18n.t(en, lang)` (keys
+in `shared/languages/de.json`):
+
+| Method | Answer |
+|---|---|
+| describe — `(character, lang)` | `{"title", "intro", "cards": [card], "create": {"label", "fields": [field]} \| None}` |
+| save — `(character, card_id, values, lang)` | `{"ok", "error"?, "card_id"?}`; `card_id` `None` = create from `create.fields` |
+| delete — `(character, card_id, lang)` | `{"ok", "error"?}` |
+| action — `(character, card_id, action_id, lang)` | `{"ok", "message"?, "error"?}` |
+
+A **card** is `{"id", "title", "subtitle", "badges": [str], "fields": [field],
+"values": {key: value}, "status", "actions": [{"id", "label", "confirm"?,
+"primary"?}], "deletable", "delete_confirm"?}`; a **field** is `{"key", "type",
+"label", "hint"?, "required"?, "min"?, "max"?, "unit"?, "filter"?,
+"placeholder"?}`. `confirm` on an action / `delete_confirm` on a card make the
+panel ask first (in-app dialog). After every save, delete and action the panel
+reloads `describe` — the server is the truth.
+
+| `type` | Control | Value |
+|---|---|---|
+| `text` / `textarea` | text input / text area | string |
+| `int` | number input with `min`/`max`, `unit` behind it | int (`None` when left empty on a field that is not `required`) |
+| `bool` | checkbox | bool |
+| `item` | one item of the world item library (shared library included), picker with thumbnails and search | item id |
+| `items` | several items, same picker; `filter: "outfit"` offers only outfit pieces (`category == "outfit_piece"`) | list of item ids |
+| `condition` | dropdown of the conditions catalog (`GET /world/conditions/list`) | condition id (`""` = none) |
+| `characters` | checkboxes with portraits of every character of the world except the panel's own | list of names |
+
+An id the lists no longer know (deleted item, condition or character) stays
+shown and marked "(missing)", and saving keeps it. The core checks the values
+before the provider sees them (declared keys only, type coercion, `required`,
+`min`/`max`; `docs/skill-core-api.md` → "Character panels"). A refused save,
+delete or action is no HTTP error: `{"ok": false, "error": "..."}` is shown
+inline in the card. Routes (admin-only): `GET /characters/{name}/panels/{package}`,
+`POST …/save` body `{card_id|null, values}`, `POST …/delete` body `{card_id}`,
+`POST …/action` body `{card_id, action_id}`, each with `?lang=` the UI language.
+
 ## PluginContext API
 
 | Attribut/Methode | Beschreibung |

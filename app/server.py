@@ -136,6 +136,7 @@ from app.routes import clip_catalog_loops
 from app.routes import game_audio
 from app.routes import poses as poses_route
 from app.routes import secrets
+from app.routes import character_panels as character_panels_route
 from app.routes import inventory
 from app.routes import account
 from app.routes import i18n as i18n_route
@@ -896,6 +897,7 @@ app.include_router(clip_catalog_loops.router)
 app.include_router(game_audio.router)
 app.include_router(poses_route.router)
 app.include_router(characters.router)
+app.include_router(character_panels_route.router)
 app.include_router(npc_route.router)
 app.include_router(extension_motion_route.router)
 app.include_router(chat.router)

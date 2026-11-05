@@ -3182,3 +3182,78 @@ a.ga-btn {
 .prop-action-presets > button span { font-weight: 400; font-size: 13px; line-height: 1.5; }
 .prop-workspace [data-author-path][aria-invalid="true"] { border-color: var(--danger); }
 .prop-workspace-dialog .prop-action-field { margin-bottom: 10px; }
+
+/* Package character panel (Characters → Skills, PackagePanel.tsx): a
+   package's own editor. Cards are .ga-fieldset; rows are a label column plus
+   the control, pickers show pictures in wrapping rows. */
+.ga-pp { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.ga-pp-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ga-pp-muted { color: var(--text-muted, #8b949e); font-size: 12px; }
+.ga-pp-card { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.ga-pp-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.ga-pp-head strong { font-size: 14px; }
+.ga-pp-rows { display: flex; flex-direction: column; gap: 7px; }
+.ga-pp-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px; align-items: start; }
+.ga-pp-label { font-size: 12px; color: var(--text-muted, #8b949e); padding-top: 6px; }
+.ga-pp-req { color: #d29922; }
+.ga-pp-control { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: stretch; }
+.ga-pp-control > input[type="checkbox"] { align-self: flex-start; margin-top: 7px; }
+.ga-pp-control > .ga-input, .ga-pp-control > .ga-textarea { width: 100%; }
+.ga-pp-status .ga-pp-control { padding-top: 5px; font-size: 13px; }
+.ga-pp-hint {
+  font-size: 11px; color: var(--text-muted, #8b949e);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ga-pp-inline { display: flex; align-items: center; gap: 6px; }
+.ga-pp-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.ga-pp-error {
+  font-size: 12px; color: #f85149; background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.35); border-radius: 4px; padding: 5px 8px;
+}
+.ga-pp-missing { color: #e3b341; }
+.ga-pp-thumb {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px; overflow: hidden; background: rgba(255, 255, 255, 0.07);
+  color: var(--text-muted, #8b949e); line-height: 1;
+}
+.ga-pp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ga-pp-portrait { border-radius: 50%; }
+.ga-pp-pick {
+  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; max-width: 100%;
+  padding: 3px 10px 3px 4px; min-height: 30px; cursor: pointer; font: inherit; font-size: 13px;
+  color: var(--text, #c9d1d9); background: var(--bg-secondary, #21262d);
+  border: 1px solid var(--border, #30363d); border-radius: 6px;
+}
+.ga-pp-pick:hover { border-color: var(--accent, #6aa9ff); }
+.ga-pp-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+.ga-pp-chip {
+  position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 3px;
+  width: 72px; padding: 4px; border-radius: 6px; font: inherit;
+  background: var(--bg-secondary, #21262d); border: 1px solid var(--border, #30363d);
+  color: var(--text, #c9d1d9);
+}
+.ga-pp-add { cursor: pointer; border-style: dashed; }
+.ga-pp-add:hover { border-color: var(--accent, #6aa9ff); }
+.ga-pp-tile-name {
+  font-size: 11px; line-height: 1.25; max-width: 100%; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ga-pp-x {
+  position: absolute; top: 1px; right: 2px; border: none; background: rgba(0, 0, 0, 0.55);
+  color: #fff; border-radius: 50%; width: 16px; height: 16px; line-height: 14px;
+  font-size: 12px; padding: 0; cursor: pointer;
+}
+.ga-pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.ga-pp-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px;
+  cursor: pointer; font: inherit; color: var(--text, #c9d1d9);
+  background: var(--bg-secondary, #21262d); border: 1px solid var(--border, #30363d); border-radius: 6px;
+}
+.ga-pp-tile:hover { border-color: var(--accent, #6aa9ff); }
+.ga-pp-tile-on { border-color: var(--accent, #6aa9ff); background: rgba(120, 170, 255, 0.16); }
+.ga-pp-person {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 4px; cursor: pointer;
+  font-size: 12px; border-radius: 22px; border: 1px solid var(--border, #30363d);
+  background: var(--bg-secondary, #21262d);
+}
+.ga-pp-person-on { border-color: var(--accent, #6aa9ff); background: rgba(120, 170, 255, 0.12); }

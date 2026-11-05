@@ -1835,6 +1835,7 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
     """Returns all globally loaded skills with per-character enabled state and config fields."""
     from app.core.dependencies import get_skill_manager
     from app.models.character import get_character_skill_config
+    from app.core.character_panels import has_panel
     skill_manager = get_skill_manager()
     try:
         from app.plugins.registry import package_of_skill
@@ -1877,11 +1878,17 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
                         o["value"] for o in option_sources[src]}
 
         _cap_pkg = None
+        _panel_pkg = ""
         if package_of_skill is not None:
             try:
                 _p = package_of_skill(skill_id)
                 if _p is not None and _p.capability_label:
                     _cap_pkg = _p
+                # Package character panel (app/core/character_panels.py):
+                # every verb of a package that registered one carries the
+                # package id, so the tab shows the panel for the group.
+                if _p is not None and has_panel(_p.id):
+                    _panel_pkg = _p.id
             except Exception:
                 pass
         skills.append({
@@ -1901,6 +1908,8 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
             # the toggle and shows why); the PUT route enforces it too.
             "blocked_reason": skill_dependency_block(character_name, skill_id),
             "config_fields": config_fields if config_fields else None,
+            # Package id whose character panel the tab renders, "" = none.
+            "panel_package": _panel_pkg,
         })
 
     # Location list for skill config fields of type "locations"

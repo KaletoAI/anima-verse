@@ -1239,6 +1239,7 @@ Capabilities, die der Core heute abfragt:
 | `tool_decision.open_questions` | `streaming.tool_state_note` / `open_questions_note`: the rp_first tool decision (both paths) and, for a `single` character, the chat turn's scene state. `fn(agent_name, tool_names) -> list[str]`: one line per question someone put to the character that an offered verb answers, with the exact yes and no call (multiple providers: party and pair invitations; each failure is isolated) | No open-question block; the invitee only hears the question in prose |
 | `pair_reaction` | `prop_action_engine`: a pair furniture action requested with consent "react" that an NPC partner did not start. Called with the keywords execution_id, actor and partner, it must return at once; the answer goes to `app.core.prop_action_engine.react` (below). The run waits at the furniture for it up to `REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such runs never wait: reaction `none`, the action goes straight in |
 | `play.say_intercept` | `routes/play.py` `play_say`, after the addressees are filtered and before spell detection. Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called in registration order, off the event loop, with the keywords `avatar`, `content`, `volume`, `addressees` (the reachable ones), `location_id`, `room_id`; answer `None` to pass or `{"consumed": True, "result": {...}}` to take the message. The first consuming contributor wins: no utterance is recorded, no spell detection and no room reaction runs, the route answers `{"ok": true, "intercepted": <result>}`. A raising contributor is logged and skipped; image-only messages are not offered | Every message is spoken into the room as usual |
+| `character_panel:<package id>` | `app.core.character_panels` for the admin routes `/characters/{name}/panels/{package}` and the skill listing (`panel_package`); see "Character panels" below | No panel on the Skills tab, the routes answer 404 |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |
@@ -1586,6 +1587,31 @@ by unstamped entries in descending `created_at` order. Storage and `list_secrets
 remain unlimited. All secret read-modify-write operations serialize through
 `keyed_lock("secrets", character_name)`.
 
+
+## Character panels — `app.core.character_panels` ✅
+
+A package that needs a real editor on a character (a list of entries with item,
+condition and character pickers, a test button) registers a PANEL PROVIDER from
+its `on_load` module; Game-Admin → Characters → Skills renders it generically
+under the package's capability entry. The provider contract (its four methods,
+the card and field shapes, the field types) is in `docs/plugins.md` →
+"Character panels". The core names no package: with no provider the routes
+answer 404 and the Skills tab shows no panel (deletion test).
+
+| Name | Contract |
+|---|---|
+| `panel_capability(package_id)` | The capability string `character_panel:<package id>`. Register with `app.core.hooks.register_provider(capability, fn, *, owner=None, multiple=False)`, passing the provider object as `fn` and the package id as `owner` |
+| `has_panel(package_id)` | Whether a provider is registered for the package |
+| `get_panel_provider(package_id)` | The registered provider or `None` |
+| `FIELD_TYPES` | The renderer's whole field vocabulary: `text`, `textarea`, `int`, `bool`, `item`, `items`, `condition`, `characters` |
+
+Every save goes through the core first: the submitted values are reduced to the
+keys the card (or the create form) declares, coerced to the field's type
+(`text`/`textarea`/`item`/`condition` → stripped string, `int` → int within
+`min`/`max`, `bool` → bool, `items`/`characters` → de-duplicated list of
+non-empty strings) and checked against `required`. A failed check answers
+`{"ok": false, "error": ...}` without calling the provider, so the provider
+validates only what is specific to it (uniqueness, references, state).
 
 ## Package tables — `app.core.db`
 

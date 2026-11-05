@@ -3852,6 +3852,20 @@
     "Starting memory": "Start-Erinnerung",
     "What does the character know and intend at the start? Becomes its only memory.": "Was weiß und will der Charakter zum Start? Wird seine einzige Erinnerung.",
     "Resetting…": "Setze zurück…",
-    "Fresh start — irreversible": "Neustart — unwiderruflich"
+    "Fresh start — irreversible": "Neustart — unwiderruflich",
+    "Choose item…": "Gegenstand wählen…",
+    "Invalid values.": "Ungültige Werte.",
+    "New entries cannot be created here.": "Hier können keine neuen Einträge angelegt werden.",
+    "No matches.": "Keine Treffer.",
+    "No other characters.": "Keine anderen Charaktere.",
+    "Nothing here yet.": "Noch nichts vorhanden.",
+    "That did not work.": "Das hat nicht geklappt.",
+    "This entry is removed for good.": "Der Eintrag wird endgültig entfernt.",
+    "This entry no longer exists.": "Diesen Eintrag gibt es nicht mehr.",
+    "{label} is required.": "{label} fehlt.",
+    "{label}: at least {n}.": "{label}: mindestens {n}.",
+    "{label}: at most {n}.": "{label}: höchstens {n}.",
+    "{label}: enter a whole number.": "{label}: bitte eine ganze Zahl eingeben.",
+    "{label}: invalid selection.": "{label}: ungültige Auswahl."
   }
 }
