@@ -114,8 +114,7 @@ class OutfitChangeSkill(BaseSkill):
                     forbidden.add(s)
                     forced.pop(s, None)
             else:
-                errors.append(f"Slot '{slot}': "
-                              + self._reason(character_name, res, res.get("item_id", ""), "unbekannt"))
+                errors.append(f"Slot '{slot}': {res.get('reason', 'unbekannt')}")
 
         # 3) Unequip single items — the same forbidden update for pieces;
         # hand items (equipped_items) need no intent.
@@ -137,8 +136,7 @@ class OutfitChangeSkill(BaseSkill):
                         forbidden.add(s)
                         forced.pop(s, None)
             else:
-                errors.append(f"'{token}': "
-                              + self._reason(character_name, r, iid, "nicht equipped"))
+                errors.append(f"'{token}': {r.get('reason', 'nicht equipped')}")
 
         # 4) Equip tokens — equip the piece + set forced_pieces.
         for token in spec.get("equip", []):
@@ -166,15 +164,13 @@ class OutfitChangeSkill(BaseSkill):
                         forced[s] = iid
                         forbidden.discard(s)
                 else:
-                    errors.append(f"'{token}': "
-                                  + self._reason(character_name, r, iid, "equip fehlgeschlagen"))
+                    errors.append(f"'{token}': {r.get('reason', 'equip fehlgeschlagen')}")
             else:
                 r = equip_item(character_name, iid, source="skill")
                 if r.get("status") == "ok":
                     results.append(f"'{it.get('name', iid)}' an die Hand genommen")
                 else:
-                    errors.append(f"'{token}': "
-                                  + self._reason(character_name, r, iid, "equip fehlgeschlagen"))
+                    errors.append(f"'{token}': {r.get('reason', 'equip fehlgeschlagen')}")
 
         # 5) Persist the intent
         intent["forced_pieces"] = forced
@@ -239,26 +235,9 @@ class OutfitChangeSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     def _inventory_item_index(self, character_name: str) -> List[Dict[str, Any]]:
-        """The character's inventory entries with item details — without the
-        costume pieces she may not wear right now
-        (``identity_view.wear_refusal``): a name never matches them and the
-        decision menu never offers them."""
-        from app.core.identity_view import wear_refusal
+        """The character's inventory entries with item details."""
         inv = get_character_inventory(character_name, include_equipped=True)
-        return [e for e in inv.get("inventory", [])
-                if not wear_refusal(character_name, e.get("item_id") or "")]
-
-    @staticmethod
-    def _reason(character_name: str, res: Dict[str, Any], item_id: str,
-                fallback: str) -> str:
-        """The refusal of an equip/unequip result for the tool answer: the
-        costume lock's sentence, else the raw reason."""
-        reason = res.get("reason") or ""
-        from app.core.identity_view import costume_detail
-        detail = costume_detail(reason, character_name, res.get("item_id") or item_id)
-        if detail:
-            return detail["message"]
-        return reason or fallback
+        return inv.get("inventory", [])
 
     def _match_inventory(self, token: str, inv: List[Dict[str, Any]],
                          guess: bool = True) -> str:

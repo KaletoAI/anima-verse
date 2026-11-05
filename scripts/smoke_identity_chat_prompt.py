@@ -63,10 +63,8 @@ THE RULES (task brief) and what follows BY HAND
     has "Name: Cara" and "Appearance: freckled redhead with a crooked smile",
     and the 1:1 moment's relationships section lists both rows: "- Cara: Known" and
     "- Moonveil: Known" (nobody wears the persona: the bare alias).
-[G] person_description without observer (image prompts) shows the persona
-    look while Cara is transformed (plan 2026-11-05 Task 4): starts "A
-    figure in moonlit silver." and has no "freckled"; real_look=True (the
-    profile portrait) keeps the real appearance: contains "freckled"; with
+[G] person_description without observer (image prompts) keeps the real
+    appearance while Cara is transformed: contains "freckled"; with
     observer "Obs" it starts "A figure in moonlit silver." and has no
     "freckled".
 """
@@ -249,10 +247,7 @@ has("bearer line not in system", _sys, "You are currently Moonveil", False)
 
 # ── [G] person_description ──────────────────────────────────────────────────
 print("[G] person_description")
-_image = person_description("Cara")
-check("image prompt shows the persona look", _image.startswith("A figure in moonlit silver."), True)
-has("image prompt hides appearance", _image, "freckled", False)
-has("profile portrait keeps real appearance", person_description("Cara", real_look=True), "freckled")
+has("image prompt keeps real appearance", person_description("Cara"), "freckled")
 _masked = person_description("Cara", include_outfit=True, observer="Obs")
 check("observer view starts with persona", _masked.startswith("A figure in moonlit silver."), True)
 has("observer view hides appearance", _masked, "freckled", False)

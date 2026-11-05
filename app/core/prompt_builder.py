@@ -281,8 +281,7 @@ def person_description(name: str, *,
                        body_profile: Optional[Dict[str, Any]] = None,
                        include_exposed: bool = True,
                        neutral_state: bool = False,
-                       observer: str = "",
-                       real_look: bool = False) -> str:
+                       observer: str = "") -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -304,19 +303,12 @@ def person_description(name: str, *,
     not an image prompt). When the person wears a persona the observer is
     not in on (``identity_view.masked_description``), the persona's
     description replaces the appearance AND the body-slot suffix — both are
-    the real body; the worn outfit (the suit) stays. ``""`` = no observer
-    (every image-prompt path): while the person wears a persona its
-    non-empty description replaces the appearance and the body-slot suffix
-    the same way (``outfit_imagegen.current_look`` — a render pinned to a
-    queued state keeps that state's look); ``real_look=True`` keeps her real
-    appearance anyway (the profile portrait is her real face)."""
+    the real body; the worn outfit (the suit) stays. ``""`` = no observer,
+    the real appearance (every image-prompt path)."""
     masked = None
     if observer:
         from app.core.identity_view import masked_description
         masked = masked_description(observer, name)
-    elif not real_look:
-        from app.core.outfit_imagegen import current_look
-        masked = current_look(name).appearance
     if masked is not None:
         appearance = " ".join(masked.split())
     else:
@@ -358,8 +350,7 @@ class PromptBuilder:
                  back_view: bool = False,
                  mesh_input: bool = False,
                  body_profile: Optional[Dict[str, Any]] = None,
-                 neutral_state: bool = False,
-                 real_look: bool = False):
+                 neutral_state: bool = False):
         self.user_id = ""
         self.character_name = character_name
         # State-triggered image_modifier directives rewrite the person
@@ -372,9 +363,6 @@ class PromptBuilder:
         self.mesh_input = mesh_input
         self.body_profile = body_profile
         self.neutral_state = neutral_state
-        # A profile portrait shows the agent's REAL face, also while she
-        # wears a persona (person_description real_look).
-        self.real_look = real_look
 
     # ------------------------------------------------------------------
     # Step 1: detect people.
@@ -415,18 +403,6 @@ class PromptBuilder:
         """
         return get_active_character()
 
-    def _user_appearance(self) -> str:
-        """The avatar's appearance for an image prompt: while the avatar
-        wears a persona its non-empty description (the same rule as
-        :func:`person_description` with no observer), else her real one."""
-        avatar = self._avatar_name()
-        if avatar and not (self.real_look and avatar == self.character_name):
-            from app.core.outfit_imagegen import current_look
-            look = current_look(avatar).appearance
-            if look is not None:
-                return " ".join(look.split())
-        return get_user_appearance()
-
     def _is_avatar_name(self, name: str) -> bool:
         """True when *name* refers to the player's avatar."""
         if not name:
@@ -463,7 +439,7 @@ class PromptBuilder:
 
         for name in names:
             if self._is_avatar_name(name):
-                appearance = self._user_appearance() or ""
+                appearance = get_user_appearance() or ""
                 gender = get_user_gender().strip().lower()
                 persons.append(Person(
                     name=avatar_name, appearance=appearance,
@@ -505,7 +481,7 @@ class PromptBuilder:
                 or any(p in padded for p in _USER_PRONOUNS)
             )
             if user_mentioned:
-                user_app = self._user_appearance()
+                user_app = get_user_appearance()
                 if user_app:
                     gender = get_user_gender().strip().lower()
                     persons.append(Person(
@@ -563,8 +539,7 @@ class PromptBuilder:
             name, apply_state_modifiers=self.apply_state_modifiers,
             back_view=self.back_view, mesh_input=self.mesh_input,
             body_profile=self.body_profile if name == self.character_name else None,
-            neutral_state=self.neutral_state,
-            real_look=self.real_look and name == self.character_name)
+            neutral_state=self.neutral_state)
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:
         """Set actor_label to the actual character name."""
@@ -739,7 +714,7 @@ class PromptBuilder:
         avatar_name = self._avatar_name()
         if not avatar_name:
             return None
-        appearance = self._user_appearance()
+        appearance = get_user_appearance()
         if not appearance:
             return None
         gender = get_user_gender().strip().lower()
@@ -796,9 +771,7 @@ class PromptBuilder:
                         Person(name=active_char, appearance=person.appearance,
                                gender=person.gender, is_agent=False)
                     )
-                # A transformed avatar never falls back to her real portrait.
-                from app.core.outfit_imagegen import current_look
-                if not ref_path and not (active_char and current_look(active_char).transformed):
+                if not ref_path:
                     profile_img = get_user_profile_image()
                     if profile_img:
                         images_dir = get_user_images_dir()
@@ -827,30 +800,7 @@ class PromptBuilder:
         Args:
             person: Person object.
             profile_only: True = profile image only (e.g. outfit creation).
-
-        While the person wears a persona (``outfit_imagegen.current_look`` —
-        a pinned render keeps its queued state) only an image of the SAME
-        persona look qualifies (``reference_allowed``): never her profile
-        portrait or a render of her real look. None → ``""``, she is
-        described by text alone.
         """
-        from app.core.outfit_imagegen import current_look, reference_allowed
-        subject = (get_active_character() or person.name) if person.is_user else person.name
-        if subject and current_look(subject).transformed:
-            if person.is_user or profile_only:
-                return ""
-            try:
-                from app.core.expression_regen import expression_snapshot, find_compatible_expression
-                mood = get_character_current_feeling(subject) or ""
-                cached = find_compatible_expression(expression_snapshot(subject, mood))
-            except (OSError, ValueError, RuntimeError) as exc:
-                logger.debug("Persona identity reference unavailable for %s: %s", subject, exc)
-                cached = None
-            if cached and reference_allowed(subject, cached):
-                return str(cached)
-            logger.debug("RefImage [%s]: persona look, no reference of that look", subject)
-            return ""
-
         # User: profile image
         if person.is_user:
             profile_img = get_user_profile_image()
@@ -924,8 +874,7 @@ class PromptBuilder:
         except (OSError, ValueError, RuntimeError) as exc:
             logger.debug("Bare reference unavailable for %s: %s", person.name, exc)
             return
-        from app.core.outfit_imagegen import reference_allowed
-        if bare and reference_allowed(person.name, bare):
+        if bare:
             variables.ref_images[idx] = str(bare)
             logger.info("RefImage [%s]: the scene names its own outfit (%s) — "
                         "reference without clothes %s instead of %s",

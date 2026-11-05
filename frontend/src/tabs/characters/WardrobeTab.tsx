@@ -45,9 +45,6 @@ interface Item {
   consumable: boolean; equipped: boolean; is_outfit: boolean; slots: string[]
   outfit_types: string[]; is_spell: boolean; incantation: string
   image: boolean; rarity: string
-  // Costume lock: the English reason this character may not wear the piece
-  // right now (a suit piece of a persona it does not wear); "" = wearable.
-  wear_lock?: string
 }
 const RARITY_COLOR: Record<string, string> = {
   common: 'rgba(255,255,255,0.18)', rare: '#5b9cff', unique: '#e0a106',
@@ -198,7 +195,7 @@ export function WardrobeTab({ character }: { character: string }) {
       await apiPost(url, { user_id: '', ...body })
       await load()
     } catch (error) {
-      // A refusal (e.g. the costume lock's 409) says why instead of failing silently.
+      // A refusal says why instead of failing silently.
       toast((error as Error).message, 'error')
     } finally { setBusy(false) }
   }, [busy, load, toast])
@@ -227,11 +224,8 @@ export function WardrobeTab({ character }: { character: string }) {
     if (busy || !selectedOutfit || outfitPreview?.id !== selectedOutfit.id) return
     setBusy(true)
     try {
-      const res = await apiPost<{ message?: string }>(
-        `/inventory/characters/${enc}/apply-outfit-set`, { outfit_id: selectedOutfit.id })
+      await apiPost(`/inventory/characters/${enc}/apply-outfit-set`, { outfit_id: selectedOutfit.id })
       await load()
-      // Partly applied: the costume lock names the piece that stayed on/off.
-      if (res?.message) toast(res.message, 'info')
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {
@@ -351,15 +345,9 @@ export function WardrobeTab({ character }: { character: string }) {
                     ))}
                   </span>
                 ) : null}
-                {it.wear_lock ? (
-                  <span className="ga-tag ga-tag-missing" title={t(it.wear_lock)}
-                    style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden',
-                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t(it.wear_lock)}</span>
-                ) : null}
                 {it.equipped
                   ? <span style={{ fontSize: '0.72em', opacity: 0.6 }}>{t('worn')}</span>
-                  : <button disabled={busy || !!it.wear_lock} title={it.wear_lock ? t(it.wear_lock) : undefined}
-                      style={btn()} onClick={() => act(`/inventory/characters/${enc}/equip`, { item_id: it.item_id })}>{t('Wear')}</button>}
+                  : <button disabled={busy} style={btn()} onClick={() => act(`/inventory/characters/${enc}/equip`, { item_id: it.item_id })}>{t('Wear')}</button>}
                 <button disabled={busy} title={t('Remove from inventory')} style={{ ...btn(), borderColor: 'rgba(224,86,86,0.4)' }}
                   onClick={() => removeItem(it.item_id)}>✕</button>
               </div>

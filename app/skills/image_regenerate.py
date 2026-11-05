@@ -404,13 +404,7 @@ def regenerate_image(character_name: str,
                     # profile image; photos need the same exact-outfit resolver
                     # as NPCs, without altering the normal slot priorities.
                     ref_person = replace(p, is_user=False) if (occasion == "photo" or screenshot_photo) and p.is_user else p
-                    # A source reference of another look (her real face while
-                    # she wears a persona now) is never reused.
-                    from app.core.outfit_imagegen import reference_allowed
-                    _src_ref = _source_refs["persons"].get(p.name)
-                    if _src_ref and not reference_allowed(p.name, _src_ref):
-                        _src_ref = ""
-                    ref = (_src_ref
+                    ref = (_source_refs["persons"].get(p.name)
                            or _regen_builder._resolve_person_ref_image(ref_person))
                     if ref:
                         _regen_pv.ref_images[idx] = ref

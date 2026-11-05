@@ -346,15 +346,6 @@ def render_has_reference_image(character_name: str, *,
     if set_profile or not character_name:
         return False
     try:
-        # A persona look never slots her real portrait (outfit_imagegen.
-        # reference_allowed); only a render of the same look could serve, so
-        # the real portrait must not steer the match toward img2img either.
-        from app.core.outfit_imagegen import current_look
-        if current_look(character_name).transformed:
-            return False
-    except Exception:
-        pass
-    try:
         from app.models.character import get_character_profile_image
         return bool(get_character_profile_image(character_name))
     except Exception:
@@ -2329,9 +2320,7 @@ class ImageService:
             if photographer_mode:
                 logger.info("PHOTOGRAPHER MODE active for %s", character_name)
 
-            # A profile portrait shows the agent's real face, also while she
-            # wears a persona; every other render shows the persona's look.
-            builder = PromptBuilder(character_name, real_look=set_profile)
+            builder = PromptBuilder(character_name)
 
             if auto_enhance:
                 config = EntryPointConfig.chat()

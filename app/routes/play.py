@@ -2952,7 +2952,6 @@ def build_belongings(character_name: str) -> dict:
     from app.models.inventory import (get_character_inventory, get_equipped_pieces,
                                       get_item)
     from app.models.character import get_character_outfits
-    from app.core.identity_view import COSTUME_TAG, wear_refusal
     from app.core.spell_engine import cast_blocked_reason
     from app.models.character import get_character_profile
     caster_profile = get_character_profile(avatar) or {}
@@ -2991,9 +2990,6 @@ def build_belongings(character_name: str) -> dict:
                 "cast_blocked": cast_blocked_reason(caster_profile, sp) if sp else "",
                 "incantation": (sp or {}).get("incantation", "") if sp else "",
                 "image": bool(it.get("image")), "rarity": (it.get("rarity") or ""),
-                # Costume lock: the English reason (the UI translates it, like
-                # slot_labels) when this character may not wear it now.
-                "wear_lock": COSTUME_TAG if wear_refusal(avatar, iid) else "",
             })
     except Exception as e:
         logger.debug("belongings inventory failed: %s", e)
@@ -3237,7 +3233,6 @@ def _play_equip_sync(user, body: Any):
     with keyed_lock("character_profile", avatar):
         res = equip_piece(avatar, item_id, source="avatar")
     if res.get("status") != "ok":
-        _costume_conflict(res.get("reason", ""), avatar, res.get("item_id") or item_id)
         raise HTTPException(status_code=400, detail=res.get("reason", "equip failed"))
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
@@ -3274,7 +3269,6 @@ def _play_unequip_sync(user, body: Any):
     with keyed_lock("character_profile", avatar):
         res = unequip_piece(avatar, slot=slot, item_id=item_id, source="avatar")
     if res.get("status") != "ok":
-        _costume_conflict(res.get("reason", ""), avatar, res.get("item_id") or item_id)
         raise HTTPException(status_code=400, detail=res.get("reason", "unequip failed"))
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
@@ -3387,11 +3381,6 @@ def _play_give_sync(user, body: Any):
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
     target = _require_present_target(avatar, (body or {}).get("target"))
-    # The worn costume cannot be given away at all (taking it off is refused
-    # too), so it gets its own refusal instead of "take it off first".
-    from app.core.identity_view import COSTUME_PINNED, costume_pinned
-    if costume_pinned(avatar, item_id):
-        _costume_conflict(COSTUME_PINNED, avatar, item_id)
     # A worn piece is refused rather than silently taken off: unequipping is a
     # separate, visible act, and the paper doll offers it one click away.
     try:
@@ -3403,7 +3392,6 @@ def _play_give_sync(user, body: Any):
                             detail="You are wearing this — take it off first.")
     res = gift_item(avatar, target, item_id)
     if not res.get("success"):
-        _costume_conflict(res.get("reason", ""), avatar, item_id)
         raise HTTPException(status_code=400, detail=res.get("error") or "give failed")
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
@@ -3442,7 +3430,6 @@ def _play_drop_sync(user, body: Any):
         raise HTTPException(status_code=400, detail="You are nowhere to put this down.")
     res = drop_item(avatar, loc, room, item_id)
     if not res.get("success"):
-        _costume_conflict(res.get("reason", ""), avatar, item_id)
         raise HTTPException(status_code=400, detail=res.get("error") or "drop failed")
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
@@ -4146,15 +4133,6 @@ def play_schedule(user=Depends(get_current_user)):
     return out
 
 
-def _costume_conflict(reason: str, avatar: str, item_id: str) -> None:
-    """Raise the 409 of a costume-lock refusal (``{"reason", "message"}``,
-    worded in the avatar's language); any other reason passes."""
-    from app.core.identity_view import costume_detail
-    detail = costume_detail(reason, avatar, item_id)
-    if detail:
-        raise HTTPException(status_code=409, detail=detail)
-
-
 def _require_avatar() -> str:
     from app.models.account import get_active_character
     avatar = (get_active_character() or "").strip()
@@ -4389,16 +4367,9 @@ def _play_set_outfit_sync(user, body: Any):
         if slots:
             pieces_by_slot[slots[0]] = pid
     with keyed_lock("character_profile", avatar):
-        result = apply_equipped_pieces(avatar, pieces=pieces_by_slot,
-                                       remove_slots=list(target.get("remove_slots") or []),
-                                       source="play_outfit")
-    # The costume lock: a set it blocks entirely is a 409, a partial one
-    # names what stayed on.
-    from app.core.identity_view import costume_skip_detail
-    costume = costume_skip_detail(avatar, result.get("skipped") or [])
-    if costume is not None and not result.get("changed"):
-        raise HTTPException(status_code=409, detail=costume)
-    extra = {"message": costume["message"]} if costume else {}
+        apply_equipped_pieces(avatar, pieces=pieces_by_slot,
+                              remove_slots=list(target.get("remove_slots") or []),
+                              source="play_outfit")
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
         from app.core.perception import announce_action
@@ -4408,7 +4379,7 @@ def _play_set_outfit_sync(user, body: Any):
                         source="wardrobe")
     except Exception:
         pass
-    return {"ok": True, "name": target.get("name", ""), **extra}
+    return {"ok": True, "name": target.get("name", "")}
 
 
 # ---- Phone / Messaging (pillar B: explicit DMs, medium="messaging") ----

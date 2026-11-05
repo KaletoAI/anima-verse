@@ -3942,9 +3942,6 @@
     "pick a LoRA": "LoRA wählen",
     "No LoRAs.": "Keine LoRAs.",
     "The changes to this entry are lost.": "Die Änderungen an diesem Eintrag gehen verloren.",
-    "A required field is empty.": "Ein Pflichtfeld ist leer.",
-    "Costume — only while transformed": "Kostüm – nur verwandelt",
-    "{item} is a costume piece: it can only be worn while transformed.": "{item} ist ein Kostümteil: Es kann nur verwandelt getragen werden.",
-    "The costume stays on until {name} turns back.": "Das Kostüm bleibt an, bis {name} sich zurückverwandelt."
+    "A required field is empty.": "Ein Pflichtfeld ist leer."
   }
 }

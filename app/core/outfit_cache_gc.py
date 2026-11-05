@@ -26,8 +26,7 @@ So there are two ways to judge a cache entry, in this order:
    NOTHING equipped belongs to a character dressed by free text
    (``outfit_description``, a temporary NPC) and re-signs against that text —
    an edited outfit line therefore leaves a detectable entry behind instead of
-   a permanently "valid" one. A recorded persona ``look`` re-signs with that
-   look, so a persona's entries stay valid after she reverts.
+   a permanently "valid" one.
 2. **Reachability.** Without a manifest, the only usable question is whether
    the signature is one that could still be produced at all — i.e. whether it
    lies in the set of signatures over the character's inventory
@@ -86,13 +85,11 @@ def reachable_signatures(character_name: str) -> Set[str]:
             f"{total:,} combinations — too many to verify the cache against "
             f"(limit {MAX_REACHABLE_COMBOS:,}). Reduce the inventory or clean "
             f"up by hand.")
-    from app.core.outfit_imagegen import pinned_look
-    with pinned_look(character_name):     # one persona read, not one per combination
-        return {_signature(pieces, character_name) for pieces in _iter_combos(choices)}
+    return {_signature(pieces, character_name) for pieces in _iter_combos(choices)}
 
 
 def _sign(pieces: Dict[str, str], items: Optional[List[str]],
-          character_name: str = "", look: str = "") -> str:
+          character_name: str = "") -> str:
     """Re-sign a manifest with TODAY's rule (visibility normalisation
     included — that is what makes normalisation orphans detectable).
 
@@ -101,16 +98,13 @@ def _sign(pieces: Dict[str, str], items: Optional[List[str]],
     ``outfit_description`` (a temporary NPC), and the rule hashes that text
     (``model_refs.outfit_signature``). Without the name every empty manifest
     would re-sign to md5("") and the entries left behind by an edited outfit
-    text would count as valid forever. ``look`` = the manifest's recorded
-    persona look (``""`` = the real look)."""
+    text would count as valid forever."""
     from app.core.model_refs import outfit_signature
-    return outfit_signature(pieces, items or [], character_name, look=look)
+    return outfit_signature(pieces, items or [], character_name)
 
 
 def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
-    """``{pieces, items, mesh_variant, look}`` of a sidecar, or None when it
-    records no pieces. ``look`` is the persona look the entry was rendered
-    with (``""`` = the real look, also for every entry from before personas).
+    """``{pieces, items}`` of a sidecar, or None when it records none.
 
     Two key spellings are accepted on purpose: the reference renders have
     always written ``equipped_pieces``/``equipped_items`` (the expression
@@ -133,8 +127,7 @@ def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
             items = meta.get(ikey)
             return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
                     "items": [str(i) for i in (items or []) if i],
-                    "mesh_variant": meta.get("mesh_variant", ""),
-                    "look": str(meta.get("look") or "")}
+                    "mesh_variant": meta.get("mesh_variant", "")}
     return None
 
 
@@ -168,8 +161,7 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
             return False
         from app.core.model_refs import mesh_signature
         return mesh_signature(manifest["pieces"], manifest["items"],
-                              character_name, manifest.get("mesh_variant", ""),
-                              manifest.get("look", "")) == base
+                              character_name, manifest.get("mesh_variant", "")) == base
     return base in reachable()
 
 

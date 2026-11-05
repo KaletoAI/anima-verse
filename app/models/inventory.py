@@ -1423,12 +1423,8 @@ def give_item(from_character: str,
     """
     if not item_id or not to_character:
         return False
+
     if consume_source and from_character:
-        # The worn costume never leaves its bearer (the forced removal
-        # below would skip that check).
-        from app.core.identity_view import costume_pinned
-        if costume_pinned(from_character, item_id):
-            return False
         try:
             remove_from_inventory(from_character, item_id, quantity=1, force=True)
         except TypeError:
@@ -1466,16 +1462,8 @@ def remove_from_inventory(character_name: str,
     """Remove an item from a character inventory.
 
     force=True also removes locked items, for TTL cleanup or story overrides.
-    By default the owner cannot discard locked items, nor a piece of the
-    costume she wears right now (``identity_view.costume_pinned``) — the
-    transformation's revert takes the suit back with force=True.
+    By default the owner cannot discard locked items.
     """
-    if not force:
-        from app.core.identity_view import costume_pinned
-        if costume_pinned(character_name, item_id):
-            logger.info("Item %s is %s's worn costume — removal refused",
-                        item_id, character_name)
-            return False
     data = _load_inventory(character_name)
     inventory = data.get("inventory", [])
 
@@ -1687,11 +1675,6 @@ def transfer_item(from_character: str,
     if not item.get("transferable", True):
         logger.info("Item %s ist nicht uebertragbar", item_id)
         return False
-    # The worn costume cannot leave its bearer; checked BEFORE the target
-    # gets a copy (the removal below would refuse after the add).
-    from app.core.identity_view import costume_pinned
-    if costume_pinned(from_character, item_id):
-        return False
     # Add to the target before removing from the sender; abort if the target is full.
     added = add_to_inventory(to_character, item_id, quantity=quantity,
         obtained_from=from_character, obtained_method="gift")
@@ -1710,10 +1693,6 @@ def gift_item(from_character: str,
     item = get_item(item_id)
     if not item:
         return {"success": False, "error": "Item nicht gefunden"}
-    from app.core.identity_view import COSTUME_PINNED, costume_message, costume_pinned
-    if costume_pinned(from_character, item_id):
-        return {"success": False, "reason": COSTUME_PINNED,
-                "error": costume_message(COSTUME_PINNED, from_character, item_id)}
 
     if not transfer_item(from_character, to_character, item_id, quantity=1):
         return {"success": False, "error": "Transfer fehlgeschlagen (Item fehlt, Inventar voll, oder nicht uebertragbar)"}
@@ -1894,10 +1873,6 @@ def drop_item(character_name: str,
 
     if not has_item(character_name, item_id):
         return {"success": False, "error": "Item nicht im Inventar"}
-    from app.core.identity_view import COSTUME_PINNED, costume_message, costume_pinned
-    if costume_pinned(character_name, item_id):
-        return {"success": False, "reason": COSTUME_PINNED,
-                "error": costume_message(COSTUME_PINNED, character_name, item_id)}
 
     # Take the piece off first if currently worn.
     if item.get("category") == "outfit_piece":
@@ -2051,19 +2026,13 @@ def _notify_outfit_changed(character_name: str, source: str, *,
 
 
 def equip_piece(character_name: str, item_id: str,
-                source: str = "", *, allow_costume: bool = False) -> Dict[str, Any]:
+                source: str = "") -> Dict[str, Any]:
     """Put on an outfit piece. Occupies every slot from item.outfit_piece.slots
     symmetrically and displaces whatever currently sits in one of those slots.
 
     ``source`` is the caller context (skill / compliance / wardrobe / avatar /
     …) and ends up in the state-history entry — that is what makes "who put
     this on, and when" answerable afterwards.
-
-    Costume lock (``app.core.identity_view``): a suit piece of a persona the
-    character does not wear right now is refused (reason ``"costume"``), and
-    so is a piece that would displace her worn costume (reason
-    ``"costume_pinned"``, ``item_id`` = the pinned piece). The transformation
-    itself passes ``allow_costume=True``.
 
     Returns: {"status": "ok", "slots": [...], "displaced": [old_item_ids,...]} or
              {"status": "error", "reason": "..."}
@@ -2081,11 +2050,6 @@ def equip_piece(character_name: str, item_id: str,
     slots = _clean_piece_slots(piece_def.get("slots"))
     if not slots:
         return {"status": "error", "reason": "invalid_slot"}
-    if not allow_costume:
-        from app.core.identity_view import wear_refusal
-        refusal = wear_refusal(character_name, item_id)
-        if refusal:
-            return {"status": "error", "reason": refusal}
 
     # Species topology (body-slot packages): a character can only wear
     # pieces whose slots exist for their species — a cat has no 'top'.
@@ -2113,11 +2077,6 @@ def equip_piece(character_name: str, item_id: str,
         occ = eq.get(s, "")
         if occ and occ != item_id and occ not in displaced:
             displaced.append(occ)
-    if not allow_costume and displaced:
-        from app.core.identity_view import COSTUME_PINNED, costume_pinned
-        pinned = next((d for d in displaced if costume_pinned(character_name, d)), None)
-        if pinned:
-            return {"status": "error", "reason": COSTUME_PINNED, "item_id": pinned}
 
     for displaced_id in displaced:
         for s in list(eq.keys()):
@@ -2148,14 +2107,12 @@ def equip_piece(character_name: str, item_id: str,
 
 def unequip_piece(character_name: str,
                    slot: str = "", item_id: str = "",
-                   source: str = "", *, allow_costume: bool = False) -> Dict[str, Any]:
+                   source: str = "") -> Dict[str, Any]:
     """Take off a piece — addressed either by slot or by item_id.
 
     Multi-slot pieces come off completely: every slot the item sits in is
     cleared. The piece stays in the inventory, it is just no longer equipped.
-    ``source`` is the caller context for the state-history entry. A piece of
-    the costume she wears right now stays on (reason ``"costume_pinned"``)
-    unless ``allow_costume=True``.
+    ``source`` is the caller context for the state-history entry.
     """
     from app.models.character import get_character_profile, save_character_profile
     profile = get_character_profile(character_name)
@@ -2174,10 +2131,6 @@ def unequip_piece(character_name: str,
         return {"status": "error", "reason": "not_equipped"}
 
     removed = eq[target_slot]
-    if not allow_costume:
-        from app.core.identity_view import COSTUME_PINNED, costume_pinned
-        if costume_pinned(character_name, removed):
-            return {"status": "error", "reason": COSTUME_PINNED, "item_id": removed}
     cleared_slots = [s for s, iid in list(eq.items()) if iid == removed]
     for s in cleared_slots:
         eq.pop(s, None)
@@ -2196,11 +2149,9 @@ def unequip_piece(character_name: str,
 
 
 def equip_item(character_name: str, item_id: str,
-               source: str = "", *, allow_costume: bool = False) -> Dict[str, Any]:
+               source: str = "") -> Dict[str, Any]:
     """Equip a non-piece item (hammer, glasses, …). The item has to be in the
-    inventory. Outfit pieces go through equip_piece, not here. A suit item of
-    a persona she does not wear right now is refused (reason ``"costume"``)
-    unless ``allow_costume=True``.
+    inventory. Outfit pieces go through equip_piece, not here.
     """
     from app.models.character import get_character_profile, save_character_profile
     if not has_item(character_name, item_id):
@@ -2210,11 +2161,6 @@ def equip_item(character_name: str, item_id: str,
         return {"status": "error", "reason": "item_not_found"}
     if item.get("category") == "outfit_piece":
         return {"status": "error", "reason": "use_equip_piece_for_outfit_piece"}
-    if not allow_costume:
-        from app.core.identity_view import wear_refusal
-        refusal = wear_refusal(character_name, item_id)
-        if refusal:
-            return {"status": "error", "reason": refusal}
 
     profile = get_character_profile(character_name)
     state = _get_equipped(profile)
@@ -2231,20 +2177,14 @@ def equip_item(character_name: str, item_id: str,
 
 
 def unequip_item(character_name: str, item_id: str,
-                 source: str = "", *, allow_costume: bool = False) -> Dict[str, Any]:
-    """Take a non-piece item off the equipment. It stays in the inventory.
-    A suit item of the costume she wears right now stays on (reason
-    ``"costume_pinned"``) unless ``allow_costume=True``."""
+                 source: str = "") -> Dict[str, Any]:
+    """Take a non-piece item off the equipment. It stays in the inventory."""
     from app.models.character import get_character_profile, save_character_profile
     profile = get_character_profile(character_name)
     state = _get_equipped(profile)
     items = state["equipped_items"]
     if item_id not in items:
         return {"status": "error", "reason": "not_equipped"}
-    if not allow_costume:
-        from app.core.identity_view import COSTUME_PINNED, costume_pinned
-        if costume_pinned(character_name, item_id):
-            return {"status": "error", "reason": COSTUME_PINNED, "item_id": item_id}
     items.remove(item_id)
     profile["equipped_items"] = items
     stored = save_character_profile(character_name, profile)
@@ -2262,8 +2202,7 @@ def apply_equipped_pieces(character_name: str, *,
     pieces: Optional[Dict[str, str]] = None,
     items: Optional[List[str]] = None,
     remove_slots: Optional[List[str]] = None,
-    source: str = "",
-    allow_costume: bool = False) -> Dict[str, Any]:
+    source: str = "") -> Dict[str, Any]:
     """Atomic equip change with diff detection.
 
     pieces: target state of the piece slots (slot -> item_id). None = pieces
@@ -2275,13 +2214,6 @@ def apply_equipped_pieces(character_name: str, *,
             argument).
     source: caller context, for the log line and the state-history entry
             (ui_wardrobe, skill, ...).
-    allow_costume: bypass the costume lock (``app.core.identity_view``) —
-            only the transformation itself, which puts the suit on before its
-            persona row exists and takes it off on revert. Without it a suit
-            piece of a persona the character does not wear is skipped
-            (reason ``"costume"``, and taken off if she still wears it), and
-            a piece of the costume she wears stays on: neither cleared nor
-            displaced (reason ``"costume_pinned"``, once per piece).
 
     Returns: {
         "status": "ok",
@@ -2306,54 +2238,26 @@ def apply_equipped_pieces(character_name: str, *,
     cleared: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
 
-    # Costume lock: the worn suit pieces that must stay on.
-    pinned_ids: set = set()
-    refused_ids: set = set()
-    if not allow_costume:
-        from app.core.identity_view import costume_pinned, wear_refusal
-        pinned_ids = {iid for iid in set(before_pieces.values()) | set(before_items)
-                      if iid and costume_pinned(character_name, iid)}
-    pinned_reported: set = set()
-
-    def _keep_pinned(iid: str, slot: str = "") -> None:
-        if iid in pinned_reported:
-            return
-        pinned_reported.add(iid)
-        entry = {"item_id": iid, "reason": "costume_pinned"}
-        if slot:
-            entry["slot"] = slot
-        skipped.append(entry)
-
     rs = list(remove_slots or [])
     # remove_slots removes the entire item, including mirrored slots.
     for slot in rs:
         iid = target_pieces.get(slot)
         if not iid:
             continue
-        if iid in pinned_ids:
-            _keep_pinned(iid, slot)
-            continue
         for s in [s for s, x in list(target_pieces.items()) if x == iid]:
             cleared.append({"slot": s, "item_id": iid})
             target_pieces.pop(s, None)
 
     if pieces is not None:
-        # 0) Costume pieces this character may not wear.
-        if not allow_costume:
-            refused_ids = {iid for iid in pieces.values()
-                           if iid and wear_refusal(character_name, iid)}
         # 1) Completely remove pieces absent from the target state,
         # including every mirrored slot of each affected item.
-        wanted_ids = {iid for iid in pieces.values() if iid and iid not in refused_ids}
+        wanted_ids = {iid for iid in pieces.values() if iid}
         for slot in list(target_pieces.keys()):
             iid = target_pieces.get(slot)
             if not iid:
                 continue
             if iid in wanted_ids:
                 continue  # The item stays, possibly in different slots; set it again below.
-            if iid in pinned_ids:
-                _keep_pinned(iid, slot)
-                continue
             if slot in pieces or slot in rs:
                 # The slot is about to be replaced or cleared; cleanup handles it.
                 continue
@@ -2381,9 +2285,6 @@ def apply_equipped_pieces(character_name: str, *,
             if not item_slots_list:
                 skipped.append({"item_id": iid, "slot": slot, "reason": "invalid_slot"})
                 continue
-            if iid in refused_ids:
-                skipped.append({"item_id": iid, "slot": slot, "reason": "costume"})
-                continue
             item_entries.append({"iid": iid, "input_slot": slot, "slots": item_slots_list})
 
         # Multi-slot pieces precede single-slot pieces, retaining input
@@ -2402,15 +2303,6 @@ def apply_equipped_pieces(character_name: str, *,
                 skipped.append({"item_id": iid, "slot": e["input_slot"],
                                 "reason": "slot_conflict_with_multi_slot"})
                 continue
-            # A piece that would displace the worn costume stays off.
-            pin = next((target_pieces[ts] for ts in item_slots_list
-                        if target_pieces.get(ts) and target_pieces[ts] != iid
-                        and target_pieces[ts] in pinned_ids), None)
-            if pin is not None:
-                skipped.append({"item_id": iid, "slot": e["input_slot"],
-                                "reason": "costume_pinned"})
-                _keep_pinned(pin)
-                continue
             # Remove existing items occupying target slots completely,
             # including their mirrored slots.
             for ts in item_slots_list:
@@ -2427,13 +2319,6 @@ def apply_equipped_pieces(character_name: str, *,
                 locked[ts] = iid
                 applied.append({"item_id": iid, "slot": ts})
 
-        # A refused costume piece she still wears (one she owned and wore
-        # before the persona existed) comes off when the target names it.
-        for iid in refused_ids:
-            for s in [s for s, x in list(target_pieces.items()) if x == iid]:
-                cleared.append({"slot": s, "item_id": iid})
-                target_pieces.pop(s, None)
-
     if items is not None:
         validated: List[str] = []
         seen = set()
@@ -2443,17 +2328,8 @@ def apply_equipped_pieces(character_name: str, *,
             if not has_item(character_name, iid):
                 skipped.append({"item_id": iid, "reason": "not_in_inventory"})
                 continue
-            if not allow_costume and wear_refusal(character_name, iid):
-                skipped.append({"item_id": iid, "reason": "costume"})
-                continue
             seen.add(iid)
             validated.append(iid)
-        # The worn costume stays on even when the target drops it.
-        for iid in before_items:
-            if iid in pinned_ids and iid not in seen:
-                seen.add(iid)
-                validated.append(iid)
-                _keep_pinned(iid)
         target_items = validated
 
     changed = (target_pieces != before_pieces) or (target_items != before_items)

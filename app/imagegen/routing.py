@@ -169,14 +169,10 @@ def _character_spec(occ_def: Dict[str, Any], character: str) -> str:
         return ""
     try:
         from app.models.character import get_character_profile
-        from app.core.outfit_imagegen import effective_outfit_imagegen
         ovr = (get_character_profile(character) or {}).get("outfit_imagegen") or {}
-        if not isinstance(ovr, dict):
-            return ""
-        # A worn persona's backend replaces hers (read-time only; a pinned
-        # job state wins — see outfit_imagegen.pinned_look).
-        ovr = effective_outfit_imagegen(character, ovr)
     except Exception:
+        return ""
+    if not isinstance(ovr, dict):
         return ""
     spec = normalize_spec(ovr.get(occ_def.get("char_spec_field") or "workflow"))
     if not spec and occ_def.get("char_spec_fallback"):

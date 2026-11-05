@@ -236,10 +236,8 @@ def _find_inventory_piece_for_slot(
     style_hint preference is gone with the outfit_types model; style_hint is
     only a creation hint now, no mechanical selection rule.) Multi-slot
     pieces are skipped — they come through ChangeOutfit / the wardrobe,
-    otherwise they would displace occupied slots. A costume piece the
-    character may not wear (``identity_view.wear_refusal``) is never picked.
+    otherwise they would displace occupied slots.
     """
-    from app.core.identity_view import wear_refusal
     exclude_ids = exclude_ids or set()
     inv = _load_inventory(character_name).get("inventory", [])
     for entry in inv:
@@ -251,8 +249,6 @@ def _find_inventory_piece_for_slot(
             continue
         slots = _piece_slots(item)
         if target_slot not in slots or len(slots) > 1:
-            continue
-        if wear_refusal(character_name, iid):
             continue
         return iid
     return None
@@ -420,7 +416,7 @@ def apply_outfit_compliance(
                 # unequip_piece takes care of the multi-slot mirrors
                 try:
                     res = unequip_piece(character_name, slot=slot, source="compliance")
-                    # A refusal (the worn costume stays on) leaves the slot.
+                    # A refused unequip leaves the slot.
                     if res.get("status") == "ok":
                         eq_pieces.pop(slot, None)
                         result["forbidden_cleared"].append(slot)

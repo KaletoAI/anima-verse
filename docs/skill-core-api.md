@@ -214,7 +214,7 @@ and an `owner` (the package id):
 | `identity.active_persona` (`PROVIDER_ACTIVE`) | `subject` → `{"persona_id", "alias", "description", "portrait_url"}` while C is transformed, else `None`. Optional keys: `"field_overrides"` (`{field: text}`, keys from `OVERRIDABLE_FIELDS`; empty ones omitted), `"pause_routine"` (bool), `"imagegen"` (dict of image settings), `"suit_items"` (list of item ids) |
 | `identity.knows` (`PROVIDER_KNOWS`) | `observer, subject` → `bool`: O is in on C's current persona |
 | `identity.persona_names` (`PROVIDER_NAMES`) | nothing → iterable of every configured alias, transformed or not |
-| `identity.costume_items` (`PROVIDER_COSTUME`) | nothing → `{item_id: persona_id}`: the suit pieces of every usable persona — read by the costume lock (`costume_owner`, `wear_refusal`) |
+| `identity.costume_items` | nothing → `{item_id: persona_id}`: the suit pieces of every usable persona (no core consumer) |
 
 With no provider every function answers the real name (deletion test). A
 provider that raises is logged once at debug and treated as absent for that
@@ -228,8 +228,6 @@ URLs, DB keys other than the identity key) stay the real name.
 | `OVERRIDABLE_FIELDS` | `("character_personality", "dialogue_style", "character_presence", "character_task", "character_goals")` — the character prompt fields a persona may replace. |
 | `self_field(subject, key)` | While C wears a persona: a key of `OVERRIDABLE_FIELDS` → the persona's non-empty override; `"character_appearance"` → the persona description when non-empty; else (and with no persona/provider) `None` = use the real value. For C's OWN prompts and a knower's partner block (`build_prompt_section` applies it before the `source_file`/status/state branches); readers use `self_field(name, key) or <real value>`. |
 | `routine_paused(subject)` | True while C wears a persona with `pause_routine`: the thought context leaves her daily schedule and its sleep nudge out. No persona/provider → False. |
-| `persona_imagegen(subject)` | The image settings of the persona C wears — a deep copy of the provider's `imagegen` (`{}` when it brings none) — or `None` when C is not transformed (no persona/provider). Keys the core reads: `workflow`, `tpose_workflow` (backend globs), `loras`, `tpose_loras` (`[{name, strength}]`). Folded into her own settings by `app.core.outfit_imagegen`. |
-| `look_token(subject)` | `""` when C is not transformed, else `"persona:<persona_id>"` (the alias when the provider gave no id) — the persona-look part of the outfit signature, so a persona's renders/meshes get cache entries of their own. |
 | `active_persona(subject)` | `Persona` or `None` (not transformed, no/raising provider, answer without alias). |
 | `knows(observer, subject)` | True when O is C (casefold), C wears no persona, or the provider says so; a raising provider counts as True. |
 | `shown_name(observer, subject)` | `C` when no persona or O is C; `"<alias> (<C>)"` for a knower; the alias otherwise. |
@@ -251,50 +249,6 @@ URLs, DB keys other than the identity key) stay the real name.
 | `pair_stamp(a, b)` | `{"identity": {subject: alias}, "identity_shown": {subject: label the other side sees}}` for the side(s) of a pairwise message that wear a persona now, else `{}`. `UnifiedChatManager.save_message` stores it in an in-person message's `metadata` (never on a phone message). |
 | `stamped_name(observer, subject, stamp)` | The name O reads for C on a stamped message: no alias stamped → C; C still wears the stamped alias → `shown_name`; persona no longer worn → the stamped label (said as the persona stays the persona's); no provider → C. |
 | `rewrite_names(observer, text, subjects)` | Each transformed subject's real name (whole word, case-sensitive, one pass) → `shown_name(observer, subject)`. For system/storyteller text only, never a character's own speech. |
-| `costume_owner(item_id)` | The persona id whose suit the item belongs to (`identity.costume_items`), else `None` — no suit piece, no provider, a raising provider (every item wearable). |
-| `wear_refusal(character, item_id)` | `""` = C may wear the item; `COSTUME_REFUSED` (`"costume"`) when it is a suit piece of persona P and C does not wear P right now. Ownership is irrelevant: a piece she owned before the persona existed stays hers but unwearable. A piece in the suit of the persona she wears is always wearable. |
-| `costume_pinned(character, item_id)` | True when the item is in the `suit_items` of the persona C wears now: it may not be taken off, displaced, removed from the inventory, dropped or given away until she turns back. No persona/provider → False. |
-| `costume_message(reason, character, item_id, lang=None)` | The sentence for `COSTUME_REFUSED` (`"{item} is a costume piece: it can only be worn while transformed."`) / `COSTUME_PINNED` (`"The costume stays on until {name} turns back."`) via `t(en, lang)`; `""` for any other reason. |
-| `costume_detail(reason, character, item_id)` / `costume_skip_detail(character, skipped)` | `{"reason", "message"}` (message in C's language) for a costume reason — the HTTP 409 detail of the equip/unequip/give/drop/remove routes — else `None`; the second takes an `apply_equipped_pieces` `skipped` list and answers for its first costume skip. |
-| `COSTUME_TAG` | `"Costume — only while transformed"` — the English `wear_lock` value of a refused item in the belongings payload (`/play/belongings`, Game-Admin wardrobe); the clients translate it with `t()`. |
-
-**Costume lock in the inventory core** (`app.models.inventory`): `equip_piece`, `equip_item` and
-`apply_equipped_pieces` refuse a piece `wear_refusal` refuses (reason `"costume"`; the apply skips it,
-and takes it off when C still wears it and the target names it); `equip_piece` refuses a piece that
-would displace the worn costume and `unequip_piece` / `unequip_item` refuse taking it off (reason
-`"costume_pinned"`, `item_id` = the pinned piece); `apply_equipped_pieces` keeps it on (skipped once
-with `"costume_pinned"`). All four take the keyword `allow_costume=False`; only the transformation
-itself passes `True` (it puts the suit on before its persona row exists and takes it off on revert).
-`remove_from_inventory` refuses the worn costume unless `force=True`; `transfer_item`, `gift_item`,
-`drop_item` and `give_item(consume_source=True)` refuse it outright. The compliance auto-fill and the
-ChangeOutfit index/menu never offer a refused piece.
-
-## Persona image settings — `app.core.outfit_imagegen` ✅
-
-While a character wears a persona, every image of HER — outfit/expression images, the `photo` /
-`instagram` / `expression` / `regenerate` occasions, T-pose references and therefore the 3D model —
-renders with the persona's backend globs and LoRAs and the persona's look; her stored
-`profile["outfit_imagegen"]` is never changed (read-time override). Her profile portrait stays her real
-face (`app.core.prompt_builder.PromptBuilder(..., real_look=True)` for a `set_profile` render). The routing's character match
-(position 0) and the character render read through `effective_outfit_imagegen`; the image appearance
-(`app.core.prompt_builder.person_description(...)` without observer) uses the persona description;
-the outfit signature carries the look token (`app.core.model_refs.outfit_signature_raw(...)`, keyword
-`look`), and render/mesh sidecars record it as `look` so the cache GC re-signs a persona entry correctly.
-A job keeps the state it was queued in: the expression snapshot freezes the `PersonaLook` and the render
-runs inside `pinned_look`; a model-reference run is pinned to its state at start. A persona mesh never
-takes the face view (it is rendered from the real portrait): `app.core.face_retexture.reference_info(...)`
-reports it unavailable for a source whose meta records a `look` (problem `persona_look`), so face
-correction uses the mesh's own front render or an explicit "face" is refused.
-
-| Function / value | Semantics |
-|---|---|
-| `effective_outfit_imagegen(character, stored)` | Not transformed → a copy of `stored`. Transformed → a copy where `workflow` / `tpose_workflow` are the persona's when non-empty (empty = keep hers), `loras` := the persona's `loras` (possibly `[]` — no character LoRA), `tpose_loras` := the persona's `tpose_loras` (possibly `[]` — the render's rule "empty = the normal LoRAs" then means the persona's), `model` removed; `profile_workflow`, `mesh_workflow`, `tpose_view_workflow` unchanged. Honours `pinned_look`. |
-| `merge_outfit_imagegen(stored, look)` | The same merge for an explicit `PersonaLook`. |
-| `PersonaLook(token, appearance, imagegen)` | Frozen: `token` (`look_token`), `appearance` (persona description or `None` = real look), `imagegen` (read-only persona settings, `None` = not transformed). `REAL_LOOK` = not transformed. |
-| `capture_look(character)` | The LIVE state (ignores a pin). |
-| `current_look(character)` | The pinned state inside `pinned_look`, else the live one. |
-| `reference_allowed(character, path)` | Whether an image may be slotted as C's identity reference now. Not transformed (honouring a pin) → True. Transformed → only an image rendered under the SAME look token (sidecar `look`, or an expression's `outfit_raw` ending in `"|look=<token>"`); never her profile portrait or a real-look render. `PromptBuilder._resolve_person_ref_image`, the scene render, regenerate's source references and the bare-outfit swap check it; without an allowed image she is described by text alone. |
-| `pinned_look(character, look=None)` | Context manager: pins C's state (`look`, or the current one captured now) for the calling thread (`ContextVar`) — where the routing resolves; never another thread. |
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
@@ -499,8 +453,7 @@ apply_condition; liefert `{success, changes, condition_applied}`). `consume_item
 Core-Vokabular — Routen rufen sie direkt, ohne Skill-Bezug.
 
 Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
-`equip_item`/`unequip_item` (each with the keyword `allow_costume=False`, see the costume lock under
-Identity view), `add_to_inventory`,
+`equip_item`/`unequip_item`, `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
 Inventory and equipment calls used by the **transformation package** (stable):
@@ -509,8 +462,8 @@ Inventory and equipment calls used by the **transformation package** (stable):
 |---|---|
 | `app.models.inventory.get_carried_item_ids(character_name) -> set[str]` | IDs of the items the character holds (quantity > 0), in ONE query, without profile reads or item enrichment — for "does she carry the power item" checks on hot paths |
 | `app.models.inventory.add_to_inventory(character_name, item_id, quantity=1, obtained_from="", obtained_method="manual", locked=None) -> bool` | Add a world item to the inventory; `False` for an unknown item or a failed write. Passive: effects apply only through `consume_item`. `locked=True` protects it from removal without `force` |
-| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry and the costume the character wears right now (`identity_view.costume_pinned`) only with `force=True`. `False` when nothing was removed |
-| `app.models.inventory.apply_equipped_pieces(character_name, *, pieces=None, items=None, remove_slots=None, source="", allow_costume=False) -> dict` | Atomic equip change with diff detection. `pieces` = COMPLETE target state of the piece slots (slot → item ID; occupied slots missing from it are cleared), `items` = target list of the non-piece items, `None` = untouched; `remove_slots` clears explicitly. Returns `{status, changed, applied, cleared, skipped, pieces_before, pieces_after, items_before, items_after}`. Costume lock: a refused suit piece is skipped (`"costume"`), the worn costume stays on (`"costume_pinned"`); `allow_costume=True` bypasses both — the transformation's transform and revert only. A profile read-modify-write: call it under `keyed_lock("character_profile", name)` |
+| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry only with `force=True`. `False` when nothing was removed |
+| `app.models.inventory.apply_equipped_pieces(character_name, *, pieces=None, items=None, remove_slots=None, source="") -> dict` | Atomic equip change with diff detection. `pieces` = COMPLETE target state of the piece slots (slot → item ID; occupied slots missing from it are cleared), `items` = target list of the non-piece items, `None` = untouched; `remove_slots` clears explicitly. Returns `{status, changed, applied, cleared, skipped, pieces_before, pieces_after, items_before, items_after}`. A profile read-modify-write: call it under `keyed_lock("character_profile", name)` |
 
 Public discovery helpers (stable):
 
@@ -1172,7 +1125,7 @@ LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
 
 | Function | Contract |
 |---|---|
-| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. `observer=` (keyword, default `""`) gives what that character sees: for a person wearing a persona the observer is not in on, the persona description replaces appearance and body slots (the outfit stays); without it (image prompts) the persona description of a transformed person replaces them the same way (`app.core.outfit_imagegen.current_look`), unless `real_look=True` (the profile portrait). Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
+| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. `observer=` (keyword, default `""`) gives what that character sees: for a person wearing a persona the observer is not in on, the persona description replaces appearance and body slots (the outfit stays); without it, the real appearance (image prompts). Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
 | `app.core.prompt_compose.compose(*, use_case, subject, backend, hints=None, negative_extra="", style_override=None, conditions="")` | Compose the selected backend family's use-case style and negative prompt. Returns `.prompt`, `.negative`, `.warnings`, `.meta`. Call inside the routing callback so each fallback backend gets its own composition. |
 | `app.core.llm_json.parse_json(raw: str) -> dict \| None` | Extract a JSON object from a queued LLM answer, tolerating code fences; returns None when it cannot be parsed. A bare array is returned under `_list`. Validate task-specific fields in the caller. |
 
