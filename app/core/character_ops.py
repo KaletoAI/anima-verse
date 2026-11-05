@@ -762,10 +762,11 @@ def build_memory_relationships(character_name: str,
 
     # Ghost filter: relationships whose partner no longer exists in the
     # world (character deleted) stay in the DB but must not show in the
-    # Mind panel.
+    # Mind panel. A DORMANT partner exists (a linked family member that
+    # stands nowhere right now) and stays listed.
     try:
         from app.models.character import list_available_characters
-        existing = set(list_available_characters())
+        existing = set(list_available_characters(include_dormant=True))
     except Exception:
         existing = set()
 
@@ -3210,11 +3211,14 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
     the day-consolidation cursor + sleep flags. Correspondence
     (``chat_messages``) and the shared room record (``utterances``/``scenes``)
     stay; see ``character_reset.KEPT``.
+
+    A dormant character exists and can be wiped (a dormant leader's mind is
+    its body's memory too); on a linked body the mind stays (ruling R3).
     """
     # Existence check via the character LIST — get_character_profile returns
     # a default profile for unknown names (ghost-character pitfall).
     from app.models.character import list_available_characters
-    if character_name not in list_available_characters():
+    if character_name not in list_available_characters(include_dormant=True):
         raise HTTPException(status_code=404,
                             detail=f"Character '{character_name}' not found")
 
@@ -3230,15 +3234,21 @@ def fresh_start_character(character_name: str, intro_text: str = "") -> Dict[str
     secrets, routine, gallery); everything the character lived through in this
     world goes — see ``character_reset`` scope ``reinit``. The result carries
     the per-store counts, ``errors`` and the scope description (``mode_doc``).
+
+    A dormant LEADER is refused with 409 ("revert first"); a linked body
+    keeps its leader's mind and gets no intro memory (ruling R3).
     """
     from app.models.character import list_available_characters
-    if character_name not in list_available_characters():
+    if character_name not in list_available_characters(include_dormant=True):
         raise HTTPException(status_code=404,
                             detail=f"Character '{character_name}' not found")
 
     from app.core.character_reset import (SCOPE_REINIT, describe_scope,
                                           reset_character, seed_intro_memory)
-    result = reset_character(character_name, scope=SCOPE_REINIT)
+    try:
+        result = reset_character(character_name, scope=SCOPE_REINIT)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     try:
         result["intro_memory"] = seed_intro_memory(character_name, intro_text)
     except Exception as e:

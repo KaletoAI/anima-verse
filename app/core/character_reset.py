@@ -43,6 +43,18 @@ Re-init means "this character starts fresh in THIS world".
   profile's values instead of being carried over.
 * Identity stays: profile, authored soul/personality, outfits, inventory, manual secrets,
   daily routine, gallery.
+
+Linked characters (ruling R3 of the linked-characters design)
+-------------------------------------------------------------
+A linked BODY shares its leader's MIND. A reset of a body touches only BODY
+stores — the stores marked ``mind`` (memories, the mind's day/week/season
+summaries, diary, thoughts, learned-secret visibility, and any package store
+registered with ``mind=True``), the shared soul sections and the consolidation
+cursor stay, and the result says whose mind it is. A reset of a LEADER acts on
+the mind as for anybody else, rows a body marked included. A re-init of a
+DORMANT leader is refused ("revert first"): it would put the leader back into
+the world next to its present body. A dormant body keeps its (empty)
+placement — the swap that brings it back copies a full one.
 """
 from __future__ import annotations
 
@@ -76,7 +88,8 @@ class Store:
     ``where`` is a WHERE clause over ``table`` and ``params`` names how often
     the character name is bound into it. ``json_column`` marks the stores whose
     character link lives inside a JSON list — those cannot be deleted by a
-    plain column match and are handled by their own pruner.
+    plain column match and are handled by their own pruner. ``mind`` marks a
+    MIND store: a reset of a linked body leaves it alone.
     """
     key: str
     table: str
@@ -85,6 +98,7 @@ class Store:
     what: str
     params: int = 1
     json_column: str = ""
+    mind: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,6 +108,7 @@ class ResetHandler:
     scopes: Tuple[str, ...]
     what: str
     lock: Callable | None = None
+    mind: bool = False
 
 
 _HANDLERS: Dict[str, ResetHandler] = {}
@@ -101,12 +116,15 @@ _REGISTRY_LOCK = RLock()
 
 
 def register_reset_store(key: str, fn: Callable, scopes=SCOPES, *,
-                         what: str, lock: Callable | None = None) -> None:
+                         what: str, lock: Callable | None = None,
+                         mind: bool = False) -> None:
     """Register a reload-safe package handler fn(conn, character_name) -> int.
 
     The handler runs in its own transaction. Exceptions roll back that handler
     and are returned in errors; filesystem effects must be idempotent.
     Optional lock(name) supplies the ordinary writer lock, held through commit.
+    ``mind=True`` marks a MIND store (linked characters): a reset of a linked
+    body skips it.
     """
     scopes = tuple(scopes)
     if not key or key in {s.key for s in STORES} or key in {
@@ -115,7 +133,7 @@ def register_reset_store(key: str, fn: Callable, scopes=SCOPES, *,
     if not callable(fn) or not scopes or set(scopes) - set(SCOPES):
         raise ValueError("callable handler and valid reset scopes required")
     with _REGISTRY_LOCK:
-        _HANDLERS[key] = ResetHandler(key, fn, scopes, what, lock)
+        _HANDLERS[key] = ResetHandler(key, fn, scopes, what, lock, bool(mind))
 
 
 def _handlers_for(scope):
@@ -128,14 +146,20 @@ def _handlers_for(scope):
 STORES: Tuple[Store, ...] = (
     # ── derived memory ────────────────────────────────────────────────────
     Store("memories", "memories", "character_name=?", SCOPES,
-          "tiered memories (episodic/daily/weekly/relationship)"),
-    Store("summaries", "summaries", "character_name=?", SCOPES,
-          "own daily/weekly/season summaries — rows where this character is "
-          "another one's `partner` are that character's summary and stay"),
+          "tiered memories (episodic/daily/weekly/relationship)", mind=True),
+    Store("summaries", "summaries",
+          "character_name=? AND NOT (kind='history' OR (kind='daily' AND partner<>''))",
+          SCOPES,
+          "own day/week/season entries — rows where this character is "
+          "another one's `partner` are that character's summary and stay",
+          mind=True),
+    Store("chat_summaries", "summaries",
+          "character_name=? AND (kind='history' OR (kind='daily' AND partner<>''))",
+          SCOPES, "own per-partner chat summaries (daily + conversation history)"),
     Store("diary_entries", "diary_entries", "character_name=?", SCOPES,
-          "persisted daily recaps (the diary timeline)"),
+          "persisted daily recaps (the diary timeline)", mind=True),
     Store("thoughts", "thoughts", "character_name=?", SCOPES,
-          "private thought journal"),
+          "private thought journal", mind=True),
     Store("mood_history", "mood_history", "character_name=?", SCOPES,
           "mood time series (diary lane)"),
     Store("state_history", "state_history", "character_name=?", SCOPES,
@@ -330,14 +354,18 @@ def _prune_notifications(conn, character_name: str) -> int:
 # Non-table steps
 # ---------------------------------------------------------------------------
 
-def _reset_day_cursor(character_name: str) -> str:
+def _reset_day_cursor(character_name: str, body: bool = False) -> str:
     """Cursor to NOW + clear the sleep flags, so already-collapsed old scenes
-    are not re-consolidated into fresh day entries after the wipe."""
+    are not re-consolidated into fresh day entries after the wipe.
+
+    ``body``: a linked body sleeps on its own but has no cursor — the cursor
+    is its mind's — so only its sleep flags are cleared."""
     from app.core.db import transaction
     from app.core.timeutils import utc_now
+    keys = (() if body else (("day_cursor", utc_now().isoformat(timespec="seconds")),)) \
+        + (("sleep_start", ""), ("woke_main_sleep", ""))
     with transaction() as conn:
-        for key, value in (("day_cursor", utc_now().isoformat(timespec="seconds")),
-                           ("sleep_start", ""), ("woke_main_sleep", "")):
+        for key, value in keys:
             conn.execute("INSERT INTO world_kv(key,value) VALUES (?,?) "
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                          (f"{key}:{character_name}", value))
@@ -350,6 +378,7 @@ def _reset_retrospect_soul_files(character_name: str, errors: list) -> int:
     lines like "About others: …" from lived experience, the export ships them
     verbatim under ``files/soul/``, and nothing downstream can filter free
     prose the way the dangling filter filters a relationship row."""
+    from app.core.linked_characters import soul_owner
     from app.core.soul_writer import rewrite_file
     from app.models.character import get_character_language
 
@@ -360,6 +389,8 @@ def _reset_retrospect_soul_files(character_name: str, errors: list) -> int:
         language = "en"
     done = 0
     for file_id in RETROSPECT_SOUL_FILES:
+        if soul_owner(character_name, file_id) != character_name:
+            continue  # a linked body's SHARED section is its leader's file
         try:
             rewrite_file(character_name, file_id, [], language=language)
             done += 1
@@ -440,10 +471,22 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
         raise ValueError("character_name required")
 
     from app.core.db import transaction
+    from app.core.linked_characters import leader_of
+    from app.models.character import DORMANT_STATUS, get_character_status
+
+    leader = leader_of(name) or ""
+    dormant = get_character_status(name) == DORMANT_STATUS
+    if scope == SCOPE_REINIT and dormant and not leader:
+        raise ValueError(f"{name} is dormant — revert first (a fresh start would "
+                         f"place {name} in the world).")
 
     result: Dict[str, Any] = {"character": name, "scope": scope, "errors": []}
+    if leader:
+        result["mind_owner"] = leader
 
     for store in stores_for(scope):
+        if leader and store.mind:
+            continue
         try:
             with transaction() as conn:
                 if store.json_column:
@@ -459,6 +502,8 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
             result["errors"].append({"store": store.key, "error": str(e)})
 
     for handler in _handlers_for(scope):
+        if leader and handler.mind:
+            continue
         try:
             guard = handler.lock(name) if handler.lock else nullcontext()
             with guard, transaction() as conn:
@@ -467,7 +512,7 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
             result[handler.key] = None
             result["errors"].append({"store": handler.key, "error": str(e)})
 
-    for key, fn in (("day_cursor", _reset_day_cursor),
+    for key, fn in (("day_cursor", lambda n: _reset_day_cursor(n, body=bool(leader))),
                     ("soul_files", lambda n: _reset_retrospect_soul_files(n, result["errors"]))):
         try:
             result[key] = fn(name)
@@ -475,13 +520,23 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
             result[key] = None
             result["errors"].append({"store": key, "error": str(e)})
     if scope == SCOPE_REINIT:
-        try:
-            result["character_state"] = _reset_mechanical_state(name)
-        except Exception as e:
-            result["character_state"] = None
-            result["errors"].append({"store": "character_state", "error": str(e)})
+        if dormant:
+            # A dormant body stands nowhere and stays so: the swap that brings
+            # it back copies a complete placement, the profile's start values
+            # must not resurface on it.
+            result["character_state"] = "kept (dormant)"
+        else:
+            try:
+                result["character_state"] = _reset_mechanical_state(name)
+            except Exception as e:
+                result["character_state"] = None
+                result["errors"].append({"store": "character_state", "error": str(e)})
 
     result["kept"] = list(KEPT[scope])
+    if leader:
+        result["kept"].append(
+            "memories, thoughts, day/week/season summaries, diary, learned secrets "
+            f"and shared soul sections — the mind belongs to {leader}")
     logger.info("Character reset [%s] scope=%s: %s", name, scope,
                 {k: v for k, v in result.items() if k not in ("kept", "character")})
     return result
@@ -490,9 +545,15 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
 def seed_intro_memory(character_name: str, intro_text: str) -> int:
     """Seed the ONE memory a fresh start begins with. Returns 1 when a memory
     was written, 0 for an empty text. Raises on a failed write — the caller
-    decides whether that is fatal."""
+    decides whether that is fatal.
+
+    A linked body gets none (0): its memories are its leader's mind, which a
+    fresh start of the body leaves untouched (ruling R3)."""
     text = (intro_text or "").strip()
     if not text:
+        return 0
+    from app.core.linked_characters import is_linked
+    if is_linked(character_name):
         return 0
     from app.core.db import get_connection
     from app.models.memory import add_memory
@@ -559,4 +620,4 @@ def _reading_secret_locks(name):
 
 register_reset_store("reading_secret_membership", _reset_reading_secret_membership,
                      (SCOPE_REINIT,), what="learned-secret visibility in other owners' rows",
-                     lock=_reading_secret_locks)
+                     lock=_reading_secret_locks, mind=True)

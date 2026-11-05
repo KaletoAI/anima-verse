@@ -593,7 +593,7 @@ def delete_character_route(character_name: str) -> Dict[str, Any]:
     success = delete_character(character_name)
     if not success:
         raise HTTPException(status_code=404,
-                            detail=f"Character '{character_name}' nicht gefunden oder geschuetzt")
+                            detail=f"Character '{character_name}' not found or protected")
     return {"status": "success", "deleted": character_name}
 
 
@@ -1070,7 +1070,7 @@ async def upload_character_image(character_name: str, request: Request) -> Dict[
         allowed_extensions = {"png", "jpg", "jpeg", "gif", "webp", "mp4"}
         filename = file.filename.lower()
         if not any(filename.endswith(ext) for ext in allowed_extensions):
-            raise HTTPException(status_code=400, detail="Format nicht unterstuetzt")
+            raise HTTPException(status_code=400, detail="Format not supported")
 
         images_dir = get_character_images_dir(character_name)
 
@@ -2311,7 +2311,7 @@ def set_character_profile_image_endpoint(character_name: str, image_filename: st
                 "profile_image": image_filename
             }
         else:
-            raise HTTPException(status_code=404, detail="Bild nicht gefunden")
+            raise HTTPException(status_code=404, detail="Image not found")
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -2332,7 +2332,7 @@ def delete_character_image_endpoint(character_name: str, image_filename: str) ->
                 "deleted_image": image_filename
             }
         else:
-            raise HTTPException(status_code=404, detail="Bild nicht gefunden")
+            raise HTTPException(status_code=404, detail="Image not found")
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -2708,9 +2708,13 @@ def delete_single_knowledge(character_name: str, entry_id: str) -> Dict[str, Any
 
 @router.delete("/{character_name}/knowledge")
 def clear_character_knowledge(character_name: str) -> Dict[str, Any]:
-    """Delete all memory entries of a character."""
+    """Delete all memory entries of a character. A linked body's memories are
+    its leader's mind — refused with 409 (clear them on the leader)."""
     from app.models.memory import clear_memories
-    m_count = clear_memories(character_name)
+    try:
+        m_count = clear_memories(character_name)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"status": "success", "deleted_count": m_count}
 
 
@@ -2832,10 +2836,11 @@ async def memory_consolidate_now(character_name: str,
                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Runs the full 5-phase memory consolidation for ONE character right now
     (admin test tool — exercise the per-NPC amount caps without waiting for
-    the 6h background cycle). Synchronous; returns the removal counts."""
+    the 6h background cycle). Synchronous; returns the removal counts.
+    A dormant character exists; a linked body's run is its MIND's."""
     import asyncio as _aio
     from app.models.character import list_available_characters
-    if character_name not in list_available_characters():
+    if character_name not in list_available_characters(include_dormant=True):
         raise HTTPException(status_code=404,
                             detail=f"Character '{character_name}' not found")
     from app.core.memory_service import handle_memory_consolidation

@@ -703,7 +703,8 @@ hängt, räumt ihn über denselben Weg auf (Check:
 | `app.core.room_entry.characters_in_room(location_id, room_id, exclude="", *, strict=False, profiles=None) -> List[str]` | The existing room-ID/name membership algorithm; empty room means the whole location. Strict mode validates context and reuses a held name-to-profile mapping |
 | `app.core.agent_loop.get_agent_loop().bump(character_name, hint='', perception_template='', perception_vars=None, tool_whitelist=None) -> bool` ✅ | Charakter für einen zeitnahen Thought-Turn vormerken. `hint` ist die Zeile, die er dabei liest; `tool_whitelist` schränkt die angebotenen Verben ein. Liefert `False`, wenn er keinen Turn bekommen kann (z.B. temporärer NPC) |
 | `app.core.agent_loop.get_agent_loop().bump_respond(character_name, speaker, content, volume='normal', obligatory=True, hint='', winding_down=False, on_demand=False, request_id='') -> bool` | Queue a visible direct chat/tool answer independently of autonomous thoughts and HOT-chat gating. Explicit `on_demand=True` requests may answer during freeze, but not queue pause or world sleep. Optional opaque `request_id` correlates a `respond_finished` event when the turn completes, is cancelled, superseded or dropped; callers may request another unanswered question on their next regular check. Ordinary room reactions leave `on_demand=False`. |
-| `app.models.memory.add_memory(character_name, content, memory_type='semantic', importance=3, tags=None, context='', related_character='', …)` | Erinnerung anlegen |
+| `app.models.memory.add_memory(character_name, content, memory_type='semantic', importance=3, tags=None, context='', related_character='', …)` | Erinnerung anlegen. Pass the ACTING character: the row is stored under its mind (`linked_characters.mind_of`), a linked body is recorded as `meta.body` |
+| `app.models.memory.memory_body(mem) -> str` | The linked body that formed a memory (`meta.body`), else `""` — a renderer writes such a memory as "(as <body>) …" |
 | `app.models.account.is_player_controlled(character_name)` / `get_active_character()` ✅ / `get_player_identity(default='user')` ✅ | Avatar-Erkennung, Anzeigename des Spielers. Einen festen 1:1-Gesprächspartner gibt es nicht mehr — wer gerade beisammen ist, sagt `app.core.perception.addressable_for(character_name)` |
 
 ## Chat & Messaging ✅ (talk_to / send_message / notify_user)
@@ -1533,6 +1534,14 @@ stat writers and LLM stat adjustments continue to use the base values (0–100).
 - `delete_secrets_by_ref(character_name, source_ref)` → number deleted with the exact reference, scoped to this owner.
 - `known_about_others_block(character_name: str) -> str` → known-about-others prompt text, or `""`; shared by chat and both thought templates (thoughts require `secrets_enabled`). Own secrets are excluded.
 - `is_record(secret)` → whether `source == "record"`.
+- `knows(secret, name)` → whether `name` is a knower, through its mind (a linked body knows what its leader knows) — use it instead of `name in secret["known_by"]`.
+
+Secrets belong to the MIND (linked characters): every function above stores and
+reads under the owner's mind (`app.core.linked_characters.mind_of`),
+`known_by`/`discovered_by` store knowers as minds, a secret a body creates
+carries `body` (the owner's prompt marks it "(as <body>)", a knower reads
+"About <body>: …"), and the known-about-others lookup includes dormant owners.
+The keyed lock is `"secrets"` keyed by the owner's MIND name.
 
 The owner's `[known by: …]` annotation omits every name in `discovered_by`;
 if no visible knowers remain, the annotation is omitted.
@@ -1616,6 +1625,22 @@ Admin routes (all `require_admin`): `GET`/`PUT`/`DELETE /characters/{name}/link`
 (`PUT` body `{leader, shared_soul_sections}`), `POST /characters/{leader}/linked`
 (`{name}`). Refusals answer 409 with the error text.
 
+**The mind stores** resolve the name they are given through `mind_of` at their
+choke point, so a package passes the ACTING character and never resolves it
+itself: memories (`app.models.memory`, body-written rows carry `meta.body`,
+`app.models.memory.memory_body(mem)`), thoughts (`app.models.thought_store`, rows carry `body`),
+the day/week/season summaries (`app.core.day_consolidation`,
+`app.core.memory_service`; the per-partner chat summaries stay with the body),
+secrets kept and learned (`app.models.secrets`, `app.models.secrets.knows(secret, name)`) and the
+core diary (`app.models.diary`, `metadata.body`). Consolidation runs once per
+mind over the whole family: `app.core.day_consolidation.family_scenes(character_name, after_ts="", limit=50)`
+is the family's not-yet-folded scene list (each scene once, newest first) and
+`app.core.day_consolidation.scene_as(scene, reader)` the member a reader lived a
+scene as ("" when it took part itself) — the "(as <body>)" mark. The chat and
+thought templates get `linked_leader` (the one-mind identity line, system
+part). A reset of a body skips every mind store (`register_reset_store(...,
+mind=True)` for a package's); a fresh start of a dormant leader is refused.
+
 ## Package tables — `app.core.db`
 
 A package that keeps world state of its own stores it in `world.db` (never a JSON
@@ -1632,8 +1657,10 @@ other per-character table. Wipes on a character reset go through a reset store
 
 ## Character reset stores
 
-`app.core.character_reset.register_reset_store(key, fn, scopes=SCOPES, *, what, lock=None)`
-registers a package-owned store from its manifest `on_load` module. `SCOPES` is
+`app.core.character_reset.register_reset_store(key, fn, scopes=SCOPES, *, what, lock=None, mind=False)`
+registers a package-owned store from its manifest `on_load` module. `mind=True`
+marks a MIND store (keyed by `linked_characters.mind_of`): a reset of a linked
+body skips it, a reset of the leader runs it. `SCOPES` is
 `("memory", "reinit")`; use `(SCOPE_REINIT,)` for fresh-start-only state. Keys
 must be unique, nonempty and must not collide with core stores/result fields.
 Reloading the same key replaces its handler. Registration and snapshots are

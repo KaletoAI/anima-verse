@@ -13,5 +13,7 @@ def reset_cache(conn, character_name):
     return int(existed)
 
 
+# The fingerprints guard memories, and memories are a MIND store (a reset of
+# a linked body leaves them, so it leaves their fingerprints too).
 register_reset_store("knowledge_extract_cache", reset_cache, SCOPES,
-                     what="extracted-fact file fingerprints")
+                     what="extracted-fact file fingerprints", mind=True)
