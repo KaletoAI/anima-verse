@@ -8,19 +8,14 @@ One class, three verbs (``params: {verb: transform|revert|reveal_identity}``):
 * ``revert`` — the clearing verb of the ``is_transformed`` flag; visible only
   while the character wears a persona.
 * ``reveal_identity`` — ``{"target": "<name>"}``: makes one present person a
-  knower and tells the two of them in a private line.
-
-The identity lines of the scene state are not a verb's: they come from
-``prompt_lines`` through the ``character.prompt_context`` and
-``character.thought_context`` events (``register.py``), so a knower who
-carries no power item gets them too.
+  knower (the bearer's knower secret, ``knowers.add``) and tells the two of
+  them in a private line.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
 from app.core.game_time import GameTime
-from app.core.identity_view import active_persona, resolve_name, shown_name
 from app.core.perception import addressable_for, record_private_line
 from app.core.prompt_templates import render
 from app.core.timeutils import game_time
@@ -127,7 +122,7 @@ class TransformationSkill(PluginSkill):
             d = self._reveal_persona(character_name, "")
             if isinstance(d, str):
                 return []
-            return sorted((shown_name(character_name, n) for n in addressable_for(character_name)
+            return sorted((n for n in addressable_for(character_name)
                            if not knowers.knows(n, character_name, d.id)),
                           key=str.casefold)
         return []
@@ -139,10 +134,8 @@ class TransformationSkill(PluginSkill):
         if isinstance(d, str):
             return ""
         present = addressable_for(character_name)
-        inside = [shown_name(character_name, n) for n in present
-                  if knowers.knows(n, character_name, d.id)]
-        outside = [shown_name(character_name, n) for n in present
-                   if not knowers.knows(n, character_name, d.id)]
+        inside = [n for n in present if knowers.knows(n, character_name, d.id)]
+        outside = [n for n in present if not knowers.knows(n, character_name, d.id)]
         return render("transformation/decision_context.md", alias=d.alias,
                       knowers_present=sorted(inside, key=str.casefold),
                       non_knowers_present=sorted(outside, key=str.casefold))
@@ -184,7 +177,7 @@ class TransformationSkill(PluginSkill):
         if row is None:
             return ToolRefusal(f"{c} is not transformed")
         d = definitions.load().get(row.persona_id)
-        alias = str((row.outfit_snapshot or {}).get("alias") or (d.alias if d else ""))
+        alias = str((row.snapshot or {}).get("alias") or (d.alias if d else ""))
         if not engine.revert(c, reason="verb"):
             return ToolRefusal(f"{c} is not transformed")
         return f"{c} turns back from {alias or 'the persona'}."
@@ -204,23 +197,11 @@ class TransformationSkill(PluginSkill):
             return "you have no secret identity to reveal"
         return _pick(options, token)
 
-    def _present_target(self, c: str, token: str, present: List[str]) -> Optional[str]:
-        """The present character ``token`` names from ``c``'s mouth, or None.
-
-        A label "<alias> (<name>)" counts by its name. A real name of a
-        transformed character ``c`` is not in on is not here — ``c`` sees
-        only the persona (Ruling R4)."""
-        token = (token or "").strip()
-        if token.endswith(")") and "(" in token:
-            token = token[token.rindex("(") + 1:-1].strip()
-        target = resolve_name(c, token)
-        if target is None or target not in present:
-            return None
-        persona = active_persona(target)
-        if (persona is not None and token.casefold() == target.casefold()
-                and not knowers.knows(c, target, persona.persona_id)):
-            return None
-        return target
+    @staticmethod
+    def _present_target(token: str, present: List[str]) -> Optional[str]:
+        """The present character ``token`` names (casefolded, stripped), or None."""
+        folded = (token or "").strip().casefold()
+        return next((n for n in present if n.casefold() == folded), None) if folded else None
 
     def _reveal(self, c: str, token: str, persona: str) -> str:
         if not token.strip():
@@ -228,19 +209,18 @@ class TransformationSkill(PluginSkill):
         d = self._reveal_persona(c, persona)
         if isinstance(d, str):
             return ToolRefusal(d)
-        target = self._present_target(c, token, addressable_for(c))
+        target = self._present_target(token, addressable_for(c))
         if target is None or target == c:
             return ToolRefusal(f"{token.strip()} is not here — only someone present can be told")
         if knowers.knows(target, c, d.id):
-            return ToolRefusal(f"{shown_name(c, target)} already knows that you are {d.alias}")
+            return ToolRefusal(f"{target} already knows that you are {d.alias}")
         if not knowers.add(target, c, d.id):
             return ToolRefusal(f"the secret of {d.alias} could not be shared")
-        label = shown_name(c, target)
-        content = render("transformation/reveal.md", bearer=c, target=label, alias=d.alias)
+        content = render("transformation/reveal.md", bearer=c, target=target, alias=d.alias)
         record_private_line(recipients=[c, target], content=content,
                             location_id=get_character_current_location(c) or "",
                             room_id=get_character_current_room(c) or "",
                             source="transformation:reveal",
                             perception_meta={"transformation": "reveal", "persona_id": d.id})
         self.ctx.logger.info("%s reveals persona %s to %s", c, d.id, target)
-        return f"{c} reveals to {label} that {c} is {d.alias}."
+        return f"{c} reveals to {target} that {c} is {d.alias}."

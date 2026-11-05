@@ -1,11 +1,11 @@
-"""Transform / revert — the mechanics of wearing a persona.
+"""Transform / revert — the trigger of a persona.
 
-``transform`` remembers the worn outfit, grants and puts on the suit, locks
-the outfit, sets the ``is_transformed`` flag, applies the persona's condition,
-strikes the transform activity, records the active row and tells the present
-knowers. ``revert`` undoes all of it in reverse and starts the cooldown.
+``transform`` sets the ``is_transformed`` flag, applies the persona's
+condition, strikes the transform activity, records the active row and tells
+the present knowers. ``revert`` undoes it in reverse and starts the cooldown.
 ``tick`` (the ``world_tick`` hook) ends transformations whose GAME-time
-duration ran out or whose bearer no longer holds the power item.
+duration ran out or whose bearer no longer holds the power item. The worn
+outfit is not touched.
 
 Locks: one ``keyed_lock("transformation", bearer)`` spans a whole transform or
 revert (two of them for the same bearer never interleave); inside it the
@@ -13,16 +13,15 @@ profile part runs under ``keyed_lock("character_profile", bearer)``. The pose
 setters take the places lock, which comes BEFORE the profile lock, so they run
 after the profile lock is released. No LLM or HTTP call happens under either.
 
-The active row's ``outfit_snapshot`` holds everything a revert needs even when
-the persona was edited or removed meanwhile: ``pieces`` / ``items`` (the
-outfit worn before), ``condition_id`` and ``alias`` (as applied) and
-``pose_key`` (the catalog key the transform activity resolved to; the pose is
-cleared on revert only while it is still that one).
+The active row's ``snapshot`` holds everything a revert needs even when the
+persona was edited or removed meanwhile: ``condition_id`` and ``alias`` (as
+applied) and ``pose_key`` (the catalog key the transform activity resolved
+to; the pose is cleared on revert only while it is still that one).
 """
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from app.core.effect_application import apply_character_effects
 from app.core.game_time import GameDuration, GameTime
@@ -34,10 +33,9 @@ from app.core.prompt_templates import render
 from app.core.timeutils import game_time
 from app.models.character import (clear_pose_intent, get_character_current_location,
                                   get_character_current_room, get_character_profile,
-                                  is_outfit_locked, list_available_characters,
-                                  set_outfit_locked, set_pose_intent, set_state_flag)
-from app.models.inventory import (add_to_inventory, apply_equipped_pieces,
-                                  get_carried_item_ids, get_item, remove_from_inventory)
+                                  list_available_characters, set_pose_intent,
+                                  set_state_flag)
+from app.models.inventory import get_carried_item_ids
 
 from plugins.transformation import definitions, knowers, store
 from plugins.transformation.definitions import Definition
@@ -56,48 +54,6 @@ def _result(ok: bool, reason: str = "", alias: str = "") -> TransformResult:
     return {"ok": ok, "reason": reason, "alias": alias}
 
 
-def _piece_slots(item_id: str) -> Optional[List[str]]:
-    """The slots of an outfit piece, ``None`` for any other item."""
-    item = get_item(item_id)
-    if not item or item.get("category") != "outfit_piece":
-        return None
-    raw = (item.get("outfit_piece") or {}).get("slots") or []
-    return [str(s).strip().lower() for s in raw if str(s).strip()]
-
-
-def _suit_outfit(snap_pieces: Dict[str, str], snap_items: List[str],
-                 suit: tuple) -> tuple:
-    """Target ``(pieces, items)``: the snapshot with the suit put over it.
-
-    A snapshot piece is dropped as a whole when the suit covers ANY of its
-    slots (a dress under a suit top must not keep the top slot), so the suit
-    wins every slot it names. Suit pieces go in by their first slot;
-    ``apply_equipped_pieces`` mirrors the rest. A suit item that is no outfit
-    piece is worn as equipment next to the snapshot's.
-    """
-    covered: set = set()
-    suit_pieces: Dict[str, str] = {}
-    items = list(snap_items)
-    for iid in suit:
-        slots = _piece_slots(iid)
-        if slots is None:
-            if iid not in items:
-                items.append(iid)
-            continue
-        if not slots:
-            continue
-        covered.update(slots)
-        suit_pieces.setdefault(slots[0], iid)
-    slots_of: Dict[str, set] = {}
-    for slot, iid in snap_pieces.items():
-        if iid:
-            slots_of.setdefault(iid, set()).add(slot)
-    pieces = {slot: iid for slot, iid in snap_pieces.items()
-              if iid and not (slots_of[iid] & covered)}
-    pieces.update(suit_pieces)
-    return pieces, items
-
-
 def _condition(bearer: str, condition_id: str, add: bool) -> None:
     if not condition_id:
         return
@@ -110,18 +66,8 @@ def _condition(bearer: str, condition_id: str, add: bool) -> None:
     apply_character_effects(bearer, [effect], game_time(), source=SOURCE)
 
 
-def _restore(bearer: str, snapshot: Dict[str, Any], granted: tuple,
-             lock_before: bool) -> None:
-    """Undo the profile part of a transform. Caller holds the profile lock.
-
-    The outfit is restored FIRST: the granted suit pieces are still worn and
-    would otherwise be taken out of an inventory that still equips them."""
-    apply_equipped_pieces(bearer, pieces=dict(snapshot.get("pieces") or {}),
-                          items=list(snapshot.get("items") or []),
-                          source="transformation_revert")
-    for iid in granted:
-        remove_from_inventory(bearer, iid, force=True)
-    set_outfit_locked(bearer, lock_before)
+def _restore(bearer: str, snapshot: Dict[str, Any]) -> None:
+    """Undo the profile part of a transform. Caller holds the profile lock."""
     set_state_flag(bearer, FLAG, False)
     _condition(bearer, str(snapshot.get("condition_id") or ""), add=False)
 
@@ -188,52 +134,32 @@ def transform(bearer: str, persona_id: str, *, source: str,
                 logger.warning("unusable cooldown stamp %r for %s/%s — ignored",
                                cooldown, bearer, d.id)
 
+        snapshot: Dict[str, Any] = {"condition_id": d.condition_id, "alias": d.alias,
+                                    "pose_key": ""}
         with keyed_lock("character_profile", bearer):
-            profile = get_character_profile(bearer)
-            snapshot: Dict[str, Any] = {
-                "pieces": dict(profile.get("equipped_pieces") or {}),
-                "items": list(profile.get("equipped_items") or []),
-                "condition_id": d.condition_id,
-                "alias": d.alias,
-                "pose_key": "",
-            }
-            lock_before = is_outfit_locked(bearer)
-            granted: List[str] = []
             try:
-                carried = get_carried_item_ids(bearer)
-                for iid in d.suit_items:
-                    if iid in carried or iid in granted:
-                        continue
-                    if add_to_inventory(bearer, iid, obtained_from=SOURCE, obtained_method="manual"):
-                        granted.append(iid)
-                    else:
-                        logger.warning("suit item %s could not be granted to %s", iid, bearer)
-                pieces, items = _suit_outfit(snapshot["pieces"], snapshot["items"], d.suit_items)
-                apply_equipped_pieces(bearer, pieces=pieces, items=items, source=SOURCE)
-                set_outfit_locked(bearer, True)
                 set_state_flag(bearer, FLAG, True)
                 _condition(bearer, d.condition_id, add=True)
             except Exception:
                 logger.exception("transform of %s into %s failed — undoing", bearer, d.id)
-                _restore(bearer, snapshot, tuple(granted), lock_before)
+                _restore(bearer, snapshot)
                 raise
 
         until = ""
         if d.max_duration_minutes > 0:
             until = (now + GameDuration.of(minutes=d.max_duration_minutes)).canonical()
         row = ActiveRow(bearer=bearer, persona_id=d.id, started_game=now.canonical(),
-                        until_game=until, outfit_snapshot=snapshot,
-                        granted_items=tuple(granted), lock_before=lock_before)
+                        until_game=until, snapshot=snapshot)
         try:
             store.set_active(row)
         except Exception:
             logger.exception("transform of %s into %s not recorded — undoing", bearer, d.id)
             with keyed_lock("character_profile", bearer):
-                _restore(bearer, snapshot, tuple(granted), lock_before)
+                _restore(bearer, snapshot)
             raise
         pose_key = _strike_activity(bearer, d.transform_activity)
         if pose_key:
-            store.set_active(replace(row, outfit_snapshot={**snapshot, "pose_key": pose_key}))
+            store.set_active(replace(row, snapshot={**snapshot, "pose_key": pose_key}))
         logger.info("%s transforms into %s (%s, source=%s, until=%s)",
                     bearer, d.alias, d.id, source, until or "revert")
         _narrate(bearer, d.id, d.alias, "transform", source=source)
@@ -243,11 +169,10 @@ def transform(bearer: str, persona_id: str, *, source: str,
 def revert(bearer: str, *, reason: str) -> bool:
     """End ``bearer``'s transformation. False when there is none.
 
-    ``reason``: one of ``REVERT_REASONS`` (log + narration meta). Restores the
-    outfit before the granted suit pieces are taken back, restores the outfit
-    lock, clears the flag and the condition, clears the transform activity if
-    it is still the current pose, starts the cooldown (GAME time) and tells
-    the present knowers.
+    ``reason``: one of ``REVERT_REASONS`` (log + narration meta). Clears the
+    flag and the condition, clears the transform activity if it is still the
+    current pose, starts the cooldown (GAME time) and tells the present
+    knowers.
     """
     if reason not in REVERT_REASONS:
         logger.warning("revert of %s with unknown reason %r", bearer, reason)
@@ -256,10 +181,10 @@ def revert(bearer: str, *, reason: str) -> bool:
         if row is None:
             return False
         d = definitions.load().get(row.persona_id)
-        snapshot = dict(row.outfit_snapshot or {})
+        snapshot = dict(row.snapshot or {})
         now = game_time()
         with keyed_lock("character_profile", bearer):
-            _restore(bearer, snapshot, row.granted_items, row.lock_before)
+            _restore(bearer, snapshot)
             pose_key = str(snapshot.get("pose_key") or "")
             pose_now = str(get_character_profile(bearer).get("pose_key") or "")
         store.clear_active(bearer)

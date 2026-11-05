@@ -3,16 +3,11 @@
 The panel provider of the package (``character_panel:transformation``,
 registered in ``register.py``; contract: ``docs/plugins.md`` → "Character
 panels"). One card per persona of the world — the personas whose power item
-the character holds first — in five tabs: Persona (item, alias, enabled,
-appearance), Transformation (phrases, durations, activity, effect), Suit &
-images (suit pieces, image/T-pose backend and LoRAs), Behaviour (the prompt
-fields the persona replaces, the routine pause) and In on the secret (the
-knowers of (persona, character)); a create form; test actions (transform now,
-revert now, give the item to this character).
-
-Panel keys differ from the storage where the value lives inside a JSON column:
-``_OVERRIDE_FIELDS`` maps into ``prompt_overrides``, ``_IMAGE_FIELDS`` into
-``imagegen``.
+the character holds first — in three tabs: Persona (item, alias, enabled),
+Transformation (phrases, durations, activity, effect) and In on the secret
+(the knowers of (persona, character)); a create form; test actions (transform
+now, revert now, give the item to this character). The alias is a plain
+label: the knower secret and the narration name the persona by it.
 
 The persona belongs to its ITEM, not to the character the panel is opened on:
 every card is shown on every character, and whoever holds the item can
@@ -21,9 +16,8 @@ character (she would be the bearer).
 
 The core has already reduced the submitted values to the declared fields and
 coerced their types (``app.core.character_panels.coerce_values``); this module
-checks what is specific to personas (alias rules, one persona per item, a
-worn persona's alias stays). Every string it answers goes through
-``t(en, lang)``.
+checks what is specific to personas (alias required, one persona per item).
+Every string it answers goes through ``t(en, lang)``.
 """
 from __future__ import annotations
 
@@ -31,13 +25,11 @@ import sqlite3
 import unicodedata
 from typing import Any, Dict, List, Optional
 
-from app.core.character_name import CharacterNameError, localized_message, validate_character_name
 from app.core.game_time import GameTime
 from app.core.i18n import localized, t
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.timeutils import game_time
-from app.models.character import list_available_characters
 from app.models.inventory import (add_to_inventory, find_item_location, get_carried_item_ids,
                                   get_item, remove_from_inventory)
 
@@ -48,30 +40,13 @@ from plugins.transformation.definitions import (DEFAULT_COOLDOWN_MINUTES,
 
 logger = get_logger("transformation")
 
-#: Serializes the validate-then-write of definitions (two admins saving the
-#: same alias at once).
+#: Serializes the validate-then-write of definitions (two admins binding the
+#: same item at once).
 _LOCK_KEY = ("transformation_definitions", "*")
 
-#: Item filter of the renderer for outfit pieces (``category == "outfit_piece"``).
-_OUTFIT_FILTER = "outfit"
-
-#: The stored columns the panel writes.
-_EDITABLE = ("item_id", "alias", "description", "suit_items", "condition_id",
-             "activation_phrase", "revert_phrase", "max_duration_minutes",
-             "cooldown_minutes", "transform_activity", "enabled", "pause_routine",
-             "prompt_overrides", "imagegen")
-
-#: Panel key -> key inside the ``prompt_overrides`` column.
-_OVERRIDE_FIELDS = {"personality": "character_personality", "dialogue_style": "dialogue_style",
-                    "presence": "character_presence", "task": "character_task",
-                    "goals": "character_goals"}
-
-#: Panel key -> key inside the ``imagegen`` column.
-_IMAGE_FIELDS = {"image_backend": "workflow", "tpose_backend": "tpose_workflow",
-                 "image_loras": "loras", "tpose_loras": "tpose_loras"}
-
-#: The columns whose panel keys are the column names.
-_PLAIN = tuple(k for k in _EDITABLE if k not in ("prompt_overrides", "imagegen"))
+#: The stored columns the panel writes (panel key = column name).
+_EDITABLE = ("item_id", "alias", "condition_id", "activation_phrase", "revert_phrase",
+             "max_duration_minutes", "cooldown_minutes", "transform_activity", "enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +87,6 @@ def _tabs(lang: str) -> List[Dict[str, Any]]:
     return [
         {"id": "persona", "label": t("Persona", lang)},
         {"id": "transform", "label": t("Transformation", lang)},
-        {"id": "suit", "label": t("Suit & images", lang)},
-        {"id": "behaviour", "label": t("Behaviour", lang),
-         "hint": t("Empty = unchanged. Filled = replaces it while transformed.", lang)},
         {"id": "knowers", "label": t("In on the secret", lang)},
     ]
 
@@ -125,33 +97,21 @@ def _item_field(lang: str) -> Dict[str, Any]:
 
 
 def _alias_field(lang: str) -> Dict[str, Any]:
-    return {"key": "alias", "type": "text", "label": t("Alias", lang), "required": True,
-            "hint": t("The name everyone else sees. Renaming later starts afresh: what others "
-                      "remember stays with the old name.", lang)}
-
-
-def _appearance_field(lang: str) -> Dict[str, Any]:
-    return {"key": "description", "type": "textarea", "label": t("Persona appearance", lang),
-            "hint": t("Body, face and hair as everyone — and every picture — sees them while "
-                      "transformed. The suit comes from the suit pieces.", lang)}
+    return {"key": "alias", "type": "text", "label": t("Alias", lang), "required": True}
 
 
 def _fields(character: str, alias: str, lang: str) -> List[Dict[str, Any]]:
     unit = t("min", lang)
 
-    def on(tab: str, width: str, field: Dict[str, Any], rows: int = 0) -> Dict[str, Any]:
+    def on(tab: str, width: str, field: Dict[str, Any]) -> Dict[str, Any]:
         field.update(tab=tab, width=width)
-        if rows:
-            field["rows"] = rows
         return field
 
     return [
         on("persona", "m", _item_field(lang)),
         on("persona", "m", _alias_field(lang)),
         on("persona", "s", {"key": "enabled", "type": "bool", "label": t("Enabled", lang),
-                            "hint": t("Off: the persona leaves the world and its alias is free.",
-                                      lang)}),
-        on("persona", "full", _appearance_field(lang), rows=3),
+                            "hint": t("Off: nobody can transform into it.", lang)}),
         on("transform", "l", {"key": "activation_phrase", "type": "text",
                               "label": t("Transform phrase", lang),
                               "hint": t("When the avatar says it, the avatar transforms.", lang)}),
@@ -171,37 +131,6 @@ def _fields(character: str, alias: str, lang: str) -> List[Dict[str, Any]]:
         on("transform", "l", {"key": "condition_id", "type": "condition",
                               "label": t("Effect", lang),
                               "hint": t("Condition while transformed.", lang)}),
-        on("suit", "full", {"key": "suit_items", "type": "items", "label": t("Suit", lang),
-                            "filter": _OUTFIT_FILTER,
-                            "hint": t("Worn while transformed; the old outfit returns "
-                                      "afterwards.", lang)}),
-        on("suit", "l", {"key": "image_backend", "type": "backend",
-                         "label": t("Image backend", lang),
-                         "hint": t("Empty = the character's own.", lang)}),
-        on("suit", "l", {"key": "tpose_backend", "type": "backend",
-                         "label": t("T-pose backend", lang),
-                         "hint": t("Empty = image backend.", lang)}),
-        on("suit", "l", {"key": "image_loras", "type": "loras", "label": t("LoRAs", lang),
-                         "backend_field": "image_backend", "target": "render",
-                         "hint": t("Replace the character's LoRAs while transformed.", lang)}),
-        on("suit", "l", {"key": "tpose_loras", "type": "loras", "label": t("T-pose LoRAs", lang),
-                         "backend_field": "tpose_backend", "fallback_field": "image_backend",
-                         "target": "tpose", "hint": t("Empty = the LoRAs above.", lang)}),
-        on("behaviour", "l", {"key": "personality", "type": "textarea",
-                              "label": t("Personality", lang)}, rows=4),
-        on("behaviour", "l", {"key": "dialogue_style", "type": "textarea",
-                              "label": t("Speech", lang)}, rows=4),
-        on("behaviour", "l", {"key": "presence", "type": "textarea",
-                              "label": t("Presence", lang),
-                              "hint": t("Also what others sense of the persona.", lang)}, rows=3),
-        on("behaviour", "l", {"key": "task", "type": "textarea",
-                              "label": t("Tasks", lang)}, rows=3),
-        on("behaviour", "l", {"key": "goals", "type": "textarea",
-                              "label": t("Goals", lang)}, rows=3),
-        on("behaviour", "l", {"key": "pause_routine", "type": "bool",
-                              "label": t("Daily routine rests", lang),
-                              "hint": t("While transformed, her daily schedule is left out "
-                                        "of her thoughts.", lang)}),
         on("knowers", "full", {"key": "knowers", "type": "characters",
                                "label": t("In on the secret", lang),
                                "hint": t("They know that {name} is {alias}.", lang).format(
@@ -210,20 +139,12 @@ def _fields(character: str, alias: str, lang: str) -> List[Dict[str, Any]]:
 
 
 def _create_fields(lang: str) -> List[Dict[str, Any]]:
-    return [_item_field(lang), _alias_field(lang), _appearance_field(lang)]
+    return [_item_field(lang), _alias_field(lang)]
 
 
 def _values(row: Dict[str, Any]) -> Dict[str, Any]:
     """The card values under the panel keys, every field filled."""
-    values = {key: row[key] for key in _PLAIN}
-    overrides = row["prompt_overrides"]
-    for key, stored in _OVERRIDE_FIELDS.items():
-        values[key] = overrides.get(stored, "")
-    image = row["imagegen"]
-    for key, stored in _IMAGE_FIELDS.items():
-        values[key] = [dict(e) for e in image[stored]] if stored in store.IMAGEGEN_LORA_KEYS \
-            else image[stored]
-    return values
+    return {key: row[key] for key in _EDITABLE}
 
 
 def _status(character: str, row: Dict[str, Any], active, lang: str) -> str:
@@ -233,7 +154,7 @@ def _status(character: str, row: Dict[str, Any], active, lang: str) -> str:
             alias=row["alias"], time=_label_of(active.started_game, lang))
     if active is not None:
         worn = store.get_definition(active.persona_id)
-        alias = (worn or {}).get("alias") or str(active.outfit_snapshot.get("alias") or "")
+        alias = (worn or {}).get("alias") or str(active.snapshot.get("alias") or "")
         return t("Currently transformed into {alias}", lang).format(alias=alias)
     cooldown = _cooldown_running(character, pid)
     if cooldown:
@@ -319,33 +240,15 @@ def _check(record: Dict[str, Any], own: Optional[Dict[str, Any]], lang: str) -> 
     if not alias:
         return _required("Alias", lang)
     own_id = own["id"] if own else ""
-    folded = _fold(alias)
     for other in store.list_definitions():
-        if other["id"] == own_id:
-            continue
-        if _fold(other["alias"]) == folded:
-            return t("Another persona already uses the alias {alias}.", lang).format(alias=alias)
-        if other["item_id"] == item_id:
+        if other["id"] != own_id and other["item_id"] == item_id:
             return t("This item already grants the persona {alias}.", lang).format(
                 alias=other["alias"] or other["id"])
-    try:
-        validate_character_name(alias)
-    except CharacterNameError as err:
-        # A persona alias is a reserved character name — its OWN alias may stay.
-        if not (err.code == "reserved" and own and _fold(own["alias"]) == folded):
-            return localized_message(err, lang)
-    if folded in {_fold(n) for n in list_available_characters(include_pooled=True)}:
-        return t("{alias} is the name of a character.", lang).format(alias=alias)
     if (own is None or own["item_id"] != item_id) and get_item(item_id) is None:
         return t("This item does not exist.", lang)
     for key in ("max_duration_minutes", "cooldown_minutes"):
         if int(record[key]) < 0:
             return t("Minutes cannot be negative.", lang)
-    if own and _fold(own["alias"]) != folded:
-        wearers = _wearers(own["id"])
-        if wearers:
-            return t("Revert first: {name} currently wears this persona.", lang).format(
-                name=", ".join(wearers))
     return ""
 
 
@@ -356,29 +259,17 @@ def save(character: str, card_id: Optional[str], values: Dict[str, Any],
         if card_id and own is None:
             return {"ok": False, "error": t("This entry no longer exists.", lang)}
         base: Dict[str, Any] = dict(own) if own else {
-            "item_id": "", "alias": "", "description": "", "suit_items": [], "condition_id": "",
+            "item_id": "", "alias": "", "condition_id": "",
             "activation_phrase": "", "revert_phrase": "",
             "max_duration_minutes": DEFAULT_MAX_DURATION_MINUTES,
             "cooldown_minutes": DEFAULT_COOLDOWN_MINUTES,
             "transform_activity": DEFAULT_TRANSFORM_ACTIVITY, "enabled": True,
-            "pause_routine": True, "prompt_overrides": {},
-            "imagegen": store.normalize_imagegen({}),
         }
         record = dict(base)
-        for key in _PLAIN:
+        for key in _EDITABLE:
             if key in values:
                 record[key] = values[key]
-        overrides = dict(record["prompt_overrides"])
-        for key, stored in _OVERRIDE_FIELDS.items():
-            if key in values:
-                overrides[stored] = values[key]
-        record["prompt_overrides"] = store.normalize_overrides(overrides)
-        image = dict(record["imagegen"])
-        for key, stored in _IMAGE_FIELDS.items():
-            if key in values:
-                image[stored] = values[key]
-        record["imagegen"] = store.normalize_imagegen(image)
-        for key in ("item_id", "alias", "description", "condition_id", "activation_phrase",
+        for key in ("item_id", "alias", "condition_id", "activation_phrase",
                     "revert_phrase", "transform_activity"):
             record[key] = str(record.get(key) or "").strip()
         record["alias"] = unicodedata.normalize("NFC", record["alias"])
@@ -388,7 +279,6 @@ def save(character: str, card_id: Optional[str], values: Dict[str, Any],
             record["cooldown_minutes"] = DEFAULT_COOLDOWN_MINUTES
         record["transform_activity"] = record["transform_activity"] or DEFAULT_TRANSFORM_ACTIVITY
         record["enabled"] = bool(record["enabled"])
-        record["pause_routine"] = bool(record["pause_routine"])
         try:
             record["max_duration_minutes"] = int(record["max_duration_minutes"])
             record["cooldown_minutes"] = int(record["cooldown_minutes"])

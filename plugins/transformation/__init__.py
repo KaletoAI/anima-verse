@@ -1,6 +1,6 @@
 """Transformation: a character holding a power item transforms into a persona.
 
-While transformed, every observer who is not in on the secret perceives only
-the persona's alias. The core reaches this package only through the identity
-providers registered in ``register.py`` (``app/core/identity_view.py``).
+The trigger only: the item check, phrases, cooldown, duration, the persona's
+condition and transform activity, and who is in on the secret. Nothing masks
+a name or an appearance.
 """

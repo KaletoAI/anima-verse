@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke: the transformation verbs, the avatar's phrases and the scene-state
-identity lines (``plugins/transformation/skill.py``, ``intercept.py``,
-``prompt_lines.py``).
+"""Smoke: the transformation verbs and the avatar's phrases
+(``plugins/transformation/skill.py``, ``intercept.py``).
 
 Usage:  ./.venv/bin/python scripts/smoke_transformation_verbs.py
 
@@ -12,16 +11,22 @@ transform activity resolves through the catalog default; the package is
 loaded the way the server loads it (``packages.enabled = "transformation"``,
 ``discover_packages()``), the verbs through the skill manager.
 
+THE SPEC (task 2 of the linked-characters plan, ruling P1): the verbs
+Transform / Revert / RevealIdentity and the phrase intercept stay; the
+package adds no scene-state identity lines any more and nothing masks a
+name, so every name a verb prints or accepts is the real one. RevealIdentity
+adds the knower to the bearer's secret (``knowers.add``).
+
 FIXTURE
     Location "Inn", room "taproom": Cara (bearer of "amulet"), Kim (knower of
     Cara), Obs (knows nothing), Ava (the avatar, bearer of "ring").
-    Persona p1: item amulet, alias "Moonveil", no suit, no condition,
+    Persona p1: item amulet, alias "Moonveil", no condition,
     max 0 (until reverted), cooldown 0.
     Persona p2: item ring, alias "Starlace", activation_phrase
     "by the moonlight", revert_phrase "Moon, rest", max 0, cooldown 0.
     Game clock pinned (factor 0).
 
-THE RULES (task brief) and what follows BY HAND
+THE RULES, and what follows BY HAND
 [A] tick() seeds the holders' secrets; Kim becomes a knower of Cara/p1.
     Visibility: transform is visible for Cara and Ava (they hold a persona
     item), hidden for Kim and Obs (they hold none). reveal_identity likewise.
@@ -35,24 +40,16 @@ THE RULES (task brief) and what follows BY HAND
     Cara's active persona is p1, flag is_transformed True.
     The next round offers "Revert" and hides "Transform"
     ("already transformed" from available_now).
-[C] Scene-state lines while Cara is Moonveil. Everybody stands in the
-    taproom; names in a line are sorted (casefold) and joined "A and B".
-    - Kim knows Cara/p1, Cara is present and transformed; the others present
-      besides Kim and Cara are Ava and Obs, neither knows ->
-      'Moonveil here is actually Cara. Ava and Obs do not know — do not call
-      Moonveil "Cara" in front of them.'  Kim knows no other bearer, so that
-      is Kim's ONLY line.
-    - Cara is transformed; her knowers are [Kim]; non-knowers present Ava,
-      Obs -> 'You are currently Moonveil. Only Kim knows that you are Cara.
-      Ava and Obs do not know — never reveal it in front of them.'
-    - Obs knows nothing -> blocks_for("Obs") == [].
+[C] No identity lines while Cara is Moonveil (everybody in the taproom):
+    - the chat event (character.prompt_context, mode chat) and the thought
+      event (character.thought_context) add no block naming "Moonveil" for
+      Kim (knower), Cara (bearer) or Obs; the thought context of Kim has no
+      "Moonveil" in its skill context blocks.
     - The rp_first tool step: reveal_identity's menu for Cara lists who
-      present is not in on it -> ["Ava", "Obs"]; its state line reads
+      present is not in on it, by real name, sorted -> ["Ava", "Obs"]; its
+      state line reads
       "Persona Moonveil. Already in on it: Kim. Not in on it: Ava, Obs."
       Cara carries one power item, so transform has no menu.
-    - The chat event (character.prompt_context, mode chat) gives Kim the same
-      line; the thought event (character.thought_context) gives Kim one
-      section that starts with "=== " and contains the line.
 [D] Avatar phrases (say_intercept, through play._run_say_intercepts):
     - Ava says "By the  Moonlight!" -> normalized "by the moonlight" contains
       p2's activation phrase -> consumed, result {"kind": "transformation",
@@ -67,8 +64,9 @@ THE RULES (task brief) and what follows BY HAND
     - Ava says "Moon... rest." -> normalized "moon rest" == revert phrase ->
       consumed, ok True, alias "Starlace"; Ava no longer active.
 [E] reveal_identity (Cara still Moonveil):
-    - target Obs -> not an "Error"; identity_view.knows("Obs","Cara") True,
-      shown_name("Obs","Cara") == "Moonveil (Cara)"; the line
+    - target "obs" (casefold of a present name) -> not an "Error";
+      knowers.knows("Obs","Cara","p1") True and Obs is on the known_by list
+      of Cara's secret for p1; the line
       "Cara reveals to Obs: Cara is Moonveil." reaches exactly {Cara, Obs}.
     - target Obs again -> starts with "Error" (already knows).
     - target "Nobody" (not present) -> starts with "Error".
@@ -93,10 +91,8 @@ os.environ["ANIMATION_RIG_FILE"] = str(ROOT / "rig.fbx")
 
 PERSONAS = [
     {"id": "p1", "item_id": "amulet", "alias": "Moonveil",
-     "description": "A figure in moonlit silver.",
      "max_duration_minutes": 0, "cooldown_minutes": 0},
     {"id": "p2", "item_id": "ring", "alias": "Starlace",
-     "description": "A figure wrapped in starlight.",
      "activation_phrase": "by the moonlight", "revert_phrase": "Moon, rest",
      "max_duration_minutes": 0, "cooldown_minutes": 0},
 ]
@@ -171,11 +167,11 @@ from app.plugins import loader, registry  # noqa: E402
 loader.discover_packages()
 check("package loaded", "transformation" in {p.id for p in registry.packages()}, True)
 
-from app.core import hooks, identity_view, perception  # noqa: E402
+from app.core import hooks, perception  # noqa: E402
 from app.core.dependencies import get_skill_manager  # noqa: E402
 from app.core.streaming import turn_tools  # noqa: E402
 from app.skills.base import TurnFacts  # noqa: E402
-from plugins.transformation import engine, knowers, prompt_lines, store  # noqa: E402
+from plugins.transformation import engine, knowers, store  # noqa: E402
 
 manager = get_skill_manager()
 transform = manager.get_skill("transform")
@@ -244,37 +240,24 @@ check("flag set -> revert's state active", inactive_clearing_tools("Cara", [reve
 check("Transform hidden while transformed",
       (transform.name in _got, _hidden.get(transform.name)), (False, "already transformed"))
 
-# ── [C] scene-state lines ───────────────────────────────────────────────────
-print("[C] scene-state lines")
-KIM_LINE = ('Moonveil here is actually Cara. Ava and Obs do not know — do not call '
-            'Moonveil "Cara" in front of them.')
-CARA_LINE = ('You are currently Moonveil. Only Kim knows that you are Cara. '
-             'Ava and Obs do not know — never reveal it in front of them.')
-_kim = prompt_lines.blocks_for("Kim")
-check("Kim's lines", _kim, [KIM_LINE])
-check("Kim's line names the identity", any("Moonveil here is actually Cara" in b for b in _kim), True)
-check("Cara's lines", prompt_lines.blocks_for("Cara"), [CARA_LINE])
-check("Obs gets nothing", prompt_lines.blocks_for("Obs"), [])
+# ── [C] no identity lines ───────────────────────────────────────────────────
+print("[C] no identity lines")
+for _who in ("Kim", "Cara", "Obs"):
+    _blocks = []
+    hooks.emit("character.prompt_context", character_name=_who, mode="chat", blocks=_blocks)
+    check(f"chat event: nothing about Moonveil for {_who}",
+          [b for b in _blocks if "Moonveil" in str(b)], [])
+    _sections = []
+    hooks.emit("character.thought_context", character_name=_who, blocks=_sections)
+    check(f"thought event: nothing about Moonveil for {_who}",
+          [b for b in _sections if "Moonveil" in str(b)], [])
+from app.core.thought_context import build_thought_context  # noqa: E402
+check("thought context of Kim has no identity line",
+      "Moonveil" in build_thought_context("Kim").get("skill_context_blocks", ""), False)
 check("reveal menu for Cara", reveal.decision_menu("Cara"), ["Ava", "Obs"])
 check("reveal state line for Cara", reveal.tool_decision_context("Cara"),
       "Persona Moonveil. Already in on it: Kim. Not in on it: Ava, Obs.")
 check("transform menu with one item", transform.decision_menu("Cara"), [])
-_blocks = []
-hooks.emit("character.prompt_context", character_name="Kim", mode="chat", blocks=_blocks)
-check("chat event carries Kim's line", KIM_LINE in _blocks, True)
-_blocks = []
-hooks.emit("character.prompt_context", character_name="Obs", mode="chat", blocks=_blocks)
-check("chat event gives Obs nothing of it", [b for b in _blocks if "Moonveil" in b], [])
-_sections = []
-hooks.emit("character.thought_context", character_name="Kim", blocks=_sections)
-check("thought event: one section for Kim", len(_sections), 1)
-check("thought section is headed and holds the line",
-      bool(_sections) and _sections[0].startswith("=== ") and KIM_LINE in _sections[0], True)
-from app.core.thought_context import build_thought_context  # noqa: E402
-check("thought context of Kim carries the line",
-      KIM_LINE in build_thought_context("Kim").get("skill_context_blocks", ""), True)
-check("thought context of Obs does not",
-      "Moonveil" in build_thought_context("Obs").get("skill_context_blocks", ""), False)
 
 # ── [D] avatar phrases ──────────────────────────────────────────────────────
 print("[D] avatar phrases")
@@ -308,10 +291,10 @@ check("Ava no longer transformed", store.get_active("Ava"), None)
 
 # ── [E] reveal_identity ─────────────────────────────────────────────────────
 print("[E] reveal_identity")
-_res = reveal.execute('{"agent_name":"Cara","target":"Obs"}')
+_res = reveal.execute('{"agent_name":"Cara","target":"obs"}')
 check("reveal to Obs is no error", is_error(_res), False)
-check("Obs knows now", identity_view.knows("Obs", "Cara"), True)
-check("Obs sees both names", identity_view.shown_name("Obs", "Cara"), "Moonveil (Cara)")
+check("Obs knows now", knowers.knows("Obs", "Cara", "p1"), True)
+check("Obs on the secret", "Obs" in knowers.knower_names("Cara", "p1"), True)
 _ids, _who = line_rows("Cara reveals to Obs: Cara is Moonveil.")
 check("one reveal line", len(_ids), 1)
 check("reveal line reaches Cara + Obs only", _who, {"Cara", "Obs"})

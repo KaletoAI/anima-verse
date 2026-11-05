@@ -1,7 +1,7 @@
 name: transformation
 version: "1.0.0"
 category: skill
-description: A character holding a power item transforms into a persona with its own alias; whoever is not in on the secret sees only the alias.
+description: A character holding a power item transforms into a persona (a condition and a transform activity while it lasts); knowers are kept as a character secret.
 capability_label: Transformation
 capability_description: The character can transform into a persona through a power item it holds, and back.
 on_load: register.py
