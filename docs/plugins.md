@@ -1168,7 +1168,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `sleep` | `sleep`, `wakeup` | Schlaf-Flag setzen und den Charakter währenddessen von der Karte nehmen |
 | `take_photo` | `image_generation` | Der Charakter macht ein Foto / erzeugt ein Bild (Verb über den Core-Bild-Service) |
 | `talk_to` | `talk_to` | Dialog von Angesicht zu Angesicht, in Hörweite |
-| `transformation` | — | Transformation through a power item into a persona with an alias; non-knowers perceive only the alias. Personas are the world config list `skills.transformation_personas` (an `is_array` package subsection); `on_load` creates the `transformation_*` tables and registers the `identity.active_persona` / `identity.knows` / `identity.persona_names` providers and a reinit reset store. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in Characters → Secrets |
+| `transformation` | `transform`, `revert`, `reveal_identity` | Transformation through a power item into a persona with an alias; non-knowers perceive only the alias. Personas are the world config list `skills.transformation_personas` (an `is_array` package subsection); `on_load` creates the `transformation_*` tables and registers the `identity.active_persona` / `identity.knows` / `identity.persona_names` providers and a reinit reset store. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in Characters → Secrets (details: [Package `transformation`](#package-transformation)) |
 | `undress` | `undress`, `get_dressed` | Aus-/Anziehen für Freitext-Garderoben |
 | `wet` | `enter_water`, `dry_off` | Nässe-Zustand — Schwimm-Ausnahme solange nass, Auto-Trocknung per TTL |
 
@@ -1176,6 +1176,74 @@ Destination-bound party invitations: Destination-bound consent lasts only for th
 
 Drei weitere Ordner unter `plugins/` sind **Symlinks in ein privates Repo** und
 gehören nicht zu diesem SFW-Repo; ohne dieses Repo existieren sie schlicht nicht.
+
+## Package `transformation`
+
+A character who carries a power item can transform into a **persona**: an alias with its own
+description. Every observer who is not in on the secret perceives only the alias — as a separate person
+with its own relationship row and its own memories — everywhere the system names people (perception
+stream, present lists, partner block, thought and tool-step prompts, NPC action prompts, relationship and
+memory sections, scene summaries, the player's HUD and 3D labels when the avatar is a non-knower).
+Knowers read `<alias> (<name>)`. The package is generic (a masked hero, a curse, a disguise); flavour
+comes from world content.
+
+**Configuration** — world config list `skills.transformation_personas` (Game-Admin → Setup → Skills,
+an `is_array` package subsection, one entry per persona):
+
+| Field | Meaning |
+|---|---|
+| `id` | Unique, stable persona id. A new id starts a new persona (knowers and cooldowns of the old id no longer apply) |
+| `enabled` | Default `true`; off takes the persona out of the world and frees its alias |
+| `item_id` | The power item. Whoever carries it can transform — the power travels with the item |
+| `alias` | The name non-knowers perceive. Must not be an existing character's name; while it is configured no character can be created or imported under it (`identity.persona_names` → `validate_character_name` code `reserved`) |
+| `description` | What non-knowers perceive instead of the real appearance (may be empty — it still masks) |
+| `activation_phrase` / `revert_phrase` | What the avatar says to transform / to return (see below) |
+| `suit_items` | Comma-separated item ids worn while transformed; the outfit worn before is restored on revert |
+| `condition_id` | Condition applied while transformed (prompt/image/stat modifiers); empty = none |
+| `max_duration_minutes` | GAME minutes until the transformation ends by itself; default 60, `0` = until reverted |
+| `cooldown_minutes` | GAME minutes after a revert before the same bearer can use this persona again; default 30 |
+| `transform_activity` | Activity shown while the transformation takes place; default `transforming` |
+
+**Verbs** (one class `TransformationSkill`, all `always_load`):
+- `transform` — offered to whoever carries a persona's power item, while not transformed and not on
+  cooldown. Input `{}`, or `{"persona": "<alias>"}` with several power items. Puts on the suit, locks the
+  outfit, sets the state flag `is_transformed`, applies the condition, starts the GAME-time duration.
+- `revert` — the clearing verb of `is_transformed`; offered only while a persona is worn. Restores the
+  outfit, removes the condition, starts the cooldown.
+- `reveal_identity` — `{"target": "<name>"}`: makes one present person a knower; a private line tells
+  the two of them.
+
+The `world_tick` hook ends a transformation whose duration ran out or whose bearer no longer carries the
+power item. Knowers (and the bearer) get a private narrator line about the transform/revert; non-knowers
+get none — for them the persona is simply in the room and the person is not.
+
+**Avatar phrases** — provider `play.say_intercept`: when the avatar says a persona's
+`activation_phrase` (or, while wearing it, its `revert_phrase`) the message never reaches the room; it
+becomes a private line for the avatar and the present knowers and the transformation runs. Matching is
+casefolded, punctuation-trimmed and needs the phrase as a contiguous word run; only personas whose item the
+avatar carries count. A refusal (already transformed, cooldown, …) adds a storyteller hint for the
+avatar alone.
+
+**Core surface it uses**:
+- providers `identity.active_persona`, `identity.knows`, `identity.persona_names` (owner
+  `transformation`), read through `app.core.identity_view` (`docs/skill-core-api.md` § Identity view);
+- events `character.prompt_context` (chat / NPC prompts) and `character.thought_context` (thought prompt)
+  for the identity lines — the bearer's "You are currently <alias>. Only … knows …" and a knower's
+  "<alias> here is actually <name>. … do not know — …". Both land in the scene state, never in the stable
+  system prefix (`CHAT_PROMPTS.md`);
+- a `reinit` reset store (`app.core.character_reset.register_reset_store`) for the package tables
+  `transformation_active` / `transformation_cooldown`.
+
+**Knowers** are an ordinary record secret of the bearer: `"I am secretly <alias>."` with
+`source_ref = transformation:<persona id>`, created for every holder of the power item on the next tick.
+Its `known_by` list is the knower list — edit it in Game-Admin → Characters → Secrets.
+
+**Step-1 limits**: no "caught in the act" yet (witnesses of a transformation do not learn the secret);
+no guessing from clues; LLM-generated speech is not filtered (a knower may slip — the scene-state line asks
+them not to); images and voices are not secret (image prompts use the real character, TTS the real voice);
+technical identifiers (payload keys, `/characters/<name>/…` URLs) stay the real name — the HUD swaps only
+what it shows. Deletion test: without the package every surface names the real person again
+(`scripts/smoke_transformation_leaks.py`).
 
 ## Best Practices
 

@@ -452,6 +452,15 @@ Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
 `equip_item`/`unequip_item`, `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
+Inventory and equipment calls used by the **transformation package** (stable):
+
+| Function | Contract |
+|---|---|
+| `app.models.inventory.get_carried_item_ids(character_name) -> set[str]` | IDs of the items the character holds (quantity > 0), in ONE query, without profile reads or item enrichment — for "does she carry the power item" checks on hot paths |
+| `app.models.inventory.add_to_inventory(character_name, item_id, quantity=1, obtained_from="", obtained_method="manual", locked=None) -> bool` | Add a world item to the inventory; `False` for an unknown item or a failed write. Passive: effects apply only through `consume_item`. `locked=True` protects it from removal without `force` |
+| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry only with `force=True`. `False` when nothing was removed |
+| `app.models.inventory.apply_equipped_pieces(character_name, *, pieces=None, items=None, remove_slots=None, source="") -> dict` | Atomic equip change with diff detection. `pieces` = COMPLETE target state of the piece slots (slot → item ID; occupied slots missing from it are cleared), `items` = target list of the non-piece items, `None` = untouched; `remove_slots` clears explicitly. Returns `{status, changed, applied, cleared, skipped, pieces_before, pieces_after, items_before, items_after}`. A profile read-modify-write: call it under `keyed_lock("character_profile", name)` |
+
 Public discovery helpers (stable):
 
 | Function | Contract |
@@ -686,6 +695,7 @@ placement; destination-bound shared trips always use timed cross-location travel
 | `get_character_skill_config(character_name, skill_name) -> Dict` / `save_character_skill_config(character_name, skill_name, config)` | Per-Charakter-Skill-Config. Normalerweise nicht direkt rufen — `BaseSkill._get_effective_config` liefert Defaults + Overrides typisiert |
 | `record_access_denied(character_name, location_id, location_name, reason, rule_name='', action='enter')` | Abgewiesenen Zutritt vermerken (Gedächtnis + UI-Hinweis) |
 | `record_state_change(character_name, change_type, value, metadata=None) -> bool` | Eine Zustandsänderung (Ort, Raum, Outfit, Entdeckung, fehlgeschlagene Reise …) in die `state_history` schreiben — die Quelle des Tagebuchs und der „Zuletzt erlebt"-Zeilen; `False` heißt: nichts geschrieben (Rückgabe prüfen), Ringpuffer 200 Einträge pro Charakter |
+| `is_outfit_locked(character_name) -> bool` / `set_outfit_locked(character_name, locked)` | The outfit lock (`outfit_intent.locked`): while set, nothing changes the outfit automatically (compliance, wardrobe intents). The setter is its own profile read-modify-write under `keyed_lock("character_profile", name)` (re-entrant). A package that locks for its own reason remembers the value it found and restores it |
 
 **Viele Leser nehmen `profile=`.** Wer das Profil ohnehin geladen hat, reicht es durch
 und spart den zweiten DB-Zugriff: `get_character_current_location`,
@@ -953,6 +963,7 @@ ein Fehler sind kein normales Ende. Ein NPC steht nach 20 Spielminuten von selbs
 |---|---|
 | `set_pose_key_detail(character_name, key, detail, *, unknown='resolve') -> str` | **Der Setter für ein Verb, das den Katalog-Key schon kennt:** schreibt Key + Anzeige-Detail exakt. `unknown='resolve'` lässt einen unbekannten Key noch über den Resolver laufen |
 | `set_pose_intent(character_name, pose, prefer='', flavor=None, *, arriving=False)` | Kanonischer Setter für FREITEXT („Character macht jetzt X"): ordnet dem Pose-Katalog zu (`pose_key`), bereinigt die Würze (`pose_flavor`), matcht die Bild-Variante und schreibt alles ins Profil. No-op wenn Key und Flavor unverändert; leerer Text setzt zurück. Beendet eine laufende Paar-Interaktion. `arriving=True`: die Pose der Ankunft einer Reise — die Figur kommt aus `walking` (zählt fehlende Übergänge, `transition_misses`). Bleibt Core (R5 — mehrere Schreiber) |
+| `clear_pose_intent(character_name, *, arriving=False)` | Clear the pose (key, flavor, variant) and give up a held place — standing up puts the character on the server's stand point. Takes the places lock, which comes BEFORE the profile lock: never call it (or `set_pose_intent`) while holding `keyed_lock("character_profile", …)` |
 | `get_character_pose_key(character_name, profile=None)` / `get_character_pose_flavor(character_name)` | Gespeicherter Katalog-Key bzw. bereinigter Freitext |
 | `get_effective_pose_key(character_name, profile=None)` / `get_effective_activity(character_name, profile=None)` | Render-Key bzw. Anzeigetext, beide inkl. Schlaf-Override |
 | `app.core.pose_catalog.split_key_detail(text, axis='pose') -> (key, detail)` | Zerlegt eine `key: detail`-Eingabe |
@@ -1290,6 +1301,11 @@ Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
 | `app.core.prompt_templates.render_task(task, **vars) -> (system, user)` / `render(template_path, **vars) -> str` | Jinja-Templates; die Paket-Templates liegen im Suchpfad (`StrictUndefined` — ein fehlender Platzhalter kracht laut) |
 | `app.core.tool_formats.format_example(format_name, tool_name, example_input) -> str` | Tool-Nutzungs-Beispiel im aktiven Tool-Format |
 | `app.core.timeutils.game_time(*, strict=False) -> GameTime` | GAME time for world logic, never `datetime.now()`; strict mode propagates persisted clock-read failures |
+| `app.core.game_time.GameTime.parse(text, calendar=None) -> GameTime` / `.canonical() -> str` | Persist a GAME instant as its canonical sortable stamp (`Y0002-D109T14:23:45`) and read it back; `GameTime` compares and adds `GameDuration` |
+| `app.core.game_time.GameDuration.of(days=0, hours=0, minutes=0, seconds=0) -> GameDuration` | An in-world duration (durations, cooldowns, TTLs) — a world freeze stops it with the clock |
+| `app.core.config.get(path, default=None)` | World/instance setting by dot path (e.g. `skills.<package>.<field>`), the layers already merged |
+| `app.core.config_schema.field_default(section, *keys)` | The schema default of one field — the ONE fallback source, also for a package subsection (`field_default("skills", "<subsection>", "<field>")`); raises `KeyError` for an unknown field or one without default |
+| `app.core.log.get_logger(name)` | The application logger (`logs/main.log`) |
 | `app.core.timeutils.utc_now()` / `utc_now_iso()` / `parse_iso(s)` | SYSTEM-Zeit — nur technische Stempel (Persistenz, Reihenfolge, Cooldowns, Logs) |
 | `app.core.i18n.t(en, lang=None) -> str` | Übersetzbare Zeichenkette; die Quelle bleibt Englisch |
 | `PluginContext`: `ctx.get_config(path, default)`, `ctx.http`, `ctx.logger` | Welt-Config per Dot-Pfad (Beispiel `skills.markdown_writer.max_size_kb` seedet die Per-Character-`_defaults`), HTTP, Logging |
@@ -1571,6 +1587,20 @@ remain unlimited. All secret read-modify-write operations serialize through
 `keyed_lock("secrets", character_name)`.
 
 
+## Package tables — `app.core.db`
+
+A package that keeps world state of its own stores it in `world.db` (never a JSON
+file), in tables prefixed with its id, created idempotently from its `on_load`
+module (`CREATE TABLE IF NOT EXISTS`). Name a per-character column
+`character_name`: the character-deletion sweep removes such rows like every
+other per-character table. Wipes on a character reset go through a reset store
+(next section).
+
+| Function | Contract |
+|---|---|
+| `get_connection()` | The thread's connection to the current world's `world.db` — for reads |
+| `transaction()` | Context manager around one atomic write: commits on success, rolls back and re-raises on an exception. Never hold it across an LLM/HTTP call; take keyed locks BEFORE it |
+
 ## Character reset stores
 
 `app.core.character_reset.register_reset_store(key, fn, scopes=SCOPES, *, what, lock=None)`
@@ -1679,7 +1709,7 @@ nothing. A player-controlled partner pushes such a run away with the ordinary
 `app.core.interaction_engine.check_can_pair(actor, partner) -> str` returns
 an empty string when two distinct characters are awake, present and free to
 receive a proposal, otherwise a refusal reason. Combine it with
-`app.models.character.list_available_characters()` and `partner_poses()` for
+`app.models.character.list_available_characters(include_pooled=False, *, strict=False)` and `partner_poses()` for
 proposal menus. The latter returns `(pose_key, animation_kind)`, not display
 labels; only free pair clips qualify. Pending invitations are answered through
 the separate question flow and must not be copied into proposal menus.
