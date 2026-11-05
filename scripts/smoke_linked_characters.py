@@ -83,6 +83,10 @@ WHAT FOLLOWS BY HAND
     build_soul_files(Glut): beliefs shared_from "Tilda", goals shared_from "".
     A read-modify-write save of Glut leaves Glut's OWN soul/beliefs.md without
     "Fire is honest" (the mind is never copied into the body).
+    World-dev is no side door: apply-soul(Glut, beliefs) -> 409 with the same
+    text, apply-soul(Glut, goals) -> success; an applied character JSON for
+    Glut carrying a beliefs field leaves both beliefs files as they were
+    (Tilda's still holds "Fire is honest", Glut's own has no "Smoke lies").
 [H] Rosters with Glut + Kim dormant: list_available_characters() =
     [Obs, Tess, Tilda]; character_exists(Glut) True, ("glut") True;
     list_available_characters(include_dormant=True) adds Glut, Kim;
@@ -329,7 +333,7 @@ _gdir = ch.get_character_dir("Glut")
                                            encoding="utf-8")
 (_gdir / "soul" / "goals.md").write_text("# Goals\n\n## Short-term\n- Find the comet.\n",
                                          encoding="utf-8")
-from app.models.character_template import invalidate_source_file  # noqa: E402
+from app.models.character_template import get_template, invalidate_source_file  # noqa: E402
 invalidate_source_file(_tdir / "soul" / "beliefs.md")
 invalidate_source_file(_gdir / "soul" / "goals.md")
 check("soul_owner(Glut, beliefs)", lc.soul_owner("Glut", "beliefs"), "Tilda")
@@ -365,6 +369,30 @@ edit("Glut", current_feeling="calm")
 _own = _gdir / "soul" / "beliefs.md"
 check("mind not copied into the body",
       "Fire is honest" in (_own.read_text(encoding="utf-8") if _own.exists() else ""), False)
+from app.routes import world_dev  # noqa: E402
+try:
+    world_dev._apply_soul_data_sync({"character_name": "Glut", "section": "beliefs",
+                                     "content": "# B\n- no"})
+    check("world-dev apply-soul shared refused", "no error", 409)
+except HTTPException as e:
+    check("world-dev apply-soul shared refused", (e.status_code, e.detail),
+          (409, "This section is shared with Tilda — edit it on Tilda."))
+_wd = world_dev._apply_soul_data_sync({"character_name": "Glut", "section": "goals",
+                                       "content": "# G\n- Fly high."})
+check("world-dev apply-soul own section", _wd.get("status"), "success")
+_glut_prof = ch.get_character_profile("Glut") or {}
+_bel_key = next((f.get("key") for s_ in (get_template(_glut_prof.get("template", "")) or {}).get("sections", [])
+                 for f in s_.get("fields", [])
+                 if str(f.get("source_file") or "").endswith("beliefs.md")), None)
+check("template has a beliefs source_file field", bool(_bel_key), True)
+if _bel_key:
+    world_dev._apply_character_internal({"character_name": "Glut",
+                                         "template": _glut_prof.get("template", ""),
+                                         _bel_key: "# Beliefs\n- Smoke lies."})
+check("world-dev apply-character kept Tilda's beliefs",
+      "Fire is honest" in (_tdir / "soul" / "beliefs.md").read_text(encoding="utf-8"), True)
+check("world-dev apply-character wrote no body copy",
+      "Smoke lies" in (_own.read_text(encoding="utf-8") if _own.exists() else ""), False)
 
 # ── [H] ─────────────────────────────────────────────────────────────────────
 section("[H] rosters")

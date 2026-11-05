@@ -1708,11 +1708,20 @@ def _apply_character_internal(char_data: Dict[str, Any],
 
         save_character_profile(char_name, profile, create_new=_is_new)
 
+    # A linked character's SHARED soul sections belong to its leader: an
+    # applied JSON never writes them (neither the leader's file nor a dead
+    # copy beside the body) — they are edited on the leader.
+    from app.core.linked_characters import soul_owner
+
     if soul_field_map:
         char_dir = get_character_dir(char_name, create=True)
         for fk, rel_path in soul_field_map.items():
             content = char_data.get(fk)
             if content is None or not str(content).strip():
+                continue
+            if soul_owner(char_name, rel_path) != char_name:
+                logger.info("WorldDev: %s of %s is shared with %s — not applied",
+                            rel_path, char_name, soul_owner(char_name, rel_path))
                 continue
             md_path = char_dir / rel_path
             md_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1731,6 +1740,10 @@ def _apply_character_internal(char_data: Dict[str, Any],
         for section_key, content in extra_md.items():
             rel = SECTION_FILE_MAP.get(section_key)
             if not rel or not str(content or "").strip():
+                continue
+            if soul_owner(char_name, rel) != char_name:
+                logger.info("WorldDev: %s of %s is shared with %s — not applied",
+                            rel, char_name, soul_owner(char_name, rel))
                 continue
             md_path = char_dir / rel
             md_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1976,6 +1989,13 @@ def _apply_soul_data_sync(data: Any):
     profile = get_character_profile(char_name)
     if not profile.get("character_name"):
         raise HTTPException(status_code=404, detail=f"Character '{char_name}' nicht gefunden")
+
+    # A linked character's SHARED section belongs to its leader: edited there.
+    from app.core.linked_characters import soul_owner
+    owner = soul_owner(char_name, section)
+    if owner != char_name:
+        raise HTTPException(status_code=409, detail=(
+            f"This section is shared with {owner} — edit it on {owner}."))
 
     from app.models.character import get_character_dir
     char_dir = get_character_dir(char_name)
