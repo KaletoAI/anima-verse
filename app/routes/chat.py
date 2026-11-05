@@ -598,9 +598,9 @@ def _apply_removed_pieces(character_name: str,
         distinct_equipped = len({iid for iid in eq.values() if iid})
         if distinct_equipped >= 2 and len(wanted) >= distinct_equipped:
             logger.warning(
-                "Chat-Extraktion [%s]: %d/%d Pieces sollen entfernt werden — "
-                "vermutlich Outfit-Wechsel ohne Tool-Aufruf, ignoriere "
-                "removed-Liste (Pieces: %s)",
+                "Chat extraction [%s]: %d/%d pieces to be removed — "
+                "probably an outfit change without a tool call, ignoring "
+                "the removed list (pieces: %s)",
                 character_name, len(wanted), distinct_equipped,
                 ", ".join(sorted(wanted))[:200])
             return []
@@ -637,7 +637,7 @@ def _apply_removed_pieces(character_name: str,
                         if _slot:
                             add_forbidden_slot(character_name, _slot)
             except Exception as _fse:
-                logger.debug("forbidden_slots konnte nicht gesetzt werden: %s", _fse)
+                logger.debug("forbidden_slots could not be set: %s", _fse)
 
         # Regenerate the expression variant when something changed
         if unequipped:
@@ -872,7 +872,7 @@ def _extract_context_from_last_chat(agent_name: str,
             logger.debug("Chat-Kontext-Extraktion [%s]: kein LLM verfuegbar", target_name)
             return
         except Exception as e:
-            logger.warning("Chat-Kontext-Extraktion [%s] Fehler: %s", target_name, e)
+            logger.warning("Chat context extraction [%s] error: %s", target_name, e)
             return
 
         raw = (response.content or "").strip()
@@ -883,7 +883,7 @@ def _extract_context_from_last_chat(agent_name: str,
         try:
             data = json.loads(json_match.group())
         except json.JSONDecodeError:
-            logger.debug("Chat-Kontext [%s]: JSON-Parse-Fehler: %s", target_name, raw[:100])
+            logger.debug("Chat context [%s]: JSON parse error: %s", target_name, raw[:100])
             return
 
         feeling = data.get("feeling")
@@ -1495,7 +1495,6 @@ def _build_chat_prompt(character_name: str,
     scenes_block = ""
     if _has("memory_enabled"):
         try:
-            from app.models import scene_store
             from app.models.world import get_location_by_id
             from app.core import day_consolidation as _dc
             _parts = []
@@ -1518,23 +1517,26 @@ def _build_chat_prompt(character_name: str,
                 _parts.append("Earlier days:\n" + "\n".join(
                     f"- {_day_label(dk)}: {txt.strip()}"
                     for dk, txt in reversed(_days) if (txt or "").strip()))
-            # Stage 2: today's scenes (after the cursor — folded ones drop out)
+            # Stage 2: today's scenes (after the MIND's cursor — folded ones
+            # drop out). A linked character's family lives them as one mind:
+            # a scene a linked body had reads "(as <body>) …", the same mark
+            # the memories carry.
+            from app.core.linked_characters import mind_of
             _cursor = _dc.get_cursor(character_name)
             _lines = []
-            for sc in scene_store.get_recent_scenes_for(
-                    character_name,
+            for sc in _dc.family_scenes(
+                    character_name, _cursor,
                     limit=_mem_amt(character_name, "memory_scenes_in_prompt",
                                    "memory.scenes_in_prompt", 8)):
-                if (sc.get("last_activity_ts") or "") <= _cursor:
-                    continue
                 summ = (sc.get("summary") or "").strip()
-                if not summ:
-                    continue
+                _as = _dc.scene_as(sc, mind_of(character_name))
                 _osc = [p for p in (sc.get("participants") or [])
-                        if p and p != character_name and p != STORYTELLER_SPEAKER]
+                        if p and p not in (character_name, mind_of(character_name), _as)
+                        and p != STORYTELLER_SPEAKER]
                 _loc = get_location_by_id(sc.get("location_id", "")) or {}
                 tag = " · ".join([x for x in (_loc.get("name", ""), ", ".join(_osc)) if x])
-                _lines.append(f"- {summ}" + (f"  ({tag})" if tag else ""))
+                _lines.append(f"- {'(as ' + _as + ') ' if _as else ''}{summ}"
+                              + (f"  ({tag})" if tag else ""))
             if _lines:
                 # get_recent_scenes_for is newest-first -> flip to chronological.
                 _lines.reverse()
@@ -1601,9 +1603,12 @@ def _build_chat_prompt(character_name: str,
         "chat/npc_talk.md" if is_temporary_npc(character_name)
         else "chat/chat_stream.md")
 
+    from app.core.linked_characters import leader_of
     system = render(
         system_template,
         character_name=character_name,
+        # A linked body's one-mind line (stable — the system part).
+        linked_leader=leader_of(character_name) or "",
         world_setup=world_setup,
         lang_instruction=lang_instruction,
         char_lines=char_lines,

@@ -71,6 +71,13 @@ on the last user turn, BEHIND the history. Derived expectations:
     must not carry the old sentence "You may also use other locations not in
     this list" — it invited exactly the markers the server then threw away.
 
+[11] A linked body's one-mind line (linked characters, task 5) is part of the
+    STABLE identity: with linked_leader="LEADER_X" the line "You are also
+    LEADER_X — one mind in another body" appears once, after "=== YOUR
+    IDENTITY ===" and before TOOLS_A, in both reply templates; per-turn
+    changes still leave the system prompt untouched; without the variable
+    (or with "") no such line.
+
 [7] build_prompt_section(volatile=...) with four fields in template order
         a: plain                                   -> stable
         b: prompt_volatile true                    -> volatile
@@ -264,6 +271,21 @@ for path in ("app/routes/chat.py", "app/core/tool_step_prompt.py"):
           len(re.findall(r"\blist_locations\(", src)), 0)
     check(f"[9] {path} uses the gated list",
           "list_locations_for_character(" in src, True)
+
+
+# [11]
+for template in ("chat/chat_stream.md", "chat/npc_talk.md"):
+    linked = _stream(template, linked_leader="LEADER_X")
+    line = "You are also LEADER_X — one mind in another body"
+    check(f"[11] {template}: one-mind line once", linked.count(line), 1)
+    check(f"[11] {template}: inside the identity block, before the tools",
+          linked.find("=== YOUR IDENTITY ===") < linked.find(line) < linked.find("TOOLS_A"),
+          True)
+    check(f"[11] {template}: per-turn changes keep the linked system prompt",
+          linked == _stream(template, linked_leader="LEADER_X",
+                            **{name: f"CHANGED_{name}" for name in PER_TURN}), True)
+    check(f"[11] {template}: no line when unlinked",
+          "You are also" in _stream(template, linked_leader=""), False)
 
 
 print(f"\n{'FAILED: ' + str(len(FAILURES)) if FAILURES else 'all checks passed'}")
