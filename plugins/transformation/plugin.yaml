@@ -1,9 +1,9 @@
 name: transformation
 version: "1.0.0"
 category: skill
-description: A character holding a power item transforms into a persona (a condition and a transform activity while it lasts); knowers are kept as a character secret.
+description: A leading character holding a power item turns into one of its linked characters (a body swap — the linked character stands exactly where the leader stood); knowers are kept as a secret of the mind.
 capability_label: Transformation
-capability_description: The character can transform into a persona through a power item it holds, and back.
+capability_description: The character can turn into one of its linked characters through a power item it holds, and back.
 on_load: register.py
 skills:
   - skill_id: transform
@@ -24,6 +24,6 @@ skills:
 state_flags:
   - flag: is_transformed
     cleared_by: revert
-    prompt_when_set: "You are transformed and wear your persona. To be your ordinary self again — where nobody who is not in on the secret is watching — use {clear_tool}."
+    prompt_when_set: "You are transformed: this body is your other self. To be your ordinary self again — where nobody who is not in on the secret is watching — use {clear_tool}."
 templates:
   llm: templates/llm

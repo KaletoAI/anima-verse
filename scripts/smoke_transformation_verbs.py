@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke: the transformation verbs and the avatar's phrases
-(``plugins/transformation/skill.py``, ``intercept.py``).
+"""Smoke: the transformation verbs, the avatar's phrases and the secrecy line
+(``plugins/transformation/skill.py``, ``intercept.py``, ``prompt_lines.py``).
 
 Usage:  ./.venv/bin/python scripts/smoke_transformation_verbs.py
 
@@ -11,67 +11,69 @@ transform activity resolves through the catalog default; the package is
 loaded the way the server loads it (``packages.enabled = "transformation"``,
 ``discover_packages()``), the verbs through the skill manager.
 
-THE SPEC (task 2 of the linked-characters plan, ruling P1): the verbs
-Transform / Revert / RevealIdentity and the phrase intercept stay; the
-package adds no scene-state identity lines any more and nothing masks a
-name, so every name a verb prints or accepts is the real one. RevealIdentity
-adds the knower to the bearer's secret (``knowers.add``).
+THE SPEC (``docs/superpowers/specs/2026-11-05-linked-characters-design.md`` →
+"Transformation package", "Prompts", Goals 2 and 6): transform/revert are a
+body swap — for NPCs through the verbs, for the player through the avatar
+phrase (the leader says the activation phrase, the BODY says the revert
+phrase). Knowers: per (body, observer) "<body> is secretly <leader>.", a
+record secret of the mind (stored at the leader, ``body`` = the body) whose
+known_by list holds the knowers; the reveal verb adds one. The secrecy text
+("nobody may learn that you are <leader>, except …") is the package's own
+scene-state line for the present body.
 
 FIXTURE
-    Location "Inn", room "taproom": Cara (bearer of "amulet"), Kim (knower of
-    Cara), Obs (knows nothing), Ava (the avatar, bearer of "ring").
-    Persona p1: item amulet, alias "Moonveil", no condition,
-    max 0 (until reverted), cooldown 0.
-    Persona p2: item ring, alias "Starlace", activation_phrase
+    Location "Inn", room "taproom": Tilda (leader, carries "amulet"), Kim,
+    Obs, Ava (leader, carries "ring"; the ACTIVE character of user "play").
+    Glut = create_linked(Tilda), Star = create_linked(Ava) (both dormant).
+    Definition "glut": Tilda -> Glut, item amulet, no phrases, max 0, cooldown 0.
+    Definition "star": Ava -> Star, item ring, activation_phrase
     "by the moonlight", revert_phrase "Moon, rest", max 0, cooldown 0.
-    Game clock pinned (factor 0).
+    Kim knows that Glut is Tilda (knowers.add). Game clock pinned (factor 0).
 
 THE RULES, and what follows BY HAND
-[A] tick() seeds the holders' secrets; Kim becomes a knower of Cara/p1.
-    Visibility: transform is visible for Cara and Ava (they hold a persona
-    item), hidden for Kim and Obs (they hold none). reveal_identity likewise.
-    Before any transform the tool round for Cara (turn_tools, thought mode,
-    present Kim/Obs/Ava) offers "Transform" and not "Revert": revert is
-    visible only while a persona is worn (the single-mode tool list has no
-    flag gate), and the manifest's state_flags names it the clearing verb of
-    is_transformed, so turn_tools would hide it with "state not active" too —
-    checked directly on inactive_clearing_tools.
-[B] execute('{"agent_name":"Cara"}') on transform -> not an "Error",
-    Cara's active persona is p1, flag is_transformed True.
-    The next round offers "Revert" and hides "Transform"
-    ("already transformed" from available_now).
-[C] No identity lines while Cara is Moonveil (everybody in the taproom):
-    - the chat event (character.prompt_context, mode chat) and the thought
-      event (character.thought_context) add no block naming "Moonveil" for
-      Kim (knower), Cara (bearer) or Obs; the thought context of Kim has no
-      "Moonveil" in its skill context blocks.
-    - The rp_first tool step: reveal_identity's menu for Cara lists who
-      present is not in on it, by real name, sorted -> ["Ava", "Obs"]; its
-      state line reads
-      "Persona Moonveil. Already in on it: Kim. Not in on it: Ava, Obs."
-      Cara carries one power item, so transform has no menu.
+[A] Visibility: transform visible for Tilda and Ava (they lead a definition
+    and carry its item), hidden for Kim, Obs and Glut; reveal_identity
+    likewise visible for Tilda and Ava; revert visible for nobody (no body is
+    present). The thought tool round for Tilda offers Transform, not Revert;
+    revert is the clearing verb of is_transformed (unset -> inactive).
+[B] execute transform '{"agent_name":"Tilda"}' -> no "Error"; Tilda dormant,
+    Glut present in the taproom; flag is_transformed on Glut. Revert visible
+    for Glut and offered in Glut's round; transform hidden for Glut; revert
+    hidden for Tilda.
+[C] Secrecy lines while Glut stands in the taproom (present: Kim, Obs, Ava):
+    - Glut, chat event (character.prompt_context): one block
+      "You are Glut, and secretly Tilda. Nobody may learn that you are Tilda,
+      except Kim. Ava and Obs do not know — never reveal it in front of them."
+    - Kim: "Glut here is secretly Tilda. Ava and Obs do not know — do not call
+      Glut "Tilda" in front of them."
+    - Obs: no block naming Tilda. Thought event for Glut: one section
+      "=== Secret identity ===\\n- <the Glut line>" (the render trims the end).
+    - The knower secret: one record secret of Tilda's mind with source_ref
+      "transformation:Glut", content "Glut is secretly Tilda.", body "Glut",
+      known_by ["Kim"]; Kim's known-about-others block contains
+      "About Glut: Glut is secretly Tilda.".
+    - reveal_identity for Glut: menu = present non-knowers sorted
+      ["Ava", "Obs"]; state line "Glut is secretly Tilda. Already in on it:
+      Kim. Not in on it: Ava, Obs."; transform has no menu for Tilda (one body).
 [D] Avatar phrases (say_intercept, through play._run_say_intercepts):
     - Ava says "By the  Moonlight!" -> normalized "by the moonlight" contains
-      p2's activation phrase -> consumed, result {"kind": "transformation",
-      "ok": True, "reason": "", "alias": "Starlace"}; Ava is active on p2.
-      Ava's own line reaches Ava only (no other knower of Ava/p2 is
-      present): Obs has NO perception row whose content contains
-      "moonlight" (casefold).
-    - "What a moonlight night" -> no contiguous "by the moonlight" -> None.
-    - Obs says "by the moonlight" -> Obs holds no persona item -> None.
-    - Ava says it again -> consumed, ok False, reason "already_transformed";
-      a storyteller hint reaches Ava only.
-    - Ava says "Moon... rest." -> normalized "moon rest" == revert phrase ->
-      consumed, ok True, alias "Starlace"; Ava no longer active.
-[E] reveal_identity (Cara still Moonveil):
-    - target "obs" (casefold of a present name) -> not an "Error";
-      knowers.knows("Obs","Cara","p1") True and Obs is on the known_by list
-      of Cara's secret for p1; the line
-      "Cara reveals to Obs: Cara is Moonveil." reaches exactly {Cara, Obs}.
-    - target Obs again -> starts with "Error" (already knows).
-    - target "Nobody" (not present) -> starts with "Error".
-[F] revert verb: execute -> not an "Error"; Cara no longer active; flag
-    False; "Revert" not offered again; a second revert -> "Error".
+      the activation phrase -> consumed {"kind": "transformation", "ok": True,
+      "reason": "", "body": "Star", "error": ""}; Ava dormant, Star present;
+      user play's active character is now Star. Obs and Kim perceive nothing
+      containing "moonlight".
+    - Star says "What a moonlight night" -> None (not a phrase of hers).
+    - Obs says "by the moonlight" -> None (Obs leads nothing).
+    - Star says "by the moonlight" -> consumed, ok False, reason
+      "already_transformed"; the phrase line + a storyteller hint reach Star
+      only (+2 rows for Star, 0 for the others).
+    - Star says "Moon... rest." -> "moon rest" == the revert phrase ->
+      consumed, ok True, body "Star"; Ava present again, Star dormant, user
+      play controls Ava.
+[E] reveal_identity by Glut (still present): target "obs" -> no "Error";
+    knowers.knows("Obs", "Glut") True; the line "Glut reveals to Obs: Glut is
+    Tilda." reaches exactly {Glut, Obs}; again -> "Error"; "Nobody" -> "Error".
+[F] revert verb by Glut -> no "Error"; Tilda present, Glut dormant; revert
+    not visible for Glut any more; a second revert -> "Error".
 """
 import json
 import os
@@ -88,14 +90,6 @@ os.environ["STORAGE_DIR"] = str(STORAGE)
 os.environ["INSTANCE_DIR"] = str(ROOT / "instance")
 os.environ["ANIMATION_CLIPS_DIR"] = str(ROOT / "clips")
 os.environ["ANIMATION_RIG_FILE"] = str(ROOT / "rig.fbx")
-
-PERSONAS = [
-    {"id": "p1", "item_id": "amulet", "alias": "Moonveil",
-     "max_duration_minutes": 0, "cooldown_minutes": 0},
-    {"id": "p2", "item_id": "ring", "alias": "Starlace",
-     "activation_phrase": "by the moonlight", "revert_phrase": "Moon, rest",
-     "max_duration_minutes": 0, "cooldown_minutes": 0},
-]
 (STORAGE / "config.json").write_text(json.dumps({
     "packages": {"enabled": "transformation"},
 }), encoding="utf-8")
@@ -107,21 +101,17 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
-# The personas live in the package's own table (Characters → Skills panel).
-from plugins.transformation import store as tstore  # noqa: E402
-tstore.ensure_schema()
-for _p in PERSONAS:
-    tstore.create_definition({k: v for k, v in _p.items() if k != "id"}, persona_id=_p["id"])
-
 from app.core import embedding  # noqa: E402
 embedding.embed = lambda text: None   # no model: the catalog default answers
 
+from app.core import linked_characters as lc  # noqa: E402
+from app.core import users  # noqa: E402
 from app.core.db import get_connection  # noqa: E402
 from app.core.game_time import GameTime  # noqa: E402
 from app.core.keyed_lock import keyed_lock  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
-from app.models import inventory  # noqa: E402
-from app.models.character import get_character_profile, save_character_profile  # noqa: E402
+from app.models import inventory, secrets  # noqa: E402
+from app.models import character as ch  # noqa: E402
 from app.models.world import _load_world_data, _save_world_data, add_location  # noqa: E402
 
 FAILURES = []
@@ -149,19 +139,32 @@ for _loc in _data.get("locations", []):
         _loc["entry_room"] = "taproom"
 _save_world_data(_data)
 
-for _name in ("Cara", "Kim", "Obs", "Ava"):
-    assert save_character_profile(_name, {"character_name": _name, "template": "human-roleplay"},
-                                  create_new=True), _name
+for _name in ("Tilda", "Kim", "Obs", "Ava"):
+    assert ch.save_character_profile(_name, {"character_name": _name,
+                                             "template": "human-roleplay"},
+                                     create_new=True), _name
     with keyed_lock("character_profile", _name):
-        _p = get_character_profile(_name)
+        _p = ch.get_character_profile(_name)
         _p["current_location"] = INN
         _p["current_room"] = "taproom"
-        assert save_character_profile(_name, _p)
+        assert ch.save_character_profile(_name, _p)
+PLAY = users.create_user("play", "play-password-1", allowed_characters=["Ava"])
+users.update_user(PLAY, settings={"active_character": "Ava"})
+assert lc.create_linked("Tilda", "Glut")["ok"]
+assert lc.create_linked("Ava", "Star")["ok"]
 
 inventory.add_item("Amulet", item_id="amulet")
 inventory.add_item("Ring", item_id="ring")
-assert inventory.add_to_inventory("Cara", "amulet")
+assert inventory.add_to_inventory("Tilda", "amulet")
 assert inventory.add_to_inventory("Ava", "ring")
+
+from plugins.transformation import store as tstore  # noqa: E402
+tstore.ensure_schema()
+tstore.create_definition({"leader": "Tilda", "body": "Glut", "item_id": "amulet",
+                          "max_duration_minutes": 0, "cooldown_minutes": 0})
+tstore.create_definition({"leader": "Ava", "body": "Star", "item_id": "ring",
+                          "activation_phrase": "by the moonlight", "revert_phrase": "Moon, rest",
+                          "max_duration_minutes": 0, "cooldown_minutes": 0})
 
 from app.plugins import loader, registry  # noqa: E402
 loader.discover_packages()
@@ -171,7 +174,7 @@ from app.core import hooks, perception  # noqa: E402
 from app.core.dependencies import get_skill_manager  # noqa: E402
 from app.core.streaming import turn_tools  # noqa: E402
 from app.skills.base import TurnFacts  # noqa: E402
-from plugins.transformation import engine, knowers, store  # noqa: E402
+from plugins.transformation import knowers  # noqa: E402
 
 manager = get_skill_manager()
 transform = manager.get_skill("transform")
@@ -179,6 +182,7 @@ revert = manager.get_skill("revert")
 reveal = manager.get_skill("reveal_identity")
 check("three verbs loaded", [s is not None for s in (transform, revert, reveal)],
       [True, True, True])
+check("Kim made a knower of Glut", knowers.add("Kim", "Glut"), True)
 
 
 def offered(name):
@@ -210,54 +214,66 @@ def is_error(text):
     return str(text).startswith("Error")
 
 
-# ── [A] visibility, before any transform ────────────────────────────────────
+def active_of(user_id):
+    return (users.get_user_by_id(user_id).get("settings") or {}).get("active_character")
+
+
+# ── [A] visibility ──────────────────────────────────────────────────────────
 print("[A] visibility")
-engine.tick()
-check("Kim made a knower", knowers.add("Kim", "Cara", "p1"), True)
-check("Cara in the room", sorted(perception.addressable_for("Cara")), ["Ava", "Kim", "Obs"])
-for _name, _vis in (("Cara", True), ("Ava", True), ("Kim", False), ("Obs", False)):
+for _name, _vis in (("Tilda", True), ("Ava", True), ("Kim", False), ("Obs", False),
+                    ("Glut", False)):
     check(f"transform visible for {_name}", transform.visible_for(_name), _vis)
+for _name, _vis in (("Tilda", True), ("Ava", True), ("Kim", False), ("Obs", False)):
     check(f"reveal_identity visible for {_name}", reveal.visible_for(_name), _vis)
-_got, _hidden = offered("Cara")
-check("Transform offered before", transform.name in _got, True)
-check("Revert not offered before", revert.name in _got, False)
-check("revert invisible before", revert.visible_for("Cara"), False)
+for _name in ("Tilda", "Glut", "Ava", "Star", "Kim"):
+    check(f"revert hidden for {_name}", revert.visible_for(_name), False)
+_got, _hidden = offered("Tilda")
+check("Transform offered", transform.name in _got, True)
+check("Revert not offered", revert.name in _got, False)
 from app.core.flag_lifecycle import inactive_clearing_tools  # noqa: E402
-check("state flag declares revert as its clearing verb (flag unset -> inactive)",
-      inactive_clearing_tools("Cara", [revert.name]), {revert.name})
-check("transform hidden for Obs (no item)",
-      transform.name in offered("Obs")[0], False)
+check("revert is the clearing verb of is_transformed",
+      inactive_clearing_tools("Glut", [revert.name]), {revert.name})
 
 # ── [B] transform verb ──────────────────────────────────────────────────────
 print("[B] transform verb")
-_res = transform.execute('{"agent_name":"Cara"}')
+_res = transform.execute('{"agent_name":"Tilda"}')
 check("transform result is no error", is_error(_res), False)
-check("Cara wears p1", getattr(store.get_active("Cara"), "persona_id", None), "p1")
-check("flag set", get_character_profile("Cara").get("is_transformed"), True)
-_got, _hidden = offered("Cara")
-check("Revert offered while transformed", revert.name in _got, True)
-check("flag set -> revert's state active", inactive_clearing_tools("Cara", [revert.name]), set())
-check("Transform hidden while transformed",
-      (transform.name in _got, _hidden.get(transform.name)), (False, "already transformed"))
+check("Tilda dormant", ch.get_character_status("Tilda"), "dormant")
+check("Glut present", (ch.get_character_status("Glut"),
+                       ch.get_character_profile("Glut").get("current_room")), ("", "taproom"))
+check("flag on Glut", ch.get_character_profile("Glut").get("is_transformed"), True)
+check("revert visible for Glut", revert.visible_for("Glut"), True)
+check("revert hidden for Tilda", revert.visible_for("Tilda"), False)
+check("transform hidden for Glut", transform.visible_for("Glut"), False)
+_got, _hidden = offered("Glut")
+check("Revert offered to Glut", revert.name in _got, True)
+check("flag set -> revert's state active", inactive_clearing_tools("Glut", [revert.name]), set())
 
-# ── [C] no identity lines ───────────────────────────────────────────────────
-print("[C] no identity lines")
-for _who in ("Kim", "Cara", "Obs"):
+# ── [C] secrecy lines + the knower secret ───────────────────────────────────
+print("[C] secrecy lines")
+GLUT_LINE = ("You are Glut, and secretly Tilda. Nobody may learn that you are Tilda, except "
+             "Kim. Ava and Obs do not know — never reveal it in front of them.")
+KIM_LINE = ('Glut here is secretly Tilda. Ava and Obs do not know — do not call Glut '
+            '"Tilda" in front of them.')
+for _who, _want in (("Glut", [GLUT_LINE]), ("Kim", [KIM_LINE]), ("Obs", [])):
     _blocks = []
     hooks.emit("character.prompt_context", character_name=_who, mode="chat", blocks=_blocks)
-    check(f"chat event: nothing about Moonveil for {_who}",
-          [b for b in _blocks if "Moonveil" in str(b)], [])
-    _sections = []
-    hooks.emit("character.thought_context", character_name=_who, blocks=_sections)
-    check(f"thought event: nothing about Moonveil for {_who}",
-          [b for b in _sections if "Moonveil" in str(b)], [])
-from app.core.thought_context import build_thought_context  # noqa: E402
-check("thought context of Kim has no identity line",
-      "Moonveil" in build_thought_context("Kim").get("skill_context_blocks", ""), False)
-check("reveal menu for Cara", reveal.decision_menu("Cara"), ["Ava", "Obs"])
-check("reveal state line for Cara", reveal.tool_decision_context("Cara"),
-      "Persona Moonveil. Already in on it: Kim. Not in on it: Ava, Obs.")
-check("transform menu with one item", transform.decision_menu("Cara"), [])
+    check(f"chat event for {_who}", [b for b in _blocks if "Tilda" in str(b)], _want)
+_sections = []
+hooks.emit("character.thought_context", character_name="Glut", blocks=_sections)
+check("thought event for Glut", [s for s in _sections if "Tilda" in str(s)],
+      ["=== Secret identity ===\n- " + GLUT_LINE])
+_sec = [s for s in secrets.list_secrets("Tilda") if s.get("source_ref") == "transformation:Glut"]
+check("one knower secret at the mind", len(_sec), 1)
+check("secret content/body/knowers",
+      (_sec[0].get("content"), _sec[0].get("body"), _sec[0].get("known_by")) if _sec else None,
+      ("Glut is secretly Tilda.", "Glut", ["Kim"]))
+check("Kim's known-about block", "About Glut: Glut is secretly Tilda."
+      in secrets.known_about_others_block("Kim"), True)
+check("reveal menu for Glut", reveal.decision_menu("Glut"), ["Ava", "Obs"])
+check("reveal state line for Glut", reveal.tool_decision_context("Glut"),
+      "Glut is secretly Tilda. Already in on it: Kim. Not in on it: Ava, Obs.")
+check("transform menu with one body", transform.decision_menu("Tilda"), [])
 
 # ── [D] avatar phrases ──────────────────────────────────────────────────────
 print("[D] avatar phrases")
@@ -270,47 +286,48 @@ def say(avatar, content):
 
 
 check("activation phrase consumed", say("Ava", "By the  Moonlight!"),
-      {"kind": "transformation", "ok": True, "reason": "", "alias": "Starlace"})
-check("Ava wears p2", getattr(store.get_active("Ava"), "persona_id", None), "p2")
+      {"kind": "transformation", "ok": True, "reason": "", "body": "Star", "error": ""})
+check("Ava dormant, Star present", (ch.get_character_status("Ava"),
+                                    ch.get_character_status("Star")), ("dormant", ""))
+check("play controls Star", active_of(PLAY), "Star")
 check("Obs heard nothing of the phrase", rows_containing("Obs", "moonlight"), [])
 check("Kim heard nothing of the phrase", rows_containing("Kim", "moonlight"), [])
-check("Ava has her own line", rows_containing("Ava", "By the  Moonlight!"), ["By the  Moonlight!"])
-check("no contiguous phrase -> not consumed", say("Ava", "What a moonlight night"), None)
-check("Obs holds no item -> not consumed", say("Obs", "by the moonlight"), None)
-_before = {n: len(rows_containing(n, "")) for n in ("Ava", "Obs", "Kim", "Cara")}
-_again = say("Ava", "by the moonlight")
-check("phrase again consumed, refused",
-      (_again or {}).get("ok"), False)
+check("not a phrase -> not consumed", say("Star", "What a moonlight night"), None)
+check("Obs leads nothing -> not consumed", say("Obs", "by the moonlight"), None)
+_before = {n: len(rows_containing(n, "")) for n in ("Star", "Obs", "Kim", "Glut")}
+_again = say("Star", "by the moonlight")
+check("phrase again consumed, refused", (_again or {}).get("ok"), False)
 check("refusal reason", (_again or {}).get("reason"), "already_transformed")
-_after = {n: len(rows_containing(n, "")) for n in ("Ava", "Obs", "Kim", "Cara")}
-check("refusal hint (+ phrase line) for Ava only",
-      {n: _after[n] - _before[n] for n in _after}, {"Ava": 2, "Obs": 0, "Kim": 0, "Cara": 0})
-check("revert phrase consumed", say("Ava", "Moon... rest."),
-      {"kind": "transformation", "ok": True, "reason": "", "alias": "Starlace"})
-check("Ava no longer transformed", store.get_active("Ava"), None)
+_after = {n: len(rows_containing(n, "")) for n in ("Star", "Obs", "Kim", "Glut")}
+check("refusal hint (+ phrase line) for Star only",
+      {n: _after[n] - _before[n] for n in _after}, {"Star": 2, "Obs": 0, "Kim": 0, "Glut": 0})
+check("revert phrase consumed", say("Star", "Moon... rest."),
+      {"kind": "transformation", "ok": True, "reason": "", "body": "Star", "error": ""})
+check("Ava present, Star dormant", (ch.get_character_status("Ava"),
+                                    ch.get_character_status("Star")), ("", "dormant"))
+check("play controls Ava again", active_of(PLAY), "Ava")
 
 # ── [E] reveal_identity ─────────────────────────────────────────────────────
 print("[E] reveal_identity")
-_res = reveal.execute('{"agent_name":"Cara","target":"obs"}')
+_res = reveal.execute('{"agent_name":"Glut","target":"obs"}')
 check("reveal to Obs is no error", is_error(_res), False)
-check("Obs knows now", knowers.knows("Obs", "Cara", "p1"), True)
-check("Obs on the secret", "Obs" in knowers.knower_names("Cara", "p1"), True)
-_ids, _who = line_rows("Cara reveals to Obs: Cara is Moonveil.")
+check("Obs knows now", knowers.knows("Obs", "Glut"), True)
+_ids, _who = line_rows("Glut reveals to Obs: Glut is Tilda.")
 check("one reveal line", len(_ids), 1)
-check("reveal line reaches Cara + Obs only", _who, {"Cara", "Obs"})
-check("reveal again -> error", is_error(reveal.execute('{"agent_name":"Cara","target":"Obs"}')), True)
+check("reveal line reaches Glut + Obs only", _who, {"Glut", "Obs"})
+check("reveal again -> error", is_error(reveal.execute('{"agent_name":"Glut","target":"Obs"}')),
+      True)
 check("absent target -> error",
-      is_error(reveal.execute('{"agent_name":"Cara","target":"Nobody"}')), True)
+      is_error(reveal.execute('{"agent_name":"Glut","target":"Nobody"}')), True)
 
 # ── [F] revert verb ─────────────────────────────────────────────────────────
 print("[F] revert verb")
-_res = revert.execute('{"agent_name":"Cara"}')
+_res = revert.execute('{"agent_name":"Glut"}')
 check("revert result is no error", is_error(_res), False)
-check("Cara no longer active", store.get_active("Cara"), None)
-check("flag cleared", get_character_profile("Cara").get("is_transformed"), False)
-_got, _hidden = offered("Cara")
-check("Revert not offered again", revert.name in _got, False)
-check("revert of nobody -> error", is_error(revert.execute('{"agent_name":"Cara"}')), True)
+check("Tilda present, Glut dormant", (ch.get_character_status("Tilda"),
+                                      ch.get_character_status("Glut")), ("", "dormant"))
+check("revert hidden for Glut again", revert.visible_for("Glut"), False)
+check("revert of nobody -> error", is_error(revert.execute('{"agent_name":"Glut"}')), True)
 
 print()
 print(f"{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

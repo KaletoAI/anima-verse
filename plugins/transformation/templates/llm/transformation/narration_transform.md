@@ -1,1 +1,1 @@
-{{ bearer }} transforms into {{ alias }}.
+{{ leader }} transforms into {{ body }}.

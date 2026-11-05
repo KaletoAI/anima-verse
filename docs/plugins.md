@@ -1112,18 +1112,23 @@ in `shared/languages/de.json`):
 
 | Method | Answer |
 |---|---|
-| describe — `(character, lang)` | `{"title", "intro", "tabs"?: [tab], "cards": [card], "create": {"label", "fields": [field]} \| None}` |
+| describe — `(character, lang)` | `{"title", "intro", "tabs"?: [tab], "actions"?: [action], "cards": [card], "create": {"label", "fields": [field]} \| None}` |
 | save — `(character, card_id, values, lang)` | `{"ok", "error"?, "card_id"?}`; `card_id` `None` = create from `create.fields` |
 | delete — `(character, card_id, lang)` | `{"ok", "error"?}` |
-| action — `(character, card_id, action_id, lang)` | `{"ok", "message"?, "error"?}` |
+| action — `(character, card_id, action_id, lang)` (+ keyword `value` for an action with `input`) | `{"ok", "message"?, "error"?}` |
 
 A **card** is `{"id", "title", "subtitle", "badges": [str], "fields": [field],
-"values": {key: value}, "status", "actions": [{"id", "label", "confirm"?,
-"primary"?}], "deletable", "delete_confirm"?}`; a **field** is `{"key", "type",
+"values": {key: value}, "status", "actions": [action], "deletable", "delete_confirm"?}`;
+an **action** is `{"id", "label", "confirm"?, "primary"?, "input"?}`; a **field** is `{"key", "type",
 "label", "hint"?, "required"?, "min"?, "max"?, "unit"?, "filter"?,
-"placeholder"?, "tab"?, "width"?, "rows"?}`. `confirm` on an action / `delete_confirm` on a card make the
-panel ask first (in-app dialog). After every save, delete and action the panel
-reloads `describe` — the server is the truth.
+"placeholder"?, "tab"?, "width"?, "rows"?, "options"?}`. `confirm` on an action / `delete_confirm` on a card make the
+panel ask first (in-app dialog). An action with `input` = `{"label", "placeholder"?, "message"?}` asks
+for one line of text first (in-app dialog, never `window.prompt`); the core strips it, refuses an empty
+one ("<input label> is required.", the provider is not called) and hands it to the provider as the keyword
+argument `value` — an action without `input` is called without it. The panel-level `actions` (top bar,
+not bound to a card — e.g. "Create linked character") run with `card_id` `""`; the core runs only a
+declared one. After every save, delete and action the panel reloads `describe` — the server is the
+truth. A card with no fields is a status card: it shows no Save/Discard.
 
 **Layout.** The panel shows ONE card at a time: a strip of chips on top (card
 title + its badges, plus a "+ <create label>" chip) selects it; the first card
@@ -1154,6 +1159,7 @@ has no tab bar).
 | `items` | several items, same picker; `filter: "outfit"` offers only outfit pieces (`category == "outfit_piece"`) | list of item ids |
 | `condition` | dropdown of the conditions catalog (`GET /world/conditions/list`) | condition id (`""` = none) |
 | `characters` | checkboxes with portraits of every character of the world except the panel's own | list of names |
+| `select` | dropdown of the field's `options` = `[{"value", "label"?}]` (label defaults to the value; "— none —" first unless the field is `required` and set) | one option value (`""` = none). The core refuses a value outside the options ("<label>: invalid selection.") unless it is the card's stored value — a choice the options no longer list is kept, shown "(missing)" |
 | `backend` | dropdown of the image generator backends (`GET /world/imagegen-options`, inpaint/upscale/video excluded), first entry "— default —" | backend name (`""` = none) |
 | `loras` | LoRA rows (name, strength, remove) plus an "Add LoRA" dropdown; the options are the LoRA library of the backend named by the draft value of the card's field `backend_field` (or `fallback_field` when that is empty; both empty = the character's routed backend), refetched when that value changes — `GET /characters/outfit-lora-options?character_name=&target=&backend=`; `target` `"render"` (default) or `"tpose"` | list of `{"name", "strength"}` (strength clamped to [-4, 4], non-numeric → 1.0, duplicates by name dropped) |
 
@@ -1164,7 +1170,7 @@ before the provider sees them (declared keys only, type coercion, `required`,
 delete or action is no HTTP error: `{"ok": false, "error": "..."}` is shown
 inline in the card. Routes (admin-only): `GET /characters/{name}/panels/{package}`,
 `POST …/save` body `{card_id|null, values}`, `POST …/delete` body `{card_id}`,
-`POST …/action` body `{card_id, action_id}`, each with `?lang=` the UI language.
+`POST …/action` body `{card_id, action_id, value?}`, each with `?lang=` the UI language.
 
 ## PluginContext API
 
@@ -1259,84 +1265,116 @@ gehören nicht zu diesem SFW-Repo; ohne dieses Repo existieren sie schlicht nich
 
 ## Package `transformation`
 
-A character who carries a power item can transform into a **persona**. The package is the TRIGGER only:
-the item check, the spoken phrases, cooldown and GAME-time duration, the state flag `is_transformed`, a
-condition and a transform activity while it lasts, a private narrator line for the present knowers, and who
-is in on the secret. Nothing masks a name, an appearance or an image: every observer keeps perceiving the
-real character, and the persona's `alias` is a plain label (the knower secret and the narration name the
-persona by it). The package is generic (a masked hero, a curse, a disguise); flavour comes from world
-content.
+A leading character who carries a power item turns into one of its **linked characters** — a **body
+swap** (`app.core.linked_characters`, spec `docs/superpowers/specs/2026-11-05-linked-characters-design.md`).
+The linked character (the *body*, e.g. Glut for the leader Tilda) is a full character of its own — name,
+appearance, portrait, images, 3D model, wardrobe, Instagram, stats, goals — and shares the leader's mind
+(memories, thoughts, secrets, own-direction feelings) through the core. Only one family member stands in
+the world: a transform makes the leader dormant and puts the body exactly where it stood (location, room,
+point, yaw, seat, activity); a revert does the reverse. The package is the TRIGGER: the power item, the
+spoken phrases, cooldown and GAME-time duration, the state flag `is_transformed` and a condition on the
+body while it lasts, a private narrator line for the present knowers, and who knows the secret. Nothing
+masks a name, an appearance or an image; the body's character name is the label everywhere.
 
-**Editor** — Game-Admin → Characters → <character> → Skills → **Transformation** (the package's character
-panel, `panel.py`; contract in [Character panels](#character-panels)). One card per persona of the world —
-those whose power item the opened character holds first, badge "holds the item" — in three tabs: **Persona**
-(power item, alias, enabled), **Transformation** (phrases, durations, activity, effect) and **In on the
-secret** (the knowers of (persona, opened character) as character checkboxes). Pickers instead of ids, a
-status line (ordinary self / transformed since … / on cooldown until …) and test actions: **Transform now**
-(engine source `admin`, `ignore_cooldown=True` — the admin overrides a running cooldown; any other refusal
-shows the engine's reason), **Revert now**, **Give <item> to <character>** (moves the item from its current
-holder). There is no Setup section and no config key: the persona belongs to its ITEM, so the same cards
-show on every character.
+**Editor** — Game-Admin → Characters → <leader> → Skills → **Transformation** (the package's character
+panel, `panel.py`; contract in [Character panels](#character-panels)). On a LEADER: one card per
+definition the character leads — those whose power item it holds first, badge "holds the item" — in two
+tabs: **Transformation** (the linked character to become — a `select` of `bodies_of(leader)` —, power
+item, enabled; transform/revert phrase; max duration, cooldown, activity, effect on the body; short
+fields side by side on the 12-column grid) and **Knowers** (character checkboxes: who knows that the body
+is the leader). The panel-level action **Create linked character** asks only for a name
+(`create_linked(leader, name)`: a new dormant body from the leader's template); it is selectable right
+after. Status line (ordinary self / transformed into <body> since … / on cooldown until …) and test
+actions: **Transform now** (engine source `admin`, `ignore_cooldown=True` — the admin overrides a running
+cooldown; any other refusal, including a swap refusal state, shows its reason), **Revert now** (shows a
+swap refusal's reason), **Give <item> to <leader>** (moves the item from its current holder). On a linked
+BODY the panel shows only one status card per definition that turns its leader into it, **Revert now**
+while it stands in the world, and a pointer to the leader's panel.
 
-**Storage** — package table `transformation_definitions` in `world.db` (world content: NOT part of the reset
-store, a character reset never touches it), one row per persona:
+**Storage** — three package tables in `world.db`; the leader sits in the column `character_name` of all
+three, so the core's character-deletion sweep removes a deleted leader's rows. A table of the earlier
+persona shape is dropped and re-created once (no data migration).
+
+`transformation_definitions` (world content: NOT part of the reset store), one row per (leader, item):
 
 | Column | Meaning |
 |---|---|
-| `id` | Stable persona id, a slug of the alias at creation (`moonveil`, `moonveil_2`, …); renaming the alias keeps it |
-| `item_id` | The power item (UNIQUE — one persona per item). Whoever carries it can transform; the power travels with the item |
-| `alias` | A label: the knower secret ("I am secretly <alias>.") and the narration name the persona by it. No name rule — it may repeat and may be a character's name |
-| `activation_phrase` / `revert_phrase` | What the avatar says to transform / to return (see below) |
-| `condition_id` | Condition applied while transformed (prompt/image/stat modifiers); empty = none |
+| `id` | Stable id, a slug of the body's name at creation (`glut`, `glut_2`, …) |
+| `character_name` | The leader (API key `leader`); fixed at creation |
+| `body` | The linked character the leader turns into (must be linked to the leader when chosen) |
+| `item_id` | The power item — `UNIQUE(character_name, item_id)`: one definition per leader and item. The leader must carry it to transform; the swap moves it to the body, the revert back |
+| `activation_phrase` / `revert_phrase` | What the avatar says to transform (as the leader) / to return (as the body) |
 | `max_duration_minutes` | GAME minutes until the transformation ends by itself; default 60, `0` = until reverted |
-| `cooldown_minutes` | GAME minutes after a revert before the same bearer can use this persona again; default 30 |
-| `transform_activity` | Activity shown while the transformation takes place; default `transforming` |
-| `enabled` | Default on; off takes the persona out of the world (a worn one ends on the next tick) |
+| `cooldown_minutes` | GAME minutes after a revert before the leader can use this definition again; default 30 |
+| `transform_activity` | Activity of the body while the transformation takes place; default `transforming` |
+| `condition_id` | Condition applied to the BODY while it stands in the world (removed on revert); empty = none |
+| `enabled` | Default on; off = this transformation cannot start (a running one keeps going) |
 | `updated_at` | SYSTEM stamp of the last write |
 
-The defaults are the constants in `definitions.py`. A table created by an earlier version of the package
-carries further columns (`description`, `suit_items`, `prompt_overrides`, `pause_routine`, `imagegen`; in
-`transformation_active` `granted_items`, `lock_before`); they keep their defaults and are neither read nor
-written. **Save rules** (refused inline in the panel, nothing saved): power item and alias required; the
-item is not bound to another persona and exists when it is (re)chosen; minutes ≥ 0. Deleting is refused
-while someone wears the persona; a delete also removes every bearer's cooldown and knower secret of it, a
-rename rewrites the secrets' text. `definitions.load()` skips a disabled row and, with one warning per row,
-one that lacks its item or alias.
+`transformation_active` — `{leader, body, def_id, started_game, until_game, snapshot}` (snapshot:
+`item_id`, `condition_id` as applied, the transform activity's `pose_key`); `transformation_cooldown` —
+`(leader, def_id) → until_game`. Both are the leader's `reinit` reset store. The defaults are the
+constants in `definitions.py`. **Save rules** (refused inline, nothing saved): body and item required;
+the body is a linked character of the leader; the item is not used by another definition of the leader
+and exists when (re)chosen; minutes ≥ 0; the body of a running transformation cannot change. Deleting is
+refused while the transformation runs; it removes the definition's cooldowns, the knowers stay (they
+belong to the body). `definitions.load()` skips a disabled row and, with one warning per row, one
+lacking its leader, body or item.
+
+**Engine** (`engine.py`) — `transform(leader, def_id)`: the definition is the leader's, nothing runs,
+the leader carries the item, the cooldown (unless the admin), the body is linked → `swap_presence(leader,
+body, items=[item_id])` (refused in a swap refusal state: journey or movement target, asleep, pair
+interaction or invitation, furniture action, reading, party — `linked_characters.SWAP_REFUSAL_TEXT`).
+Then the condition and the flag go onto the body, the transform activity is struck on it, the active row
+is recorded and the present knowers get the narration "<leader> transforms into <body>.". `revert(leader,
+reason=…)`: the in-game paths (verb, phrase) need the item on the body; the automatic (`expired`,
+`item_lost`) and the admin's revert do not → `swap_presence(body, leader, items=[item_id])`; then the
+condition and flag leave the body, the transform activity is cleared on the leader if the swap carried it
+back, the leader's cooldown starts, "<body> turns back into <leader>." for the present knowers. The
+`world_tick` hook reverts what ran out (`expired`) and a body that no longer carries the item
+(`item_lost`, wherever it stands); a refused automatic revert stays and is retried on every following
+tick — never forced. The package answers the provider `linked.expected_present` with the body while a
+transformation runs, so the core's family repair keeps the body in the world.
 
 **Verbs** (one class `TransformationSkill`, all `always_load`):
-- `transform` — offered to whoever carries a persona's power item, while not transformed and not on
-  cooldown. Input `{}`, or `{"persona": "<alias>"}` with several power items. Sets the state flag
-  `is_transformed`, applies the condition, strikes the transform activity, starts the GAME-time duration.
-  The worn outfit is not touched.
-- `revert` — the clearing verb of `is_transformed`; offered only while a persona is worn. Removes the
-  condition, clears the transform activity (if it is still the current pose), starts the cooldown.
-- `reveal_identity` — `{"target": "<name>"}` (a present character, casefolded): adds that person to the
-  bearer's knower secret (`knowers.add`); a private line tells the two of them.
+- `transform` — offered to a leader who carries the item of one of its definitions, while not on
+  cooldown. Input `{}`, or `{"into": "<body>"}` when it can become several.
+- `revert` — the clearing verb of `is_transformed`; offered only to a body standing in the world for its
+  leader. Needs the power item.
+- `reveal_identity` — `{"target": "<name>"}` (a present character, casefolded): makes that person a knower
+  of "<body> is secretly <leader>" (`knowers.add`); a private line tells the two of them. Usable by the
+  present body and by the leader (`{"as": "<body>"}` picks one).
 
-The `world_tick` hook ends a transformation whose duration ran out or whose bearer no longer carries the
-power item, and gives every holder of a power item its knower secret. Knowers (and the bearer) get a
-private narrator line about the transform/revert; non-knowers get none.
+**Prompts** — the core gives a body the one-mind identity line (system prompt). The package adds the
+secrecy text to the scene state (`character.prompt_context` / `character.thought_context`, volatile):
+the present body reads "You are <body>, and secretly <leader>. Nobody may learn that you are <leader>,
+except <knowers>." plus who present does not know; a present knower reads "<body> here is secretly
+<leader>." plus who present does not know. Non-knowers get nothing.
 
-**Avatar phrases** — provider `play.say_intercept`: when the avatar says a persona's
-`activation_phrase` (or, while wearing it, its `revert_phrase`) the message never reaches the room; it
-becomes a private line for the avatar and the present knowers and the transformation runs. Matching is
-casefolded, punctuation-trimmed and needs the phrase as a contiguous word run; only personas whose item the
-avatar carries count. A refusal (already transformed, cooldown, …) adds a storyteller hint for the
-avatar alone.
+**Avatar phrases** — provider `play.say_intercept`: when the avatar (a leader holding the item) says a
+definition's `activation_phrase`, or the avatar is the present body and says the running definition's
+`revert_phrase`, the message never reaches the room; it becomes a private line for the avatar and the
+present knowers and the swap runs (the swap switches the player to the other family member). Matching is
+casefolded, punctuation-trimmed and needs the phrase as a contiguous word run. A refusal (already
+transformed, cooldown, a swap refusal state, …) adds a storyteller hint for the avatar alone.
+
+**Knowers** are ONE record secret per body, created through `secrets.add_secret(body, …)` — so it is
+stored at the mind (the leader) and carries `body`: "<body> is secretly <leader>.", `source_ref =
+transformation:<body>`, `known_by` = the knowers (as minds). A knower's prompt reads "About <body>: <body>
+is secretly <leader>.". The family always knows; every other check goes through `secrets.knows`.
+Characters → Secrets shows the same secret.
 
 **Core surface it uses**:
+- `app.core.linked_characters`: `swap_presence`, `leader_of`, `mind_of`, `bodies_of`, `create_linked`,
+  `EXPECTED_PRESENT_PROVIDER`;
 - the provider `play.say_intercept` (`app.routes.play.SAY_INTERCEPT_CAPABILITY`);
 - `app.core.effect_application.apply_character_effects` for the condition, `set_state_flag`,
   `set_pose_intent` / `clear_pose_intent` for the flag and the activity, `perception.record_private_line`
-  for the narration;
-- a `reinit` reset store (`app.core.character_reset.register_reset_store`) for the package tables
-  `transformation_active` / `transformation_cooldown`;
+  for the narration, the hooks `character.prompt_context` / `character.thought_context`;
+- `app.models.secrets` (`add_secret`, `add_known_by`, `update_secret`, `knows`) for the knowers;
+- a `reinit` reset store (`app.core.character_reset.register_reset_store`) for `transformation_active` /
+  `transformation_cooldown`;
 - the character panel provider `character_panel:transformation` (`app.core.character_panels`).
-
-**Knowers** are an ordinary record secret of the bearer: `"I am secretly <alias>."` with
-`source_ref = transformation:<persona id>`, created for every holder of the power item on the next tick.
-Its `known_by` list is the knower list — edited in the Transformation panel ("In on the secret");
-Characters → Secrets shows the same secret.
 
 ## Best Practices
 

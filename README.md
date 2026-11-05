@@ -179,11 +179,13 @@ stops acting autonomously).
   journey and all clients derive the same position.
 - **Parties:** one leader plus followers travel as one — only the leader moves, followers are pulled
   along, and joining is an LLM tool call, never a keyword match.
-- **Transformation:** a character who carries a power item can transform into a persona (the
-  `transformation` package; personas edited in Game-Admin → Characters → Skills → Transformation, bound
-  to a power item) — with a cooldown, a GAME-time duration and a condition while it lasts; who is in on
-  the secret is kept as a character secret. The avatar transforms by saying a phrase, NPCs by a tool
-  call ([details](docs/plugins.md#package-transformation)).
+- **Transformation:** a character who carries a power item turns into one of its **linked characters**
+  — a body swap: the linked character, a full character of its own with one shared mind, stands exactly
+  where the leader stood (the `transformation` package; set up on the leader in Game-Admin → Characters →
+  Skills → Transformation, including "Create linked character") — with a cooldown, a GAME-time duration
+  and a condition on the body while it lasts; who knows that the body is the leader is kept as a secret
+  of the mind. The avatar transforms by saying a phrase, NPCs by a tool call
+  ([details](docs/plugins.md#package-transformation)).
 - Locations → rooms, with an `entry_room`, per-room floor plans, indoor/outdoor, decency, swim rules,
   `known_locations` discovery and rule-based access control (**Block / Force / Discover / Modify**
   rules with free-text conditions such as `has_item:item_a1b2c3d4 OR courage>50`). A block rule can
