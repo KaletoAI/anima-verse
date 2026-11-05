@@ -101,8 +101,8 @@ public static class PropActionMotion
         return At("arrived",Number(anchor["x"]),Number(anchor["y"]),Number(anchor["z"]),Number(anchor["yaw"]));
     }
     public static double EntryPhase(JsonNode entry,double ageS) => Math.Min(1,Math.Max(0,
-        (Number(entry["elapsed_game_s"])+Math.Max(0,ageS)*Math.Max(0,Number(entry["game_seconds_per_real_second"])))
-        /Number(entry["duration_game_s"])));
+        (Number(entry["elapsed_s"])+Math.Max(0,ageS)*Math.Max(0,Number(entry["clock_rate"])))
+        /Number(entry["duration_s"])));
     public static double? EntrySupportLift(double firstY,double lastY,double currentY,double accessY,double anchorY,double rootOffset)
     {
         double supportY=anchorY+rootOffset, lift=supportY-rootOffset-accessY, span=lastY-firstY;
@@ -113,7 +113,7 @@ public static class PropActionMotion
     {
         string N(JsonNode? n)=>Number(n).ToString("G",CultureInfo.InvariantCulture);
         string At(JsonNode a)=>string.Join(",",new[]{"x","y","z","yaw"}.Select(k=>N(a[k])));
-        return $"{Text(entry["kind"])}|{N(entry["started_game_s"])}|{At(entry["access"]!)}|{At(entry["anchor"]!)}";
+        return $"{Text(entry["kind"])}|{N(entry["started_s"])}|{At(entry["access"]!)}|{At(entry["anchor"]!)}";
     }
     public static JsonArray Choices(JsonNode offer)
     {

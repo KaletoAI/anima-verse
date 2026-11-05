@@ -69,13 +69,13 @@
           "z": 0,
           "yaw": 180
         },
-        "duration_game_s": 4,
-        "elapsed_game_s": 2,
-        "game_seconds_per_real_second": 1,
+        "duration_s": 4,
+        "elapsed_s": 2,
+        "clock_rate": 1,
         "height_cm": 170,
         "root_offset": 0.398,
         "role": null,
-        "started_game_s": 43206
+        "started_s": 43206
       }
     },
     {

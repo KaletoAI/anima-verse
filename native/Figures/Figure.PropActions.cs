@@ -52,7 +52,7 @@ public partial class Figure
         if(_turn is null) Yaw=TargetYaw=yaw;
         _lift=PropEntryLift=lift.Value;
         HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default;
-        SecondaryFrozen=PropActionMotion.Number(spec["game_seconds_per_real_second"])<=0;
+        SecondaryFrozen=PropActionMotion.Number(spec["clock_rate"])<=0;
         UpdateFigure(0); return true;
     }
     // Imported humanoids can carry world-up on local Z. Support uses the parent frame, not a component name.

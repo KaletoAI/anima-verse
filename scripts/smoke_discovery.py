@@ -92,6 +92,10 @@ Cases:
   [3] the ticker discovers along the way: ROADSIDE at (500, 60) edge 10 has
       its south edge at z = 55, so a walker on the road x = 500 is 55 m away
       at z = 0 (out of range, nothing) and 45 m away at z = 10 (discovered).
+      The journey [[500, 0, 0], [500, 40, 40]] walks 1 m per REAL second on
+      the MOTION clock (real time since 2026-11-05, plan-bewegung-echtzeit.md),
+      pinned here (``timeutils.motion_time`` replaced, START = 1000.0), so
+      the tick at t = 10 s stands exactly at z = 10.
       Plus an IDLER standing still: no journey, but a point — discovered.
       The EXPLORATION half of the same two ticks: (500, 0) is cell
       (floor(500/64), floor(0/64)) = (7, 0) — 500 = 7·64 + 52 — so the ticker
@@ -157,7 +161,8 @@ from app.core.discovery import (  # noqa: E402
     discover_in_range, get_discovery_range_m, locations_within)
 from app.core.exploration import (  # noqa: E402
     cell_key, cell_of, explored_cells, explored_sig)
-from app.core.game_time import GameDuration, GameTime  # noqa: E402
+from app.core import timeutils  # noqa: E402
+from app.core.game_time import GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
     boundary_contains, boundary_distance_m)
@@ -177,9 +182,13 @@ from app.routes.play import play_pos  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-# Game time is the world calendar: a canonical stamp, no date, no timezone.
-START = "Y0001-D001T12:00:00"
-START_GT = GameTime.parse(START)
+# The motion clock, pinned: real seconds the world has run unfrozen.
+START = 1000.0
+_MOTION = [START]
+timeutils.motion_time = lambda: _MOTION[0]
+timeutils.motion_rate = lambda: 1.0
+# The game calendar only labels things; it stands still at this stamp.
+START_GT = GameTime.parse("Y0001-D001T12:00:00")
 USER = {"username": "demo", "role": "user"}
 AVATAR = "demo_avatar"
 WALKER = "demo_walker"
@@ -327,14 +336,14 @@ def give_journey(name: str, target: str, waypoints) -> None:
     prof["movement_target"] = target
     prof["journey"] = {"target": target,
                        "waypoints": [list(w) for w in waypoints],
-                       "started_at_game": START, "speed_m_s": 1.0,
+                       "started_at_s": START, "speed_m_s": 1.0,
                        "entry_edge": ""}
     save_character_profile(name, prof)
 
 
 def tick_at(seconds: float) -> None:
-    """Pin the game clock to START + seconds and run ONE ticker pass."""
-    set_game_time(START_GT + GameDuration.of(seconds=seconds))
+    """Pin the motion clock to START + seconds and run ONE ticker pass."""
+    _MOTION[0] = START + seconds
     travel_engine.advance_all_journeys()
 
 
@@ -365,9 +374,8 @@ def park(x: float, z: float) -> None:
 
 
 # ── the world ───────────────────────────────────────────────────────────
-set_game_factor(0.0)                  # the game clock stands still — pinned
+set_game_factor(0.0)                  # the game clock stands still
 set_game_time(START_GT)
-travel_engine.game_speed_factor = lambda: 1.0   # …the goal window runs at 1×
 
 ALPHA = place("Smoke Alpha", 50.0, 50.0)
 TURNED = place("Smoke Turned", 200.0, 50.0, yaw=45.0)

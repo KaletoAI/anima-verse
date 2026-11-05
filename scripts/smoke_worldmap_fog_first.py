@@ -15,7 +15,7 @@ from app.core import paths
 
 # Reuse the seed module's throwaway world and make the redirect explicit.
 paths.init(seed.STORAGE)
-from app.core import exploration, world_ops
+from app.core import exploration, timeutils, world_ops
 from app.models import character
 
 baseline = seed.load_head_module()
@@ -51,7 +51,7 @@ def build(fn, show_all):
 
 journey = {"target": seed.MARKET,
            "waypoints": [[600, 0, 0], [200, 0, 400]],
-           "started_at_game": seed.FROZEN.canonical(), "speed_m_s": 1}
+           "started_at_s": timeutils.motion_time(), "speed_m_s": 1}
 cases = [
     ("unknown location", seed.MARKET, None, "", False, False),
     ("show_all", seed.MARKET, None, "", True, True),

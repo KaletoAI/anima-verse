@@ -32,7 +32,7 @@ change into avg*10):
   [3] react(resist, feeling -2): "cancelled" / "partner_resisted", no
       claims left; partner->actor -0.10, actor->partner -0.03; average
       -0.065 -> strength 10 - 0.65 = 9.35. A second answer changes nothing.
-  [4] no answer: both arrived, the wait is 61 s old -> due_in_game_s 0, the
+  [4] no answer: both arrived, the wait is 61 s old -> due_in_s 0, the
       next advance goes into "entry" with reaction "timeout".
   [5] a romantic accept (feeling 1, romantic, compatible pair): tension
       0 + 0.02 = 0.02.
@@ -165,10 +165,10 @@ class React(unittest.TestCase):
         name, partner, eid = self.start()
         arrive()
         self.assertEqual(R.get(eid)["phase"], "")
-        self.assertIsNone(A.due_in_game_s(F.game_time()))
+        self.assertIsNone(A.due_in_s(F.game_time()))
         later = A.utc_now() + timedelta(seconds=61)
         with patch.object(A, "utc_now", lambda: later):
-            self.assertEqual(A.due_in_game_s(F.game_time()), 0.0)
+            self.assertEqual(A.due_in_s(F.game_time()), 0.0)
             A.advance(F.game_time())
         run = R.get(eid)
         self.assertEqual((run["phase"], run["data"]["reaction"]["state"]), ("entry", "timeout"))

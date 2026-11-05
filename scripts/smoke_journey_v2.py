@@ -7,11 +7,16 @@ Runs against a THROWAWAY storage directory — never touches a real world.
 Rules every expectation below is derived from BY HAND:
 
   * A journey on the profile is
-    ``{target, waypoints: [[x, z, t_cum], …], started_at_game, speed_m_s}``.
-    ``t_cum`` = cumulative GAME seconds since the start, waypoint 0 is 0.0.
-  * The OLD format (a journey dict carrying ``path``) is discarded silently
-    on read, and ``movement_target`` is cleared with it — no migration.
-  * ``journey_state`` is a pure function of the game clock: the position is
+    ``{target, waypoints: [[x, z, t_cum], …], started_at_s, speed_m_s}``.
+    ``t_cum`` = cumulative REAL seconds since the start, waypoint 0 is 0.0;
+    ``started_at_s`` is a MOTION-clock second (``timeutils.motion_time`` —
+    real seconds the world has run unfrozen; movement runs in real time since
+    2026-11-05, plan-bewegung-echtzeit.md). The motion clock is PINNED in this
+    smoke (``timeutils.motion_time`` / ``motion_rate`` replaced) at M = 1000.0.
+  * The OLD formats are discarded silently on read, and ``movement_target``
+    is cleared with them — no migration: v1 (a dict carrying ``path``) and
+    the game-clock format (``started_at_game`` without ``started_at_s``).
+  * ``journey_state`` is a pure function of the motion clock: the position is
     the linear interpolation inside the segment the elapsed time falls in.
   * An opening's world point: the opening names a boundary EDGE INDEX and a
     fraction along it (contract v6 Nr. 5). Without a drawn boundary the
@@ -34,12 +39,9 @@ Hand-derived expectations:
       legal pace" would re-time every new journey).
 
   [2] ``journey_state`` with waypoints [[0,0,0], [10,0,10], [10,20,40]]
-      (10 m in 10 s, then 20 m in 30 s — factor ⅔). Game time is the world
-      calendar, so the start stamp is the canonical string
-      ``Y0001-D001T12:00:00`` and ``now_game`` a ``GameTime``; midday of day
-      one is chosen so the "clock set back" case below (t = −5 s) is still a
-      representable instant — a ``GameTime`` cannot lie before the epoch.
-      total_m = 30.0, eta = start + 40 s = ``Y0001-D001T12:00:40``.
+      (10 m in 10 s, then 20 m in 30 s — factor ⅔), started at motion second
+      S = 1000.0, asked at S + t. total_m = 30.0; remaining_s at t = 0 is
+      40.0, at t = 25 it is 15.0, once arrived 0.0.
         t = 0  → (0,0),  seg 0, progress_m 0
         t = 5  → (5,0),  seg 0, progress_m 5   (half of segment 0)
         t = 10 → (10,0), seg 1, progress_m 10  (the joint belongs to seg 1)
@@ -47,8 +49,8 @@ Hand-derived expectations:
                  → progress_m 20
         t = 40 → arrived, (10,20), progress_m 30
         t = 99 → arrived (beyond the end never runs past the last waypoint)
-        t = −5 → clamped to the start (a game clock set back must not walk
-                 the figure backwards)
+        t = −5 → clamped to the start (a start still ahead — an exit clip —
+                 must not walk the figure backwards); remaining_s 45.0
       Zero-length / zero-time segments are skipped, not divided by:
       [[0,0,0], [10,0,10], [10,0,10], [10,20,40]] answers exactly like the
       3-waypoint case at t = 10 and t = 25.
@@ -59,6 +61,8 @@ Hand-derived expectations:
       ({target, path, started_at_game, seconds_per_cell}) plus a matching
       ``movement_target`` → ``get_journey`` is None, ``movement_target``
       is empty afterwards and the journey dict is gone from the profile.
+      The same for a GAME-CLOCK journey ({target, waypoints,
+      started_at_game, speed_m_s}, no ``started_at_s``, no owner).
 
   [4] ``opening_world_point`` at a location (50, 50), plan_width_m 10.
       Without a drawn boundary the effective one is the reference square
@@ -106,9 +110,9 @@ Hand-derived expectations:
       own position — its first waypoint is that point, and no opening of
       any location is inserted.
 
-  [7] The ticker: with the game clock pinned (factor 0 at
-      ``Y0001-D010T12:00:00``) a journey whose start stamp lies a game hour in
-      the past is finished, so ``advance_all_journeys`` settles the arrival — the
+  [7] The ticker: with the motion clock pinned, a journey whose start lies
+      3600 motion seconds in the past is finished (its route is ~68 s), so
+      ``advance_all_journeys`` settles the arrival — the
       character stands in MARKET, movement_target and journey are gone.
       (The in-flight position write is Task 3's; this only pins that an
       arrival never hangs.)
@@ -137,9 +141,9 @@ from app.core import config, travel_engine  # noqa: E402
 from app.core.keyed_lock import keyed_lock  # noqa: E402
 from app.core.boundary_entry import opening_world_point  # noqa: E402
 from app.core.config_schema import SECTIONS  # noqa: E402
-from app.core.game_time import GameDuration, GameTime  # noqa: E402
-from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
-                                set_game_time)
+from app.core.game_time import GameTime  # noqa: E402
+from app.core import timeutils as _tu  # noqa: E402
+from app.core.timeutils import set_game_factor  # noqa: E402
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
     get_character_profile, get_movement_target,
@@ -152,9 +156,13 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-# Canonical world-calendar stamps — game time has no dates and no timezone.
-START = "Y0001-D001T12:00:00"
-START_GT = GameTime.parse(START)
+# The motion clock, pinned: every journey stamp below is exact. RATE is the
+# clock's rate (1.0 running, 0.0 frozen).
+START = 1000.0
+MOTION = [START]
+RATE = [1.0]
+_tu.motion_time = lambda: MOTION[0]
+_tu.motion_rate = lambda: RATE[0]
 
 
 def check(label, actual, expected):
@@ -210,8 +218,7 @@ def set_map3d(location_id: str, **fields) -> None:
 
 
 def state_at(waypoints, seconds):
-    return travel_engine.journey_state(
-        waypoints, START, START_GT + GameDuration.of(seconds=seconds))
+    return travel_engine.journey_state(waypoints, START, START + seconds)
 
 
 def loc_dict(cx, cz, width, yaw=0.0, openings=None):
@@ -256,14 +263,15 @@ check("the new key is in the schema",
       "travel_speed_m_s" in SECTIONS["game"]["fields"], True)
 
 # ── [2] journey_state ───────────────────────────────────────────────────
-print("[2] journey_state — pure interpolation over cumulative game seconds")
+print("[2] journey_state — pure interpolation over cumulative real seconds")
 WPS = [[0, 0, 0], [10, 0, 10], [10, 20, 40]]
 st = state_at(WPS, 0)
 check("t=0 pos", rounded(st["pos"]), (0.0, 0.0))
 check("t=0 arrived", st["arrived"], False)
 approx("t=0 progress_m", st["progress_m"], 0.0)
 approx("total_m", st["total_m"], 30.0)
-check("eta_game", st["eta_game"], "Y0001-D001T12:00:40")
+approx("t=0 remaining_s", st["remaining_s"], 40.0)
+check("no eta_game any more (journey_eta projects it)", "eta_game" in st, False)
 st = state_at(WPS, 5)
 check("t=5 pos", rounded(st["pos"]), (5.0, 0.0))
 check("t=5 seg", st["seg"], 0)
@@ -276,16 +284,19 @@ st = state_at(WPS, 25)
 check("t=25 pos", rounded(st["pos"]), (10.0, 10.0))
 check("t=25 seg", st["seg"], 1)
 approx("t=25 progress_m", st["progress_m"], 20.0)
+approx("t=25 remaining_s", st["remaining_s"], 15.0)
 st = state_at(WPS, 40)
 check("t=40 arrived", st["arrived"], True)
 check("t=40 pos", rounded(st["pos"]), (10.0, 20.0))
 approx("t=40 progress_m", st["progress_m"], 30.0)
+approx("t=40 remaining_s", st["remaining_s"], 0.0)
 st = state_at(WPS, 99)
 check("t=99 stays at the last waypoint", rounded(st["pos"]), (10.0, 20.0))
 check("t=99 arrived", st["arrived"], True)
 st = state_at(WPS, -5)
-check("a clock set back clamps to the start", rounded(st["pos"]), (0.0, 0.0))
+check("a start still ahead clamps to the start", rounded(st["pos"]), (0.0, 0.0))
 check("… and is not arrived", st["arrived"], False)
+approx("… remaining_s counts the wait: 5 + 40", st["remaining_s"], 45.0)
 
 ZERO = [[0, 0, 0], [10, 0, 10], [10, 0, 10], [10, 20, 40]]
 check("zero-length segment: t=10 pos", rounded(state_at(ZERO, 10)["pos"]),
@@ -307,12 +318,25 @@ with keyed_lock("character_profile", "legacy_npc"):
     prof = get_character_profile("legacy_npc")
     prof["movement_target"] = "loc_old"
     prof["journey"] = {"target": "loc_old", "path": ["loc_a", "loc_old"],
-                       "started_at_game": START, "seconds_per_cell": 60.0}
+                       "started_at_game": "Y0001-D001T12:00:00",
+                       "seconds_per_cell": 60.0}
     save_character_profile("legacy_npc", prof)
 check("old journey is not returned",
       travel_engine.get_journey("legacy_npc"), None)
 check("movement_target cleared", get_movement_target("legacy_npc"), "")
 check("journey dict removed from the profile",
+      "journey" in get_character_profile("legacy_npc"), False)
+print("[3b] a game-clock journey (started_at_game, no started_at_s) is dropped too")
+with keyed_lock("character_profile", "legacy_npc"):
+    prof = get_character_profile("legacy_npc")
+    prof["movement_target"] = "loc_old"
+    prof["journey"] = {"target": "loc_old", "waypoints": [[0, 0, 0], [10, 0, 10]],
+                       "started_at_game": "Y0001-D001T12:00:00", "speed_m_s": 1.0}
+    save_character_profile("legacy_npc", prof)
+check("game-clock journey is not returned",
+      travel_engine.get_journey("legacy_npc"), None)
+check("… movement_target cleared", get_movement_target("legacy_npc"), "")
+check("… journey dict removed from the profile",
       "journey" in get_character_profile("legacy_npc"), False)
 
 # ── [4] opening world points ────────────────────────────────────────────
@@ -387,7 +411,7 @@ check("reason", reason, "")
 check_true("journey created", isinstance(journey, dict), f"{journey}")
 if isinstance(journey, dict):
     check("journey keys", sorted(journey),
-          sorted(["target", "waypoints", "started_at_game", "speed_m_s",
+          sorted(["target", "waypoints", "started_at_s", "speed_m_s",
                   "entry_edge", "journey_id"]))
     check_true("start sets stored journey_id", bool(re.fullmatch(r"[0-9a-f]{32}",
                get_character_profile("demo_npc")["journey"].get("journey_id", ""))))
@@ -408,8 +432,9 @@ if isinstance(journey, dict):
                f"{ts}")
     approx("the last t_cum is the polyline length / 1.4",
            ts[-1], polyline_length(wps) / 1.4, tol=0.05)
-    st = travel_engine.journey_state(wps, journey["started_at_game"],
-                                     GameTime.parse(journey["started_at_game"]))
+    check("no exit clip: it starts at the motion now", journey["started_at_s"], START)
+    st = travel_engine.journey_state(wps, journey["started_at_s"],
+                                     journey["started_at_s"])
     check("state at the start stamp is the start point", rounded(st["pos"]),
           (0.0, 0.0))
     approx("progress_m at the start", st["progress_m"], 0.0)
@@ -440,16 +465,12 @@ check("target gone", get_movement_target("wild_npc"), "")
 
 # ── [7] the ticker still settles arrivals ───────────────────────────────
 print("[7] a finished journey is settled by the ticker (Task 3 rebuilds it)")
-# Pin the game clock: the position is a pure function of it, so a stopped
-# clock at a known instant makes "the journey has finished" exact.
-set_game_factor(0.0)
-set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
+# The position is a pure function of the (pinned) motion clock, so a start
+# 3600 motion seconds back makes "the journey has finished" exact.
 with keyed_lock("character_profile", "demo_npc"):
     prof = get_character_profile("demo_npc")
     # Back-date the start so the whole route lies in the past.
-    prof["journey"] = dict(prof["journey"],
-                           started_at_game=(game_time()
-                                            - GameDuration.of(hours=1)).canonical())
+    prof["journey"] = dict(prof["journey"], started_at_s=MOTION[0] - 3600.0)
     save_character_profile("demo_npc", prof)
 travel_engine.advance_all_journeys()
 check("arrived at the target", get_character_current_location("demo_npc"),
@@ -522,24 +543,19 @@ try:
     check("a broken table is no delay, and no exception",
           travel_engine.departure_bridge("wild_npc"), ("", 0.0))
 
-    # The delay is WHOLE game seconds, rounded UP: the calendar has second
-    # resolution, so 2.23 s stored as a stamp comes back as 2 and the last
-    # 0.23 s of the standing-up would be cut off by the first step. At
-    # factor 1 a real second is a game second; the clip length times the
-    # factor is the rule (end to end in [the exit delay is the clip's REAL
-    # length] below): 2.23 * 10 = 22.3 -> 23, 2.23 * 0.5 = 1.115 -> 2, and a
-    # frozen clock (factor 0) converts nothing and keeps ceil(2.23) = 3.
-    check("a clip length rounds UP to whole game seconds",
-          travel_engine._exit_delay(2.23, 1.0), 3)
-    check("… an exact second stays that second",
-          travel_engine._exit_delay(1.0, 1.0), 1)
-    check("… and no clip is no delay", travel_engine._exit_delay(0.0, 1.0), 0)
-    check("… factor 10 scales the REAL clip: ceil(22.3)",
-          travel_engine._exit_delay(2.23, 10.0), 23)
-    check("… factor 0.5: ceil(1.115)",
-          travel_engine._exit_delay(2.23, 0.5), 2)
-    check("… a frozen clock keeps the clip's own seconds",
-          travel_engine._exit_delay(2.23, 0.0), 3)
+    # The departure is the motion now plus the clip's REAL seconds, rounded
+    # UP to the millisecond (``_departure_start``): M = 1000.0, so a 2.23 s
+    # clip starts at 1002.23, 1.0 s at 1001.0, no clip at 1000.0 — and the
+    # game clock's factor changes none of it (factor 10 and 0.5 alike).
+    for _f in (1.0, 10.0, 0.5):
+        set_game_factor(_f)
+        check(f"factor {_f}: a 2.23 s clip starts at M + 2.23",
+              travel_engine._departure_start(2.23), 1002.23)
+    set_game_factor(1.0)
+    check("… a 1.0 s clip at M + 1", travel_engine._departure_start(1.0), 1001.0)
+    check("… and no clip is no delay", travel_engine._departure_start(0.0), 1000.0)
+    check("… 0.0005 s rounds UP to the next millisecond",
+          travel_engine._departure_start(0.0005), 1000.001)
 finally:
     (_ch.get_effective_pose_key,
      _ac.resolve_transition, _ac.clip_meta) = _keep
@@ -561,13 +577,12 @@ finally:
 #        waypoints[2] = HOME's own opening (0, 5), t_cum measured from the
 #        stand point: sqrt(2.4² + 2²) = sqrt(9.76) = 3.1241 m / 1.4 m/s
 #        = 2.2315 s (grass, factor 1.0).
-#   [J2] the exit clip lasts 2.0 s -> the journey starts 2 game seconds after
-#        the order (`_exit_delay`; the clock stands at factor 0 since [7], so
-#        the clip's own ceil(2.0) = 2). journey_state
-#          one second BEFORE started_at_game -> (2, 3), progress 0: the
+#   [J2] the exit clip lasts 2.0 s -> the journey starts 2 real seconds after
+#        the order (`_departure_start`: M + 2.0 = 1002.0). journey_state
+#          one second BEFORE started_at_s -> (2, 3), progress 0: the
 #            figure is still getting up, clamped to the SEAT (the zero-time
 #            leg must not be walked before the journey runs);
-#          AT started_at_game -> (2.4, 3), progress 0.4: the clip is over;
+#          AT started_at_s -> (2.4, 3), progress 0.4: the clip is over;
 #          one second AFTER -> progress 0.4 + 1.4 = 1.8 m (>= 0.4).
 #   [J3] the same seat with an exit clip in mode `strip` (no travel) ->
 #        no extra point: waypoints[0] = [2, 3, 0.0], waypoints[1] = (0, 5)
@@ -622,17 +637,17 @@ try:
     check("[J1] waypoints[2] is HOME's opening", rounded(_w[2]), (0.0, 5.0))
     approx("[J1] … timed from the stand point: 3.1241 m / 1.4",
            _w[2][2], math.sqrt(9.76) / 1.4, tol=0.01)
-    _s = (_j or {}).get("started_at_game") or START
-    _S = GameTime.parse(_s)
-    _st = travel_engine.journey_state(_w, _s, _S - GameDuration.of(seconds=1))
+    _s = (_j or {}).get("started_at_s") or START
+    check("[J2] the journey starts after the 2.0 s clip: M + 2", _s, 1002.0)
+    _st = travel_engine.journey_state(_w, _s, _s - 1)
     check("[J2] before the start the figure is on the seat",
           rounded(_st["pos"]), (2.0, 3.0))
     approx("[J2] … having walked nothing", _st["progress_m"], 0.0)
-    _st = travel_engine.journey_state(_w, _s, _S)
+    _st = travel_engine.journey_state(_w, _s, _s)
     check("[J2] at the start it stands on the stand point",
           rounded(_st["pos"]), (2.4, 3.0))
     approx("[J2] … 0.4 m along", _st["progress_m"], 0.4)
-    _st = travel_engine.journey_state(_w, _s, _S + GameDuration.of(seconds=1))
+    _st = travel_engine.journey_state(_w, _s, _s + 1)
     check_true("[J2] one second later progress_m >= 0.4",
                _st["progress_m"] >= 0.4, str(_st["progress_m"]))
     approx("[J2] … exactly 0.4 + 1.4 = 1.8 m", _st["progress_m"], 1.8, tol=0.01)
@@ -653,24 +668,24 @@ finally:
 
 # ── The world WAITS: a journey that starts later ────────────────────────
 #
-# Derived BY HAND. A journey of 10 m over 10 game seconds, started 2.23 s
-# after the clock reads START (the length of the standing-up clip):
+# Derived BY HAND. A journey of 10 m over 10 real seconds, started 2.23 s
+# after the motion clock reads START (the length of the standing-up clip):
 #
 #   now = START + 0.00 s  ->  elapsed −2.23 s, clamped to 0 -> the first point
 #   now = START + 2.23 s  ->  elapsed  0.00 s               -> the first point
 #   now = START + 7.23 s  ->  elapsed  5.00 s, half the line -> (5, 0)
-#   eta                    =  START + 2.23 + 10 = 12.23 s, NOT 10 —
+#   remaining_s at START   =  2.23 + 10 = 12.23 s, NOT 10 —
 #                             getting up is part of how long it takes to
 #                             arrive, which is the whole point of delaying it.
+#   journey_eta at factor 2 = game now + 12.23 × 2 = 24.46 -> + 24 game s.
 print("\n[the world waits for the exit clip]")
 _WPS = [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]]
 _EXIT = 2.23
-_LATER = (START_GT + GameDuration.of(seconds=_EXIT)).canonical()
+_LATER = START + _EXIT
 
 
 def _at(seconds):
-    return travel_engine.journey_state(
-        _WPS, _LATER, START_GT + GameDuration.of(seconds=seconds))
+    return travel_engine.journey_state(_WPS, _LATER, START + seconds)
 
 
 approx("at the moment of the order the figure has not moved",
@@ -681,12 +696,16 @@ approx("still nothing a breath before the start",
 approx("at the start it begins", _at(_EXIT)["progress_m"], 0.0)
 approx("five seconds later it is halfway", _at(_EXIT + 5.0)["progress_m"], 5.0)
 check("… at the middle of the line", rounded(_at(_EXIT + 5.0)["pos"]), (5.0, 0.0))
-check("the arrival is the delay LATER, not the same",
-      _at(0.0)["eta_game"],
-      (START_GT + GameDuration.of(seconds=_EXIT + 10.0)).canonical())
+approx("the arrival is the delay LATER: 2.23 + 10 real s",
+       _at(0.0)["remaining_s"], 12.23)
 check_true("and it is not the undelayed arrival",
-           _at(0.0)["eta_game"]
-           != (START_GT + GameDuration.of(seconds=10.0)).canonical())
+           abs(_at(0.0)["remaining_s"] - 10.0) > 1e-6)
+set_game_factor(2.0)
+_g_now = GameTime(100000)
+with patch.object(travel_engine, "game_time_exact", return_value=(_g_now, 0.0)):
+    check("journey_eta at factor 2: game now + round(12.23 × 2) = + 24 s",
+          (travel_engine.journey_eta(_at(0.0)) - _g_now).seconds, 24.0)
+set_game_factor(1.0)
 
 # ── What the ROSTER says while the figure gets up ───────────────────────
 #
@@ -698,8 +717,9 @@ check_true("and it is not the undelayed arrival",
 #   starts_in_s         real seconds until it walks — the "not yet" flag
 #   pace/speed_m_s_real null, so nothing extrapolates between polls
 #
-# Derived by hand: at game factor 1 a 2.23 game-second delay is 2.23 real
-# seconds; once the start has passed, all three go back to their normal value.
+# Derived by hand: the start stamp is a motion second, so a start 2.23 s
+# ahead is starts_in_s 2.23 at every factor; once the start has passed, all
+# three go back to their normal value.
 print("\n[the roster says 'not yet']")
 from app.core import world_ops as _wo                          # noqa: E402
 
@@ -712,32 +732,26 @@ try:
     set_character_pos(_ROSTER_NPC, 0.0, 0.0)
 
     def _roster(offset_s):
-        now = game_time()
         with keyed_lock("character_profile", _ROSTER_NPC):
             _p = get_character_profile(_ROSTER_NPC) or {}
             _p["journey"] = {
                 "target": "somewhere", "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
-                "started_at_game": (now
-                                    + GameDuration.of(seconds=offset_s)).canonical(),
+                "started_at_s": MOTION[0] + offset_s,
                 "speed_m_s": 1.0, "exit_clip": "standup", "exit_s": 2.23}
             _p["movement_target"] = "somewhere"
             save_character_profile(_ROSTER_NPC, _p)
-        with patch("app.core.timeutils.game_time_exact", return_value=(now, 0.0)):
-            _rows = _wo.build_worldmap_payload(show_all=True)["characters"]
+        _rows = _wo.build_worldmap_payload(show_all=True)["characters"]
         return next((c for c in _rows if c["name"] == _ROSTER_NPC), None)
 
-    # 3.0, not 2.23: that is what `start_journey` writes for a 2.23 s clip.
-    _up = _roster(3.0)
+    # 2.23: that is what `start_journey` writes for a 2.23 s clip.
+    _up = _roster(2.23)
     _go = _roster(0.0)
     check_true("the figure is in the roster at all", _up is not None)
     if _up and _go:
         check("while getting up it plays the bridge clip",
               _up["activity_animation"], "standup")
-        # 2.23 s of clip -> 3 WHOLE game seconds: the calendar has second
-        # resolution, and rounding DOWN would cut the last 0.23 s of the
-        # standing-up off with the first step (`_exit_delay`).
         approx("… and the roster says how long that still takes",
-               _up["travel"]["starts_in_s"], 3.0)
+               _up["travel"]["starts_in_s"], 2.23)
         check("… and nothing may extrapolate its position",
               (_up["travel"]["pace_m_s_real"], _up["travel"]["speed_m_s_real"]),
               (None, None))
@@ -754,53 +768,37 @@ except Exception as _e:                                        # pragma: no cove
 
 # ── The wait is the clip's REAL length, whatever the clock's pace ───────
 #
-# The client plays the exit clip in REAL seconds; the journey start is a GAME
-# stamp, and the roster turns the gap back with `starts_in_s = pending /
-# factor` (factor = game seconds per real second, `game_speed_factor`). So the
-# delay has to be the clip length times the factor, rounded UP to whole game
-# seconds (the calendar has second resolution — see `_exit_delay`):
+# The client plays the exit clip in REAL seconds and the journey start is a
+# MOTION-clock second, so the delay IS the clip length at every game-clock
+# factor (`_departure_start`, ceil to the millisecond):
 #
-#   factor 1    2.23 s clip -> ceil(2.23)        =  3 game s -> 3 / 1   = 3.0 s
-#   factor 10   2.23 s clip -> ceil(2.23 * 10)   = 23 game s -> 23 / 10 = 2.3 s
-#   factor 0.5  2.23 s clip -> ceil(2.23 * 0.5)  =  2 game s -> 2 / 0.5 = 4.0 s
+#   factor 1, 10, 0.5:  2.23 s clip -> started_at_s = M + 2.23
+#                                   -> starts_in_s  = 2.23
 #
-# Each `starts_in_s` is >= 2.23, the clip's own length: the route never starts
-# under the running clip. (The old delay `ceil(2.23)` = 3 game s at factor 10
-# was 3 / 10 = 0.3 real s — the figure walked off 1.93 s into its standing-up.)
-# The clock is PINNED (game_time patched to a fixed stamp) so a running clock
-# at factor 10 cannot eat into `pending` between the order and the payload.
+# (Under the game-clock model factor 10 needed ceil(2.23 × 10) = 23 game s
+# and the roster turned it back into 2.3 real s.) The motion clock is pinned,
+# so nothing eats into `pending` between the order and the payload.
 print("\n[the exit delay is the clip's REAL length]")
-import app.core.timeutils as _tu                               # noqa: E402
-
-_PIN = GameTime.parse("Y0001-D020T08:00:00")
-_keep_clock = (_tu.game_time, _tu.game_time_exact, travel_engine.game_time,
-               travel_engine.departure_bridge)
+_keep_bridge = travel_engine.departure_bridge
 try:
-    _tu.game_time = travel_engine.game_time = lambda: _PIN
-    _tu.game_time_exact = lambda: (_PIN, 0.0)
     travel_engine.departure_bridge = lambda n: ("standup", 2.23)
     set_known_locations(_ROSTER_NPC, [HOME, PARK])
-    for _factor, _delay, _real in ((1.0, 3, 3.0), (10.0, 23, 2.3),
-                                   (0.5, 2, 4.0)):
+    for _factor in (1.0, 10.0, 0.5):
         set_game_factor(_factor)
         travel_engine.cancel_journey(_ROSTER_NPC)
         _j, _why = travel_engine.start_journey(_ROSTER_NPC, PARK)
         check(f"factor {_factor}: the journey starts", _why, "")
-        check(f"factor {_factor}: it starts {_delay} game s after the order",
-              (GameTime.parse((_j or {}).get("started_at_game") or _PIN.canonical())
-               - _PIN).seconds, float(_delay))
+        approx(f"factor {_factor}: it starts 2.23 real s after the order",
+               ((_j or {}).get("started_at_s") or 0.0) - MOTION[0], 2.23, tol=1e-9)
         _row = next((c for c in _wo.build_worldmap_payload(show_all=True)
                      ["characters"] if c["name"] == _ROSTER_NPC), None) or {}
         _in = (_row.get("travel") or {}).get("starts_in_s")
-        approx(f"factor {_factor}: starts_in_s = {_delay} / {_factor} = {_real}",
-               _in, _real)
-        check_true(f"factor {_factor}: … never under the 2.23 s clip",
-                   _in is not None and _in >= 2.23, str(_in))
+        approx(f"factor {_factor}: starts_in_s = 2.23", _in, 2.23)
+    set_game_factor(1.0)
 except Exception as _e:                                        # pragma: no cover
     check_true(f"the real-length check ran ({_e})", False)
 finally:
-    (_tu.game_time, _tu.game_time_exact, travel_engine.game_time,
-     travel_engine.departure_bridge) = _keep_clock
+    travel_engine.departure_bridge = _keep_bridge
     travel_engine.cancel_journey(_ROSTER_NPC)
 
 # Hand expectation: UUID4 hex is exactly 32 lowercase hexadecimal digits;

@@ -25,6 +25,11 @@ string, ``factor``):
 ``factor`` ≥ 0 lets game time run x-times as fast as system time. The world
 freeze stops the game clock (``on_freeze_change``); the sleep mode does not.
 
+Movement does NOT run on the game clock: journeys, party followers, approaches
+and prop-action entry clips walk in REAL time on the MOTION clock
+(``motion_time()`` / ``motion_rate()``) — real seconds the world has run
+unfrozen, untouched by the factor and by time jumps, stopped by the freeze.
+
 Server stores/sends timezone-aware UTC ISO strings (``…+00:00``) for system
 stamps; the clients render them in the configured display timezone
 (``display_timezone_name``) and clock format (``display_time_format``), both
@@ -269,9 +274,118 @@ def game_speed_factor() -> float:
     """Current game-clock factor; 0.0 while the world is frozen.
 
     How many GAME seconds pass per REAL second. Consumers turn game-time
-    durations into real-time ones (a frozen world → 0.0 → no conversion)."""
+    durations into real-time ones (a frozen world → 0.0 → no conversion).
+    MOVEMENT never reads it: walking runs on :func:`motion_time`."""
     a = _load_game_anchors()
     return 0.0 if a["frozen"] else float(a["factor"])
+
+
+def game_clock_factor() -> float:
+    """The CONFIGURED game-clock factor, also while the world is frozen.
+
+    For projections only — "at which pace will the calendar run once it runs"
+    (e.g. a journey's displayed arrival, ``travel_engine.journey_eta``). A
+    frozen world keeps its factor; :func:`game_speed_factor` reports 0.0 then.
+    """
+    return float(_load_game_anchors()["factor"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Motion clock — the real seconds the world has been RUNNING
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Everything that MOVES in the 3D world (journeys, party followers, in-room
+# approaches, prop-action entry clips) runs in REAL time, whatever the game
+# clock's factor is (user decision 2026-11-05; plan-bewegung-echtzeit.md). The
+# one thing the world-wide pause still does to it is stop it: a frozen world
+# freezes every walker. So movement needs a clock of its own:
+#
+#     motion_time() = anchor_s + (utc_now() − anchor_real)    (running)
+#     motion_time() = anchor_s                                (frozen)
+#
+# It is a TECHNICAL clock (float seconds, no calendar, never shown): a factor
+# change (``set_game_factor``) and a time jump (``set_game_time``) leave it
+# untouched, so a running journey never jumps with either. Only the freeze
+# hook re-anchors it, guarded by its own persisted marker exactly like the game
+# clock (``on_freeze_change``). Without stored anchors it counts from a fixed
+# epoch — no write on a read path, and the value is the same in every process.
+
+_KEY_MOTION_ANCHOR_REAL = "motion_clock.anchor_real"
+_KEY_MOTION_ANCHOR_S = "motion_clock.anchor_s"
+_KEY_MOTION_ANCHORS_FROZEN = "motion_clock.anchors_frozen"
+_MOTION_EPOCH_REAL = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+_motion_cache: Dict[str, Any] = {}
+
+
+def _load_motion_anchors() -> Dict[str, Any]:
+    """Motion anchors + the live freeze flag from world_kv (cached).
+
+    Unreadable storage (early boot) answers the epoch defaults WITHOUT caching,
+    so the next call retries."""
+    global _motion_cache
+    if _motion_cache.get("loaded"):
+        return _motion_cache
+    anchor_real, anchor_s, frozen, anchors_frozen = _MOTION_EPOCH_REAL, 0.0, False, None
+    try:
+        from app.models.world import get_world_setting, is_world_frozen
+        raw_real = get_world_setting(_KEY_MOTION_ANCHOR_REAL, "")
+        raw_s = get_world_setting(_KEY_MOTION_ANCHOR_S, "")
+        raw_frozen = get_world_setting(_KEY_MOTION_ANCHORS_FROZEN, "")
+        frozen = bool(is_world_frozen())
+        if raw_real:
+            anchor_real = parse_iso(raw_real)
+        if raw_s:
+            anchor_s = float(raw_s)
+        if raw_frozen:
+            anchors_frozen = raw_frozen == "1"
+    except Exception:
+        return {"anchor_real": anchor_real, "anchor_s": anchor_s, "frozen": frozen,
+                "anchors_frozen": anchors_frozen, "loaded": False}
+    _motion_cache = {"anchor_real": anchor_real, "anchor_s": anchor_s, "frozen": frozen,
+                     "anchors_frozen": anchors_frozen, "loaded": True}
+    return _motion_cache
+
+
+def motion_time() -> float:
+    """Seconds on the MOTION clock: real seconds the world has run unfrozen.
+
+    The time base of every movement (``travel_engine.journey_state``, the
+    prop-action entry clips). Only differences mean anything."""
+    a = _load_motion_anchors()
+    if a["frozen"]:
+        return float(a["anchor_s"])
+    return float(a["anchor_s"]) + (utc_now() - a["anchor_real"]).total_seconds()
+
+
+def motion_rate() -> float:
+    """Motion seconds per real second: 1.0 while the world runs, 0.0 frozen."""
+    return 0.0 if _load_motion_anchors()["frozen"] else 1.0
+
+
+def _motion_on_freeze_change(frozen: bool) -> None:
+    """Re-anchor the motion clock for a freeze/unfreeze — idempotent.
+
+    The value at the switch is computed from what the STORED anchors were
+    written for (the marker), never from the live flag, which is already the
+    new one here. A missing marker means "never re-anchored": anchors from the
+    epoch defaults that counted as running — unless the world thaws, in which
+    case it was frozen all along and the stored ``anchor_s`` is its value."""
+    global _motion_cache
+    _motion_cache = {}
+    a = _load_motion_anchors()
+    if a["anchors_frozen"] is not None and bool(a["anchors_frozen"]) == bool(frozen):
+        _motion_cache = {}
+        return
+    from app.models.world import set_world_setting
+    now = utc_now()
+    value = float(a["anchor_s"])
+    if frozen and a["anchors_frozen"] is not True:
+        value += (now - a["anchor_real"]).total_seconds()
+    set_world_setting(_KEY_MOTION_ANCHOR_REAL, now.isoformat())
+    set_world_setting(_KEY_MOTION_ANCHOR_S, repr(value))
+    set_world_setting(_KEY_MOTION_ANCHORS_FROZEN, "1" if frozen else "0")
+    _motion_cache = {}
 
 
 def set_game_time(when: GameTime) -> None:
@@ -310,7 +424,14 @@ def on_freeze_change(frozen: bool) -> None:
     the state is a no-op. The live flag cannot answer "did it change?" — it is
     already the new value here — hence the persisted ``anchors_frozen``
     marker. ``None`` means the marker predates this guard: then we re-anchor
-    as before (and the marker exists from that moment on)."""
+    as before (and the marker exists from that moment on).
+
+    The MOTION clock (:func:`motion_time`) stops and resumes with it, under
+    its own marker."""
+    try:
+        _motion_on_freeze_change(frozen)
+    except Exception as e:
+        logger.warning("motion clock freeze hook failed: %s", e)
     a = _load_game_anchors()
     if a["anchors_frozen"] is not None and bool(a["anchors_frozen"]) == bool(frozen):
         return
@@ -348,8 +469,10 @@ def get_game_clock_info(lang: str = "en") -> Dict[str, Any]:
 
 
 def invalidate_game_clock_cache() -> None:
-    """Drops the in-process anchor cache (next read reloads from world_kv)."""
+    """Drops the in-process anchor caches of the game AND the motion clock
+    (next read reloads from world_kv)."""
     _game_cache.clear()
+    _motion_cache.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -13,10 +13,13 @@ Rules every expectation below is derived from BY HAND:
   * A character cannot KNOW whether a place is on the map — so an
     ``unplaced_target`` reads to the character exactly like an
     ``unknown_target``; only the ``travel_failed`` record keeps them apart.
-  * ``journey_state`` is a pure function of the GAME clock, which is pinned
-    here (``set_game_factor(0.0)`` + ``set_game_time(GameTime)``) so the ETA
-    text is an exact statement, not a race against wall time. Game time is
-    the world calendar — the clock is pinned to ``Y0001-D001T12:00:00``.
+  * ``journey_state`` is a pure function of the MOTION clock (real seconds
+    the world has run unfrozen; movement runs in real time since 2026-11-05,
+    plan-bewegung-echtzeit.md); the calendar arrival is its projection
+    ``journey_eta`` = game now + remaining real seconds × factor. Both clocks
+    are pinned here: the SYSTEM clock (``timeutils.utc_now``) stands still,
+    the game clock is set to ``Y0001-D001T12:00:00`` at factor 1, so the ETA
+    text is an exact statement, not a race against wall time.
   * The avatar is excluded from journeys (Task 5 owns avatar travel): a
     cross-location SetLocation by a player-controlled character stays the
     INSTANT move it was.
@@ -43,8 +46,12 @@ Hand-derived expectations:
       (waypoints, no ``path``), ``movement_target`` = MARKET, the character
       still stands in HOME (the ticker performs the arrival, not the skill)
       and the answer names the target plus the ETA: the HH:MM of
-      ``journey_state(...)["eta_game"]`` while the arrival falls on the SAME
-      game day, the full calendar label once it does not. No travel_failed
+      ``journey_eta(journey_state(...))`` while the arrival falls on the SAME
+      game day, the full calendar label once it does not. By hand: the route
+      from (0,0) to MARKET's opening (95,0) is at least the straight 95 m,
+      i.e. ≥ 67.9 real s at 1.4 m/s (> 60 s); any detour stays far below the
+      168 m that would push it past 120 s — so at factor 1 the arrival is
+      12:01:xx and the text carries "12:01". No travel_failed
       record is written for a successful start.
 
   [3] SECRET is placed but unknown → no journey, no movement target, a
@@ -133,6 +140,8 @@ db.init_schema()
 
 from app.core import travel_engine  # noqa: E402
 from app.core.db import get_connection  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from app.core import timeutils  # noqa: E402
 from app.core.game_time import GameTime  # noqa: E402
 from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
                                 set_game_time)
@@ -275,7 +284,11 @@ check("no Python line pairs Move with SetLocation any more",
       grep.stdout.strip(), "")
 
 # ── the world ───────────────────────────────────────────────────────────
-set_game_factor(0.0)
+# The SYSTEM clock stands still, so the game clock (factor 1) and the motion
+# clock do too — every stamp below is exact.
+_REAL = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
+timeutils.utc_now = lambda: _REAL
+set_game_factor(1.0)
 set_game_time(START_GT)
 
 HOME = add_location(name="Smoke Home", description="set-location v2 smoke")["id"]
@@ -335,8 +348,10 @@ if journey is not None:
           "waypoints" in journey and "path" not in journey, True)
     now = game_time()
     state = travel_engine.journey_state(journey["waypoints"],
-                                        journey["started_at_game"], now)
-    eta = GameTime.parse(state["eta_game"])
+                                        journey["started_at_s"],
+                                        timeutils.motion_time())
+    eta = travel_engine.journey_eta(state)
+    check("the hand-derived arrival minute", eta.time_hhmm(), "12:01")
     # Same game day → the bare clock time; a trip crossing midnight gets the
     # full calendar label instead (the skill's own rule).
     eta_text = (eta.time_hhmm() if eta.day_index == now.day_index

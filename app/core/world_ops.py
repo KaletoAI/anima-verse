@@ -380,7 +380,7 @@ def _fog_inputs() -> Dict[str, dict]:
 
 
 def _local_prop_approach(name, observer, profile, observer_profile, journey, visible,
-                         now, fraction, factor):
+                         now_s, rate):
     """Public motion only, withdrawn on room/sight/ownership loss.
 
     No target, execution/consent identity, foreign room or overland segment.
@@ -404,7 +404,7 @@ def _local_prop_approach(name, observer, profile, observer_profile, journey, vis
     from app.core.travel_engine import journey_state, segment_paces_m_s_real
     from app.core.room_stand import room_geometry
     from app.core.prop_action_paths import _Space
-    state = journey_state(journey["waypoints"], journey["started_at_game"], now, offset_s=fraction)
+    state = journey_state(journey["waypoints"], journey["started_at_s"], now_s)
     if state["arrived"]:
         return None
     remaining = [list(state["pos"])] + [list(point[:2]) for point in journey["waypoints"][state["seg"] + 1:]]
@@ -420,18 +420,18 @@ def _local_prop_approach(name, observer, profile, observer_profile, journey, vis
                for i, (a, b) in enumerate(zip(remaining, remaining[1:]))
                if state["seg"] + i + 1 > escape):
         return None
-    from app.core.game_time import GameTime
-    pending = max(0, (GameTime.parse(journey["started_at_game"]) - now).seconds - fraction)
-    paces = segment_paces_m_s_real(journey["waypoints"], factor) if factor > 0 and not pending else None
+    # Motion-clock seconds are real seconds: the wait IS the countdown.
+    pending = max(0.0, float(journey["started_at_s"]) - now_s)
+    paces = segment_paces_m_s_real(journey["waypoints"], rate) if rate > 0 and not pending else None
     return dict(journey_id=journey.get("journey_id"), room_id=room[1], floor_y=journey.get("floor_y"),
                 waypoints=remaining, progress_m=0, walked_m=state["progress_m"],
                 remaining_m=round(max(0, state["total_m"] - state["progress_m"]), 2),
                 paces_m_s_real=paces[state["seg"]:] if paces else None,
-                starts_in_s=round(pending / factor, 3) if pending and factor > 0 else None)
+                starts_in_s=round(pending, 3) if pending and rate > 0 else None)
 
 
 def _prop_action_entry(name, observer, profile, observer_profile, visible,
-                       now, fraction, factor, cm):
+                       now_s, cm):
     """Only the live owned entry's render geometry, never its private identity.
 
     Both y values are body-root heights (access is the floor); yaw retains
@@ -468,17 +468,18 @@ def _prop_action_entry(name, observer, profile, observer_profile, visible,
             pos = engine.C.get_character_pos(name)
             if not pos or math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) > .05:
                 return None
-            duration = float(spec["duration_game_s"])
+            # The entry clip runs in REAL seconds on the motion clock, like
+            # every movement — the game clock's factor plays no part.
+            duration = float(spec["duration_s"])
             elapsed = float(data["entry_elapsed"])
-            started = float(data["entry_started_game_s"])
-            rate = float(factor)
+            started = float(data["entry_started_s"])
+            rate = 1.0
             # Match the executor: downtime and frozen ticks earn no entry
             # progress. A restart stays paused until its owner reanchors.
             if data["process"] != engine._PROCESS:
                 rate = 0.0
             elif not engine.is_world_frozen():
-                from app.core.game_time import GameTime
-                elapsed += max(0.0, (now - GameTime.parse(data["last_game"])).seconds + fraction)
+                elapsed += max(0.0, now_s - float(data["last_motion"]))
             else:
                 rate = 0.0
             # An unspecified character height uses the measured rig at scale
@@ -502,9 +503,9 @@ def _prop_action_entry(name, observer, profile, observer_profile, visible,
             if run["definition"]["ability"] == "pair" and role is None:
                 return None
             return dict(kind=spec["kind"], pose_key=spec["pose_key"], access=public_access,
-                        anchor=public_anchor, root_offset=root_offset, duration_game_s=duration,
-                        elapsed_game_s=min(duration, elapsed), game_seconds_per_real_second=rate,
-                        height_cm=cm, role=role, started_game_s=started)
+                        anchor=public_anchor, root_offset=root_offset, duration_s=duration,
+                        elapsed_s=min(duration, elapsed), clock_rate=rate,
+                        height_cm=cm, role=role, started_s=started)
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         logger.debug("prop entry payload failed for %s: %s", name, exc)
         return None
@@ -742,14 +743,18 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                      "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}
                     if _min_x is not None else None)
 
-    # Journeys are a pure function of the GAME clock — read it ONCE for the
-    # whole payload so every character in one response shares the same now.
-    from app.core.game_time import GameTime
-    from app.core.timeutils import game_speed_factor, game_time_exact
-    from app.core.travel_engine import (get_journey, journey_state,
+    # Journeys are a pure function of the MOTION clock (real seconds the world
+    # has run unfrozen) — read it ONCE for the whole payload so every
+    # character in one response shares the same now. The GAME clock is read
+    # alongside for what still runs on it (pair interactions, display).
+    from app.core.timeutils import (game_speed_factor, game_time_exact,
+                                    motion_rate, motion_time)
+    from app.core.travel_engine import (get_journey, journey_eta, journey_state,
                                         segment_pace_m_s, segment_paces_m_s_real)
     from app.models.character import get_character_language
     _now_game, _frac = game_time_exact()
+    _now_s = motion_time()
+    _rate = motion_rate()
     _read_mono = time.monotonic()
     _factor = game_speed_factor()
     # Display language for the ready-made time labels below — the avatar's,
@@ -894,27 +899,27 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         travel = None
         try:
             if _j:
-                _st = journey_state(_j["waypoints"], _j["started_at_game"],
-                                    _now_game, offset_s=_frac)
+                _st = journey_state(_j["waypoints"], _j["started_at_s"], _now_s)
                 # The pace the journey was STARTED with (world setting at that
                 # moment) — a later setting change never re-times it.
                 _speed = float(_j.get("speed_m_s") or 0.0)
                 # …and the pace this very segment is baked at (terrain).
                 _pace = segment_pace_m_s(_j["waypoints"], _st)
-                _eta = GameTime.parse(_st["eta_game"])
+                # The calendar arrival is a PROJECTION (the walk runs in real
+                # seconds, the calendar at its factor) — see `journey_eta`.
+                _eta = journey_eta(_st)
                 # NOT UNDER WAY YET: the start lies ahead of the clock because
                 # the figure is still getting out of its pose
                 # (`travel_engine.departure_bridge`). Everything below that
                 # would let a client move it has to say so — a client that
                 # extrapolates here walks a figure that is standing up.
-                _pending = max(0.0, (GameTime.parse(_j["started_at_game"])
-                                     - _now_game).seconds - _frac)
+                _pending = max(0.0, float(_j["started_at_s"]) - _now_s)
                 travel = {
                     "target_id": _j["target"],
                     "journey_id": _j.get("journey_id") if name == avatar else None,
                     "paces_m_s_real": (None if _thin or _pending else
-                                       segment_paces_m_s_real(_j["waypoints"], _factor)),
-                    # x/z ONLY — the baked cumulative game seconds (t_cum) are
+                                       segment_paces_m_s_real(_j["waypoints"], _rate)),
+                    # x/z ONLY — the baked cumulative real seconds (t_cum) are
                     # server-internal. A client walks the line by DISTANCE
                     # (progress_m), never by re-deriving the timing.
                     # The route ENDS at the target's opening, so under fog it
@@ -932,22 +937,22 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # stamp `Y0002-D109T14:00:00` — there is no world
                     # timezone any more. Clients never slice it: the two
                     # display fields beside it are computed here, server-side.
-                    "eta_game": None if _thin else _st["eta_game"],
+                    "eta_game": None if _thin else _eta.canonical(),
                     "eta_hhmm": None if _thin else _eta.time_hhmm(),
                     "eta_label": None if _thin else _eta.label(_lang),
-                    # The journey's GAME pace as a REAL-seconds one — null on
-                    # a frozen world (factor 0): nothing moves, so nothing may
-                    # extrapolate. Successor of v1's cell_seconds_real, with
-                    # the factor on the other side: a DURATION divides by it,
-                    # a SPEED (metres per second) multiplies.
                     # REAL seconds until the figure starts walking — null
-                    # once it does. A client shows the bridge clip
+                    # once it does (and on a frozen world, where nothing
+                    # counts down). A client shows the bridge clip
                     # (`activity_animation`) and moves nothing until then.
-                    "starts_in_s": (round(_pending / _factor, 3)
-                                    if _pending > 0 and _factor > 0 else None),
-                    "speed_m_s_real": (round(_speed * _factor, 4)
+                    "starts_in_s": (round(_pending, 3)
+                                    if _pending > 0 and _rate > 0 else None),
+                    # The journey's nominal pace — already metres per REAL
+                    # second (movement runs in real time, independent of the
+                    # game clock's factor). null on a frozen world: nothing
+                    # moves, so nothing may extrapolate.
+                    "speed_m_s_real": (round(_speed, 4)
                                        if not _thin and not _pending
-                                       and _factor > 0 and _speed > 0 else None),
+                                       and _rate > 0 and _speed > 0 else None),
                     # The pace of the segment being walked RIGHT NOW (§ A11,
                     # E4): the terrain speed_factor sits in the baked stamps,
                     # not in speed_m_s. Per-segment extrapolation uses
@@ -957,9 +962,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # would be a lie.
                     # …and the FOURTH case in which this number would be a
                     # lie: a journey that has not begun.
-                    "pace_m_s_real": (round(_pace * _factor, 4)
+                    "pace_m_s_real": (round(_pace, 4)
                                       if not _thin and not _pending
-                                      and _factor > 0 and _pace else None),
+                                      and _rate > 0 and _pace else None),
                 }
         except Exception as e:
             travel = None
@@ -983,9 +988,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # its first point.
         _bridge = ""
         try:
-            if _j and _j.get("exit_clip") and _j.get("started_at_game"):
-                if ((_now_game - GameTime.parse(_j["started_at_game"])).seconds
-                        + _frac) < 0:
+            if _j and _j.get("exit_clip") and _j.get("started_at_s") is not None:
+                if _now_s < float(_j["started_at_s"]):
                     _bridge = str(_j["exit_clip"])
         except Exception as e:
             logger.debug("departure bridge payload for %s: %s", name, e)
@@ -1025,10 +1029,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "travel": travel,
             "local_approach": _local_prop_approach(
                 name, avatar, _prof, _observer_profile, _j, _local_visible,
-                _now_game, _frac, _factor),
+                _now_s, _rate),
             "prop_action_entry": _prop_action_entry(
                 name, avatar, _prof, _observer_profile, _local_visible,
-                _now_game, _frac, _factor, cm),
+                _now_s, cm),
             # Running pair interaction (§ A8a): kind/role/partner/anchor and
             # the GAME-clock start, so both figures play their halves in
             # lockstep at one anchor; null when the character has none.

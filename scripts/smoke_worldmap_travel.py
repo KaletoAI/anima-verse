@@ -9,12 +9,21 @@ starts_in_s, speed_m_s_real, pace_m_s_real}`` and NOTHING else — every cell fi
 ``frac``/``progress_cells``/``cell_seconds_real``) is gone without
 replacement.
 
+MOVEMENT RUNS IN REAL TIME (user decision 2026-11-05,
+plan-bewegung-echtzeit.md): a journey is timed on the MOTION clock
+(``timeutils.motion_time`` — real seconds the world has run unfrozen), its
+``started_at_s`` and baked ``t_cum`` are real seconds, and the game clock's
+factor no longer scales any pace. Only the calendar arrival (``eta_game``) is
+a projection at the configured factor (``travel_engine.journey_eta``).
+
 ``starts_in_s`` joined the block with the DEPARTURE BRIDGE (transition clips,
-``travel_engine.departure_bridge``): a journey whose ``started_at_game`` lies
-ahead of the clock has not begun, and this is the real-seconds countdown until
-it does. It is the one number fog does NOT withhold — see [6].
+``travel_engine.departure_bridge``): a journey whose ``started_at_s`` lies
+ahead of the motion clock has not begun, and this is the real-seconds
+countdown until it does. It is the one number fog does NOT withhold — see [6].
 
 Runs against a THROWAWAY storage directory — it never touches a real world.
+The SYSTEM clock is pinned (``timeutils.utc_now`` replaced by a hand-moved
+one), so the running-world numbers below are exact, not tolerances.
 The journey is written onto the profile BY HAND, so no expectation below
 depends on the pathfinder: this is a payload check, not a routing check
 (routing is scripts/smoke_journey_v2.py).
@@ -38,17 +47,19 @@ The seed:
                                       the game clock has none, so it must not
                                       shift the arrival stamp by one minute)
 
-The hand-built journey (identical for both travellers):
+The hand-built journey (identical for the fast travellers):
 
     waypoints = [[0, 0, 0.0], [30, 0, 30.0], [30, 40, 70.0]]
-    speed_m_s = 1.0        started_at_game = Y0001-D001T12:00:00
+    speed_m_s = 1.0        started_at_s = motion now − elapsed
 
-``started_at_game`` is a canonical world-calendar stamp — game time knows
-seasons and days, not dates, and has no timezone at all.
+``stage(elapsed, frozen, factor)`` puts every traveller ``elapsed`` REAL
+seconds into its walk and stands the game CALENDAR at
+Y0001-D001T12:00:00 + ``elapsed`` game seconds with the given factor — the
+calendar is placed independently of the walk (they no longer share a clock).
 
     leg 1: (0,0) -> (30,0)   = 30 m, baked at t_cum 30 s
     leg 2: (30,0) -> (30,40) = 40 m, baked at t_cum 70 s
-    total                    = 70 m over 70 GAME seconds
+    total                    = 70 m over 70 REAL seconds
 
 The SLOW polyline (npc_slow) — same points, same nominal ``speed_m_s`` 1.0,
 but leg 2 runs over soft ground and was baked at HALF the pace (that is what
@@ -56,18 +67,21 @@ the terrain ``speed_factor`` does to ``t_cum``, § A1.5):
 
     waypoints = [[0, 0, 0.0], [30, 0, 30.0], [30, 40, 110.0]]
 
-    leg 1: 30 m in 30 game s  -> 1.0 m per GAME second
-    leg 2: 40 m in 80 game s  -> 0.5 m per GAME second
+    leg 1: 30 m in 30 real s  -> 1.0 m per REAL second
+    leg 2: 40 m in 80 real s  -> 0.5 m per REAL second
 
 Hand-derived expectations:
 
-  [1] frozen world, game clock standing at start + 35 s
+  [1] frozen world, every traveller 35 real s into its walk, calendar at
+      12:00:35, factor 1
       elapsed 35 s falls into leg 2 (t0 30, t1 70, span 40):
         frac       = (35 − 30) / 40           = 0.125
         progress_m = 30 + 40 × 0.125          = 35.0
         total_m    = 30 + 40                  = 70.0
-        eta_game   = Y0001-D001T12:00:00 + 70 s = Y0001-D001T12:01:10
-                     — canonical, and unmoved by server.timezone
+        remaining  = 70 − 35                  = 35 real s
+        eta_game   = 12:00:35 + 35 × factor 1 = Y0001-D001T12:01:10
+                     — canonical, and unmoved by server.timezone; frozen,
+                     the projection keeps the CONFIGURED factor
         eta_hhmm   = "12:01"   (rendered server-side; no client slices a
                      stamp any more, § A11)
         eta_label  = "Spring, day 1 · 12:01 · Year 1" — the default calendar
@@ -75,46 +89,49 @@ Hand-derived expectations:
                      day 1 of year 1
         waypoints  = [[0.0, 0.0], [30.0, 0.0], [30.0, 40.0]]  — x/z ONLY,
                      the baked t_cum stays server-internal
-        speed_m_s_real = null — the clock stands (factor 0), so nothing may
-                     be extrapolated
+        speed_m_s_real = null — the motion clock stands (rate 0), so nothing
+                     may be extrapolated
         pace_m_s_real  = null — same reason, same clock
 
-  [2] running world
-        factor 2.0 -> speed_m_s_real = 1.0 m/GAME-s × 2 GAME-s/REAL-s
-                                     = 2.0 m/REAL-s
-        factor 0.5 -> 0.5
-      A SPEED multiplies by the factor where v1's DURATION
-      (``cell_seconds_real``) divided by it — same clock, inverse quantity.
-      ``progress_m`` then only gets a tolerance check: real time passes
-      between the anchor and the payload build.
+  [2] running world, 35 real s in, at factor 2.0 AND factor 0.5
+        speed_m_s_real = 1.0 at BOTH — the walk is real time, the factor
+                     scales nothing (the game-clock model said 2.0 / 0.5)
+        progress_m     = 35.0 at both (exact: the system clock is pinned)
+        pace_m_s_real  = 1.0 at both (this leg IS the nominal one)
+        eta_game at factor 2: 12:00:35 + 35 × 2 = 12:01:45 — the calendar
+                     runs faster, so the walker arrives at a LATER calendar
+                     time; the walker itself did not move. (Factor 0.5 gives
+                     35 + 17.5 = 52.5 s — a half second, not checked.)
 
   [2b] the SEGMENT pace (E4) — ``pace_m_s_real`` is the pace of the segment
       the figure is walking RIGHT NOW, straight out of the baked stamps:
-        |w[seg+1] − w[seg]| / (t[seg+1] − t[seg]) × factor
-      On the fast polyline every segment runs at the nominal 1.0 m/GAME-s,
+        |w[seg+1] − w[seg]| / (t[seg+1] − t[seg])      (real seconds)
+      On the fast polyline every segment runs at the nominal 1.0 m/s,
       so both fields agree — that proves nothing. npc_slow does:
-        clock at start + 35 s -> elapsed 35 falls into leg 2
-                                 (t0 30, t1 110, span 80)
+        35 real s in  -> elapsed 35 falls into leg 2 (t0 30, t1 110, span 80)
         frac       = (35 − 30) / 80          = 0.0625
         progress_m = 30 + 40 × 0.0625        = 32.5
-        pace       = 40 m / 80 game s        = 0.5 m/GAME-s
-        factor 2.0 -> pace_m_s_real  = 1.0   (0.5 × 2)
-                      speed_m_s_real = 2.0   (nominal 1.0 × 2, unchanged)
-      Its FIRST leg is the nominal one: at start + 10 s the two agree again
-      (pace 30 m / 30 s = 1.0 m/GAME-s -> 2.0 at factor 2).
+        pace       = 40 m / 80 s             = 0.5 m/s
+        at factor 2.0 -> pace_m_s_real  = 0.5   (no factor)
+                         speed_m_s_real = 1.0   (nominal, no factor)
+      Its FIRST leg is the nominal one: 10 real s in, the two agree again
+      (pace 30 m / 30 s = 1.0 m/s).
 
   [2c] ``pace_m_s_real`` is null wherever an extrapolation would be a lie:
       frozen clock (see [1]) and after the arrival — a journey walked past
       its end has no current segment. ``speed_m_s_real`` stays filled there
-      (it is the journey's nominal pace, not a statement about a segment).
+      (it is the journey's nominal pace, not a statement about a segment):
+      200 real s in, running, factor 1 -> pace null, speed 1.0.
 
   [3] a movement target alone is NOT a journey
         npc_idle carries movement_target = B but no journey dict
           -> travel is null, movement_target_id is still B
 
-  [4] a journey walked past its end (clock at start + 200 s, still frozen)
+  [4] a journey walked past its end (200 real s in, still frozen, calendar
+      at 12:03:20)
         progress_m = total_m = 70.0, and the block stays until the ticker
         settles the arrival ("field gone" is the arrival signal, § A11)
+        remaining 0 -> eta_game = the calendar itself = Y0001-D001T12:03:20
 
   [5] fog (§ A12) holds for travellers too
         fogged view : npc_walker stands in the unknown B -> gone entirely,
@@ -145,25 +162,33 @@ Hand-derived expectations:
           fogged, demo_avatar (itself)           -> the full block
           show_all, npc_near                     -> the full block
 
-[7-8] P1 hand calculations: 30/30*2 = 2 and 40/80*2 = 1 m/real-s;
-a 0.6 m zero-time lead and a zero-length segment each give a null entry.
-Frozen, factor 0, pending and foreign fog give a null list; arrival retains it.
-At real +10.3 with factor 2, 20.6 game-s gives progress 20.6 m.
-Start 5 game-s ahead, real +0.1 at factor 2: pending (5-0.2)/2 = 2.4 real-s.
-At rounded start with fraction -0.4, pending is 0.4/2 = 0.2 real-s;
-the departure clip must still play.
-Identity is 32 hex characters for the avatar and null for every foreign row.
-Both monotonic ages are nonnegative, with builder build_ms initially zero.
-At 1 game-s/m, thinning 0,10,10.01,20 leaves 0,10,20 with times 0,10,20;
-t15 gives 15 m. Goal 10.015 replaces 10, so duration is 10.015 s.
-0 -> 0.001 collapses to the goal at t0, already arrived; the separate seat
-leg still survives. For 10000 seeded pairs 2-5 cm apart, one axis differs
-by at least 2/sqrt(2) = 1.414 cm > 1 cm: rounding cannot merge a pair.
-The new contract assertions fail against Task 1 commit 0d4c1c88.
+  [7] through the /play/worldmap route, the avatar on the SLOW polyline:
+        paces_m_s_real = [30/30, 40/80] = [1.0, 0.5] at factor 1, 2 and 0
+        (factor 0 stops the calendar, not the walk — only the freeze does);
+        null while frozen and for a foreign row under fog; kept after the
+        arrival (100 real s in).
+        started at S, +10.3 real s at factor 2 -> progress 10.3 m (the
+        game-clock model said 20.6).
+        started 5 real s AHEAD of the clock, +0.1 real s -> pending 4.9 ->
+        starts_in_s 4.9 at factor 1 AND factor 2, progress 0.0, paces null.
+        started 0.5 s ahead, +0.3 -> starts_in_s 0.2 and the exit clip
+        ("standup") still plays as activity_animation.
+        a 0.6 m lead at zero time and a zero-length segment each give a null
+        entry: [None, 30/30] = [None, 1.0].
+        Identity is 32 hex characters for the avatar and null for every
+        foreign row. Both monotonic ages are nonnegative, with builder
+        build_ms initially zero.
+  [8] at 1 m/s, thinning 0,10,10.01,20 leaves 0,10,20 with times 0,10,20;
+      15 real s in gives 15 m. Goal 10.015 replaces 10, so duration is
+      10.015 s. 0 -> 0.001 collapses to the goal at t0, already arrived; the
+      separate seat leg still survives. For 10000 seeded pairs 2-5 cm apart,
+      one axis differs by at least 2/sqrt(2) = 1.414 cm > 1 cm: rounding
+      cannot merge a pair.
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_travel.py
 """
 import json
+from datetime import datetime, timedelta, timezone
 from starlette.responses import JSONResponse
 import os
 import math
@@ -192,6 +217,18 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import config, travel_engine, nav_grid, timeutils  # noqa: E402
+
+# Pin the SYSTEM clock: the motion clock and the game clock both read
+# `timeutils.utc_now`, so every running-world number below is exact.
+R0 = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
+_now = [R0]
+timeutils.utc_now = lambda: _now[0]
+timeutils.invalidate_game_clock_cache()
+
+
+def advance(seconds: float) -> None:
+    """Move the pinned system clock forward by ``seconds`` real seconds."""
+    _now[0] = _now[0] + timedelta(seconds=seconds)
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_ops import build_worldmap_payload  # noqa: E402
@@ -208,6 +245,8 @@ CHECKED = 0
 START = "Y0001-D001T12:00:00"
 START_GT = GameTime.parse(START)
 ETA = "Y0001-D001T12:01:10"
+ETA_FACTOR2 = "Y0001-D001T12:01:45"
+ETA_ARRIVED = "Y0001-D001T12:03:20"
 ETA_LABEL = "Spring, day 1 · 12:01 · Year 1"
 WAYPOINTS = [[0.0, 0.0, 0.0], [30.0, 0.0, 30.0], [30.0, 40.0, 70.0]]
 # Same points, same nominal speed — leg 2 baked at half the pace (soft ground).
@@ -240,16 +279,6 @@ def route_json(result):
     return json.loads(result.body)
 
 
-def approx(label: str, actual, expected, tol: float) -> None:
-    global CHECKED
-    CHECKED += 1
-    ok = isinstance(actual, (int, float)) and abs(actual - expected) <= tol
-    print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
-          + ("" if ok else f" — expected ≈{expected!r} (tol {tol})"))
-    if not ok:
-        FAILURES.append(label)
-
-
 def place(name: str, x: float, z: float) -> str:
     """A location placed at a world-METRE point with a 10 m footprint edge."""
     loc = add_location(name=name, description=f"{name} for the travel smoke.")
@@ -269,25 +298,44 @@ def seed_character(name: str, location_id: str) -> None:
                            create_new=True)
 
 
-def give_journey(name: str, target: str, waypoints=None) -> None:
+def give_journey(name: str, target: str, waypoints=None,
+                 started_at_s: float | None = None) -> None:
     """Write journey + movement target in ONE profile save — the two live and
-    die together, and a mismatch would make ``get_journey`` call it stale."""
+    die together, and a mismatch would make ``get_journey`` call it stale.
+    ``started_at_s`` is a MOTION-clock stamp (default: the clock's now)."""
     from app.core.keyed_lock import keyed_lock
+    if started_at_s is None:
+        started_at_s = timeutils.motion_time()
     with keyed_lock("character_profile", name):
         prof = get_character_profile(name)
         prof["journey"] = {"target": target,
                            "waypoints": [list(w) for w in (waypoints or WAYPOINTS)],
-                           "started_at_game": START, "speed_m_s": SPEED,
+                           "started_at_s": float(started_at_s), "speed_m_s": SPEED,
                            "entry_edge": "", "journey_id": "a" * 32}
         prof["movement_target"] = target
         save_character_profile(name, prof)
 
 
+# Every traveller and its polyline — `stage` re-stamps them all.
+TRAVELLERS = (("demo_avatar", WAYPOINTS), ("npc_walker", WAYPOINTS),
+              ("npc_near", WAYPOINTS), ("npc_slow", SLOW_WAYPOINTS))
+
+
+def stage(elapsed: float, *, frozen: bool, factor: float = 1.0) -> None:
+    """Every traveller ``elapsed`` REAL seconds into its walk; the calendar at
+    START + ``elapsed`` game seconds with ``factor``. Freeze FIRST: the freeze
+    hook re-anchors both clocks, so what is set afterwards is what stays."""
+    set_world_frozen(frozen)
+    set_game_factor(factor)
+    set_game_time(START_GT + GameDuration.of(seconds=elapsed))
+    began = timeutils.motion_time() - elapsed
+    for name, wps in TRAVELLERS:
+        give_journey(name, B, wps, started_at_s=began)
+
+
 def freeze_at(seconds: float) -> None:
-    """Stand the game clock still at START + ``seconds``. Freeze FIRST: the
-    freeze hook re-anchors, so a time set afterwards is the one that stays."""
-    set_world_frozen(True)
-    set_game_time(START_GT + GameDuration.of(seconds=seconds))
+    """Frozen world, every traveller ``seconds`` real seconds in, factor 1."""
+    stage(seconds, frozen=True)
 
 
 def char(payload, name: str) -> dict:
@@ -326,11 +374,11 @@ def contract_checks():
     print("\n[7] exact instant, per-segment paces, identity and payload ages")
     from app.routes.play import play_worldmap
     from app.models.account import set_active_character
-    from datetime import datetime, timedelta, timezone
 
     set_active_character("demo_avatar")
-    give_journey("demo_avatar", B, SLOW_WAYPOINTS)
     freeze_at(35)
+    give_journey("demo_avatar", B, SLOW_WAYPOINTS,
+                 started_at_s=timeutils.motion_time() - 35)
     frozen = route_json(play_worldmap(user={"role": "admin"}, show_all=1))
     check("route sync keys", sorted(frozen["sync"]), ["build_ms", "clock_age_ms"])
     check("route sync nonnegative", all(isinstance(v, (int, float)) and v >= 0
@@ -341,39 +389,45 @@ def contract_checks():
           char(frozen, "demo_avatar")["travel"]["journey_id"] or "")), True)
     check("foreign ID is null even show_all", char(frozen, "npc_near")["travel"]["journey_id"], None)
 
-    real = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    set_world_frozen(False)
-    # Patch the technical clock, not the payload or any travel arithmetic.
-    def payload_at(delta, factor=2, anchor=START_GT):
-        timeutils._persist_game_anchors(real, anchor, factor, False)
-        with patch.object(timeutils, "utc_now", return_value=real + timedelta(seconds=delta)):
-            return route_json(play_worldmap(user={"role": "admin"}, show_all=1))
+    def own_at(ahead, delta, factor=1.0, waypoints=SLOW_WAYPOINTS, exit_clip=None):
+        """The avatar's row: a journey starting ``ahead`` real s after the
+        motion clock's now, read ``delta`` real s later at ``factor``."""
+        set_world_frozen(False)
+        set_game_factor(factor)
+        give_journey("demo_avatar", B, waypoints,
+                     started_at_s=timeutils.motion_time() + ahead)
+        if exit_clip:
+            from app.core.keyed_lock import keyed_lock
+            with keyed_lock("character_profile", "demo_avatar"):
+                prof = get_character_profile("demo_avatar")
+                prof["journey"]["exit_clip"] = exit_clip
+                save_character_profile("demo_avatar", prof)
+        advance(delta)
+        return char(route_json(play_worldmap(user={"role": "admin"}, show_all=1)),
+                    "demo_avatar")
 
-    run = payload_at(10.3)
-    own = char(run, "demo_avatar")["travel"]
-    check("paces factor 2", own["paces_m_s_real"], [2.0, 1.0])
-    check("exact payload progress 21 - 0.4", own["progress_m"], 20.6)
-    check("paces after arrival", char(payload_at(100), "demo_avatar")["travel"]["paces_m_s_real"], [2.0, 1.0])
-    check("factor zero paces", char(payload_at(10.3, 0), "demo_avatar")["travel"]["paces_m_s_real"], None)
-    pending = char(payload_at(0, 2, START_GT - GameDuration(5)), "demo_avatar")["travel"]
-    check("pending paces null", pending["paces_m_s_real"], None)
-    pending = char(payload_at(0.1, 2, START_GT - GameDuration(5)), "demo_avatar")["travel"]
-    check("exact starts_in_s (5 - 0.2) / 2", pending["starts_in_s"], 2.4)
-    check("not started exact progress", pending["progress_m"], 0.0)
-    from app.core.keyed_lock import keyed_lock
-    with keyed_lock("character_profile", "demo_avatar"):
-        prof = get_character_profile("demo_avatar")
-        prof["journey"]["exit_clip"] = "standup"
-        save_character_profile("demo_avatar", prof)
-    boundary = char(payload_at(0.3, 2, START_GT - GameDuration(1)), "demo_avatar")
-    check("rounded start still pending by 0.4 game s", boundary["travel"]["starts_in_s"], 0.2)
-    check("negative remainder keeps departure clip", boundary["activity_animation"], "standup")
+    for factor in (1.0, 2.0, 0.0):
+        check(f"paces at factor {factor} = [30/30, 40/80]",
+              own_at(0, 1, factor)["travel"]["paces_m_s_real"], [1.0, 0.5])
+    check("real +10.3 s at factor 2 walks 10.3 m (not 20.6)",
+          own_at(0, 10.3, 2.0)["travel"]["progress_m"], 10.3)
+    check("paces after arrival", own_at(0, 100)["travel"]["paces_m_s_real"], [1.0, 0.5])
+    for factor in (1.0, 2.0):
+        pending = own_at(5, 0.1, factor)["travel"]
+        check(f"factor {factor}: starts_in_s = 5 − 0.1", pending["starts_in_s"], 4.9)
+        check(f"factor {factor}: pending paces null", pending["paces_m_s_real"], None)
+        check(f"factor {factor}: not started, progress 0", pending["progress_m"], 0.0)
+    boundary = own_at(0.5, 0.3, exit_clip="standup")
+    check("still pending by 0.2 real s", boundary["travel"]["starts_in_s"], 0.2)
+    check("pending start keeps the departure clip", boundary["activity_animation"], "standup")
     fog = build_worldmap_payload("demo_avatar", show_all=False)
     check("foreign fog paces", char(fog, "npc_near")["travel"]["paces_m_s_real"], None)
-    give_journey("demo_avatar", B, [[-0.6, 0, 0], [0, 0, 0], [30, 0, 30]])
-    check("zero-time lead", char(payload_at(1), "demo_avatar")["travel"]["paces_m_s_real"], [None, 2.0])
-    give_journey("demo_avatar", B, [[0, 0, 0], [0, 0, 1], [30, 0, 31]])
-    check("zero-length segment", char(payload_at(1), "demo_avatar")["travel"]["paces_m_s_real"], [None, 2.0])
+    check("zero-time lead",
+          own_at(0, 1, waypoints=[[-0.6, 0, 0], [0, 0, 0], [30, 0, 30]])["travel"]["paces_m_s_real"],
+          [None, 1.0])
+    check("zero-length segment",
+          own_at(0, 1, waypoints=[[0, 0, 0], [0, 0, 1], [30, 0, 31]])["travel"]["paces_m_s_real"],
+          [None, 1.0])
 
     print("\n[8] thinning precedes costs and retains the goal")
     def bake(points):
@@ -387,13 +441,13 @@ def contract_checks():
     wps = bake([(0, 0), (10, 0), (10.01, 0), (20, 0)])
     check("thin before costing", wps, [[0, 0, 0], [10, 0, 10], [20, 0, 20]])
     check("thinned paces", travel_engine.segment_paces_m_s_real(wps, 1), [1.0, 1.0])
-    check("same time axis at t15", travel_engine.journey_state(wps, START,
-          START_GT + GameDuration(15))["progress_m"], 15.0)
+    check("same time axis at t15", travel_engine.journey_state(wps, 0.0, 15.0)["progress_m"],
+          15.0)
     check("close goal replaces predecessor", bake([(0, 0), (10, 0), (10.015, 0)]),
           [[0, 0, 0], [10.015, 0, 10.015]])
     collapsed = bake([(0, 0), (0.001, 0)])
     check("collapse keeps only goal", collapsed, [[0.001, 0, 0]])
-    check("collapse arrived", travel_engine.journey_state(collapsed, START, START_GT)["arrived"], True)
+    check("collapse arrived", travel_engine.journey_state(collapsed, 0.0, 0.0)["arrived"], True)
     check("seat leg remains below 2cm", travel_engine._with_seat_leg([[0.001, 0, 0]], (0, 0)),
           [[0, 0, 0], [0.001, 0, 0]])
     rng = random.Random(2043)
@@ -430,41 +484,36 @@ def main() -> int:
     check("speed_m_s_real is null while frozen", tr.get("speed_m_s_real"), None)
     check("pace_m_s_real is null while frozen", tr.get("pace_m_s_real"), None)
 
-    print("\n[2] a running clock — the real-seconds pace")
-    for factor, expected in ((2.0, 2.0), (0.5, 0.5)):
-        set_world_frozen(False)
-        set_game_factor(factor)
+    print("\n[2] a running clock — the pace is real metres per second at EVERY factor")
+    for factor in (2.0, 0.5):
+        stage(35.0, frozen=False, factor=factor)
         run = build_worldmap_payload("demo_avatar", show_all=True)
         rtr = char(run, "demo_avatar").get("travel") or {}
-        check(f"factor {factor} → speed_m_s_real", rtr.get("speed_m_s_real"),
-              expected)
-        approx(f"factor {factor} → progress_m still ≈35 m",
-               rtr.get("progress_m"), 35.0, 2.0)
+        check(f"factor {factor} → speed_m_s_real (no factor)",
+              rtr.get("speed_m_s_real"), 1.0)
+        check(f"factor {factor} → progress_m = 35.0 exactly",
+              rtr.get("progress_m"), 35.0)
         check(f"factor {factor} → pace_m_s_real (this leg IS the nominal one)",
-              rtr.get("pace_m_s_real"), expected)
+              rtr.get("pace_m_s_real"), 1.0)
+        if factor == 2.0:
+            check("factor 2 → eta = 12:00:35 + 35 × 2 (a projection)",
+                  rtr.get("eta_game"), ETA_FACTOR2)
 
     print("\n[2b] the segment pace tells a slow leg from the nominal speed")
-    freeze_at(35.0)
-    set_world_frozen(False)
-    set_game_factor(2.0)
+    stage(35.0, frozen=False, factor=2.0)
     slow = char(build_worldmap_payload("demo_avatar", show_all=True),
                 "npc_slow").get("travel") or {}
-    approx("progress_m = 30 + 40 × 0.0625", slow.get("progress_m"), 32.5, 2.0)
-    check("speed_m_s_real stays the NOMINAL 1.0 × 2", slow.get("speed_m_s_real"),
-          2.0)
-    check("pace_m_s_real = 40 m / 80 game s × 2", slow.get("pace_m_s_real"), 1.0)
-    freeze_at(10.0)
-    set_world_frozen(False)
-    set_game_factor(2.0)
+    check("progress_m = 30 + 40 × 0.0625", slow.get("progress_m"), 32.5)
+    check("speed_m_s_real stays the NOMINAL 1.0", slow.get("speed_m_s_real"), 1.0)
+    check("pace_m_s_real = 40 m / 80 s", slow.get("pace_m_s_real"), 0.5)
+    stage(10.0, frozen=False, factor=2.0)
     fast_leg = char(build_worldmap_payload("demo_avatar", show_all=True),
                     "npc_slow").get("travel") or {}
-    check("on ITS first leg the two agree again (30 m / 30 s × 2)",
-          fast_leg.get("pace_m_s_real"), 2.0)
+    check("on ITS first leg the two agree again (30 m / 30 s)",
+          fast_leg.get("pace_m_s_real"), 1.0)
 
     print("\n[2c] past the end there is no current segment any more")
-    freeze_at(200.0)
-    set_world_frozen(False)
-    set_game_factor(1.0)
+    stage(200.0, frozen=False, factor=1.0)
     done = char(build_worldmap_payload("demo_avatar", show_all=True),
                 "demo_avatar").get("travel") or {}
     check("pace_m_s_real is null after the arrival", done.get("pace_m_s_real"),
@@ -486,7 +535,8 @@ def main() -> int:
     tr = char(allv, "demo_avatar").get("travel") or {}
     check("progress_m = total_m", (tr.get("progress_m"), tr.get("total_m")),
           (70.0, 70.0))
-    check("eta_game unchanged", tr.get("eta_game"), ETA)
+    check("arrived: eta_game is the calendar itself", tr.get("eta_game"),
+          ETA_ARRIVED)
 
     print("\n[5] fog holds for travellers too")
     freeze_at(35.0)

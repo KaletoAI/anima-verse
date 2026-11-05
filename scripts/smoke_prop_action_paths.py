@@ -92,10 +92,46 @@ db.init_schema()
 from app.core import prop_action_paths as N
 from app.core import room_stand as S
 from app.core.game_time import GameTime, GameDuration
-from app.core.timeutils import game_time, set_game_factor, set_game_time
+from app.core import timeutils
+from app.core.timeutils import game_time, set_game_factor
 from app.models import character as C, world as W, intents as I
 from app.core import party_engine as P, prompt_templates
 from plugins.party import trip_intents as T
+
+# The fixture's ONE hand-moved clock. Movement runs on the MOTION clock
+# (timeutils.motion_time: real seconds the world ran unfrozen,
+# plan-bewegung-echtzeit.md), gameplay durations on the game clock (factor 0
+# here, so neither moves by itself). A forward step of ``set_game_time`` below
+# is "N seconds pass": it moves the game clock AND — unless the world is frozen,
+# exactly as the real motion clock — the motion clock by the same N seconds
+# (factor-1 lockstep). A backward reset moves only the game clock. Tests that
+# exercise the REAL clock against a pinned ``utc_now`` use ``real_motion_clock``.
+REAL_MOTION_TIME = timeutils.motion_time
+MOTION = [1000.0]
+timeutils.motion_time = lambda: MOTION[0]
+
+
+def set_game_time(when):
+    step = (when - game_time()).seconds
+    if step > 0 and not W.is_world_frozen():
+        MOTION[0] += step
+    timeutils.set_game_time(when)
+
+
+def elapse(seconds):
+    """``seconds`` pass, also a fraction: the motion clock moves exactly
+    (unless frozen), the game clock by the nearest whole second it can hold."""
+    if not W.is_world_frozen():
+        MOTION[0] += seconds
+    timeutils.set_game_time(game_time() + GameDuration.of(seconds=seconds))
+
+
+@contextmanager
+def real_motion_clock():
+    """The real motion clock (derived from ``utc_now``) for this block."""
+    with patch.object(timeutils, "motion_time", REAL_MOTION_TIME):
+        yield
+
 
 set_game_factor(0)
 set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
@@ -619,7 +655,7 @@ class Ownership(unittest.TestCase):
 
     def test_freeze_excludes_real_elapsed_time_without_catchup(self):
         clock = [datetime(2040, 1, 1, tzinfo=timezone.utc)]
-        with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]):
+        with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]), real_motion_clock():
             set_game_factor(1)
             set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
             name, _, _, j = self.start()
@@ -743,7 +779,7 @@ def observe_movement():
     assert plan["status"] == "ok", plan
     clock = [datetime(2040, 1, 1, tzinfo=timezone.utc)]
     snapshots = []
-    with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]):
+    with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]), real_motion_clock():
         set_game_factor(1)
         set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
         journey, reason = E.start_approach_journey(name, target, "actor",

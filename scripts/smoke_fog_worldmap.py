@@ -79,9 +79,9 @@ Hand-derived expectations:
                 that the fog never thins the AVATAR's block.
     npc_open    location-less at (30, 0)  -> 30 m from the avatar
     npc_trav    location-less at (100, 0) -> 100 m from the avatar, WITH a
-                journey (target C, a 4000 m polyline started at the current
-                game time — a canonical world-calendar stamp — so it is still
-                on its first leg)
+                journey (target C, a 4000 m polyline started at the motion
+                clock's now — real seconds, movement runs in real time — so
+                it is still on its first leg)
     game.discovery_range_m = 50 m (the sight range, § A12; the same number
                 that discovers places by coming close)
 
@@ -209,7 +209,7 @@ db.init_schema()
 
 from app.core import config  # noqa: E402
 from app.core.exploration import mark_explored  # noqa: E402
-from app.core.timeutils import game_time  # noqa: E402
+from app.core.timeutils import motion_time  # noqa: E402
 from app.core.world_ops import build_worldmap_payload  # noqa: E402
 from app.models.character import (  # noqa: E402
     enter_offmap_sleep, get_character_current_location, get_character_pos,
@@ -319,7 +319,7 @@ def put_in_the_open(name: str, x: float, z: float) -> None:
 
 def give_journey(name: str, target: str, start_x: float) -> None:
     """A long journey starting NOW, written by hand — this is a payload check,
-    not a routing check. 4000 m at 1 m per GAME second keeps the traveller on
+    not a routing check. 4000 m at 1 m per REAL second keeps the traveller on
     its first leg for the whole run."""
     from app.core.keyed_lock import keyed_lock
     with keyed_lock("character_profile", name):
@@ -327,7 +327,7 @@ def give_journey(name: str, target: str, start_x: float) -> None:
         prof["journey"] = {
             "target": target,
             "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
-            "started_at_game": game_time().canonical(),
+            "started_at_s": motion_time(),
             "speed_m_s": 1.0,
             "entry_edge": "",
         }
@@ -350,7 +350,7 @@ def give_point_journey(name: str, start_x: float) -> None:
             "target": "",
             "target_point": {"x": start_x + 4000.0, "z": 4000.0},
             "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
-            "started_at_game": game_time().canonical(),
+            "started_at_s": motion_time(),
             "speed_m_s": 1.0,
             "entry_edge": "",
         }

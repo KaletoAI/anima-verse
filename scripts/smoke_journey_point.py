@@ -16,15 +16,19 @@ Rules every expectation below is derived from BY HAND:
     straight line is clear (``nav_grid.route`` docstring). Over one flat
     grass rectangle the line from (0, 0) to (30, 0) is clear, so the route
     is exactly those two points.
-  * ``nav_grid.segment_costs`` answers GAME SECONDS AT 1 m/s, i.e. the
+  * ``nav_grid.segment_costs`` answers SECONDS AT 1 m/s, i.e. the
     segment length divided by the terrain's ``speed_factor``. ``grass`` has
     ``speed_factor`` 1.0 (``shared/terrain/types.json``), so the cost of the
     single segment is its plain length, 30.0.
   * ``start_journey_to_point`` divides that by the world's travel speed
     (``game.travel_speed_m_s``, read ONCE at the start and written onto the
     journey). The smoke pins it to 3.0 m/s so every stamp is a whole number.
-  * ``journey_state`` is a pure function of the GAME clock: the position is
-    the linear interpolation inside the segment the elapsed time falls in.
+  * ``journey_state`` is a pure function of the MOTION clock
+    (``timeutils.motion_time`` — real seconds the world has run unfrozen;
+    movement runs in real time since 2026-11-05, plan-bewegung-echtzeit.md):
+    the position is the linear interpolation inside the segment the elapsed
+    time falls in. The smoke PINS the motion clock (``timeutils.motion_time``
+    replaced) at T0 = 5000.0, so every elapsed time below is exact.
   * ``deep_water`` is ``passable: false`` (``shared/terrain/types.json``) —
     the blocked kind this smoke paints its forbidden goal on.
 
@@ -32,11 +36,12 @@ Hand-derived expectations:
 
   [1] The journey from (0, 0) to (30, 0), speed 3.0 m/s:
         distance   = |(30,0) − (0,0)| = 30.0 m
-        cost       = 30.0 / 1.0 (grass) = 30.0 game-seconds at 1 m/s
-        travel time = 30.0 / 3.0 = 10.0 GAME seconds
+        cost       = 30.0 / 1.0 (grass) = 30.0 seconds at 1 m/s
+        travel time = 30.0 / 3.0 = 10.0 REAL seconds
       so the waypoints are [[0.0, 0.0, 0.0], [30.0, 0.0, 10.0]] — two of
       them, ``target`` empty, ``target_point`` {'x': 30.0, 'z': 0.0},
-      ``entry_edge`` None, ``speed_m_s`` 3.0. T2 requires a generated
+      ``entry_edge`` None, ``speed_m_s`` 3.0, ``started_at_s`` T0 (no exit
+      clip, so no delay). T2 requires a generated
       ``journey_id`` that is a non-empty string. NO ``movement_target`` is
       stamped (a free point has no id to stamp), and ``get_journey`` returns
       the dict anyway — a point journey identifies itself by its own goal.
@@ -50,8 +55,8 @@ Hand-derived expectations:
       location has nowhere to start from → ``(None, 'no_route')``.
 
   [4] The ticker (``advance_all_journeys``, the entry ``get_travel_ticker``
-      calls in its ``_run`` loop). The game clock is PINNED (factor 0) so
-      "elapsed" is exact:
+      calls in its ``_run`` loop). The motion clock is PINNED so "elapsed"
+      is exact:
         T0 + 5 s  → an in-flight tick: the position is (15.0, 0.0), the
                     journey is STILL there and ``current_location`` is ''.
                     This is the regression that matters: out in the open
@@ -113,9 +118,7 @@ from app.core.task_queue import get_task_queue  # noqa: E402
 get_task_queue()._started = True
 
 from app.core import travel_engine  # noqa: E402
-from app.core.game_time import GameDuration, GameTime  # noqa: E402
-from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
-                                set_game_time)
+from app.core import timeutils  # noqa: E402
 from app.models import terrain  # noqa: E402
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_pos, get_movement_target,
@@ -126,8 +129,11 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-# The pinned instant every elapsed time below is measured from.
-T0 = "Y0001-D010T12:00:00"
+# The pinned motion-clock instant every elapsed time below is measured from.
+T0 = 5000.0
+_MOTION = [T0]
+timeutils.motion_time = lambda: _MOTION[0]
+timeutils.motion_rate = lambda: 1.0
 
 
 def check(label, actual, expected):
@@ -160,8 +166,8 @@ def approx(label, actual, expected, tol=1e-6):
 
 
 def at(seconds):
-    """Pin the game clock ``seconds`` GAME seconds after T0."""
-    set_game_time(GameTime.parse(T0) + GameDuration.of(seconds=seconds))
+    """Pin the motion clock ``seconds`` REAL seconds after T0."""
+    _MOTION[0] = T0 + seconds
 
 
 def polyline_length(wps):
@@ -203,7 +209,6 @@ terrain.save_area({"kind": "deep_water",
 # The world speed, pinned so every hand-derived stamp is a whole number.
 config._CONFIG.setdefault("game", {})["travel_speed_m_s"] = 3.0
 
-set_game_factor(0.0)
 at(0)
 
 save_character_profile("demo_npc", {"current_location": ""}, create_new=True)
@@ -216,7 +221,7 @@ check("reason", reason, "ok")
 check_true("journey created", isinstance(journey, dict), f"{journey}")
 if isinstance(journey, dict):
     check("journey keys", sorted(journey),
-          sorted(["target", "target_point", "waypoints", "started_at_game",
+          sorted(["target", "target_point", "waypoints", "started_at_s",
                   "speed_m_s", "entry_edge", "journey_id"]))
     check_true("journey_id is a non-empty string",
                isinstance(journey["journey_id"], str) and bool(journey["journey_id"]))
@@ -225,8 +230,8 @@ if isinstance(journey, dict):
     check("target_point", journey["target_point"], {"x": 30.0, "z": 0.0})
     check("entry_edge", journey["entry_edge"], None)
     approx("speed_m_s", journey["speed_m_s"], 3.0)
-    check("started_at_game is the pinned instant",
-          journey["started_at_game"], T0)
+    check("started_at_s is the pinned motion instant",
+          journey["started_at_s"], T0)
     wps = journey["waypoints"]
     check_true("at least two waypoints", len(wps) >= 2, f"{len(wps)}")
     check("first waypoint is the real position",
@@ -241,8 +246,8 @@ check("get_journey returns the point journey",
 
 # ── [2] journey_state is unchanged for a point journey ──────────────────
 print("[2] journey_state half way through")
-st = travel_engine.journey_state(journey["waypoints"], journey["started_at_game"],
-                                 GameTime.parse(T0) + GameDuration.of(seconds=5))
+st = travel_engine.journey_state(journey["waypoints"], journey["started_at_s"],
+                                 T0 + 5)
 check("pos at 5 s", (round(st["pos"][0], 2), round(st["pos"][1], 2)),
       (15.0, 0.0))
 check("not arrived", st["arrived"], False)
@@ -318,10 +323,10 @@ if isinstance(journey_h, dict):
     approx("the last t_cum is that length / 3.0 m/s", wps_h[-1][2],
            length_h / 3.0, tol=0.01)
 at(10)
-# 10.0 GAME seconds at 3.0 m/s over factor-1.0 grass = 30.0 m walked — the
+# 10.0 REAL seconds at 3.0 m/s over factor-1.0 grass = 30.0 m walked — the
 # figure is past HOME's opening at (−35, 0) and well short of the goal.
 st = travel_engine.journey_state(journey_h["waypoints"],
-                                 journey_h["started_at_game"], game_time())
+                                 journey_h["started_at_s"], timeutils.motion_time())
 approx("in-flight progress_m", st["progress_m"], 30.0, tol=0.01)
 check("not arrived", st["arrived"], False)
 travel_engine.advance_all_journeys()
@@ -365,7 +370,7 @@ check("… and the ticker does not drag it back out",
       get_character_current_location("home_npc"), HOME)
 
 print()
-_ = game_time()   # the clock is still readable after all of the above
+_ = timeutils.game_time()   # the game clock is still readable after all of the above
 if FAILURES:
     print(f"FAILED {len(FAILURES)}/{CHECKED}: {FAILURES}")
     sys.exit(1)

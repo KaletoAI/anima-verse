@@ -136,8 +136,8 @@ class StepOut(unittest.TestCase):
         self.assertEqual(result['status'], 'approaching', result)
         journey = F.E.get_journey(name)
         self.assertEqual([p[:2] for p in journey['waypoints'][:2]], [[8, 5], [8, 5.5]])
-        lead = (F.GameTime.parse(journey['started_at_game']) - F.game_time()).total_seconds
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=lead + 1))
+        lead = journey['started_at_s'] - F.timeutils.motion_time()
+        F.elapse(lead + 1)
         F.E.advance_all_journeys()
         self.assertIsNotNone(F.E.get_journey(name), F.C.get_character_profile(name).get('last_journey_result'))
         pos = F.C.get_character_pos(name)
@@ -172,8 +172,8 @@ class StepOut(unittest.TestCase):
         self.assertAlmostEqual(journey['waypoints'][-1][2], length / journey['speed_m_s'])
         # The approach starts after a poll lead (travel_engine._approach_start);
         # the legs count from that start.
-        lead = (F.GameTime.parse(journey['started_at_game']) - F.game_time()).total_seconds
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=lead + 1))
+        lead = journey['started_at_s'] - F.timeutils.motion_time()
+        F.elapse(lead + 1)
         F.E.advance_all_journeys()
         self.assertIsNotNone(F.E.get_journey(name), F.C.get_character_profile(name))
         self.assertEqual(F.C.get_character_pos(name)['x'], 8.4)

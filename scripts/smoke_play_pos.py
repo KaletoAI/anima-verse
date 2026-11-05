@@ -27,11 +27,15 @@ The validation chain, in the order the route applies it:
      dropped SILENTLY (200 ``{ok: false, throttled: true}``) — a client that
      reports every frame must not collect error toasts,
   5. plausible step against the time elapsed since the LAST ACCEPTED report:
-     allowance = max(5 m, 3 × travel_speed × game_factor × elapsed,
-     3 × 3.4 m/s × elapsed). THREE terms: the floor, the GAME-clock term and
-     the REAL-clock term — the last one exists because free walking is not
-     coupled to the game clock, so a frozen or slow world (factor 0) must not
-     collect 409s from an honest walker. Generous on purpose — this is an
+     allowance = max(5 m, 3 × travel_speed × elapsed, 3 × 3.4 m/s × elapsed).
+     THREE terms: the floor, the travel-speed term and the free-walk term.
+     Both speeds are metres per REAL second — movement runs in real time
+     since 2026-11-05, so the game clock's factor is in none of them, and a
+     frozen or slow world (factor 0) collects no 409s from an honest walker.
+     At the default travel_speed 1.4 m/s the travel term (4.2 m per elapsed
+     second) always stays below the free-walk term (10.2 m per elapsed
+     second), so every number below is set by the floor or the free-walk
+     term. Generous on purpose — this is an
      anti-teleport bound, not a precision anticheat (409 ``too_far`` + the
      last valid point). ``elapsed`` is the CLIENT's own ``t_ms`` difference
      when the report is stamped, the server's processing-time difference when
@@ -111,10 +115,9 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       `water` is SWIMMABLE since round 2 of the acceptance — a wall of water
       is its own kind now.
 
-  [3] Anti-teleport. The clock is pinned at factor 0 for this run, so the
-      game term is 0; the reports follow each other within milliseconds, so
-      the real term (3 × 3.4 × elapsed, well under 0.1 m here) stays far
-      below the floor as well: max(5, 0, ~0.01) = 5 m.
+  [3] Anti-teleport. The reports follow each other within milliseconds, so
+      both speed terms (3 × 1.4 × elapsed and 3 × 3.4 × elapsed, well under
+      0.1 m here) stay far below the floor: max(5, ~0.004, ~0.01) = 5 m.
       (0, 3) → (3, 5) is √(3² + 2²) = 3.606 m ≤ 5 → accepted;
       (3, 5) → (500, 0) is ≈ 497 m > 5 → 409 ``too_far`` + (3, 5) back.
 
@@ -196,9 +199,9 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       and ``/play/travel`` apply. A REFUSED report wakes nobody: it moved
       nobody.
 
-  [19] The allowance is not only game-time coupled. With the clock frozen
-      (factor 0) the travel-speed term is 0, so what is left is the 5 m floor
-      and the REAL-speed term 3 × 3.4 m/s × elapsed. After 0.55 s that is
+  [19] The allowance follows REAL time. The game clock stands (factor 0)
+      for this run, and that changes nothing: after 0.55 s the travel term
+      is 3 × 1.4 × 0.55 = 2.31 m and the free-walk term 3 × 3.4 × 0.55 =
       5.61 m, so a 5.05 m step — outside the bare floor — is allowed; the
       next report has elapsed ≈ 0, the allowance is the floor again, and
       20 m is far outside it.
@@ -229,8 +232,8 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       8 s and then aborts it, but the request keeps running on the server and
       is processed late; taken as the newest point it drags the server's
       baseline seconds behind the figure, and every honest report after it
-      looks like a 12 m stride in 0.4 s. Four probes, all with the game clock
-      frozen (factor 0, so the game term of the allowance is 0):
+      looks like a 12 m stride in 0.4 s. Four probes (the game clock stands
+      at factor 0, which no term of the allowance reads):
         a) two stamped reports, ``seq`` 1 then 5, land the avatar on
            (800, 803) — plain wilderness grass, nothing near it;
         b) THE LEFTOVER: ``seq`` 2 at (800, 802). One metre away, grass, in
@@ -241,7 +244,8 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
         c) THE STALLED SERVER: the client walked 20 m while the loop was
            blocked for 3 s and its clock says so (``t_ms`` 2000 → 5000), while
            the gap between the two handler runs is ≈ 0. Client-measured
-           elapsed 3.0 s → allowance max(5, 0, 3 × 3.4 × 3.0) = 30.6 m, and
+           elapsed 3.0 s → allowance max(5, 3 × 1.4 × 3.0, 3 × 3.4 × 3.0)
+           = max(5, 12.6, 30.6) = 30.6 m, and
            20 m is inside it → accepted;
         d) THE COUNTER-PROBE, the same 20 m from the same point with NO stamp:
            elapsed is the server's ≈ 0, the allowance falls back to the 5 m
@@ -636,7 +640,7 @@ def main() -> int:
     check("the avatar did not move", get_character_pos(AVATAR),
           {"x": 0.0, "z": 3.0})
 
-    print("\n[3] the anti-teleport bound (allowance floor 5 m at factor 0)")
+    print("\n[3] the anti-teleport bound (allowance floor 5 m)")
     status, payload = report(3.0, 5.0)          # 3.606 m — inside the floor
     check("a 3.606 m step is accepted", (payload or {}).get("ok")
           if status == "ok" else status, True)
@@ -882,12 +886,12 @@ def main() -> int:
     check("an accepted report", status, "ok")
     check("...wakes the avatar", is_character_sleeping(AVATAR), False)
 
-    print("\n[19] the allowance follows REAL time, not only the game clock")
-    # The game clock is frozen (factor 0) for this whole run, so the
-    # travel-speed term is 0 and only two terms are left:
-    #   floor            = 5 m
-    #   real-speed term  = 3 x 3.4 m/s x elapsed
-    # After 0.55 s of real time that is 3 x 3.4 x 0.55 = 5.61 m, so a 5.05 m
+    print("\n[19] the allowance follows REAL time, not the game clock")
+    # The game clock stands (factor 0) for this whole run; no term reads it:
+    #   floor             = 5 m
+    #   travel-speed term = 3 x 1.4 m/s x elapsed
+    #   free-walk term    = 3 x 3.4 m/s x elapsed
+    # After 0.55 s of real time that is max(5, 2.31, 5.61) = 5.61 m, so a 5.05 m
     # step — refused by the bare floor — is allowed. The very next report has
     # elapsed ~= 0, the allowance falls back to the 5 m floor, and 20 m is
     # far outside it.
@@ -964,7 +968,7 @@ def main() -> int:
     # 20 m and its clock says so (t_ms 2000 → 5000), while the gap between the
     # two handler runs is ≈ 0 — pinned here by setting the server baseline to
     # NOW, so the case measures the rule and not the machine.
-    # allowance = max(5, 0 [factor 0], 3 × 3.4 × 3.0) = 30.6 m > 20 m.
+    # allowance = max(5, 3 × 1.4 × 3.0, 3 × 3.4 × 3.0) = 30.6 m > 20 m.
     play_route._pos_report_at[AVATAR] = time.monotonic()
     status, _payload = report(820.0, 803.0, seq=6, t_ms=5000.0)
     check("20 m over 3 s of CLIENT time is allowed", status, "ok")

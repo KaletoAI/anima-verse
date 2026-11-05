@@ -364,7 +364,7 @@ public static partial class PropActionsCheck
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(npcEntry)); Step(0);
             Is("observer lazy measured entry requests fitting",observer.PropEntry?.Played==false && lazy.Requests()>0);
             lazy.Complete(); Step(0); Is("observer fits measured clip",observer.PropEntry?.Played==true); Near("observer public entry clock",observer.ClipTime,1); Near("observer public support lift",observer.PropEntryLift,.0645);
-            var oldEntry=observer.PropEntry; npcEntry["characters"]![1]!["prop_action_entry"]!["elapsed_game_s"]=2.5;
+            var oldEntry=observer.PropEntry; npcEntry["characters"]![1]!["prop_action_entry"]!["elapsed_s"]=2.5;
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(npcEntry)); Step(0); Is("observer elapsed poll retains identity",ReferenceEquals(oldEntry,observer.PropEntry)); Near("observer elapsed poll seeks clock",observer.ClipTime,1.25);
 
             // The entry ends in a furniture PAIR: the row holds the prop seat AND the interaction, its activity is the bare

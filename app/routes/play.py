@@ -549,8 +549,9 @@ def _play_enter_room_sync(user, body: Any):
 def _travel_block(name: str, lang: str = "en"):
     """The character's running journey for the player UI, or None.
 
-    Derived from the STORED journey and the game clock (``journey_state`` is
-    a pure function of it) — nothing is recomputed, no route is walked here.
+    Derived from the STORED journey and the motion clock (``journey_state`` is
+    a pure function of it; the calendar arrival is ``journey_eta``'s
+    projection) — nothing is recomputed, no route is walked here.
 
     ONE vocabulary with the worldmap block (§ A11): ``target_id``,
     ``eta_game``, ``eta_hhmm``, ``eta_label``, ``progress_m`` and ``total_m``
@@ -563,10 +564,9 @@ def _travel_block(name: str, lang: str = "en"):
     the block.
     """
     try:
-        from app.core.game_time import GameTime
         from app.core.i18n import t
-        from app.core.timeutils import game_time
-        from app.core.travel_engine import get_journey, journey_state
+        from app.core.timeutils import motion_time
+        from app.core.travel_engine import get_journey, journey_eta, journey_state
         from app.models.world import get_location_name
         j = get_journey(name)
         # A walk to a seat in the same room is the prop action's approach, not
@@ -574,9 +574,9 @@ def _travel_block(name: str, lang: str = "en"):
         # The motion itself still comes from the worldmap block.
         if not j or j.get("execution_kind") == "prop_action":
             return None
-        st = journey_state(j["waypoints"], j["started_at_game"], game_time())
+        st = journey_state(j["waypoints"], j["started_at_s"], motion_time())
         target_id = j.get("target") or ""
-        eta = GameTime.parse(st["eta_game"])
+        eta = journey_eta(st)
         # A POINT journey (E3-0) has no place to name — the panel prints
         # `target_name` in bold, so an empty string would be a blank label
         # instead of an honest one.
@@ -585,7 +585,7 @@ def _travel_block(name: str, lang: str = "en"):
         return {
             "target_id": target_id,
             "target_name": target_name,
-            "eta_game": st["eta_game"],
+            "eta_game": eta.canonical(),
             "eta_hhmm": eta.time_hhmm(),
             "eta_label": eta.display_label(lang),
             "progress_m": st["progress_m"],
@@ -783,11 +783,10 @@ _POS_STEP_FLOOR_M = 5.0
 _POS_STEP_FACTOR = 3.0
 #: The client's own walking pace in REAL metres per second — a mirror of
 #: ``WALK_SPEED`` in ``client3d/src/scene/npcs.ts``, kept here for one reason:
-#: the travel-speed term above is coupled to the GAME clock, and free walking
-#: is not. In a frozen world (factor 0) or a slow one that term collapses to
-#: nothing while the player still walks 3.4 m every second, and an honest
-#: walker would collect 409s. The allowance is the LARGEST of the three
-#: (floor, game-speed term, real-speed term), so neither clock can strand it.
+#: a world whose travel speed is set below the client's walking pace would
+#: otherwise refuse an honest free walker with 409s. Both terms count REAL
+#: seconds (movement runs in real time since 2026-11-05); the allowance is the
+#: LARGEST of the three (floor, travel-speed term, walking term).
 _POS_WALK_SPEED_M_S = 3.4
 #: How close to an authored boundary opening a point has to be to count as
 #: crossing THROUGH it (metres). The client offers the entry at 3 m and walks
@@ -860,10 +859,10 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
          SILENTLY (200 ``{ok: false, throttled: true}``): a client that reports
          too eagerly must not collect error toasts for it,
       5. plausible step against the elapsed time since the last ACCEPTED
-         report, allowance ``max(5 m, 3 × travel_speed × game_factor ×
-         elapsed, 3 × 3.4 m/s × elapsed)`` — THREE terms, and the last one is
-         why a frozen or slow world does not strand an honest walker (409
-         ``too_far``). ``elapsed`` is the CLIENT's own ``t_ms`` difference
+         report, allowance ``max(5 m, 3 × travel_speed × elapsed,
+         3 × 3.4 m/s × elapsed)`` — all in REAL seconds (movement runs in real
+         time since 2026-11-05, the game factor plays no part); the last term
+         covers a free walker faster than the travel pace (409 ``too_far``). ``elapsed`` is the CLIENT's own ``t_ms`` difference
          when the client sends the pair, and the server's processing-time
          difference when it does not,
       6. the LOCATION of the point (``location_at_point``) — derived FIRST,
@@ -1154,7 +1153,6 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # takeover, an admin move) there is no baseline and the point is taken as
     # given — the terrain and the transition gate still judge it.
     if here is not None and last_at is not None:
-        from app.core.timeutils import game_speed_factor
         from app.core.travel_engine import get_travel_speed_m_s
         # WHOSE CLOCK. The client's, whenever it stamped both reports: what
         # the allowance is about is the time the figure spent WALKING, and a
@@ -1168,8 +1166,9 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
         else:
             elapsed = max(0.0, now - last_at)
         allowance = max(_POS_STEP_FLOOR_M,
-                        _POS_STEP_FACTOR * get_travel_speed_m_s()
-                        * game_speed_factor() * elapsed,
+                        # metres per REAL second — movement does not
+                        # scale with the game clock's factor
+                        _POS_STEP_FACTOR * get_travel_speed_m_s() * elapsed,
                         _POS_STEP_FACTOR * _POS_WALK_SPEED_M_S * elapsed)
         if math.hypot(x - here["x"], z - here["z"]) > allowance:
             # The clock is NAMED in the line: reading "in 0.40s" without

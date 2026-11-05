@@ -223,9 +223,9 @@ export function clampProgress(value: number, totalM: number): number {
  * The rendered figure does not jump onto the point the polyline says; it walks
  * there, so a poll correction stays a walk. The bound for that walk is the
  * normal pace OR the journey's own, whichever is greater — a fixed walking
- * pace is a brake, not a smoother: `pace_m_s_real` carries the game time
- * factor (§ A11), so on a fast clock the point outruns the figure and it lags
- * behind its own journey the whole way, then teleports on arrival.
+ * pace is a brake, not a smoother: a journey baked faster than the walk
+ * (`game.travel_speed_m_s`, real metres per second, § A11) outruns the figure
+ * and it lags behind its own journey the whole way, then teleports on arrival.
  *
  * Never further than `distanceM`, so the step cannot overshoot the point it is
  * correcting towards.

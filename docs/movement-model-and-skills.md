@@ -49,17 +49,20 @@ Ein Ortswechsel über Ortsgrenzen ist seit der Reise-Engine eine
 - `start_journey_to_point(name, x, z)` ist die Variante zu einem freien Punkt. Sie
   setzt **kein** `movement_target`, nur die `journey` — wer Ankunft oder Abbruch
   prüft, muss beides abfragen.
-- `journey_state(waypoints, started_at_game, now_game)` ist eine **reine Funktion**:
-  die Position folgt aus Polylinie + Startzeit + **Spieluhr**. Deshalb leiten alle
-  Clients dieselbe Position aus derselben Payload ab, und eine eingefrorene Welt friert
-  jede Reise mit ein.
+- `journey_state(waypoints, started_at_s, now_s)` ist eine **reine Funktion**:
+  die Position folgt aus Polylinie + Startzeit + **Bewegungsuhr**
+  (`timeutils.motion_time()`: echte Sekunden, die die Welt ungefroren gelaufen ist).
+  Bewegung läuft seit 2026-11-05 in **Echtzeit** — der Zeitfaktor der Spieluhr ändert
+  das Lauftempo nicht, ein Zeitsprung versetzt keine Reise. Alle Clients leiten dieselbe
+  Position aus derselben Payload ab, und eine eingefrorene Welt friert jede Reise mit
+  ein. Die Ankunft auf dem Spielkalender ist eine Projektion (`journey_eta`).
 - Ein Hintergrund-**TravelTicker** (`get_travel_ticker`, im Server-Lifespan) führt
   Ankünfte herbei; der Agent-Loop läuft keine Schritte mehr selbst.
 - Wer gerade reist, beantwortet **eine** Query:
   `app.models.character.list_active_journeys()`. Nie über alle Profile iterieren.
 
 Das Tempo ist die Welt-Einstellung `game.travel_speed_m_s` (Admin → Game, Default
-**1,4** Meter pro Spiel-Sekunde, geklemmt auf 0,1…20). Es wird beim START auf die
+**1,4** Meter pro echter Sekunde, geklemmt auf 0,1…20). Es wird beim START auf die
 Reise geschrieben — laufende Reisen behalten ihr Tempo.
 
 Bei Ankunft greifen Entry-Room, Auto-Discovery und ein AgentLoop-Bump.

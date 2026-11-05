@@ -50,7 +50,7 @@ EXPECTATIONS, DERIVED BY HAND
     for the partner, rate "x" for nobody. Read 20 game seconds after the
     run's last beat: actor 10 + 0.5·20 = 20.0, partner 90 + 10 = 100.0
     (capped); both hand out rate 0.5·2 = 1.0 per REAL second. The beat:
-    due_in_game_s = 5 real s · 2 = 10 game s − 20 since = −10 (due). Without
+    due_in_s = (5 real s · 2 = 10 game s − 20 since) / 2 = −5 REAL s (due). Without
     the provider the active run waits on no clock (None); a frozen world
     (factor 0) neither carries forward (value 10.0, rate 0.0) nor beats.
 [10] HOLD. Without a provider `hold_meter` -> unsupported; an outsider ->
@@ -218,7 +218,7 @@ class Finale(RUNS.Runs):
         name, partner, run = active_pair()
         eid = run["execution_id"]
         F.set_game_time(F.game_time() + GameDuration.of(seconds=20))
-        self.assertIsNone(A.due_in_game_s(F.game_time()))
+        self.assertIsNone(A.due_in_s(F.game_time()))
         hooks.register_provider("prop_action.meters", lambda execution_id, members, pose_key: [
             dict(name=members[0], value=10, rate=0.5), dict(name=members[1], value=90, rate=0.5)])
         try:
@@ -226,11 +226,11 @@ class Finale(RUNS.Runs):
                 row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
                 self.assertEqual([(m["name"], m["value"], m["rate"]) for m in row["meters"]],
                                  [(name, 20.0, 1.0), (partner, 100.0, 1.0)])
-                self.assertAlmostEqual(A.due_in_game_s(F.game_time()), -10.0, places=6)
+                self.assertAlmostEqual(A.due_in_s(F.game_time()), -5.0, places=6)
             with patch.object(A, "game_speed_factor", lambda: 0.0):
                 row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
                 self.assertEqual([(m["value"], m["rate"]) for m in row["meters"]], [(10.0, 0.0), (90.0, 0.0)])
-                self.assertIsNone(A.due_in_game_s(F.game_time()))
+                self.assertIsNone(A.due_in_s(F.game_time()))
         finally:
             hooks._providers.pop("prop_action.meters", None)
 

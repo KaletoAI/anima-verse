@@ -1323,8 +1323,9 @@ SECTIONS = {
                 "min": 0.1,
                 "max": 20,
                 "step": 0.1,
-                "description": "Walking speed in world metres per GAME second on "
-                               "neutral ground (1.4 m/s ≈ a human walking pace). "
+                "description": "Walking speed in world metres per REAL second on "
+                               "neutral ground (1.4 m/s ≈ a human walking pace); "
+                               "the game clock's speed factor does not change it. "
                                "The terrain type scales it: a journey segment is "
                                "walked at speed × the terrain's speed_factor. "
                                "Existing journeys keep the speed they started with.",

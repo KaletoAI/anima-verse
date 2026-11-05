@@ -10,6 +10,10 @@ sleep and the home room. Missing/unplaced/unreachable homes and confinement
 set sleep at the origin, so later ticks cannot restart the failed trip.
 A follower leaves its party before walking independently. Offmap and players
 retain their existing semantics. All storage is temporary; no server needed.
+Journeys run on the MOTION clock (real seconds, plan-bewegung-echtzeit.md),
+pinned here at 1000.0; the ~100 m trip takes about 100 / 1.4 ≈ 71 real s, so
+advancing the motion clock by 10000 s lies far past every arrival. The game
+clock stands still (factor 0) so no rule or flag drifts meanwhile.
 """
 import json
 import os
@@ -30,7 +34,8 @@ config.load(root / "config.json")
 db.init_schema()
 from app.core import travel_engine, party_engine
 from app.core.periodic_jobs import _sub_force_rules
-from app.core.game_time import GameTime, GameDuration
+from app.core.game_time import GameTime
+from app.core import timeutils
 from app.core.timeutils import set_game_factor, set_game_time
 from app.models import character as ch, rules, terrain
 from app.models.world import add_location, update_location_position, _load_world_data, _save_world_data, add_room
@@ -39,6 +44,9 @@ from app.core.db import get_connection
 set_game_factor(0)
 start = GameTime.parse("Y0001-D001T12:00:00")
 set_game_time(start)
+MOTION = [1000.0]
+timeutils.motion_time = lambda: MOTION[0]
+timeutils.motion_rate = lambda: 1.0
 a = add_location(name="Origin", description="fixture")["id"]
 b = add_location(name="Home", description="fixture")["id"]
 isle = add_location(name="Island", description="fixture")["id"]
@@ -91,7 +99,7 @@ check("home room travels with journey", j.get("target_room") == bedroom)
 check("journey start has a forced action diary entry", len(diary("walker")) == 1 and "journey to" in diary("walker")[0].get("value", ""))
 _sub_force_rules()
 check("second tick retains journey and single diary entry", travel_engine.get_journey("walker") == j and len(diary("walker")) == 1 and not sleeping("walker"))
-set_game_time(start + GameDuration.of(seconds=10000))
+MOTION[0] += 10000.0
 travel_engine.advance_all_journeys()
 _sub_force_rules()
 check("arrival sleeps in home room", ch.get_character_current_location("walker") == b and ch.get_character_current_room("walker") == bedroom and sleeping("walker"))

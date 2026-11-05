@@ -6,17 +6,16 @@ Runs against a THROWAWAY storage directory — never touches a real world.
 
 Rules every expectation below is derived from BY HAND:
 
-  * ``journey_state`` is a pure function of the GAME clock. The clock is
-    pinned here: ``set_game_factor(0.0)`` stops it, ``set_game_time(GameTime)``
-    jumps it exactly — so "tick at t = 30 s" is an exact statement, not a
-    race against wall time.
-  * The ticker's GOAL WINDOW (``_at_goal``) reads the clock FACTOR, and a
-    stopped clock reports 0.0 — so the factor is injected here instead
-    (``set_factor``, which replaces ``travel_engine.game_speed_factor``).
-    That keeps the two apart on purpose: the CLOCK stays frozen, so every
-    position below is exact, while the FACTOR is whatever the case under
-    test wants. Everything outside [7e] runs at factor 1.0, which is where
-    the "one tick = 5 s × speed" of [7b]/[7d] comes from.
+  * ``journey_state`` is a pure function of the MOTION clock
+    (``timeutils.motion_time`` — real seconds the world has run unfrozen;
+    movement runs in real time since 2026-11-05, plan-bewegung-echtzeit.md).
+    The clock is PINNED here (``timeutils.motion_time`` / ``motion_rate``
+    replaced, START = 1000.0) — so "tick at t = 30 s" is an exact statement,
+    not a race against wall time. The game clock stands still (factor 0)
+    except in [7e], which turns its factor on purpose.
+  * The ticker's GOAL WINDOW (``_at_goal``) is one tick's walk:
+    5 REAL s × ``speed_m_s`` — the game clock's factor is not in it. That
+    is where the "one tick = 5 s × speed" of [7b]/[7d] comes from.
   * The ticker writes the interpolated point every tick via
     ``set_character_pos(..., preserve_movement_target=True)``. The point
     DERIVES the location (``location_at_point``, footprint test inclusive):
@@ -39,7 +38,7 @@ The route used everywhere below (HOME at (0,0) w 10, opening S at 0.5 →
     W4 [60,  0, 120]   turning south       — 30 m in 30 s
     W5 [95,  0, 155]   MARKET's W opening  — 35 m in 35 s
 
-  Every segment is 1 m per game second (the hand-picked t_cum), so a
+  Every segment is 1 m per real second (the hand-picked t_cum), so a
   position is read off the polyline directly. Only W5 touches MARKET's
   footprint (x = 95 is its west edge, and the footprint test is inclusive)
   — every earlier point of the route lies outside every footprint except
@@ -158,7 +157,7 @@ Hand-derived expectations:
 
       EASTGATE at (300, 0), width 10 → footprint x ∈ [295, 305],
       z ∈ [−5, 5]; its ONLY opening sits on the E edge at 0.5 → (305, 0),
-      linked to the room "Yard". The route (1 m per game second again) comes
+      linked to the room "Yard". The route (1 m per real second again) comes
       from the west, cuts straight through the footprint and walks around to
       the far door:
 
@@ -189,14 +188,14 @@ Hand-derived expectations:
           (T4: the arrival keeps what it walked to). The room is the ARRIVAL room (the
           ground), NOT the Yard the E opening links to: the route is 75 m
           long and 8 m of it are walked, so 67 m of REMAINING ROUTE stand
-          against one tick's 5 m (5 s × 1 m/game-s) — this crossing is not
+          against one tick's 5 m (5 s × 1 m/s) — this crossing is not
           the final approach to that door and has no claim on the room
           behind it (see [7d] for the case that is). A second tick is a
           complete no-op — the settle happens once.
       (d) THE GOAL TOLERANCE IS THE REMAINING ROUTE, NOT A EUCLIDEAN RADIUS
           (E4, E3-residual). The wall-collinear approach walks EASTGATE's
           east wall straight down to its own door: route [[305, 40], [305, 0]]
-          at 1 m per game second, 40 m in total. x = 305 IS the east wall and
+          at 1 m per real second, 40 m in total. x = 305 IS the east wall and
           the footprint test is inclusive, so every point with |z| ≤ 5 already
           derives EASTGATE — the crossing is caught at t = 36, i.e. at
           (305, 4), four metres in FRONT of the door it is walking to.
@@ -209,19 +208,19 @@ Hand-derived expectations:
             4.0 ≤ 5.0   → at the goal → the E opening's room "Yard"
           [7b] is the counter-case on the same building: the crossing there
           happens 67 m before the end of the route, so the ground room stands.
-      (e) THE WINDOW RIDES THE GAME-CLOCK FACTOR (final E4 review, I1). One
-          tick is 5 REAL seconds; how many METRES that is depends on how fast
-          the game clock runs:
-            window_m = 5.0 s × factor (game s per real s) × speed (m/game s)
-          Same wall route, same speed 1.0, total 40 m:
-            · factor 0.5 → window 2.5 m. At t = 36 the remaining 4.0 m are
-              MORE than the window, so the very crossing that gave "Yard" in
-              [7d] now hands out the arrival room; at t = 38 the remaining
-              2.0 m fit and the door's room wins again.
-            · factor 0.0 (a frozen world) → the floor 0.1 → window 0.5 m: at
-              t = 36 the ground room, at t = 39.7 (remaining 0.3 m) "Yard".
-              Without the floor the window would be 0 m and NO crossing could
-              ever be the goal.
+      (e) THE WINDOW RIDES THE SPEED, NOT THE GAME-CLOCK FACTOR. One tick
+          is 5 REAL seconds and the journey walks real seconds, so
+            window_m = 5.0 s × speed_m_s (m per real s)
+          · [7d]'s wall route (speed 1.0, window 5 m) at game factor 0.5 and
+            at factor 4: at t = 36 the remaining 4.0 m ≤ 5 m → "Yard" both
+            times (under the old model factor 0.5 shrank the window to
+            2.5 m and handed out the ground room).
+          · a motion rate of 0 (a frozen world) keeps the window: t = 36,
+            remaining 4.0 m ≤ 5 m → "Yard" (the old 0.1 factor floor is gone).
+          · the same wall at HALF pace, speed 0.5 (route
+            [[305, 40, 0], [305, 0, 80]], 40 m in 80 s) → window 2.5 m:
+            t = 72 → progress 36 m, remaining 4.0 m > 2.5 m → the ground
+            room; t = 76 → remaining 2.0 m ≤ 2.5 m → "Yard".
       (c) ``accessible_when`` is a wall at the arrival gate too (it used to be
           enforced only on the avatar's /play/travel route, so every NPC and
           every rule-flip-while-on-the-road walked past it). VAULT at
@@ -252,7 +251,8 @@ db.init_schema()
 
 from app.core import state_events, travel_engine  # noqa: E402
 from app.core.party_engine import add_to_party  # noqa: E402
-from app.core.game_time import GameDuration, GameTime  # noqa: E402
+from app.core import timeutils  # noqa: E402
+from app.core.game_time import GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
@@ -268,11 +268,16 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-# Game time is the world calendar: a canonical stamp, no date, no timezone.
-START = "Y0001-D001T12:00:00"
-START_GT = GameTime.parse(START)
+# The motion clock, pinned: real seconds the world has run unfrozen.
+START = 1000.0
+_MOTION = [START]
+_RATE = [1.0]
+timeutils.motion_time = lambda: _MOTION[0]
+timeutils.motion_rate = lambda: _RATE[0]
+# The game calendar only labels things; it stands still at this stamp.
+START_GT = GameTime.parse("Y0001-D001T12:00:00")
 
-# The route of the module docstring — [x, z, t_cum], 1 m per game second.
+# The route of the module docstring — [x, z, t_cum], 1 m per real second.
 ROUTE = [[0.0, 0.0, 0.0], [0.0, 5.0, 5.0], [0.0, 30.0, 30.0],
          [60.0, 30.0, 90.0], [60.0, 0.0, 120.0], [95.0, 0.0, 155.0]]
 
@@ -329,32 +334,30 @@ def set_map3d(location_id: str, **fields) -> None:
 
 
 def give_journey(name: str, target: str, entry_edge=3,
-                 waypoints=None, started: str = START) -> None:
+                 waypoints=None, started: float = START,
+                 speed: float = 1.0) -> None:
     """Hand-written journey on the profile — the ticker's INPUT, so the
     expectations below never depend on what the router happens to route."""
     prof = get_character_profile(name)
     prof["movement_target"] = target
     prof["journey"] = {"target": target,
                        "waypoints": [list(w) for w in (waypoints or ROUTE)],
-                       "started_at_game": started, "speed_m_s": 1.0,
+                       "started_at_s": started, "speed_m_s": speed,
                        "entry_edge": entry_edge}
     save_character_profile(name, prof)
 
 
 def tick_at(seconds: float) -> None:
-    """Pin the game clock to START + seconds and run ONE ticker pass."""
-    set_game_time(START_GT + GameDuration.of(seconds=seconds))
+    """Pin the motion clock to START + seconds and run ONE ticker pass."""
+    _MOTION[0] = START + seconds
     travel_engine.advance_all_journeys()
 
 
 def set_factor(factor: float) -> None:
-    """Pin the CLOCK FACTOR the goal window reads, without starting the clock.
-
-    ``set_game_factor`` would do both — and a running clock makes every
-    position in this file a race. The ticker asks exactly one question of the
-    factor (``_at_goal``), so injecting the answer is enough.
-    """
-    travel_engine.game_speed_factor = lambda: factor
+    """Set the GAME clock's factor for real. Positions do not depend on it
+    (they run on the pinned motion clock), so a running game clock is no race
+    here — which is exactly what [7e] proves."""
+    set_game_factor(factor)
 
 
 def pos_of(name):
@@ -399,10 +402,8 @@ SHED = add_location(name="Ticker Shed", description="beside the route")["id"]
 update_location_position(SHED, 0.0, 32.0)
 set_map3d(SHED, plan_width_m=2.0)
 
-set_game_factor(0.0)                  # the game clock stands still — pinned
+set_game_factor(0.0)                  # the game clock stands still
 set_game_time(START_GT)
-set_factor(1.0)                       # …but the goal window runs at 1× (see
-#                                       the module docstring); [7e] varies it.
 
 
 def new_npc(name, location="", x=None, z=None, known=(HOME, MARKET, BARN)):
@@ -792,39 +793,46 @@ check("remaining 4 m ≤ one tick's 5 m → the opening's room wins",
       get_character_current_room("wallwalk_npc"), YARD)
 check("journey gone", travel_engine.get_journey("wallwalk_npc"), None)
 
-print("[7e] the goal window rides the GAME-CLOCK factor")
-# window_m = 5.0 real s per tick x factor (game s per real s) x 1.0 m/game s.
-# The route is [7d]'s: 40 m down EASTGATE's own east wall, every point with
-# |z| <= 5 already derives EASTGATE, so the crossing is caught early and the
-# ONLY question left is whether it counts as the final approach.
-set_factor(0.5)                        # window 5.0 x 0.5 x 1.0 = 2.5 m
-new_npc("halfpace_npc", "", 305.0, 40.0)
-give_journey("halfpace_npc", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
+print("[7e] the goal window rides the SPEED, not the game-clock factor")
+# window_m = 5.0 real s per tick x speed_m_s. The route is [7d]'s: 40 m down
+# EASTGATE's own east wall, every point with |z| <= 5 already derives
+# EASTGATE, so the crossing is caught early and the ONLY question left is
+# whether it counts as the final approach.
+for _f in (0.5, 4.0):
+    set_factor(_f)                     # window stays 5.0 x 1.0 = 5 m
+    _n = f"factor_npc_{_f}"
+    new_npc(_n, "", 305.0, 40.0)
+    give_journey(_n, EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
+    tick_at(36)
+    check(f"factor {_f} still arrives", get_character_current_location(_n), EASTGATE)
+    check(f"factor {_f}: remaining 4 m <= the 5 m window -> the opening's room",
+          get_character_current_room(_n), YARD)
+set_factor(0.0)                        # the game clock stands still again
+
+_RATE[0] = 0.0                         # a frozen world: the window keeps its size
+new_npc("frozen_npc", "", 305.0, 40.0)
+give_journey("frozen_npc", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
 tick_at(36)
-check("factor 0.5 still arrives",
+check("motion rate 0: remaining 4 m <= 5 m -> the opening's room (no floor)",
+      get_character_current_room("frozen_npc"), YARD)
+_RATE[0] = 1.0
+
+SLOW_WALL = [[305.0, 40.0, 0.0], [305.0, 0.0, 80.0]]   # 0.5 m/s, 40 m in 80 s
+new_npc("halfpace_npc", "", 305.0, 40.0)
+give_journey("halfpace_npc", EASTGATE, entry_edge=1, waypoints=SLOW_WALL,
+             speed=0.5)
+tick_at(72)
+check("half pace arrives (progress 36 m)",
       get_character_current_location("halfpace_npc"), EASTGATE)
 check("...but remaining 4 m > the 2.5 m window -> the arrival room",
       get_character_current_room("halfpace_npc"), GROUND_ROOM_ID)
 
 new_npc("halfpace_npc2", "", 305.0, 40.0)
-give_journey("halfpace_npc2", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
-tick_at(38)
-check("two seconds later remaining 2 m <= 2.5 m -> the opening's room",
+give_journey("halfpace_npc2", EASTGATE, entry_edge=1, waypoints=SLOW_WALL,
+             speed=0.5)
+tick_at(76)
+check("four seconds later remaining 2 m <= 2.5 m -> the opening's room",
       get_character_current_room("halfpace_npc2"), YARD)
-
-set_factor(0.0)                        # frozen -> floor 0.1 -> window 0.5 m
-new_npc("frozen_npc", "", 305.0, 40.0)
-give_journey("frozen_npc", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
-tick_at(36)
-check("a frozen world falls back on the floor: 4 m > 0.5 m -> arrival room",
-      get_character_current_room("frozen_npc"), GROUND_ROOM_ID)
-
-new_npc("frozen_npc2", "", 305.0, 40.0)
-give_journey("frozen_npc2", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
-tick_at(39.7)
-check("...and the floor is not zero: remaining 0.3 m <= 0.5 m -> the door",
-      get_character_current_room("frozen_npc2"), YARD)
-set_factor(1.0)                        # back to the file's default pace
 
 print("[7c] accessible_when is a wall at the arrival gate too")
 VAULT = add_location(name="Ticker Vault", description="needs the key")["id"]

@@ -59,9 +59,10 @@ wrapping ``app.models.character.get_character_profile``:
 
 The route below is the same shape smoke_travel_ticker.py uses: HOME at
 (0,0) with a 10 m footprint and a south opening at (0,5); MARKET at (100,0)
-with a 10 m footprint and a west opening at (95,0); 1 m per game second, so
-the position at t seconds is read off the polyline directly and arrival is
-at t = 155 s.
+with a 10 m footprint and a west opening at (95,0); 1 m per REAL second (the
+journey runs on the MOTION clock since 2026-11-05, plan-bewegung-echtzeit.md —
+pinned here at START = 1000.0 via ``timeutils.motion_time``), so the position
+at t seconds is read off the polyline directly and arrival is at t = 155 s.
 """
 import os
 import sys
@@ -80,8 +81,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import travel_engine  # noqa: E402
-from app.core.game_time import GameDuration, GameTime  # noqa: E402
-from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
+from app.core import timeutils  # noqa: E402
 from app.models import character as character_model  # noqa: E402
 from app.models.character import (get_character_current_location,  # noqa: E402
                                   get_character_profile,
@@ -94,8 +94,10 @@ from app.models.world import (_load_world_data, _save_world_data,  # noqa: E402
                               add_location, add_room,
                               update_location_position)
 
-START = "Y0001-D001T12:00:00"
-START_GT = GameTime.parse(START)
+START = 1000.0
+_MOTION = [START]
+timeutils.motion_time = lambda: _MOTION[0]
+timeutils.motion_rate = lambda: 1.0
 ROUTE = [[0.0, 0.0, 0.0], [0.0, 5.0, 5.0], [0.0, 30.0, 30.0],
          [60.0, 30.0, 90.0], [60.0, 0.0, 120.0], [95.0, 0.0, 155.0]]
 ARRIVAL_S = 155.0
@@ -136,11 +138,6 @@ set_map3d(MARKET, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage", "room": HALL}])
 
-set_game_factor(0.0)                  # the game clock stands still — pinned
-set_game_time(START_GT)
-# The goal window (``_at_goal``) reads the clock factor, and a stopped clock
-# reports 0.0. Injected at 1× so "one tick = 5 game seconds" holds.
-travel_engine.game_speed_factor = lambda: 1.0
 
 NAMES = ["Idle1", "Idle2", "Idle3", "Idle4", "Walker"]
 for n in NAMES:
@@ -170,8 +167,8 @@ def counting_get_profile(name):
 
 
 def tick_at(seconds):
-    """Pin the game clock to START + seconds and run ONE ticker pass."""
-    set_game_time(START_GT + GameDuration.of(seconds=seconds))
+    """Pin the motion clock to START + seconds and run ONE ticker pass."""
+    _MOTION[0] = START + seconds
     travel_engine.advance_all_journeys()
 
 
@@ -234,7 +231,7 @@ def main():
     # Hand-written waypoints so every position below is exact.
     prof = get_character_profile("Walker")
     prof["journey"] = {"target": MARKET, "waypoints": [list(w) for w in ROUTE],
-                       "started_at_game": START, "speed_m_s": 1.0,
+                       "started_at_s": START, "speed_m_s": 1.0,
                        "entry_edge": 3}
     prof["movement_target"] = MARKET
     save_character_profile("Walker", prof)

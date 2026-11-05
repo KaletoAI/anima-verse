@@ -94,9 +94,9 @@ for (const c of vectors.cases) {
   passed += result.passed; failed += result.failed;
 }
 if (failed) process.exit(1);
-const entry = {kind:'sit-down',started_game_s:5,access:{x:0,y:0,z:0,yaw:90},anchor:{x:1,y:.4,z:0,yaw:90}};
-assert.equal(motion.entryIdentity(entry), motion.entryIdentity({...entry,elapsed_game_s:3}), 'elapsed polls never reschedule');
-assert.notEqual(motion.entryIdentity(entry), motion.entryIdentity({...entry,started_game_s:6}), 'new authoritative origin schedules once');
+const entry = {kind:'sit-down',started_s:5,access:{x:0,y:0,z:0,yaw:90},anchor:{x:1,y:.4,z:0,yaw:90}};
+assert.equal(motion.entryIdentity(entry), motion.entryIdentity({...entry,elapsed_s:3}), 'elapsed polls never reschedule');
+assert.notEqual(motion.entryIdentity(entry), motion.entryIdentity({...entry,started_s:6}), 'new authoritative origin schedules once');
 const gate = motion.createManualPropGate();
 let resolveCancel;
 const deferred = new Promise(r => { resolveCancel = r; });

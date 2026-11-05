@@ -1698,7 +1698,7 @@ export class NpcManager {
       if (st.char.place || st.char.interaction) {
         if (npc.entry.played) npc.figure?.playPropEntry(previous.kind, 1, previous.height_cm,
           THREE.MathUtils.degToRad(previous.access.yaw), previous.access.y, previous.anchor.y,
-          previous.root_offset, previous.game_seconds_per_real_second <= 0);
+          previous.root_offset, previous.clock_rate <= 0);
         // The held placement ends entry even if its live clip was missed or unavailable.
         npc.root.position.copy(st.pos);
         npc.target.copy(st.pos);
@@ -1736,7 +1736,7 @@ export class NpcManager {
     npc.root.userData.propActionRole = spec.role;
     const ready = npc.figure?.playPropEntry(spec.kind, phase, spec.height_cm,
       THREE.MathUtils.degToRad(spec.access.yaw), spec.access.y, spec.anchor.y, spec.root_offset,
-      spec.game_seconds_per_real_second <= 0);
+      spec.clock_rate <= 0);
     if (!ready) {
       if (!entry.failed) {
         const message = `${npc.name}: measured entry clip/support ${spec.kind} unavailable`;
@@ -1793,8 +1793,8 @@ export class NpcManager {
       // `targetM` advances per segment along `paces_m_s_real` (metres per REAL
       // second), the displayed `shownM` follows it, and the point is
       // re-derived from `shownM` by arc length, so a node is crossed without
-      // waiting for the next poll. `paces === null` (frozen world, time factor
-      // 0, fog) extrapolates nothing, and the
+      // waiting for the next poll. `paces === null` (frozen world, fog)
+      // extrapolates nothing, and the
       // advance is capped at the END of the polyline: the figure holds at its
       // last waypoint until the server books the arrival, it never walks past
       // it.
@@ -1928,11 +1928,10 @@ export class NpcManager {
           : npc.figure.bridging ? npc.figure.paceLimit : npc.figure.paceLimitFor(clip);
         if (d > 0.05 && paceLimit > 0) {
           // Catch-up speed: WALK_SPEED, or the JOURNEY's own pace when that is
-          // faster. A fixed WALK_SPEED was a brake, not a smoother — the game
-          // time factor multiplies `paces_m_s_real` (§ A11), so past a factor of
-          // about 2.4 the interpolated point outruns 3.4 m/s and the figure
-          // lags behind its own journey for the whole trip, then teleports on
-          // arrival.
+          // faster. A fixed WALK_SPEED was a brake, not a smoother — a journey
+          // baked faster than 3.4 m/s (`game.travel_speed_m_s` up to 20, real
+          // time since 2026-11-05) would outrun the figure for the whole trip
+          // and teleport it on arrival.
           const step = catchUpStep(d, rateAt(r.points, r.paces, r.shownM), dt, WALK_SPEED);
           const dir = delta.clone().normalize();
           npc.root.position.addScaledVector(dir, step * paceLimit);

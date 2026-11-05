@@ -234,9 +234,10 @@ add_to_party("npc_lead", "npc_still")
 _prof = get_character_profile("npc_walker")
 _prof["journey"] = {
     "target": MARKET,
-    # 4000 m at 1 m per GAME second — still on the first leg for the whole run.
+    # 4000 m at 1 m per REAL second (motion clock) — still on the first leg
+    # for the whole run.
     "waypoints": [[0.0, 0.0, 0.0], [4000.0, 0.0, 4000.0]],
-    "started_at_game": FROZEN.canonical(),
+    "started_at_s": timeutils.motion_time(),
     "speed_m_s": 1.0,
     "entry_edge": "",
 }

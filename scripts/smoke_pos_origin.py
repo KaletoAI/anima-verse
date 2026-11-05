@@ -46,7 +46,7 @@ from app.models.character import (set_character_pos, get_avatar_sync_snapshot,
     save_character_profile)
 from app.core.keyed_lock import keyed_lock
 from app.core.db import transaction
-from app.core.timeutils import game_time
+from app.core.timeutils import motion_time
 from app.core.world_ops import build_worldmap_payload
 from app.routes import play
 from fastapi import HTTPException
@@ -89,7 +89,7 @@ check("pool_reset", (s["pos"], s["origin"]), (None, None))
 # snapshot_journey: journey + movement_target come from the same SELECT and are validated.
 # Write the profile under the profile lock like start_journey does (travel_engine.py:714-721):
 J = {"target": "loc_a", "waypoints": [[0, 0, 0], [10, 0, 10]],
-     "started_at_game": game_time().canonical(), "speed_m_s": 1.0, "journey_id": "a" * 32}
+     "started_at_s": motion_time(), "speed_m_s": 1.0, "journey_id": "a" * 32}
 _store(profile_journey=J, profile_target="", meta_target="loc_a")   # target in character_state.meta
 check("snapshot meta target", get_avatar_sync_snapshot("demo")["journey"]["journey_id"], "a" * 32)
 _store(profile_journey=J, profile_target="loc_a", meta_target=None)  # target ONLY in profile_json

@@ -719,9 +719,14 @@ class ApiContracts(unittest.TestCase):
             self.assertEqual(R.get(next_run['execution_id'])['status'], 'failed')
 
     def test_worldmap_entry_uses_live_clock_freeze_and_stable_origin_for_self_and_observer(self):
+        # The entry clip runs in REAL seconds on the motion clock (pinned
+        # utc_now, the real clock): 2 s clip; +.25/+.25 -> elapsed .25/.5;
+        # +.5 and a tick -> 1.0; frozen: rate 0, 2 h change nothing; thawed at
+        # game factor 3, +.25 -> 1.25 (NOT 1.75: the factor never scales a
+        # movement), rate 1; +.75 and a tick -> 2.0 >= 2 -> active.
         from app.core import timeutils
         clock = [timeutils.utc_now()]
-        with patch.object(timeutils, 'utc_now', side_effect=lambda: clock[0]):
+        with patch.object(timeutils, 'utc_now', side_effect=lambda: clock[0]), F.real_motion_clock():
             try:
                 F.set_game_factor(1)
                 name, target, _ = S.setup_run()
@@ -734,7 +739,7 @@ class ApiContracts(unittest.TestCase):
                 F.E.advance_all_journeys()
                 A.advance(F.game_time())
                 self.assertEqual(R.get(ref)['phase'], 'entry')
-                origin = F.game_time().total_seconds
+                origin = round(timeutils.motion_time(), 3)
 
                 def row(session):
                     response = session.get('/play/worldmap')
@@ -745,8 +750,8 @@ class ApiContracts(unittest.TestCase):
                 entry = public['prop_action_entry']
                 self.assertEqual(entry, row(owner)['prop_action_entry'])
                 self.assertEqual(set(entry), {'kind', 'pose_key', 'access', 'anchor', 'root_offset',
-                    'duration_game_s', 'elapsed_game_s', 'game_seconds_per_real_second',
-                    'height_cm', 'role', 'started_game_s'})
+                    'duration_s', 'elapsed_s', 'clock_rate',
+                    'height_cm', 'role', 'started_s'})
                 self.assertEqual(entry['kind'], 'run-enter')
                 self.assertEqual(entry['pose_key'], 'sitting')
                 self.assertEqual(entry['access'], dict(x=8, y=0, z=7, yaw=180))
@@ -759,12 +764,15 @@ class ApiContracts(unittest.TestCase):
                 self.assertAlmostEqual(entry['root_offset'], .398)
                 self.assertAlmostEqual(entry['anchor']['y'], .112)
                 self.assertAlmostEqual(entry['anchor']['y'] + entry['root_offset'], .51)
-                self.assertEqual(entry['duration_game_s'], 2)
-                self.assertEqual(entry['elapsed_game_s'], 0)
-                self.assertEqual(entry['game_seconds_per_real_second'], 1)
+                self.assertEqual(entry['duration_s'], 2)
+                # Stored stamps are motion seconds rounded to the millisecond
+                # (prop_action_engine._motion_now); the payload reads the
+                # unrounded clock, so elapsed may carry < 1 ms of that rounding.
+                self.assertAlmostEqual(entry['elapsed_s'], 0, places=3)
+                self.assertEqual(entry['clock_rate'], 1)
                 self.assertEqual(entry['height_cm'], 170)
                 self.assertIsNone(entry['role'])
-                self.assertEqual(entry['started_game_s'], origin)
+                self.assertEqual(entry['started_s'], origin)
                 self.assertIsNone(public['place'])
                 self.assertIsNone(public['local_approach'])
                 self.assertTrue(all(not rows for rows in viewer.get('/play/prop-actions/state').json().values()))
@@ -772,14 +780,14 @@ class ApiContracts(unittest.TestCase):
                 for elapsed in (.25, .5):
                     clock[0] += timedelta(seconds=.25)
                     polled = row(viewer)['prop_action_entry']
-                    self.assertAlmostEqual(polled['elapsed_game_s'], elapsed)
-                    self.assertEqual(polled['started_game_s'], origin)
+                    self.assertAlmostEqual(polled['elapsed_s'], elapsed, places=3)
+                    self.assertEqual(polled['started_s'], origin)
                 clock[0] += timedelta(seconds=.5)
                 A.advance(F.game_time())
                 F.W.set_world_frozen(True)
                 frozen = row(viewer)['prop_action_entry']
-                self.assertEqual(frozen['elapsed_game_s'], 1)
-                self.assertEqual(frozen['game_seconds_per_real_second'], 0)
+                self.assertEqual(frozen['elapsed_s'], 1)
+                self.assertEqual(frozen['clock_rate'], 0)
                 clock[0] += timedelta(hours=2)
                 A.advance(F.game_time())
                 self.assertEqual(row(viewer)['prop_action_entry'], frozen)
@@ -787,10 +795,13 @@ class ApiContracts(unittest.TestCase):
                 F.set_game_factor(3)
                 clock[0] += timedelta(seconds=.25)
                 faster = row(viewer)['prop_action_entry']
-                self.assertAlmostEqual(faster['elapsed_game_s'], 1.75)
-                self.assertEqual(faster['game_seconds_per_real_second'], 3)
-                self.assertEqual(faster['started_game_s'], origin)
+                self.assertAlmostEqual(faster['elapsed_s'], 1.25, places=3)
+                self.assertEqual(faster['clock_rate'], 1)
+                self.assertEqual(faster['started_s'], origin)
                 clock[0] += timedelta(seconds=.25)
+                A.advance(F.game_time())
+                self.assertEqual(R.get(ref)['status'], 'approaching', 'factor 3 must not shorten the clip')
+                clock[0] += timedelta(seconds=.5)
                 A.advance(F.game_time())
                 self.assertEqual(R.get(ref)['status'], 'active')
                 self.assertIsNone(row(viewer)['prop_action_entry'])
@@ -876,8 +887,8 @@ class ApiContracts(unittest.TestCase):
             self.assertEqual(entry['anchor']['x'], x)
             self.assertEqual(entry['height_cm'], 170)
             self.assertTrue(set(entry) <= {'kind', 'pose_key', 'access', 'anchor', 'root_offset',
-                'duration_game_s', 'elapsed_game_s', 'game_seconds_per_real_second',
-                'height_cm', 'role', 'started_game_s'})
+                'duration_s', 'elapsed_s', 'clock_rate',
+                'height_cm', 'role', 'started_s'})
             self.assertEqual(set(entry['access']), {'x', 'y', 'z', 'yaw'})
             self.assertEqual(set(entry['anchor']), {'x', 'y', 'z', 'yaw'})
             serialized = json.dumps(entry)
@@ -903,17 +914,17 @@ class ApiContracts(unittest.TestCase):
             return next(row for row in response.json()['characters'] if row['name'] == name)['prop_action_entry']
 
         before = projection()
-        self.assertEqual(before['elapsed_game_s'], 1)
+        self.assertEqual(before['elapsed_s'], 1)
         with patch.object(A, '_PROCESS', 'restarted-entry-owner'):
             F.set_game_time(F.game_time() + S.GameDuration.of(hours=4))
             paused = projection()
-            self.assertEqual(paused['started_game_s'], before['started_game_s'])
-            self.assertEqual(paused['elapsed_game_s'], 1)
-            self.assertEqual(paused['game_seconds_per_real_second'], 0)
+            self.assertEqual(paused['started_s'], before['started_s'])
+            self.assertEqual(paused['elapsed_s'], 1)
+            self.assertEqual(paused['clock_rate'], 0)
             A.advance(F.game_time())
             resumed = projection()
-            self.assertEqual(resumed['started_game_s'], before['started_game_s'])
-            self.assertEqual(resumed['elapsed_game_s'], 1)
+            self.assertEqual(resumed['started_s'], before['started_s'])
+            self.assertEqual(resumed['elapsed_s'], 1)
             S.tick(1)
             self.assertEqual(R.get(ref)['status'], 'active')
             self.assertIsNone(projection())
@@ -933,7 +944,7 @@ class ApiContracts(unittest.TestCase):
         def view(visible=None, own=None, trip=None):
             return _local_prop_approach(name, observer, F.C.get_character_profile(name),
                 own or F.C.get_character_profile(observer), trip or journey,
-                {name} if visible is None else visible, F.game_time(), 0, 1)
+                {name} if visible is None else visible, F.timeutils.motion_time(), 1.0)
         local = view()
         self.assertTrue(local['waypoints'])
         self.assertTrue(set(local) <= {'journey_id', 'room_id', 'floor_y', 'waypoints', 'progress_m', 'walked_m', 'remaining_m', 'paces_m_s_real', 'starts_in_s'})

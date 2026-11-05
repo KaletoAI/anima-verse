@@ -36,8 +36,8 @@ def travel_section(character_name: str) -> str:
         if not j:
             return ""
         from app.models.world import get_location_name
-        from app.core.game_time import GameTime
-        from app.core.timeutils import game_time
+        from app.core.timeutils import game_time, motion_time
+        from app.core.travel_engine import journey_eta
         target_id = j.get("target") or ""
         # A POINT journey (E3-0) walks to a free (x, z) instead of a place, so
         # there is no name to look up — "a spot out in the open" is what the
@@ -46,12 +46,12 @@ def travel_section(character_name: str) -> str:
         target_name = (get_location_name(target_id) or target_id
                        if target_id else "a spot out in the open")
         now = game_time()
-        st = journey_state(j["waypoints"], j["started_at_game"], now)
+        st = journey_state(j["waypoints"], j["started_at_s"], motion_time())
         if st["arrived"]:
             body = f"You have arrived at {target_name}."
         else:
             remaining = max(0.0, st["total_m"] - st["progress_m"])
-            eta = GameTime.parse(st["eta_game"])
+            eta = journey_eta(st)
             # The world knows one clock, so no "(game time)" disclaimer is
             # needed — but an arrival on a LATER day has to say so, or the
             # bare HH:MM reads as "in a moment".

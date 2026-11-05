@@ -12,11 +12,12 @@ character believes it has arrived and never asks for the room again.
 
 Rules every expectation below is derived from BY HAND:
 
-  * ``journey_state`` is a pure function of the GAME clock, pinned here
-    (``set_game_factor(0.0)`` + ``set_game_time``). The goal window reads the
-    clock FACTOR, which is injected as 1.0 (same trick as
-    ``smoke_travel_ticker.py``).
-  * The hand-written route (1 m per game second):
+  * ``journey_state`` is a pure function of the MOTION clock (real seconds
+    the world has run unfrozen; movement runs in real time since 2026-11-05,
+    plan-bewegung-echtzeit.md), PINNED here (``timeutils.motion_time`` /
+    ``motion_rate`` replaced) at START = 1000.0. The goal window is
+    ``_TICK_SECONDS × speed_m_s`` — no clock factor in it any more.
+  * The hand-written route (1 m per real second):
         W0 [60, 0, 0]  → W1 [95, 0, 35]
     CAFE sits at (100, 0) with edge 10 → footprint x ∈ [95, 105],
     z ∈ [−5, 5]; its only opening is the W edge at 0.5 → (95, 0), WITHOUT a
@@ -66,8 +67,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import travel_engine  # noqa: E402
-from app.core.game_time import GameDuration, GameTime  # noqa: E402
-from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
+from app.core import timeutils  # noqa: E402
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
     get_character_pose_key, get_character_profile, get_movement_target,
@@ -82,8 +82,10 @@ from app.plugins.context import PluginContext  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START = "Y0001-D001T12:00:00"
-START_GT = GameTime.parse(START)
+START = 1000.0
+_MOTION = [START]
+timeutils.motion_time = lambda: _MOTION[0]
+timeutils.motion_rate = lambda: 1.0
 ROUTE = [[60.0, 0.0, 0.0], [95.0, 0.0, 35.0]]
 
 
@@ -137,14 +139,18 @@ def give_journey(name, **extra):
     prof = get_character_profile(name)
     prof["movement_target"] = CAFE
     prof["journey"] = {"target": CAFE, "waypoints": [list(w) for w in ROUTE],
-                       "started_at_game": START, "speed_m_s": 1.0,
+                       "started_at_s": START, "speed_m_s": 1.0,
                        "entry_edge": 3, **extra}
     save_character_profile(name, prof)
 
 
 def tick_at(seconds):
-    set_game_time(START_GT + GameDuration.of(seconds=seconds))
+    _MOTION[0] = START + seconds
     travel_engine.advance_all_journeys()
+
+
+def at_start():
+    _MOTION[0] = START
 
 
 def denials(name):
@@ -173,9 +179,7 @@ set_map3d(CAFE, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 
-set_game_factor(0.0)
-set_game_time(START_GT)
-travel_engine.game_speed_factor = lambda: 1.0
+at_start()
 
 # ── [1] start_journey carries room + pose ───────────────────────────────
 print("[1] start_journey stores target_room / target_pose")
@@ -203,7 +207,7 @@ check("room", get_character_current_room("base_npc"), GROUND_ROOM_ID)
 
 # ── [3] the requested room wins ─────────────────────────────────────────
 print("[3] target_room HAUPTRAUM → arrives in Hauptraum")
-set_game_time(START_GT)
+at_start()
 new_npc("room_npc", "", 60.0, 0.0)
 give_journey("room_npc", target_room=HAUPTRAUM)
 tick_at(35)
@@ -218,7 +222,7 @@ RULE = add_rule({"name": "staff only", "type": "block", "action": "enter",
                  "target": {"scope": "room", "location_id": CAFE,
                             "room_ids": [BACK]},
                  "condition": "always", "message": "Staff only."})
-set_game_time(START_GT)
+at_start()
 new_npc("back_npc", "", 60.0, 0.0)
 give_journey("back_npc", target_room=BACK)
 tick_at(35)
@@ -233,7 +237,7 @@ check_true("an access_denied entry names the room",
 
 # ── [5] a stale room id ─────────────────────────────────────────────────
 print("[5] target_room not a room of the target → ground")
-set_game_time(START_GT)
+at_start()
 new_npc("stale_npc", "", 60.0, 0.0)
 give_journey("stale_npc", target_room="deadbeef")
 tick_at(35)
@@ -241,7 +245,7 @@ check("room", get_character_current_room("stale_npc"), GROUND_ROOM_ID)
 
 # ── [6] the carried pose ────────────────────────────────────────────────
 print("[6] target_pose applied on arrival")
-set_game_time(START_GT)
+at_start()
 new_npc("pose_npc", "", 60.0, 0.0)
 give_journey("pose_npc", target_room=HAUPTRAUM, target_pose="sitting")
 tick_at(35)
@@ -252,7 +256,7 @@ check("pose key", get_character_pose_key("pose_npc"), "sitting")
 print("[7] SetLocation across locations with a room")
 from plugins.movement.skill_set_location import SetLocationSkill  # noqa: E402
 skill = SetLocationSkill({"enabled": True}, PluginContext("movement"))
-set_game_time(START_GT)
+at_start()
 new_npc("skill_npc", HOME, 0.0, 0.0)
 answer = skill.execute(json.dumps({"input": "Smoke Cafe, Hauptraum",
                                    "agent_name": "skill_npc"}))

@@ -94,8 +94,8 @@ class Relax(unittest.TestCase):
         duration = journey['waypoints'][-1][2]
         # The approach starts after a poll lead (travel_engine._approach_start);
         # count the legs from that start, not from the request.
-        lead = (F.GameTime.parse(journey['started_at_game']) - F.game_time()).total_seconds
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=lead + int(duration) - 1))
+        lead = journey['started_at_s'] - F.timeutils.motion_time()
+        F.elapse(lead + int(duration) - 1)
         F.E.advance_all_journeys()
         self.assertIsNotNone(F.E.get_journey(name))
         F.E._approach_validation_cache.clear()
@@ -120,7 +120,7 @@ class Relax(unittest.TestCase):
         plan = F.N.plan_approach(name, target, 'actor')
         self.assertEqual(plan['entry_mode'], 'direct', plan)
         self.assertEqual(plan['bridge_reason'], 'entry_transition_blocked')
-        self.assertEqual(A._entry_spec(name, plan, 'sitting')[0]['duration_game_s'], 0)
+        self.assertEqual(A._entry_spec(name, plan, 'sitting')[0]['duration_s'], 0)
 
     def test_g_report_names_and_read_only_cli(self):
         import contextlib

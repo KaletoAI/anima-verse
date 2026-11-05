@@ -17,6 +17,7 @@ import uuid
 
 from app.core import prop_action_store as store, places, props, travel_engine as travel
 from app.core.game_time import GameTime, GameDuration
+from app.core import timeutils
 from app.core.timeutils import game_time, game_speed_factor, parse_iso, utc_now
 from app.core.keyed_lock import keyed_lock, _DeferredRLock
 from app.core.log import get_logger
@@ -659,7 +660,8 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
                status="awaiting_consent" if asks else "approaching", phase="", reason="", target=target,
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
-                                                last_game=now, elapsed=0.0, consent_elapsed=0.0,
+                                                last_game=now, last_motion=_motion_now(),
+                                                elapsed=0.0, consent_elapsed=0.0,
                                                 **({"consent": consent} if invitees else {}),
                                                 **({"consents": {m: "pending" for m in invitees}} if asks else {})))
     replaces = _replaced_runs(actor, invitees, target, action_id)
@@ -803,7 +805,7 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
             data = run["data"]
             if data["process"] == _PROCESS:
                 data["consent_elapsed"] += max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
-            data.update(last_game=now.canonical(), process=_PROCESS)
+            data.update(last_game=now.canonical(), last_motion=_motion_now(), process=_PROCESS)
             if data["consent_elapsed"] >= 300:
                 run.update(status="cancelled", reason="consent_expired")
                 store.save(conn, run)
@@ -817,7 +819,8 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
                 run.update(status="failed", reason=reason)
                 store.save(conn, run)
                 return _result(run)
-            run["data"].update(plans=plans, consented=True, last_game=game_time().canonical(), process=_PROCESS)
+            run["data"].update(plans=plans, consented=True, last_game=game_time().canonical(),
+                               last_motion=_motion_now(), process=_PROCESS)
             run["data"]["consents"][actor] = "yes"
             run["status"] = "approaching"
             store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
@@ -851,7 +854,8 @@ def _start(run):
         if not journey:
             _finish(run, "failed", reason)
             return
-        delay = max(0, (GameTime.parse(journey["started_at_game"]) - game_time()).total_seconds)
+        # Approach deadline in REAL (motion-clock) seconds, like the walk itself.
+        delay = max(0.0, float(journey["started_at_s"]) - timeutils.motion_time())
         deadline = max(deadline, float(journey["waypoints"][-1][2]) + delay + 60)
         try:
             snapshot = _motion_snapshot(run, name, journey)
@@ -860,7 +864,7 @@ def _start(run):
             logger.exception("Prop action motion snapshot failed: %s", run["execution_id"])
             snapshot = None
         run["data"].setdefault("motions", {})[name] = snapshot
-    run["data"].update(deadline=deadline, last_game=game_time().canonical())
+    run["data"].update(deadline=deadline, last_game=game_time().canonical(), last_motion=_motion_now())
     _save(run)
 
 
@@ -910,7 +914,9 @@ def motion_for(name: str, run) -> dict | None:
     Public to the participant only (request/respond answers, its own
     ``state_for`` rows). ``waypoints`` are world-XZ metres, the first leg is
     the zero-time seat leg when ``departure`` is set; ``paces_m_s_real`` are
-    per segment (null = timeless), from the game clock right now.
+    per segment (null = timeless), REAL metres per second from the motion
+    clock (null while the world is frozen) — the game clock's factor plays no
+    part (movement runs in real time).
     """
     if not run or run["status"] != "approaching" or name not in store.people(run):
         return None
@@ -919,7 +925,7 @@ def motion_for(name: str, run) -> dict | None:
         return None
     motion = {k: v for k, v in snapshot.items() if k != "timed"}
     motion["waypoints"] = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in snapshot["timed"]]
-    motion["paces_m_s_real"] = travel.segment_paces_m_s_real(snapshot["timed"], game_speed_factor())
+    motion["paces_m_s_real"] = travel.segment_paces_m_s_real(snapshot["timed"], timeutils.motion_rate())
     return motion
 
 
@@ -1268,7 +1274,7 @@ def _finish(run, status, reason, *, keep_seated="", follow=False):
         if run["status"] == "active" and run["definition"]["ability"] != "sleep":
             # Include the final online partial interval before any cleanup. _clock
             # has already advanced on scheduler paths, so this never counts twice.
-            delta = _clock(run, game_time())
+            delta, _motion = _clock(run, game_time())
             if run["definition"]["ability"] == "combined":
                 duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
                 delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
@@ -1418,7 +1424,8 @@ def _follow_up(run, follows):
                               definition_revision=revision, status="approaching", phase="", reason="",
                               target=dict(target), definition=definition,
                               data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
-                                        last_game=now, elapsed=0.0, consent_elapsed=0.0,
+                                        last_game=now, last_motion=_motion_now(),
+                                        elapsed=0.0, consent_elapsed=0.0,
                                         follow_of=run["execution_id"],
                                         **({} if name in avatars else {"follow_limit_s": FOLLOW_NPC_LIMIT_S})))
                 result, _created = _admit(follow, fingerprint, replaces=(run["execution_id"],), direct=True)
@@ -1665,29 +1672,51 @@ def interrupt(actor, reason, *, execution_id=""):
                 _finish(current, "completed" if reason == "awake" and current["status"] == "sleeping" else "cancelled", reason)
 
 
+def _motion_now() -> float:
+    """The motion clock as stored on a run (``last_motion``, milliseconds)."""
+    return round(timeutils.motion_time(), 3)
+
+
+def _entry_seconds(data) -> float:
+    """REAL seconds the longest entry clip of a run takes. A stored entry from
+    before real-time entries (no ``duration_s``) counts as already over."""
+    return max(float(e.get("duration_s") or 0.0) for e in data["entries"].values())
+
+
 def _clock(run, now):
+    """Advance a run's two clocks to ``now`` and return ``(game_delta,
+    motion_delta)``: GAME seconds for what is gameplay (phases, gauges, the
+    invitation), MOTION-clock (real) seconds for what moves (the approach
+    deadline, the entry clip). Both are 0.0 after a restart or while frozen."""
     data = run["data"]
     previous = GameTime.parse(data["last_game"])
     gap = max(0, (now - previous).total_seconds)
+    now_s = _motion_now()
+    motion_gap = max(0.0, now_s - float(data.get("last_motion", now_s)))
     restarted = data["process"] != _PROCESS
     if restarted:
         # Reanchor every still-owned real journey before travel may advance it.
+        # Downtime is shifted out on the motion clock the journey runs on.
         from app.core.keyed_lock import keyed_lock
         for role, name in _members(run):
             with keyed_lock("character_profile", name):
                 profile = C.get_character_profile(name)
                 journey = profile.get("journey")
                 if journey and _own_journey(run, name, journey):
-                    checkpoint = GameTime.parse(journey.get("position_checkpoint_game", data["last_game"]))
-                    anchored = GameTime.parse(journey.get("prop_action_reanchored_at", checkpoint.canonical()))
-                    shift = max(0, (now - max(checkpoint, anchored)).total_seconds)
-                    journey["started_at_game"] = (GameTime.parse(journey["started_at_game"]) + GameDuration.of(seconds=shift)).canonical()
-                    journey["prop_action_reanchored_at"] = now.canonical()
+                    checkpoint = float(journey.get("position_checkpoint_s",
+                                                   data.get("last_motion", now_s)))
+                    anchored = float(journey.get("prop_action_reanchored_at_s", checkpoint))
+                    shift = max(0.0, now_s - max(checkpoint, anchored))
+                    journey["started_at_s"] = round(float(journey["started_at_s"]) + shift, 3)
+                    journey["prop_action_reanchored_at_s"] = now_s
                     if not C.save_character_profile(name, profile):
                         raise RuntimeError("prop_action_reanchor_write_failed")
         data["process"] = _PROCESS
     data["last_game"] = now.canonical()
-    return 0.0 if restarted or is_world_frozen() else float(gap)
+    data["last_motion"] = now_s
+    if restarted or is_world_frozen():
+        return 0.0, 0.0
+    return float(gap), float(motion_gap)
 
 
 @contextmanager
@@ -1705,7 +1734,8 @@ def owner_guard(actor, journey):
                 _clock(run, game_time())
                 _save(run)
             reason = _validate(run, require_claims=True)
-            elapsed = run["data"]["elapsed"] + max(0, (game_time() - GameTime.parse(run["data"]["last_game"])).total_seconds)
+            data = run["data"]
+            elapsed = data["elapsed"] + max(0.0, _motion_now() - float(data.get("last_motion", _motion_now())))
             if not is_world_frozen() and elapsed > run["data"].get("deadline", 60):
                 reason = "approach_timeout"
             if reason:
@@ -1785,7 +1815,7 @@ def _entry_capability(pose):
 
 def _entry_spec(name, plan, pose, *, _query=None):
     if plan.get("entry_mode") == "direct":
-        return dict(kind="", duration_game_s=0.0, pose_key=pose), ""
+        return dict(kind="", duration_s=0.0, pose_key=pose), ""
     from app.core.animation_clips import clip_travel_m, clip_ref_height_m
     from app.core.room_stand import bridge_offset, bridge_scale
     from app.core.height import height_cm
@@ -1804,7 +1834,8 @@ def _entry_spec(name, plan, pose, *, _query=None):
     if not geometry or not access_space(geometry, anchor["placement_id"]).visible(
             (access["x"], access["z"]), (anchor["x"], anchor["z"])):
         return None, "entry_transition_blocked"
-    return dict(kind=kind, duration_game_s=float(meta["duration_s"]) * max(1, game_speed_factor()), pose_key=pose), ""
+    # The clip's own REAL length: the entry runs on the motion clock.
+    return dict(kind=kind, duration_s=float(meta["duration_s"]), pose_key=pose), ""
 
 
 def _begin_entry(run):
@@ -1823,8 +1854,9 @@ def _begin_entry(run):
         entries[name] = spec
     run["phase"] = "entry"
     now = game_time()
+    started = _motion_now()
     run["data"].update(entries=entries, entry_elapsed=0.0, last_game=now.canonical(),
-                       entry_started_game_s=now.total_seconds)
+                       last_motion=started, entry_started_s=started)
     _save(run)
     # Display actual bridge at exact access; no place/body anchor until it ends.
     from app.core.keyed_lock import keyed_lock
@@ -1838,7 +1870,7 @@ def _begin_entry(run):
                 profile["prop_action_entry"] = dict(execution_id=run["execution_id"], **entries[name],
                     access=plan["access"], anchor=plan["entry_anchor"])
             C.save_character_profile(name, profile)
-    if not any(e["duration_game_s"] for e in entries.values()):
+    if not any(e["duration_s"] for e in entries.values()):
         _activate(run)
 
 
@@ -1858,7 +1890,8 @@ def _activate(run):
         run["phase"] = run["definition"]["phases"][0]["id"] if ability == "combined" else "active"
         if ability == "sleep":
             run["phase"] = "sleep_pending"
-        run["data"].update(phase_elapsed=0.0, active_game_s=0.0, last_game=game_time().canonical())
+        run["data"].update(phase_elapsed=0.0, active_game_s=0.0, last_game=game_time().canonical(),
+                           last_motion=_motion_now())
         _commit(run, ("start",), runtime=runtime, catalogs=catalogs)
     with keyed_lock("places", run["target"]["location_id"]):
         if ability == "pair":
@@ -1941,7 +1974,7 @@ def advance(now: GameTime) -> int:
             run = store.get(snapshot["execution_id"])
             if run["status"] in store.TERMINAL:
                 continue
-            delta = _clock(run, now)
+            delta, motion_delta = _clock(run, now)
             if is_world_frozen():
                 _save(run)
                 continue
@@ -1976,8 +2009,8 @@ def advance(now: GameTime) -> int:
                     continue
             elif run["status"] == "approaching":
                 if run["phase"] == "entry":
-                    data["entry_elapsed"] += delta
-                    if data["entry_elapsed"] >= max(e["duration_game_s"] for e in data["entries"].values()):
+                    data["entry_elapsed"] += motion_delta
+                    if data["entry_elapsed"] >= _entry_seconds(data):
                         _activate(run)
                         advanced += 1
                         continue
@@ -1989,7 +2022,7 @@ def advance(now: GameTime) -> int:
                         advanced += 1
                         continue
                 else:
-                    data["elapsed"] += delta
+                    data["elapsed"] += motion_delta
                     if data["elapsed"] > data.get("deadline", 60):
                         _finish(run, "failed", "approach_timeout")
                         continue
@@ -2055,19 +2088,22 @@ def advance(now: GameTime) -> int:
     return advanced
 
 
-#: REAL seconds between two beats of a run that fills gauges (see due_in_game_s)
+#: REAL seconds between two beats of a run that fills gauges (see due_in_s)
 METER_BEAT_REAL_S = 5.0
 
 
-def due_in_game_s(now: GameTime):
-    """Game seconds until a live run's next timed step — an entry clip, a
-    combined phase ending or the next gauge beat (METER_BEAT_REAL_S) — or
-    None when no run waits on the clock.
+def due_in_s(now: GameTime):
+    """REAL seconds until a live run's next timed step — an entry clip
+    (motion clock), a combined phase ending or the next gauge beat
+    (METER_BEAT_REAL_S; both game time, turned into real seconds by the
+    factor) — or None when no run waits on a clock.
 
     The travel ticker beats on it (travel_engine._next_beat_s), so a sitter
     sits when the clip ends instead of on the next world-admin tick.
     """
     soonest = None
+    factor = game_speed_factor()
+    now_s = _motion_now()
     for run in store.live_runs():
         data = run["data"]
         if (run["status"] == "approaching" and run["phase"] != "entry"
@@ -2079,21 +2115,26 @@ def due_in_game_s(now: GameTime):
             continue
         left = None
         if run["status"] == "approaching" and run["phase"] == "entry" and data.get("entries"):
-            left = max(e["duration_game_s"] for e in data["entries"].values()) - data.get("entry_elapsed", 0.0)
-        elif run["status"] == "active" and run["definition"]["ability"] == "combined":
-            phase = next((p for p in run["definition"]["phases"] if p["id"] == run["phase"]), None)
-            if phase is not None:
-                left = phase["duration_game_s"] - data.get("phase_elapsed", 0.0)
-        if (run["status"] == "active" and run["definition"]["ability"] != "sleep"
-                and game_speed_factor() > 0 and _meters(run)):
-            # A package fills gauges on the beat (``prop_action.active``): a
-            # beat every METER_BEAT_REAL_S keeps the finale on time, where the
-            # world-admin tick alone would let it wait up to a minute.
-            beat = METER_BEAT_REAL_S * game_speed_factor()
-            left = beat if left is None else min(left, beat)
+            # The entry clip runs on the motion clock: real seconds already.
+            left = (_entry_seconds(data) - data.get("entry_elapsed", 0.0)
+                    - max(0.0, now_s - float(data.get("last_motion", now_s))))
+        elif factor > 0:
+            game_left = None
+            if run["status"] == "active" and run["definition"]["ability"] == "combined":
+                phase = next((p for p in run["definition"]["phases"] if p["id"] == run["phase"]), None)
+                if phase is not None:
+                    game_left = phase["duration_game_s"] - data.get("phase_elapsed", 0.0)
+            if run["status"] == "active" and run["definition"]["ability"] != "sleep" and _meters(run):
+                # A package fills gauges on the beat (``prop_action.active``): a
+                # beat every METER_BEAT_REAL_S keeps the finale on time, where
+                # the world-admin tick alone would let it wait up to a minute.
+                beat = METER_BEAT_REAL_S * factor
+                game_left = beat if game_left is None else min(game_left, beat)
+            if game_left is not None:
+                game_left -= max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
+                left = game_left / factor
         if left is None:
             continue
-        left -= max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
         soonest = left if soonest is None else min(soonest, left)
     return soonest
 

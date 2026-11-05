@@ -261,13 +261,12 @@ class SetLocationSkill(PluginSkill):
             _trigger_access_denied_thought(blocked_character, location_name, reason)
             return reason
         if outcome["status"] == "travelling":
-            from app.core.travel_engine import journey_state
-            from app.core.game_time import GameTime
-            from app.core.timeutils import game_time
+            from app.core.travel_engine import journey_eta, journey_state
+            from app.core.timeutils import game_time, motion_time
             j = outcome["journey"]
             now = game_time()
-            st = journey_state(j["waypoints"], j["started_at_game"], now)
-            eta = GameTime.parse(st["eta_game"])
+            st = journey_state(j["waypoints"], j["started_at_s"], motion_time())
+            eta = journey_eta(st)
             eta_text = eta.time_hhmm() if eta.day_index == now.day_index else eta.label()
             room_part = f", room: {room_name}" if room_name else ""
             return (f"You set off for {location_name}{room_part} "

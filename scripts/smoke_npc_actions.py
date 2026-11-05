@@ -178,7 +178,7 @@ from app.core.game_time import GameDuration  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
 from app.core.npc_pool import pool_npc  # noqa: E402
 from app.core.prompt_templates import render_task  # noqa: E402
-from app.core.timeutils import game_time, set_game_time, utc_now  # noqa: E402
+from app.core.timeutils import game_time, motion_time, set_game_time, utc_now  # noqa: E402
 from app.core.users import create_user, update_user  # noqa: E402
 from app.models import rules as rules_model, world  # noqa: E402
 from app.models.character import (force_set_status,  # noqa: E402
@@ -419,8 +419,8 @@ isolate(D)
 check("released, it is one again", npc_actions.candidates(), [D])
 
 _p = get_character_profile(D)
-_p["journey"] = {"target": LOC2_ID, "path": [], "seconds_per_cell": 10,
-                 "started_at_game": game_time().canonical()}
+_p["journey"] = {"target": LOC2_ID, "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
+                 "started_at_s": motion_time(), "speed_m_s": 1.0}
 save_character_profile(D, _p)
 check("on the road is not", npc_actions.candidates(), [])
 _p = get_character_profile(D)

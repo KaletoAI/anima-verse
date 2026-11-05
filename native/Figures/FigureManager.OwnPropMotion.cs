@@ -171,7 +171,7 @@ public partial class FigureManager
         var spec=(JsonObject)plan["entry"]!.DeepClone();
         spec["access"]=plan["access"]!.DeepClone(); spec["anchor"]=plan["anchor"]!.DeepClone();
         spec["root_offset"]=plan["anchor"]?["root_offset"]?.DeepClone(); spec["height_cm"]=plan["height_cm"]?.DeepClone();
-        spec["game_seconds_per_real_second"]=1; return spec;
+        spec["clock_rate"]=1; return spec;
     }
     private void TickOwnPropMotion(Figure figure,double dt,double camDist)
     {
@@ -208,7 +208,7 @@ public partial class FigureManager
             if(!ready && changed) (PropEntryError ?? _log).Invoke($"{figure.CharacterName}: measured exit clip/support unavailable");
         } else if(phase=="entry") {
             var spec=OwnEntrySpec(plan);
-            if(playback.HeldEntryPhase is not null) spec["game_seconds_per_real_second"]=0;
+            if(playback.HeldEntryPhase is not null) spec["clock_rate"]=0;
             double duration=PropActionMotion.Number(spec["duration_s"]);
             bool ready=figure.PlayPropEntry(spec,playback.HeldEntryPhase ?? (duration>0 ? (elapsed-OwnEntryAt(plan))/duration : 1));
             if(!ready && changed) (PropEntryError ?? _log).Invoke($"{figure.CharacterName}: measured entry clip/support {PropActionMotion.Text(spec["kind"])} unavailable");

@@ -82,7 +82,7 @@ if(needed.some(k=>!existsSync(join(clips,k+'.fbx')))) {
   }
   manager.clearOwnMotion('avatar');
   const spec={...plan.entry,access:plan.access,anchor:plan.anchor,height_cm:170,root_offset:0,
-   started_game_s:0,elapsed_game_s:0,duration_game_s:4.066667,game_seconds_per_real_second:1};
+   started_s:0,elapsed_s:0,duration_s:4.066667,clock_rate:1};
   manager.update([{char:{name:'avatar',activity_animation:'idle',prop_action_entry:spec},pos:owner.position.clone(),stamp:100}]);
   manager.tick(0,10);
   for(let frame=1;frame<=122;frame++) {

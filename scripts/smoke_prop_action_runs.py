@@ -430,7 +430,7 @@ class Runs(unittest.TestCase):
         self.assertEqual(F.C.get_character_pos(name), {"x": access["x"], "z": access["z"]})
         self.assertFalse(F.C.get_character_profile(name).get("place"))
         self.assertEqual(row["data"]["entry_elapsed"], 0)
-        tick(row["data"]["entries"][name]["duration_game_s"])
+        tick(row["data"]["entries"][name]["duration_s"])
         activated = R.get(result["execution_id"])
         self.assertEqual(activated["status"], "active", activated)
         anchor = activated["data"]["plans"][name]["entry_anchor"]
@@ -536,7 +536,7 @@ class Runs(unittest.TestCase):
         # Real single-journey core step, while the partner is still on its path.
         with A.owner_guard(name, first) as allowed:
             self.assertTrue(allowed)
-            F.E._advance_approach(name, first, F.game_time())
+            F.E._advance_approach(name, first, F.timeutils.motion_time())
         self.assertFalse(F.C.get_character_profile(name).get("interaction"))
         self.assertEqual(R.get(result["execution_id"])["data"]["arrived"], [name])
         F.E.advance_all_journeys()
@@ -647,7 +647,9 @@ class Runs(unittest.TestCase):
         F.C.set_character_status(other, "pooled")
         result = request(name, target)
         self.assertEqual(result["status"], "approaching", result)
-        A.advance(F.game_time() + GameDuration.of(seconds=120))
+        # The approach deadline counts MOTION seconds: 120 s pass on both clocks.
+        F.set_game_time(F.game_time() + GameDuration.of(seconds=120))
+        A.advance(F.game_time())
         self.assertEqual(R.get(result["execution_id"])["reason"], "approach_timeout")
         self.assertFalse(R.claims())
         result = request(name, target)
@@ -819,7 +821,7 @@ class Runs(unittest.TestCase):
     def test_real_world_freeze_pauses_run_deadline_across_five_hours(self):
         name, target, _ = setup_run()
         clock = [F.datetime(2040, 1, 1, tzinfo=F.timezone.utc)]
-        with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]):
+        with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]), F.real_motion_clock():
             F.set_game_factor(1)
             F.set_game_time(F.GameTime.parse("Y0001-D010T12:00:00"))
             result = request(name, target)
@@ -1081,7 +1083,7 @@ class Runs(unittest.TestCase):
         F.E.advance_all_journeys()
         at_ten = F.C.get_character_pos(name)
         journey = F.E.get_journey(name)
-        self.assertEqual(journey["position_checkpoint_game"], F.game_time().canonical())
+        self.assertEqual(journey["position_checkpoint_s"], round(F.timeutils.motion_time(), 3))
         self.assertEqual(R.get(result["execution_id"])["data"]["last_game"], stamp.canonical())
         class ProcessStop(BaseException):
             pass
@@ -1098,8 +1100,9 @@ class Runs(unittest.TestCase):
             after = F.C.get_character_pos(name)
             self.assertGreater(after["x"], at_ten["x"], "resumed way went backwards over its t10 checkpoint")
             stored = F.E.get_journey(name)
-            self.assertEqual(stored["position_checkpoint_game"], F.game_time().canonical())
-            expected = F.E.journey_state(stored["waypoints"], stored["started_at_game"], F.game_time())["pos"]
+            self.assertEqual(stored["position_checkpoint_s"], round(F.timeutils.motion_time(), 3))
+            expected = F.E.journey_state(stored["waypoints"], stored["started_at_s"],
+                                         F.timeutils.motion_time())["pos"]
             self.assertAlmostEqual(after["x"], expected[0], places=2)
             self.assertAlmostEqual(after["z"], expected[1], places=2)
 

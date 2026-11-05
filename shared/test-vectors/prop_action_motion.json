@@ -4,7 +4,7 @@
   "fixtures": {
     "ENTRY": {
       "kind": "sit-down",
-      "started_game_s": 5,
+      "started_s": 5,
       "access": {
         "x": 0,
         "y": 0,
@@ -510,9 +510,9 @@
       "fn": "entryClipSample",
       "args": [
         {
-          "elapsed_game_s": 2,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 1,
+          "elapsed_s": 2,
+          "duration_s": 4,
+          "clock_rate": 1,
           "clip_duration_s": 2,
           "height_cm": 200
         },
@@ -528,9 +528,9 @@
       "fn": "entryClipSample",
       "args": [
         {
-          "elapsed_game_s": 1,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 1,
+          "elapsed_s": 1,
+          "duration_s": 4,
+          "clock_rate": 1,
           "clip_duration_s": 2,
           "height_cm": 200
         },
@@ -546,9 +546,9 @@
       "fn": "entryClipSample",
       "args": [
         {
-          "elapsed_game_s": 1,
-          "duration_game_s": 8,
-          "game_seconds_per_real_second": 2,
+          "elapsed_s": 1,
+          "duration_s": 8,
+          "clock_rate": 2,
           "clip_duration_s": 4,
           "height_cm": 140
         },
@@ -564,9 +564,9 @@
       "fn": "entryClipSample",
       "args": [
         {
-          "elapsed_game_s": 1,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 0,
+          "elapsed_s": 1,
+          "duration_s": 4,
+          "clock_rate": 0,
           "clip_duration_s": 2,
           "height_cm": 200
         },
@@ -582,9 +582,9 @@
       "fn": "entryClipSample",
       "args": [
         {
-          "elapsed_game_s": 3,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 1,
+          "elapsed_s": 3,
+          "duration_s": 4,
+          "clock_rate": 1,
           "clip_duration_s": 2,
           "height_cm": 200
         },
@@ -600,9 +600,9 @@
       "fn": "entryClipSample",
       "args": [
         {
-          "elapsed_game_s": 2,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 1,
+          "elapsed_s": 2,
+          "duration_s": 4,
+          "clock_rate": 1,
           "clip_duration_s": 2,
           "height_cm": 100
         },
@@ -1127,9 +1127,9 @@
       "fn": "entryPhase",
       "args": [
         {
-          "elapsed_game_s": 1,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 2
+          "elapsed_s": 1,
+          "duration_s": 4,
+          "clock_rate": 2
         },
         -3
       ],
@@ -1140,9 +1140,9 @@
       "fn": "entryPhase",
       "args": [
         {
-          "elapsed_game_s": 1,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": -2
+          "elapsed_s": 1,
+          "duration_s": 4,
+          "clock_rate": -2
         },
         3
       ],
@@ -1153,9 +1153,9 @@
       "fn": "entryPhase",
       "args": [
         {
-          "elapsed_game_s": -2,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 1
+          "elapsed_s": -2,
+          "duration_s": 4,
+          "clock_rate": 1
         },
         0
       ],
@@ -1166,9 +1166,9 @@
       "fn": "entryPhase",
       "args": [
         {
-          "elapsed_game_s": 1,
-          "duration_game_s": 4,
-          "game_seconds_per_real_second": 2
+          "elapsed_s": 1,
+          "duration_s": 4,
+          "clock_rate": 2
         },
         1.5
       ],
@@ -1246,7 +1246,7 @@
         {
           "$fixture": "ENTRY",
           "$with": {
-            "elapsed_game_s": 3
+            "elapsed_s": 3
           }
         }
       ],
@@ -1259,7 +1259,7 @@
         {
           "$fixture": "ENTRY",
           "$with": {
-            "started_game_s": 6
+            "started_s": 6
           }
         }
       ],

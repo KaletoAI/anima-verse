@@ -112,8 +112,8 @@ public static partial class PropActionsCheck
             var row=map["characters"]![0]!;
             var spec=(JsonObject)plan["entry"]!.DeepClone();
             spec["access"]=plan["access"]!.DeepClone(); spec["anchor"]=plan["anchor"]!.DeepClone();
-            spec["height_cm"]=170; spec["root_offset"]=0; spec["started_game_s"]=0;
-            spec["elapsed_game_s"]=0; spec["duration_game_s"]=4.066667; spec["game_seconds_per_real_second"]=1;
+            spec["height_cm"]=170; spec["root_offset"]=0; spec["started_s"]=0;
+            spec["elapsed_s"]=0; spec["duration_s"]=4.066667; spec["clock_rate"]=1;
             row["prop_action_entry"]=spec;
             await manager.Apply(JsonSerializer.SerializeToElement(map)); manager.Tick(0);
             for(int frame=1;frame<=122;frame++) {

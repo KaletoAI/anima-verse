@@ -10,9 +10,10 @@ itself runs, and its end must be exactly where the server seats the figure.
 
 Hand-derived expectations (contract docs/schnittstellen-3d.md, "Own motion"):
 - waypoints = the persisted journey polyline (x, z), seat leg included;
-- a walked segment's real pace = travel speed x game factor (factor 2 here:
-  the baked t_cum is length / speed, so length / t x 2 = 2 x speed); the
-  zero-time seat leg has no pace (null);
+- a walked segment's real pace = the travel speed itself at ANY game factor
+  (factor 2 here: the baked t_cum is length / speed in REAL seconds, so
+  length / t = speed — movement runs on the motion clock,
+  plan-bewegung-echtzeit.md); the zero-time seat leg has no pace (null);
 - access = the plan's floor access; anchor = the plan's entry anchor with
   y lowered by root_offset (the same convention as prop_action_entry);
 - the entry kind/pose = what the server plays at arrival; duration_s = the
@@ -99,7 +100,7 @@ class MotionPlan(unittest.TestCase):
         self.assertEqual(len(motion['paces_m_s_real']), len(motion['waypoints']) - 1)
         for pace, a, b in zip(motion['paces_m_s_real'], journey['waypoints'], journey['waypoints'][1:]):
             if math.dist(a[:2], b[:2]) > 0:
-                self.assertAlmostEqual(pace, speed * 2, places=3)
+                self.assertAlmostEqual(pace, speed, places=3)
         self.assertEqual(motion['access'], {k: float(plan['access'][k]) for k in ('x', 'y', 'z', 'yaw')})
         anchor = plan['entry_anchor']
         offset = float(anchor.get('root_offset', 0))
@@ -173,7 +174,7 @@ class MotionPlan(unittest.TestCase):
         observer = F.actor(target['location_id'], at=(2, 5))
         local = _local_prop_approach(name, observer, F.C.get_character_profile(name),
                                      F.C.get_character_profile(observer), journey, {name},
-                                     F.game_time(), 0, 1)
+                                     F.timeutils.motion_time(), 1.0)
         self.assertIsNotNone(local)
         self.assertEqual(local['waypoints'][0], [seat['x'], seat['z']])
         self.assertEqual(local['floor_y'], journey['floor_y'])

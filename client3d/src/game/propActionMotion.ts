@@ -85,10 +85,12 @@ export function motionEntrySeconds(plan: import('@anima/player-ui/propActions').
   return Math.max(0, elapsedS - seconds);
 }
 
-export function entryPhase(entry: { elapsed_game_s: number; duration_game_s: number;
-  game_seconds_per_real_second: number }, ageS: number): number {
-  return Math.min(1, Math.max(0, (entry.elapsed_game_s + Math.max(0, ageS)
-    * Math.max(0, entry.game_seconds_per_real_second)) / entry.duration_game_s));
+/** Entry clip progress 0..1: the server's real seconds as of the poll plus the
+ *  real time since, at the server's clock rate (1 playing, 0 frozen). */
+export function entryPhase(entry: { elapsed_s: number; duration_s: number;
+  clock_rate: number }, ageS: number): number {
+  return Math.min(1, Math.max(0, (entry.elapsed_s + Math.max(0, ageS)
+    * Math.max(0, entry.clock_rate)) / entry.duration_s));
 }
 
 /** Support correction follows the measured clip's own vertical body motion,
@@ -102,10 +104,10 @@ export function entrySupportLift(firstY: number, lastY: number, currentY: number
   return lift * Math.max(0, Math.min(1, (currentY - firstY) / span));
 }
 
-export function entryIdentity(entry: {kind: string; started_game_s: number;
+export function entryIdentity(entry: {kind: string; started_s: number;
   access: {x:number;y:number;z:number;yaw:number}; anchor: {x:number;y:number;z:number;yaw:number}}): string {
   const a = entry.access, b = entry.anchor;
-  return `${entry.kind}|${entry.started_game_s}|${a.x},${a.y},${a.z},${a.yaw}|${b.x},${b.y},${b.z},${b.yaw}`;
+  return `${entry.kind}|${entry.started_s}|${a.x},${a.y},${a.z},${a.yaw}|${b.x},${b.y},${b.z},${b.yaw}`;
 }
 
 /** Cancellation is an actual awaited mutation, never a position-write side effect. */

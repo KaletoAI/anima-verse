@@ -4,29 +4,35 @@
 Usage: ./.venv/bin/python scripts/smoke_travel_beat.py
 
 Runs on a private temp storage (paths.init before any world-DB import); every
-DB reader is patched, nothing is composed for real.
+DB reader is patched, nothing is composed for real. The MOTION clock
+(``timeutils.motion_time`` / ``motion_rate`` — real seconds the world has run
+unfrozen) is pinned; movement runs in REAL time since 2026-11-05
+(plan-bewegung-echtzeit.md), so the game clock's factor appears below only to
+show that it changes nothing about a walk or an entry clip.
 
-Hand-derived expectations (fixed tick 5 s, early beat +0.1 s):
+Hand-derived expectations (fixed tick 5 s, early beat +0.1 s, motion now
+M = 1000.0, a 1.4 m leg baked at 1.4 m/s = 1 real second):
 - no journeys                                   -> 5.0
-- approach, 1 game s to go, factor 1            -> 1 + 0.1 = 1.1
-- the same at factor 2 (game runs twice as fast) -> 1/2 + 0.1 = 0.6
+- approach, 1 real s to go, factor 1            -> 1 + 0.1 = 1.1
+- the same at factor 4 (real time, unchanged)   -> 1.1
 - an overland journey 1 s from arrival           -> 5.0 (fixed beat only)
 - an approach already arrived but not settled    -> 0.1 once, then 5.0
-- a frozen world (factor 0)                      -> 5.0
-- a run's entry clip ends in 2 game s, factor 1  -> 2 + 0.1 = 2.1
-- the same at factor 2                           -> 2/2 + 0.1 = 1.1
+- a frozen world (motion rate 0)                 -> 5.0
+- a run's entry clip ends in 2 real s            -> 2 + 0.1 = 2.1
+- the same at factor 4                           -> 2.1 (due_in_s is REAL seconds)
 - an entry already overdue                       -> 0.1
 The ticker advances the runs only when a step is due (due <= 0).
-due_in_game_s, now = last stamp + 1 s:
+due_in_s (REAL seconds), motion now = last_motion + 1 s, game now = last
+game stamp + 1 game s:
 - entry clips 2 s and 3 s, 1 s elapsed           -> max(2, 3) - 1 - 1 = 1
-- combined phase 5 s, 2 s elapsed                -> 5 - 2 - 1 = 2
-- the earliest wins                              -> 1; nothing timed -> None
-An approach starts on the first WHOLE game second >= exact now + max(exit
-clip, 0.3 s lead) x factor (game time 1000, fraction 0.4 unless stated):
-- no exit clip, factor 1     -> ceil(1000.4 + 0.3)  = 1001
-- exit 2.23 s, factor 10     -> ceil(1000.4 + 22.3) = 1023
-- fraction -0.2, factor 1    -> ceil(999.8 + 0.3)   = 1001
-- frozen (factor 0)          -> lead unscaled: ceil(1000.4 + 0.3) = 1001
+- the same at factor 4                           -> 1 (entry = motion clock)
+- combined phase 5 game s, 2 elapsed, factor 1   -> (5 - 2 - 1) / 1 = 2
+- the same at factor 2                           -> (5 - 2 - 1) / 2 = 1
+- the earliest wins (factor 1)                   -> 1; nothing timed -> None
+An approach starts the exit clip, and at least the 0.3 s lead, after the
+motion now (``_approach_start``, rounded UP to the millisecond; M = 1000.0):
+- no exit clip               -> 1000.3
+- exit 2.23 s, at factor 1 and factor 10 alike -> 1002.23
 A woken ticker starts its next pass at once instead of after its 5 s sleep.
 places._compose and room_stand.room_geometry compose once per scene
 fingerprint, recompose when it moves, and hand out private copies.
@@ -43,11 +49,12 @@ from app.core import paths
 
 paths.init(Path(tempfile.mkdtemp(prefix="smoke-travel-beat-")))
 
-from app.core import places, room_stand, travel_engine as T  # noqa: E402
+from app.core import places, room_stand, timeutils, travel_engine as T  # noqa: E402
 from app.core.game_time import GameTime  # noqa: E402
 
 NOW = GameTime.parse("Y0003-D054T11:00:00")
 LATER = GameTime.parse("Y0003-D054T11:00:01")
+M = 1000.0
 failures = []
 
 
@@ -57,9 +64,9 @@ def check(label, ok, detail=""):
         failures.append(label)
 
 
-def row(journey_id, *, approach=True, started=NOW):
-    # 1.4 m at 1.4 m/s: arrival 1 game second after the start.
-    journey = dict(journey_id=journey_id, started_at_game=started.canonical(),
+def row(journey_id, *, approach=True, started=M):
+    # 1.4 m at 1.4 m/s: arrival 1 real second after the start.
+    journey = dict(journey_id=journey_id, started_at_s=started,
                    waypoints=[[0.0, 0.0, 0.0], [1.4, 0.0, 1.0]])
     if approach:
         journey["approach_target"] = {"location_id": "l", "room_id": "r"}
@@ -72,17 +79,25 @@ class Engine:
     def __init__(self, due):
         self.due, self.advanced = due, []
 
-    def due_in_game_s(self, now):
+    def due_in_s(self, now):
         return self.due
 
     def advance(self, now):
         self.advanced.append(now)
 
 
-def beat(rows, *, factor=1.0, now=NOW, engine=None):
+def clocks(*, factor=1.0, rate=1.0, motion=M, game=NOW):
+    """Pin the motion clock, its rate and the game clock (+ its factor)."""
+    return (patch.object(timeutils, "motion_time", return_value=motion),
+            patch.object(timeutils, "motion_rate", return_value=rate),
+            patch.object(timeutils, "game_speed_factor", return_value=factor),
+            patch.object(T, "game_time", return_value=game))
+
+
+def beat(rows, *, factor=1.0, rate=1.0, motion=M, engine=None):
+    c = clocks(factor=factor, rate=rate, motion=motion)
     with patch("app.models.character.list_active_journeys", return_value=rows), \
-            patch.object(T, "game_speed_factor", return_value=factor), \
-            patch.object(T, "game_time", return_value=now), \
+            c[0], c[1], c[2], c[3], \
             patch.object(T, "_prop_action_engine", return_value=engine):
         return T._next_beat_s()
 
@@ -92,25 +107,25 @@ def beats():
     check("no journeys -> fixed 5 s", beat([]) == 5.0, beat([]))
     got = beat([row("a")])
     check("approach 1 s out, factor 1 -> 1.1 s", abs(got - 1.1) < 1e-9, got)
-    got = beat([row("a")], factor=2.0)
-    check("approach 1 s out, factor 2 -> 0.6 s", abs(got - 0.6) < 1e-9, got)
+    got = beat([row("a")], factor=4.0)
+    check("approach 1 s out, factor 4 -> still 1.1 s (real time)", abs(got - 1.1) < 1e-9, got)
     got = beat([row("o", approach=False)])
     check("overland journey keeps the fixed beat", got == 5.0, got)
-    got = beat([row("a")], factor=0.0)
+    got = beat([row("a")], rate=0.0)
     check("frozen world keeps the fixed beat", got == 5.0, got)
-    first = beat([row("z")], now=LATER)
-    second = beat([row("z")], now=LATER)
+    first = beat([row("z")], motion=M + 1)
+    second = beat([row("z")], motion=M + 1)
     check("arrived approach gets ONE early beat, then the fixed one",
           (first, second) == (0.1, 5.0), (first, second))
-    beat([], now=LATER)
+    beat([], motion=M + 1)
     check("finished journeys leave the early-beat set", not T._early_beats, T._early_beats)
 
 
 def entry_beats():
     got = beat([], engine=Engine(2.0))
-    check("entry ends in 2 game s, factor 1 -> 2.1 s", abs(got - 2.1) < 1e-9, got)
-    got = beat([], factor=2.0, engine=Engine(2.0))
-    check("entry ends in 2 game s, factor 2 -> 1.1 s", abs(got - 1.1) < 1e-9, got)
+    check("entry ends in 2 real s, factor 1 -> 2.1 s", abs(got - 2.1) < 1e-9, got)
+    got = beat([], factor=4.0, engine=Engine(2.0))
+    check("entry ends in 2 real s, factor 4 -> 2.1 s", abs(got - 2.1) < 1e-9, got)
     got = beat([], engine=Engine(-0.5))
     check("an overdue entry -> 0.1 s", got == 0.1, got)
     check("no timed run keeps the fixed beat", beat([], engine=Engine(None)) == 5.0)
@@ -125,29 +140,33 @@ def entry_beats():
 def due_steps():
     from app.core import prop_action_engine as A
     stamp = NOW.canonical()
-    entry = dict(status="approaching", phase="entry", definition=dict(ability="pose"),
-                 data=dict(last_game=stamp, entry_elapsed=1.0,
-                           entries={"a": dict(duration_game_s=2), "b": dict(duration_game_s=3)}))
-    combined = dict(status="active", phase="drink",
+    base = dict(actor="a", members=[])
+    entry = dict(base, status="approaching", phase="entry", definition=dict(ability="pose"),
+                 data=dict(last_game=stamp, last_motion=M, entry_elapsed=1.0,
+                           entries={"a": dict(duration_s=2), "b": dict(duration_s=3)}))
+    combined = dict(base, status="active", phase="drink",
                     definition=dict(ability="combined", phases=[dict(id="prepare", duration_game_s=1),
                                                                dict(id="drink", duration_game_s=5)]),
-                    data=dict(last_game=stamp, phase_elapsed=2.0))
-    walking = dict(status="approaching", phase="", definition=dict(ability="pose"),
-                   data=dict(last_game=stamp, elapsed=0.0))
-    for runs, expected in (([entry], 1), ([combined], 2), ([combined, entry, walking], 1), ([walking], None)):
-        with patch.object(A.store, "live_runs", return_value=runs):
-            got = A.due_in_game_s(LATER)
-        check(f"due_in_game_s -> {expected}", got == expected, got)
+                    data=dict(last_game=stamp, last_motion=M, phase_elapsed=2.0))
+    walking = dict(base, status="approaching", phase="", definition=dict(ability="pose"),
+                   data=dict(last_game=stamp, last_motion=M, elapsed=0.0))
+    for runs, factor, expected in (([entry], 1.0, 1), ([entry], 4.0, 1), ([combined], 1.0, 2),
+                                   ([combined], 2.0, 1), ([combined, entry, walking], 1.0, 1),
+                                   ([walking], 1.0, None)):
+        with patch.object(A.store, "live_runs", return_value=runs), \
+                patch.object(timeutils, "motion_time", return_value=M + 1), \
+                patch.object(A, "game_speed_factor", return_value=factor):
+            got = A.due_in_s(LATER)
+        check(f"due_in_s at factor {factor} -> {expected}", got == expected, got)
 
 
 def approach_start():
-    for fraction, exit_s, factor, expected in ((0.4, 0.0, 1.0, 1001), (0.4, 2.23, 10.0, 1023),
-                                               (-0.2, 0.0, 1.0, 1001), (0.4, 0.0, 0.0, 1001)):
-        with patch("app.core.timeutils.game_time_exact", return_value=(GameTime(1000), fraction)), \
-                patch.object(T, "game_speed_factor", return_value=factor):
-            got = T._approach_start(exit_s).total_seconds
-        check(f"approach start fraction {fraction} exit {exit_s} factor {factor} -> {expected}",
-              got == expected, got)
+    for exit_s, factor, expected in ((0.0, 1.0, 1000.3), (2.23, 1.0, 1002.23), (2.23, 10.0, 1002.23)):
+        with patch.object(timeutils, "motion_time", return_value=M), \
+                patch.object(timeutils, "game_speed_factor", return_value=factor):
+            got = T._approach_start(exit_s)
+        check(f"approach start exit {exit_s} factor {factor} -> {expected}",
+              abs(got - expected) < 1e-9, got)
 
 
 def wake():

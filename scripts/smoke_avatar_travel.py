@@ -26,12 +26,14 @@ Rules every expectation below is derived from BY HAND:
     reachable would produce a perfectly walkable journey — pinned below so
     the route can never quietly stop applying the gate. The ticker's
     arrival gate stays the SECOND net (Task 3), not the first.
-  * ``journey_state`` is a pure function of the GAME clock, which is pinned
-    here (``set_game_factor(0.0)`` + ``set_game_time(GameTime)``) so the ETA
-    is an exact statement, not a race against wall time. Game time is the
-    world calendar: the clock is pinned to ``Y0001-D001T12:00:00`` and every
-    arrival stamp is canonical, never an ISO datetime and never in a
-    timezone.
+  * ``journey_state`` is a pure function of the MOTION clock (real seconds
+    the world has run unfrozen; movement runs in real time since 2026-11-05,
+    plan-bewegung-echtzeit.md); the calendar arrival is its projection
+    ``journey_eta`` = game now + remaining real seconds × factor. Both clocks
+    are pinned: the SYSTEM clock (``timeutils.utc_now``) stands still and the
+    game clock is set to ``Y0001-D001T12:00:00`` at factor 1, so the ETA is
+    an exact statement, not a race against wall time. Every arrival stamp is
+    canonical, never an ISO datetime and never in a timezone.
   * The grid compass is GONE: ``compute_avatar_neighbors``,
     ``move_avatar_step``, ``neighbor_access`` and the two ``/world/avatar/*``
     routes existed for a world of square cells that E1 deleted. Deletion
@@ -54,11 +56,15 @@ Hand-derived expectations:
 
   [1] HOME → MARKET starts a journey: the answer carries
       ``journey.target_id`` = MARKET, the ETA as the CANONICAL game stamp of
-      ``journey_state(...)['eta_game']`` plus the two display strings the
+      ``journey_eta(journey_state(...))`` plus the two display strings the
       server renders from it (``eta_hhmm``, ``eta_label`` — one vocabulary
       with the worldmap block, § A11) and the walked distance; the profile holds a v2 journey (waypoints, no ``path``)
       with ``movement_target`` = MARKET, and the avatar still STANDS in
       HOME — the ticker performs arrivals, the route does not.
+      By hand: the route from (0,0) to MARKET's opening (95,0) is at least
+      the straight 95 m, ≥ 67.9 real s at 1.4 m/s (> 60 s); any detour stays
+      far below the 168 m that would cross 120 s — so at factor 1 the ETA is
+      12:01:xx, ``eta_hhmm`` "12:01".
 
   [2] ``POST /play/travel/cancel`` drops journey + movement target and
       reports the abandoned target; a second call answers "nothing to
@@ -135,9 +141,10 @@ db.init_schema()
 from fastapi import HTTPException  # noqa: E402
 
 from app.core import travel_engine  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from app.core import timeutils  # noqa: E402
 from app.core.game_time import GameTime  # noqa: E402
-from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
-                                set_game_time)
+from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.party_engine import add_to_party  # noqa: E402
 from app.models import terrain  # noqa: E402
 from app.models.account import set_active_character  # noqa: E402
@@ -246,7 +253,11 @@ def new_character(name: str, location_id: str, x: float, z: float,
 
 
 # ── the world ───────────────────────────────────────────────────────────
-set_game_factor(0.0)
+# The SYSTEM clock stands still, so the game clock (factor 1) and the motion
+# clock do too — every stamp below is exact.
+_REAL = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
+timeutils.utc_now = lambda: _REAL
+set_game_factor(1.0)
 set_game_time(START_GT)
 
 HOME = place("Smoke Home", 0.0, 0.0, "S")
@@ -290,14 +301,16 @@ def main() -> int:
         check("the answered target name", block.get("target_name"),
               "Smoke Market")
         state = travel_engine.journey_state(
-            journey["waypoints"], journey["started_at_game"], game_time())
+            journey["waypoints"], journey["started_at_s"],
+            timeutils.motion_time())
         # ONE vocabulary with the worldmap block (§ A11, E3 Task 6):
         # eta_game is the CANONICAL game stamp in both payloads, and both
         # render the display strings beside it server-side — no client ever
         # slices a stamp.
-        eta = GameTime.parse(state["eta_game"])
+        eta = travel_engine.journey_eta(state)
         check("the answered eta_game (canonical)", block.get("eta_game"),
-              state["eta_game"])
+              eta.canonical())
+        check("the hand-derived arrival minute", block.get("eta_hhmm"), "12:01")
         check("the answered ETA as game wall-clock time",
               block.get("eta_hhmm"), eta.time_hhmm())
         check("the answered ETA label", block.get("eta_label"),
@@ -421,10 +434,11 @@ def main() -> int:
     check("the travelling target name", trav.get("target_name"), "Smoke Market")
     journey = travel_engine.get_journey("demo_avatar")
     state = travel_engine.journey_state(
-        journey["waypoints"], journey["started_at_game"], game_time())
-    check("the canonical ETA", trav.get("eta_game"), state["eta_game"])
+        journey["waypoints"], journey["started_at_s"], timeutils.motion_time())
+    eta = travel_engine.journey_eta(state)
+    check("the canonical ETA", trav.get("eta_game"), eta.canonical())
     check("the ETA in game wall-clock time", trav.get("eta_hhmm"),
-          GameTime.parse(state["eta_game"]).time_hhmm())
+          eta.time_hhmm())
     check("the total distance", trav.get("total_m"), state["total_m"])
     play_travel_cancel(user=USER)
 

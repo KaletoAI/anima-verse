@@ -154,6 +154,7 @@ import inspect  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 from app.core import character_ops, world_ops  # noqa: E402
+from app.core.timeutils import motion_time  # noqa: E402
 from app.core.outfit_compliance import apply_outfit_compliance  # noqa: E402
 from app.core.party_engine import add_to_party, get_party_of  # noqa: E402
 from app.models import world  # noqa: E402
@@ -295,7 +296,7 @@ prof.update({
     "movement_target": MARKET_ID,
     "journey": {"target": MARKET_ID,
                 "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
-                "started_at_game": "Y0001-D001T12:00:00",
+                "started_at_s": motion_time(),
                 "speed_m_s": 1.0, "entry_edge": None},
     "pose_key": "walking", "pose_flavor": "strolling to the market",
 })

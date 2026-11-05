@@ -105,6 +105,7 @@ db.init_schema()
 
 from app.core.activity_engine import apply_effects  # noqa: E402
 from app.core.keyed_lock import keyed_lock  # noqa: E402
+from app.core.timeutils import motion_time  # noqa: E402
 from app.models.character import (get_character_profile,  # noqa: E402
                                   save_character_profile, set_movement_target)
 
@@ -133,7 +134,7 @@ def seed():
         "movement_target": "market",
         "journey": {"target": "market",
                     "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
-                    "started_at_game": "Y0001-D001T12:00:00",
+                    "started_at_s": motion_time(),
                     "speed_m_s": 1.0, "entry_edge": None},
     }, create_new=True)
 

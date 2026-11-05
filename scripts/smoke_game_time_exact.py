@@ -6,8 +6,10 @@ factor 2, real +10.3 -> elapsed 20.6, rounded 21, fraction -0.4.
 factor 1, real +7.2 -> 7 + 0.2; frozen or factor 0 -> 0 + 0.
 Real -1.2 -> rounded -1, G0 becomes 99, fraction -0.2.
 Anchor 1 at real -1.2 and anchor 0 at -0.2 both clamp exact time to
-zero, so their fraction is 0. A 30 m / 30 s journey at 21 - 0.4 s
-has walked 20.6 m; a start at G0+25 is still pending at G0+21.2.
+zero, so their fraction is 0. Journeys run on the MOTION clock (float real
+seconds, no rounding — plan-bewegung-echtzeit.md): a 30 m / 30 s journey
+started at motion second 100.0 has walked 120.6 − 100 = 20.6 m at 120.6; a
+start at 125.0 is still pending at 121.2 (progress 0.0).
 The missing API fails on Task 1 commit 0d4c1c88.
 """
 import sys
@@ -58,10 +60,8 @@ def main():
                 check(label + " fraction", round(frac, 6), fraction)
                 check(label + " game_time unchanged", tu.game_time(), gt)
         wps = [[0, 0, 0], [30, 0, 30]]
-        check("offset progress", journey_state(wps, g0.canonical(),
-              g0 + GameDuration(21), offset_s=-0.4)["progress_m"], 20.6)
-        check("not started", journey_state(wps, (g0 + GameDuration(25)).canonical(),
-              g0 + GameDuration(21), offset_s=0.2)["progress_m"], 0.0)
+        check("exact motion progress", journey_state(wps, 100.0, 120.6)["progress_m"], 20.6)
+        check("not started", journey_state(wps, 125.0, 121.2)["progress_m"], 0.0)
         print(f"OK — {count} checks passed")
 
 
