@@ -109,7 +109,12 @@ def _get_diary_path(character_name: str) -> Path:
 
 
 def _load_stored(character_name: str) -> List[Dict[str, Any]]:
-    """Load stored diary entries (currently only daily_summary) from DB."""
+    """Load stored diary entries (currently only daily_summary) from DB.
+
+    Diary entries belong to the MIND (linked characters): a body reads its
+    leader's diary."""
+    from app.core.linked_characters import mind_of
+    character_name = mind_of(character_name)
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -136,7 +141,7 @@ def _load_stored(character_name: str) -> List[Dict[str, Any]]:
             entries.append(entry)
         return entries
     except Exception as e:
-        logger.warning("_load_stored diary DB-Fehler fuer %s: %s", character_name, e)
+        logger.warning("_load_stored diary DB error for %s: %s", character_name, e)
         # Fallback: JSON file
         path = _get_diary_path(character_name)
         if not path.exists():
@@ -150,7 +155,9 @@ def _load_stored(character_name: str) -> List[Dict[str, Any]]:
 
 
 def _save_stored(character_name: str, entries: List[Dict[str, Any]]) -> None:
-    """Save diary entries to DB and JSON backup."""
+    """Save the MIND's diary entries to the DB."""
+    from app.core.linked_characters import family_of, mind_of
+    character_name = mind_of(character_name)
     try:
         with transaction() as conn:
             # Load existing db_id -> str_id mapping
@@ -205,10 +212,10 @@ def _save_stored(character_name: str, entries: List[Dict[str, Any]]) -> None:
                         (character_name, ts, game_ts, content, tags, meta_blob),
                     )
     except Exception as e:
-        logger.error("_save_stored diary DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("_save_stored diary DB error for %s: %s", character_name, e)
         return
     from app.core import sync_topics
-    sync_topics.avatars([character_name], "self")
+    sync_topics.avatars(family_of(character_name), "self")
 
 
 def _day_start_stamp(day_key: str) -> str:
@@ -242,14 +249,21 @@ def add_summary(character_name: str, content: str, day_key: str) -> Dict[str, An
     ``day_key`` is the GAME day the entry is about (``Y0002-D109``); the game
     stamp is that day's start, so the entry sorts and filters with it. The
     system ``timestamp`` records only when the text was written.
+
+    The entry goes into the MIND's diary; a linked body that wrote it is
+    recorded as ``metadata.body``.
     """
+    from app.core.linked_characters import mind_of
+    metadata: Dict[str, Any] = {"date": day_key}
+    if mind_of(character_name) != character_name:
+        metadata["body"] = character_name
     entry = {
         "id": uuid.uuid4().hex[:8],
         "type": "daily_summary",
         "content": content,
         "timestamp": utc_now_iso(),
         "game_ts": _day_start_stamp(day_key) or game_time().canonical(),
-        "metadata": {"date": day_key},
+        "metadata": metadata,
     }
     stored = _load_stored(character_name)
     stored.append(entry)
@@ -545,7 +559,7 @@ def _render_unknown_fallback(state_type: str, value: str,
                               if v not in (None, "", []))
         if meta_str:
             content += f" ({meta_str})"
-    logger.debug("Diary-Fallback fuer unbekannten state-type '%s'", state_type)
+    logger.debug("Diary fallback for unknown state type '%s'", state_type)
     return {"type": state_type, "content": content, "timestamp": ts, "metadata": meta}
 
 
@@ -567,7 +581,7 @@ def _process_state_entry(e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         return renderer(value, meta, ts)
     except Exception as ex:
-        logger.warning("Diary-Renderer fuer '%s' fehlgeschlagen: %s",
+        logger.warning("Diary renderer for '%s' failed: %s",
                        change_type, ex)
         return _render_unknown_fallback(change_type, value, meta, ts)
 

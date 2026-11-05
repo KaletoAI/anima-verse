@@ -31,7 +31,7 @@ def discover_photo(photographer: str, filename: str, subjects: list[str],
     with keyed_lock("secret_photo", (photographer, filename)):
         secret = next((s for s in secrets.list_secrets(photographer, strict=True)
                        if s.get("source_ref") == ref), None)
-        if secret and watcher in secret.get("known_by", []):
+        if secret and secrets.knows(secret, watcher):
             return False
         if secret is None:
             secret = secrets.add_secret(photographer,

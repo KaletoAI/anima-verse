@@ -15,6 +15,7 @@ from app.core.i18n import localized, t
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.timeutils import game_time
+from app.core.linked_characters import mind_of
 from app.models import character, inventory, secrets
 from app.models.memory import add_memory
 
@@ -178,12 +179,13 @@ def _learn(reader, item, pages, day):
         sid = page.get("secret_id")
         if not sid:
             continue
-        # Serialize the check and first learning across all items of this owner.
+        # Serialize the check and first learning across all items of this owner
+        # (its MIND — the key the secrets model locks; linked characters).
         # Reserve the daily slot atomically, then release ALL locks before memory.
         remember = False
-        with keyed_lock("secrets", owner):
+        with keyed_lock("secrets", mind_of(owner)):
             secret = secrets.get_secret(owner, sid)
-            if not secret or reader in secret.get("known_by", []):
+            if not secret or secrets.knows(secret, reader):
                 continue
             if not secrets.add_known_by(owner, sid, reader, discovered=True):
                 continue
@@ -397,7 +399,7 @@ def npc_read(reader: str, item_id: str) -> dict:
         for page in reversed(pages):
             sid = page.get("secret_id")
             secret = secrets.get_secret(owner, sid) if sid else None
-            if secret and sid not in seen and reader not in secret.get("known_by", []):
+            if secret and sid not in seen and not secrets.knows(secret, reader):
                 unknown.append(page)
                 seen.add(sid)
                 if len(unknown) == NPC_PAGES:

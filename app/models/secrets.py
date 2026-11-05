@@ -2,6 +2,13 @@
 
 Track a character's own secrets and what it knows about others.
 Prompt construction includes both owned secrets and known information.
+
+**Secrets belong to the MIND** (linked characters,
+``app.core.linked_characters``): the secrets a character keeps are stored
+under ``mind_of(owner)``, and a knower or discoverer is recorded as
+``mind_of(observer)`` — whichever body acts. A secret a linked body created
+carries ``body`` = that body, so the owner's prompt marks it "(as <body>)" and
+a knower reads "About <body>: …" (the body is who they know it about).
 """
 import json
 import uuid
@@ -12,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
+from app.core.linked_characters import mind_of
 
 logger = get_logger("secrets")
 
@@ -74,8 +82,28 @@ def _row_to_secret(row, *, strict: bool = False) -> Dict[str, Any]:
     return meta
 
 
+def _minds(names: Any) -> List[str]:
+    """Knower names as minds: each through ``mind_of``, order kept, deduplicated."""
+    out: List[str] = []
+    for name in names or []:
+        if not isinstance(name, str):
+            continue
+        mind = mind_of(name)
+        if mind not in out:
+            out.append(mind)
+    return out
+
+
+def knows(secret: Dict[str, Any], name: str) -> bool:
+    """Whether ``name`` is among a secret's knowers — through its mind, so a
+    linked body knows what its leader knows. Use it instead of a plain
+    ``name in secret["known_by"]``."""
+    return bool(name) and mind_of(name) in (secret or {}).get("known_by", [])
+
+
 def _load_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str, Any]]:
-    """Load a character's secrets; strict reads propagate storage/JSON errors."""
+    """Load the secrets of a character's MIND; strict reads propagate storage/JSON errors."""
+    character_name = mind_of(character_name)
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -87,12 +115,13 @@ def _load_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str
     except Exception as e:
         if strict:
             raise
-        logger.error("_load_secrets DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("_load_secrets DB error for %s: %s", character_name, e)
         return []
 
 
 def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
-    """Save all of a character's secrets to the DB."""
+    """Save all secrets of a character's MIND to the DB."""
+    character_name = mind_of(character_name)
     try:
         with transaction() as conn:
             # Load existing rows as DB ID -> string ID.
@@ -113,7 +142,7 @@ def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
 
             new_str_ids = {s.get("id") for s in secrets if s.get("id")}
 
-            # Geloeschte entfernen
+            # Remove deleted rows
             for db_id, str_id in db_to_str.items():
                 if str_id not in new_str_ids:
                     conn.execute("DELETE FROM secrets WHERE id=?", (db_id,))
@@ -142,7 +171,7 @@ def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
                         (character_name, secret.get("content", ""), visibility, meta_str),
                     )
     except Exception as e:
-        logger.error("_save_secrets DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("_save_secrets DB error for %s: %s", character_name, e)
 
 
 def list_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str, Any]]:
@@ -151,7 +180,7 @@ def list_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str,
 
 
 def get_secret(character_name: str, secret_id: str) -> Optional[Dict[str, Any]]:
-    """Gibt ein einzelnes Geheimnis zurueck."""
+    """One secret of the character's mind, or None."""
     secrets = _load_secrets(character_name)
     for s in secrets:
         if s.get("id") == secret_id:
@@ -169,7 +198,10 @@ def add_secret(character_name: str,
     source: str = "manual",
     known_by: Optional[List[str]] = None,
     source_ref: str = "") -> Dict[str, Any]:
-    """Create a secret for a character."""
+    """Create a secret for a character — stored under its mind; a linked
+    body is recorded as the secret's ``body``."""
+    actor = character_name
+    character_name = mind_of(actor)
     with keyed_lock("secrets", character_name):
         if category not in VALID_CATEGORIES:
             category = "personal"
@@ -185,7 +217,7 @@ def add_secret(character_name: str,
             "content": content.strip(),
             "category": category,
             "severity": severity,
-            "known_by": known_by or [],
+            "known_by": _minds(known_by),
             "discovered_by": [],
             "created_at": now,
             "discovered_at": None,
@@ -196,10 +228,12 @@ def add_secret(character_name: str,
             "related_location": related_location or None,
             "consequences_if_revealed": consequences_if_revealed.strip(),
         }
+        if actor != character_name:
+            secret["body"] = actor
 
         secrets.append(secret)
         _save_secrets(character_name, secrets)
-        logger.info("Secret erstellt: %s fuer %s (severity=%d, category=%s)",
+        logger.info("Secret created: %s for %s (severity=%d, category=%s)",
                     secret["id"], character_name, severity, category)
         return secret
 
@@ -207,7 +241,9 @@ def add_secret(character_name: str,
 def update_secret(character_name: str,
     secret_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update editable fields of an existing secret."""
+    """Update editable fields of an existing secret. ``known_by`` /
+    ``discovered_by`` names are stored as minds."""
+    character_name = mind_of(character_name)
     with keyed_lock("secrets", character_name):
         secrets = _load_secrets(character_name)
         for s in secrets:
@@ -220,25 +256,27 @@ def update_secret(character_name: str,
                 }
                 for key, value in updates.items():
                     if key in allowed:
-                        s[key] = value
+                        s[key] = (_minds(value) if key in ("known_by", "discovered_by")
+                                  else value)
                 # Validate editable values.
                 if s.get("category") not in VALID_CATEGORIES:
                     s["category"] = "personal"
                 s["severity"] = max(1, min(5, s.get("severity", 2)))
                 _save_secrets(character_name, secrets)
-                logger.info("Secret aktualisiert: %s", secret_id)
+                logger.info("Secret updated: %s", secret_id)
                 return s
         return None
 
 
 def delete_secret(character_name: str, secret_id: str) -> bool:
     """Delete a secret by id."""
+    character_name = mind_of(character_name)
     with keyed_lock("secrets", character_name):
         secrets = _load_secrets(character_name)
         new_secrets = [s for s in secrets if s.get("id") != secret_id]
         if len(new_secrets) < len(secrets):
             _save_secrets(character_name, new_secrets)
-            logger.info("Secret geloescht: %s", secret_id)
+            logger.info("Secret deleted: %s", secret_id)
             return True
         return False
 
@@ -249,8 +287,11 @@ def add_known_by(character_name: str,
     discovered: bool = False) -> bool:
     """Add a knower, stamping first learning with game time.
 
-    discovered=True marks independent discovery.
+    discovered=True marks independent discovery. The owner and the knower
+    are both taken as their minds (a body learns for its leader).
     """
+    character_name = mind_of(character_name)
+    knower_name = mind_of(knower_name)
     with keyed_lock("secrets", character_name):
         secrets = _load_secrets(character_name)
         for s in secrets:
@@ -268,7 +309,7 @@ def add_known_by(character_name: str,
                     if not s.get("discovered_at"):
                         s["discovered_at"] = utc_now_iso()
                 _save_secrets(character_name, secrets)
-                logger.info("Secret %s: %s weiss jetzt davon (discovered=%s)",
+                logger.info("Secret %s: %s knows it now (discovered=%s)",
                             secret_id, knower_name, discovered)
                 return True
         return False
@@ -276,6 +317,7 @@ def add_known_by(character_name: str,
 
 def delete_secrets_by_ref(character_name: str, source_ref: str) -> int:
     """Delete all secrets with this exact source reference; return the count."""
+    character_name = mind_of(character_name)
     with keyed_lock("secrets", character_name):
         secrets = _load_secrets(character_name)
         remaining = [s for s in secrets if s.get("source_ref", "") != source_ref]
@@ -288,12 +330,20 @@ def delete_secrets_by_ref(character_name: str, source_ref: str) -> int:
 # Secrets about other characters that this observer knows.
 
 def get_known_secrets_about(observer_name: str) -> List[Dict[str, Any]]:
-    """Return secrets about others whose known_by list contains this observer."""
+    """Return secrets about others whose known_by list contains this observer.
+
+    The observer is its MIND; the owners are every character that exists,
+    DORMANT ones included (a dormant leader keeps the secrets its bodies
+    made). ``secret_owner`` is the storing mind; a body-made secret names its
+    body in ``secret["body"]``.
+    """
     from app.models.character import list_available_characters
 
+    observer_name = mind_of(observer_name)
     known = []
-    all_chars = list_available_characters()
-    for char_name in all_chars:
+    # Each MIND once: a linked body's secrets are stored under its leader.
+    all_minds = dict.fromkeys(mind_of(n) for n in list_available_characters(include_dormant=True))
+    for char_name in all_minds:
         if char_name == observer_name:
             continue
         secrets = _load_secrets(char_name)
@@ -311,9 +361,11 @@ def get_known_secrets_about(observer_name: str) -> List[Dict[str, Any]]:
 def known_about_others_block(character_name: str) -> str:
     """Render known secrets with the chat limits and learning order."""
     # Learning stamps precede legacy entries; creation time orders the latter.
+    mind = mind_of(character_name)
+
     def learned_order(entry):
         secret = entry["secret"]
-        stamp = secret.get("known_at", {}).get(character_name)
+        stamp = secret.get("known_at", {}).get(mind)
         return (bool(stamp), stamp or secret.get("created_at") or "")
 
     candidates = sorted(get_known_secrets_about(character_name),
@@ -334,12 +386,13 @@ def known_about_others_block(character_name: str) -> str:
     if known_about_others:
         lines = []
         for entry in known_about_others:
-            owner = entry["secret_owner"]
             s = entry["secret"]
+            # Who the knower knows it ABOUT: the body that made it, if any.
+            owner = s.get("body") or entry["secret_owner"]
             content = (s.get("content") or "").strip()
             if not content:
                 continue
-            discovered = character_name in s.get("discovered_by", [])
+            discovered = mind in s.get("discovered_by", [])
             method = "you discovered this yourself" if discovered else "someone told you"
             sev = s.get("severity", 2)
             lines.append(f"- About {owner}: {content} ({method}, severity {sev}/5)")
@@ -370,7 +423,9 @@ def build_secrets_prompt_section(character_name: str) -> str:
             if not content:
                 continue
             severity_label = SEVERITY_LABELS.get(s.get("severity", 2), "unknown")
-            line = f"- {content} (severity: {severity_label})"
+            body = s.get("body") or ""
+            line = (f"- {'(as ' + body + ') ' if body else ''}{content} "
+                    f"(severity: {severity_label})")
             if s.get("consequences_if_revealed"):
                 line += f" — if revealed: {s['consequences_if_revealed']}"
             visible_knowers = [name for name in s.get("known_by", [])
