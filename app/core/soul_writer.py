@@ -52,8 +52,12 @@ SOUL_FILE_SCHEMA: Dict[str, Dict] = {
 
 
 def get_soul_file_path(character_name: str, file_id: str) -> Path:
+    """The file every reader/writer here uses — the leader's file for a
+    linked character's SHARED section (``linked_characters.soul_owner``)."""
+    from app.core.linked_characters import soul_owner
     from app.models.character import get_character_dir
-    return get_character_dir(character_name) / "soul" / SOUL_FILE_SCHEMA[file_id]["filename"]
+    owner = soul_owner(character_name, file_id)
+    return get_character_dir(owner) / "soul" / SOUL_FILE_SCHEMA[file_id]["filename"]
 
 
 def list_categories(file_id: str) -> List[str]:

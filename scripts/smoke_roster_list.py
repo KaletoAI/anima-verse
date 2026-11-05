@@ -9,7 +9,9 @@ LLM — the route function is called directly.
 
 WHY (DATA-11 of the 2026-09-20 review)
 --------------------------------------
-The answer is ``{name, template, temporary}`` per character. ``template`` is a
+The answer is ``{name, template, temporary, status}`` per character
+(``status`` since the linked-characters work: a DORMANT character is listed
+with ``status "dormant"`` so the admin can edit it and the list shows a badge). ``template`` is a
 COLUMN of the ``characters`` table, ``temporary`` is a property of the TEMPLATE
 (``character_template.template_feature(…, "temporary_npc")``). The handler
 nevertheless loaded a full profile per character AND called
@@ -17,7 +19,7 @@ nevertheless loaded a full profile per character AND called
 template — 80 profile loads and 40 template deepcopies for a 40-character
 roster feeding the Game-Admin roster and the player sidebar.
 
-FIXTURE (a throwaway world, 6 rows in ``characters``)
+FIXTURE (a throwaway world, 7 rows in ``characters``)
 -----------------------------------------------------
 Two templates are written into a throwaway template directory
 (``character_template.get_templates_dir`` is redirected at it — the real
@@ -31,6 +33,7 @@ shared/templates/character is never touched):
     Cid    column "plain-smoke", blob template "temp-smoke"   (the BLOB wins)
     Dee    column "", blob has no template key at all
     Pia    column "temp-smoke", status 'pooled'
+    Eve    column "plain-smoke", status 'dormant'
     _sys   column "temp-smoke", underscore name
 
 EXPECTED, derived by hand from ``get_character_profile`` +
@@ -39,32 +42,36 @@ EXPECTED, derived by hand from ``get_character_profile`` +
   [1] The payload is exactly, in name order (the query orders by name, as
       ``list_available_characters`` did):
         {"characters": [
-           {"name": "Ann", "template": "plain-smoke", "temporary": False},
-           {"name": "Bob", "template": "temp-smoke",  "temporary": True},
-           {"name": "Cid", "template": "temp-smoke",  "temporary": True},
-           {"name": "Dee", "template": "",            "temporary": False}]}
+           {"name": "Ann", "template": "plain-smoke", "temporary": False, "status": ""},
+           {"name": "Bob", "template": "temp-smoke",  "temporary": True,  "status": ""},
+           {"name": "Cid", "template": "temp-smoke",  "temporary": True,  "status": ""},
+           {"name": "Dee", "template": "",            "temporary": False, "status": ""},
+           {"name": "Eve", "template": "plain-smoke", "temporary": False, "status": "dormant"}]}
       Pia is pooled and _sys is no character — the roster gate of
-      ``list_available_characters``. Cid shows the BLOB value because
+      ``list_available_characters``. Eve is DORMANT: out of every roster, but
+      the admin list shows it with its status (spec "Core: dormant status"). Cid shows the BLOB value because
       ``get_character_profile`` only injects the column when the key is absent
       from the blob. Dee has no template at all, so ``template_feature`` falls
       back to "human-default", which this throwaway world does not define ->
       False.
 
-  [2] BYTE-IDENTICAL to the old implementation: the old handler body is
-      re-implemented verbatim in this file and both answers are compared as
-      ``json.dumps(..., sort_keys=False)`` strings.
+  [2] BYTE-IDENTICAL to the old implementation for what it answered: the old
+      handler body is re-implemented verbatim in this file; the new answer
+      without the dormant row and without the ``status`` key is compared with
+      it as ``json.dumps(..., sort_keys=False)`` strings. (The old handler
+      runs on today's ``list_available_characters``, which leaves Eve out.)
 
   [3] THE LOAD COUNTER. ``character.get_character_profile`` is wrapped:
         * new handler:  0 profile loads
         * old handler:  8 loads for these 4 characters — one per character in
           the handler plus one per character inside ``is_temporary_npc`` ->
-          ``template_feature``. (Pia and _sys are filtered by the roster gate
-          before any load.)
+          ``template_feature``. (Pia, Eve and _sys are filtered by the roster
+          gate before any load.)
       The check asserts 0, so this file fails on the old code by construction.
 
   [4] ``get_template`` is called ONCE PER DISTINCT TEMPLATE NAME, not once per
       character: 3 distinct names here (plain-smoke, temp-smoke,
-      human-default) -> at most 3 calls for 4 characters.
+      human-default) -> at most 3 calls for 5 characters.
 """
 import json
 import sys
@@ -113,6 +120,7 @@ PEOPLE = [
     ("Cid", "plain-smoke", "temp-smoke", ""),
     ("Dee", "", None, ""),
     ("Pia", "temp-smoke", None, "pooled"),
+    ("Eve", "plain-smoke", None, "dormant"),
     ("_sys", "temp-smoke", None, ""),
 ]
 
@@ -160,10 +168,11 @@ ch.get_character_profile = counting_get_profile
 ct.get_template = counting_get_template
 
 EXPECTED = {"characters": [
-    {"name": "Ann", "template": "plain-smoke", "temporary": False},
-    {"name": "Bob", "template": "temp-smoke", "temporary": True},
-    {"name": "Cid", "template": "temp-smoke", "temporary": True},
-    {"name": "Dee", "template": "", "temporary": False},
+    {"name": "Ann", "template": "plain-smoke", "temporary": False, "status": ""},
+    {"name": "Bob", "template": "temp-smoke", "temporary": True, "status": ""},
+    {"name": "Cid", "template": "temp-smoke", "temporary": True, "status": ""},
+    {"name": "Dee", "template": "", "temporary": False, "status": ""},
+    {"name": "Eve", "template": "plain-smoke", "temporary": False, "status": "dormant"},
 ]}
 
 print("[1] the payload")
@@ -177,8 +186,11 @@ print("[2] byte-identical to the old handler")
 COUNT["profiles"] = COUNT["templates"] = 0
 old_payload = old_list_characters()
 old_loads = COUNT["profiles"]
+_new_old_shape = {"characters": [
+    {k: r[k] for k in ("name", "template", "temporary")}
+    for r in new_payload["characters"] if r.get("status") != "dormant"]}
 check("same JSON bytes",
-      json.dumps(new_payload, ensure_ascii=False)
+      json.dumps(_new_old_shape, ensure_ascii=False)
       == json.dumps(old_payload, ensure_ascii=False),
       json.dumps(old_payload, ensure_ascii=False))
 
@@ -187,7 +199,7 @@ check("new handler: 0 profile loads", new_loads == 0, f"{new_loads} loads")
 check("old handler: 2 loads per character (8)", old_loads == 8, f"{old_loads} loads")
 
 print("[4] one template lookup per distinct template name")
-check("at most 3 get_template calls for 4 characters",
+check("at most 3 get_template calls for 5 characters",
       new_templates <= 3, f"{new_templates} calls")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")

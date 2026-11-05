@@ -1283,6 +1283,16 @@ def build_profile_payload(character_name: str) -> Dict[str, Any]:
     # value as the control and the one in effect next to it.
     from app.core.field_overrides import active_overrides
     overrides = active_overrides(profile)
+    # A linked character's LOCKED fields come from its leader: the same note
+    # path, marked ``linked_from`` so the editor renders them read-only with
+    # "from <leader>".
+    from app.core.linked_characters import LOCKED_PROFILE_FIELDS, leader_of
+    _leader = leader_of(character_name)
+    if _leader:
+        for _key in LOCKED_PROFILE_FIELDS:
+            _val = profile.get(_key)
+            overrides[_key] = {"value": "" if _val is None else str(_val),
+                               "label": _leader, "linked_from": _leader}
     return {"character": character_name, "profile": profile,
             "field_overrides": overrides}
 
@@ -2272,8 +2282,9 @@ async def create_character_core(request) -> Dict[str, Any]:
         raise HTTPException(status_code=400,
                             detail=localized_message(err, lang))
 
-    # Check if character already exists
-    existing = list_available_characters()
+    # Check if character already exists — EVERY row counts, a dormant or a
+    # pooled character still owns its name.
+    existing = list_available_characters(include_pooled=True)
     if character_name in existing:
         raise HTTPException(status_code=409, detail=t(
             "A character named \"{name}\" already exists.", lang
@@ -2442,10 +2453,10 @@ def build_soul_files(character_name: str) -> Dict[str, Any]:
     """Lists the soul MD files available for this character.
 
     Honors template feature gates. Returns per file: section id, file-default
-    lock status, and whether the file exists.
+    lock status, whether the file exists, and ``shared_from`` — the leader
+    whose file a linked character's shared section is ("" otherwise).
     """
     from app.models.character import get_character_dir, get_character_profile
-    char_dir = get_character_dir(character_name)
 
     # Friendly labels from the template: source_file basename (= section id) ->
     # field label/label_de. So the soul tab shows "Roleplay Rules" instead of
@@ -2471,13 +2482,17 @@ def build_soul_files(character_name: str) -> Dict[str, Any]:
     except Exception:
         pass
 
+    from app.core.linked_characters import soul_owner
     files = []
     for section_id in ("personality", "tasks", "presence", "roleplay_rules",
                         "beliefs", "lessons", "goals", "soul"):
         if not _is_soul_section_enabled(character_name, section_id):
             continue
         meta = _soul_file_meta(section_id)
-        meta["exists"] = (char_dir / meta["path"]).exists()
+        # A linked character's SHARED section is its leader's file.
+        owner = soul_owner(character_name, section_id)
+        meta["shared_from"] = owner if owner != character_name else ""
+        meta["exists"] = (get_character_dir(owner) / meta["path"]).exists()
         _lbl = label_map.get(section_id, {})
         meta["label"] = _lbl.get("label", "")
         meta["label_de"] = _lbl.get("label_de", "")
@@ -2492,9 +2507,11 @@ def read_soul_file(character_name: str, section_id: str) -> Dict[str, Any]:
     if not _is_soul_section_enabled(character_name, section_id):
         raise HTTPException(status_code=403, detail=f"Section '{section_id}' nicht im Template aktiv")
 
+    from app.core.linked_characters import soul_owner
     from app.models.character import get_character_dir
-    char_dir = get_character_dir(character_name)
-    md_path = char_dir / _SOUL_FILE_MAP[section_id]
+    # A linked character's SHARED section is read from its leader's file.
+    owner = soul_owner(character_name, section_id)
+    md_path = get_character_dir(owner) / _SOUL_FILE_MAP[section_id]
 
     raw = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
     sections = _parse_soul_sections(raw)
@@ -2502,6 +2519,7 @@ def read_soul_file(character_name: str, section_id: str) -> Dict[str, Any]:
     return {
         "character": character_name,
         "section": section_id,
+        "shared_from": owner if owner != character_name else "",
         "path": meta["path"],
         "file_default": meta["file_default"],
         "raw": raw,
@@ -2522,6 +2540,12 @@ async def write_soul_file(character_name: str, section_id: str, request) -> Dict
     content = data.get("content", "")
     if not _is_soul_section_enabled(character_name, section_id):
         raise HTTPException(status_code=403, detail=f"Section '{section_id}' nicht im Template aktiv")
+    # A linked character's SHARED section belongs to its leader: edited there.
+    from app.core.linked_characters import soul_owner
+    owner = soul_owner(character_name, section_id)
+    if owner != character_name:
+        raise HTTPException(status_code=409, detail=(
+            f"This section is shared with {owner} — edit it on {owner}."))
 
     from app.models.character import get_character_dir
     char_dir = get_character_dir(character_name)

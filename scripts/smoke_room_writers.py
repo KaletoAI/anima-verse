@@ -49,6 +49,8 @@ KNOWN = {
         "one-time migration onto __ground__ / a storey corridor — no hull, the point stays",
     ("app/core/npc_pool.py", "_unplace"):
         "back into the pool: room '' and the point NULL in the same UPDATE",
+    ("app/core/linked_characters.py", "place_at"):
+        "_place_on_return: the centre, then stand_up in the arrival/leader's room (unplaced: no location, no room)",
     ("app/core/character_ops.py", "build_profile_payload"):
         "a display copy (room id -> name) for a response, never stored",
 }

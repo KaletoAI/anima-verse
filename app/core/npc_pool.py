@@ -143,12 +143,17 @@ def pool_npc(name: str, reason: str = "") -> bool:
     """Move a living temporary NPC into the pool. True when it went in.
 
     Only a temporary NPC can be pooled — an ordinary character has a place in
-    this world and never becomes spare parts.
+    this world and never becomes spare parts. A DORMANT character (a linked
+    family member, ``linked_characters``) is never pooled either.
     """
-    from app.models.character import (POOLED_STATUS, get_character_profile,
+    from app.models.character import (DORMANT_STATUS, POOLED_STATUS,
+                                      get_character_profile, get_character_status,
                                       is_temporary_npc, save_character_profile,
                                       set_character_status)
     if not name or not is_temporary_npc(name):
+        return False
+    if get_character_status(name) == DORMANT_STATUS:
+        logger.warning("pool: '%s' is dormant, not a pool candidate", name)
         return False
     from app.models.character import _interrupt_prop_action
     _interrupt_prop_action(name, "pooled")
@@ -317,10 +322,15 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     """
     from app.core.npc_ops import expiry_stamp, is_permanent_npc
     from app.models.character import (POOLED_STATUS, get_character_profile,
-                                      is_temporary_npc,
+                                      get_character_status, is_temporary_npc,
                                       save_character_profile,
                                       set_character_status)
     if not name or not is_temporary_npc(name):
+        return False
+    # Only a POOLED sheet leaves the pool: a dormant character (a linked
+    # family member) or a living one is never touched from here.
+    if get_character_status(name) != POOLED_STATUS:
+        logger.warning("pool: '%s' is not pooled — not revived", name)
         return False
 
     # Read AND write under the per-character profile lock (DATA-3): the save

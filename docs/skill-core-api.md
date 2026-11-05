@@ -645,7 +645,9 @@ placement; destination-bound shared trips always use timed cross-location travel
 | `get_character_current_location(character_name='', profile=None) -> str` / `get_character_current_room(character_name, profile=None) -> str` | Aufenthaltsort/-raum. Bei laufender Reise ist das die NÄCHSTE Position, nicht das Reiseziel; unterwegs im freien Gelände ist `current_location` leer |
 | `is_character_sleeping(character_name, profile=None) -> bool` | Schläft der Charakter? (nicht erreichbar) |
 | `is_temporary_npc(character_name) -> bool` | Temporärer NPC — hat keine Thought-Turns, `bump` lehnt ihn ab |
-| `list_available_characters(include_pooled=False, *, strict=False) -> List[str]` | Available character names; strict mode propagates roster read failures |
+| `list_available_characters(include_pooled=False, *, include_dormant=False, strict=False) -> List[str]` | Available character names — the roster gate: pooled and dormant characters (`is_out_of_world`) stand nowhere and are left out. `include_dormant=True` adds the dormant ones (existence questions, editors); `include_pooled=True` returns every row (pool bookkeeping, name collisions). Strict mode propagates roster read failures |
+| `character_exists(name) -> bool` | Whether the character exists (case-insensitive). A DORMANT character exists — relationships with and memories of it stay in prompts; a pooled NPC does not |
+| `is_out_of_world(status) -> bool` | Whether a `characters.status` value (`DORMANT_STATUS` `"dormant"`, `POOLED_STATUS` `"pooled"`; the set is `OUT_OF_WORLD_STATUSES`) keeps the character out of the world. In the world = the empty status |
 | `get_character_language(character_name) -> str` | Sprache des Charakters (für Texte, die er selbst schreibt) |
 | `get_character_dir(character_name, *, create=False) -> Path` | Per-Charakter-Storage-Verzeichnis — für Pakete mit eigenen Dateien (markdown_writer schreibt nach `<dir>/documents/<folder>/`) |
 | `get_character_skill_config(character_name, skill_name) -> Dict` / `save_character_skill_config(character_name, skill_name, config)` | Per-Charakter-Skill-Config. Normalerweise nicht direkt rufen — `BaseSkill._get_effective_config` liefert Defaults + Overrides typisiert |
@@ -1574,6 +1576,41 @@ of a name wins, anything else dropped) and checked against `required`. A failed 
 `{"ok": false, "error": ...}` without calling the provider, so the provider
 validates only what is specific to it (uniqueness, references, state).
 
+## Linked characters — `app.core.linked_characters` ✅
+
+One mind in several bodies. A LINKED character (a body) names its LEADING
+character in its profile (`linked_to`, plus `shared_soul_sections`); the leader
+owns the mind. Only one family member stands in the world, the others are
+DORMANT (`app.models.character.DORMANT_STATUS`). A package never re-implements
+any of this — it asks here. Spec:
+`docs/superpowers/specs/2026-11-05-linked-characters-design.md`.
+
+| Name | Contract |
+|---|---|
+| `mind_of(name)` | The mind owner: the leader of a body, otherwise `name` itself. Every mind store (memories, thoughts, secrets, diary) is keyed by it |
+| `leader_of(name)` | The leader a body is linked to, or `None` |
+| `bodies_of(leader)` | The leader's bodies, sorted by name (`[]` for anybody else) |
+| `family_of(name)` | Leader first, then its bodies sorted; `[name]` for an unlinked character |
+| `is_linked(name)` | Whether `name` is a body |
+| `present_member(name)` | The family member that is not dormant, or `None` |
+| `shared_soul_sections(name)` | The soul sections a body reads from its leader (default `DEFAULT_SHARED_SOUL` = `soul`, `beliefs`, `lessons`; any of `SHAREABLE_SOUL_SECTIONS`, never `goals`); `()` when not linked |
+| `soul_owner(name, section)` | Whose file a soul section (key `beliefs` or path `soul/beliefs.md`) is: the leader for a shared section of a body, else `name`. The soul reader (`load_source_file` callers), `soul_writer` and the soul editor all resolve through it; the editor refuses writing a shared section on the body (409 "edit it on <leader>") |
+| `LOCKED_PROFILE_FIELDS` | `("gender", "age")` — a body reads them LIVE from its leader in `get_character_profile`; `save_character_profile` never stores them on a body |
+| `swap_refusal(name)` | `""` or why `name` cannot leave its body now: `journey` (journey or movement target), `sleeping`, `interaction` (pair interaction, approach, open invitation), `prop_action`, `reading` (item-reading session), `party`. `SWAP_REFUSAL_TEXT[code]` is the English reason |
+| `delete_refusal(name)` | `""` or why `name` may not be deleted: a leader with bodies, or a present body whose leader is dormant. `delete_character` refuses with it |
+| `link(body, leader, *, shared=DEFAULT_SHARED_SOUL)` | `{"ok", "error"}`. Refuses a self-link, unknown characters, temporary NPCs, a leader that is itself linked, a body that leads bodies, a body linked elsewhere, a non-shareable section and a present body in a `swap_refusal` state. A NEW link makes the body dormant (`make_dormant`) and allows it to every user allowed the leader; the same leader again only updates the shared sections. The body's own former mind rows stay in storage, unread while linked |
+| `unlink(body)` | `{"ok", "error"}`. Only a DORMANT body: status `''`, placed at the leader's current location and room (arrival room when none). A present body is refused ("revert first") |
+| `create_linked(leader, name)` | `{"ok", "error", "name"}`. A new body from the leader's TEMPLATE only, `linked_to` + default shared sections, created dormant, default skills seeded, allowed to every user allowed the leader |
+| `make_dormant(name)` | Status `dormant`; location, room, point and seat cleared, no off-map return marker — raw writes, no compliance/party/discovery side effects |
+| `place_at(name, location_id, room_id="")` | Raw placement (no compliance/party/discovery): location + room (arrival room when empty), the location's stand point, presence events |
+| `describe(name)` | `{leader, bodies: [{name, status}], shared_soul_sections, status: "dormant"/"present", shareable, candidates}` — the editor payload of `GET /characters/{name}/link` |
+| `invalidate()` | Drop the cached link map. `save_character_profile` calls `note_saved(name, linked_to, shared)` after every committed write and `delete_character` invalidates — a writer of `linked_to` outside those needs it |
+| `note_saved(name, linked_to, shared)` | The save hook: invalidates the map only when the stored link differs from it |
+
+Admin routes (all `require_admin`): `GET`/`PUT`/`DELETE /characters/{name}/link`
+(`PUT` body `{leader, shared_soul_sections}`), `POST /characters/{leader}/linked`
+(`{name}`). Refusals answer 409 with the error text.
+
 ## Package tables — `app.core.db`
 
 A package that keeps world state of its own stores it in `world.db` (never a JSON
@@ -1696,7 +1733,7 @@ nothing. A player-controlled partner pushes such a run away with the ordinary
 `app.core.interaction_engine.check_can_pair(actor, partner) -> str` returns
 an empty string when two distinct characters are awake, present and free to
 receive a proposal, otherwise a refusal reason. Combine it with
-`app.models.character.list_available_characters(include_pooled=False, *, strict=False)` and `partner_poses()` for
+`app.models.character.list_available_characters(include_pooled=False, *, include_dormant=False, strict=False)` and `partner_poses()` for
 proposal menus. The latter returns `(pose_key, animation_kind)`, not display
 labels; only free pair clips qualify. Pending invitations are answered through
 the separate question flow and must not be copied into proposal menus.

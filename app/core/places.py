@@ -261,12 +261,13 @@ def _census(location_id: str, room_id: Optional[str]) -> List[Tuple[str, str, Op
 
     The roster gate is the one of ``list_available_characters``: names with a
     leading underscore and reserved names are no characters, and a POOLED NPC
-    stands nowhere. That function's filesystem fallback has NO counterpart
+    stands nowhere, and neither does a DORMANT one (``is_out_of_world``).
+    That function's filesystem fallback has NO counterpart
     here — world data is DB-only, and a world with no rows has nobody in any
     room either.
     """
     from app.core.db import get_connection
-    from app.models.character import POOLED_STATUS, _is_real_character
+    from app.models.character import _is_real_character, is_out_of_world
     sql = _CENSUS_SQL
     params: List[Any] = [location_id]
     if room_id is not None:
@@ -280,7 +281,7 @@ def _census(location_id: str, room_id: Optional[str]) -> List[Tuple[str, str, Op
         return []
     out: List[Tuple[str, str, Optional[dict]]] = []
     for name, status, room, place_raw in rows:
-        if not _is_real_character(name) or status == POOLED_STATUS:
+        if not _is_real_character(name) or is_out_of_world(status):
             continue
         place: Any = None
         if place_raw:

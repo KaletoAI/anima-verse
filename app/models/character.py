@@ -422,6 +422,7 @@ def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[
             tmpl_name = (row[2] or "").strip()
             if tmpl_name and "template" not in profile:
                 profile["template"] = tmpl_name
+            _overlay_locked_fields(conn, profile)
             _inject_soul_md_values(character_name, profile, strict=strict)
             return profile
     except Exception as e:
@@ -438,6 +439,30 @@ def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[
         "character_appearance": "",
         "created_by": ""
     }
+
+
+def _overlay_locked_fields(conn, profile: Dict[str, Any]) -> None:
+    """A linked character reads its LOCKED fields live from its leader.
+
+    ``linked_characters.LOCKED_PROFILE_FIELDS`` (gender, age) are never stored
+    on a body (``save_character_profile`` strips them); the leader's current
+    value is put in on every read — ONE extra query, only for a body. A value
+    the leader does not have is absent on the body too.
+    """
+    leader = str(profile.get("linked_to") or "").strip()
+    if not leader:
+        return
+    from app.core.linked_characters import LOCKED_PROFILE_FIELDS
+    cols = ", ".join(f"json_extract(profile_json, '$.{k}')" for k in LOCKED_PROFILE_FIELDS)
+    row = conn.execute(
+        f"SELECT {cols} FROM characters WHERE name=? AND json_valid(profile_json)",
+        (leader,)).fetchone()
+    for i, key in enumerate(LOCKED_PROFILE_FIELDS):
+        value = row[i] if row else None
+        if value is None:
+            profile.pop(key, None)
+        else:
+            profile[key] = value
 
 
 def _inject_soul_md_values(character_name: str, profile: Dict[str, Any], *,
@@ -458,6 +483,7 @@ def _inject_soul_md_values(character_name: str, profile: Dict[str, Any], *,
         template_id = profile.get("template", "")
         if not template_id:
             return
+        from app.core.linked_characters import soul_owner
         from app.models.character_template import get_template, load_source_file
         tmpl = get_template(template_id)
         if not tmpl:
@@ -475,7 +501,9 @@ def _inject_soul_md_values(character_name: str, profile: Dict[str, Any], *,
                 # headings. A scaffold file is therefore empty here too —
                 # otherwise consumers would receive bare headings as if they
                 # were a personality.
-                profile[key] = load_source_file(character_name, source_file)
+                # A linked character's SHARED sections are its leader's file.
+                profile[key] = load_source_file(
+                    soul_owner(character_name, source_file), source_file)
     except Exception as e:
         if strict:
             raise
@@ -507,9 +535,24 @@ def get_character_language_instruction(character_name: str) -> str:
 
 
 #: ``characters.status`` of a recycled temporary NPC — kept as a profile,
-#: standing nowhere (plan-npc-auto-spawn.md § 3). Everything else runs with an
-#: empty status; there is deliberately no third value.
+#: standing nowhere (plan-npc-auto-spawn.md § 3). The pool's own semantics
+#: (wipe at boot, cap, recycle) are bound to this value only.
 POOLED_STATUS = "pooled"
+
+#: ``characters.status`` of a linked character's family member that stands
+#: nowhere right now (``app.core.linked_characters``): it exists — its
+#: relationships and memories stay visible — but it is in no roster, no
+#: payload, no earshot list and never recycled, wiped or capped.
+DORMANT_STATUS = "dormant"
+
+#: Every status that means "exists, but stands nowhere in the world". A
+#: character in the world has the empty status.
+OUT_OF_WORLD_STATUSES = frozenset((POOLED_STATUS, DORMANT_STATUS))
+
+
+def is_out_of_world(status: str) -> bool:
+    """Whether a ``characters.status`` value keeps the character out of the world."""
+    return (status or "") in OUT_OF_WORLD_STATUSES
 
 
 def _is_real_character(name: str) -> bool:
@@ -687,6 +730,15 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     except Exception as _se:
         logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
 
+    # A LINKED character never stores its locked fields: they are read live
+    # from the leader (``_overlay_locked_fields``), so a read-modify-write of
+    # the body must not copy the leader's value into the body's blob.
+    _linked_to = str(profile.get("linked_to") or "").strip()
+    if _linked_to:
+        from app.core.linked_characters import LOCKED_PROFILE_FIELDS
+        for _key in LOCKED_PROFILE_FIELDS:
+            profile.pop(_key, None)
+
     # Store the stripped profile in the DB blob.
     profile_to_store = profile
 
@@ -804,6 +856,10 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                          lambda v: v)
         profile[name] = read_cast(value)
 
+    # The cached link map follows a changed link or shared-section list.
+    if _stored:
+        from app.core.linked_characters import note_saved
+        note_saved(character_name, _linked_to, profile_to_store.get("shared_soul_sections"))
 
     # A re-dressed temporary NPC needs its pictures again — see
     # npc_assets.on_outfit_description_changed for the rule (and for why the
@@ -849,7 +905,8 @@ def list_temporary_npcs() -> List[str]:
 
 
 def get_character_status(character_name: str) -> str:
-    """Lifecycle status of the character row: '' (in the world) or 'pooled'."""
+    """Lifecycle status of the character row: '' (in the world), 'pooled' or
+    'dormant' (see ``OUT_OF_WORLD_STATUSES``)."""
     if not character_name:
         return ""
     try:
@@ -990,6 +1047,13 @@ def delete_character(character_name: str) -> bool:
     """
     if not character_name or character_name.lower() in _RESERVED_NAMES:
         return False
+    # A leader with linked bodies, or a present body standing in for its
+    # dormant leader, is not deleted (``linked_characters.delete_refusal``).
+    from app.core import linked_characters
+    _refusal = linked_characters.delete_refusal(character_name)
+    if _refusal:
+        logger.warning("delete_character refused: %s", _refusal)
+        return False
     _interrupt_prop_action(character_name, "deleted")
 
     from app.core import sync_topics
@@ -1091,6 +1155,7 @@ def delete_character(character_name: str) -> bool:
 
         from app.core import sync_topics
         if stored_tx_1:
+            linked_characters.invalidate()
             _notify_prop_presence(old_loc, old_room)
             sync_topics.moved(character_name, old_loc, "")
         if stored_tx_1:
@@ -3003,6 +3068,11 @@ def populate_soul_files_from_profile(character_name: str,
             value = profile.get(key)
             if not value or not isinstance(value, str) or not value.strip():
                 continue
+            # A linked character's SHARED section is its leader's file (the
+            # value was injected from there) — never copied into its own.
+            from app.core.linked_characters import soul_owner
+            if soul_owner(character_name, source_file) != character_name:
+                continue
             md_path = char_dir / source_file
             if not md_path.exists():
                 continue
@@ -3550,17 +3620,21 @@ def character_exists(name: str) -> bool:
     filter excludes relationships, memories and commitments to absent characters
     from prompts. Data stays in the DB and reappears on import; see
     plan-character-import-fresh-start.md.
+
+    A DORMANT character exists (it stands nowhere, but everybody's
+    relationships with and memories of it stay); a pooled NPC does not.
     """
     n = (name or "").strip().lower()
     if not n:
         return False
     try:
-        return n in {c.lower() for c in list_available_characters()}
+        return n in {c.lower() for c in list_available_characters(include_dormant=True)}
     except Exception:
         return False
 
 
-def list_available_characters(include_pooled: bool = False, *, strict: bool = False) -> List[str]:
+def list_available_characters(include_pooled: bool = False, *, include_dormant: bool = False,
+                              strict: bool = False) -> List[str]:
     """List available characters from the DB.
 
     Filtering:
@@ -3574,7 +3648,11 @@ def list_available_characters(include_pooled: bool = False, *, strict: bool = Fa
         keeps them out of the worldmap payload, the earshot lists, the agent
         loop and every character picker at once. ``include_pooled=True`` is for
         the pool's own bookkeeping and for the name-collision check — a pooled
-        name is still taken.
+        name is still taken. It returns EVERY row, dormant ones included.
+      - DORMANT characters (``status='dormant'``, a linked family member that
+        stands nowhere right now) are out of the roster the same way
+        (``is_out_of_world``). ``include_dormant=True`` adds them back — the
+        existence question (``character_exists``) and the admin editor.
 
     The roster IS the DB table (DATA-17): the filesystem fallback that used to
     run for a world without rows read ``character_profile.json`` files that
@@ -3592,7 +3670,8 @@ def list_available_characters(include_pooled: bool = False, *, strict: bool = Fa
         logger.error("list_available_characters DB error: %s", e, exc_info=True)
         return []
     return [r[0] for r in rows if _is_real_character(r[0])
-            and (include_pooled or r[1] != POOLED_STATUS)]
+            and (include_pooled or not is_out_of_world(r[1])
+                 or (include_dormant and r[1] == DORMANT_STATUS))]
 
 
 def list_active_journeys() -> List[Dict[str, Any]]:
@@ -3613,8 +3692,8 @@ def list_active_journeys() -> List[Dict[str, Any]]:
     — enough for ``travel_engine.get_journey(name, profile=…)``, which reads
     exactly ``journey`` and ``movement_target``.
 
-    The roster gate of :func:`list_available_characters` applies: a pooled or
-    reserved name is not on the map and therefore does not travel.
+    The roster gate of :func:`list_available_characters` applies: a pooled,
+    dormant or reserved name is not on the map and therefore does not travel.
     """
     try:
         rows = get_connection().execute(
@@ -3636,7 +3715,7 @@ def list_active_journeys() -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for name, journey_raw, target_raw, current_location, status in rows:
-        if not _is_real_character(name) or status == POOLED_STATUS:
+        if not _is_real_character(name) or is_out_of_world(status):
             continue
         journey: Any = None
         if journey_raw:

@@ -184,6 +184,12 @@ export function CharacterListPanel({
         >
           <span className="ga-list-row-main">
             <strong>{marker ? `${marker} ` : ''}{c.display_name || c.name}</strong>
+            {c.status === 'dormant' ? (
+              <span className="ga-chip" style={{ marginLeft: 6 }}
+                title={t('Stands nowhere right now: another body of the same mind is in the world.')}>
+                {t('dormant')}
+              </span>
+            ) : null}
           </span>
         </button>
       </li>

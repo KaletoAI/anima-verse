@@ -238,7 +238,7 @@ export function TemplateTab({
   /** fields an active STATE overrides right now (template `state_override`):
    *  the control keeps the stored value, the note beside it says what is in
    *  effect and which state set it */
-  const [overrides, setOverrides] = useState<Record<string, { value: string; label: string; icon?: string }>>({})
+  const [overrides, setOverrides] = useState<Record<string, { value: string; label: string; icon?: string; linked_from?: string }>>({})
   const [savingKey, setSavingKey] = useState('')
   const [loaded, setLoaded] = useState(false)
 
@@ -247,7 +247,7 @@ export function TemplateTab({
     setLoaded(false)
     try {
       const [pr, cf] = await Promise.all([
-        apiGet<{ profile: Record<string, unknown>; field_overrides?: Record<string, { value: string; label: string; icon?: string }> }>(
+        apiGet<{ profile: Record<string, unknown>; field_overrides?: Record<string, { value: string; label: string; icon?: string; linked_from?: string }> }>(
           `/characters/${encodeURIComponent(character)}/profile`),
         apiGet<{ config: Record<string, unknown> }>(`/characters/${encodeURIComponent(character)}/config`),
       ])
@@ -366,7 +366,10 @@ export function TemplateTab({
   const cols = (tab.columns || []).slice().sort((a, b) => a - b)
 
   const renderField = (f: TmplFieldDef) => {
-    const ro = !!f.readonly || FORCE_READONLY.has(f.key)
+    // A LOCKED field of a linked character is its leader's value, read live
+    // (server: linked_characters.LOCKED_PROFILE_FIELDS) — shown, never edited.
+    const lockedFrom = overrides[f.key]?.linked_from || ''
+    const ro = !!f.readonly || FORCE_READONLY.has(f.key) || !!lockedFrom
     // A Discard has to reach the text a user typed and never blurred: that
     // never became a value, so no prop of the input changes and its own
     // `local` state would keep it on screen. Remounting is what throws it
@@ -403,7 +406,11 @@ export function TemplateTab({
         ? tmplText(ovOption as { [k: string]: unknown }, 'label', lang) || ov.value
         : ov.value)
       : ''
-    const overrideNote = ov ? (
+    const overrideNote = lockedFrom ? (
+      <div className="ga-form-hint" title={t('A linked character reads this field from its leading character.')}>
+        {t('from {name}').replace('{name}', lockedFrom)}
+      </div>
+    ) : ov ? (
       <div className="ga-form-hint" title={t('An active state overrides this field; the stored value applies again when the state ends.')}>
         {t('now')}: <strong>{ovText}</strong> ({t('state')}: {ov.icon ? `${ov.icon} ` : ''}{ov.label})
       </div>

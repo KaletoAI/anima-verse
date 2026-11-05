@@ -91,7 +91,7 @@ def list_characters() -> Dict[str, Any]:
 
 
 def _roster_rows() -> List[Dict[str, Any]]:
-    """``[{name, template, temporary}]`` for the whole roster from ONE query.
+    """``[{name, template, temporary, status}]`` for the whole roster from ONE query.
 
     Both fields sit in the ``characters`` table, so nothing here needs a
     profile load (DATA-11: ``get_character_profile`` + ``is_temporary_npc``
@@ -106,10 +106,13 @@ def _roster_rows() -> List[Dict[str, Any]]:
     distinct template name, not once per character.
 
     Roster gate = the one of ``list_available_characters``: reserved and
-    underscore names are no characters, a POOLED NPC is not in the world.
+    underscore names are no characters, a POOLED NPC is not in the world. A
+    DORMANT character (a linked family member standing nowhere right now) IS
+    listed — the admin edits it while it is dormant — with its ``status``, so
+    the list can show the badge.
     """
     from app.core.db import get_connection
-    from app.models.character import POOLED_STATUS, _is_real_character
+    from app.models.character import DORMANT_STATUS, _is_real_character, is_out_of_world
     from app.models.character_template import get_template
     try:
         rows = get_connection().execute(
@@ -139,7 +142,8 @@ def _roster_rows() -> List[Dict[str, Any]]:
 
     out: List[Dict[str, Any]] = []
     for name, status, tmpl_col, blob_ok, blob_type, blob_value in rows:
-        if not _is_real_character(name) or status == POOLED_STATUS:
+        if not _is_real_character(name) or (
+                is_out_of_world(status) and status != DORMANT_STATUS):
             continue
         if not blob_ok:
             template = ""            # an unreadable blob has no template
@@ -148,7 +152,7 @@ def _roster_rows() -> List[Dict[str, Any]]:
         else:
             template = (tmpl_col or "").strip()
         out.append({"name": name, "template": template,
-                    "temporary": _temporary(template)})
+                    "temporary": _temporary(template), "status": status})
     return out
 
 
@@ -582,11 +586,71 @@ def delete_character_route(character_name: str) -> Dict[str, Any]:
     """Delete a character from the database and storage directory."""
     if not character_name:
         raise HTTPException(status_code=400, detail="character_name fehlt")
+    from app.core.linked_characters import delete_refusal
+    refusal = delete_refusal(character_name)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
     success = delete_character(character_name)
     if not success:
         raise HTTPException(status_code=404,
                             detail=f"Character '{character_name}' nicht gefunden oder geschuetzt")
     return {"status": "success", "deleted": character_name}
+
+
+# ---------------------------------------------------------------------------
+# Linked characters (app.core.linked_characters) — world authoring, admin-only
+# ---------------------------------------------------------------------------
+
+def _link_result(result: Dict[str, Any], name: str) -> Dict[str, Any]:
+    from app.core.linked_characters import describe
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error") or "Refused.")
+    return describe(name)
+
+
+@router.get("/{character_name}/link")
+def get_character_link(character_name: str,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The link state: ``{leader, bodies, shared_soul_sections, status,
+    shareable, candidates}``."""
+    from app.core.linked_characters import describe
+    from app.models.character import character_exists
+    if not character_exists(character_name):
+        raise HTTPException(status_code=404, detail=f"Character '{character_name}' not found")
+    return describe(character_name)
+
+
+@router.put("/{character_name}/link")
+async def put_character_link(character_name: str, request: Request,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Link to a leader / change the shared soul sections:
+    ``{leader, shared_soul_sections}``. Linking makes the character dormant."""
+    from app.core.linked_characters import DEFAULT_SHARED_SOUL, link
+    data = await request.json()
+    shared = data.get("shared_soul_sections")
+    return _link_result(link(character_name, str(data.get("leader") or ""),
+                             shared=list(DEFAULT_SHARED_SOUL) if shared is None else shared),
+                        character_name)
+
+
+@router.delete("/{character_name}/link")
+def delete_character_link(character_name: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Unlink a dormant body; it stands at its leader's place afterwards."""
+    from app.core.linked_characters import unlink
+    return _link_result(unlink(character_name), character_name)
+
+
+@router.post("/{character_name}/linked")
+async def create_linked_character(character_name: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Create a new linked character ``{name}`` for this leader (dormant)."""
+    from app.core.linked_characters import create_linked
+    data = await request.json()
+    result = create_linked(character_name, str(data.get("name") or ""))
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error") or "Refused.")
+    return {"status": "success", "character": result["name"]}
 
 
 @router.post("/{character_name}/generate-profile-image")

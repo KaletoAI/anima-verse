@@ -25,6 +25,9 @@ interface SoulFileMeta {
   exists: boolean
   label?: string
   label_de?: string
+  /** A linked character's SHARED section: the leading character whose file it
+   *  is ('' otherwise). Shown read-only — it is edited on the leader. */
+  shared_from?: string
 }
 
 // Mirror of the backend _parse_soul_sections (and the legacy client parser):
@@ -70,6 +73,7 @@ export function SoulEditor({ character }: { character: string }) {
   const [section, setSection] = useState('')
   const [raw, setRaw] = useState('')
   const [fileDefault, setFileDefault] = useState('locked')
+  const [sharedFrom, setSharedFrom] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -81,12 +85,13 @@ export function SoulEditor({ character }: { character: string }) {
   const loadFile = useCallback(
     async (sec: string) => {
       try {
-        const data = await apiGet<{ raw?: string; file_default?: string }>(
+        const data = await apiGet<{ raw?: string; file_default?: string; shared_from?: string }>(
           `/characters/${encodeURIComponent(character)}/soul/file/${encodeURIComponent(sec)}`,
         )
         setSection(sec)
         setRaw(data.raw || '')
         setFileDefault(data.file_default || 'locked')
+        setSharedFrom(data.shared_from || '')
         setDirty(false)
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -109,6 +114,7 @@ export function SoulEditor({ character }: { character: string }) {
     setFiles([])
     setSection('')
     setRaw('')
+    setSharedFrom('')
     setDirty(false)
     ;(async () => {
       try {
@@ -120,13 +126,14 @@ export function SoulEditor({ character }: { character: string }) {
         setFiles(list)
         if (list.length > 0) {
           const first = list[0].section
-          const d = await apiGet<{ raw?: string; file_default?: string }>(
+          const d = await apiGet<{ raw?: string; file_default?: string; shared_from?: string }>(
             `/characters/${encodeURIComponent(character)}/soul/file/${encodeURIComponent(first)}`,
           )
           if (cancelled) return
           setSection(first)
           setRaw(d.raw || '')
           setFileDefault(d.file_default || 'locked')
+          setSharedFrom(d.shared_from || '')
         }
       } catch {
         /* no soul files for this template */
@@ -180,6 +187,7 @@ export function SoulEditor({ character }: { character: string }) {
               onClick={() => selectFile(f.section)}
             >
               {lock} {name}
+              {f.shared_from ? ' · ' + t('from {name}').replace('{name}', f.shared_from) : ''}
               {f.exists ? '' : ' ' + t('(empty)')}
             </button>
           )
@@ -189,18 +197,25 @@ export function SoulEditor({ character }: { character: string }) {
         <div className="soul-editor-col">
           <div className="soul-col-header">
             <span>{t('Editor (Markdown)')}</span>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-primary"
-              disabled={!dirty || saving}
-              onClick={save}
-            >
-              {saving ? t('Saving…') : t('Save')}
-            </button>
+            {sharedFrom ? (
+              <span className="ga-form-hint" title={t('A linked character reads this section from its leading character; edit it there.')}>
+                {t('from {name}').replace('{name}', sharedFrom)}
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-primary"
+                disabled={!dirty || saving}
+                onClick={save}
+              >
+                {saving ? t('Saving…') : t('Save')}
+              </button>
+            )}
           </div>
           <textarea
             className="soul-editor"
             spellCheck={false}
+            readOnly={!!sharedFrom}
             value={raw}
             placeholder={t('Pick a file above…')}
             onChange={(e) => {

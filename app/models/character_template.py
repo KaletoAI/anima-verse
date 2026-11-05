@@ -594,7 +594,10 @@ def build_prompt_section(
         # would outlive a reset that cleared the file (the file IS the truth).
         source_file = field.get("source_file")
         if source_file:
-            value = load_source_file(character_name, source_file) if character_name else ""
+            # A linked character's SHARED sections are its leader's file.
+            from app.core.linked_characters import soul_owner
+            value = (load_source_file(soul_owner(character_name, source_file), source_file)
+                     if character_name else "")
         elif field.get("store") == "status_effects":
             from app.core.stat_boosts import effective_stat
             value = effective_stat(data, key)

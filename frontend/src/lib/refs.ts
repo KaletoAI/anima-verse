@@ -29,6 +29,9 @@ export interface CharacterRef {
   /** True for a temporary NPC — its template carries the `temporary_npc`
    *  feature. Surfaces that must not offer NPCs filter on this. */
   temporary?: boolean
+  /** Lifecycle status: '' in the world, 'dormant' for a linked family
+   *  member that stands nowhere right now (listed so the admin can edit it). */
+  status?: string
 }
 
 export async function loadLocations(): Promise<LocationRef[]> {

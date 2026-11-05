@@ -32,6 +32,7 @@ import { SkillsTab } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
 import { KnownLocationsEditor } from './KnownLocationsEditor'
 import { RelationshipAddresses } from './RelationshipAddresses'
+import { LinkedCharacterPanel } from './LinkedCharacterPanel'
 import { NewCharacterDialog } from './NewCharacterDialog'
 import { NewNpcDialog } from './NewNpcDialog'
 import { FieldSet } from './FieldSet'
@@ -98,6 +99,7 @@ const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'skills', label: 'Skills' },
   { id: 'wardrobe', label: 'Wardrobe' },
   { id: 'secrets', label: 'Secrets' },
+  { id: 'linked', label: 'Linked' },
 ]
 
 interface TmplSectionRaw extends TmplSection {
@@ -713,6 +715,9 @@ export function CharactersTab() {
       // edit leaves the previous ones behind. For that sheet the tab hangs on
       // HAVING pictures, not on being allowed to make new ones.
       if (id === 'expressions' && isTempNpc) return true
+      // A temporary NPC is never linked (one mind in several bodies is for
+      // full characters only).
+      if (id === 'linked' && isTempNpc) return false
       const f = specialGate[id]
       return !f || features[f] !== false
     }
@@ -1083,6 +1088,14 @@ export function CharactersTab() {
               <WardrobeTab key={selected} character={selected} />
             ) : subTab === 'secrets' ? (
               <SecretsEditor character={selected} />
+            ) : subTab === 'linked' ? (
+              <LinkedCharacterPanel
+                character={selected}
+                onOpen={onSelect}
+                onChanged={() => {
+                  loadCharacters().then(setCharacters).catch(() => undefined)
+                }}
+              />
             ) : (
               <div className="ga-form">
                 <div className="ga-placeholder">
