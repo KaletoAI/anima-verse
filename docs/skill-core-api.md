@@ -1646,6 +1646,9 @@ scene as ("" when it took part itself) — the "(as <body>)" mark. The chat and
 thought templates get `linked_leader` (the one-mind identity line, system
 part). A reset of a body skips every mind store (`register_reset_store(...,
 mind=True)` for a package's); a fresh start of a dormant leader is refused.
+A package's OWN per-character store that belongs to the mind keys its rows by
+`mind_of(name)` at its own choke point and records the acting body in the row
+(for example as `body` in its row metadata, rendered "(as <body>)").
 
 ## Package tables — `app.core.db`
 

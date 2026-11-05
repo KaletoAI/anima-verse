@@ -179,6 +179,9 @@ stops acting autonomously).
   journey and all clients derive the same position.
 - **Parties:** one leader plus followers travel as one — only the leader moves, followers are pulled
   along, and joining is an LLM tool call, never a keyword match.
+- **Linked characters:** one mind in several bodies — a linked character is a full character of its own
+  whose memories, thoughts, secrets, diary entries and own feelings belong to its leader's mind; only one
+  member of a family stands in the world, the others are dormant (Game-Admin → Characters → Linked).
 - **Transformation:** a character who carries a power item turns into one of its **linked characters**
   — a body swap: the linked character, a full character of its own with one shared mind, stands exactly
   where the leader stood (the `transformation` package; set up on the leader in Game-Admin → Characters →
