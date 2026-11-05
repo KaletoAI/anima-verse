@@ -35,14 +35,25 @@ function clockOf(ts: string): string {
   return formatTime(ts, clockSettings()) || ts
 }
 
-function addresseesOf(line: SceneLine): string[] {
+/** The addressees to print. With `perceived` set (the player's own scene,
+ *  `/play/scene`) a perceived row prints `meta.addressees_shown` — the
+ *  perceiver's view of a disguised addressee at the moment the line was heard
+ *  — and the real `meta.addressees` otherwise; the admin views (objective rows
+ *  and a character's perceptions) always print the real names. */
+function addresseesOf(line: SceneLine, perceived: boolean): string[] {
   if (line.addressees && line.addressees.length) return line.addressees
+  const shown = perceived ? line.meta?.addressees_shown : undefined
+  if (Array.isArray(shown) && shown.length) return shown as string[]
   const m = line.meta?.addressees
   return Array.isArray(m) ? (m as string[]) : []
 }
 
-function speakerOf(line: SceneLine): string {
-  return line.speaker || (line.meta?.speaker as string) || '?'
+/** The speaker to print: `meta.speaker_shown` in the player's own scene
+ *  (the narrator's localized label, or the perceiver's view of a disguised
+ *  speaker), else the real speaker. */
+function speakerOf(line: SceneLine, perceived: boolean): string {
+  const shown = perceived ? (line.meta?.speaker_shown as string) : ''
+  return shown || line.speaker || (line.meta?.speaker as string) || '?'
 }
 
 /** Token usage of the LLM call that produced the line, as `meta.llm_usage`.
@@ -78,7 +89,7 @@ function usageOf(line: SceneLine, t: (en: string) => string): LineUsage | null {
 
 export interface ThinkingInfo {
   name: string
-  /** true = antwortet (sichtbarer Chat-Turn), false = denkt (Hintergrund). */
+  /** true = responding (a visible chat turn), false = thinking (background). */
   responding?: boolean
 }
 
@@ -94,7 +105,7 @@ export const SCENE_ROW_ACTIVE_CLASS = 'scene-row-active'
 export const SCENE_ROW_ID_ATTR = 'data-scene-id'
 
 export function SceneView({ lines, emptyHint, thinking, onOpenImage,
-                            highlightedId, onRowHover }: {
+                            highlightedId, onRowHover, perceived = false }: {
   lines: SceneLine[]
   emptyHint?: string
   thinking?: ThinkingInfo[]
@@ -106,6 +117,11 @@ export function SceneView({ lines, emptyHint, thinking, onOpenImage,
   /** Optional: the pointer entered a row (its id) or left it (`null`).
    *  Left out = no pointer handlers are attached at all. */
   onRowHover?: (id: number | null) => void
+  /** Optional: the lines are the PLAYER's own perceptions — print the
+   *  server's `meta.speaker_shown` / `meta.addressees_shown` (the avatar's
+   *  view of a disguised character). Left out = the real names, which is what
+   *  the Game-Admin views show. */
+  perceived?: boolean
 }) {
   // Subscribe to the shared clock settings so the stamp helpers above
   // re-render once the server-configured format and timezone arrive.
@@ -122,7 +138,7 @@ export function SceneView({ lines, emptyHint, thinking, onOpenImage,
         // objective observer view has none and keeps the index.
         <SceneRow key={line.id ?? i} line={line} onOpenImage={onOpenImage}
           highlighted={highlightedId != null && line.id === highlightedId}
-          onRowHover={onRowHover} />
+          onRowHover={onRowHover} perceived={perceived} />
       ))}
       {thinkers.map((info) => (
         <div key={`thinking-${info.name}`} className="ga-list-row" style={{ display: 'flex', gap: 8, alignItems: 'baseline', opacity: 0.75 }}>
@@ -144,12 +160,13 @@ export function SceneView({ lines, emptyHint, thinking, onOpenImage,
   )
 }
 
-function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
+function SceneRow({ line, onOpenImage, highlighted, onRowHover, perceived }: {
   line: SceneLine
   onOpenImage?: (url: string) => void
   /** Adds `SCENE_ROW_ACTIVE_CLASS`; false/absent leaves the markup as it was. */
   highlighted?: boolean
   onRowHover?: (id: number | null) => void
+  perceived: boolean
 }) {
   const { t } = useI18n()
   // Row hooks for a host that wants a highlight. Without `onRowHover` no
@@ -162,8 +179,8 @@ function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
     onMouseLeave: onRowHover ? () => onRowHover(null) : undefined,
   }
   const rowClass = 'ga-list-row' + (highlighted ? ` ${SCENE_ROW_ACTIVE_CLASS}` : '')
-  const speaker = speakerOf(line)
-  const addr = addresseesOf(line)
+  const speaker = speakerOf(line, perceived)
+  const addr = addresseesOf(line, perceived)
   const time = clockOf(line.ts)
   // Attached image (avatar showed something): rendered as a small thumbnail
   // under the line. Click opens it via onOpenImage (Lightbox) or in a new tab.
@@ -237,9 +254,9 @@ function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
     const toArrow = addr.length ? <span style={{ opacity: 0.5 }}> → {addr.join(', ')}</span> : null
     const content = isShout ? (line.content || '').toUpperCase() : line.content
     const volStyle = isWhisper
-      ? { opacity: 0.5 }                 // leise → gedimmt/grau
+      ? { opacity: 0.5 }                 // whisper → dimmed/grey
       : isShout
-        ? { fontWeight: 700 as const }   // schreien → fett (+ Caps am Inhalt)
+        ? { fontWeight: 700 as const }   // shout → bold (+ caps on the content)
         : {}
     body = (
       <span style={volStyle}>

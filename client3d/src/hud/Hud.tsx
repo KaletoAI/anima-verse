@@ -32,7 +32,7 @@ import {
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
-  CharacterFormHostContext, type CharacterFormHost, SCENE_ROW_ID_ATTR,
+  CharacterFormHostContext, type CharacterFormHost, SCENE_ROW_ID_ATTR, shownName,
   type ScreenshotPhoto, type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
@@ -659,7 +659,9 @@ export function Hud({ avatar, username, role }: {
   // The header names who stands IN the room (`present_detail`, the figures),
   // not the earshot roster `present` — a passer-by outside the walls stays
   // addressable but is not "here".
-  const inRoom = (data?.present_detail || []).map((p) => p.name);
+  // Printed names are the avatar's view (`display_name` — a disguised
+  // character's alias); the keys stay real.
+  const inRoom = (data?.present_detail || []).map((p) => p.display_name || p.name);
   const avatarName = data?.avatar || avatar;
 
   // Party follower (E3-T3): `party.role === 'follower'` locks movement. The
@@ -670,7 +672,9 @@ export function Hud({ avatar, username, role }: {
   // the lock from the name handed those keys back (E3-T5 fix). The name is
   // only there to say WHOM one is following.
   const isFollower = data?.party?.role === 'follower';
-  const partyLeader = isFollower ? data?.party?.leader || '' : '';
+  // A display string only (the plaque/travel bar say whom one follows).
+  const partyLeader = isFollower && data?.party?.leader
+    ? shownName(data.display_names, data.party.leader) : '';
   useEffect(() => {
     setGameState({ movementLocked: isFollower, partyLeader });
   }, [isFollower, partyLeader]);
@@ -1121,7 +1125,7 @@ export function Hud({ avatar, username, role }: {
           request — and only present while there is a party at all. */}
       {data?.party && (
         <div className="hud-party">
-          <PartyStrip party={data.party} onLeave={leaveParty} />
+          <PartyStrip party={data.party} displayNames={data.display_names} onLeave={leaveParty} />
         </div>
       )}
 
@@ -1215,7 +1219,8 @@ export function Hud({ avatar, username, role }: {
               photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.dialogId} {...ctl} />}
               highlightedId={chatFocus} onRowHover={setHoveredRowId}
               transcriptAside={
-                <ChatPortraits names={portraitNames} versions={speakerVersions} />} />
+                <ChatPortraits names={portraitNames} versions={speakerVersions}
+                  labels={data?.display_names} portraits={data?.portrait_urls} />} />
           </ErrorBoundary>
         </section>
       )}
@@ -1391,7 +1396,8 @@ export function Hud({ avatar, username, role }: {
         )}
         {offer === 'talk' && game.talkTarget && (
           <div className="hud-talk">
-            {t('Press F to talk to {name}').replace('{name}', game.talkTarget.name)}
+            {t('Press F to talk to {name}').replace('{name}',
+              shownName(data?.display_names, game.talkTarget.name))}
           </div>
         )}
         {/* Elevator (E3, floors on foot): the same prompt shape as the talk

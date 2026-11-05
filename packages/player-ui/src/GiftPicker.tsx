@@ -45,12 +45,17 @@ const RARITY_COLOR: Record<string, string> = {
 export function GiftPicker({
   avatar,
   recipients,
+  labelOf,
   defaultRecipient,
   onClose,
   onGifted,
 }: {
   avatar: string
+  /** Real names — what is posted as `to_character`. */
   recipients: string[]
+  /** Optional: the label to print for a recipient (the avatar's view of a
+   *  disguised person). Left out = the name itself. */
+  labelOf?: (name: string) => string
   defaultRecipient?: string
   onClose: () => void
   onGifted: (r: GiftResult) => void
@@ -116,7 +121,7 @@ export function GiftPicker({
               >
                 {recipients.map((name) => (
                   <option key={name} value={name}>
-                    {name}
+                    {labelOf ? labelOf(name) : name}
                   </option>
                 ))}
               </select>

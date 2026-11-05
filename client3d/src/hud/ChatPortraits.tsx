@@ -28,9 +28,14 @@
  * label: the narrator's own place (it has no portrait and never will, so it is
  * titled as the narrator) and the placeholder for "nothing drawable has been
  * said yet" (titled "No portrait").
+ *
+ * A DISGUISED speaker the avatar is not in on (`portrait_urls` of the scene
+ * payload) shows the persona portrait instead of the render, and the
+ * silhouette when the persona has none — never the real face. Names are keys
+ * here; the alt text prints the avatar's view (`display_names`).
  */
 import { useState } from 'react';
-import { useI18n } from '@anima/player-ui';
+import { portraitOverride, shownName, useI18n } from '@anima/player-ui';
 
 import { portraitSlots } from './chatPanel';
 
@@ -53,11 +58,15 @@ function Silhouette({ title }: { title: string }) {
   );
 }
 
-export function ChatPortraits({ names, versions }: {
+export function ChatPortraits({ names, versions, labels, portraits }: {
   /** in the order they spoke, YOUNGEST LAST — i.e. next to the chat column */
   names: string[];
   /** name → expression version, straight out of `speaker_expr_versions` */
   versions: Record<string, string>;
+  /** name → shown name (`display_names` of the scene payload) */
+  labels?: Record<string, string>;
+  /** name → persona portrait, '' = none (`portrait_urls` of the scene payload) */
+  portraits?: Record<string, string>;
 }) {
   const { t } = useI18n();
   // The renders whose <img> reported an error, keyed by name AND version: a
@@ -68,13 +77,15 @@ export function ChatPortraits({ names, versions }: {
   return (
     <div className="hud-chat-portraits" aria-hidden="true">
       {portraitSlots(names, versions).map((slot, i) => {
-        const key = `${slot.name}|${slot.version}`;
-        const url = `/characters/${encodeURIComponent(slot.name)}/outfit-expression`
-          + `?fallback=default${slot.version ? `&v=${encodeURIComponent(slot.version)}` : ''}`;
+        const persona = slot.name ? portraitOverride(portraits, slot.name) : undefined;
+        const key = `${slot.name}|${slot.version}|${persona ?? ''}`;
+        const url = persona !== undefined ? persona
+          : `/characters/${encodeURIComponent(slot.name)}/outfit-expression`
+            + `?fallback=default${slot.version ? `&v=${encodeURIComponent(slot.version)}` : ''}`;
         return (
           <div key={slot.name || `blank-${i}`} className="hud-chat-portrait">
-            {slot.name && !failed[key]
-              ? <img src={url} alt={slot.name}
+            {slot.name && url && !failed[key]
+              ? <img src={url} alt={shownName(labels, slot.name)}
                   onError={() => setFailed((f) => ({ ...f, [key]: true }))} />
               : <Silhouette title={slot.narrator ? narratorTitle : blankTitle} />}
           </div>

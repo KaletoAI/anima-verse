@@ -1070,7 +1070,7 @@ Minimap-Maßstab), muss das abfangen.
 
 Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 (E1), und **`travel`** hat mit E3 eine andere INNERE Form bekommen (§ A11).
-Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `height_cm`,
+Die Reihenfolge lautet `name`, `display_name`, `portrait_url` (nur wenn vorhanden), `location_id`, **`pos`**, `pos_origin`, `yaw`, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
@@ -1079,6 +1079,8 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
+| `display_name` | `str` | What a client PRINTS for this character (name tag, plaque, info panel): the avatar's view of a disguised character (`identity_view.player_view`) — the alias for an avatar not in on the disguise, `"<alias> (<name>)"` for one who is, else `name`. Display only: `name` stays the key for figures, URLs and every posted action. Without an avatar (no lens) it is `name`. |
+| `portrait_url` | `str` (optional) | Present only when the avatar is not in on this character's disguise: the persona portrait that replaces `avatar_url` (and any render of the real face); `""` = draw the no-portrait placeholder. **Absent** otherwise — then `avatar_url` applies as before. |
 | `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
 | `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |

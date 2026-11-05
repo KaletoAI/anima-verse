@@ -823,6 +823,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # Icons behind the name tag (``name_badges``), titled in the avatar's
     # language — the same badges the chat's address chips show.
     from app.core.name_badges import badges_for as _badges_for
+    from app.core.identity_view import player_view as _player_view
     from app.models.character import get_character_language as _char_lang
     _badge_lang = (_char_lang(avatar) if avatar else "") or "de"
     characters = []
@@ -1002,8 +1003,17 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         from app.core.model3d import model_revision
         from app.core.extension_rig import motion_payload
         _model_rev = model_revision(_MODEL_SIG_CACHE[name][2]) if _model_sig else ""
+        _shown = _player_view(avatar, name)
         characters.append({
             "name": name,
+            # What the tag, plaque and info panel print: the AVATAR's view of
+            # a disguised character (display-only secrecy — ``name`` and every
+            # URL stay the real key), plus ``portrait_url`` ("" = placeholder)
+            # in place of ``avatar_url`` when the avatar is not in on it.
+            # No avatar (spectator without lens, admin view) → the real name.
+            "display_name": _shown["display_name"],
+            **({"portrait_url": _persona_portrait}
+               if (_persona_portrait := _shown.get("portrait_url")) is not None else {}),
             "location_id": loc_id,
             # Free metre point, or null when the character has none (its
             # location is unplaced). Clients place the figure by `pos` and

@@ -83,6 +83,7 @@ export function PlayerPhotoDialog({
   subjects,
   available,
   avatar,
+  labelOf,
   onSubmit,
   onClose,
   title,
@@ -237,7 +238,7 @@ export function PlayerPhotoDialog({
                   <button key={name} type="button" disabled={busy}
                     className={`player-photo-chip${selected.includes(name) ? ' on' : ''}`}
                     aria-pressed={selected.includes(name)}
-                    onClick={() => toggle(name)}>{name}</button>
+                    onClick={() => toggle(name)}>{labelOf ? labelOf(name) : name}</button>
                 ))}
               </div>
             )}

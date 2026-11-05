@@ -165,6 +165,27 @@ def masked_description(observer: str, subject: str) -> Optional[str]:
     return persona.description
 
 
+def player_view(observer: str, subject: str) -> Dict[str, str]:
+    """The display fields of ``subject`` in a payload for the player whose
+    avatar is ``observer`` (display-only secrecy: the payload's keys and URLs
+    stay the real name).
+
+    ``{"display_name": shown_name(observer, subject)}``, plus
+    ``"portrait_url"`` — the persona's portrait, ``""`` = none, show the
+    no-portrait placeholder — exactly when :func:`masked_description` is not
+    ``None`` (O is a non-knower of C's active persona). No observer (no
+    avatar, an unfiltered admin view) → the real name and no portrait field."""
+    if not observer:
+        return {"display_name": subject}
+    persona = active_persona(subject)
+    out = {"display_name": _label(observer, subject, persona)}
+    if persona is not None and not _same(observer, subject):
+        state = _knows_state(observer, subject, persona)
+        if state is not _FAILED and not state:
+            out["portrait_url"] = persona.portrait_url
+    return out
+
+
 def resolve_name(observer: str, token: str) -> Optional[str]:
     """The real character a name token refers to, from ``observer``'s mouth.
 

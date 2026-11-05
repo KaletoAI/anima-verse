@@ -1,15 +1,22 @@
 /** Hand-derived: encode each URL value; avatar wins duplicate Ava; names sort
  * Ava,Bo,Kira independently of payload order. Room/roster changes invalidate
- * renders; pending beats cooldown, which beats a cached signature. */
+ * renders; pending beats cooldown, which beats a cached signature. A figure
+ * prints `display_name` (else its name) and a present `portrait_url` replaces
+ * the expression render ('' = no picture); the scene key stays on real names. */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 const result = await build({ entryPoints: ['client3d/src/hud/sceneTile.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
-const { backgroundUrl, exprUrl, tileFigures, sceneKey, tileHidden, renderOutcome, renderedSig, TILE_COLLAPSE_BELOW_PX } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
+const { backgroundUrl, exprUrl, figureUrl, tileFigures, sceneKey, tileHidden, renderOutcome, renderedSig, TILE_COLLAPSE_BELOW_PX } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 const s = { avatar:'Ava', location_id:'loc 1', location_name:'Inn', room_id:'r1', room_name:'Hall', present_detail:[{name:'Kira',avatar_url:'',expr_version:'k1'},{name:'Ava',avatar_url:'',expr_version:'a9'},{name:'Bo',avatar_url:''}], avatar_expr_version:'a1', bg_id:'day 1.png', bg_version:'v7', travel:null };
 assert.equal(backgroundUrl(s), '/world/locations/loc%201/background?room=r1&file=day%201.png&v=v7');
 assert.equal(exprUrl('Kira','k1'), '/characters/Kira/outfit-expression?fallback=default&v=k1');
 assert.equal(exprUrl('Bo'), '/characters/Bo/outfit-expression?fallback=default');
-assert.deepEqual(tileFigures(s), [{name:'Ava',version:'a1',isAvatar:true},{name:'Kira',version:'k1',isAvatar:false},{name:'Bo',version:'',isAvatar:false}]);
+assert.deepEqual(tileFigures(s), [{name:'Ava',label:'Ava',version:'a1',isAvatar:true},{name:'Kira',label:'Kira',version:'k1',isAvatar:false},{name:'Bo',label:'Bo',version:'',isAvatar:false}]);
+const masked = {...s, present_detail:[{name:'Cara',avatar_url:'',expr_version:'c1',display_name:'Moonveil',portrait_url:'/inventory/items/amulet/image'},{name:'Kim',avatar_url:'',display_name:'Kim',portrait_url:''}]};
+const mf = tileFigures(masked);
+assert.deepEqual(mf.map(f => [f.name, f.label]), [['Ava','Ava'],['Cara','Moonveil'],['Kim','Kim']]);
+assert.deepEqual(mf.map(figureUrl), ['/characters/Ava/outfit-expression?fallback=default&v=a1','/inventory/items/amulet/image','']);
+assert.equal(sceneKey(masked), 'loc 1/r1|Ava,Cara,Kim');
 assert.equal(sceneKey(s), 'loc 1/r1|Ava,Bo,Kira');
 assert.equal(sceneKey({...s,present_detail:[...s.present_detail].reverse()}), sceneKey(s));
 assert.notEqual(sceneKey({...s,room_id:'r2'}), sceneKey(s));

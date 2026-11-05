@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiPost, Icon, useI18n, type SceneData } from '@anima/player-ui';
-import { backgroundUrl, exprUrl, renderedSig, renderOutcome, sceneKey, tileFigures, tileHidden, type RenderAnswer } from './sceneTile';
+import { backgroundUrl, figureUrl, renderedSig, renderOutcome, sceneKey, tileFigures, tileHidden, type RenderAnswer } from './sceneTile';
 
 export function SceneTile({ scene, collapsed, railEl }: { scene: SceneData | null; collapsed: boolean; railEl: HTMLElement | null }) {
   const { t } = useI18n();
@@ -66,10 +66,10 @@ export function SceneTile({ scene, collapsed, railEl }: { scene: SceneData | nul
     <img className="hud-scene-background" src={bg} alt="" onError={() => setFailedFor(bg)} draggable={false} />
     {activeSig ? <img className="hud-scene-background" src={'/play/scene-render/image?sig=' + encodeURIComponent(activeSig)} alt="" draggable={false} />
       : <div className="hud-scene-figures">{tileFigures(scene).map(f => <div className="hud-scene-figure" key={f.name}
-        title={f.isAvatar ? `${f.name} (${t('you')})` : f.name}>
-        <span className={f.isAvatar ? 'hud-scene-avatar' : ''}>{f.name}</span>
-        <img key={exprUrl(f.name, f.version)} src={exprUrl(f.name, f.version)} alt="" draggable={false}
-          onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+        title={f.isAvatar ? `${f.label} (${t('you')})` : f.label}>
+        <span className={f.isAvatar ? 'hud-scene-avatar' : ''}>{f.label}</span>
+        {figureUrl(f) && <img key={figureUrl(f)} src={figureUrl(f)} alt="" draggable={false}
+          onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />}
       </div>)}</div>}
     <div className="hud-scene-strip">{scene.room_name || scene.location_name}
       {scene.room_name && scene.location_name !== scene.room_name ? ` · ${scene.location_name}` : ''}</div>
