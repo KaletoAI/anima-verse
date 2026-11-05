@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiGet } from '../../lib/api'
 
 /**
  * Field controls of the package character panel (PackagePanel.tsx): the
  * renderer's whole vocabulary — text, textarea, int, bool, item, items,
- * condition, characters. Pickers show pictures and names, never a bare id; an
- * id the reference lists no longer know stays visible, marked "(missing)",
- * and is kept on save.
+ * condition, characters, backend, loras. Pickers show pictures and names,
+ * never a bare id; an id the reference lists no longer know stays visible,
+ * marked "(missing)", and is kept on save.
  */
 
 export interface PanelField {
@@ -22,6 +23,20 @@ export interface PanelField {
   unit: string
   filter: string
   placeholder: string
+  /** Layout (presentation only): tab id, grid width, textarea height. */
+  tab?: string
+  width?: string
+  rows?: number
+  /** `loras` only: the backend field of the same card that scopes the list,
+   *  its fallback when empty, and the render target of the list. */
+  backend_field?: string
+  fallback_field?: string
+  target?: string
+}
+
+export interface LoraValue {
+  name: string
+  strength: number
 }
 
 export interface ItemOpt {
@@ -47,6 +62,8 @@ export interface PanelRefs {
   items: ItemOpt[]
   conditions: ConditionOpt[]
   characters: CharacterOpt[]
+  /** Image generator backend names (`backend` fields). */
+  backends: string[]
 }
 
 const ITEM_PX = 52
@@ -172,16 +189,95 @@ function asList(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : []
 }
 
+function asLoras(v: unknown): LoraValue[] {
+  if (!Array.isArray(v)) return []
+  return v
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((x) => ({ name: String(x.name ?? ''), strength: Number(x.strength ?? 1) }))
+    .filter((x) => x.name)
+}
+
+/** LoRA list of a panel field: rows (name, strength, remove) plus an add
+ *  row. The options are the LoRA library scoped to `backend` (the draft value
+ *  of the card's backend field; "" = the character's routed backend) and are
+ *  fetched again when it changes. Same behaviour as the LoRA lists of
+ *  ImageOverrides.tsx, compact. */
+function LoraControl({
+  value, onChange, character, backend, target,
+}: {
+  value: unknown
+  onChange: (v: unknown) => void
+  character: string
+  backend: string
+  target: string
+}) {
+  const { t } = useI18n()
+  const list = asLoras(value)
+  const [options, setOptions] = useState<Array<{ name: string; missing?: boolean }>>([])
+  const [add, setAdd] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    const q = `?character_name=${encodeURIComponent(character)}&target=${encodeURIComponent(target)}`
+      + `&backend=${encodeURIComponent(backend)}`
+    // Short delay: a fallback field may be a typed glob — one request per pause, not per key.
+    const timer = window.setTimeout(() => {
+      apiGet<{ loras?: Array<{ name: string; missing?: boolean }> }>(`/characters/outfit-lora-options${q}`)
+        .then((d) => { if (!cancelled) setOptions((d.loras || []).filter((l) => l.name && l.name !== 'None')) })
+        .catch(() => { if (!cancelled) setOptions([]) })
+    }, 250)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [character, target, backend])
+  const known = new Set(options.map((o) => o.name))
+  const addable = options.filter((o) => !list.some((x) => x.name === o.name))
+
+  return (
+    <div className="ga-pp-loras">
+      {list.length === 0 ? <span className="ga-pp-muted">{t('No LoRAs.')}</span> : null}
+      {list.map((l, i) => (
+        <div key={l.name} className="ga-pp-lora">
+          <span className={'ga-pp-lora-name' + (known.has(l.name) ? '' : ' ga-pp-missing')} title={l.name}>
+            {l.name}{known.has(l.name) ? '' : ' ' + t('(missing)')}
+          </span>
+          <input className="ga-input" type="number" step={0.05} min={-4} max={4} title={t('Strength')}
+            value={l.strength}
+            onChange={(e) => {
+              const strength = parseFloat(e.target.value)
+              onChange(list.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)))
+            }} />
+          <button type="button" className="ga-btn ga-btn-sm" title={t('Remove')}
+            onClick={() => onChange(list.filter((_, j) => j !== i))}>×</button>
+        </div>
+      ))}
+      <div className="ga-pp-lora ga-pp-lora-add">
+        <select className="ga-input" value={add} onChange={(e) => setAdd(e.target.value)}>
+          <option value="">— {t('pick a LoRA')} —</option>
+          {addable.map((o) => (
+            <option key={o.name} value={o.name}>{o.name}{o.missing ? ` ${t('(missing)')}` : ''}</option>
+          ))}
+        </select>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!add}
+          onClick={() => {
+            if (!add) return
+            onChange([...list, { name: add, strength: 1 }])
+            setAdd('')
+          }}>{t('Add LoRA')}</button>
+      </div>
+    </div>
+  )
+}
+
 /** The control of one field. `value` is the draft value; `onChange` the
  *  local edit (saving is the card's Save button). */
 export function PanelFieldControl({
-  field, value, onChange, refs, character,
+  field, value, onChange, refs, character, draft,
 }: {
   field: PanelField
   value: unknown
   onChange: (v: unknown) => void
   refs: PanelRefs
   character: string
+  /** The whole card draft — a `loras` field reads its backend field from it. */
+  draft: Record<string, unknown>
 }) {
   const { t, lang } = useI18n()
   const [picking, setPicking] = useState(false)
@@ -200,7 +296,8 @@ export function PanelFieldControl({
   switch (field.type) {
     case 'textarea':
       return (
-        <textarea className="ga-textarea" rows={3} placeholder={field.placeholder || undefined}
+        <textarea className="ga-textarea" rows={field.rows && field.rows > 0 ? field.rows : 3}
+          placeholder={field.placeholder || undefined}
           value={value == null ? '' : String(value)} onChange={(e) => onChange(e.target.value)} />
       )
     case 'int':
@@ -230,6 +327,24 @@ export function PanelFieldControl({
           ))}
           {cur && !known ? <option value={cur}>{cur + ' ' + t('(missing)')}</option> : null}
         </select>
+      )
+    }
+    case 'backend': {
+      const cur = value == null ? '' : String(value)
+      return (
+        <select className="ga-input" value={cur} onChange={(e) => onChange(e.target.value)}>
+          <option value="">{t('— default —')}</option>
+          {refs.backends.map((b) => <option key={b} value={b}>{b}</option>)}
+          {cur && !refs.backends.includes(cur) ? <option value={cur}>{cur + ' ' + t('(missing)')}</option> : null}
+        </select>
+      )
+    }
+    case 'loras': {
+      const pick = (key?: string) => (key && draft[key] != null ? String(draft[key]).trim() : '')
+      const backend = pick(field.backend_field) || pick(field.fallback_field)
+      return (
+        <LoraControl value={value} onChange={onChange} character={character}
+          backend={backend} target={field.target === 'tpose' ? 'tpose' : 'render'} />
       )
     }
     case 'item': {

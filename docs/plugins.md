@@ -1112,7 +1112,7 @@ in `shared/languages/de.json`):
 
 | Method | Answer |
 |---|---|
-| describe — `(character, lang)` | `{"title", "intro", "cards": [card], "create": {"label", "fields": [field]} \| None}` |
+| describe — `(character, lang)` | `{"title", "intro", "tabs"?: [tab], "cards": [card], "create": {"label", "fields": [field]} \| None}` |
 | save — `(character, card_id, values, lang)` | `{"ok", "error"?, "card_id"?}`; `card_id` `None` = create from `create.fields` |
 | delete — `(character, card_id, lang)` | `{"ok", "error"?}` |
 | action — `(character, card_id, action_id, lang)` | `{"ok", "message"?, "error"?}` |
@@ -1121,9 +1121,29 @@ A **card** is `{"id", "title", "subtitle", "badges": [str], "fields": [field],
 "values": {key: value}, "status", "actions": [{"id", "label", "confirm"?,
 "primary"?}], "deletable", "delete_confirm"?}`; a **field** is `{"key", "type",
 "label", "hint"?, "required"?, "min"?, "max"?, "unit"?, "filter"?,
-"placeholder"?}`. `confirm` on an action / `delete_confirm` on a card make the
+"placeholder"?, "tab"?, "width"?, "rows"?}`. `confirm` on an action / `delete_confirm` on a card make the
 panel ask first (in-app dialog). After every save, delete and action the panel
 reloads `describe` — the server is the truth.
+
+**Layout.** The panel shows ONE card at a time: a strip of chips on top (card
+title + its badges, plus a "+ <create label>" chip) selects it; the first card
+is selected initially, a save selects the returned `card_id`, a delete the
+first remaining card, and switching away from unsaved edits asks first. The
+card head (title, badges, subtitle, `status`, the actions, Delete / Discard /
+Save) stays above the fields. A **tab** is `{"id", "label", "hint"?}`; `tabs`
+is the tab order of the whole panel. A field's `tab` names one (missing or
+unknown → the first tab); the tab bar appears only when a card's fields fill
+two tabs or more, the active tab's `hint` shows as one line under it, and the
+draft survives tab switches (a tab with an empty `required` field is marked).
+Inside a tab the fields sit on a 12-column grid, label on top and `hint` below
+(at most two lines, the full text on hover): `width` `"s"`/`"m"`/`"l"`/`"full"`
+spans 3/4/6/12 columns, default `full` for `textarea`/`items`/`characters`/`loras`
+and `m` otherwise; below 720 px of panel width every field takes the full
+row. `rows` is a `textarea`'s height (default 3). `tab`/`width`/`rows` are
+presentation only — the core hands them through untouched. Keep short fields
+narrow and side by side, and split a card into tabs before it grows past a
+screen. The create form uses the same renderer (its fields name no tab, so it
+has no tab bar).
 
 | `type` | Control | Value |
 |---|---|---|
@@ -1134,6 +1154,8 @@ reloads `describe` — the server is the truth.
 | `items` | several items, same picker; `filter: "outfit"` offers only outfit pieces (`category == "outfit_piece"`) | list of item ids |
 | `condition` | dropdown of the conditions catalog (`GET /world/conditions/list`) | condition id (`""` = none) |
 | `characters` | checkboxes with portraits of every character of the world except the panel's own | list of names |
+| `backend` | dropdown of the image generator backends (`GET /world/imagegen-options`, inpaint/upscale/video excluded), first entry "— default —" | backend name (`""` = none) |
+| `loras` | LoRA rows (name, strength, remove) plus an "Add LoRA" dropdown; the options are the LoRA library of the backend named by the draft value of the card's field `backend_field` (or `fallback_field` when that is empty; both empty = the character's routed backend), refetched when that value changes — `GET /characters/outfit-lora-options?character_name=&target=&backend=`; `target` `"render"` (default) or `"tpose"` | list of `{"name", "strength"}` (strength clamped to [-4, 4], non-numeric → 1.0, duplicates by name dropped) |
 
 An id the lists no longer know (deleted item, condition or character) stays
 shown and marked "(missing)", and saving keeps it. The core checks the values

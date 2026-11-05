@@ -3184,28 +3184,72 @@ a.ga-btn {
 .prop-workspace-dialog .prop-action-field { margin-bottom: 10px; }
 
 /* Package character panel (Characters → Skills, PackagePanel.tsx): a
-   package's own editor. Cards are .ga-fieldset; rows are a label column plus
-   the control, pickers show pictures in wrapping rows. */
-.ga-pp { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+   package's own editor. A chip strip selects one card (.ga-fieldset); its head
+   row carries status, actions and Save; the fields sit on a 12-column grid
+   (label on top, hint below), every field full width below 720px of panel
+   width. Pickers show pictures in wrapping rows. */
+.ga-pp { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .ga-pp-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .ga-pp-muted { color: var(--text-muted, #8b949e); font-size: 12px; }
-.ga-pp-card { margin: 0; display: flex; flex-direction: column; gap: 8px; }
-.ga-pp-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
-.ga-pp-head strong { font-size: 14px; }
-.ga-pp-rows { display: flex; flex-direction: column; gap: 7px; }
-.ga-pp-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px; align-items: start; }
-.ga-pp-label { font-size: 12px; color: var(--text-muted, #8b949e); padding-top: 6px; }
-.ga-pp-req { color: #d29922; }
-.ga-pp-control { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: stretch; }
-.ga-pp-control > input[type="checkbox"] { align-self: flex-start; margin-top: 7px; }
-.ga-pp-control > .ga-input, .ga-pp-control > .ga-textarea { width: 100%; }
-.ga-pp-status .ga-pp-control { padding-top: 5px; font-size: 13px; }
-.ga-pp-hint {
-  font-size: 11px; color: var(--text-muted, #8b949e);
+.ga-pp-selector { display: flex; flex-wrap: wrap; gap: 6px; }
+.ga-pp-sel {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0;
+  padding: 4px 10px; border-radius: 16px; cursor: pointer; font: inherit; font-size: 13px;
+  color: var(--text, #c9d1d9); background: var(--bg-secondary, #21262d);
+  border: 1px solid var(--border, #30363d);
+}
+.ga-pp-sel:hover { border-color: var(--accent, #6aa9ff); }
+.ga-pp-sel-on { border-color: var(--accent, #6aa9ff); background: rgba(120, 170, 255, 0.16); }
+.ga-pp-sel-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ga-pp-sel-add { border-style: dashed; color: var(--text-muted, #8b949e); }
+.ga-pp-card { margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ga-pp-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.ga-pp-head-info {
+  flex: 1 1 240px; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px;
+}
+.ga-pp-head-info strong { font-size: 14px; overflow-wrap: anywhere; }
+.ga-pp-status { font-size: 12px; color: var(--text, #c9d1d9); overflow-wrap: anywhere; }
+.ga-pp-head-btns {
+  margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+}
+.ga-pp-sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--border, #30363d); }
+.ga-pp-tabs {
+  display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border, #30363d);
+}
+.ga-pp-tabs .ga-tab { padding: 6px 12px; }
+.ga-pp-tab-bad { color: #d29922; }
+.ga-pp-tabhint {
+  font-size: 12px; color: var(--text-muted, #8b949e); margin-top: 5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.ga-pp-inline { display: flex; align-items: center; gap: 6px; }
-.ga-pp-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.ga-pp-body { container-type: inline-size; min-width: 0; }
+.ga-pp-fields { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px 14px; }
+.ga-pp-f { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: stretch; }
+.ga-pp-w3 { grid-column: span 3; }
+.ga-pp-w4 { grid-column: span 4; }
+.ga-pp-w6 { grid-column: span 6; }
+.ga-pp-w12 { grid-column: span 12; }
+@container (max-width: 719px) {
+  .ga-pp-fields > .ga-pp-f { grid-column: span 12; }
+}
+.ga-pp-label { font-size: 12px; line-height: 1.3; color: var(--text-muted, #8b949e); overflow-wrap: anywhere; }
+.ga-pp-req { color: #d29922; }
+.ga-pp-f > input[type="checkbox"] { align-self: flex-start; margin: 6px 0 0; }
+.ga-pp-f > .ga-input, .ga-pp-f > .ga-textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.ga-pp-hint {
+  font-size: 11px; line-height: 1.35; color: var(--text-muted, #8b949e); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
+.ga-pp-inline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ga-pp-loras { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ga-pp-lora { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ga-pp-lora-name {
+  flex: 1 1 auto; min-width: 0; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ga-pp-lora > input[type="number"] { flex: 0 0 80px; width: 80px; }
+.ga-pp-lora-add > select { flex: 1 1 auto; min-width: 0; width: auto; }
+.ga-pp-lora-add > button { flex: 0 0 auto; }
 .ga-pp-error {
   font-size: 12px; color: #f85149; background: rgba(248, 81, 73, 0.1);
   border: 1px solid rgba(248, 81, 73, 0.35); border-radius: 4px; padding: 5px 8px;
@@ -3225,6 +3269,7 @@ a.ga-btn {
   border: 1px solid var(--border, #30363d); border-radius: 6px;
 }
 .ga-pp-pick:hover { border-color: var(--accent, #6aa9ff); }
+.ga-pp-pick > span:not(.ga-pp-thumb) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ga-pp-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 .ga-pp-chip {
   position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 3px;

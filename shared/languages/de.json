@@ -3921,6 +3921,12 @@
     "{name} already holds the item.": "{name} besitzt den Gegenstand schon.",
     "{name} now holds {item}.": "{name} hat jetzt den Gegenstand „{item}“.",
     "The item could not be given.": "Der Gegenstand konnte nicht übergeben werden.",
-    "Unknown action.": "Unbekannte Aktion."
+    "Unknown action.": "Unbekannte Aktion.",
+    "— default —": "— Standard —",
+    "Add LoRA": "LoRA hinzufügen",
+    "pick a LoRA": "LoRA wählen",
+    "No LoRAs.": "Keine LoRAs.",
+    "The changes to this entry are lost.": "Die Änderungen an diesem Eintrag gehen verloren.",
+    "A required field is empty.": "Ein Pflichtfeld ist leer."
   }
 }

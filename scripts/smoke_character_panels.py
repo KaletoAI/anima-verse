@@ -50,6 +50,40 @@ G) SKILL LISTING — ``character_ops.build_available_skills`` with a stub skill
    panel), ``s3`` to package ``other-pkg`` (no panel), ``s4`` to no package.
    Expected ``panel_package``: s1 = s2 = ``smoke-panel-pkg``, s3 = s4 = ``""``.
    After ``unregister_owned_providers`` the same listing has ``""`` for all.
+
+H) LAYOUT ATTRIBUTES + ``backend``/``loras`` TYPES — a second fake provider
+   (package ``smoke-panel-pkg2``) answers ``tabs`` = ``[{"id": "main", "label":
+   "Main", "hint": "Basics"}, {"id": "img", "label": "Image", "hint": ""}]`` and
+   fields carrying ``tab``/``width``/``rows``. The contract says these are
+   presentation only, so ``describe`` must hand them back exactly as given:
+   ``panel["tabs"]`` equals the list above, field ``bio`` keeps ``tab "main"``,
+   ``width "full"``, ``rows 6``; field ``look`` keeps ``tab "img"``, ``width "m"``;
+   field ``name`` (no tab/width/rows) carries none of the three keys. The
+   ``loras`` field keeps ``backend_field "look"``, ``fallback_field ""`` (not
+   given → empty), ``target "tpose"``.
+   SAVE of card ``p1`` with ``look "  Flux  "`` and ``loras`` =
+   ``[{"name": " a ", "strength": "x"}, {"name": "a", "strength": 9},
+   {"name": ""}, "junk"]``: by the coercion rule (name stripped and non-empty,
+   strength float clamped to [-4, 4], non-numeric → 1.0, duplicate names
+   dropped, first wins, non-dicts dropped) the first entry becomes
+   ``{"name": "a", "strength": 1.0}``, the second is a duplicate of ``a`` and
+   goes, the third has an empty name, the fourth is no dict → the provider
+   receives ``{"look": "Flux", "loras": [{"name": "a", "strength": 1.0}]}``.
+   A second save with ``loras`` = ``[{"name": "b", "strength": -9},
+   {"name": "c", "strength": "0.5"}]`` → ``[{"name": "b", "strength": -4.0},
+   {"name": "c", "strength": 0.5}]`` (clamp at -4; a numeric string parses);
+   ``loras`` = ``"nope"`` (not a list) → error "LoRAs: invalid selection.".
+
+I) LoRA OPTIONS ``backend`` PARAM — ``app/routes/characters.py``
+   ``get_outfit_lora_options`` with a fake image service (``enabled``; backends
+   in this order: ``Flux-Off`` disabled image, ``FluxVideo`` enabled video,
+   ``Flux-Dev`` enabled image with ``lora_filter "flx"``, ``SDXL`` enabled image)
+   and a fake ``get_lora_options`` that answers ``[{"name": "<backend>|<filter>"}]``:
+   ``backend="Flux-Dev"`` (exact name) → ``[{"name": "Flux-Dev|flx"}]``;
+   ``backend="flux*"`` → the first ENABLED IMAGE backend matching the glob is
+   ``Flux-Dev`` (``Flux-Off`` disabled, ``FluxVideo`` is video) → same answer;
+   ``backend="sdxl"`` (case-insensitive like the routing) → ``[{"name": "SDXL|"}]``;
+   ``backend="Nope*"`` → ``[]`` and the fake is not called.
 """
 import inspect
 import os
@@ -297,8 +331,111 @@ try:
                                                       lang="en", _={}), 404)
     finally:
         deps_mod._skill_manager, reg_mod.package_of_skill, character_ops.skill_dependency_block = saved
+
+    # ── H) layout attributes + backend/loras types ─────────────────────────
+    print("H) tabs/tab/width/rows pass through; backend + loras coercion")
+    TABS = [{"id": "main", "label": "Main", "hint": "Basics"},
+            {"id": "img", "label": "Image", "hint": ""}]
+
+    class LayoutProvider:
+        def __init__(self):
+            self.saves = []
+
+        def describe(self, character, lang):
+            fields = [
+                {"key": "name", "type": "text", "label": "Name"},
+                {"key": "bio", "type": "textarea", "label": "Bio", "tab": "main",
+                 "width": "full", "rows": 6},
+                {"key": "look", "type": "backend", "label": "Backend", "tab": "img", "width": "m"},
+                {"key": "loras", "type": "loras", "label": "LoRAs", "tab": "img",
+                 "backend_field": "look", "target": "tpose"},
+            ]
+            return {"title": "Layout", "tabs": [dict(t) for t in TABS],
+                    "cards": [{"id": "p1", "title": "P", "fields": fields,
+                               "values": {"name": "P", "look": "", "loras": []}}]}
+
+        def save(self, character, card_id, values, lang):
+            self.saves.append(values)
+            return {"ok": True, "card_id": card_id}
+
+        def delete(self, character, card_id, lang):
+            return {"ok": True}
+
+        def action(self, character, card_id, action_id, lang):
+            return {"ok": True}
+
+    PKG2 = "smoke-panel-pkg2"
+    lp = LayoutProvider()
+    hooks.register_provider(panel_capability(PKG2), lp, owner=PKG2)
+    panel = routes.get_character_panel("Ada", PKG2, lang="en", _={})
+    check("tabs pass through", panel.get("tabs"), TABS)
+    by_key = {f["key"]: f for f in panel["cards"][0]["fields"]}
+    check("bio tab/width/rows", (by_key["bio"].get("tab"), by_key["bio"].get("width"),
+                                 by_key["bio"].get("rows")), ("main", "full", 6))
+    check("look tab/width", (by_key["look"].get("tab"), by_key["look"].get("width")), ("img", "m"))
+    check("name carries no layout keys",
+          [k for k in ("tab", "width", "rows") if k in by_key["name"]], [])
+    check("loras link attributes",
+          (by_key["loras"].get("backend_field"), by_key["loras"].get("fallback_field"),
+           by_key["loras"].get("target")), ("look", "", "tpose"))
+    res = routes.save_character_panel("Ada", PKG2, body={"card_id": "p1", "values": {
+        "look": "  Flux  ",
+        "loras": [{"name": " a ", "strength": "x"}, {"name": "a", "strength": 9},
+                  {"name": ""}, "junk"]}}, lang="en", _={})
+    check("backend/loras save ok", res, {"ok": True, "error": "", "card_id": "p1"})
+    check("provider got coerced backend + loras", lp.saves[-1] if lp.saves else None,
+          {"look": "Flux", "loras": [{"name": "a", "strength": 1.0}]})
+    routes.save_character_panel("Ada", PKG2, body={"card_id": "p1", "values": {
+        "loras": [{"name": "b", "strength": -9}, {"name": "c", "strength": "0.5"}]}},
+        lang="en", _={})
+    check("loras clamp + numeric string", lp.saves[-1] if lp.saves else None,
+          {"loras": [{"name": "b", "strength": -4.0}, {"name": "c", "strength": 0.5}]})
+    res = routes.save_character_panel("Ada", PKG2, body={"card_id": "p1", "values": {
+        "loras": "nope"}}, lang="en", _={})
+    check("loras not a list", res, {"ok": False, "error": "LoRAs: invalid selection."})
+    hooks.unregister_owned_providers(PKG2)
+
+    # ── I) LoRA options: backend param ─────────────────────────────────────
+    print("I) outfit-lora-options ?backend=")
+    import app.core.config as config_mod
+    import app.imagegen.service as service_mod
+    from app.routes import characters as char_routes
+
+    class _B:
+        def __init__(self, name, enabled, media="image", lora_filter=""):
+            self.name, self.instance_enabled, self.MEDIA_TYPE = name, enabled, media
+            self.lora_filter = lora_filter
+
+    class _Svc:
+        enabled = True
+        backends = [_B("Flux-Off", False), _B("FluxVideo", True, "video"),
+                    _B("Flux-Dev", True, lora_filter="flx"), _B("SDXL", True)]
+
+    lora_calls = []
+
+    def _fake_lora_options(name, lora_filter=""):
+        lora_calls.append(name)
+        return [{"name": f"{name}|{lora_filter}"}]
+
+    saved_io = (service_mod.get_image_service, config_mod.get_lora_options)
+    service_mod.get_image_service = lambda: _Svc()
+    config_mod.get_lora_options = _fake_lora_options
+    try:
+        opts = char_routes.get_outfit_lora_options(character_name="Ada", backend="Flux-Dev")
+        check("exact backend name", opts, {"loras": [{"name": "Flux-Dev|flx"}]})
+        opts = char_routes.get_outfit_lora_options(character_name="Ada", backend="flux*")
+        check("glob → first enabled image backend", opts, {"loras": [{"name": "Flux-Dev|flx"}]})
+        opts = char_routes.get_outfit_lora_options(character_name="Ada", backend="sdxl")
+        check("case-insensitive like the routing", opts, {"loras": [{"name": "SDXL|"}]})
+        n_calls = len(lora_calls)
+        opts = char_routes.get_outfit_lora_options(character_name="Ada", backend="Nope*")
+        check("no match → []", opts, {"loras": []})
+        check("no match → library not asked", len(lora_calls), n_calls)
+    finally:
+        service_mod.get_image_service, config_mod.get_lora_options = saved_io
 finally:
     hooks.unregister_owned_providers(PKG)
+    hooks.unregister_owned_providers("smoke-panel-pkg2")
 
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
 if FAILURES:

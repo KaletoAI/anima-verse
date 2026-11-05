@@ -13,7 +13,8 @@ through the admin routes in ``app/routes/character_panels.py`` and Game-Admin
 renders the answer generically (``frontend/src/tabs/characters/PackagePanel.tsx``):
 
 - ``describe(character, lang) -> dict`` — the whole panel:
-  ``{"title", "intro", "cards": [Card], "create": {"label", "fields": [Field]} | None}``
+  ``{"title", "intro", "tabs": [Tab]?, "cards": [Card],
+  "create": {"label", "fields": [Field]} | None}``
 - ``save(character, card_id, values, lang) -> {"ok", "error"?, "card_id"?}``
   (``card_id`` None = create)
 - ``delete(character, card_id, lang) -> {"ok", "error"?}``
@@ -34,6 +35,7 @@ provider is not called. Docs: ``docs/plugins.md`` → "Character panels",
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Dict, List, Optional
 
@@ -46,11 +48,21 @@ logger = get_logger("character_panels")
 #: Capability prefix of a panel provider: ``character_panel:<package id>``.
 CAPABILITY_PREFIX = "character_panel:"
 
-#: The renderer's whole vocabulary. Values: ``item``/``condition`` = one id
-#: string, ``items``/``characters`` = a list of strings.
+#: The renderer's whole vocabulary. Values: ``item``/``condition``/``backend``
+#: = one id string, ``items``/``characters`` = a list of strings, ``loras`` = a
+#: list of ``{"name", "strength"}``.
 FIELD_TYPES = frozenset({
     "text", "textarea", "int", "bool", "item", "items", "condition", "characters",
+    "backend", "loras",
 })
+
+#: Presentation-only field attributes: handed to the renderer exactly as the
+#: provider gave them (only when given), never checked here.
+_LAYOUT_KEYS = ("tab", "width", "rows")
+
+#: Bounds of a LoRA strength; a value outside is clamped.
+LORA_STRENGTH_MIN = -4.0
+LORA_STRENGTH_MAX = 4.0
 
 _LIST_TYPES = frozenset({"items", "characters"})
 _LANG_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$")
@@ -122,6 +134,15 @@ def _field(raw: Any, where: str) -> Dict[str, Any]:
     }
     out["min"] = _opt_int(raw.get("min"))
     out["max"] = _opt_int(raw.get("max"))
+    for lk in _LAYOUT_KEYS:
+        if lk in raw:
+            out[lk] = raw[lk]
+    if ftype == "loras":
+        # The LoRA list is scoped to the backend another field of the same
+        # card names (the draft value, fallback_field when that is empty).
+        out["backend_field"] = _s(raw.get("backend_field")).strip()
+        out["fallback_field"] = _s(raw.get("fallback_field")).strip()
+        out["target"] = "tpose" if _s(raw.get("target")).strip() == "tpose" else "render"
     return out
 
 
@@ -171,12 +192,30 @@ def _card(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _tabs(raw: Any) -> List[Dict[str, Any]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PanelContractError("tabs is not a list")
+    out: List[Dict[str, Any]] = []
+    for tab in raw:
+        if not isinstance(tab, dict) or not _s(tab.get("id")).strip():
+            raise PanelContractError("tab without id")
+        tid = _s(tab.get("id")).strip()
+        out.append({"id": tid, "label": _s(tab.get("label")) or tid, "hint": _s(tab.get("hint"))})
+    ids = [tab["id"] for tab in out]
+    if len(set(ids)) != len(ids):
+        raise PanelContractError("duplicate tab ids")
+    return out
+
+
 def normalize_panel(raw: Any) -> Dict[str, Any]:
     """A provider's ``describe`` answer reduced to the contract.
 
-    Optional keys get their empty default; a missing card/field/action id, a
-    field type outside ``FIELD_TYPES`` or a wrong container type raise
-    ``PanelContractError``."""
+    Optional keys get their empty default; a missing card/field/action/tab id,
+    a field type outside ``FIELD_TYPES`` or a wrong container type raise
+    ``PanelContractError``. The layout attributes ``tab``/``width``/``rows`` of
+    a field pass through untouched (the renderer falls back on its own)."""
     if not isinstance(raw, dict):
         raise PanelContractError("describe() did not answer an object")
     cards = raw.get("cards") or []
@@ -194,7 +233,7 @@ def normalize_panel(raw: Any) -> Dict[str, Any]:
         norm_create = {"label": _s(create.get("label")),
                        "fields": _fields(create.get("fields"), "create")}
     return {"title": _s(raw.get("title")), "intro": _s(raw.get("intro")),
-            "cards": norm_cards, "create": norm_create}
+            "tabs": _tabs(raw.get("tabs")), "cards": norm_cards, "create": norm_create}
 
 
 def _result(raw: Any, what: str, lang: str, *extra: str) -> Dict[str, Any]:
@@ -213,6 +252,34 @@ def _result(raw: Any, what: str, lang: str, *extra: str) -> Dict[str, Any]:
 # Value coercion (the generic part of a save)
 # ---------------------------------------------------------------------------
 
+def _lora_strength(raw: Any) -> float:
+    """A LoRA strength: float clamped to the bounds; non-numeric → 1.0."""
+    if isinstance(raw, bool):
+        return 1.0
+    try:
+        val = float(raw.strip() if isinstance(raw, str) else raw)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(val):
+        return 1.0
+    return max(LORA_STRENGTH_MIN, min(LORA_STRENGTH_MAX, val))
+
+
+def _coerce_loras(raw: List[Any]) -> List[Dict[str, Any]]:
+    """Entries with a non-empty name, first of a name wins; anything else goes."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = _s(entry.get("name")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append({"name": name, "strength": _lora_strength(entry.get("strength"))})
+    return out
+
+
 def coerce_values(fields: List[Dict[str, Any]], values: Dict[str, Any], *,
                   creating: bool, lang: str = "en") -> tuple[Dict[str, Any], str]:
     """``(clean values, error)`` for submitted ``values`` against normalized
@@ -227,7 +294,7 @@ def coerce_values(fields: List[Dict[str, Any]], values: Dict[str, Any], *,
                 return {}, t("{label} is required.", lang).format(label=label)
             continue
         raw = values[key]
-        if ftype in ("text", "textarea", "item", "condition"):
+        if ftype in ("text", "textarea", "item", "condition", "backend"):
             val: Any = _s(raw).strip()
             empty = not val
         elif ftype == "bool":
@@ -245,6 +312,13 @@ def coerce_values(fields: List[Dict[str, Any]], values: Dict[str, Any], *,
                 if f["max"] is not None and num > f["max"]:
                     return {}, t("{label}: at most {n}.", lang).format(label=label, n=f["max"])
                 val, empty = num, False
+        elif ftype == "loras":
+            if raw is None:
+                raw = []
+            if not isinstance(raw, (list, tuple)):
+                return {}, t("{label}: invalid selection.", lang).format(label=label)
+            val = _coerce_loras(list(raw))
+            empty = not val
         else:  # _LIST_TYPES
             if raw is None:
                 raw = []

@@ -496,7 +496,8 @@ def _save_home_location_route_sync(character_name: str,
 
 @router.get("/outfit-lora-options")
 def get_outfit_lora_options(character_name: str = "",
-                            target: str = "render") -> Dict[str, Any]:
+                            target: str = "render",
+                            backend: str = "") -> Dict[str, Any]:
     """Returns the LoRA list for the outfit-piece editor.
 
     Args:
@@ -505,6 +506,11 @@ def get_outfit_lora_options(character_name: str = "",
             image routing's "expression" occasion (outfit and variant
             renders); "tpose" to the "tpose" occasion (its position 0 is
             outfit_imagegen.tpose_workflow, else outfit_imagegen.workflow).
+        backend: non-empty = skip the routing resolution and scope the list
+            to the first ENABLED image backend whose name matches this value
+            as an fnmatch glob (case-insensitive like the routing; an exact
+            name works); no such backend → empty list. Used by panel fields
+            whose LoRAs belong to a backend chosen in the same form.
 
     Response:
         loras: [{name, missing}] from the LoRA library, scoped to the backend
@@ -515,6 +521,22 @@ def get_outfit_lora_options(character_name: str = "",
     imagegen = get_image_service()
     if not imagegen.enabled:
         return {"loras": []}
+
+    pattern = (backend or "").strip().lower()
+    if pattern:
+        import fnmatch
+        from app.core.config import get_lora_options
+        eff = next((b for b in imagegen.backends
+                    if getattr(b, "instance_enabled", False)
+                    and getattr(b, "MEDIA_TYPE", "image") == "image"
+                    and fnmatch.fnmatch(str(b.name).lower(), pattern)), None)
+        if eff is None:
+            return {"loras": []}
+        try:
+            return {"loras": get_lora_options(
+                eff.name, lora_filter=getattr(eff, "lora_filter", "") or "")}
+        except Exception:
+            return {"loras": []}
 
     try:
         from app.core.config import get_lora_options
