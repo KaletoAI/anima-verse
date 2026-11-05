@@ -9,35 +9,41 @@ imported), no server, no real world DB, no LLM. The package is loaded the way
 the server loads it: ``packages.enabled = "transformation"`` in the world
 config, then ``discover_packages()`` runs its ``on_load`` (``register.py``).
 
-FIXTURE (world config ``skills.transformation_personas``, in this order)
+FIXTURE (``store.create_definition``, in this order — the store writes rows as
+given, the usability rules are ``definitions.load()``'s)
     #1 id "moon"     item "moon_brooch" alias "Moonveil"  suit "silver_mask, , silver_cape"
                      max 0, cooldown 15, activity "glowing", description "A masked figure in silver."
     #2 id "noalias"  item "x"           alias ""          -> skipped: lacks alias
     #3 id "dup"      item "y"           alias "moonveil"  -> skipped: duplicate alias (casefold of #1)
     #4 id "kimclash" item "z"           alias "KIM"       -> skipped: collides with character Kim
     #5 id "off"      item "w"           alias "Dormant"   enabled false -> skipped: disabled
-    #6 id "moon"     item "v"           alias "Other"     -> skipped: duplicate id (#1 wins)
+    #6 id "moon"     item "v"           alias "Other"     -> refused by the table (PRIMARY KEY)
     #7 id "sun"      item "sun_ring"    alias "Sunward"   (only the required fields)
     Characters Cara (bearer), Kim (knower), Obs (non-knower). Item "moon_brooch"
     has an image, "sun_ring" has none.
 
 THE RULES (task brief), and what follows BY HAND
-[A] Generic array support (step 1): the manifest subsection carries
-    ``is_array: true`` + ``item_label_field: alias``. It must survive
-    registry -> ``config_schema.get_schema()["skills"]["subsections"]`` ->
-    the world-scope schema (``config_scope.schema_for("world")``) unchanged;
-    ``config.get`` returns the 7 records as stored in the file; ``prune``
-    keeps the list whole (a list is one value, it has no shipped default);
-    ``shipped_tree("world")`` has NO value at that path — the field defaults
-    belong to each ITEM, never to the list (a dict there would make "Reset to
-    default" put an object where a list lives); a save + reload round trip
-    gives the same 7 records back.
-[B] definitions.load(): kept = {"moon", "sun"} (#2..#6 skipped as listed).
+[A] Storage (task 2): the world config list ``skills.transformation_personas``
+    is gone — no package subsection in the registry, none in
+    ``config_schema.get_schema()["skills"]`` or the world-scope schema
+    (``config_scope.schema_for("world")``, what Setup → Skills renders). The
+    personas are rows of ``transformation_definitions``: #6 raises
+    ``sqlite3.IntegrityError`` (id taken), so does a second row for item
+    "moon_brooch" (``item_id`` UNIQUE); 6 rows stored. ``list_definitions``
+    keeps creation order; #1's suit is stored as
+    ["silver_mask", "silver_cape"] (blank member dropped). A row created
+    without id gets a slug of its alias: "Ünder Moon!" -> "under_moon", the
+    next one with the same alias "under_moon_2", an alias without one ASCII
+    letter -> "persona". Every write bumps ``definitions_generation()``.
+[B] definitions.load(): kept = {"moon", "sun"} (#2..#5 skipped as listed).
     moon: suit_items = ("silver_mask", "silver_cape") (blank member dropped),
           max 0, cooldown 15, activity "glowing".
-    sun:  schema defaults — enabled True, max 60, cooldown 30, activity
-          "transforming", suit_items = (), description "".
+    sun:  table defaults = the constants in ``definitions`` — enabled True,
+          max 60, cooldown 30, activity "transforming", suit_items = (),
+          description "".
     for_item("moon_brooch").id = "moon"; for_item("nothing") = None.
+    An ``update_definition`` is seen by the next ``load()`` at once (the
+    write generation is the cache key): sun's cooldown 45 -> 45, back to 30.
 [C] cache rebuilt from table: a row written straight into
     ``transformation_active`` (as a restart would find it) is visible after
     ``store.invalidate()`` -> active_persona("Cara").alias = "Moonveil",
@@ -64,7 +70,8 @@ THE RULES (task brief), and what follows BY HAND
     hold 0 rows of Cara afterwards and active_persona("Cara") is None.
     A memory-scope reset keeps the state (it is mechanical state, not memory):
     after re-arming, reset_character("Cara", memory) has no "transformation"
-    key and the active row stays.
+    key and the active row stays. Neither reset touches the definitions (world
+    content): still 6 rows.
 [H] deletion: delete_character("Obs") sweeps Obs's active row (the tables key
     the character in a ``character_name`` column, which the delete sweep
     covers).
@@ -98,7 +105,6 @@ RECORDS = [
 ]
 (STORAGE / "config.json").write_text(json.dumps({
     "packages": {"enabled": "transformation"},
-    "skills": {"transformation_personas": RECORDS},
 }), encoding="utf-8")
 
 from app.core import paths  # noqa: E402
@@ -136,36 +142,48 @@ from app.plugins import loader, registry  # noqa: E402
 loader.discover_packages()
 check("package loaded", "transformation" in {p.id for p in registry.packages()}, True)
 
-# ── [A] generic array support ──────────────────────────────────────────────
-print("[A] config_schema array subsection")
+# ── [A] storage ────────────────────────────────────────────────────────────
+print("[A] definitions table, no config list")
+import sqlite3  # noqa: E402
 from app.core import config_schema, config_scope  # noqa: E402
-_sub = registry.config_subsections().get("transformation_personas") or {}
-check("registry subsection is_array", _sub.get("is_array"), True)
-_schema_sub = config_schema.get_schema()["skills"]["subsections"].get("transformation_personas") or {}
-check("get_schema is_array", _schema_sub.get("is_array"), True)
-check("get_schema item_label_field", _schema_sub.get("item_label_field"), "alias")
-_world_sub = ((config_scope.schema_for(config_scope.WORLD).get("skills") or {})
-              .get("subsections") or {}).get("transformation_personas") or {}
-check("world schema is_array", _world_sub.get("is_array"), True)
-check("world schema item_label_field", _world_sub.get("item_label_field"), "alias")
-check("scope is world", config_scope.scope_of("skills.transformation_personas"), "world")
-check("config.get returns the stored list", config.get("skills.transformation_personas"), RECORDS)
-check("prune keeps the list whole",
-      config_scope.prune({"skills": {"transformation_personas": RECORDS}}),
-      {"skills": {"transformation_personas": RECORDS}})
-check("shipped_tree has no value at the list path",
-      "transformation_personas" in ((config_scope.shipped_tree(config_scope.WORLD)
-                                     .get("skills") or {})),
+from plugins.transformation import definitions, knowers, store  # noqa: E402
+check("no registry subsection", "transformation_personas" in registry.config_subsections(), False)
+check("no schema subsection",
+      "transformation_personas" in (config_schema.get_schema()["skills"].get("subsections") or {}),
       False)
-check("shipped_default of the list", config_scope.shipped_default("skills.transformation_personas"),
-      (False, None))
-config.save(config.get_all(), STORAGE / "config.json")
-config.load(STORAGE / "config.json")
-check("save + reload round trip", config.get("skills.transformation_personas"), RECORDS)
+check("not in Setup → Skills (world schema)",
+      "transformation_personas" in ((config_scope.schema_for(config_scope.WORLD).get("skills") or {})
+                                    .get("subsections") or {}),
+      False)
+_gen0 = store.definitions_generation()
+_refused = []
+for _r in RECORDS:
+    try:
+        store.create_definition({k: v for k, v in _r.items() if k != "id"}, persona_id=_r["id"])
+    except sqlite3.IntegrityError:
+        _refused.append(_r["id"] + "/" + _r["item_id"])
+check("duplicate id refused by the table", _refused, ["moon/v"])
+try:
+    store.create_definition({"item_id": "moon_brooch", "alias": "Second"}, persona_id="second")
+    _item_twice = "stored"
+except sqlite3.IntegrityError:
+    _item_twice = "refused"
+check("one persona per item", _item_twice, "refused")
+check("rows stored, creation order", [r["id"] for r in store.list_definitions()],
+      ["moon", "noalias", "dup", "kimclash", "off", "sun"])
+check("suit stored as a clean list", store.get_definition("moon")["suit_items"],
+      ["silver_mask", "silver_cape"])
+check("writes bump the generation", store.definitions_generation() > _gen0, True)
+_s1 = store.create_definition({"item_id": "q1", "alias": "Ünder Moon!"})
+_s2 = store.create_definition({"item_id": "q2", "alias": "Ünder Moon!"})
+_s3 = store.create_definition({"item_id": "q3", "alias": "月"})
+check("slug ids", [_s1, _s2, _s3], ["under_moon", "under_moon_2", "persona"])
+for _sid in (_s1, _s2, _s3):
+    check(f"delete {_sid}", store.delete_definition(_sid), True)
+check("delete unknown", store.delete_definition("nope"), False)
 
 # ── [B] definitions ─────────────────────────────────────────────────────────
 print("[B] definitions")
-from plugins.transformation import definitions, knowers, store  # noqa: E402
 defs = definitions.load()
 check("kept ids", sorted(defs), ["moon", "sun"])
 moon, sun = defs["moon"], defs["sun"]
@@ -183,6 +201,9 @@ check("sun suit default", sun.suit_items, ())
 check("sun description default", sun.description, "")
 check("for_item moon_brooch", getattr(definitions.for_item("moon_brooch"), "id", None), "moon")
 check("for_item unknown", definitions.for_item("nothing"), None)
+store.update_definition("sun", {"cooldown_minutes": 45})
+check("update seen at once", definitions.load()["sun"].cooldown_minutes, 45)
+store.update_definition("sun", {"cooldown_minutes": 30})
 
 # ── [C] active state + cache ────────────────────────────────────────────────
 print("[C] active state")
@@ -267,6 +288,7 @@ store.set_active(store.ActiveRow(bearer="Cara", persona_id="moon", started_game=
 result = reset_character("Cara", scope=SCOPE_MEMORY)
 check("memory reset leaves the state", "transformation" in result, False)
 check("active row kept", _rows("transformation_active", "Cara"), 1)
+check("definitions survive both resets", len(store.list_definitions()), 6)
 
 # ── [H] deletion sweep ─────────────────────────────────────────────────────
 print("[H] character deletion")

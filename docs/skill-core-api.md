@@ -685,6 +685,7 @@ placement; destination-bound shared trips always use timed cross-location travel
 | `get_character_config(character_name, *, profile=None, strict=False) -> Dict` | Reuse a held profile; strict mode never repairs/writes failed config reads. Valid empty config gets defaults in memory; malformed/null/non-object JSON or missing rows fail |
 | `save_character_profile(character_name, profile, create_new=False) -> bool` | Schreibt den GANZEN Blob. **Wirft nie** — `False` heißt: nichts gespeichert (reservierter/unbekannter Name oder fehlgeschlagener Write). Rückgabe prüfen. Bei Neuanlage `create_new=True` Pflicht — der Name muss dann die Namensregel erfüllen, sonst `False`. Nur unter `keyed_lock("character_profile", name)` (siehe „Sperren") |
 | `app.core.character_name.validate_character_name(name) -> str` | Die EINE Namensregel für NEUE Charaktere: Buchstaben jeder Schrift, Ziffern, einfache Leerzeichen, `-`, `'`, `.`, `_` (nicht am Anfang), 1–60 Zeichen. Gibt den NFC-normalisierten Namen zurück oder wirft `CharacterNameError` (Feld `code`). Gilt nur beim Anlegen/Import — bestehende Namen werden nie geprüft, nie umbenannt |
+| `app.core.character_name.localized_message(err, lang='') -> str` | The text of a `CharacterNameError` in the UI language (its English template through `i18n.t`, then its params filled in) — for an editor that shows the name rule's refusal, e.g. a persona alias in the Transformation panel |
 | `save_character_current_location(character_name='', location='', …)` | ZENTRALE Bewegung — löst Entry-Room, Compliance, Party-Drag, Flag-Location-Resets, Discovery aus. Nie umgehen |
 | `get_character_current_location(character_name='', profile=None) -> str` / `get_character_current_room(character_name, profile=None) -> str` | Aufenthaltsort/-raum. Bei laufender Reise ist das die NÄCHSTE Position, nicht das Reiseziel; unterwegs im freien Gelände ist `current_location` leer |
 | `is_character_sleeping(character_name, profile=None) -> bool` | Schläft der Charakter? (nicht erreichbar) |
@@ -1303,12 +1304,14 @@ Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
 | `app.core.tool_formats.format_example(format_name, tool_name, example_input) -> str` | Tool-Nutzungs-Beispiel im aktiven Tool-Format |
 | `app.core.timeutils.game_time(*, strict=False) -> GameTime` | GAME time for world logic, never `datetime.now()`; strict mode propagates persisted clock-read failures |
 | `app.core.game_time.GameTime.parse(text, calendar=None) -> GameTime` / `.canonical() -> str` | Persist a GAME instant as its canonical sortable stamp (`Y0002-D109T14:23:45`) and read it back; `GameTime` compares and adds `GameDuration` |
+| `app.core.game_time.GameTime.display_label(lang='en', calendar=None) -> str` | The label of a GAME instant for a UI payload (season, day, clock in the configured `server.time_format`) — what a client SHOWS; prompts use `.label(lang)` |
 | `app.core.game_time.GameDuration.of(days=0, hours=0, minutes=0, seconds=0) -> GameDuration` | An in-world duration (durations, cooldowns, TTLs) — a world freeze stops it with the clock |
 | `app.core.config.get(path, default=None)` | World/instance setting by dot path (e.g. `skills.<package>.<field>`), the layers already merged |
 | `app.core.config_schema.field_default(section, *keys)` | The schema default of one field — the ONE fallback source, also for a package subsection (`field_default("skills", "<subsection>", "<field>")`); raises `KeyError` for an unknown field or one without default |
 | `app.core.log.get_logger(name)` | The application logger (`logs/main.log`) |
 | `app.core.timeutils.utc_now()` / `utc_now_iso()` / `parse_iso(s)` | SYSTEM-Zeit — nur technische Stempel (Persistenz, Reihenfolge, Cooldowns, Logs) |
 | `app.core.i18n.t(en, lang=None) -> str` | Übersetzbare Zeichenkette; die Quelle bleibt Englisch |
+| `app.core.i18n.localized(obj, field, lang='en')` | `obj["<field>_<lang>"]` when non-empty, else `obj[field]` — the localized name/description of an item, activity, rule |
 | `PluginContext`: `ctx.get_config(path, default)`, `ctx.http`, `ctx.logger` | Welt-Config per Dot-Pfad (Beispiel `skills.markdown_writer.max_size_kb` seedet die Per-Character-`_defaults`), HTTP, Logging |
 
 ## Decision models — `app.core.decision` ✅
@@ -1567,6 +1570,7 @@ stat writers and LLM stat adjustments continue to use the base values (0–100).
 - `list_secrets(character_name, *, strict=False)` → all stored secrets owned by a character.
 - `get_secret(character_name, secret_id)` → secret dict or `None`.
 - `add_secret(character_name, content, category="personal", severity=2, related_characters=None, related_location=None, consequences_if_revealed="", source="manual", known_by=None, source_ref="")` → created secret dict.
+- `update_secret(character_name, secret_id, updates)` → the updated secret or `None`; writes only the editable keys (`content`, `known_by`, `discovered_by`, `category`, `severity`, …), `source_ref` stays.
 - `add_known_by(character_name, secret_id, knower_name, discovered=False)` → whether the secret exists; adds the knower and stamps first learning with `game_time().canonical()` in `known_at`. Repeated learning preserves that stamp.
 - `delete_secrets_by_ref(character_name, source_ref)` → number deleted with the exact reference, scoped to this owner.
 - `known_about_others_block(character_name: str) -> str` → known-about-others prompt text, or `""`; shared by chat and both thought templates (thoughts require `secrets_enabled`). Own secrets are excluded.

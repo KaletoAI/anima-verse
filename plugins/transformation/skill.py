@@ -44,7 +44,7 @@ _TRANSFORM_REFUSALS = {
 
 
 def held_personas(character: str) -> List[Definition]:
-    """The personas whose power item ``character`` carries, in config order."""
+    """The personas whose power item ``character`` carries, in definition order."""
     defs = definitions.load()
     if not defs or not character:
         return []

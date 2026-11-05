@@ -180,11 +180,11 @@ stops acting autonomously).
 - **Parties:** one leader plus followers travel as one — only the leader moves, followers are pulled
   along, and joining is an LLM tool call, never a keyword match.
 - **Secret identities:** a character who carries a power item can transform into a persona — an
-  alias with its own description (the `transformation` package; personas in Game-Admin → Setup →
-  Skills). Everyone not in on the secret perceives only the alias, as a separate person with its own
-  relationship and memories, in every prompt and in the player's HUD; knowers (Characters → Secrets)
-  read "alias (name)". The avatar transforms by saying a phrase, NPCs by a tool call
-  ([details](docs/plugins.md#package-transformation)).
+  alias with its own description (the `transformation` package; personas edited in Game-Admin →
+  Characters → Skills → Transformation, bound to a power item). Everyone not in on the secret perceives
+  only the alias, as a separate person with its own relationship and memories, in every prompt and in the
+  player's HUD; knowers (ticked in the same panel) read "alias (name)". The avatar transforms by saying
+  a phrase, NPCs by a tool call ([details](docs/plugins.md#package-transformation)).
 - Locations → rooms, with an `entry_room`, per-room floor plans, indoor/outdoor, decency, swim rules,
   `known_locations` discovery and rule-based access control (**Block / Force / Discover / Modify**
   rules with free-text conditions such as `has_item:item_a1b2c3d4 OR courage>50`). A block rule can

@@ -87,7 +87,6 @@ PERSONA = {"id": "p1", "item_id": "amulet", "alias": "Moonveil",
            "max_duration_minutes": 60, "cooldown_minutes": 30}
 (STORAGE / "config.json").write_text(json.dumps({
     "packages": {"enabled": "transformation"},
-    "skills": {"transformation_personas": [PERSONA]},
 }), encoding="utf-8")
 
 from app.core import paths  # noqa: E402
@@ -96,6 +95,12 @@ paths.init_instance(ROOT / "instance")
 from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
+
+# The personas live in the package's own table (Characters → Skills panel).
+from plugins.transformation import store as tstore  # noqa: E402
+tstore.ensure_schema()
+for _p in [PERSONA]:
+    tstore.create_definition({k: v for k, v in _p.items() if k != "id"}, persona_id=_p["id"])
 
 from app.core import embedding  # noqa: E402
 embedding.embed = lambda text: None   # no model: the catalog default answers

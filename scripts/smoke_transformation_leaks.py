@@ -14,7 +14,7 @@ module is imported). No server, no LLM, no real world.
     (``packages.enabled = "transformation"``, ``discover_packages()``).
   * The deletion half runs this same file again in a FRESH SUBPROCESS with
     ``--absent``: a new temp world, the same characters, items and lines, the
-    package NOT enabled (``packages.enabled = ""``, no persona config). The
+    package NOT enabled (``packages.enabled = ""``, no persona rows). The
     package also registers EVENT listeners (``character.prompt_context``,
     ``character.thought_context``, ``world_tick``) and ``hooks`` cannot
     unregister those, so dropping its providers in-process would not model a
@@ -125,8 +125,7 @@ PERSONAS = [
      "max_duration_minutes": 0, "cooldown_minutes": 0},
 ]
 _cfg = ({"packages": {"enabled": ""}} if ABSENT else
-        {"packages": {"enabled": "transformation"},
-         "skills": {"transformation_personas": PERSONAS}})
+        {"packages": {"enabled": "transformation"}})
 (STORAGE / "config.json").write_text(json.dumps(_cfg), encoding="utf-8")
 
 from app.core import paths  # noqa: E402
@@ -135,6 +134,12 @@ paths.init_instance(ROOT / "instance")
 from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
+
+if not ABSENT:   # the personas live in the package's own table (Characters → Skills panel)
+    from plugins.transformation import store as tstore  # noqa: E402
+    tstore.ensure_schema()
+    for _p in PERSONAS:
+        tstore.create_definition({k: v for k, v in _p.items() if k != "id"}, persona_id=_p["id"])
 
 from app.core import embedding  # noqa: E402
 embedding.embed = lambda text: None   # no model: the catalog default answers
