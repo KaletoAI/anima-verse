@@ -346,6 +346,15 @@ def render_has_reference_image(character_name: str, *,
     if set_profile or not character_name:
         return False
     try:
+        # A persona look never slots her real portrait (outfit_imagegen.
+        # reference_allowed); only a render of the same look could serve, so
+        # the real portrait must not steer the match toward img2img either.
+        from app.core.outfit_imagegen import current_look
+        if current_look(character_name).transformed:
+            return False
+    except Exception:
+        pass
+    try:
         from app.models.character import get_character_profile_image
         return bool(get_character_profile_image(character_name))
     except Exception:
