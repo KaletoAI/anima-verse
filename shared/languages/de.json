@@ -3292,6 +3292,8 @@
     "Body anchor": "Körperanker",
     "Requirement": "Voraussetzung",
     "Effect": "Wirkung",
+    "Condition while transformed": "Zustand während der Verwandlung",
+    "Linked characters share one place: {name} stands in the world right now, and placing here moves {name}.": "Verknüpfte Figuren teilen sich einen Ort: {name} steht gerade in der Welt, und ein Platzieren hier versetzt {name}.",
     "Configuration": "Konfiguration",
     "Check in room": "Im Raum prüfen",
     "Uses the saved configuration. This check reserves no place, moves nobody and changes no values. It reports the first blocking reason; later checks are not confirmed as passed.": "Nur gespeicherte Konfiguration. Diese Prüfung reserviert keinen Platz, bewegt niemanden und verändert keine Werte. Sie meldet den ersten tatsächlichen Sperrgrund; spätere Prüfungen sind damit nicht als bestanden bestätigt.",

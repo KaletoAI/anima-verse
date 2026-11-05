@@ -134,7 +134,7 @@ def _fields(leader: str, body: str, lang: str) -> List[Dict[str, Any]]:
                               "label": t("Activity while transforming", lang),
                               "placeholder": DEFAULT_TRANSFORM_ACTIVITY}),
         on("transform", "s", {"key": "condition_id", "type": "condition",
-                              "label": t("Effect", lang),
+                              "label": t("Condition while transformed", lang),
                               "hint": t("Condition on the body while transformed.", lang)}),
         on("knowers", "full", {"key": "knowers", "type": "characters",
                                "label": t("Knowers", lang),

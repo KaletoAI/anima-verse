@@ -78,6 +78,12 @@ export function PlacementEditor({
 
   return (
     <>
+      {current.synced_with ? (
+        <p className="ga-form-hint">
+          {t('Linked characters share one place: {name} stands in the world right now, and placing here moves {name}.')
+            .split('{name}').join(current.synced_with)}
+        </p>
+      ) : null}
       <div className="ga-form-row">
         <Field
           label={t('Location')}

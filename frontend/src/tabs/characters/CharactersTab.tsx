@@ -67,6 +67,9 @@ export interface CurrentLocation {
   current_activity: string
   current_room: string
   current_room_name: string
+  /** A dormant linked member shows its family's ONE place — the place of the
+   *  member standing in the world, named here ("" otherwise). */
+  synced_with?: string
 }
 
 export interface DraftPlacement {
