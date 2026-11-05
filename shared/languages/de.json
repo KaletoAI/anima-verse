@@ -3873,7 +3873,7 @@
     "Power item": "Kraft-Gegenstand",
     "Whoever holds it can transform.": "Wer ihn besitzt, kann sich verwandeln.",
     "Alias": "Deckname",
-    "The name everyone else sees.": "Der Name, den alle anderen sehen.",
+    "The name everyone else sees. Renaming later starts afresh: what others remember stays with the old name.": "Der Name, den alle anderen sehen. Eine spätere Umbenennung fängt neu an: Was andere erlebt haben, bleibt beim alten Namen.",
     "Looks like": "Aussehen",
     "What others perceive instead of the real appearance.": "Was andere statt des echten Aussehens wahrnehmen.",
     "Suit": "Kostüm",

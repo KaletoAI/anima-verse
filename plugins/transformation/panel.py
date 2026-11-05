@@ -93,7 +93,7 @@ def _fields(character: str, alias: str, lang: str) -> List[Dict[str, Any]]:
         {"key": "item_id", "type": "item", "label": t("Power item", lang), "required": True,
          "hint": t("Whoever holds it can transform.", lang)},
         {"key": "alias", "type": "text", "label": t("Alias", lang), "required": True,
-         "hint": t("The name everyone else sees.", lang)},
+         "hint": t("The name everyone else sees. Renaming later starts afresh: what others remember stays with the old name.", lang)},
         {"key": "description", "type": "textarea", "label": t("Looks like", lang),
          "hint": t("What others perceive instead of the real appearance.", lang)},
         {"key": "suit_items", "type": "items", "label": t("Suit", lang), "filter": _OUTFIT_FILTER,
@@ -123,7 +123,7 @@ def _create_fields(lang: str) -> List[Dict[str, Any]]:
         {"key": "item_id", "type": "item", "label": t("Power item", lang), "required": True,
          "hint": t("Whoever holds it can transform.", lang)},
         {"key": "alias", "type": "text", "label": t("Alias", lang), "required": True,
-         "hint": t("The name everyone else sees.", lang)},
+         "hint": t("The name everyone else sees. Renaming later starts afresh: what others remember stays with the old name.", lang)},
         {"key": "description", "type": "textarea", "label": t("Looks like", lang),
          "hint": t("What others perceive instead of the real appearance.", lang)},
     ]
