@@ -280,9 +280,12 @@ def render_block(entries: List[Dict[str, Any]]) -> str:
     if not entries:
         return ""
     from app.core.prompt_templates import render
+    from app.models.memory import memory_body
+    # A memory a linked body formed reads "(as <body>) …" (one mind).
     memories = [
         {
-            "content": (e.get("content") or "").strip(),
+            "content": (f"(as {memory_body(e)}) " if memory_body(e) else "")
+                       + (e.get("content") or "").strip(),
         }
         for e in entries if (e.get("content") or "").strip()
     ]

@@ -17,6 +17,12 @@ stamp; the retention cutoff is computed in system time too, not game time.
 string, ``Y0002-D109T14:00:00``) — it is stored at creation because the game
 clock re-anchors on set/factor/freeze and therefore cannot be derived from
 ``ts`` afterwards.
+
+**Thoughts belong to the MIND** (linked characters): every function resolves
+the name it is given through ``linked_characters.mind_of``, so a body journals
+into and reads its leader's journal. A thought a body had carries ``body`` =
+that body's name (``""`` for the mind's own), and readers render it
+"(as <body>)".
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
+from app.core.linked_characters import family_of, mind_of
 from app.core.log import get_logger
 from app.core.timeutils import game_time, utc_now_iso
 
@@ -62,22 +69,28 @@ def add_thought(character_name: str, content: str, location_id: str = "",
 
     Never raises: a failing journal write must not take down the thought turn
     it belongs to — the turn's world effects already happened through verbs.
+
+    ``character_name`` is the THINKING character; the row goes to its mind,
+    with ``body`` set when that is a linked body.
     """
     text = (content or "").strip()
     if not character_name or not text:
         return False
+    mind = mind_of(character_name)
+    body = character_name if character_name != mind else ""
     try:
         with transaction() as conn:
             conn.execute(
                 "INSERT INTO thoughts (character_name, ts, game_ts, location_id,"
-                " room_id, content, present, nearby)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (character_name, ts or utc_now_iso(), _game_ts(),
+                " room_id, content, present, nearby, body)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (mind, ts or utc_now_iso(), _game_ts(),
                  location_id or "", room_id or "", text,
                  json.dumps(list(present), ensure_ascii=False) if present else "",
-                 json.dumps(list(nearby), ensure_ascii=False) if nearby else ""))
+                 json.dumps(list(nearby), ensure_ascii=False) if nearby else "",
+                 body))
         from app.core import sync_topics
-        sync_topics.avatars([character_name], "self")
+        sync_topics.avatars(family_of(mind), "self")
         return True
     except Exception as e:
         logger.warning("add_thought(%s) failed: %s", character_name, e)
@@ -92,8 +105,8 @@ def list_thoughts(character_name: str, limit: int = 50,
         return []
     limit = max(1, min(int(limit or 50), 200))
     sql = ("SELECT id, ts, game_ts, location_id, room_id, content, present,"
-           " nearby FROM thoughts WHERE character_name=?")
-    params: List[Any] = [character_name]
+           " nearby, body FROM thoughts WHERE character_name=?")
+    params: List[Any] = [mind_of(character_name)]
     if before:
         sql += " AND ts < ?"
         params.append(before)
@@ -115,10 +128,10 @@ def thoughts_of_range(character_name: str, start_ts: str,
         return []
     try:
         rows = get_connection().execute(
-            "SELECT id, ts, location_id, room_id, content FROM thoughts"
+            "SELECT id, ts, location_id, room_id, content, body FROM thoughts"
             " WHERE character_name=? AND ts >= ? AND ts < ?"
             " ORDER BY ts ASC, id ASC",
-            (character_name, start_ts, end_ts)).fetchall()
+            (mind_of(character_name), start_ts, end_ts)).fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
         logger.warning("thoughts_of_range(%s) failed: %s",
@@ -138,10 +151,10 @@ def thoughts_of_game_range(character_name: str, start_game_ts: str,
         return []
     try:
         rows = get_connection().execute(
-            "SELECT id, ts, game_ts, location_id, room_id, content FROM thoughts"
+            "SELECT id, ts, game_ts, location_id, room_id, content, body FROM thoughts"
             " WHERE character_name=? AND game_ts >= ? AND game_ts < ?"
             " ORDER BY game_ts ASC, id ASC",
-            (character_name, start_game_ts, end_game_ts)).fetchall()
+            (mind_of(character_name), start_game_ts, end_game_ts)).fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
         logger.warning("thoughts_of_game_range(%s) failed: %s",
@@ -150,7 +163,7 @@ def thoughts_of_game_range(character_name: str, start_game_ts: str,
 
 
 def prune_before(character_name: str, cutoff_ts: str) -> int:
-    """Deletes this character's thoughts older than ``cutoff_ts``; returns the
+    """Deletes the mind's thoughts older than ``cutoff_ts``; returns the
     number deleted. Raw thoughts are transient — what matters survives in the
     consolidated day (same pattern as chat-history summarization)."""
     if not character_name or not cutoff_ts:
@@ -159,7 +172,7 @@ def prune_before(character_name: str, cutoff_ts: str) -> int:
         with transaction() as conn:
             cur = conn.execute(
                 "DELETE FROM thoughts WHERE character_name=? AND ts < ?",
-                (character_name, cutoff_ts))
+                (mind_of(character_name), cutoff_ts))
             return int(cur.rowcount or 0)
     except Exception as e:
         logger.warning("prune_before(%s) failed: %s", character_name, e)

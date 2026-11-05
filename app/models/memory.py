@@ -5,6 +5,14 @@ and memory types (episodic, semantic).
 
 Storage: world.db — tables ``memories``, ``mood_history``.
 
+**Memories belong to the MIND** (linked characters,
+``app.core.linked_characters``): every public memory function resolves the
+name it is given through ``mind_of`` first, so a body reads and writes its
+leader's memories. A memory a body writes carries ``meta.body = <body>``
+(:func:`memory_body`), and a prompt renders it "(as <body>)" — "I kissed Luna"
+means something else in the leader's head than "(as Glut) I kissed Luna". The
+mood history stays with the BODY.
+
 **Two stamps per memory, and they are not interchangeable** (plan-game-calendar
 .md §1): ``ts`` is SYSTEM time (ordering, decay, access bookkeeping), while
 ``game_ts`` is the canonical GAME time the memory was formed at. Everything the
@@ -25,6 +33,7 @@ from typing import Any, Dict, List, Optional
 from app.core.i18n import t
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
+from app.core.linked_characters import family_of, mind_of
 
 logger = get_logger("memory")
 
@@ -119,10 +128,11 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # Their producers: scene_manager.py (scene_id, location_id, room_id,
 # participants), day_consolidation.py (date_key), memory_service.py and
 # intent_engine.py (source, event_id).
+# ``body`` is the linked body that formed the memory (see the module header).
 META_KEYS = ("context", "importance", "access_count", "last_accessed",
              "decay_factor", "related_character", "delay_minutes",
              "source", "event_id", "scene_id", "location_id", "room_id",
-             "participants", "date_key")
+             "participants", "date_key", "body")
 
 # Entry fields that are stored in their own columns, not in `meta` — knowing
 # them is what lets the builder below tell "belongs elsewhere" from "typo".
@@ -162,12 +172,27 @@ def _entry_to_row(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def memory_body(mem: Dict[str, Any]) -> str:
+    """The linked body that formed a memory (its ``meta.body``), else "".
+
+    A renderer puts "(as <body>)" in front of such a memory; the mind's own
+    memories carry no body.
+    """
+    return str((mem or {}).get("body") or "").strip()
+
+
+def _as_body(mem: Dict[str, Any]) -> str:
+    body = memory_body(mem)
+    return f"(as {body}) " if body else ""
+
+
 # ---------------------------------------------------------------------------
 # Memory CRUD
 # ---------------------------------------------------------------------------
 
 def load_memories(character_name: str) -> List[Dict[str, Any]]:
-    """Loads all memory entries of a character from the DB."""
+    """Loads all memory entries of a character's MIND from the DB."""
+    character_name = mind_of(character_name)
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -188,6 +213,7 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
     ``_entry_to_row`` → ``_build_meta``, so anything not on META_KEYS is
     dropped here — which is why provenance fields have to be on that list.
     """
+    character_name = mind_of(character_name)
     try:
         # Determine which entries are new/changed by comparing ids
         conn = get_connection()
@@ -251,8 +277,8 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
     except Exception as e:
         logger.error("save_memories error for %s: %s", character_name, e)
         return
-    from app.core import sync_topics
-    sync_topics.avatars([character_name], "self")
+    from app.core import sync_topics  # every family member shows the mind's memories
+    sync_topics.avatars(family_of(character_name), "self")
 
 
 def add_memory(character_name: str,
@@ -281,10 +307,16 @@ def add_memory(character_name: str,
     ``feature_disabled`` and not ``is_feature_enabled``: the latter answers
     "human-default" (everything off) for a profile without a template, which
     on a write path would be silent data loss.
+
+    ``character_name`` is the ACTING character. The row is stored under its
+    mind; when that is a leader, the actor is recorded as ``meta.body`` (and
+    the gate reads the MIND's ``memory_enabled``, the store's owner).
     """
     content = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', content).strip()
     if not content:
         return {}
+    actor = character_name
+    character_name = mind_of(actor)
 
     try:
         from app.models.character_template import feature_disabled
@@ -309,6 +341,8 @@ def add_memory(character_name: str,
         "tags": tags or [],
         "related_character": related_character,
     }
+    if actor != character_name:
+        entry["body"] = actor
     row_id = 0
     try:
         meta = _build_meta(entry)
@@ -334,8 +368,8 @@ def add_memory(character_name: str,
         row_id = 0
 
     if row_id:
-        from app.core import sync_topics
-        sync_topics.avatars([character_name], "self")
+        from app.core import sync_topics  # every family member shows the mind's memories
+        sync_topics.avatars(family_of(character_name), "self")
 
     # Keep the situational-memory vector cache warm. Fire-and-forget: the
     # first internal embedding loads an ONNX model, and add_memory runs inside
@@ -352,7 +386,8 @@ def add_memory(character_name: str,
 
 
 def delete_memory(character_name: str, entry_id: str) -> bool:
-    """Delete one memory."""
+    """Delete one memory of the character's mind."""
+    character_name = mind_of(character_name)
     try:
         # entry_id may be a hex string (mem_xxx) or numeric.
         conn = get_connection()
@@ -381,16 +416,24 @@ def delete_memory(character_name: str, entry_id: str) -> bool:
             )
         conn.commit()
         if cur.rowcount > 0:
-            from app.core import sync_topics
-            sync_topics.avatars([character_name], "self")
+            from app.core import sync_topics  # every family member shows the mind's memories
+            sync_topics.avatars(family_of(character_name), "self")
         return cur.rowcount > 0
     except Exception as e:
-        logger.error("delete_memory Fehler fuer %s id=%s: %s", character_name, entry_id, e)
+        logger.error("delete_memory failed for %s id=%s: %s", character_name, entry_id, e)
         return False
 
 
 def clear_memories(character_name: str) -> int:
-    """Delete all memories and return their count."""
+    """Delete all memories and return their count.
+
+    Refused for a linked body (``ValueError``): its memories ARE its leader's
+    mind, and clearing them is the leader's business (ruling R3).
+    """
+    mind = mind_of(character_name)
+    if mind != character_name:
+        raise ValueError(f"The mind of {character_name} belongs to {mind} — "
+                         f"clear it on {mind}.")
     try:
         conn = get_connection()
         count = conn.execute(
@@ -401,11 +444,11 @@ def clear_memories(character_name: str) -> int:
                 "DELETE FROM memories WHERE character_name=?", (character_name,)
             )
             conn.commit()
-            from app.core import sync_topics
-            sync_topics.avatars([character_name], "self")
+            from app.core import sync_topics  # every family member shows the mind's memories
+            sync_topics.avatars(family_of(character_name), "self")
         return count
     except Exception as e:
-        logger.error("clear_memories Fehler fuer %s: %s", character_name, e)
+        logger.error("clear_memories failed for %s: %s", character_name, e)
         return 0
 
 
@@ -414,10 +457,11 @@ def upsert_relationship_memory(character_name: str,
     new_fact: str,
     max_facts: int = 5,
     replace_prefix: str = "") -> Dict[str, Any]:
-    """Aktualisiert den Beziehungs-Eintrag zu einem anderen Character.
+    """Update the mind's relationship entry about another character.
 
-    Aequivalent zu knowledge.upsert_character_relationship(), aber in memories.json.
-    Pro related_character gibt es genau EINEN Eintrag (memory_type="semantic", tag="relationship").
+    There is exactly ONE entry per related_character (memory_type="semantic",
+    tag="relationship"). A new entry goes through ``add_memory`` with the
+    acting character's name, so a body's first fact is marked with it.
     """
     new_fact = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', new_fact).strip()
     if not new_fact:
@@ -425,7 +469,7 @@ def upsert_relationship_memory(character_name: str,
 
     entries = load_memories(character_name)
 
-    # Bestehenden Relationship-Eintrag suchen
+    # Find the existing relationship entry
     existing = None
     for e in entries:
         if (
@@ -460,7 +504,8 @@ def upsert_relationship_memory(character_name: str,
 
 def delete_memories_by_source(character_name: str, tag: str, context: str = ""
 ) -> int:
-    """Delete memories matching a tag and optional context."""
+    """Delete the mind's memories matching a tag and optional context."""
+    character_name = mind_of(character_name)
     try:
         conn = get_connection()
         if context:
@@ -506,10 +551,10 @@ def delete_memories_by_source(character_name: str, tag: str, context: str = ""
                 conn.commit()
             removed = len(to_del)
         if removed > 0:
-            logger.info("%d memories (tag=%s) geloescht fuer %s", removed, tag, character_name)
+            logger.info("%d memories (tag=%s) deleted for %s", removed, tag, character_name)
         return removed
     except Exception as e:
-        logger.error("delete_memories_by_source Fehler fuer %s: %s", character_name, e)
+        logger.error("delete_memories_by_source failed for %s: %s", character_name, e)
         return 0
 
 
@@ -517,7 +562,7 @@ def get_memories_by_tag(character_name: str,
     tag: str,
     related_character: str = "",
     limit: int = 0) -> List[Dict[str, Any]]:
-    """Gibt Memories zurueck die einen bestimmten Tag haben."""
+    """The mind's memories carrying a tag (optionally about one character)."""
     entries = load_memories(character_name)
     filtered = [e for e in entries if tag in e.get("tags", [])]
     if related_character:
@@ -603,7 +648,10 @@ def retrieve_relevant_memories(character_name: str,
     decay_factor), so every retrieval sends the whole entry through
     ``save_memories`` → ``_build_meta``. A meta field missing from META_KEYS
     therefore dies here, on the first retrieval, not on the write.
+
+    Reads the MIND's memories (and its per-NPC prompt budget).
     """
+    character_name = mind_of(character_name)
     if max_results <= 0:
         # Per-NPC prompt budget (empty = global memory.max_prompt_entries).
         max_results = memory_amount(character_name, "memory_max_prompt_entries",
@@ -717,7 +765,8 @@ def build_memory_prompt_section(character_name: str,
     the wrong addressee as "the user" during a TalkTo.
 
     Every time reference is WORLD time (``game_ts``); entries without a game
-    stamp appear undated rather than carrying a real-world date.
+    stamp appear undated rather than carrying a real-world date. A memory a
+    linked body formed reads "(as <body>) …".
     """
     memories = retrieve_relevant_memories(character_name,
         current_message=current_message)
@@ -746,7 +795,7 @@ def build_memory_prompt_section(character_name: str,
         ts = _format_memory_timestamp(mem.get("game_ts", ""), lang)
         ts_prefix = f"({ts}) " if ts else ""
         related = mem.get("related_character", "")
-        content = mem.get("content", "")
+        content = _as_body(mem) + mem.get("content", "")
 
         # Dangling filter: a memory referencing a character that
         # does not (or no longer) exists in the world is kept in storage but
@@ -815,7 +864,7 @@ def load_mood_history(character_name: str) -> List[Dict[str, Any]]:
         ).fetchall()
         return [{"timestamp": r[0], "mood": r[1], "source": r[2]} for r in rows]
     except Exception as e:
-        logger.error("load_mood_history Fehler fuer %s: %s", character_name, e)
+        logger.error("load_mood_history failed for %s: %s", character_name, e)
         return []
 
 
@@ -841,7 +890,7 @@ def save_mood_history(character_name: str, entries: List[Dict[str, Any]]):
             """, (character_name, excess))
             conn.commit()
     except Exception as e:
-        logger.error("save_mood_history Trim-Fehler fuer %s: %s", character_name, e)
+        logger.error("save_mood_history trim failed for %s: %s", character_name, e)
 
 
 def record_mood(character_name: str, mood: str, source: str = ""):
@@ -875,7 +924,7 @@ def record_mood(character_name: str, mood: str, source: str = ""):
             """, (character_name, excess))
             conn.commit()
     except Exception as e:
-        logger.error("record_mood Fehler fuer %s: %s", character_name, e)
+        logger.error("record_mood failed for %s: %s", character_name, e)
 
 
 def delete_commitment_memories() -> int:

@@ -785,9 +785,14 @@ def _tagged_memories_since(character_name: str, tag: str,
     system clock exactly as before. The ``LIKE`` on the JSON ``tags`` column is
     only a PRE-FILTER; the caller still decides on the parsed list, so the
     result is identical to the old membership test.
+
+    Memories are stored under the MIND (``linked_characters.mind_of``), so a
+    linked body's window is read there.
     """
     try:
         from app.core.db import get_connection
+        from app.core.linked_characters import mind_of
+        character_name = mind_of(character_name)
         conn = get_connection()
         rows = conn.execute(
             "SELECT tags, content FROM memories "

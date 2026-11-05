@@ -1115,6 +1115,10 @@ ALTER_MIGRATIONS = [
     # (JSON list of "Name (room)" snapshots, room names frozen at write time).
     # Makes "same building, different room" visible in the admin journal.
     ("thoughts", "nearby", "TEXT DEFAULT ''"),
+    # thoughts: the linked BODY that had the thought (linked characters —
+    # thoughts belong to the mind and are stored under the leader). Empty for
+    # the mind's own thoughts; a recap renders the others "(as <body>)".
+    ("thoughts", "body", "TEXT NOT NULL DEFAULT ''"),
     # llm_call_stats: agent_name + max_tokens added for the admin stats tab
     ("llm_call_stats", "agent_name", "TEXT DEFAULT ''"),
     ("llm_call_stats", "max_tokens", "INTEGER DEFAULT 0"),

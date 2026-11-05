@@ -107,8 +107,12 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 
     daily_schedule_block, rhythm_sleep_now = _build_daily_schedule_context(character_name)
 
+    from app.core.linked_characters import leader_of
     ctx: Dict[str, Any] = {
         "character_name": character_name,
+        # A linked body shares ONE mind with its leader — a stable line right
+        # under the name ("" for everybody else).
+        "linked_leader": leader_of(character_name) or "",
         # The character's language instruction (e.g. "Always respond in
         # German.") — otherwise the thought turn produces English asides.
         "lang_instruction": get_character_language_instruction(character_name),
@@ -827,7 +831,11 @@ def recent_thoughts_block(character_name: str) -> str:
         text = thought_handover(row.get("content") or "")
         if not text:
             continue
-        lines.append(f"- {_closing_excerpt(text, THOUGHT_RECENT_TAIL_CHARS)}")
+        # The journal is the MIND's: a thought a linked body had reads
+        # "(as <body>)", the same mark the memories carry.
+        body = (row.get("body") or "").strip()
+        mark = f"(as {body}) " if body else ""
+        lines.append(f"- {mark}{_closing_excerpt(text, THOUGHT_RECENT_TAIL_CHARS)}")
     return "\n".join(reversed(lines))
 
 

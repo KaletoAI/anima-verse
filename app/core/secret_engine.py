@@ -18,15 +18,14 @@ logger = get_logger("secret_engine")
 
 def generate_secrets(character_name: str,
     count: int = 2) -> List[Dict[str, Any]]:
-    """Generiert neue Geheimnisse fuer einen Character via LLM.
+    """Generate new secrets for a character via the LLM.
 
     Args:
-        user_id: User-ID
-        character_name: Character-Name
-        count: Gewuenschte Anzahl neuer Geheimnisse (1-3)
+        character_name: character name
+        count: wanted number of new secrets (1-3)
 
     Returns:
-        Liste der neu erstellten Geheimnisse (bereits gespeichert)
+        List of the newly created secrets (already stored)
     """
     from app.core.llm_router import llm_call
     from app.models.character import get_character_profile
@@ -36,7 +35,7 @@ def generate_secrets(character_name: str,
     # Kontext sammeln
     context = _build_generation_context(character_name)
     if not context:
-        logger.warning("Kein Kontext fuer %s — zu wenig Daten?", character_name)
+        logger.warning("No context for %s — too little data?", character_name)
         # Trotzdem versuchen mit minimalem Kontext
         profile = get_character_profile(character_name)
         context = f"Character: {character_name}\nPersonality: {profile.get('character_personality', 'unknown')}"
@@ -59,7 +58,7 @@ def generate_secrets(character_name: str,
         secrets_data = _parse_llm_response(raw)
 
         if not secrets_data:
-            logger.warning("LLM hat keine gueltige Antwort geliefert fuer %s", character_name)
+            logger.warning("LLM returned no valid answer for %s", character_name)
             return []
 
         # Geheimnisse speichern
@@ -76,12 +75,12 @@ def generate_secrets(character_name: str,
                 consequences_if_revealed=sd.get("consequences_if_revealed", ""),
                 source="generated")
             created.append(secret)
-            logger.info("Generiertes Geheimnis fuer %s: %s", character_name, secret["id"])
+            logger.info("Generated secret for %s: %s", character_name, secret["id"])
 
         return created
 
     except Exception as e:
-        logger.error("Geheimnis-Generierung fehlgeschlagen fuer %s: %s", character_name, e)
+        logger.error("Secret generation failed for %s: %s", character_name, e)
         return []
 
 
@@ -145,7 +144,9 @@ def _build_generation_context(character_name: str) -> str:
             character_name, current_message="secrets personality history",
             max_results=10)
         if memories:
-            mem_lines = [f"- {m.get('content', '')}" for m in memories]
+            from app.models.memory import memory_body
+            mem_lines = [f"- {'(as ' + memory_body(m) + ') ' if memory_body(m) else ''}"
+                         f"{m.get('content', '')}" for m in memories]
             parts.append("Key memories:\n" + "\n".join(mem_lines))
     except Exception:
         pass

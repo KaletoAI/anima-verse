@@ -164,7 +164,7 @@ class RetrospectSkill(PluginSkill):
 
     def _gather_recent_memories(self, character_name: str) -> str:
         try:
-            from app.models.memory import load_memories
+            from app.models.memory import load_memories, memory_body
             mems = load_memories(character_name) or []
         except Exception:
             return ""
@@ -176,7 +176,9 @@ class RetrospectSkill(PluginSkill):
             content = (m.get("content") or "").strip()
             if not content:
                 continue
-            out.append(f"- {content}")
+            # One mind, several bodies: what a linked body lived is marked.
+            body = memory_body(m)
+            out.append(f"- {'(as ' + body + ') ' if body else ''}{content}")
         return "\n".join(out)
 
     def _parse_json(self, raw: str):
