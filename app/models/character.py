@@ -698,6 +698,14 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     for k in _STATE_COLS:
         if k in profile:
             state_values[k] = profile.pop(k) or ""
+    # A dormant linked member stands nowhere — the family's one place is the
+    # present member's (linked_characters.placement_owner): a profile save
+    # never gives it a location or room of its own.
+    if (state_values.get("current_location") or state_values.get("current_room")):
+        from app.core.linked_characters import placement_owner
+        if placement_owner(character_name) != character_name:
+            state_values.pop("current_location", None)
+            state_values.pop("current_room", None)
     # Typed state columns (pose_*, is_*) need their own casts.
     state_typed: Dict[str, Any] = {}
     for name, _sql_type, _read_cast, write_cast in _STATE_TYPED_COLS:
@@ -1661,6 +1669,16 @@ def save_character_current_location(character_name: str = "", location: str = ""
     _party_drag: True only for a dragged-along party follower — prevents the
     dragged follower from triggering a party drag of its own (recursion).
     """
+    # A linked family has ONE place: a dormant member's place is the place of
+    # the member standing in the world (linked_characters.placement_owner).
+    from app.core.linked_characters import placement_owner
+    _owner = placement_owner(character_name)
+    if _owner != character_name:
+        if not _owner:
+            logger.warning("%s: nobody of the linked family stands in the world — "
+                           "%s not stored", character_name, location)
+            return
+        character_name = _owner
     from datetime import datetime
     from app.core.keyed_lock import keyed_lock
     # A pair clip holds two figures at ONE anchor. Leaving the place ends
@@ -2651,6 +2669,16 @@ def save_character_current_room(character_name: str, room_id: str,
 
     _party_drag: True only for a party follower dragged along (recursion
     guard, like save_character_current_location)."""
+    # A linked family has ONE place: a dormant member's place is the place of
+    # the member standing in the world (linked_characters.placement_owner).
+    from app.core.linked_characters import placement_owner
+    _owner = placement_owner(character_name)
+    if _owner != character_name:
+        if not _owner:
+            logger.warning("%s: nobody of the linked family stands in the world — "
+                           "%s not stored", character_name, room)
+            return
+        character_name = _owner
     from app.core.keyed_lock import keyed_lock
     # Refuse before interrupting an interaction, which writes both profiles.
     # Recheck under the write lock in case a concurrent location move intervenes.

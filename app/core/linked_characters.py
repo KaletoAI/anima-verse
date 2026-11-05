@@ -201,6 +201,20 @@ def present_member(name: str) -> Optional[str]:
     return None
 
 
+def placement_owner(name: str) -> str:
+    """Whose place ``name`` has. A family has ONE place — the place of the
+    member standing in the world — so a DORMANT member's place is that
+    member's (``""`` while nobody of the family stands anywhere); everybody
+    else is its own placement owner. Every location/room setter routes a
+    write for ``name`` to this character."""
+    if not name or len(family_of(name)) < 2:
+        return name
+    from app.models.character import DORMANT_STATUS, get_character_status
+    if get_character_status(name) != DORMANT_STATUS:
+        return name
+    return present_member(name) or ""
+
+
 def shared_soul_sections(name: str) -> Tuple[str, ...]:
     """The soul sections a body reads from its leader (``()`` when not linked)."""
     hit = _load_map()["body"].get(name or "")

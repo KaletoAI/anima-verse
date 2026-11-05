@@ -2594,18 +2594,26 @@ async def write_soul_file(character_name: str, section_id: str, request) -> Dict
 
 
 def build_current_location_payload(character_name: str) -> Dict[str, Any]:
-    """Return the current virtual location."""
+    """Return the current virtual location.
+
+    A dormant linked member shows its family's ONE place — the place of the
+    member standing in the world, named in ``synced_with`` ("" otherwise).
+    """
+    from app.core.linked_characters import placement_owner
+    _owner = placement_owner(character_name)
+    synced_with = _owner if _owner and _owner != character_name else ""
+    place_of = synced_with or character_name
     from app.models.character import get_character_current_location
     from app.models.world import get_location_name as _get_loc_name, get_room_by_id, _load_world_data
     from app.models.character_template import is_feature_enabled
     locations_on = is_feature_enabled(character_name, "locations_enabled")
     activities_on = is_feature_enabled(character_name, "activities_enabled")
-    location_id = get_character_current_location(character_name) if locations_on else ""
+    location_id = get_character_current_location(place_of) if locations_on else ""
     location_name = _get_loc_name(location_id) if location_id else ""
     from app.models.character import get_effective_activity
-    activity = get_effective_activity(character_name) if activities_on else ""
+    activity = get_effective_activity(place_of) if activities_on else ""
     from app.models.character import get_character_current_room
-    current_room = get_character_current_room(character_name) if locations_on else ""
+    current_room = get_character_current_room(place_of) if locations_on else ""
     # Resolve room: could be an ID or a name — normalize to ID + name
     current_room_id = ""
     current_room_name = ""
@@ -2628,9 +2636,9 @@ def build_current_location_payload(character_name: str) -> Dict[str, Any]:
                 break
     # Detailed activity description
     from app.models.character import get_character_profile, get_movement_target
-    profile = get_character_profile(character_name)
+    profile = get_character_profile(place_of)
     activity_detail = ""  # current_activity_detail was removed with the pose-model cutover.
-    movement_target_id = get_movement_target(character_name) if locations_on else ""
+    movement_target_id = get_movement_target(place_of) if locations_on else ""
     movement_target_name = _get_loc_name(movement_target_id) if movement_target_id else ""
     return {
         "character": character_name,
@@ -2642,6 +2650,7 @@ def build_current_location_payload(character_name: str) -> Dict[str, Any]:
         "current_room_name": current_room_name or current_room or "",
         "movement_target_id": movement_target_id,
         "movement_target_name": movement_target_name,
+        "synced_with": synced_with,
     }
 
 
@@ -2659,9 +2668,25 @@ def _wake_avatar_on_manual_move(character_name: str, moved: bool) -> None:
         logger.info("manual move: %s woke up (location/room change)", character_name)
 
 
+def _placement_subject(character_name: str) -> str:
+    """The character a location write for ``character_name`` moves: itself,
+    or for a dormant linked member the family member standing in the world.
+    409 while nobody of that family stands anywhere."""
+    from app.core.linked_characters import placement_owner
+    owner = placement_owner(character_name)
+    if not owner:
+        raise HTTPException(status_code=409, detail=(
+            f"Nobody of {character_name}'s linked family stands in the world."))
+    return owner
+
+
 async def apply_current_location(character_name: str, request) -> Dict[str, Any]:
-    """Update the current virtual location."""
+    """Update the current virtual location (of the family's present member
+    for a dormant linked character)."""
     from app.models.character import save_character_current_location
+    # A linked family has ONE place: placing a dormant member places the
+    # member standing in the world (linked_characters.placement_owner).
+    character_name = _placement_subject(character_name)
     data = await request.json()
     user_id = data.get("user_id", "")
     location = data.get("current_location", "")
@@ -2809,8 +2834,12 @@ async def apply_place_on_map(character_name: str, data: Dict[str, Any]) -> Dict[
       stored point is refused with the server's point in the body, which the
       client snaps onto — the same correction path a party pull uses.
 
-    The avatar's block rules are checked as on every avatar move.
+    The avatar's block rules are checked as on every avatar move. A dormant
+    linked member places its family's present member (one place per family).
     """
+    # A linked family has ONE place: placing a dormant member places the
+    # member standing in the world (linked_characters.placement_owner).
+    character_name = _placement_subject(character_name)
     from app.models.character import (get_character_current_location,
                                       save_character_current_location)
     location = (data.get("location_id") or data.get("current_location") or "").strip()
