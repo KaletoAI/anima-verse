@@ -74,8 +74,10 @@ def delete_character_panel(character_name: str, package_id: str, body: Any = Bod
 def run_character_panel_action(character_name: str, package_id: str, body: Any = Body(...),
                                lang: str = Query("en"),
                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Body ``{card_id, action_id}``."""
+    """Body ``{card_id, action_id, value?}`` (``card_id`` ``""`` = a
+    panel-level action; ``value`` = the text an action with ``input`` asked for)."""
     data = _body(body)
     return _run("action", package_id, character_name,
                 lambda: panels.run_panel_action(package_id, character_name, data.get("card_id"),
-                                                data.get("action_id"), lang))
+                                                data.get("action_id"), lang,
+                                                value=data.get("value")))

@@ -13,12 +13,16 @@ through the admin routes in ``app/routes/character_panels.py`` and Game-Admin
 renders the answer generically (``frontend/src/tabs/characters/PackagePanel.tsx``):
 
 - ``describe(character, lang) -> dict`` — the whole panel:
-  ``{"title", "intro", "tabs": [Tab]?, "cards": [Card],
-  "create": {"label", "fields": [Field]} | None}``
+  ``{"title", "intro", "tabs": [Tab]?, "actions": [Action]?, "cards": [Card],
+  "create": {"label", "fields": [Field]} | None}`` (``actions`` = panel-level
+  actions, not bound to a card: run with ``card_id`` ``""``)
 - ``save(character, card_id, values, lang) -> {"ok", "error"?, "card_id"?}``
   (``card_id`` None = create)
 - ``delete(character, card_id, lang) -> {"ok", "error"?}``
 - ``action(character, card_id, action_id, lang) -> {"ok", "message"?, "error"?}``
+  — an action that declares ``input`` (``{"label", "placeholder"?,
+  "message"?}``: the panel asks for one line of text first) receives the
+  entered, stripped, non-empty text as the keyword argument ``value``
 
 Every string the provider answers is shown as it stands: the provider
 translates its own labels with ``app.core.i18n.t(en, lang)``. The core never
@@ -48,12 +52,12 @@ logger = get_logger("character_panels")
 #: Capability prefix of a panel provider: ``character_panel:<package id>``.
 CAPABILITY_PREFIX = "character_panel:"
 
-#: The renderer's whole vocabulary. Values: ``item``/``condition``/``backend``
-#: = one id string, ``items``/``characters`` = a list of strings, ``loras`` = a
+#: The renderer's whole vocabulary. Values: ``item``/``condition``/``backend``/
+#: ``select`` = one id string (``select``: one of the field's ``options``), ``items``/``characters`` = a list of strings, ``loras`` = a
 #: list of ``{"name", "strength"}``.
 FIELD_TYPES = frozenset({
     "text", "textarea", "int", "bool", "item", "items", "condition", "characters",
-    "backend", "loras",
+    "backend", "loras", "select",
 })
 
 #: Presentation-only field attributes: handed to the renderer exactly as the
@@ -143,6 +147,26 @@ def _field(raw: Any, where: str) -> Dict[str, Any]:
         out["backend_field"] = _s(raw.get("backend_field")).strip()
         out["fallback_field"] = _s(raw.get("fallback_field")).strip()
         out["target"] = "tpose" if _s(raw.get("target")).strip() == "tpose" else "render"
+    if ftype == "select":
+        out["options"] = _options(raw.get("options"), f"{where}: field {key!r}")
+    return out
+
+
+def _options(raw: Any, where: str) -> List[Dict[str, str]]:
+    """A ``select`` field's choices: ``[{"value", "label"}]`` (label defaults
+    to the value; duplicate or empty values are a contract error)."""
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PanelContractError(f"{where}: options is not a list")
+    out: List[Dict[str, str]] = []
+    for opt in raw:
+        if not isinstance(opt, dict) or not _s(opt.get("value")).strip():
+            raise PanelContractError(f"{where}: option without value")
+        value = _s(opt.get("value")).strip()
+        if any(o["value"] == value for o in out):
+            raise PanelContractError(f"{where}: duplicate option {value!r}")
+        out.append({"value": value, "label": _s(opt.get("label")) or value})
     return out
 
 
@@ -161,8 +185,28 @@ def _fields(raw: Any, where: str) -> List[Dict[str, Any]]:
 def _action(raw: Any, where: str) -> Dict[str, Any]:
     if not isinstance(raw, dict) or not _s(raw.get("id")).strip():
         raise PanelContractError(f"{where}: action without id")
-    return {"id": _s(raw.get("id")).strip(), "label": _s(raw.get("label")) or _s(raw.get("id")),
-            "confirm": _s(raw.get("confirm")), "primary": bool(raw.get("primary"))}
+    out = {"id": _s(raw.get("id")).strip(), "label": _s(raw.get("label")) or _s(raw.get("id")),
+           "confirm": _s(raw.get("confirm")), "primary": bool(raw.get("primary"))}
+    inp = raw.get("input")
+    if inp:
+        if not isinstance(inp, dict):
+            raise PanelContractError(f"{where}: action {out['id']!r} input is not an object")
+        out["input"] = {"label": _s(inp.get("label")) or out["label"],
+                        "placeholder": _s(inp.get("placeholder")),
+                        "message": _s(inp.get("message"))}
+    return out
+
+
+def _actions(raw: Any, where: str) -> List[Dict[str, Any]]:
+    if not raw:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PanelContractError(f"{where}: actions is not a list")
+    out = [_action(a, where) for a in raw]
+    ids = [a["id"] for a in out]
+    if len(set(ids)) != len(ids):
+        raise PanelContractError(f"{where}: duplicate action ids")
+    return out
 
 
 def _card(raw: Any) -> Dict[str, Any]:
@@ -178,15 +222,12 @@ def _card(raw: Any) -> Dict[str, Any]:
     badges = raw.get("badges") or []
     if not isinstance(badges, (list, tuple)):
         raise PanelContractError(f"{where}: badges is not a list")
-    actions = raw.get("actions") or []
-    if not isinstance(actions, (list, tuple)):
-        raise PanelContractError(f"{where}: actions is not a list")
     return {
         "id": cid, "title": _s(raw.get("title")), "subtitle": _s(raw.get("subtitle")),
         "badges": [_s(b) for b in badges if _s(b)],
         "fields": _fields(raw.get("fields"), where), "values": dict(values),
         "status": _s(raw.get("status")),
-        "actions": [_action(a, where) for a in actions],
+        "actions": _actions(raw.get("actions"), where),
         "deletable": bool(raw.get("deletable")),
         "delete_confirm": _s(raw.get("delete_confirm")),
     }
@@ -215,7 +256,8 @@ def normalize_panel(raw: Any) -> Dict[str, Any]:
     Optional keys get their empty default; a missing card/field/action/tab id,
     a field type outside ``FIELD_TYPES`` or a wrong container type raise
     ``PanelContractError``. The layout attributes ``tab``/``width``/``rows`` of
-    a field pass through untouched (the renderer falls back on its own)."""
+    a field pass through untouched (the renderer falls back on its own).
+    ``actions`` are the panel-level actions (no card)."""
     if not isinstance(raw, dict):
         raise PanelContractError("describe() did not answer an object")
     cards = raw.get("cards") or []
@@ -233,7 +275,8 @@ def normalize_panel(raw: Any) -> Dict[str, Any]:
         norm_create = {"label": _s(create.get("label")),
                        "fields": _fields(create.get("fields"), "create")}
     return {"title": _s(raw.get("title")), "intro": _s(raw.get("intro")),
-            "tabs": _tabs(raw.get("tabs")), "cards": norm_cards, "create": norm_create}
+            "tabs": _tabs(raw.get("tabs")), "actions": _actions(raw.get("actions"), "panel"),
+            "cards": norm_cards, "create": norm_create}
 
 
 def _result(raw: Any, what: str, lang: str, *extra: str) -> Dict[str, Any]:
@@ -281,11 +324,14 @@ def _coerce_loras(raw: List[Any]) -> List[Dict[str, Any]]:
 
 
 def coerce_values(fields: List[Dict[str, Any]], values: Dict[str, Any], *,
-                  creating: bool, lang: str = "en") -> tuple[Dict[str, Any], str]:
+                  creating: bool, lang: str = "en",
+                  current: Optional[Dict[str, Any]] = None) -> tuple[Dict[str, Any], str]:
     """``(clean values, error)`` for submitted ``values`` against normalized
     ``fields``. Undeclared keys are dropped; ``error`` is ``""`` when every
     present value fits its field. ``creating`` = a required field that is
-    absent counts as empty."""
+    absent counts as empty. ``current`` = the card's stored values: a
+    ``select`` value outside the options is accepted only when it is the
+    stored one (a choice the options no longer list is kept, never forced)."""
     clean: Dict[str, Any] = {}
     for f in fields:
         key, ftype, label = f["key"], f["type"], f["label"]
@@ -297,6 +343,12 @@ def coerce_values(fields: List[Dict[str, Any]], values: Dict[str, Any], *,
         if ftype in ("text", "textarea", "item", "condition", "backend"):
             val: Any = _s(raw).strip()
             empty = not val
+        elif ftype == "select":
+            val = _s(raw).strip()
+            empty = not val
+            stored = _s((current or {}).get(key)).strip()
+            if val and val != stored and val not in {o["value"] for o in f.get("options") or []}:
+                return {}, t("{label}: invalid selection.", lang).format(label=label)
         elif ftype == "bool":
             val, empty = bool(raw), False
         elif ftype == "int":
@@ -350,11 +402,11 @@ def _provider_for(package_id: str, character: str) -> Any:
     return provider
 
 
-def _call(provider: Any, method: str, *args: Any) -> Any:
+def _call(provider: Any, method: str, *args: Any, **kwargs: Any) -> Any:
     fn = getattr(provider, method, None)
     if not callable(fn):
         raise PanelContractError(f"provider has no {method}()")
-    return fn(*args)
+    return fn(*args, **kwargs)
 
 
 def describe_panel(package_id: str, character: str, lang: str = "en") -> Dict[str, Any]:
@@ -386,7 +438,8 @@ def save_panel_card(package_id: str, character: str, card_id: Optional[str],
         if card is None:
             return {"ok": False, "error": t("This entry no longer exists.", lang)}
         fields = card["fields"]
-    clean, error = coerce_values(fields, values, creating=cid is None, lang=lang)
+    clean, error = coerce_values(fields, values, creating=cid is None, lang=lang,
+                                 current=None if cid is None else card["values"])
     if error:
         return {"ok": False, "error": error}
     return _result(_call(provider, "save", character, cid, clean, lang), "save", lang, "card_id")
@@ -403,12 +456,39 @@ def delete_panel_card(package_id: str, character: str, card_id: str,
     return _result(_call(provider, "delete", character, cid, lang), "delete", lang)
 
 
+def _declared_action(panel: Dict[str, Any], cid: str, aid: str) -> Optional[Dict[str, Any]]:
+    """The action ``aid`` as declared by the card ``cid`` (``""`` = the panel)."""
+    if not cid:
+        actions = panel["actions"]
+    else:
+        card = next((c for c in panel["cards"] if c["id"] == cid), None)
+        actions = card["actions"] if card else []
+    return next((a for a in actions if a["id"] == aid), None)
+
+
 def run_panel_action(package_id: str, character: str, card_id: str, action_id: str,
-                     lang: str = "en") -> Dict[str, Any]:
-    """Run one card action → ``{"ok", "error", "message"?}``."""
+                     lang: str = "en", *, value: Any = None) -> Dict[str, Any]:
+    """Run one action → ``{"ok", "error", "message"?}``.
+
+    ``card_id`` ``""`` = a panel-level action (it must be declared in the
+    panel's ``actions``). An action declaring ``input`` needs a non-empty
+    ``value`` (stripped; empty → "<input label> is required.") and the
+    provider receives it as ``value=``; any other action is called without."""
     lang = normalize_lang(lang)
     provider = _provider_for(package_id, character)
     cid, aid = _s(card_id).strip(), _s(action_id).strip()
-    if not cid or not aid:
+    if not aid:
         return {"ok": False, "error": t("This entry no longer exists.", lang)}
-    return _result(_call(provider, "action", character, cid, aid, lang), "action", lang, "message")
+    panel = normalize_panel(_call(provider, "describe", character, lang))
+    declared = _declared_action(panel, cid, aid)
+    if not cid and declared is None:
+        return {"ok": False, "error": t("This entry no longer exists.", lang)}
+    if declared is not None and declared.get("input"):
+        text = _s(value).strip()
+        if not text:
+            return {"ok": False, "error": t("{label} is required.", lang).format(
+                label=declared["input"]["label"])}
+        raw = _call(provider, "action", character, cid, aid, lang, value=text)
+    else:
+        raw = _call(provider, "action", character, cid, aid, lang)
+    return _result(raw, "action", lang, "message")

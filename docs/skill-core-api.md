@@ -1576,7 +1576,7 @@ answer 404 and the Skills tab shows no panel (deletion test).
 | `panel_capability(package_id)` | The capability string `character_panel:<package id>`. Register with `app.core.hooks.register_provider(capability, fn, *, owner=None, multiple=False)`, passing the provider object as `fn` and the package id as `owner` |
 | `has_panel(package_id)` | Whether a provider is registered for the package |
 | `get_panel_provider(package_id)` | The registered provider or `None` |
-| `FIELD_TYPES` | The renderer's whole field vocabulary: `text`, `textarea`, `int`, `bool`, `item`, `items`, `condition`, `characters`, `backend`, `loras` |
+| `FIELD_TYPES` | The renderer's whole field vocabulary: `text`, `textarea`, `int`, `bool`, `item`, `items`, `condition`, `characters`, `backend`, `loras`, `select` |
 
 Every save goes through the core first: the submitted values are reduced to the
 keys the card (or the create form) declares, coerced to the field's type
@@ -1584,9 +1584,12 @@ keys the card (or the create form) declares, coerced to the field's type
 within `min`/`max`, `bool` → bool, `items`/`characters` → de-duplicated list of
 non-empty strings, `loras` → list of `{"name", "strength"}` with a non-empty
 stripped name, strength a float clamped to [-4, 4] (non-numeric → 1.0), first
-of a name wins, anything else dropped) and checked against `required`. A failed check answers
+of a name wins, anything else dropped, `select` → stripped string that must be one of the field's
+`options` or the card's stored value) and checked against `required`. A failed check answers
 `{"ok": false, "error": ...}` without calling the provider, so the provider
-validates only what is specific to it (uniqueness, references, state).
+validates only what is specific to it (uniqueness, references, state). An
+action runs only when declared (panel-level `actions` with `card_id` `""`, or
+the card's); one with `input` needs a non-empty text, handed over as `value=`.
 
 ## Linked characters — `app.core.linked_characters` ✅
 

@@ -84,6 +84,26 @@ I) LoRA OPTIONS ``backend`` PARAM — ``app/routes/characters.py``
    ``Flux-Dev`` (``Flux-Off`` disabled, ``FluxVideo`` is video) → same answer;
    ``backend="sdxl"`` (case-insensitive like the routing) → ``[{"name": "SDXL|"}]``;
    ``backend="Nope*"`` → ``[]`` and the fake is not called.
+
+J) ``select`` FIELD, PANEL-LEVEL ACTIONS, ACTION ``input`` — a third fake provider
+   (package ``smoke-panel-pkg3``) answers panel ``actions`` = ``[{"id": "make",
+   "label": "Make", "input": {"label": "Name"}}]``, card ``s1`` with the field
+   ``who`` (``select``, options ``[{"value": "a", "label": "A"}, {"value": "b"}]``,
+   stored value ``"gone"``) and the card action ``plain`` (no input).
+   By the contract: the options come back normalized
+   ``[{"value": "a", "label": "A"}, {"value": "b", "label": "b"}]`` (label
+   defaults to the value); the panel action keeps ``input`` ``{"label": "Name",
+   "placeholder": "", "message": ""}``; ``plain`` carries no ``input`` key.
+   SAVE ``who`` = ``" b "`` → provider gets ``{"who": "b"}``; ``"c"`` (no option,
+   not the stored value) → "Who: invalid selection." and the provider is not
+   called; ``"gone"`` (the stored value the options no longer list) → kept,
+   provider gets ``{"who": "gone"}``.
+   ACTION ``make`` with card_id ``""`` and value ``"  Zed "`` → the provider gets
+   ``("action", "Ada", "", "make", "en", "Zed")`` (value stripped, as keyword);
+   value ``"  "`` → "Name is required." without a provider call; an undeclared
+   panel action ``nope`` → "This entry no longer exists." without a call;
+   ``plain`` on ``s1`` → the provider is called WITHOUT a value (``value``
+   param stays at its default ``None``).
 """
 import inspect
 import os
@@ -433,9 +453,79 @@ try:
         check("no match → library not asked", len(lora_calls), n_calls)
     finally:
         service_mod.get_image_service, config_mod.get_lora_options = saved_io
+
+    # ── J) select field, panel-level actions, action input ────────────────
+    print("J) select options, panel actions, action input")
+
+    class SelectProvider:
+        def __init__(self):
+            self.calls = []
+
+        def describe(self, character, lang):
+            return {"title": "Sel",
+                    "actions": [{"id": "make", "label": "Make", "input": {"label": "Name"}}],
+                    "cards": [{"id": "s1", "title": "S",
+                               "fields": [{"key": "who", "type": "select", "label": "Who",
+                                           "options": [{"value": "a", "label": "A"},
+                                                       {"value": "b"}]}],
+                               "values": {"who": "gone"},
+                               "actions": [{"id": "plain", "label": "Plain"}]}]}
+
+        def save(self, character, card_id, values, lang):
+            self.calls.append(("save", values))
+            return {"ok": True, "card_id": card_id}
+
+        def delete(self, character, card_id, lang):
+            return {"ok": True}
+
+        def action(self, character, card_id, action_id, lang, value=None):
+            self.calls.append(("action", character, card_id, action_id, lang, value))
+            return {"ok": True}
+
+    PKG3 = "smoke-panel-pkg3"
+    sp = SelectProvider()
+    hooks.register_provider(panel_capability(PKG3), sp, owner=PKG3)
+    panel = routes.get_character_panel("Ada", PKG3, lang="en", _={})
+    check("select options normalized", panel["cards"][0]["fields"][0].get("options"),
+          [{"value": "a", "label": "A"}, {"value": "b", "label": "b"}])
+    check("panel action with input", panel.get("actions"),
+          [{"id": "make", "label": "Make", "confirm": "", "primary": False,
+            "input": {"label": "Name", "placeholder": "", "message": ""}}])
+    check("card action without input key", "input" in panel["cards"][0]["actions"][0], False)
+    res = routes.save_character_panel("Ada", PKG3, body={"card_id": "s1", "values": {"who": " b "}},
+                                      lang="en", _={})
+    check("select save ok", (res["ok"], sp.calls[-1] if sp.calls else None),
+          (True, ("save", {"who": "b"})))
+    n = len(sp.calls)
+    res = routes.save_character_panel("Ada", PKG3, body={"card_id": "s1", "values": {"who": "c"}},
+                                      lang="en", _={})
+    check("select outside the options", (res, len(sp.calls)),
+          ({"ok": False, "error": "Who: invalid selection."}, n))
+    routes.save_character_panel("Ada", PKG3, body={"card_id": "s1", "values": {"who": "gone"}},
+                                lang="en", _={})
+    check("stored select value kept", sp.calls[-1], ("save", {"who": "gone"}))
+    res = routes.run_character_panel_action("Ada", PKG3, body={"card_id": "", "action_id": "make",
+                                                               "value": "  Zed "}, lang="en", _={})
+    check("panel action with value", (res["ok"], sp.calls[-1]),
+          (True, ("action", "Ada", "", "make", "en", "Zed")))
+    n = len(sp.calls)
+    res = routes.run_character_panel_action("Ada", PKG3, body={"card_id": "", "action_id": "make",
+                                                               "value": "  "}, lang="en", _={})
+    check("empty input refused", (res, len(sp.calls)),
+          ({"ok": False, "error": "Name is required."}, n))
+    res = routes.run_character_panel_action("Ada", PKG3, body={"card_id": "", "action_id": "nope"},
+                                            lang="en", _={})
+    check("undeclared panel action", (res, len(sp.calls)),
+          ({"ok": False, "error": "This entry no longer exists."}, n))
+    routes.run_character_panel_action("Ada", PKG3, body={"card_id": "s1", "action_id": "plain",
+                                                         "value": "x"}, lang="en", _={})
+    check("card action without input gets no value", sp.calls[-1],
+          ("action", "Ada", "s1", "plain", "en", None))
+    hooks.unregister_owned_providers(PKG3)
 finally:
     hooks.unregister_owned_providers(PKG)
     hooks.unregister_owned_providers("smoke-panel-pkg2")
+    hooks.unregister_owned_providers("smoke-panel-pkg3")
 
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
 if FAILURES:

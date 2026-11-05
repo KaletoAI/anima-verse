@@ -7,7 +7,7 @@ import { apiGet } from '../../lib/api'
 /**
  * Field controls of the package character panel (PackagePanel.tsx): the
  * renderer's whole vocabulary — text, textarea, int, bool, item, items,
- * condition, characters, backend, loras. Pickers show pictures and names,
+ * condition, characters, backend, loras, select. Pickers show pictures and names,
  * never a bare id; an id the reference lists no longer know stays visible,
  * marked "(missing)", and is kept on save.
  */
@@ -32,6 +32,8 @@ export interface PanelField {
   backend_field?: string
   fallback_field?: string
   target?: string
+  /** `select` only: the choices, in order. */
+  options?: Array<{ value: string; label: string }>
 }
 
 export interface LoraValue {
@@ -325,6 +327,18 @@ export function PanelFieldControl({
               {(c.icon ? c.icon + ' ' : '') + (c.label || c.name)}
             </option>
           ))}
+          {cur && !known ? <option value={cur}>{cur + ' ' + t('(missing)')}</option> : null}
+        </select>
+      )
+    }
+    case 'select': {
+      const cur = value == null ? '' : String(value)
+      const opts = field.options || []
+      const known = opts.some((o) => o.value === cur)
+      return (
+        <select className="ga-input" value={cur} onChange={(e) => onChange(e.target.value)}>
+          {!cur || !field.required ? <option value="">{t('— none —')}</option> : null}
+          {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           {cur && !known ? <option value={cur}>{cur + ' ' + t('(missing)')}</option> : null}
         </select>
       )

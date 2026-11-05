@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, ConfirmDialog } from '@anima/player-ui'
+import { PromptDialog } from '../../components/PromptDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { isGeneratorBackend } from '../../lib/imageBackends'
@@ -22,7 +23,7 @@ import {
  *   GET  /characters/{c}/panels/{package}?lang=     (describe)
  *   POST /characters/{c}/panels/{package}/save      {card_id|null, values}
  *   POST /characters/{c}/panels/{package}/delete    {card_id}
- *   POST /characters/{c}/panels/{package}/action    {card_id, action_id}
+ *   POST /characters/{c}/panels/{package}/action    {card_id, action_id, value?}
  * and this file only renders it (contract: docs/plugins.md → "Character
  * panels"). Every label arrives translated from the server; after each save,
  * delete or action the panel reloads — the server is the truth. A refusal
@@ -32,7 +33,8 @@ import {
  * (title, badges, status, actions, Delete/Discard/Save) stays above the
  * card's tabs; inside a tab the fields sit on a 12-column grid by their
  * `width`. The draft lives per shown card, so a tab switch keeps it; a card
- * switch with unsaved edits asks first.
+ * switch with unsaved edits asks first. Panel-level actions (no card) sit in
+ * the top bar; an action with `input` asks for one line of text first.
  */
 
 interface PanelAction {
@@ -40,6 +42,8 @@ interface PanelAction {
   label: string
   confirm: string
   primary: boolean
+  /** Ask for one line of text first; it is sent as `value`. */
+  input?: { label: string; placeholder: string; message: string }
 }
 interface PanelTab {
   id: string
@@ -62,6 +66,8 @@ interface Panel {
   title: string
   intro: string
   tabs?: PanelTab[]
+  /** Panel-level actions, not bound to a card (run with card_id ""). */
+  actions?: PanelAction[]
   cards: PanelCard[]
   create: { label: string; fields: PanelField[] } | null
 }
@@ -118,6 +124,10 @@ export function PackagePanel({ character, packageId }: { character: string; pack
   const [activeTab, setActiveTab] = useState('')
   const [dirty, setDirty] = useState(false)
   const [pendingSwitch, setPendingSwitch] = useState<{ to: string | null } | null>(null)
+  // A panel-level action waiting for its confirmation or its input.
+  const [panelPending, setPanelPending] = useState<PanelAction | null>(null)
+  const [panelBusy, setPanelBusy] = useState(false)
+  const [panelError, setPanelError] = useState('')
 
   const base = `/characters/${encodeURIComponent(character)}/panels/${encodeURIComponent(packageId)}`
   const q = `?lang=${encodeURIComponent(lang)}`
@@ -208,6 +218,27 @@ export function PackagePanel({ character, packageId }: { character: string; pack
     [base, q],
   )
 
+  /** Run a panel-level action (card_id ""); `value` = the asked-for text. */
+  const runPanelAction = async (a: PanelAction, value?: string) => {
+    setPanelBusy(true)
+    setPanelError('')
+    try {
+      const r = await call('action', { card_id: '', action_id: a.id, ...(value !== undefined ? { value } : {}) })
+      if (r.ok) {
+        if (r.message) toast(r.message)
+        await reload()
+      } else {
+        setPanelError(r.error || t('That did not work.'))
+      }
+    } finally {
+      setPanelBusy(false)
+    }
+  }
+  const startPanelAction = (a: PanelAction) => {
+    if (a.input || a.confirm) setPanelPending(a)
+    else void runPanelAction(a)
+  }
+
   const select = (to: string | null) => {
     if (to === selected) return
     if (dirty) setPendingSwitch({ to })
@@ -221,25 +252,34 @@ export function PackagePanel({ character, packageId }: { character: string; pack
   if (!panel) return <div className="ga-loading" style={{ marginTop: 14 }}>{t('Loading…')}</div>
 
   const tabs = panel.tabs || []
+  const panelActions = panel.actions || []
   const createLabel = panel.create?.label || t('New')
   const card = selected && selected !== CREATE ? panel.cards.find((c) => c.id === selected) : undefined
   const creating = selected === CREATE && !!panel.create
 
   return (
     <div className="ga-pp">
-      {panel.title || panel.intro || (panel.create && panel.cards.length === 0 && !creating) ? (
+      {panel.title || panel.intro || panelActions.length || (panel.create && panel.cards.length === 0 && !creating) ? (
         <div className="ga-pp-top">
           <div style={{ minWidth: 0 }}>
             {panel.title ? <div className="ga-fieldset-title" style={{ margin: 0 }}>{panel.title}</div> : null}
             {panel.intro ? <div className="ga-pp-muted">{panel.intro}</div> : null}
           </div>
-          {panel.create && panel.cards.length === 0 && !creating ? (
-            <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => select(CREATE)}>
-              + {createLabel}
-            </button>
-          ) : null}
+          <div className="ga-pp-head-btns">
+            {panelActions.map((a) => (
+              <button key={a.id} type="button" disabled={panelBusy}
+                className={'ga-btn ga-btn-sm' + (a.primary ? ' ga-btn-primary' : '')}
+                onClick={() => startPanelAction(a)}>{a.label}</button>
+            ))}
+            {panel.create && panel.cards.length === 0 && !creating ? (
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => select(CREATE)}>
+                + {createLabel}
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
+      {panelError ? <div className="ga-pp-error">{panelError}</div> : null}
 
       {panel.cards.length > 0 ? (
         <div className="ga-pp-selector" role="tablist">
@@ -322,8 +362,10 @@ export function PackagePanel({ character, packageId }: { character: string; pack
             }
             return r
           }}
-          onAction={async (actionId) => {
-            const r = await call('action', { card_id: card.id, action_id: actionId })
+          onAction={async (actionId, value) => {
+            const r = await call('action', {
+              card_id: card.id, action_id: actionId, ...(value !== undefined ? { value } : {}),
+            })
             if (r.ok) {
               if (r.message) toast(r.message)
               await reload()
@@ -348,6 +390,32 @@ export function PackagePanel({ character, packageId }: { character: string; pack
         }}
         onClose={() => setPendingSwitch(null)}
       />
+      <ConfirmDialog
+        open={!!panelPending && !panelPending.input}
+        title={panelPending?.label || ''}
+        message={panelPending?.confirm || ''}
+        confirmLabel={panelPending?.label || ''}
+        onConfirm={() => {
+          const a = panelPending
+          setPanelPending(null)
+          if (a) void runPanelAction(a)
+        }}
+        onClose={() => setPanelPending(null)}
+      />
+      <PromptDialog
+        open={!!panelPending?.input}
+        title={panelPending?.label || ''}
+        label={panelPending?.input?.label || ''}
+        message={panelPending?.input?.message || panelPending?.confirm || undefined}
+        placeholder={panelPending?.input?.placeholder || undefined}
+        confirmLabel={panelPending?.label || undefined}
+        onSubmit={(value) => {
+          const a = panelPending
+          setPanelPending(null)
+          if (a) void runPanelAction(a, value)
+        }}
+        onClose={() => setPanelPending(null)}
+      />
     </div>
   )
 }
@@ -369,7 +437,7 @@ function CardForm({
   onSave: (values: Record<string, unknown>) => Promise<OpResult>
   onCancel?: () => void
   onDelete?: () => Promise<OpResult>
-  onAction?: (actionId: string) => Promise<OpResult>
+  onAction?: (actionId: string, value?: string) => Promise<OpResult>
 }) {
   const { t } = useI18n()
   const initial = useMemo(() => {
@@ -411,7 +479,9 @@ function CardForm({
 
   const save = () => run(() => onSave(draft))
   const doAction = (a: PanelAction) =>
-    a.confirm ? setPending({ kind: 'action', action: a }) : run(() => onAction!(a.id))
+    a.confirm || a.input ? setPending({ kind: 'action', action: a }) : run(() => onAction!(a.id))
+  // A card without fields (a status-only card) has nothing to save.
+  const editable = fields.length > 0
 
   return (
     <div className="ga-fieldset ga-pp-card">
@@ -438,12 +508,14 @@ function CardForm({
               {t('Cancel')}
             </button>
           ) : null}
-          {!isNew ? (
+          {!isNew && editable ? (
             <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !changed}
               onClick={() => { setDraft(initial); setError('') }}>{t('Discard')}</button>
           ) : null}
-          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !(isNew || changed)}
-            onClick={save}>{busy ? t('Saving…') : t('Save')}</button>
+          {editable ? (
+            <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !(isNew || changed)}
+              onClick={save}>{busy ? t('Saving…') : t('Save')}</button>
+          ) : null}
         </div>
       </div>
 
@@ -482,8 +554,23 @@ function CardForm({
         </div>
       </div>
 
+      <PromptDialog
+        open={pending?.kind === 'action' && !!pending.action.input}
+        title={pending?.kind === 'action' ? pending.action.label : ''}
+        label={pending?.kind === 'action' ? pending.action.input?.label || '' : ''}
+        message={pending?.kind === 'action'
+          ? pending.action.input?.message || pending.action.confirm || undefined : undefined}
+        placeholder={pending?.kind === 'action' ? pending.action.input?.placeholder || undefined : undefined}
+        confirmLabel={pending?.kind === 'action' ? pending.action.label : undefined}
+        onSubmit={(value) => {
+          const p = pending
+          setPending(null)
+          if (p?.kind === 'action') void run(() => onAction!(p.action.id, value))
+        }}
+        onClose={() => setPending(null)}
+      />
       <ConfirmDialog
-        open={!!pending}
+        open={!!pending && !(pending.kind === 'action' && pending.action.input)}
         title={pending?.kind === 'action' ? pending.action.label : t('Delete')}
         message={pending?.kind === 'action'
           ? pending.action.confirm
