@@ -85,7 +85,7 @@ const soloEnabled = render(PropActionOffers, { offers: [{ ...offer, required_par
 assert.match(soloEnabled, />Rest<\/button>/);
 const stepOut = render(PropActionOffers, { offers: [{ ...offer, required_partner: false, enabled: false, reason: 'start_not_walkable' }], onPick() {} });
 assert.match(stepOut, /Step away from the furniture first/);
-const execution = { execution_id: 'run-8', action_id: 'rest', definition_revision: 'rev-7', target, actor: 'Player', partner: 'Mira', status: 'awaiting_consent', phase: '', phase_label: '', reason: '', label: 'Rest', roles: { actor: 'Player', partner: 'Mira', clip: { actor: 'b', partner: 'a' }, access: { actor: 'right', partner: 'left' } }, can_respond: true, can_cancel: true };
+const execution = { execution_id: 'run-8', action_id: 'rest', definition_revision: 'rev-7', target, actor: 'Player', members: ['Mira'], viewer: 'Player', status: 'awaiting_consent', phase: '', phase_label: '', reason: '', label: 'Rest', roles: { clip: { a: 'Mira', b: 'Player' }, access: { Player: 'right', Mira: 'left' } }, can_respond: true, can_cancel: true };
 const row = (changes, kind) => render(PropActionExecutionRow, { run: { ...execution, ...changes }, kind, busy: false, perform() {} });
 const incoming = row({}, 'incoming');
 assert.match(incoming, /Accept/);

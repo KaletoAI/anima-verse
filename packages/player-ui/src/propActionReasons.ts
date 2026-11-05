@@ -71,6 +71,7 @@ const REASONS: Record<string, string> = {
   pair_geometry_marker_mismatch: "There is no suitable place for both participants",
   invalid_partner: "Choose a different available partner",
   invalid_request: "This action selection is incomplete",
+  invalid_consent: "Only a pair can start at once",
   world_frozen: "The world is paused",
   request_id_conflict: "This request changed; try again",
   not_invitee: "Only the invited person can answer",
