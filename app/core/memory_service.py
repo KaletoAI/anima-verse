@@ -188,6 +188,11 @@ def extract_memories_from_exchange(character_name: str,
             logger.debug("[%s] Thought extraction skipped: no prose after call cleanup", character_name)
             return []
 
+    from app.core.identity_view import identity_key, label_key, shown_name, shown_names
+    # The partner as a memory key: who she is right now (the alias while she
+    # wears a persona) — the same key her relationship row carries.
+    partner_key = identity_key(partner_name) if partner_name else ""
+
     try:
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
@@ -206,15 +211,19 @@ def extract_memories_from_exchange(character_name: str,
             location_id = profile.get("current_location") or ""
             room_id = profile.get("current_room") or ""
             presence = room_presence_names(character_name, location_id, room_id)
+            # Present people as the memory owner perceives them (a persona
+            # she is not in on is its alias), so the stored text says what
+            # she saw. Absent names are the ones the thought itself wrote.
             shared.update(
                 presence_known=presence is not None,
-                present_names=", ".join(presence[0]) if presence is not None else "",
+                present_names=(", ".join(shown_names(character_name, presence[0]))
+                               if presence is not None else ""),
                 absent_names=", ".join(absent_named_people(
                     character_name, location_id, room_id, texts=[clean_own])))
             sys_prompt, user_prompt = render_task("extraction_thought", **shared)
         else:
             sys_prompt, user_prompt = render_task(
-                "extraction_memory", speaker_a=partner_name,
+                "extraction_memory", speaker_a=shown_name(character_name, partner_name),
                 text_a=partner_message, **shared)
 
         response = llm_call(
@@ -275,13 +284,15 @@ def extract_memories_from_exchange(character_name: str,
             }
             # Prefer the model's named addressee, otherwise use the conversation
             # partner so a promise is attributed to an actual character.
-            related = (item.get("related_character") or "").strip()
+            # A knower's label "<alias> (<name>)" names the persona: its key
+            # is the alias.
+            related = label_key(item.get("related_character") or "")
             if not related and not monologue:
-                related = partner_name
+                related = partner_key
             # Filter generic labels; never store them as addressees.
             if related.lower() in {"user", "player", "spieler", "the user",
                                     "assistant", "character"}:
-                related = partner_name  # empty in a monologue: no addressee
+                related = partner_key  # empty in a monologue: no addressee
             if related:
                 entry["related_character"] = related
             # Due hint for commitments — a number of minutes from now.

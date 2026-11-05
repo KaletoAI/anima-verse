@@ -146,16 +146,26 @@ def get_scene_utterances(scene: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     Private lines are left out: the summary built from these rows becomes a
     memory of EVERY participant, and a private line belongs only to its
-    recipients."""
+    recipients. ``meta`` comes parsed (a dict) — it carries the ``identity``
+    snapshot of speaking time, the public view of a shared reader."""
     from app.models.perception_store import NOT_PRIVATE_SQL
     conn = get_connection()
     rows = conn.execute(
-        "SELECT id, ts, speaker, addressees, content FROM utterances "
+        "SELECT id, ts, speaker, addressees, content, meta FROM utterances "
         "WHERE location_id=? AND room_id=? AND ts>=? AND ts<=? "
         f"AND {NOT_PRIVATE_SQL} ORDER BY id",
         (scene["location_id"], scene.get("room_id", ""),
          scene["started_ts"], scene["last_activity_ts"])).fetchall()
-    return [dict(r) for r in rows]
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        try:
+            meta = json.loads(d.get("meta") or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        d["meta"] = meta if isinstance(meta, dict) else {}
+        out.append(d)
+    return out
 
 
 def prune_scene_perceptions(scene: Dict[str, Any]) -> int:

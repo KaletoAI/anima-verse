@@ -762,12 +762,14 @@ def build_memory_relationships(character_name: str,
 
     # Ghost filter: relationships whose partner no longer exists in the
     # world (character deleted) stay in the DB but must not show in the
-    # Mind panel.
+    # Mind panel. A persona name is no character but a person of its own
+    # (identity view) — its rows show under the alias.
     try:
         from app.models.character import list_available_characters
         existing = set(list_available_characters())
     except Exception:
         existing = set()
+    from app.core.identity_view import is_persona_name
 
     items = []
     for r in rels:
@@ -776,7 +778,7 @@ def build_memory_relationships(character_name: str,
         a = r.get("character_a") or ""
         b = r.get("character_b") or ""
         partner = b if a == character_name else a
-        if existing and partner not in existing:
+        if existing and partner not in existing and not is_persona_name(partner):
             continue
         # Flip the sentiment to the calling character's point of view if
         # needed: a_to_b is the sentiment from a towards b.

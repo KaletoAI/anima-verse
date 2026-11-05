@@ -4362,13 +4362,21 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
     No ghost filter is needed here: this returns a map, and the caller only
     looks up characters that are PRESENT in the room. A relationship row
     pointing at a deleted character therefore has no key anyone asks for.
+
+    Identity view: rows are keyed by identity keys (the alias of a persona
+    worn at the time). The map stays keyed by REAL names — the caller looks
+    up present characters by name — but a character who wears a persona
+    right now answers with the (avatar, alias) row, never with the row of
+    her real name; the avatar's own rows are those of its identity key.
     """
     avatar = (avatar or "").strip()
     if not avatar:
         return {}
+    from app.core import identity_view
     from app.models.relationship import get_character_relationships
+    own = identity_view.identity_key(avatar)
     try:
-        rels = get_character_relationships(avatar)
+        rels = get_character_relationships(own)
     except Exception as e:
         logger.warning("build_relation_map(%s): %s", avatar, e)
         return {}
@@ -4378,12 +4386,21 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
         # from_char/to_char (DB order); we want the non-self name.
         a = r.get("character_a") or ""
         b = r.get("character_b") or ""
-        partner = (b if a == avatar else a).strip()
+        partner = (b if a == own else a).strip()
         if not partner:
+            continue
+        if identity_view.is_persona_name(partner):
+            # A persona row belongs to whoever wears it right now; nobody →
+            # nobody present to show it on.
+            partner = identity_view.bearer_of(partner) or ""
+            if not partner:
+                continue
+        elif identity_view.identity_key(partner) != partner:
+            # Her real-name row is not the person standing here.
             continue
         # a_to_b is the sentiment from a towards b — flip it to the avatar's
         # point of view when the avatar is the b side.
-        sentiment = (r.get("sentiment_a_to_b", 0.0) if a == avatar
+        sentiment = (r.get("sentiment_a_to_b", 0.0) if a == own
                      else r.get("sentiment_b_to_a", 0.0))
         out[partner] = {
             "type": r.get("type", "neutral"),

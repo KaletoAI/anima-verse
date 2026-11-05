@@ -287,6 +287,95 @@ def is_persona_name(name: str) -> bool:
         return False
 
 
+def bearer_of(alias: str) -> Optional[str]:
+    """The character who wears the persona ``alias`` right now (casefolded
+    alias match over the roster), or ``None`` — nobody wears it, or no
+    provider is registered."""
+    folded = (alias or "").strip().casefold()
+    if not folded:
+        return None
+    from app.core.hooks import get_provider
+    if get_provider(PROVIDER_ACTIVE) is None:
+        return None
+    from app.models.character import list_available_characters
+    for name in list_available_characters():
+        persona = active_persona(name)
+        if persona is not None and persona.alias.casefold() == folded:
+            return name
+    return None
+
+
+def key_label(observer: str, key: str) -> str:
+    """The name ``observer`` reads for a stored identity KEY — a relationship
+    partner or a memory ``related_character`` (an :func:`identity_key`).
+
+    A persona name labels as ``"<alias> (<bearer>)"`` while someone wears it
+    and the observer knows that bearer, else as the bare alias (a knower of a
+    persona nobody wears right now reads the alias too). A real name is
+    itself: the row is about the person, never relabelled to her alias."""
+    key = (key or "").strip()
+    if not key or not is_persona_name(key):
+        return key
+    bearer = bearer_of(key)
+    if bearer is None or _same(observer, bearer):
+        return key
+    persona = active_persona(bearer)
+    if persona is None:
+        return key
+    state = _knows_state(observer, bearer, persona)
+    if state is True:
+        return f"{persona.alias} ({bearer})"
+    return persona.alias
+
+
+def label_key(token: str) -> str:
+    """The identity key a written name stands for: a knower's label
+    ``"<alias> (<name>)"`` whose head is a persona name → the alias; anything
+    else unchanged (stripped). The inverse of :func:`key_label` for text an
+    LLM wrote back (e.g. a memory's ``related_character``)."""
+    tok = (token or "").strip()
+    parts = _split_label(tok)
+    if parts is not None and is_persona_name(parts[0]):
+        return parts[0]
+    return tok
+
+
+def snapshot_name(subject: str, identity: Any) -> str:
+    """The public name of ``subject`` on a line that carries ``identity`` (an
+    utterance's ``{subject: alias}`` snapshot from speaking time): the stamped
+    alias, else the real name. With no provider registered every snapshot is
+    ignored (deletion test: real names)."""
+    if not subject or not isinstance(identity, dict):
+        return subject
+    alias = identity.get(subject)
+    if not isinstance(alias, str) or not alias.strip():
+        return subject
+    from app.core.hooks import get_provider
+    if get_provider(PROVIDER_ACTIVE) is None:
+        return subject
+    return alias.strip()
+
+
+def rewrite_snapshot(text: str, identity: Any) -> str:
+    """Replace each real name of an ``identity`` snapshot in ``text`` by its
+    stamped alias — whole words, case-sensitive, one pass: the PUBLIC view of
+    a system/storyteller line for shared readers (scene summaries). No
+    provider or no snapshot → ``text`` unchanged."""
+    if not text or not isinstance(identity, dict) or not identity:
+        return text
+    from app.core.hooks import get_provider
+    if get_provider(PROVIDER_ACTIVE) is None:
+        return text
+    mapping = {s: a.strip() for s, a in identity.items()
+               if isinstance(s, str) and s and isinstance(a, str) and a.strip()
+               and a.strip() != s}
+    if not mapping:
+        return text
+    alternation = "|".join(re.escape(s) for s in sorted(mapping, key=len, reverse=True))
+    pattern = re.compile(rf"(?<!\w)(?:{alternation})(?!\w)")
+    return pattern.sub(lambda m: mapping[m.group(0)], text)
+
+
 def identity_snapshot(names: Iterable[str]) -> Dict[str, str]:
     """``{subject: alias}`` for the names that wear a persona right now."""
     out: Dict[str, str] = {}

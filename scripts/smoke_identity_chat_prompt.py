@@ -21,9 +21,11 @@ FIXTURE
     "A figure in moonlit silver.", no suit, no condition, max 0, cooldown 0.
     Cara is transformed through ``engine.transform``. Forms of address:
     Obs -> "Moonveil" = "silver one", Obs -> "Cara" = "darling" (both create
-    a relationship row). ``build_relationship_prompt_section`` is stubbed to
-    "" — the relationships section (rows keyed per identity, their labels) is
-    a separate task's surface and would list the real-name row "- Cara:".
+    a relationship row: neutral, strength 10, sentiment 0 -> "Known
+    (closeness 10/100, feeling: neutral)"). The relationships section is the
+    real one: Obs's rows are (Obs, Moonveil) and (Obs, Cara); the persona row
+    reads "- Moonveil:" for the non-knower, the real-name row of a person
+    who wears a persona Obs is not in on is left out while she wears it.
 
 THE RULES (task brief) and what follows BY HAND
     The observer is the responder. shown_name(Obs, Cara) = "Moonveil",
@@ -44,7 +46,9 @@ THE RULES (task brief) and what follows BY HAND
     "- Moonveil: A figure in moonlit silver."; "Moonveil spoke to YOU
     directly"; "How you address Moonveil: silver one."; "darling" absent;
     the reply shape reads "Relationship with Moonveil:" (the (Obs, Moonveil)
-    row exists through set_address).
+    row exists through set_address); the relationships section (scene
+    state, chat_moment.md) has "- Moonveil: Known (closeness 10/100" and no
+    "- Cara:" anywhere.
 [C] Obs, room mode, Cara spoke to Kim only (addressed_to ["Kim"]): moment
     has "Moonveil was speaking to Kim, not to you."; Kim spoke to Cara
     (partner Kim, addressed_to ["Cara"]): "Kim was speaking to Moonveil,
@@ -56,7 +60,9 @@ THE RULES (task brief) and what follows BY HAND
     in moment, NOT in system (cache contract).
 [F] Not transformed (``engine.revert``, reason "admin"): Obs room mode -> "Others present:
     Cara, Kim."; details "- Cara: freckled redhead"; the 1:1 system prompt
-    has "Name: Cara" and "Appearance: freckled redhead with a crooked smile".
+    has "Name: Cara" and "Appearance: freckled redhead with a crooked smile",
+    and the 1:1 moment's relationships section lists both rows: "- Cara: Known" and
+    "- Moonveil: Known" (nobody wears the persona: the bare alias).
 [G] person_description without observer (image prompts) keeps the real
     appearance while Cara is transformed: contains "freckled"; with
     observer "Obs" it starts "A figure in moonlit silver." and has no
@@ -150,14 +156,9 @@ for _name in ("Cara", "Kim", "Obs"):
 inventory.add_item("Amulet", item_id="amulet")
 assert inventory.add_to_inventory("Cara", "amulet")
 
-from app.models import relationship  # noqa: E402
 from app.models.relationship import set_address  # noqa: E402
 assert set_address("Obs", "Moonveil", "silver one")
 assert set_address("Obs", "Cara", "darling")
-# The relationships section is not this smoke's surface (its rows and labels
-# are the relationship task's): the "darling" row above would list "- Cara:"
-# there. Blanked, so the leak checks cover the surfaces this builder owns.
-relationship.build_relationship_prompt_section = lambda character_name: ""
 
 from app.plugins import loader, registry  # noqa: E402
 loader.discover_packages()
@@ -213,6 +214,8 @@ has("partner named by alias", _mom, "Moonveil spoke to YOU directly")
 has("address keyed by identity", _mom, "How you address Moonveil: silver one.")
 has("real-name address absent", _mom, "darling", False)
 has("reply shape names the alias", _mom, "Relationship with Moonveil:")
+has("relationships: persona row", _mom, "- Moonveil: Known (closeness 10/100")
+has("relationships: no real-name row", _sys + _mom, "- Cara:", False)
 
 # ── [C] addressed names ─────────────────────────────────────────────────────
 print("[C] Obs overhears")
@@ -254,6 +257,8 @@ check("details real", detail_line(_mom, "- Cara: freckled redhead"), True)
 _sys, _mom = one_on_one("Obs", "Cara")
 has("1:1 name real", _sys, "Name: Cara")
 has("1:1 appearance real", _sys, f"Appearance: {APPEARANCE}")
+has("relationships: real-name row back", _mom, "- Cara: Known")
+has("relationships: persona row stays", _mom, "- Moonveil: Known")
 
 print()
 if FAILURES:

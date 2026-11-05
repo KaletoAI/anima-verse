@@ -712,9 +712,12 @@ def build_memory_prompt_section(character_name: str,
     Grouped by type: episodic, semantic, relationships. Retrieved
     by context instead of a static top-N.
 
-    ``partner_name`` is the current conversation partner (a character name).
-    When set, the header adds a disambiguation hint so the LLM does not read
-    the wrong addressee as "the user" during a TalkTo.
+    ``partner_name`` is the current conversation partner AS THE CHARACTER
+    SEES THEM (the caller's identity-view label). It is only used for the
+    header's disambiguation hint, so the LLM does not read the wrong
+    addressee as "the user" during a TalkTo — no memory is looked up by it.
+    A memory's ``related_character`` is an identity key (the alias of a
+    persona the partner wore) and is labelled from this character's view.
 
     Every time reference is WORLD time (``game_ts``); entries without a game
     stamp appear undated rather than carrying a real-world date.
@@ -741,6 +744,7 @@ def build_memory_prompt_section(character_name: str,
         from app.models.character import character_exists
     except Exception:
         character_exists = None  # type: ignore
+    from app.core import identity_view
 
     for mem in memories:
         ts = _format_memory_timestamp(mem.get("game_ts", ""), lang)
@@ -751,7 +755,9 @@ def build_memory_prompt_section(character_name: str,
         # Dangling filter: a memory referencing a character that
         # does not (or no longer) exists in the world is kept in storage but
         # not pulled into the prompt. Only applies with related_character set.
-        if related and character_exists is not None and not character_exists(related):
+        # A persona name is no character but a person of its own.
+        if (related and character_exists is not None and not character_exists(related)
+                and not identity_view.is_persona_name(related)):
             continue
 
         # Recency marker for very fresh entries — counted in GAME days.
@@ -767,7 +773,8 @@ def build_memory_prompt_section(character_name: str,
         if mtype == "episodic":
             episodic.append(f"- {recency_marker}{ts_prefix}{content}")
         elif related:
-            relationships.append(f"- {recency_marker}{ts_prefix}(about {related}) {content}")
+            about = identity_view.key_label(character_name, related)
+            relationships.append(f"- {recency_marker}{ts_prefix}(about {about}) {content}")
         else:
             semantic.append(f"- {recency_marker}{ts_prefix}{content}")
 
