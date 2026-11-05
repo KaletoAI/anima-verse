@@ -493,10 +493,13 @@ async def _run_storyteller_agent(
 
 
 def _short_subject_profile(actor: str) -> str:
-    """Brief trait hint for the storyteller's context."""
+    """Brief trait hint for the storyteller's context (a worn persona's
+    personality override replaces the actor's own)."""
     try:
+        from app.core.identity_view import self_field
         from app.models.character import get_character_personality
-        pers = get_character_personality(actor) or ""
+        pers = (self_field(actor, "character_personality")
+                or get_character_personality(actor) or "")
         pers = pers.strip()
         if len(pers) > 200:
             pers = pers[:200].rsplit(" ", 1)[0] + "…"

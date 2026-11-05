@@ -1003,6 +1003,19 @@ class ChatPrompt(NamedTuple):
     room_offer: str = ""
 
 
+def _masked_partner_data(partner: str, label: str, masked: str) -> dict:
+    """The only partner fields a NON-KNOWER of ``partner``'s persona gets:
+    the shown name, the persona description as appearance and — only when
+    the persona overrides it — the persona's presence. Never a value of the
+    real character (her presence.md would give her away)."""
+    from app.core.identity_view import self_field
+    data = {"character_name": label, "character_appearance": masked}
+    presence = self_field(partner, "character_presence")
+    if presence is not None:
+        data["character_presence"] = presence
+    return data
+
+
 def _build_chat_prompt(character_name: str,
     lang_instruction: str,
     history_summary: str,
@@ -1090,14 +1103,15 @@ def _build_chat_prompt(character_name: str,
                     partner_profile["current_location"] = p_loc_name or p_loc_id
                 _shown_profile = dict(partner_profile, character_name=_partner_label)
                 if _partner_masked is not None:
-                    # A non-knower sees the persona only: its name and its
-                    # look. No real-profile field and no source file of the
-                    # real character (character_name="") — each would
-                    # identify the person behind it.
+                    # A non-knower sees the persona only: its name, its look
+                    # and — when the persona sets one — its presence. No
+                    # real-profile field and no source file of the real
+                    # character (character_name="") — each would identify the
+                    # person behind it.
                     _partner_lines = build_prompt_section(
                         partner_template,
-                        {"character_name": _partner_label,
-                         "character_appearance": _partner_masked},
+                        _masked_partner_data(_partner_name, _partner_label,
+                                             _partner_masked),
                         active_features=char_features,
                         is_partner=True, character_name="",
                         volatile=False)
@@ -1252,8 +1266,11 @@ def _build_chat_prompt(character_name: str,
     else:
         char_lines = [f"Name: {character_name}"]
         self_state_lines = []
-        if char_profile.get("character_personality"):
-            char_lines.append(f"Personality: {char_profile['character_personality']}")
+        from app.core.identity_view import self_field
+        _personality = (self_field(character_name, "character_personality")
+                        or char_profile.get("character_personality"))
+        if _personality:
+            char_lines.append(f"Personality: {_personality}")
 
     # ---- Feature-Check Helper -----------------------------------------
     from app.models.character_template import is_feature_enabled as _feat

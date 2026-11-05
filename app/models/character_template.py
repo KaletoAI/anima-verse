@@ -122,9 +122,9 @@ def _merge_templates(base: Dict[str, Any], extension: Dict[str, Any]) -> Dict[st
         if key in extension:
             result[key] = extension[key]
 
-    # Alle restlichen Top-Level-Felder aus der Extension uebernehmen —
-    # Extension gewinnt. Ohne das gehen Felder wie extra_activities,
-    # outfit_imagegen, outfit_exceptions etc. stumm verloren.
+    # Take over every remaining top-level field of the extension — the
+    # extension wins. Without this, fields such as extra_activities,
+    # outfit_imagegen, outfit_exceptions etc. are silently lost.
     _handled = {"features", "tabs", "sections", "label",
                 "template_version", "base"}
     for key, value in extension.items():
@@ -554,16 +554,28 @@ def build_prompt_section(
     Fields with "source_file" are loaded from an MD file in the character
     directory instead of from the profile data (character_name must be set for
     that). A missing or empty file means the field is skipped — there is no
-    fallback to the profile blob.
+    fallback to the profile blob. Without a character_name a source_file
+    field takes ``data[key]`` instead: such a caller hands in an explicit,
+    already filtered dict (the masked partner block of a persona), never a
+    profile blob.
+
+    While ``character_name`` wears a persona, ``identity_view.self_field``
+    (``Persona.own_field``) replaces a field it answers (personality, speech,
+    presence, tasks, goals, appearance) BEFORE every other source — it wins
+    over the MD file. Applies to her own block and to a knower's partner
+    block alike.
 
     ``volatile`` filters by :func:`is_prompt_volatile`: None = every field,
     False = only the stable ones, True = only the per-turn ones.
 
     Returns a list of "Label: value" strings.
     """
+    from app.core.identity_view import active_persona
     from app.core.stat_hints import active_band
     from app.core.stat_rules import rules_for_character, rules_for_template
 
+    # Asked once per section, not per field (Persona.own_field = self_field).
+    persona = active_persona(character_name) if character_name else None
     lines = []
     stat_rules = None
     for field in get_prompt_fields(template):
@@ -589,12 +601,19 @@ def build_prompt_section(
 
         key = field["key"]
 
+        # A worn persona's override wins over every source below. Then
         # source_file: content comes from the MD file, NEVER from the profile.
         # There is deliberately no fallback to `data[key]`: a stale blob value
         # would outlive a reset that cleared the file (the file IS the truth).
+        # Only a caller without a character (the masked partner dict) hands
+        # in the value itself.
         source_file = field.get("source_file")
-        if source_file:
-            value = load_source_file(character_name, source_file) if character_name else ""
+        persona_value = persona.own_field(key) if persona is not None else None
+        if persona_value is not None:
+            value = persona_value
+        elif source_file:
+            value = (load_source_file(character_name, source_file) if character_name
+                     else data.get(key))
         elif field.get("store") == "status_effects":
             from app.core.stat_boosts import effective_stat
             value = effective_stat(data, key)

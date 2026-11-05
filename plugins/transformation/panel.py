@@ -199,7 +199,9 @@ def _fields(character: str, alias: str, lang: str) -> List[Dict[str, Any]]:
         on("behaviour", "l", {"key": "goals", "type": "textarea",
                               "label": t("Goals", lang)}, rows=3),
         on("behaviour", "l", {"key": "pause_routine", "type": "bool",
-                              "label": t("Daily routine rests", lang)}),
+                              "label": t("Daily routine rests", lang),
+                              "hint": t("While transformed, her daily schedule is left out "
+                                        "of her thoughts.", lang)}),
         on("knowers", "full", {"key": "knowers", "type": "characters",
                                "label": t("In on the secret", lang),
                                "hint": t("They know that {name} is {alias}.", lang).format(

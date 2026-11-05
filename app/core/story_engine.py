@@ -1,13 +1,13 @@
-"""Story Arc Engine — koordinierte Multi-Character Storylines.
+"""Story Arc Engine — coordinated multi-character storylines.
 
-Generiert, verfolgt und schliesst Story Arcs ab, die sich ueber mehrere
-Interaktionen entwickeln. Nutzt LLM-Calls via LLMQueue (Priority.LOW)
-und persistiert Arcs ueber app.models.story_arcs.
+Generates, tracks and closes story arcs that develop over several
+interactions. Uses LLM calls via the LLMQueue (Priority.LOW) and persists
+arcs through app.models.story_arcs.
 
-Arc-Kontext wird in bestehende Prompts (Proactive, Social Dialog) injiziert —
-keine zusaetzlichen LLM-Calls fuer die Injektion.
+Arc context is injected into existing prompts (proactive, social dialog) —
+no extra LLM calls for the injection.
 
-Konfiguration:
+Configuration:
     STORY_ENGINE_ENABLED=true
     STORY_ENGINE_MAX_ACTIVE_ARCS=2
     STORY_ENGINE_COOLDOWN_HOURS=6
@@ -54,24 +54,24 @@ def beat_images_enabled() -> bool:
 # StoryArcEngine
 # ---------------------------------------------------------------------------
 class StoryArcEngine:
-    """Singleton fuer die Story Arc Verwaltung."""
+    """Singleton that manages the story arcs."""
 
     def __init__(self):
         logger.info("StoryArcEngine initialisiert (enabled=%s)", is_enabled())
 
     @property
     def enabled(self) -> bool:
-        """Liest live aus der Config (STORY_ENGINE_ENABLED)."""
+        """Read live from the config (STORY_ENGINE_ENABLED)."""
         return is_enabled()
 
     # ------------------------------------------------------------------
-    # Arc Generation — LLM analysiert Characters und erzeugt neuen Arc
+    # Arc generation — the LLM analyses the characters and creates a new arc
     # ------------------------------------------------------------------
     def generate_arc(self) -> Optional[Dict[str, Any]]:
-        """Generiert einen neuen Story Arc via LLM.
+        """Generate a new story arc via the LLM.
 
-        Prueft vorher ob Generation erlaubt ist (Cooldown, max aktive Arcs).
-        Analysiert Character-Konstellationen und erzeugt einen passenden Arc.
+        Checks first whether generation is allowed (cooldown, max active
+        arcs). Analyses the character constellation and creates a fitting arc.
         """
         if not self.enabled:
             return None
@@ -82,7 +82,9 @@ class StoryArcEngine:
             logger.debug("Generation nicht erlaubt (Cooldown/max aktive Arcs)")
             return None
 
-        # Characters + Beziehungen laden
+        # Load characters + relationships (a worn persona's personality
+        # override replaces the bearer's own)
+        from app.core.identity_view import self_field
         from app.models.character import (
             list_available_characters,
             get_character_personality,
@@ -97,7 +99,8 @@ class StoryArcEngine:
 
         char_infos = []
         for name in characters:
-            personality = get_character_personality(name) or ""
+            personality = (self_field(name, "character_personality")
+                           or get_character_personality(name) or "")
             loc_id = get_character_current_location(name)
             loc_name = get_location_name(loc_id) if loc_id else "unbekannt"
             char_infos.append(
@@ -112,18 +115,18 @@ class StoryArcEngine:
             characters_text=characters_text,
             max_beats=max_beats())
 
-        # LLM-Call via Queue
+        # LLM call via the queue
         llm_result = self._llm_call(characters[0], sys_prompt, user_prompt)
         if not llm_result:
             return None
 
-        # JSON parsen
+        # Parse the JSON
         arc_data = self._parse_json(llm_result)
         if not arc_data:
             logger.error("Arc-Generation: ungueltige LLM-Antwort")
             return None
 
-        # Participants validieren
+        # Validate the participants
         participants = arc_data.get("participants", [])
         participants = [p for p in participants if p in characters]
         if len(participants) < 2:
@@ -141,12 +144,12 @@ class StoryArcEngine:
         return arc
 
     # ------------------------------------------------------------------
-    # Arc Advancement — nach einer Interaktion den Arc weiterentwickeln
+    # Arc advancement — develop the arc further after an interaction
     # ------------------------------------------------------------------
     def advance_arc(
         self, arc_id: str, interaction_summary: str
     ) -> Optional[Dict[str, Any]]:
-        """Entwickelt einen Arc nach einer Interaktion weiter."""
+        """Develop an arc further after an interaction."""
         if not self.enabled:
             return None
 
@@ -193,13 +196,13 @@ class StoryArcEngine:
         if updated and updated.get("status") == "resolved":
             self._on_arc_resolved(updated)
 
-        # Relationship Graph: leichter Einfluss pro Beat
+        # Relationship graph: a light influence per beat
         if updated:
             self._update_relationships_from_beat(updated,
                 result.get("tension", arc.get("tension", 1)),
                 result.get("beat_summary", interaction_summary[:200]))
 
-        # Beat-Bild generieren (best-effort, kein Fehler bei Ausfall)
+        # Generate the beat image (best effort, no error on failure)
         if updated and beat_images_enabled():
             beat_num = len(updated.get("beats", []))
             beat_summary = result.get("beat_summary", interaction_summary[:200])
@@ -213,12 +216,12 @@ class StoryArcEngine:
         return updated
 
     # ------------------------------------------------------------------
-    # Arc Resolution — Knowledge-Eintraege fuer alle Teilnehmer
+    # Arc resolution — knowledge entries for every participant
     # ------------------------------------------------------------------
     def resolve_arc(
         self, arc_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Schliesst einen Arc explizit ab und schreibt Knowledge."""
+        """Close an arc explicitly and write knowledge."""
         if not self.enabled:
             return None
 
@@ -264,13 +267,13 @@ class StoryArcEngine:
         return updated
 
     # ------------------------------------------------------------------
-    # Arc Context Injection — Text fuer System-Prompt
+    # Arc context injection — text for the system prompt
     # ------------------------------------------------------------------
     def inject_arc_context(self, character_name: str) -> str:
-        """Gibt formatierten Arc-Kontext fuer den System-Prompt zurueck.
+        """Return the formatted arc context for the system prompt.
 
-        Wird in Proactive und Social Dialog Prompts eingebettet.
-        Kein zusaetzlicher LLM-Call.
+        Embedded in the proactive and social dialog prompts.
+        No extra LLM call.
         """
         if not self.enabled:
             return ""
@@ -297,11 +300,11 @@ class StoryArcEngine:
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
-    # Interne Hilfsmethoden
+    # Internal helpers
     # ------------------------------------------------------------------
     def _llm_call(self, character_name: str, system_prompt: str,
                   user_prompt: str) -> Optional[str]:
-        """Fuehrt einen LLM-Call via Router (Task: consolidation) durch."""
+        """Run an LLM call via the router (task: consolidation)."""
         from app.core.llm_router import llm_call
 
         try:
@@ -316,19 +319,19 @@ class StoryArcEngine:
             return None
 
     def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
-        """Parst JSON aus LLM-Antwort (mit Toleranz fuer Markdown-Bloecke)."""
-        # Markdown-Code-Block entfernen
+        """Parse JSON from an LLM answer (tolerating Markdown blocks)."""
+        # Remove a Markdown code block
         cleaned = text.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
-            # Erste und letzte Zeile (```) entfernen
+            # Remove the first and last line (```)
             lines = [l for l in lines if not l.strip().startswith("```")]
             cleaned = "\n".join(lines)
 
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            # Versuche JSON-Objekt zu extrahieren
+            # Try to extract a JSON object
             start = cleaned.find("{")
             end = cleaned.rfind("}")
             if start != -1 and end > start:
@@ -416,30 +419,30 @@ class StoryArcEngine:
             return None
 
     def _on_arc_resolved(self, arc: Dict[str, Any]) -> None:
-        """Callback wenn ein Arc durch Advancement aufgeloest wird."""
+        """Callback when an arc is resolved by an advancement."""
         outcomes = arc.get("character_outcomes", {})
         resolution = arc.get("resolution", "")
         if not resolution:
             resolution = f"Story '{arc['title']}' abgeschlossen nach {len(arc.get('beats', []))} Beats."
         self._write_knowledge(arc, outcomes)
 
-        # Abschluss-Update: Tension des Gesamtarcs bestimmt finalen Einfluss
-        # Etwas staerker als einzelne Beats, aber immer noch gedaempft
+        # Closing update: the tension of the whole arc decides the final
+        # influence — a bit stronger than single beats, but still damped
         final_tension = arc.get("tension", 3)
         self._update_relationships_from_beat(arc, final_tension,
             f"Arc resolved: {resolution[:150]}")
 
     def _update_relationships_from_beat(
         self, arc: Dict[str, Any], tension: int, beat_summary: str) -> None:
-        """Leichter Relationship-Einfluss pro Story Beat.
+        """A light relationship influence per story beat.
 
-        Tension steuert die Richtung:
-          1-2 = positiv (friedlich, kooperativ)
-          3   = neutral (kein Einfluss)
-          4-5 = negativ (Konflikt, Spannung)
+        The tension sets the direction:
+          1-2 = positive (peaceful, cooperative)
+          3   = neutral (no influence)
+          4-5 = negative (conflict, tension)
 
-        Werte sind bewusst sehr niedrig gehalten, da Story Arcs
-        unkontrolliert vom LLM generiert werden.
+        The values are deliberately very low, because story arcs are
+        generated by the LLM without control.
         """
         from app.models.relationship import record_interaction
 
@@ -447,7 +450,7 @@ class StoryArcEngine:
         if len(participants) < 2:
             return
 
-        # Sentiment aus Tension ableiten: 1→+0.01, 2→+0.005, 3→0, 4→-0.005, 5→-0.01
+        # Derive the sentiment from the tension: 1→+0.01, 2→+0.005, 3→0, 4→-0.005, 5→-0.01
         sentiment = (3 - tension) * 0.005  # Range: +0.01 bis -0.01
 
         for i, char_a in enumerate(participants):
@@ -467,7 +470,7 @@ class StoryArcEngine:
     def _write_knowledge(
         self, arc: Dict[str, Any], outcomes: Dict[str, str]
     ) -> None:
-        """Schreibt Knowledge-Eintraege fuer alle Arc-Teilnehmer."""
+        """Write knowledge entries for every arc participant."""
         from app.models.memory import upsert_relationship_memory
 
         participants = arc.get("participants", [])
@@ -537,13 +540,13 @@ def _handle_story_arc_resolve(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Registrierung + Singleton
+# Registration + singleton
 # ---------------------------------------------------------------------------
 _story_engine: Optional[StoryArcEngine] = None
 
 
 def get_story_engine() -> StoryArcEngine:
-    """Gibt die globale StoryArcEngine-Instanz zurueck."""
+    """Return the global StoryArcEngine instance."""
     global _story_engine
     if _story_engine is None:
         _story_engine = StoryArcEngine()

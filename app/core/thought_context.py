@@ -82,6 +82,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     when it has content. The template renders nothing for empty blocks.
     """
     from app.core.birthday import is_birthday_today
+    from app.core.identity_view import self_field
     from app.models.world import get_room_name
     from app.core.perception import prompt_place
     from app.models.character import (
@@ -112,7 +113,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # The character's language instruction (e.g. "Always respond in
         # German.") — otherwise the thought turn produces English asides.
         "lang_instruction": get_character_language_instruction(character_name),
-        "personality": (profile.get("character_personality", "") or "").strip(),
+        # A worn persona's override replaces the bearer's own personality.
+        "personality": (self_field(character_name, "character_personality")
+                        or (profile.get("character_personality", "") or "").strip()),
         "location_name": location_name,
         "room_name": get_room_name(location_id, room_id, lang) if location_id and room_id else "",
         # DISPLAY text, not a render key: the sanitized flavor if there is
@@ -136,7 +139,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "inbox_block": _build_inbox_block(character_name),
         "events_block": _build_events_block(location_id, character_name),
         "assignments_block": _build_assignments_block(character_name),
-        "general_task": _build_general_task(profile),
+        "general_task": _build_general_task(profile, character_name),
         "state_flags_block": _build_state_flags_block(character_name),
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
@@ -405,8 +408,14 @@ def _build_assignments_block(character_name: str) -> str:
         return ""
 
 
-def _build_general_task(profile: Dict[str, Any]) -> str:
-    """Static general task from the character profile (long-running purpose)."""
+def _build_general_task(profile: Dict[str, Any], character_name: str = "") -> str:
+    """Static general task from the character profile (long-running purpose);
+    while ``character_name`` wears a persona with a task override, that."""
+    if character_name:
+        from app.core.identity_view import self_field
+        override = self_field(character_name, "character_task")
+        if override is not None:
+            return override
     return (profile.get("character_task", "") or "").strip()
 
 
@@ -717,15 +726,24 @@ def _build_retrospective_block(character_name: str) -> str:
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "retrospect_enabled"):
             return ""
+        from app.core.identity_view import active_persona
         from app.core.soul_writer import load_all_body_lines, get_last_retrospect_at
 
+        # A worn persona's goals override replaces the goals lines only;
+        # beliefs and lessons stay hers. Retrospect pauses while she wears
+        # one, so no "time to reflect" nudge either.
+        persona = active_persona(character_name)
+        goals_override = persona.own_field("character_goals") if persona else None
         beliefs = load_all_body_lines(character_name, "beliefs", limit=6)
         lessons = load_all_body_lines(character_name, "lessons", limit=6)
-        goals = load_all_body_lines(character_name, "goals", limit=6)
+        if goals_override is not None:
+            goals = [ln.strip() for ln in goals_override.splitlines() if ln.strip()]
+        else:
+            goals = load_all_body_lines(character_name, "goals", limit=6)
         last_at = get_last_retrospect_at(character_name)
 
-        overdue = True
-        if last_at:
+        overdue = persona is None
+        if overdue and last_at:
             try:
                 last_dt = parse_iso(last_at)
                 overdue = utc_now() - last_dt > timedelta(hours=_RETROSPECT_BOOST_HOURS)
@@ -1374,6 +1392,10 @@ def _build_daily_schedule_context(character_name: str) -> tuple[str, bool]:
     Neither note enforces travel.
     """
     try:
+        # A worn persona whose routine rests: no rhythm, no sleep outlook.
+        from app.core.identity_view import routine_paused
+        if routine_paused(character_name):
+            return "", False
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "activity_home_enabled"):
             return "", False

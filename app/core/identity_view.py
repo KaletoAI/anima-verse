@@ -7,7 +7,10 @@ it (``hooks.register_provider(..., owner="<package id>")``):
 
 ``identity.active_persona``  ``fn(subject) -> dict | None``
     The persona C wears right now: ``{"persona_id", "alias", "description",
-    "portrait_url"}``, or ``None`` when C is not transformed.
+    "portrait_url"}``, optionally with ``"field_overrides"`` (character prompt
+    fields the persona replaces, keys from :data:`OVERRIDABLE_FIELDS`),
+    ``"pause_routine"`` (bool), ``"imagegen"`` (dict) and ``"suit_items"``
+    (list of item ids); or ``None`` when C is not transformed.
 ``identity.knows``           ``fn(observer, subject) -> bool``
     Whether the observer is in on C's current persona.
 ``identity.persona_names``   ``fn() -> Iterable[str]``
@@ -22,9 +25,11 @@ its cache.
 """
 from __future__ import annotations
 
+import copy
 import re
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -38,15 +43,42 @@ _MISSING = object()   # no provider registered
 _FAILED = object()    # the provider raised
 _logged_failures: Set[str] = set()
 
+#: The character prompt fields a persona may replace in its bearer's OWN
+#: prompts (personality, speech, presence, tasks, goals). Soul, beliefs,
+#: lessons, RP rules and memories are never among them.
+OVERRIDABLE_FIELDS = ("character_personality", "dialogue_style", "character_presence",
+                      "character_task", "character_goals")
+
+_EMPTY: Mapping[str, Any] = MappingProxyType({})
+
 
 @dataclass(frozen=True)
 class Persona:
-    """The persona ``subject`` wears right now."""
+    """The persona ``subject`` wears right now.
+
+    ``field_overrides`` holds only non-empty strings under
+    :data:`OVERRIDABLE_FIELDS`; ``imagegen`` is a private deep copy of the
+    provider's dict (string keys only); ``suit_items`` the non-empty item ids.
+    The two mappings are read-only views, so the frozen instance stays frozen.
+    """
     subject: str
     persona_id: str
     alias: str
     description: str
     portrait_url: str
+    field_overrides: Mapping[str, str] = field(default=_EMPTY, hash=False)
+    pause_routine: bool = False
+    imagegen: Mapping[str, Any] = field(default=_EMPTY, hash=False)
+    suit_items: Tuple[str, ...] = ()
+
+    def own_field(self, key: str) -> Optional[str]:
+        """The value replacing the bearer's own field ``key`` (see
+        :func:`self_field`), or ``None`` = keep the real value."""
+        if key == "character_appearance":
+            return self.description.strip() or None
+        if key in OVERRIDABLE_FIELDS:
+            return self.field_overrides.get(key) or None
+        return None
 
 
 def _call(capability: str, *args: Any) -> Any:
@@ -85,7 +117,63 @@ def active_persona(subject: str) -> Optional[Persona]:
         return v if isinstance(v, str) else ""
 
     return Persona(subject=subject, persona_id=_s("persona_id"), alias=alias.strip(),
-                   description=_s("description"), portrait_url=_s("portrait_url"))
+                   description=_s("description"), portrait_url=_s("portrait_url"),
+                   field_overrides=_overrides(got.get("field_overrides")),
+                   pause_routine=got.get("pause_routine") is True,
+                   imagegen=_imagegen(got.get("imagegen")),
+                   suit_items=_suit_items(got.get("suit_items")))
+
+
+def _overrides(value: Any) -> Mapping[str, str]:
+    """Only :data:`OVERRIDABLE_FIELDS` keys with a non-empty string (stripped)."""
+    if not isinstance(value, dict):
+        return _EMPTY
+    out = {}
+    for key in OVERRIDABLE_FIELDS:
+        text = value.get(key)
+        if isinstance(text, str) and text.strip():
+            out[key] = text.strip()
+    return MappingProxyType(out) if out else _EMPTY
+
+
+def _imagegen(value: Any) -> Mapping[str, Any]:
+    """A deep copy of the string-keyed entries, behind a read-only view."""
+    if not isinstance(value, dict):
+        return _EMPTY
+    out = {k: copy.deepcopy(v) for k, v in value.items() if isinstance(k, str)}
+    return MappingProxyType(out) if out else _EMPTY
+
+
+def _suit_items(value: Any) -> Tuple[str, ...]:
+    """The non-empty string item ids, in order, without repeats."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    out: List[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item.strip() not in out:
+            out.append(item.strip())
+    return tuple(out)
+
+
+def self_field(subject: str, key: str) -> Optional[str]:
+    """What replaces ``subject``'s own character field ``key`` in a prompt
+    about her while she wears a persona — her OWN prompts and a knower's
+    partner block.
+
+    A key of :data:`OVERRIDABLE_FIELDS` → the persona's non-empty override;
+    ``"character_appearance"`` → the persona description when non-empty;
+    anything else, an empty override, no persona or no provider → ``None``
+    (use the real value)."""
+    persona = active_persona(subject)
+    return persona.own_field(key) if persona is not None else None
+
+
+def routine_paused(subject: str) -> bool:
+    """Whether ``subject`` wears a persona whose daily routine rests right
+    now: her daily schedule stays out of her thoughts. No persona or no
+    provider → False."""
+    persona = active_persona(subject)
+    return persona is not None and persona.pause_routine
 
 
 def _knows_state(observer: str, subject: str, persona: Optional[Persona]) -> Any:

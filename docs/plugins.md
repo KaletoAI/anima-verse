@@ -1355,10 +1355,21 @@ Characters → Secrets shows the same secret.
 
 **Step-1 limits**: no "caught in the act" yet (witnesses of a transformation do not learn the secret);
 no guessing from clues; LLM-generated speech is not filtered (a knower may slip — the scene-state line asks
-them not to); images and voices are not secret (image prompts use the real character, TTS the real voice);
+them not to); images and voices are not secret yet (image prompts use the real character, TTS the real voice);
 technical identifiers (payload keys, `/characters/<name>/…` URLs) stay the real name — the HUD swaps only
 what it shows. Deletion test: without the package every surface names the real person again
 (`scripts/smoke_transformation_leaks.py`).
+
+**The bearer's own prompts** follow the persona: while she wears it, the persona's behaviour overrides
+(`prompt_overrides`: personality, speech, presence, tasks, goals — a filled field replaces hers, an empty one
+keeps hers) and its description (as her appearance) replace her own values in her chat system prompt, her
+thought prompt and the storyteller/event/outfit-creation prompts about her (`identity_view.self_field`); a
+non-knower's partner block shows the persona's presence override, never hers. A knower's partner block shows
+the persona's values too. Soul, beliefs, lessons, RP rules and memories stay hers. With `pause_routine` her
+daily schedule and its sleep nudge are left out of her thoughts (`identity_view.routine_paused`); the
+retrospect package pauses (no reflection, no soul write) while any persona is worn. Diary, secret diary,
+knowledge extraction, secret generation, intro memory and Instagram keep the real values
+(`scripts/smoke_identity_overrides.py`).
 
 ## Best Practices
 

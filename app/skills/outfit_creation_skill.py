@@ -1,11 +1,11 @@
-"""Outfit Creation Skill — erzeugt neue Outfit-Pieces (Items) per LLM.
+"""Outfit Creation Skill — creates new outfit pieces (items) via the LLM.
 
-Der Skill generiert einzelne Kleidungsstuecke (outfit_piece-Items) mit
-slots-Liste (z.B. ["top"] oder Multi-Slot ["top","bottom"] fuer Kleider),
-prompt_fragment und outfit_types. Die Pieces wandern ins Character-Inventar
-und werden direkt equipped.
+The skill generates single garments (outfit_piece items) with a slots list
+(e.g. ["top"] or multi-slot ["top","bottom"] for dresses), a prompt_fragment
+and outfit_types. The pieces go into the character's inventory and are
+equipped right away.
 
-Schwester-Skill ChangeOutfit wechselt zwischen bereits vorhandenen Pieces.
+The sister skill ChangeOutfit switches between pieces that already exist.
 """
 import json
 import os
@@ -96,16 +96,16 @@ def _ensure_outfit_types(raw: Any, piece_name: str) -> List[str]:
 
 
 class OutfitCreationSkill(BaseSkill):
-    """Generiert neue Outfit-Pieces und legt sie direkt an.
+    """Generates new outfit pieces and creates them right away.
 
     Flow:
-    1. Kontext sammeln (Location + outfit_type, Aktivitaet, Stimmung,
-       Personality, bestehende Pieces)
-    2. LLM generiert eine Liste von Piece-Entwuerfen (slots, name,
+    1. Gather context (location + outfit_type, activity, mood,
+       personality, existing pieces)
+    2. The LLM generates a list of piece drafts (slots, name,
        prompt_fragment, outfit_types)
-    3. Jedes Piece wird als outfit_piece-Item angelegt + ins Inventar
-    4. equip_piece raeumt verdraengte Pieces in den Ziel-Slots
-       symmetrisch auf (Multi-Slot-Pieces belegen alle ihre Slots).
+    3. Each piece is created as an outfit_piece item + put into the inventory
+    4. equip_piece clears displaced pieces in the target slots
+       symmetrically (multi-slot pieces occupy all their slots).
     """
 
     SKILL_ID = "outfit_creation"
@@ -121,9 +121,9 @@ class OutfitCreationSkill(BaseSkill):
         self._defaults = {
             "enabled": True,
             "outfit_language": os.environ.get('SKILL_OUTFIT_CREATION_LANGUAGE', 'en'),
-            # Tages-Limit zaehlt erzeugte PIECES, nicht Outfits.
+            # The daily limit counts created PIECES, not outfits.
             "max_daily_items": int(os.environ.get('SKILL_OUTFIT_CREATION_MAX_DAILY_ITEMS', '8')),
-            # Inventar-Limit: wieviele outfit_piece-Items maximal pro Character
+            # Inventory limit: at most this many outfit_piece items per character
             "max_inventory_pieces": int(os.environ.get('SKILL_OUTFIT_CREATION_MAX_INVENTORY', '60')),
         }
         logger.info("OutfitCreation Skill initialized (piece-based)")
@@ -152,8 +152,8 @@ class OutfitCreationSkill(BaseSkill):
         return self._count_today_items(character_name) >= max_daily
 
     def _count_today_items(self, character_name: str) -> int:
-        """Zaehlt die outfit_piece-Items die heute im Inventar des Characters
-        gelandet sind (obtained_at beginnt mit dem heutigen Datum)."""
+        """Count the outfit_piece items that landed in the character's
+        inventory today (obtained_at starts with today's date)."""
         today = utc_now().strftime("%Y-%m-%d")
         try:
             inv_data = get_character_inventory(character_name, include_equipped=True)
@@ -178,13 +178,13 @@ class OutfitCreationSkill(BaseSkill):
             return 0
 
     # ------------------------------------------------------------------
-    # Kontext — gewuenschter Outfit-Type aus Location/Room
+    # Context — the wanted outfit type from location/room
     # ------------------------------------------------------------------
 
     def _resolve_style_context(self, character_name: str):
-        """Liefert (style_hint, decency) aus dem aktuellen Raum (Fallback:
-        Location). Ersetzt das fruehere outfit_type-Modell — Decency ist die
-        harte Bedeckungsregel, style_hint die freie Stil-Richtung.
+        """Return (style_hint, decency) from the current room (fallback: the
+        location). Replaces the former outfit_type model — decency is the
+        hard coverage rule, style_hint the free style direction.
         """
         try:
             from app.models.character import (get_character_current_location,
@@ -211,7 +211,7 @@ class OutfitCreationSkill(BaseSkill):
             return "", ""
 
     # ------------------------------------------------------------------
-    # LLM-Call
+    # LLM call
     # ------------------------------------------------------------------
 
     def _generate_pieces_via_llm(self, character_name: str, personality: str, appearance: str,
@@ -220,15 +220,15 @@ class OutfitCreationSkill(BaseSkill):
                                   existing_pieces: List[Dict[str, Any]],
                                   hint: str, language: str,
                                   max_pieces: int) -> Optional[List[Dict[str, Any]]]:
-        """LLM produziert eine Liste von Piece-Entwuerfen.
+        """The LLM produces a list of piece drafts.
 
-        Returns Liste von Dicts {slots, name, prompt_fragment, covers,
-        partially_covers} oder None bei Fehler. (Kein outfit_types mehr —
-        Stil kommt aus style_hint/decency_pref, Bedeckung aus decency.)
+        Returns a list of dicts {slots, name, prompt_fragment, covers,
+        partially_covers} or None on failure. (No outfit_types any more —
+        style comes from style_hint/decency_pref, coverage from decency.)
         """
-        # Equipped-State laden: Slots die gerade belegt sind sollen im Prompt
-        # markiert werden, damit der LLM weiss was aktuell getragen wird
-        # (→ keine unnoetigen Duplikate, klares Delta-Gefuehl).
+        # Load the equipped state: occupied slots are marked in the prompt so
+        # the LLM knows what is worn right now
+        # (→ no needless duplicates, a clear sense of the delta).
         equipped_iids: Set[str] = set()
         try:
             from app.models.inventory import get_equipped_pieces as _gep
@@ -238,8 +238,8 @@ class OutfitCreationSkill(BaseSkill):
         except Exception:
             equipped_iids = set()
 
-        # Bestehende Pieces als Kontext (der LLM soll Duplikate vermeiden).
-        # Slots + [EQUIPPED]-Marker pro Piece (kein outfit_types mehr).
+        # Existing pieces as context (the LLM should avoid duplicates).
+        # Slots + an [EQUIPPED] marker per piece (no outfit_types any more).
         existing_lines = []
         for p in existing_pieces[-20:]:  # letzte 20 reichen als Kontext
             op = p.get("outfit_piece") or {}
@@ -254,9 +254,9 @@ class OutfitCreationSkill(BaseSkill):
             existing_lines.append(line)
         existing_block = "\n".join(existing_lines) if existing_lines else "(none)"
 
-        # Bedeckungs-Block aus Decency (ersetzt die fruehere outfit_type-
-        # required-slots-Berechnung). Decency ist die harte Regel; alles
-        # Weitere entscheidet der LLM stilistisch.
+        # Coverage block from decency (replaces the former outfit_type
+        # required-slots computation). Decency is the hard rule; the LLM
+        # decides everything else by style.
         if decency == "public":
             required_block = ("Decency (public location): top AND bottom MUST be "
                               "covered. Always include a top and a bottom piece "
@@ -269,8 +269,8 @@ class OutfitCreationSkill(BaseSkill):
         else:
             required_block = ""
 
-        # Stil-Leitlinie: Raum-style_hint + persoenliche decency_preference des
-        # Characters (ersetzt outfit_types-Dresscode + outfit_exceptions).
+        # Style guideline: the room's style_hint + the character's personal
+        # decency_preference (replaces outfit_types dress code + outfit_exceptions).
         _style_parts = []
         if style_hint:
             _style_parts.append(f"Match the location's style: '{style_hint}'.")
@@ -337,9 +337,9 @@ class OutfitCreationSkill(BaseSkill):
                         normalize_outfit_types(p.get("outfit_types"))
                         for p in retry["pieces"] if isinstance(p, dict)):
                     data = retry
-            # Slot-Keyword-Map: erkenne offensichtliche LLM-Slot-Fehler
-            # Wenn Name/Fragment eindeutig nach einem anderen Slot klingt,
-            # verschieben wir das Piece.
+            # Slot keyword map: catch obvious LLM slot mistakes.
+            # When the name/fragment clearly sounds like another slot,
+            # the piece is moved.
             slot_keywords = {
                 "outer": ["jacket", "coat", "blazer", "cardigan", "hoodie",
                           "vest", "bolero", "jacke", "mantel"],
@@ -363,7 +363,7 @@ class OutfitCreationSkill(BaseSkill):
                             return slot
                 return ""
 
-            # Validieren + saubermachen
+            # Validate + clean up
             cleaned: List[Dict[str, Any]] = []
             seen_slots = set()  # alle bereits beanspruchten Slots (auch Mirrors)
 
@@ -385,7 +385,7 @@ class OutfitCreationSkill(BaseSkill):
             for p in data["pieces"]:
                 if not isinstance(p, dict):
                     continue
-                # Neues Schema: slots: [...]. Falls leer → skip.
+                # New schema: slots: [...]. Empty → skip.
                 slots = _clean_slot_list(p.get("slots"), exclude=set())
                 if not slots:
                     continue
@@ -394,10 +394,9 @@ class OutfitCreationSkill(BaseSkill):
                 if not name or not frag:
                     continue
 
-                # Slot-Sanity: wenn Name/Fragment eindeutig nach einem anderen
-                # Slot klingt UND der LLM nur einen Slot vorgeschlagen hat,
-                # korrigieren wir. Multi-Slot-Pieces (z.B. Kleid top+bottom)
-                # bleiben unangetastet.
+                # Slot sanity: when the name/fragment clearly sounds like
+                # another slot AND the LLM proposed only one slot, correct it.
+                # Multi-slot pieces (e.g. a dress top+bottom) stay untouched.
                 if len(slots) == 1:
                     inferred = _infer_slot(name, frag)
                     if inferred and inferred != slots[0]:
@@ -405,12 +404,12 @@ class OutfitCreationSkill(BaseSkill):
                                     name, slots[0], inferred, inferred)
                         slots = [inferred]
 
-                # Slot-Konflikt mit bereits gesetztem Piece → komplett skippen.
+                # Slot conflict with a piece already placed → skip it entirely.
                 if any(s in seen_slots for s in slots):
                     continue
 
-                # covers/partially_covers duerfen sich nicht mit slots ueberschneiden
-                # (slot ist physisch belegt → nichts zu verdecken).
+                # covers/partially_covers must not overlap the slots
+                # (a slot is physically occupied → nothing to cover).
                 covers = _clean_slot_list(p.get("covers"), exclude=set(slots))
                 partially = _clean_slot_list(p.get("partially_covers"), exclude=set(slots))
 
@@ -472,7 +471,7 @@ class OutfitCreationSkill(BaseSkill):
         max_inventory = cfg.get("max_inventory_pieces", 60)
         language = cfg.get("outfit_language", "en")
 
-        # Tageslimit (Pieces, nicht Outfits)
+        # Daily limit (pieces, not outfits)
         today_count = self._count_today_items(character_name)
         remaining_today = max(0, max_daily - today_count) if max_daily > 0 else 999
         if max_daily > 0 and not skip_daily_limit and remaining_today <= 0:
@@ -488,9 +487,13 @@ class OutfitCreationSkill(BaseSkill):
         _track_id = _tq.track_start("outfit_create", "Outfit-Pieces generieren",
                                       agent_name=character_name)
         try:
-            # Kontext zusammentragen
-            personality = get_character_personality(character_name) or ""
-            appearance = get_character_appearance(character_name) or ""
+            # Gather the context. A worn persona's personality / look
+            # replace her own.
+            from app.core.identity_view import self_field
+            personality = (self_field(character_name, "character_personality")
+                           or get_character_personality(character_name) or "")
+            appearance = (self_field(character_name, "character_appearance")
+                          or get_character_appearance(character_name) or "")
             loc_id = get_character_current_location(character_name) or ""
             activity = get_effective_activity(character_name) or ""
             feeling = get_character_current_feeling(character_name) or ""
@@ -510,12 +513,12 @@ class OutfitCreationSkill(BaseSkill):
                 activity=activity, feeling=feeling, style_hint=style_hint,
                 decency=decency, lang=_gcl(character_name) or "en")
 
-            # Wieviele Pieces darf der LLM heute noch erzeugen?
-            max_pieces = min(remaining_today, 6)  # ein Outfit hat selten > 6 Teile
+            # How many pieces may the LLM still create today?
+            max_pieces = min(remaining_today, 6)  # an outfit rarely has > 6 parts
             if max_pieces <= 0:
                 return f"Tageslimit erreicht: keine weiteren Pieces heute."
 
-            # Bestehende Pieces laden (fuer Context)
+            # Load the existing pieces (for context)
             existing = []
             try:
                 inv_data = get_character_inventory(character_name, include_equipped=True)
@@ -536,8 +539,8 @@ class OutfitCreationSkill(BaseSkill):
                 _tq.track_finish(_track_id, error="LLM lieferte keine Pieces")
                 return "Fehler: Konnte keine Pieces generieren."
 
-            # Pieces anlegen + ausruesten. Bestehende Pieces im Inventar mit gleichem
-            # Name+Slot werden wiederverwendet statt neu erzeugt (Dedupe).
+            # Create + equip the pieces. Existing inventory pieces with the same
+            # name+slot are reused instead of created anew (dedupe).
             _tq.track_update_label(_track_id, f"{len(pieces)} Pieces anlegen")
             created = []
             reused = []
@@ -578,7 +581,7 @@ class OutfitCreationSkill(BaseSkill):
                             obtained_method="generated",
                             obtained_from="outfit_creation")
                         created.append({"id": iid, "slots": slots_list, "name": p["name"]})
-                    # equip_piece raeumt verdraengte Pieces (auch Multi-Slot) eigenstaendig auf.
+                    # equip_piece clears displaced pieces (multi-slot too) by itself.
                     r = equip_piece(character_name, iid, source="outfit_creation")
                     if (r or {}).get("status") == "ok":
                         for s in slots_list:
@@ -587,19 +590,19 @@ class OutfitCreationSkill(BaseSkill):
                     logger.warning("Piece anlegen fehlgeschlagen (%s): %s", p.get("name"), e)
                     failed.append(p.get("name") or "?")
 
-            # Set automatisch anlegen — enthaelt alle Pieces (neu + wiederverwendet)
+            # Create the set automatically — holds every piece (new + reused)
             set_name = ""
             set_pieces = created + reused
             if set_pieces:
                 try:
                     from app.models.character import add_character_outfit
                     piece_ids = [c["id"] for c in set_pieces]
-                    # Set-Name: Outfit-Type + Kurzliste (z.B. "Business: Blazer, Heels")
+                    # Set name: outfit type + short list (e.g. "Business: Blazer, Heels")
                     short_names = ", ".join(c["name"] for c in set_pieces[:3])
                     set_name = f"{style_hint}: {short_names}" if style_hint else short_names
                     if len(set_name) > 60:
                         set_name = set_name[:57] + "..."
-                    # Outfit-Freitext aus Fragments (Backwards-Compat)
+                    # Outfit free text from the fragments (backwards compat)
                     frags = [p["prompt_fragment"] for p in pieces if p.get("prompt_fragment")]
                     outfit_text = "wearing: " + ", ".join(frags) if frags else ""
                     add_character_outfit(character_name, {
@@ -611,8 +614,8 @@ class OutfitCreationSkill(BaseSkill):
                 except Exception as e:
                     logger.warning("Set-Erstellung fehlgeschlagen: %s", e)
 
-            # Item-Bilder asynchron in die GPU-Queue schieben (fire-and-forget).
-            # Jedes Piece bekommt ein eigenes Produktfoto generiert.
+            # Push the item images asynchronously into the GPU queue
+            # (fire-and-forget). Every piece gets its own product photo.
             if created:
                 import threading
                 def _gen_item_images():

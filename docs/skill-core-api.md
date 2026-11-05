@@ -211,9 +211,10 @@ and an `owner` (the package id):
 
 | Capability (constant) | Called with → answer |
 |---|---|
-| `identity.active_persona` (`PROVIDER_ACTIVE`) | `subject` → `{"persona_id", "alias", "description", "portrait_url"}` while C is transformed, else `None` |
+| `identity.active_persona` (`PROVIDER_ACTIVE`) | `subject` → `{"persona_id", "alias", "description", "portrait_url"}` while C is transformed, else `None`. Optional keys: `"field_overrides"` (`{field: text}`, keys from `OVERRIDABLE_FIELDS`; empty ones omitted), `"pause_routine"` (bool), `"imagegen"` (dict of image settings), `"suit_items"` (list of item ids) |
 | `identity.knows` (`PROVIDER_KNOWS`) | `observer, subject` → `bool`: O is in on C's current persona |
 | `identity.persona_names` (`PROVIDER_NAMES`) | nothing → iterable of every configured alias, transformed or not |
+| `identity.costume_items` | nothing → `{item_id: persona_id}`: the suit pieces of every usable persona (the costume lock; core consumer follows) |
 
 With no provider every function answers the real name (deletion test). A
 provider that raises is logged once at debug and treated as absent for that
@@ -223,7 +224,10 @@ URLs, DB keys other than the identity key) stay the real name.
 
 | Function | Semantics |
 |---|---|
-| `Persona(subject, persona_id, alias, description, portrait_url)` | Frozen dataclass of the persona C wears. |
+| `Persona(subject, persona_id, alias, description, portrait_url, field_overrides, pause_routine, imagegen, suit_items)` | Frozen dataclass of the persona C wears. Sanitized from the provider answer: `field_overrides` = read-only mapping of the non-empty string overrides under `OVERRIDABLE_FIELDS`; `pause_routine` = True only for a literal `True`; `imagegen` = read-only mapping over a deep copy (string keys only); `suit_items` = tuple of the non-empty string ids (non-strings dropped). Missing keys → empty / `False`. `Persona.own_field(key)` = what `self_field` answers for this persona. |
+| `OVERRIDABLE_FIELDS` | `("character_personality", "dialogue_style", "character_presence", "character_task", "character_goals")` — the character prompt fields a persona may replace. |
+| `self_field(subject, key)` | While C wears a persona: a key of `OVERRIDABLE_FIELDS` → the persona's non-empty override; `"character_appearance"` → the persona description when non-empty; else (and with no persona/provider) `None` = use the real value. For C's OWN prompts and a knower's partner block (`build_prompt_section` applies it before the `source_file`/status/state branches); readers use `self_field(name, key) or <real value>`. |
+| `routine_paused(subject)` | True while C wears a persona with `pause_routine`: the thought context leaves her daily schedule and its sleep nudge out. No persona/provider → False. |
 | `active_persona(subject)` | `Persona` or `None` (not transformed, no/raising provider, answer without alias). |
 | `knows(observer, subject)` | True when O is C (casefold), C wears no persona, or the provider says so; a raising provider counts as True. |
 | `shown_name(observer, subject)` | `C` when no persona or O is C; `"<alias> (<C>)"` for a knower; the alias otherwise. |
