@@ -109,6 +109,10 @@ class ExpressionSnapshot:
     profile: object
     mood: str
     epoch: int
+    #: The character's persona state at queue time (outfit_imagegen.PersonaLook):
+    #: the render runs pinned to it, so a job keeps the look, backend and
+    #: LoRAs of the state it was queued in.
+    persona: object = None
 
 
 def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None, equipped_items=None):
@@ -117,20 +121,26 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
     from app.core.expression_sets import catalog_snapshot, set_for_character, ExpressionSetError
     from app.core.expression_pose_maps import resolve_expression_key
     from app.core.model_refs import outfit_signature_raw
+    from app.core.outfit_imagegen import current_look, merge_outfit_imagegen, pinned_look
     from app.core.prompt_builder import person_description
     while True:
         with keyed_lock("character_profile", character):
             profile = deepcopy(get_character_profile(character) or {})
             if not profile:
                 raise ExpressionSetError("Character not found", 404)
+            # The persona state is frozen with the profile: the job renders
+            # with this look, backend and LoRAs whenever it runs.
+            look = current_look(character)
+            profile["outfit_imagegen"] = merge_outfit_imagegen(profile.get("outfit_imagegen"), look)
             cat = catalog_snapshot()
             spec = set_for_character(character, profile=profile, catalog=cat)
             pieces = dict(get_equipped_pieces(character) if equipped_pieces is None else equipped_pieces)
             items = list(get_equipped_items(character) if equipped_items is None else equipped_items)
             profile["equipped_pieces"] = pieces
             profile["equipped_items"] = items
-            outfit = outfit_signature_raw(pieces, items, character, profile=profile)
-            appearance = person_description(character, body_profile=profile, apply_state_modifiers=False, neutral_state=True)
+            outfit = outfit_signature_raw(pieces, items, character, profile=profile, look=look.token)
+            with pinned_look(character, look):
+                appearance = person_description(character, body_profile=profile, apply_state_modifiers=False, neutral_state=True)
             epoch = mutation_epoch(character)
         expression = resolve_expression_key(mood, set_id=spec.id)
         with keyed_lock("character_profile", character):
@@ -138,14 +148,18 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
             if not current:
                 raise ExpressionSetError("Character was removed during matching", 404)
             latest = catalog_snapshot()
+            current_look_state = current_look(character)
             current_pieces = dict(get_equipped_pieces(character) if equipped_pieces is None else equipped_pieces)
             current_items = list(get_equipped_items(character) if equipped_items is None else equipped_items)
             current["equipped_pieces"], current["equipped_items"] = current_pieces, current_items
             current_set = set_for_character(character, profile=current, catalog=latest)
-            current_outfit = outfit_signature_raw(current_pieces, current_items, character, profile=current)
-            current_appearance = person_description(character, body_profile=current, apply_state_modifiers=False, neutral_state=True)
+            current_outfit = outfit_signature_raw(current_pieces, current_items, character, profile=current,
+                                                  look=current_look_state.token)
+            with pinned_look(character, current_look_state):
+                current_appearance = person_description(character, body_profile=current, apply_state_modifiers=False, neutral_state=True)
             if (latest.revision != cat.revision or current_set.id != spec.id
                     or current_outfit != outfit or current_appearance != appearance
+                    or current_look_state != look
                     or mutation_epoch(character) != epoch):
                 continue
         if expression not in spec.members:
@@ -155,7 +169,8 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
         identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
         return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
             f"{_safe_name(character)}_{identity[:24]}", spec.pose_prompt, prompt,
-            tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch)
+            tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch,
+            look)
 
 
 def _metadata_matches(meta, request, *, exact=True):
@@ -336,7 +351,9 @@ def _execute(request, aid, force=False):
             return None
         folder.mkdir(exist_ok=True)
         try:
-            with tempfile.TemporaryDirectory(prefix=".expression-", dir=folder) as stage:
+            from app.core.outfit_imagegen import pinned_look
+            with tempfile.TemporaryDirectory(prefix=".expression-", dir=folder) as stage, \
+                    pinned_look(request.character, request.persona):
                 stage = Path(stage)
                 rendered = render_character_image(request.character, output_stem=stage / request.stem,
                     equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
@@ -701,10 +718,13 @@ def render_character_image(character_name: str, *, output_stem: Path,
     model_override = ""
     loras_override = None
     try:
-        from app.models.character import get_character_profile as _gcp
+        from app.core.outfit_imagegen import effective_outfit_imagegen
         _prof = _render_profile
         _char_override = _prof.get("outfit_imagegen") or {}
         if isinstance(_char_override, dict):
+            # A worn persona REPLACES her model/LoRAs (read-time only; an
+            # expression job runs pinned to its queued state).
+            _char_override = effective_outfit_imagegen(character_name, _char_override)
             m = (_char_override.get("model") or "").strip()
             l = _char_override.get("loras")
             if m:
@@ -902,8 +922,14 @@ def render_character_image(character_name: str, *, output_stem: Path,
         if _gen_meta is None:
             _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
         from app.core.model_refs import mesh_variant
+        from app.core.outfit_imagegen import current_look
+        # A bare prompt (the profile-based face view) shows her real face.
+        _look_token = current_look(character_name).token if bare_prompt is None else ""
         _expr_meta = {
             **({"mesh_variant": mesh_variant(character_name, equipped_pieces, _render_profile)} if _mesh_input else {}),
+            # The persona look this render shows — part of the outfit
+            # signature, so the cache GC can re-sign the entry (manifest).
+            **({"look": _look_token} if _look_token else {}),
             "provider": _gen_meta.get("backend_type", ""),
             "service": _gen_meta.get("backend", ""),
             "model": _gen_meta.get("model", ""),

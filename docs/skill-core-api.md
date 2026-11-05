@@ -228,6 +228,8 @@ URLs, DB keys other than the identity key) stay the real name.
 | `OVERRIDABLE_FIELDS` | `("character_personality", "dialogue_style", "character_presence", "character_task", "character_goals")` — the character prompt fields a persona may replace. |
 | `self_field(subject, key)` | While C wears a persona: a key of `OVERRIDABLE_FIELDS` → the persona's non-empty override; `"character_appearance"` → the persona description when non-empty; else (and with no persona/provider) `None` = use the real value. For C's OWN prompts and a knower's partner block (`build_prompt_section` applies it before the `source_file`/status/state branches); readers use `self_field(name, key) or <real value>`. |
 | `routine_paused(subject)` | True while C wears a persona with `pause_routine`: the thought context leaves her daily schedule and its sleep nudge out. No persona/provider → False. |
+| `persona_imagegen(subject)` | The image settings of the persona C wears — a deep copy of the provider's `imagegen` (`{}` when it brings none) — or `None` when C is not transformed (no persona/provider). Keys the core reads: `workflow`, `tpose_workflow` (backend globs), `loras`, `tpose_loras` (`[{name, strength}]`). Folded into her own settings by `app.core.outfit_imagegen`. |
+| `look_token(subject)` | `""` when C is not transformed, else `"persona:<persona_id>"` (the alias when the provider gave no id) — the persona-look part of the outfit signature, so a persona's renders/meshes get cache entries of their own. |
 | `active_persona(subject)` | `Persona` or `None` (not transformed, no/raising provider, answer without alias). |
 | `knows(observer, subject)` | True when O is C (casefold), C wears no persona, or the provider says so; a raising provider counts as True. |
 | `shown_name(observer, subject)` | `C` when no persona or O is C; `"<alias> (<C>)"` for a knower; the alias otherwise. |
@@ -249,6 +251,29 @@ URLs, DB keys other than the identity key) stay the real name.
 | `pair_stamp(a, b)` | `{"identity": {subject: alias}, "identity_shown": {subject: label the other side sees}}` for the side(s) of a pairwise message that wear a persona now, else `{}`. `UnifiedChatManager.save_message` stores it in an in-person message's `metadata` (never on a phone message). |
 | `stamped_name(observer, subject, stamp)` | The name O reads for C on a stamped message: no alias stamped → C; C still wears the stamped alias → `shown_name`; persona no longer worn → the stamped label (said as the persona stays the persona's); no provider → C. |
 | `rewrite_names(observer, text, subjects)` | Each transformed subject's real name (whole word, case-sensitive, one pass) → `shown_name(observer, subject)`. For system/storyteller text only, never a character's own speech. |
+
+## Persona image settings — `app.core.outfit_imagegen` ✅
+
+While a character wears a persona, every image of HER — outfit/expression images, the `photo` /
+`instagram` / `expression` / `regenerate` occasions, T-pose references and therefore the 3D model —
+renders with the persona's backend globs and LoRAs and the persona's look; her stored
+`profile["outfit_imagegen"]` is never changed (read-time override). Her profile portrait stays her real
+face (`app.core.prompt_builder.PromptBuilder(..., real_look=True)` for a `set_profile` render). The routing's character match
+(position 0) and the character render read through `effective_outfit_imagegen`; the image appearance
+(`app.core.prompt_builder.person_description(...)` without observer) uses the persona description;
+the outfit signature carries the look token (`app.core.model_refs.outfit_signature_raw(...)`, keyword
+`look`), and render/mesh sidecars record it as `look` so the cache GC re-signs a persona entry correctly.
+A job keeps the state it was queued in: the expression snapshot freezes the `PersonaLook` and the render
+runs inside `pinned_look`; a model-reference run is pinned to its state at start.
+
+| Function / value | Semantics |
+|---|---|
+| `effective_outfit_imagegen(character, stored)` | Not transformed → a copy of `stored`. Transformed → a copy where `workflow` / `tpose_workflow` are the persona's when non-empty (empty = keep hers), `loras` := the persona's `loras` (possibly `[]` — no character LoRA), `tpose_loras` := the persona's `tpose_loras` (possibly `[]` — the render's rule "empty = the normal LoRAs" then means the persona's), `model` removed; `profile_workflow`, `mesh_workflow`, `tpose_view_workflow` unchanged. Honours `pinned_look`. |
+| `merge_outfit_imagegen(stored, look)` | The same merge for an explicit `PersonaLook`. |
+| `PersonaLook(token, appearance, imagegen)` | Frozen: `token` (`look_token`), `appearance` (persona description or `None` = real look), `imagegen` (read-only persona settings, `None` = not transformed). `REAL_LOOK` = not transformed. |
+| `capture_look(character)` | The LIVE state (ignores a pin). |
+| `current_look(character)` | The pinned state inside `pinned_look`, else the live one. |
+| `pinned_look(character, look=None)` | Context manager: pins C's state (`look`, or the current one captured now) for the calling thread (`ContextVar`) — where the routing resolves; never another thread. |
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
@@ -1125,7 +1150,7 @@ LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
 
 | Function | Contract |
 |---|---|
-| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. `observer=` (keyword, default `""`) gives what that character sees: for a person wearing a persona the observer is not in on, the persona description replaces appearance and body slots (the outfit stays); without it, the real appearance (image prompts). Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
+| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. `observer=` (keyword, default `""`) gives what that character sees: for a person wearing a persona the observer is not in on, the persona description replaces appearance and body slots (the outfit stays); without it (image prompts) the persona description of a transformed person replaces them the same way (`app.core.outfit_imagegen.current_look`), unless `real_look=True` (the profile portrait). Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
 | `app.core.prompt_compose.compose(*, use_case, subject, backend, hints=None, negative_extra="", style_override=None, conditions="")` | Compose the selected backend family's use-case style and negative prompt. Returns `.prompt`, `.negative`, `.warnings`, `.meta`. Call inside the routing callback so each fallback backend gets its own composition. |
 | `app.core.llm_json.parse_json(raw: str) -> dict \| None` | Extract a JSON object from a queued LLM answer, tolerating code fences; returns None when it cannot be parsed. A bare array is returned under `_list`. Validate task-specific fields in the caller. |
 

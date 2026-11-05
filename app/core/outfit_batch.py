@@ -194,9 +194,11 @@ def _signature(pieces: Dict[str, str], character_name: str = "") -> str:
     empty combination without the name would file the pre-warmed render under
     md5("") while the world looks for md5("wearing: …") — a cache miss, a
     second GPU render, and a GC that reports the batch's own entry stale on
-    every pass."""
+    every pass. A worn persona's look is part of it, as there."""
     from app.core.model_refs import mesh_signature, mesh_variant
-    return mesh_signature(pieces, [], character_name, mesh_variant(character_name, pieces))
+    from app.core.outfit_imagegen import current_look
+    return mesh_signature(pieces, [], character_name, mesh_variant(character_name, pieces),
+                          current_look(character_name).token if character_name else "")
 
 
 def _combo_label(pieces: Dict[str, str],
@@ -331,11 +333,13 @@ def combo_stats(character_name: str,
         have = set() if force else mesh_signatures(character_name)
         signatures = set()
         missing_sigs = set()
-        for pieces in _iter_combos(choices, coherent_only):
-            sig = _signature(pieces, character_name)
-            signatures.add(sig)
-            if sig not in have:
-                missing_sigs.add(sig)
+        from app.core.outfit_imagegen import pinned_look
+        with pinned_look(character_name):     # one persona read, not one per combination
+            for pieces in _iter_combos(choices, coherent_only):
+                sig = _signature(pieces, character_name)
+                signatures.add(sig)
+                if sig not in have:
+                    missing_sigs.add(sig)
         if coherent_only:
             total = len(signatures)
         missing = len(missing_sigs)

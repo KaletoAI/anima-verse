@@ -168,6 +168,30 @@ def self_field(subject: str, key: str) -> Optional[str]:
     return persona.own_field(key) if persona is not None else None
 
 
+def persona_imagegen(subject: str) -> Optional[Dict[str, Any]]:
+    """The image settings of the persona ``subject`` wears right now — a
+    private deep copy of the provider's ``imagegen`` dict (``{}`` when the
+    persona brings none) — or ``None`` when she is not transformed (no
+    provider, no persona). ``outfit_imagegen.effective_outfit_imagegen``
+    folds it into her own settings."""
+    persona = active_persona(subject)
+    if persona is None:
+        return None
+    return {k: copy.deepcopy(v) for k, v in persona.imagegen.items()}
+
+
+def look_token(subject: str) -> str:
+    """The cache-key part of ``subject``'s current look: ``""`` when she is
+    not transformed, else ``"persona:<persona_id>"`` (the alias when the
+    provider gave no id). Appended to the outfit signature
+    (``model_refs.outfit_signature_raw``), so a persona's renders and meshes
+    never share an entry with her real look."""
+    persona = active_persona(subject)
+    if persona is None:
+        return ""
+    return f"persona:{persona.persona_id or persona.alias}"
+
+
 def routine_paused(subject: str) -> bool:
     """Whether ``subject`` wears a persona whose daily routine rests right
     now: her daily schedule stays out of her thoughts. No persona or no

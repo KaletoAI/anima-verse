@@ -561,13 +561,16 @@ def find_model3d_serving(character_name: str) -> tuple:
     ``"exact"`` / ``"nearest"``
     (no entry for this combination — the stored mesh whose recorded piece
     combination is closest to the worn one, so a fresh outfit never degrades
-    the character to a placeholder figure). (None, "") without any match.
+    the character to a placeholder figure; only among meshes of the same
+    persona look). (None, "") without any match.
 
     Management paths (delete, rig update, generation skip-check) keep
     find_model3d's exact semantics — "the nearest neighbour" is never the
     entry to delete or overwrite."""
     try:
+        from app.core.outfit_imagegen import current_look
         pieces, items, sig = current_outfit_state(character_name)
+        look = current_look(character_name).token
     except Exception:
         return None, ""
     d = get_model3d_dir(character_name)
@@ -587,6 +590,10 @@ def find_model3d_serving(character_name: str) -> tuple:
                 continue
             from app.core.model_refs import mesh_variant
             if manifest.get("mesh_variant", "") != mesh_variant(character_name, pieces):
+                continue
+            # Never the other look: a persona's figure is not served for her
+            # real self, nor her real figure while she wears the persona.
+            if manifest.get("look", "") != look:
                 continue
             score = outfit_similarity(pieces, items,
                                       manifest["pieces"], manifest["items"])
@@ -1308,10 +1315,13 @@ def save_uploaded_model(character_name: str, original_filename: str,
     from app.core.model_refs import is_state_fork
     if is_state_fork(signature) or "-p" in (signature or ""):
         raise ValueError("State fork mesh signatures are retired")
+    from app.core.outfit_imagegen import current_look
     pieces, items, current = current_outfit_state(character_name)
+    # The persona look is known only for the worn combination's signature.
+    look = current_look(character_name).token if (signature or current) == current else ""
     return _save_uploaded_model(character_name, original_filename, contents,
                                 rig=rig, texture=texture,
-                                outfit=(pieces, items, signature or current),
+                                outfit=(pieces, items, signature or current, look),
                                 signature=signature or current)
 
 
@@ -1328,7 +1338,8 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     if is_state_fork(signature) or "-p" in signature:
         raise ValueError("State fork mesh signatures are retired")
     ext = Path(original_filename.lower()).suffix
-    pieces, items, _ = outfit
+    pieces, items, _ = outfit[:3]
+    look = outfit[3] if len(outfit) > 3 else ""
     out_dir = get_model3d_dir(character_name)
     target = out_dir / f"{signature}{ext}"
     _purge_combination(out_dir, signature, keep_model=target)
@@ -1350,6 +1361,7 @@ def _save_uploaded_model(character_name: str, original_filename: str,
         "mesh_variant": mesh_variant(character_name, pieces),
         "pieces": dict(pieces or {}),
         "items": list(items or []),
+        **({"look": look} if look else {}),
     }
     # An upload takes the same route as a generated model: re-encode and
     # normalise first, then measure, so the numbers describe what will be
@@ -1938,9 +1950,12 @@ def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
     if not isinstance(pieces, dict):
         return {}
     items = meta.get("equipped_items")
+    look = str(meta.get("look") or "")
     return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
             "items": [str(i) for i in (items or []) if i],
-            "mesh_variant": meta.get("mesh_variant", "")}
+            "mesh_variant": meta.get("mesh_variant", ""),
+            # The persona look of the render (outfit signature part).
+            **({"look": look} if look else {})}
 
 
 def _store_unrigged_model(character_name: str, signature: str, result: Dict[str, Any],
@@ -2600,7 +2615,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
-            "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view")}
+            "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "look", "job_id", "single_view")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),

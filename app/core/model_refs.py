@@ -456,7 +456,8 @@ def neutral_signature(signature: str) -> str:
 
 def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
                          equipped_items: Optional[list],
-                         character_name: str = "", *, profile: Optional[Dict[str, Any]] = None) -> str:
+                         character_name: str = "", *, profile: Optional[Dict[str, Any]] = None,
+                         look: str = "") -> str:
     """The RAW string that identifies one worn outfit — what
     :func:`outfit_signature` hashes, and the ONE description of "the same
     outfit combination" in this codebase.
@@ -477,6 +478,12 @@ def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
 
     Expression snapshots use this same raw outfit identity together with their
     selected set/member and fixed render contract.
+
+    ``look``: the persona look the render shows (``identity_view.look_token``
+    — via ``outfit_imagegen.current_look`` — or the token a snapshot froze);
+    appended as ``"|look=<look>"`` when non-empty, so a persona's renders and
+    meshes get entries of their own. Empty (not transformed) → the string is
+    byte-identical to the one before personas existed.
     """
     from app.core.expression_regen import _equipped_signature
     raw = _equipped_signature(equipped_pieces, equipped_items)
@@ -488,21 +495,23 @@ def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
                                 equipped_items=[]).get("full", "") or ""
         except Exception:  # noqa: BLE001 — an unreadable profile must not
             raw = ""       # break signing; the bare key still renders
+    if look:
+        raw += "|look=" + look
     return raw
 
 
 def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
                      equipped_items: Optional[list],
-                     character_name: str = "") -> str:
+                     character_name: str = "", *, look: str = "") -> str:
     """The 12-hex outfit key of the per-outfit render caches — the ONE rule
     both caches (``model_refs/``, ``model3d/``) and the cache GC judge an
     entry by.
 
     md5[:12] of :func:`outfit_signature_raw`, and nothing else: the bare case
-    keeps its historical md5("") key.
+    keeps its historical md5("") key. ``look`` as there.
     """
     import hashlib
-    raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
+    raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name, look=look)
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -520,10 +529,11 @@ def mesh_variant(character_name, pieces=None, profile=None):
         if mesh_part_active(slot, profile) and is_slot_exposed(slot, profile))
 
 
-def mesh_signature(pieces, items, character_name, variant):
-    """Hash the ordinary outfit plus a recorded mesh variant, including for cache GC."""
+def mesh_signature(pieces, items, character_name, variant, look=""):
+    """Hash the ordinary outfit plus a recorded mesh variant, including for
+    cache GC. ``look`` as in :func:`outfit_signature_raw`."""
     import hashlib
-    raw = outfit_signature_raw(pieces, items, character_name) + variant
+    raw = outfit_signature_raw(pieces, items, character_name, look=look) + variant
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -531,11 +541,15 @@ def current_outfit_state(character_name: str) -> tuple:
     """THE mesh-input signature: worn outfit plus exposed procedural part variant.
 
     Expression, preview and ordinary pose keys use outfit_signature instead.
+    A worn persona's look is part of it (``outfit_imagegen.current_look`` —
+    the pinned state inside a pinned render run).
     """
+    from app.core.outfit_imagegen import current_look
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
-    sig = mesh_signature(pieces, items, character_name, mesh_variant(character_name, pieces))
+    sig = mesh_signature(pieces, items, character_name, mesh_variant(character_name, pieces),
+                         current_look(character_name).token)
     return pieces, items, sig
 
 
@@ -572,7 +586,9 @@ def find_ref_image(character_name: str, kind: str,
         try:
             pieces, items, sig = current_outfit_state(character_name)
             if kind == "pose":
-                sig = outfit_signature(pieces, items, character_name)
+                from app.core.outfit_imagegen import current_look
+                sig = outfit_signature(pieces, items, character_name,
+                                       look=current_look(character_name).token)
         except Exception:
             return None
         candidates = [pose_reference_signature(character_name, sig), sig] if kind == "pose" else [sig]
@@ -746,6 +762,25 @@ def generate_model_ref_images(character_name: str,
                               signature: Optional[str] = None,
                               tpose_view: Optional[str] = None
                               ) -> Dict[str, Optional[str]]:
+    """See :func:`_generate_model_ref_images`. The whole run is pinned to
+    the character's persona state at its start (``outfit_imagegen
+    .pinned_look``): signature, look, backend and LoRAs of every render in
+    it belong to one state, also when she transforms or reverts meanwhile."""
+    from app.core.outfit_imagegen import pinned_look
+    with pinned_look(character_name):
+        return _generate_model_ref_images(character_name, kinds, force, pieces=pieces,
+                                          items=items, signature=signature,
+                                          tpose_view=tpose_view)
+
+
+def _generate_model_ref_images(character_name: str,
+                               kinds: Optional[tuple] = None,
+                               force: bool = False, *,
+                               pieces: Optional[Dict[str, str]] = None,
+                               items: Optional[list] = None,
+                               signature: Optional[str] = None,
+                               tpose_view: Optional[str] = None
+                               ) -> Dict[str, Optional[str]]:
     """Render the reference images sequentially (the image queue serializes
     per backend anyway). Blocking — call from a worker thread.
 
@@ -803,9 +838,16 @@ def generate_model_ref_images(character_name: str,
     mesh_profile = deepcopy(get_character_profile(character_name) or {})
     mesh_profile["equipped_pieces"] = dict(pieces or {})
     from app.core.body_slots import slots_for_character
-    if (any(slot.mesh_part for slot in slots_for_character(character_name, profile=mesh_profile))
+    from app.core.hooks import get_provider
+    from app.core.identity_view import PROVIDER_ACTIVE
+    from app.core.outfit_imagegen import current_look
+    look = current_look(character_name).token
+    # A signature handed in under another persona state (queued before a
+    # transform or revert) no longer describes what this run would render.
+    if ((get_provider(PROVIDER_ACTIVE) is not None
+         or any(slot.mesh_part for slot in slots_for_character(character_name, profile=mesh_profile)))
             and mesh_signature(pieces, items, character_name,
-                               mesh_variant(character_name, pieces, mesh_profile)) != signature):
+                               mesh_variant(character_name, pieces, mesh_profile), look) != signature):
         logger.info("Skipping superseded mesh input for %s (%s)", character_name, signature)
         return {}
     neutral = signature
@@ -861,7 +903,8 @@ def generate_model_ref_images(character_name: str,
             modifier_scope.close()
             if kind == "pose":
                 modifier_scope.enter_context(image_modifier_snapshot(character_name))
-            signature = (pose_reference_signature(character_name, outfit_signature(pieces, items, character_name))
+            signature = (pose_reference_signature(character_name,
+                                                  outfit_signature(pieces, items, character_name, look=look))
                          if kind == "pose" else neutral)
             if kind == "pose" and not force and find_ref_image(character_name, kind, signature):
                 continue

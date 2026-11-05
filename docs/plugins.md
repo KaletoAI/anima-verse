@@ -1355,7 +1355,10 @@ Characters → Secrets shows the same secret.
 
 **Step-1 limits**: no "caught in the act" yet (witnesses of a transformation do not learn the secret);
 no guessing from clues; LLM-generated speech is not filtered (a knower may slip — the scene-state line asks
-them not to); images and voices are not secret yet (image prompts use the real character, TTS the real voice);
+them not to); voices are not secret yet (TTS uses the real voice). Images follow the persona: image prompts of
+the bearer use the persona description and its image settings (backend, T-pose backend, LoRAs replace hers; her
+model is dropped), the persona look has its own outfit-signature cache entries (`app.core.outfit_imagegen`), and
+only her profile portrait stays her real face;
 technical identifiers (payload keys, `/characters/<name>/…` URLs) stay the real name — the HUD swaps only
 what it shows. Deletion test: without the package every surface names the real person again
 (`scripts/smoke_transformation_leaks.py`).

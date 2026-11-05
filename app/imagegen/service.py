@@ -2320,7 +2320,9 @@ class ImageService:
             if photographer_mode:
                 logger.info("PHOTOGRAPHER MODE active for %s", character_name)
 
-            builder = PromptBuilder(character_name)
+            # A profile portrait shows the agent's real face, also while she
+            # wears a persona; every other render shows the persona's look.
+            builder = PromptBuilder(character_name, real_look=set_profile)
 
             if auto_enhance:
                 config = EntryPointConfig.chat()
