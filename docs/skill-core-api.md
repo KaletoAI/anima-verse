@@ -264,7 +264,10 @@ face (`app.core.prompt_builder.PromptBuilder(..., real_look=True)` for a `set_pr
 the outfit signature carries the look token (`app.core.model_refs.outfit_signature_raw(...)`, keyword
 `look`), and render/mesh sidecars record it as `look` so the cache GC re-signs a persona entry correctly.
 A job keeps the state it was queued in: the expression snapshot freezes the `PersonaLook` and the render
-runs inside `pinned_look`; a model-reference run is pinned to its state at start.
+runs inside `pinned_look`; a model-reference run is pinned to its state at start. A persona mesh never
+takes the face view (it is rendered from the real portrait): `app.core.face_retexture.reference_info(...)`
+reports it unavailable for a source whose meta records a `look` (problem `persona_look`), so face
+correction uses the mesh's own front render or an explicit "face" is refused.
 
 | Function / value | Semantics |
 |---|---|
@@ -273,6 +276,7 @@ runs inside `pinned_look`; a model-reference run is pinned to its state at start
 | `PersonaLook(token, appearance, imagegen)` | Frozen: `token` (`look_token`), `appearance` (persona description or `None` = real look), `imagegen` (read-only persona settings, `None` = not transformed). `REAL_LOOK` = not transformed. |
 | `capture_look(character)` | The LIVE state (ignores a pin). |
 | `current_look(character)` | The pinned state inside `pinned_look`, else the live one. |
+| `reference_allowed(character, path)` | Whether an image may be slotted as C's identity reference now. Not transformed (honouring a pin) → True. Transformed → only an image rendered under the SAME look token (sidecar `look`, or an expression's `outfit_raw` ending in `"|look=<token>"`); never her profile portrait or a real-look render. `PromptBuilder._resolve_person_ref_image`, the scene render, regenerate's source references and the bare-outfit swap check it; without an allowed image she is described by text alone. |
 | `pinned_look(character, look=None)` | Context manager: pins C's state (`look`, or the current one captured now) for the calling thread (`ContextVar`) — where the routing resolves; never another thread. |
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`

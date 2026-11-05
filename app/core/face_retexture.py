@@ -74,9 +74,23 @@ def use_upscale(reference: str, upscale: bool | None) -> bool:
 
 def reference_info(character: str, signature: str, meta: dict, reference: str = '', *,
                    _snapshot: dict | None = None) -> dict:
-    """Select a self-verified close-up of the current profile, independent of outfit."""
+    """Select a self-verified close-up of the current profile, independent of outfit.
+
+    A mesh of a persona look (``meta["look"]`` — the mesh/T-pose sidecar
+    records it) never takes the face view: that is rendered from the real
+    profile portrait and would put her real face on the persona. The face
+    view then counts as unavailable (problem ``persona_look``): the
+    automatic choice is the mesh's own front render, an explicit 'face' is
+    refused."""
     if reference not in ('', 'face', 'front'):
         raise ValueError('Invalid face reference choice')
+    if str((meta or {}).get('look') or ''):
+        problem = {'code': 'persona_look',
+                   'message': "This model shows a persona look; the face view shows the character's real face.",
+                   'fix': 'Use the front view of this outfit as the reference'}
+        selected = reference or 'front'
+        return {'reference': selected, 'face_available': False, 'face_problem': problem,
+                'problems': [problem] if selected == 'face' else []}
     from app.core.model_refs import current_profile_image
     profile = current_profile_image(character)
     try:

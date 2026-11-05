@@ -1936,6 +1936,16 @@ def _char_lock(character_name: str) -> threading.Lock:
         return _char_locks.setdefault(character_name, threading.Lock())
 
 
+def _face_choice_meta(src: Path, source_bytes: bytes) -> Dict[str, Any]:
+    """The source facts ``face_retexture.reference_info`` chooses the face
+    reference from: the T-pose this mesh is made from, its hash, and its
+    persona ``look`` (a persona mesh never takes the real-face face view)."""
+    look = _ref_manifest(src).get("look", "")
+    return {"source_image": src.name,
+            "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
+            **({"look": look} if look else {})}
+
+
 def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
     """``{pieces, items}`` of the T-pose render a mesh is built from, read
     from its sidecar — the reference render records the equipped state it
@@ -2187,8 +2197,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 from app.core import face_retexture
                 ready = face_retexture.runnable(character_name)
                 face_snapshot = {}
-                face_choice = face_retexture.reference_info(character_name, signature, {
-                    "source_image": src.name, "source_image_sha256": hashlib.sha256(source_bytes).hexdigest()},
+                face_choice = face_retexture.reference_info(
+                    character_name, signature, _face_choice_meta(src, source_bytes),
                     _snapshot=face_snapshot)
                 face_reference = face_choice["reference"]
                 from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM

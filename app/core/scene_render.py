@@ -217,10 +217,12 @@ def _person_image_path(name: str) -> Optional[Path]:
     from app.core.expression_regen import expression_snapshot, find_compatible_expression, trigger_expression_generation
     from app.models.character import get_character_current_feeling
     try:
+        from app.core.outfit_imagegen import reference_allowed
         request = expression_snapshot(name, get_character_current_feeling(name) or "")
         image = find_compatible_expression(request)
         trigger_expression_generation(request)
-        return image
+        # Never an image of another look than the one she shows now.
+        return image if image is None or reference_allowed(name, image) else None
     except (ValueError, OSError) as exc:
         logger.debug("Scene expression lookup failed for %s: %s", name, exc)
         return None

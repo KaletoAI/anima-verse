@@ -28,11 +28,13 @@ before the persona feature (deletion test).
 from __future__ import annotations
 
 import copy
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Dict, Iterator, List, Mapping, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Union
 
 #: The backend globs a persona may replace; an empty persona value keeps the
 #: character's own.
@@ -136,3 +138,31 @@ def effective_outfit_imagegen(character: str, stored: Any) -> Dict[str, Any]:
     Other keys (``profile_workflow``, ``mesh_workflow``,
     ``tpose_view_workflow``) unchanged. Honours :func:`pinned_look`."""
     return merge_outfit_imagegen(stored, current_look(character))
+
+
+def reference_allowed(character: str, path: Union[str, Path, None]) -> bool:
+    """Whether the image at ``path`` may be slotted as ``character``'s
+    identity reference right now.
+
+    Not transformed (honouring :func:`pinned_look`) → always (today's rules
+    apply). Transformed → only an image rendered under the SAME look: its
+    sidecar (``<image>.json``) records ``look`` equal to the current token
+    (render and model-reference sidecars) or an ``outfit_raw`` ending in
+    ``"|look=<token>"`` (expression publications). Her profile portrait and
+    every image of her real look fail — a reference would give her face
+    away; the render then describes her by text alone."""
+    look = current_look(character)
+    if not look.transformed:
+        return True
+    if not path or not look.token:
+        return False
+    try:
+        meta = json.loads(Path(path).with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(meta, dict):
+        return False
+    if meta.get("look") == look.token:
+        return True
+    raw = meta.get("outfit_raw")
+    return isinstance(raw, str) and raw.endswith("|look=" + look.token)

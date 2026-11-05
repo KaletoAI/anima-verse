@@ -95,6 +95,25 @@ EXPECTED, derived BY HAND from the rule above
     "", _ref_manifest has no "look" key. Cache GC, not transformed now:
     the entry md5("top=<COAT>|look=persona:p1")[:12] with the look manifest
     is valid; the same entry with a look-less manifest is not.
+[I] Identity reference (fix round 1, ruling 1). Cara gets a profile
+    portrait images/profile.png (profile_image set) and a published
+    expression of her REAL look (rendered not transformed, outfit A).
+    reference_allowed: not transformed -> True for the portrait and the
+    real expression; P1 -> False for both. _resolve_person_ref_image(Cara):
+    not transformed -> the real expression (today's chain); P1 -> "" (no
+    persona-look image yet; NOT the portrait, NOT the real expression);
+    P1 profile_only -> ""; not transformed profile_only -> the portrait.
+    Pinned to the real look while P1 is live -> the real expression again.
+    After an expression published under P1 (its sidecar outfit_raw ends in
+    "|look=persona:p1"): reference_allowed True for it, and
+    _resolve_person_ref_image(Cara) under P1 -> that persona image.
+[J] Face retexture (ruling 2). A face view model_refs/face_view.png whose
+    sidecar certifies it (image_sha256 = its bytes, reference_sha256 = the
+    portrait's bytes). reference_info(Cara, sig, meta): meta of a real-look
+    T-pose (model3d._face_choice_meta of a sidecar without look) -> reference
+    "face"; of a persona T-pose (sidecar look "persona:p1") -> reference
+    "front", face_available False, no problems; explicit "face" with the
+    persona meta -> one problem, code "persona_look".
 [H] Deletion test (provider unregistered): effective == S, spec "char-*",
     current_outfit_state the real value, appearance REAL-LOOK.
 """
@@ -375,6 +394,79 @@ check("GC: persona entry valid after revert",
       gc._entry_valid(sig_p, with_look, {COAT}, lambda: set(), "Cara"), True)
 check("GC: look-less manifest does not re-sign",
       gc._entry_valid(sig_p, without, {COAT}, lambda: set(), "Cara"), False)
+
+print("[I] identity reference")
+from PIL import Image  # noqa: E402
+from app.core.outfit_imagegen import REAL_LOOK, reference_allowed  # noqa: E402
+from app.models.character import get_character_current_feeling, get_character_images_dir  # noqa: E402
+PERSONA.clear()
+with keyed_lock("character_profile", "Cara"):
+    _p = get_character_profile("Cara")
+    _p["profile_image"] = "profile.png"
+    assert save_character_profile("Cara", _p)
+PORTRAIT = get_character_images_dir("Cara") / "profile.png"
+PORTRAIT.parent.mkdir(parents=True, exist_ok=True)
+Image.new("RGB", (8, 8), (100, 0, 0)).save(PORTRAIT)
+
+
+def fake_expression(character, *, output_stem, **kw):
+    image = output_stem.with_suffix(".png")
+    Image.new("RGB", (8, 8), (20, 40, 60)).save(image)
+    image.with_suffix(".json").write_text(json.dumps({"prompt": kw["expression_prompt"],
+                                                      "equipped_pieces": kw["equipped_pieces"],
+                                                      "equipped_items": kw["equipped_items"]}))
+    return image
+
+
+MOOD = get_character_current_feeling("Cara") or ""
+with patch.object(er, "render_character_image", fake_expression):
+    REAL_EXPR = er.generate_expression_image(er.expression_snapshot("Cara", MOOD))
+check("real expression published", REAL_EXPR is not None, True)
+PERSON = pb.Person(name="Cara", appearance="", gender="")
+check("allowed, not transformed: portrait", reference_allowed("Cara", PORTRAIT), True)
+check("allowed, not transformed: real expression", reference_allowed("Cara", REAL_EXPR), True)
+check("not transformed: real expression", pb.PromptBuilder("Cara")._resolve_person_ref_image(PERSON), str(REAL_EXPR))
+check("not transformed profile_only: portrait",
+      pb.PromptBuilder("Cara")._resolve_person_ref_image(PERSON, profile_only=True), str(PORTRAIT))
+PERSONA["Cara"] = P1
+check("allowed, P1: portrait", reference_allowed("Cara", PORTRAIT), False)
+check("allowed, P1: real expression", reference_allowed("Cara", REAL_EXPR), False)
+check("P1: no reference", pb.PromptBuilder("Cara")._resolve_person_ref_image(PERSON), "")
+check("P1 profile_only: no reference",
+      pb.PromptBuilder("Cara")._resolve_person_ref_image(PERSON, profile_only=True), "")
+with pinned_look("Cara", REAL_LOOK):
+    check("pinned real look: real expression",
+          pb.PromptBuilder("Cara")._resolve_person_ref_image(PERSON), str(REAL_EXPR))
+with patch.object(er, "render_character_image", fake_expression):
+    P_EXPR = er.generate_expression_image(er.expression_snapshot("Cara", MOOD))
+check("persona expression published", P_EXPR is not None and P_EXPR != REAL_EXPR, True)
+check("allowed, P1: persona expression", reference_allowed("Cara", P_EXPR), True)
+check("P1: the persona expression", pb.PromptBuilder("Cara")._resolve_person_ref_image(PERSON), str(P_EXPR))
+PERSONA.clear()
+
+print("[J] face retexture reference")
+from app.core import face_retexture  # noqa: E402
+REFS = mr.get_model_refs_dir("Cara")
+REFS.mkdir(parents=True, exist_ok=True)
+FACE = REFS / "face_view.png"
+Image.new("RGB", (8, 8), (200, 150, 120)).save(FACE)
+FACE.with_suffix(".json").write_text(json.dumps({
+    "image_sha256": hashlib.sha256(FACE.read_bytes()).hexdigest(),
+    "reference_sha256": hashlib.sha256(PORTRAIT.read_bytes()).hexdigest()}))
+SIG = md5_12(RAW)
+for _name, _look in (("tpose_real", ""), ("tpose_persona", "persona:p1")):
+    _img = REFS / f"{_name}.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(_img)
+    _img.with_suffix(".json").write_text(json.dumps({"equipped_pieces": A, "equipped_items": [],
+                                                     **({"look": _look} if _look else {})}))
+real_meta = model3d._face_choice_meta(REFS / "tpose_real.png", b"x")
+persona_meta = model3d._face_choice_meta(REFS / "tpose_persona.png", b"x")
+check("real-look mesh: face view", face_retexture.reference_info("Cara", SIG, real_meta)["reference"], "face")
+got = face_retexture.reference_info("Cara", SIG, persona_meta)
+check("persona mesh: front, no face view, no problem",
+      (got["reference"], got["face_available"], got["problems"]), ("front", False, []))
+got = face_retexture.reference_info("Cara", SIG, persona_meta, "face")
+check("persona mesh, explicit face: refused", [p["code"] for p in got["problems"]], ["persona_look"])
 
 print("[H] deletion test")
 PERSONA["Cara"] = P1

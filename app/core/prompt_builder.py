@@ -796,7 +796,9 @@ class PromptBuilder:
                         Person(name=active_char, appearance=person.appearance,
                                gender=person.gender, is_agent=False)
                     )
-                if not ref_path:
+                # A transformed avatar never falls back to her real portrait.
+                from app.core.outfit_imagegen import current_look
+                if not ref_path and not (active_char and current_look(active_char).transformed):
                     profile_img = get_user_profile_image()
                     if profile_img:
                         images_dir = get_user_images_dir()
@@ -825,7 +827,30 @@ class PromptBuilder:
         Args:
             person: Person object.
             profile_only: True = profile image only (e.g. outfit creation).
+
+        While the person wears a persona (``outfit_imagegen.current_look`` —
+        a pinned render keeps its queued state) only an image of the SAME
+        persona look qualifies (``reference_allowed``): never her profile
+        portrait or a render of her real look. None → ``""``, she is
+        described by text alone.
         """
+        from app.core.outfit_imagegen import current_look, reference_allowed
+        subject = (get_active_character() or person.name) if person.is_user else person.name
+        if subject and current_look(subject).transformed:
+            if person.is_user or profile_only:
+                return ""
+            try:
+                from app.core.expression_regen import expression_snapshot, find_compatible_expression
+                mood = get_character_current_feeling(subject) or ""
+                cached = find_compatible_expression(expression_snapshot(subject, mood))
+            except (OSError, ValueError, RuntimeError) as exc:
+                logger.debug("Persona identity reference unavailable for %s: %s", subject, exc)
+                cached = None
+            if cached and reference_allowed(subject, cached):
+                return str(cached)
+            logger.debug("RefImage [%s]: persona look, no reference of that look", subject)
+            return ""
+
         # User: profile image
         if person.is_user:
             profile_img = get_user_profile_image()
@@ -899,7 +924,8 @@ class PromptBuilder:
         except (OSError, ValueError, RuntimeError) as exc:
             logger.debug("Bare reference unavailable for %s: %s", person.name, exc)
             return
-        if bare:
+        from app.core.outfit_imagegen import reference_allowed
+        if bare and reference_allowed(person.name, bare):
             variables.ref_images[idx] = str(bare)
             logger.info("RefImage [%s]: the scene names its own outfit (%s) — "
                         "reference without clothes %s instead of %s",
