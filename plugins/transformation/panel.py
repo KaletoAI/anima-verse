@@ -441,7 +441,8 @@ def delete(character: str, card_id: str, lang: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _transform(character: str, row: Dict[str, Any], lang: str) -> Dict[str, Any]:
-    result = engine.transform(character, row["id"], source="admin")
+    # The admin's "Transform now" overrides a running cooldown.
+    result = engine.transform(character, row["id"], source="admin", ignore_cooldown=True)
     if result.get("ok"):
         return {"ok": True, "message": t("{name} is now {alias}.", lang).format(
             name=character, alias=result.get("alias") or row["alias"])}
@@ -450,10 +451,6 @@ def _transform(character: str, row: Dict[str, Any], lang: str) -> Dict[str, Any]
         error = t("{name} does not hold the power item.", lang).format(name=character)
     elif reason == "already_transformed":
         error = t("{name} is already transformed.", lang).format(name=character)
-    elif reason == "cooldown":
-        stamp = store.cooldown_until(character, row["id"])
-        error = t("{name} is on cooldown until {time}.", lang).format(
-            name=character, time=_label_of(stamp, lang))
     else:
         error = t("This persona is switched off or not usable.", lang)
     return {"ok": False, "error": error}

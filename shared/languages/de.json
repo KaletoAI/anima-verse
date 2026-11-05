@@ -3930,7 +3930,6 @@
     "{name} is now {alias}.": "{name} ist jetzt {alias}.",
     "{name} is already transformed.": "{name} ist schon verwandelt.",
     "{name} does not hold the power item.": "{name} besitzt den Kraft-Gegenstand nicht.",
-    "{name} is on cooldown until {time}.": "Die Abklingzeit von {name} läuft noch bis {time}.",
     "This persona is switched off or not usable.": "Diese Gestalt ist abgeschaltet oder nicht nutzbar.",
     "{name} has turned back.": "{name} hat sich zurückverwandelt.",
     "{name} does not wear this persona.": "{name} ist gerade nicht in dieser Gestalt.",

@@ -82,7 +82,10 @@ THE RULES (task brief), and what follows BY HAND
     transform again (stale UI) -> "Cara is already transformed.";
     revert -> ok "Cara has turned back.", no active row, cooldown 30 min ->
       status "On cooldown until <T0+30min label>";
-    transform -> "Cara is on cooldown until <T0+30min label>.", no active row.
+    transform (admin) -> ok "Cara is now Moonveil." despite the cooldown,
+      active row moonveil; revert again -> ok; the in-game path
+      (engine.transform without ignore_cooldown) -> reason "cooldown", no
+      active row.
     Obs: transform moonveil -> "Obs does not hold the power item."; revert ->
     "Obs does not wear this persona."; give starlace -> ok "Obs now holds
     Ring." (Kim no longer carries it); give again -> "Obs already holds the
@@ -219,7 +222,7 @@ check("package loaded", "transformation" in {p.id for p in registry.packages()},
 
 from app.core import character_panels as cp  # noqa: E402
 from app.models import secrets  # noqa: E402
-from plugins.transformation import definitions, knowers, panel, store  # noqa: E402
+from plugins.transformation import definitions, engine, knowers, panel, store  # noqa: E402
 
 PKG = "transformation"
 
@@ -401,8 +404,12 @@ check("revert", act("moonveil", "revert"), {"ok": True, "error": "", "message": 
 check("no active row", store.get_active("Cara"), None)
 _cool = (T0 + GameDuration.of(minutes=30)).display_label("en")
 check("status cooldown", card("moonveil")["status"], f"On cooldown until {_cool}")
-check("transform on cooldown", act("moonveil", "transform")["error"],
-      f"Cara is on cooldown until {_cool}.")
+check("transform on cooldown (admin overrides it)", act("moonveil", "transform"),
+      {"ok": True, "error": "", "message": "Cara is now Moonveil."})
+check("active row despite the cooldown", store.get_active("Cara").persona_id, "moonveil")
+check("revert again", act("moonveil", "revert"), {"ok": True, "error": "", "message": "Cara has turned back."})
+check("in-game transform on cooldown", engine.transform("Cara", "moonveil", source="smoke")["reason"],
+      "cooldown")
 check("still no active row", store.get_active("Cara"), None)
 check("Obs lacks the item", act("moonveil", "transform", "Obs")["error"],
       "Obs does not hold the power item.")

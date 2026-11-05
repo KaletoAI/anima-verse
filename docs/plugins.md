@@ -1275,7 +1275,7 @@ those whose power item the opened character holds first, badge "holds the item" 
 LoRA lists scoped to the chosen backend), **Behaviour** (personality, speech, presence, tasks, goals, "Daily
 routine rests"; empty = unchanged, filled = replaces it while transformed) and **In on the secret** (the
 knowers of (persona, opened character) as character checkboxes). Pickers instead of ids, a status line
-(ordinary self / transformed since … / on cooldown until …) and test actions: **Transform now** (engine source `admin`; a refusal shows the engine's reason),
+(ordinary self / transformed since … / on cooldown until …) and test actions: **Transform now** (engine source `admin`, `ignore_cooldown=True` — the admin overrides a running cooldown; any other refusal shows the engine's reason),
 **Revert now**, **Give <item> to <character>** (moves the item from its current holder). There is no Setup
 section and no config key: the persona belongs to its ITEM, so the same cards show on every character.
 

@@ -163,14 +163,16 @@ def _strike_activity(bearer: str, activity: str) -> str:
     return str(get_character_profile(bearer).get("pose_key") or "")
 
 
-def transform(bearer: str, persona_id: str, *, source: str) -> TransformResult:
+def transform(bearer: str, persona_id: str, *, source: str,
+              ignore_cooldown: bool = False) -> TransformResult:
     """Transform ``bearer`` into persona ``persona_id``.
 
     Returns ``{"ok", "reason", "alias"}``; reasons on refusal:
     ``unknown_persona``, ``not_holding_item``, ``already_transformed``,
     ``cooldown``. ``source`` (verb, phrase, admin, ...) goes into the log and
-    the narration's meta. An unexpected error undoes the partial profile
-    changes and propagates.
+    the narration's meta. ``ignore_cooldown``: a running cooldown does not
+    refuse (the admin's "Transform now"); the in-game paths keep it. An
+    unexpected error undoes the partial profile changes and propagates.
     """
     d: Optional[Definition] = definitions.load().get(persona_id)
     if d is None or not bearer:
@@ -181,7 +183,7 @@ def transform(bearer: str, persona_id: str, *, source: str) -> TransformResult:
         if store.get_active(bearer) is not None:
             return _result(False, "already_transformed", d.alias)
         now = game_time()
-        cooldown = store.cooldown_until(bearer, d.id)
+        cooldown = "" if ignore_cooldown else store.cooldown_until(bearer, d.id)
         if cooldown:
             try:
                 if now < GameTime.parse(cooldown):
