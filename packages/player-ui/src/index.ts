@@ -12,6 +12,7 @@ export * from './Toast';
 export * from './Lightbox';
 export * from './ZoomButton';
 export * from './thumbs';
+export * from './VideoSources';
 export * from './useQueue';
 export * from './SceneView';
 export * from './ScenesRecap';

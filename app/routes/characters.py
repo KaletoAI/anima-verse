@@ -1089,6 +1089,9 @@ async def upload_character_image(character_name: str, request: Request) -> Dict[
         image_path.write_bytes(contents)
 
         add_character_image(character_name, image_filename)
+        if filename.endswith(".mp4"):
+            from app.core.video_webm import schedule_webm
+            schedule_webm(image_path)
 
         return {
             "status": "success",
@@ -1187,6 +1190,31 @@ def get_character_image(character_name: str, image_filename: str, request: Reque
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/{character_name}/images/{video_filename}/webm")
+def get_character_video_webm(character_name: str, video_filename: str, request: Request):
+    """WebM (VP9) companion of a gallery MP4, for engines without H.264 (CEF).
+
+    Same classification as the MP4 itself (``images`` is a public segment) and
+    the same file resolution. Created on first request when missing; a
+    concurrent request waits for the single running encode. 404 = no such
+    video, 503 + Retry-After = encode not (yet) available -- the player falls
+    back to its MP4 source either way."""
+    from fastapi.responses import Response
+    from app.core.video_webm import WEBM_MEDIA_TYPE, ensure_webm
+    try:
+        video = character_image_path(character_name, video_filename)
+    except FileNotFoundError:
+        return Response(status_code=404, headers={"Cache-Control": "public, max-age=300"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if video.suffix.lower() != ".mp4":
+        return Response(status_code=404)
+    webm = ensure_webm(video, wait=30.0)
+    if webm is None:
+        return Response(status_code=503, headers={"Retry-After": "10"})
+    return etag_file_response(webm, request, WEBM_MEDIA_TYPE)
 
 
 # --- 3D model asset (AV3D-5 stage 1) ---

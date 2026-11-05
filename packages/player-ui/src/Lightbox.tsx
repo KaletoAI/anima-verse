@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from './icons'
+import { VideoSources } from './VideoSources'
 import { useI18n } from './I18nProvider'
 import './Lightbox.css'
 
@@ -200,7 +201,7 @@ function LightboxOverlay({ item, source, onClose }: {
       )}
 
       {isVideo ? (
-        <video className="lb-media" src={item.video} controls autoPlay
+        <VideoSources className="lb-media" src={item.video!} controls autoPlay
           onClick={(e) => e.stopPropagation()} />
       ) : (
         <img className="lb-media" src={item.src} alt={item.alt || ''} draggable={false}

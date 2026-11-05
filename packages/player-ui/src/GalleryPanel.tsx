@@ -24,6 +24,7 @@ import { EmptyState } from './EmptyState'
 import { formatDateTime } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
 import { thumbUrl, thumbWidth } from './thumbs'
+import { VideoSources } from './VideoSources'
 import { ShowPhotoButton } from './ShowPhotoButton'
 
 /** Tile width the grid below targets: `minmax(72px, 1fr)` in a panel column,
@@ -341,7 +342,7 @@ export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
               </button>
             )}
             {zoom.video
-              ? <video src={zoom.video} controls autoPlay style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)' }} />
+              ? <VideoSources src={zoom.video} controls autoPlay style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)' }} />
               : <img src={zoom.url} alt={zoom.name}
                   style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)', objectFit: 'contain', borderRadius: 6 }} />}
           </div>

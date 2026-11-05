@@ -18,6 +18,7 @@ import { apiGet, apiPost, apiDelete } from './api'
 import { usePoll } from './usePolling'
 import { useToast } from './Toast'
 import { useLightbox } from './Lightbox'
+import { VideoSources } from './VideoSources'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
 import { Icon } from './icons'
@@ -437,7 +438,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
                 <Icon name="maximize" size={16} />
               </button>
               {p.video_url ? (
-                <video src={p.video_url} autoPlay loop muted playsInline onClick={() => openMedia(p.video_url!)} />
+                <VideoSources src={p.video_url} autoPlay loop muted playsInline onClick={() => openMedia(p.video_url!)} />
               ) : (
                 <>
                   <img

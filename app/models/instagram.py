@@ -289,6 +289,8 @@ def _remove_post_media(image_filename: str) -> int:
         return 0
     d = get_instagram_dir()
     paths = [d / name, get_image_meta_path(name), d / (Path(name).stem + ".mp4")]
+    from app.core.video_webm import remove_companion
+    remove_companion(d / (Path(name).stem + ".mp4"))
     return media_cleanup.remove_files(
         p for p in paths if media_cleanup.contained(d, p))
 

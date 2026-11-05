@@ -275,6 +275,8 @@ def _publish_character_video(op, video_file, route: Dict[str, Any],
     if not images_dir.is_dir():
         return {"ok": False, "error": "character deleted during the animation"}
     (images_dir / inputs["video_filename"]).write_bytes(_Path(video_file).read_bytes())
+    from app.core.video_webm import schedule_webm
+    schedule_webm(images_dir / inputs["video_filename"])
     add_character_image_metadata(character_name, inputs["image_filename"], {
         "animate_prompt": inputs.get("prompt", ""),
         "animate_backend": route.get("backend", ""),

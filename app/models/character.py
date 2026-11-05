@@ -3916,6 +3916,8 @@ def remove_image_animation(character_name: str, image_filename: str) -> Optional
         return None
 
     video_path.unlink()
+    from app.core.video_webm import remove_companion
+    remove_companion(video_path)
     logger.info("Animation deleted: %s", video_path.name)
 
     # Scrub the animation's meta — incl. its video routing, so a deleted
@@ -5106,8 +5108,11 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
 
     # Delete the associated video with the same stem.
     stem = Path(image_filename).stem
+    from app.core.video_webm import remove_companion
     for video_ext in (".mp4", ".webm"):
         video_path = images_dir / f"{stem}{video_ext}"
+        if video_ext == ".mp4":
+            remove_companion(video_path)
         if video_path.exists():
             try:
                 video_path.unlink()

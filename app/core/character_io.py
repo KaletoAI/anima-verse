@@ -185,6 +185,7 @@ def export_character_to_zip(
 
     buf = io.BytesIO()
     from app.core.screenshot_sources import SOURCE_DIR
+    from app.core.video_webm import WEBM_DIR
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if char_dir.exists():
             for fp in sorted(char_dir.rglob("*")):
@@ -192,6 +193,8 @@ def export_character_to_zip(
                     continue
                 rel = fp.relative_to(char_dir).as_posix()
                 if Path(rel).parts[:2] == ("images", SOURCE_DIR):
+                    continue
+                if Path(rel).parts[:2] == ("images", WEBM_DIR):
                     continue
                 if Path(rel).name in _FILE_EXCLUDE_NAMES or _retired_model_file(rel):
                     continue

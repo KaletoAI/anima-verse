@@ -382,6 +382,22 @@ def get_instagram_image(image_filename: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/images/{video_filename}/webm")
+def get_instagram_video_webm(video_filename: str, request: Request):
+    """WebM (VP9) companion of an Instagram MP4 (see the character route)."""
+    from app.core.http_files import etag_file_response
+    from app.core.video_webm import WEBM_MEDIA_TYPE, ensure_webm
+    if ".." in video_filename or "/" in video_filename or "\\" in video_filename:
+        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+    video = get_instagram_dir() / video_filename
+    if video.suffix.lower() != ".mp4" or not video.is_file():
+        return Response(status_code=404)
+    webm = ensure_webm(video, wait=30.0)
+    if webm is None:
+        return Response(status_code=503, headers={"Retry-After": "10"})
+    return etag_file_response(webm, request, WEBM_MEDIA_TYPE)
+
+
 @router.post("/post/{post_id}/suggest-animate-prompt")
 async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Dict[str, str]:
     """Generiert einen Animation-Prompt fuer ein Instagram-Bild via Tools-LLM."""
@@ -575,6 +591,8 @@ def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Keine Animation vorhanden")
     if video_path.exists():
         video_path.unlink()
+        from app.core.video_webm import remove_companion
+        remove_companion(video_path)
         logger.info("Instagram-Animation geloescht: %s", video_name)
 
     # Remove video_filename from the post
@@ -612,6 +630,8 @@ def _publish_instagram_video(op, video_file, route: Dict[str, Any],
     target = _Path(inputs["output_path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(_Path(video_file).read_bytes())
+    from app.core.video_webm import schedule_webm
+    schedule_webm(target)
     feed = load_feed()
     for p in feed:
         if p.get("id") == post_id:

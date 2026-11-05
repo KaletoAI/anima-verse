@@ -390,6 +390,15 @@ def _sub_screenshot_uploads():
         logger.debug("screenshot_uploads sub error: %s", error)
 
 
+def _sub_video_webm_orphans():
+    """Remove WebM companions whose MP4 is gone (daily storage hygiene)."""
+    try:
+        from app.core.video_webm import sweep_all_orphans
+        sweep_all_orphans()
+    except Exception as error:
+        logger.debug("video_webm_orphans sub error: %s", error)
+
+
 def _sub_door_models():
     """Sweep door assets unused for seven SYSTEM days."""
     try:
@@ -634,6 +643,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_glb_delivery_cache,        86400,                 "glb_delivery_cache"),
     (_sub_chat_retention,            86400,                 "chat_retention"),
     (_sub_screenshot_uploads,        86400,                 "screenshot_uploads"),
+    (_sub_video_webm_orphans,        86400,                 "video_webm_orphans"),
     (_sub_pose_transition_candidates, 86400,                "pose_transition_candidates"),
     (_sub_pose_animation_candidates, 86400,                 "pose_animation_candidates"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
