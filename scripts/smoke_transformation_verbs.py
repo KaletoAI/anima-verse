@@ -177,6 +177,9 @@ tstore.create_definition({"leader": "Ava", "body": "Star", "item_id": "ring",
                           "activation_phrase": "by the moonlight", "revert_phrase": "Moon, rest",
                           "max_duration_minutes": 0, "cooldown_minutes": 0})
 
+# transform is opt-in per leader (Skills tab) — the two leaders switch it on.
+for _n in ("Tilda", "Ava"):
+    ch.save_character_skill_config(_n, "transform", {"enabled": True})
 from app.plugins import loader, registry  # noqa: E402
 loader.discover_packages()
 check("package loaded", "transformation" in {p.id for p in registry.packages()}, True)
@@ -360,6 +363,16 @@ _sections = []
 hooks.emit("character.thought_context", character_name="Tilda", blocks=_sections)
 check("thought event for Tilda", [s for s in _sections if "Glut" in str(s)],
       ["=== Secret identity ===\n- " + TILDA_LINE])
+
+# ── [H] Skills tab shows the runtime default ────────────────────────────────
+print("[H] skills tab defaults")
+from app.core import character_ops  # noqa: E402
+_sk = {s["skill_id"]: s["enabled"] for s in character_ops.build_available_skills("Kim")["skills"]}
+check("Kim: transform off by default", _sk.get("transform"), False)
+check("Kim: revert on by default", _sk.get("revert"), True)
+check("Kim: reveal_identity on by default", _sk.get("reveal_identity"), True)
+_sk = {s["skill_id"]: s["enabled"] for s in character_ops.build_available_skills("Tilda")["skills"]}
+check("Tilda: transform switched on", _sk.get("transform"), True)
 
 print()
 print(f"{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

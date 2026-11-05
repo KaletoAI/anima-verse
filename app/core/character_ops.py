@@ -1889,8 +1889,15 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
         if not skill_id:
             continue
         config = get_character_skill_config(character_name, skill_id)
-        # Default: ALWAYS_LOAD skills start disabled, others enabled
-        default_enabled = not getattr(skill, 'ALWAYS_LOAD', False)
+        # Default without a character setting — the SAME rule the runtime
+        # filter applies (skill_manager): the skill's own default_enabled_for
+        # when it has one, else ALWAYS_LOAD skills start disabled, others on.
+        _default_for = getattr(skill, "default_enabled_for", None)
+        try:
+            default_enabled = (bool(_default_for(character_name)) if _default_for
+                               else not getattr(skill, 'ALWAYS_LOAD', False))
+        except Exception:
+            default_enabled = not getattr(skill, 'ALWAYS_LOAD', False)
         enabled = default_enabled
         if config and "enabled" in config:
             enabled = bool(config["enabled"])
