@@ -2202,9 +2202,23 @@ def _minutes_since_last_chat_with_avatar(character_name: str) -> Optional[float]
         return None
 
 
+def _out_of_world(character_name: str) -> bool:
+    """A pooled or DORMANT character stands nowhere: it never thinks, is
+    never bumped and never answers (linked characters, spec anti-goals)."""
+    try:
+        from app.models.character import get_character_status, is_out_of_world
+        return is_out_of_world(get_character_status(character_name))
+    except Exception:
+        return False
+
+
 def _is_agent_eligible(character_name: str) -> bool:
-    """Check thoughts_enabled feature, sleep state, and avatar exclusion."""
+    """Check world presence, thoughts_enabled feature, sleep state, and avatar exclusion."""
     if not character_name:
+        return False
+    # Before the off-map wake below: a dormant character must never be pulled
+    # back onto the map.
+    if _out_of_world(character_name):
         return False
     try:
         from app.models.account import is_player_controlled
@@ -2284,9 +2298,12 @@ def _is_respond_eligible(character_name: str) -> bool:
 
     Reacting ≠ autonomous thinking: whoever is addressed answers — hence NO
     thoughts_enabled gate and NO sleep gate. Only the player-controlled avatar
-    does not answer on its own.
+    does not answer on its own, and nobody who stands nowhere (pooled,
+    dormant) answers at all.
     """
     if not character_name:
+        return False
+    if _out_of_world(character_name):
         return False
     try:
         from app.models.account import is_player_controlled

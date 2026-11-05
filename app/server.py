@@ -624,6 +624,18 @@ async def lifespan(app: FastAPI):
     # Importing the package registers the built-in improvement types.
     import app.core.improvements.types  # noqa: F401
 
+    # Linked characters: exactly one member of each family stands in the
+    # world. Runs AFTER the packages loaded (get_skill_manager above), so a
+    # registered `linked.expected_present` provider is asked; the periodic
+    # tick repeats it.
+    try:
+        from app.core.linked_characters import repair_families
+        _lf = repair_families()
+        if _lf:
+            logger.info("Linked families repaired at boot: %d", _lf)
+    except Exception as _lfe:
+        logger.warning("Linked family repair at boot failed: %s", _lfe)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

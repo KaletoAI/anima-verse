@@ -676,6 +676,31 @@ class SchedulerManager:
                 return {"status": "skipped", "reason": "character_asleep",
                         "action": action_type}
 
+        # Dormant check: a linked character's family member that stands
+        # nowhere (``characters.status = 'dormant'``) does not act. Its job is
+        # skipped, never deleted — it runs again once that body is back.
+        if agent:
+            from app.models.character import DORMANT_STATUS, get_character_status
+            if get_character_status(agent) == DORMANT_STATUS:
+                logger.info("Job %s skipped: %s is dormant", job_id, agent)
+                self._log_execution(job_id, "skipped", {"reason": "character dormant"},
+                                    manual=manual)
+                # Same re-anchor as the sleep skip: the occurrence counts as
+                # consumed, or the dispatcher would retry it every 30s.
+                if not manual:
+                    job_config["last_execution"] = {
+                        "timestamp": utc_now_iso(),
+                        "game_timestamp": game_time().canonical(),
+                        "success": False,
+                        "skipped": "dormant",
+                    }
+                    try:
+                        self._save_jobs_for_character(agent)
+                    except Exception as e:
+                        logger.error("Saving last_execution failed: %s", e)
+                return {"status": "skipped", "reason": "character_dormant",
+                        "action": action_type}
+
         try:
             result = None
 

@@ -563,6 +563,16 @@ def _sub_prop_action_runs():
         engine.advance(game_time())
 
 
+def _sub_linked_families():
+    """Exactly one present member per linked-character family
+    (``linked_characters.repair_families``) — heals a family a crash, a
+    manual edit or a failed step left with nobody or with two in the world."""
+    from app.core.linked_characters import repair_families
+    repaired = repair_families()
+    if repaired:
+        logger.info("Linked families repaired: %d", repaired)
+
+
 def _sub_follow_pose_expiry():
     """An NPC's follow pose after a free pair runs out (plan-folge-pose.md);
     the furniture follow runs out in the run ticker above."""
@@ -593,6 +603,7 @@ from app.core.improvements.engine import periodic_tick as _sub_improvements  # n
 _SUB_TASKS: List[tuple] = [
     # (func,                         min_interval_s,        label)
     (_sub_prop_action_runs,          0,                     "prop_action_runs"),
+    (_sub_linked_families,           60,                    "linked_families"),
     (_sub_follow_pose_expiry,        60,                    "follow_pose_expiry"),
     (_sub_status_tick,               60,                    "status_tick"),
     (_sub_flag_lifecycle,            60,                    "flag_lifecycle"),

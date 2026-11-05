@@ -28,6 +28,7 @@ are only one trigger of a swap.
 from __future__ import annotations
 
 import threading
+from contextlib import ExitStack
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -379,6 +380,394 @@ def place_at(name: str, location_id: str, room_id: str = "") -> bool:
         pass
     sync_topics.moved(name, "", loc_id)
     return True
+
+
+# ---------------------------------------------------------------------------
+# The swap and the family repair
+# ---------------------------------------------------------------------------
+
+#: Provider capability (``app.core.hooks``): ``fn(leader) -> Optional[str]``
+#: names the family member that SHOULD stand in the world (a transformation
+#: package answers with the body while a transformation is active). No
+#: provider, or an answer outside the family = the leader.
+EXPECTED_PRESENT_PROVIDER = "linked.expected_present"
+
+#: Profile key of a DORMANT member: where it stood when it left the world
+#: (``{location, room, pos_x, pos_z, pos_yaw, at}``) — what the repair puts a
+#: family back on when nobody stands anywhere.
+DORMANT_FROM_KEY = "dormant_from"
+
+_STATE_PRESENCE_COLS = ("current_location", "current_room", "current_activity",
+                        "current_feeling", "pose_key", "pose_flavor",
+                        "location_changed_at", "activity_changed_at",
+                        "pos_x", "pos_z", "pos_yaw")
+
+
+def _read_presence(conn, name: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    """``(status, state columns, stored profile blob)`` read on ``conn``."""
+    import json
+    row = conn.execute("SELECT COALESCE(status,''), profile_json FROM characters WHERE name=?",
+                       (name,)).fetchone()
+    if row is None:
+        raise LookupError(f"unknown character {name}")
+    try:
+        blob = json.loads(row[1] or "{}")
+    except (TypeError, ValueError):
+        blob = {}
+    srow = conn.execute(
+        f"SELECT {', '.join(_STATE_PRESENCE_COLS)} FROM character_state "
+        "WHERE character_name=?", (name,)).fetchone()
+    state = {c: (srow[i] if srow else None) for i, c in enumerate(_STATE_PRESENCE_COLS)}
+    return row[0], state, blob if isinstance(blob, dict) else {}
+
+
+def _write_presence(conn, name: str, status: str, state: Dict[str, Any],
+                    blob: Dict[str, Any]) -> None:
+    """Write one character's status, presence columns and profile blob on
+    ``conn`` — inside the caller's transaction, nothing committed here.
+
+    ``state`` holds :data:`_STATE_PRESENCE_COLS` keys; the report origin of
+    the point (``pos_session``/``pos_seq``) is always cleared: a swap is a
+    server move, never the echo of a client report.
+    """
+    import json
+    from app.core.timeutils import utc_now_iso
+    conn.execute("UPDATE characters SET status=?, profile_json=?, updated_at=? WHERE name=?",
+                 (status, json.dumps(blob, ensure_ascii=False), utc_now_iso(), name))
+    cols = [c for c in _STATE_PRESENCE_COLS if c in state]
+    values = [state[c] for c in cols]
+    cur = conn.execute(
+        "UPDATE character_state SET " + ", ".join(f"{c}=?" for c in cols)
+        + ", pos_session=NULL, pos_seq=NULL WHERE character_name=?",
+        (*values, name))
+    if cur.rowcount == 0:
+        conn.execute(
+            f"INSERT INTO character_state (character_name, {', '.join(cols)}) "
+            f"VALUES (?{', ?' * len(cols)})", (name, *values))
+
+
+def _placement_of(state: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``dormant_from`` record of a presence state."""
+    from app.core.timeutils import utc_now_iso
+    return {"location": state.get("current_location") or "",
+            "room": state.get("current_room") or "",
+            "pos_x": state.get("pos_x"), "pos_z": state.get("pos_z"),
+            "pos_yaw": state.get("pos_yaw"), "at": utc_now_iso()}
+
+
+_UNPLACED = {"current_location": "", "current_room": "",
+             "pos_x": None, "pos_z": None, "pos_yaw": None}
+
+
+def _drop_offmap(blob: Dict[str, Any]) -> None:
+    blob.pop("_offmap_return_location", None)
+    blob.pop("_offmap_return_room", None)
+
+
+def _publish_presence(name: str, from_id: str, to_id: str, room_id: str) -> None:
+    """The presence pair ``appear_in_world`` / ``enter_offmap_sleep`` publish."""
+    from app.core import sync_topics
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("location_changed", name, from_id=from_id, to_id=to_id,
+                       room_id=room_id)
+    except Exception:  # noqa: BLE001
+        pass
+    sync_topics.moved(name, from_id, to_id)
+
+
+def _know_location(name: str, location_id: str) -> None:
+    """A character always knows the location it stands in."""
+    if not location_id:
+        return
+    from app.models.character import add_known_location, get_known_locations
+    if location_id not in get_known_locations(name):
+        add_known_location(name, location_id)
+
+
+def _switch_avatars(old: str, new: str) -> List[str]:
+    """Every user whose active character is ``old`` now controls ``new`` (and
+    is allowed it). Background-safe: the users table, no request context.
+    Returns the switched user ids."""
+    from app.core import sync_topics
+    from app.core.users import list_users, update_user
+    switched: List[str] = []
+    for user in list_users():
+        settings = dict(user.get("settings") or {})
+        if settings.get("avatar_released"):
+            continue
+        active = str(settings.get("active_character")
+                     or settings.get("current_character") or "").strip()
+        if not active or active != old:
+            continue
+        settings["active_character"] = new
+        settings["current_character"] = new
+        if settings.get("default_character") == old:
+            settings["default_character"] = new
+        fields: Dict[str, Any] = {"settings": settings}
+        allowed = list(user.get("allowed_characters") or [])
+        if new not in allowed:
+            fields["allowed_characters"] = allowed + [new]
+        try:
+            if update_user(user["id"], **fields):
+                switched.append(str(user["id"]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("swap: avatar of %s not switched to %s: %s",
+                           user.get("username"), new, e)
+    for user_id in switched:
+        sync_topics.rebind_user(user_id)
+    return switched
+
+
+def _move_items(src: str, dst: str, item_ids: Any) -> List[str]:
+    """Move the listed carried items from ``src`` to ``dst`` with force.
+
+    ``transferable`` and a lock do not block (the swap moves the mind's own
+    things into the other body). Worn clothing (``equipped_pieces``) never
+    moves; another equipped item is unequipped on ``src`` first. Returns the
+    ids that moved.
+    """
+    from app.models.inventory import (_load_inventory, add_to_inventory,
+                                      get_equipped_items, get_equipped_pieces,
+                                      remove_from_inventory, unequip_item)
+    moved: List[str] = []
+    wanted = [str(i).strip() for i in (item_ids or ()) if str(i).strip()]
+    if not wanted:
+        return moved
+    entries = {e.get("item_id"): e for e in (_load_inventory(src).get("inventory") or [])}
+    worn = set(get_equipped_pieces(src).values())
+    for item_id in dict.fromkeys(wanted):
+        entry = entries.get(item_id)
+        if entry is None:
+            continue
+        if item_id in worn:
+            logger.info("swap %s -> %s: %s is worn clothing — stays", src, dst, item_id)
+            continue
+        if item_id in get_equipped_items(src):
+            unequip_item(src, item_id, source="linked_swap")
+        qty = int(entry.get("quantity") or 1)
+        if not add_to_inventory(dst, item_id, quantity=qty, obtained_from=src,
+                                obtained_method="swap",
+                                locked=True if entry.get("locked") else None):
+            logger.warning("swap %s -> %s: %s could not be added — stays", src, dst, item_id)
+            continue
+        remove_from_inventory(src, item_id, quantity=qty, force=True)
+        moved.append(item_id)
+    return moved
+
+
+def swap_presence(from_name: str, to_name: str, *, items: Any = (),
+                  reason: str = "") -> Dict[str, Any]:
+    """Put ``to_name`` exactly where ``from_name`` stands and take
+    ``from_name`` out of the world — ``{"ok", "error"}`` (+ ``"refusal"``,
+    the :func:`swap_refusal` code of a refused swap, and ``"items"``, the ids
+    that moved).
+
+    Both must belong to one family, ``from_name`` must stand in the world and
+    ``to_name`` must be dormant; ``from_name`` must not be in a refusal state
+    (the error is then ``SWAP_REFUSAL_TEXT[code]``). Copied to ``to_name``:
+    location, room, point, yaw, activity, pose key/flavor, feeling and the
+    seat; ``from_name`` gets status ``dormant``, no placement, no seat, no
+    off-map marker, and its placement as ``dormant_from`` for the repair.
+    Both statuses and placements are written in ONE transaction (under the
+    family lock, the places lock of the location and both profile locks).
+    Then the listed ``items`` move with force (:func:`_move_items`), every
+    user controlling ``from_name`` controls ``to_name``, and the presence
+    events are published for both. ``reason`` is only logged.
+    """
+    from app.core.db import transaction
+    from app.core.interaction_engine import profile_locks
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (DORMANT_STATUS, _notify_prop_presence,
+                                      get_character_status, is_out_of_world)
+    src = (from_name or "").strip()
+    dst = (to_name or "").strip()
+    if not src or not dst or src == dst:
+        return _fail("Pick two different characters of one family.")
+    if not _exists(src) or not _exists(dst):
+        return _fail(f"Unknown character: {src if not _exists(src) else dst}.")
+    if mind_of(src) != mind_of(dst):
+        return _fail(f"{src} and {dst} are not linked characters of one family.")
+    leader = mind_of(src)
+    with keyed_lock("linked_family", leader):
+        if is_out_of_world(get_character_status(src)):
+            return _fail(f"{src} does not stand in the world.")
+        if get_character_status(dst) != DORMANT_STATUS:
+            return _fail(f"{dst} stands in the world already.")
+        code = swap_refusal(src)
+        if code:
+            return {"ok": False, "error": SWAP_REFUSAL_TEXT[code], "refusal": code}
+        from app.models.character import get_character_current_location
+        loc_key = get_character_current_location(src) or ""
+        with ExitStack() as locks:
+            if loc_key:
+                # LOCK ORDER: places before character_profile (places.assign).
+                locks.enter_context(keyed_lock("places", loc_key))
+            locks.enter_context(profile_locks(src, dst))
+            try:
+                with transaction() as conn:
+                    _st, src_state, src_blob = _read_presence(conn, src)
+                    _dt, _dst_state, dst_blob = _read_presence(conn, dst)
+                    seat = src_blob.get("place") if isinstance(src_blob.get("place"), dict) else None
+                    dst_blob["place"] = dict(seat) if seat else None
+                    dst_blob.pop(DORMANT_FROM_KEY, None)
+                    _drop_offmap(dst_blob)
+                    src_blob["place"] = None
+                    src_blob[DORMANT_FROM_KEY] = _placement_of(src_state)
+                    _drop_offmap(src_blob)
+                    _write_presence(conn, dst, "", dict(src_state), dst_blob)
+                    _write_presence(conn, src, DORMANT_STATUS, dict(_UNPLACED), src_blob)
+            except Exception as e:  # noqa: BLE001 — rolled back, nothing changed
+                logger.error("swap %s -> %s failed and was rolled back: %s", src, dst, e)
+                return _fail("The swap could not be stored.")
+    loc = src_state.get("current_location") or ""
+    room = src_state.get("current_room") or ""
+    _notify_prop_presence(loc, room)
+    try:
+        _know_location(dst, loc)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("swap: known location of %s not stored: %s", dst, e)
+    moved = _move_items(src, dst, items)
+    _switch_avatars(src, dst)
+    _publish_presence(src, loc, "", "")
+    _publish_presence(dst, "", loc, room)
+    logger.info("Swap %s -> %s at %s/%s%s%s", src, dst, loc or "-", room or "-",
+                f" (items: {', '.join(moved)})" if moved else "",
+                f" — {reason}" if reason else "")
+    return {"ok": True, "error": "", "items": moved}
+
+
+def _expected_present(leader: str, family: List[str]) -> str:
+    """The member the provider names, else the leader."""
+    from app.core.hooks import get_provider
+    fn = get_provider(EXPECTED_PRESENT_PROVIDER)
+    if fn is not None:
+        try:
+            named = fn(leader)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("%s(%s) failed: %s", EXPECTED_PRESENT_PROVIDER, leader, e)
+            named = None
+        if named and named in family:
+            return named
+    return leader
+
+
+def _stored_placement(blob: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The ``dormant_from`` record of a blob — None without one, or when its
+    location no longer exists (a deleted location is no place to return to)."""
+    rec = blob.get(DORMANT_FROM_KEY)
+    if not isinstance(rec, dict):
+        return None
+    loc_id = str(rec.get("location") or "").strip()
+    if not loc_id:
+        return None
+    from app.models.world import get_location_by_id
+    return rec if get_location_by_id(loc_id) else None
+
+
+def _restore(member: str, family: List[str]) -> bool:
+    """Nobody of the family stands anywhere: put ``member`` back at its own
+    stored placement, else at the most recent one of any member. Never
+    invents a location — no stored placement = nothing happens (warning)."""
+    from app.core.db import get_connection, transaction
+    conn = get_connection()
+    blobs = {m: _read_presence(conn, m)[2] for m in family}
+    rec = _stored_placement(blobs[member])
+    if rec is None:
+        recs = [r for r in (_stored_placement(b) for b in blobs.values()) if r]
+        rec = max(recs, key=lambda r: str(r.get("at") or "")) if recs else None
+    if rec is None:
+        logger.warning("Linked family of %s: nobody stands in the world and no "
+                       "placement is stored — left as it is", family[0])
+        return False
+    state = {"current_location": rec.get("location") or "",
+             "current_room": rec.get("room") or "",
+             "pos_x": rec.get("pos_x"), "pos_z": rec.get("pos_z"),
+             "pos_yaw": rec.get("pos_yaw")}
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", member):
+        with transaction() as tx:
+            _st, _state, blob = _read_presence(tx, member)
+            blob.pop(DORMANT_FROM_KEY, None)
+            blob["place"] = None
+            _drop_offmap(blob)
+            _write_presence(tx, member, "", state, blob)
+    from app.models.character import _notify_prop_presence
+    _notify_prop_presence(state["current_location"], state["current_room"])
+    try:
+        _know_location(member, state["current_location"])
+    except Exception as e:  # noqa: BLE001
+        logger.debug("repair: known location of %s: %s", member, e)
+    _publish_presence(member, "", state["current_location"], state["current_room"])
+    logger.warning("Linked family repair: nobody stood in the world — %s placed at %s/%s",
+                   member, state["current_location"], state["current_room"] or "-")
+    return True
+
+
+def _take_out(member: str) -> None:
+    """A second present member leaves the world (repair): its placement is
+    stored as ``dormant_from``, then :func:`make_dormant`."""
+    from app.core.db import get_connection
+    from app.models.character import get_character_profile, save_character_profile
+    from app.core.keyed_lock import keyed_lock
+    _st, state, _blob = _read_presence(get_connection(), member)
+    with keyed_lock("character_profile", member):
+        profile = get_character_profile(member) or {}
+        profile[DORMANT_FROM_KEY] = _placement_of(state)
+        save_character_profile(member, profile)
+    make_dormant(member)
+    logger.warning("Linked family repair: %s stood in the world as a second member — "
+                   "now dormant", member)
+
+
+def _repair_family(leader: str) -> bool:
+    from app.models.character import get_character_status, is_out_of_world
+    family = [leader] + bodies_of(leader)
+    changed = False
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("linked_family", leader):
+        present = [m for m in family if not is_out_of_world(get_character_status(m))]
+        expected = _expected_present(leader, family)
+        if not present:
+            if _restore(expected, family):
+                changed = True
+                present = [expected]
+        elif len(present) > 1:
+            keeper = (expected if expected in present
+                      else leader if leader in present else present[0])
+            for member in present:
+                if member != keeper:
+                    _take_out(member)
+            present = [keeper]
+            changed = True
+        if len(present) == 1:
+            for member in family:
+                if member != present[0] and _switch_avatars(member, present[0]):
+                    changed = True
+    return changed
+
+
+def repair_families() -> int:
+    """Enforce "exactly one present member per family" — the number of
+    families that needed a repair.
+
+    None present: the expected member (provider
+    :data:`EXPECTED_PRESENT_PROVIDER`, else the leader) stands at its own
+    stored placement, else at the most recent stored placement of any member;
+    with none stored the family is left alone (a location is never invented).
+    Two or more present: every present member except the expected one (else
+    the leader, else the first) becomes dormant. A user still controlling a
+    dormant member is switched to the present one. Runs at boot and on every
+    periodic tick.
+    """
+    repaired = 0
+    for leader in sorted(_load_map()["lead"]):
+        try:
+            if _repair_family(leader):
+                repaired += 1
+        except Exception as e:  # noqa: BLE001 — one broken family must not stop the rest
+            logger.error("Linked family repair of %s failed: %s", leader, e, exc_info=True)
+    return repaired
 
 
 # ---------------------------------------------------------------------------

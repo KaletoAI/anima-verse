@@ -4447,8 +4447,13 @@ def wake_from_offmap(character_name: str) -> bool:
     ``current_location``) AND ``_offmap_return_location`` is set in the
     profile. Idempotent — a later call without the return marker is a no-op.
 
+    A character that stands nowhere by status (pooled, dormant) is never
+    brought back here — its presence belongs to the pool or the linked swap.
+
     Returns True when the character was brought back.
     """
+    if is_out_of_world(get_character_status(character_name)):
+        return False
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3), same leaf
     # span as ``enter_offmap_sleep``: the location lookup, the position write
@@ -4524,8 +4529,11 @@ def appear_in_world(character_name: str) -> bool:
 
     Try the last location via :func:`wake_from_offmap`, then the configured
     home_location, then the first world location. A character already placed
-    is left alone. Return True when the character was placed.
+    is left alone, and so is one out of the world by status (pooled, dormant).
+    Return True when the character was placed.
     """
+    if is_out_of_world(get_character_status(character_name)):
+        return False
     if wake_from_offmap(character_name):
         return True
     from app.core.keyed_lock import keyed_lock

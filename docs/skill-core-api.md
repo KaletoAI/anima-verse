@@ -619,9 +619,10 @@ placement; destination-bound shared trips always use timed cross-location travel
 | `start_journey(character_name, target_id, target_room="", target_pose="", journey_id="", execution_ref="") -> (journey \| None, reason)` | Start a timed journey to a named location. `target_room` / `target_pose` apply on arrival, subject to access checks. Optional `journey_id` / `execution_ref` link it to the owning execution. `reason`: `''` = started · `unknown_target` (missing or unknown to this character) · `unplaced_target` (not on the map) · `no_route` |
 | `start_journey_to_point(character_name, x, z) -> (journey \| None, reason)` | Reise zu einem freien Punkt. Setzt **kein** `movement_target`, nur die `journey` — Ankunfts-/Abbruchlogik muss beides abfragen |
 | `get_journey(character_name, profile=None)` | Die laufende Reise vom Profil (oder `None`) |
-| `journey_state(waypoints, started_at_game, now_game, offset_s=0.0) -> Dict` | Pure polyline position from start and game clock with an optional elapsed-time offset in seconds; no state/tick, so all clients derive the same position |
+| `journey_state(waypoints, started_at_s, now_s) -> Dict` | Pure polyline position from the journey's `started_at_s` and the MOTION clock (`timeutils.motion_time()` — real seconds the world has run unfrozen; the game-speed factor never changes walking pace); returns `pos`, `seg`, `arrived`, `remaining_s`, `progress_m`, `total_m`. No state/tick, so all clients derive the same position |
+| `journey_eta(st) -> GameTime` | Projected arrival of a `journey_state` answer on the game calendar: exact game now + `remaining_s` × the configured factor |
 | `cancel_journey(character_name, *, journey_id=None, execution_ref=None)` | Cancel travel; supplied ownership selectors must match the current journey |
-| `get_travel_speed_m_s() -> float` | Welt-Tempo (`game.travel_speed_m_s`, Default 1.4 m/s, geklemmt 0.1…20); beim Start auf die Reise geschrieben |
+| `get_travel_speed_m_s() -> float` | Welt-Tempo in Metern pro ECHTER Sekunde (`game.travel_speed_m_s`, Default 1.4 m/s, geklemmt 0.1…20); beim Start auf die Reise geschrieben |
 | `app.models.character.list_active_journeys() -> List[Dict]` | EINE Query über alle reisenden Charaktere (`{name, journey, movement_target, current_location}`) — nie über alle Profile iterieren |
 
 ## Authoritative movement — `app.core.movement_authority`
@@ -900,7 +901,7 @@ einer laufenden Aktion für die HUD-Zeile (`GET /play/prop-actions/state` → `m
 0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`. `rate` = Punkte pro SPIELsekunde
 (fehlt/ungültig = 0): der Kern rechnet `value` vom letzten Takt des Laufs bis jetzt hoch und gibt `rate` pro
 ECHTER Sekunde weiter (eingefrorene Welt = 0). Ein Lauf, der Füllstände hat, bekommt alle
-`METER_BEAT_REAL_S` (5 s) einen Takt (`due_in_game_s`), damit der Abschluss pünktlich kommt. Optional `holdable`/`held` (nur
+`METER_BEAT_REAL_S` (5 s) einen Takt (`due_in_s`, echte Sekunden), damit der Abschluss pünktlich kommt. Optional `holdable`/`held` (nur
 echtes `True` zählt): das HUD bietet der eigenen Zeile dann einen Zurückhalten-Schalter an (`hold_meter`).
 
 ## Folge-Pose nach dem Ende — `app.core.pose_catalog` ✅
@@ -1604,6 +1605,9 @@ any of this — it asks here. Spec:
 | `create_linked(leader, name)` | `{"ok", "error", "name"}`. A new body from the leader's TEMPLATE only, `linked_to` + default shared sections, created dormant, default skills seeded, allowed to every user allowed the leader |
 | `make_dormant(name)` | Status `dormant`; location, room, point and seat cleared, no off-map return marker — raw writes, no compliance/party/discovery side effects |
 | `place_at(name, location_id, room_id="")` | Raw placement (no compliance/party/discovery): location + room (arrival room when empty), the location's stand point, presence events |
+| `swap_presence(from_name, to_name, *, items=(), reason="")` | `{"ok", "error"}` (+ `refusal` = the `swap_refusal` code of a refused swap, `items` = the ids that moved). One family, `from_name` present, `to_name` dormant, `from_name` in no refusal state (error = `SWAP_REFUSAL_TEXT[code]`). `to_name` gets `from_name`'s location, room, point, yaw, activity, pose key/flavor, feeling and seat; `from_name` becomes dormant (no placement, seat or off-map marker) and keeps its placement under `dormant_from` for the repair — both in ONE transaction. Then `items` move with force (`transferable` does not block; worn clothing never moves, another equipped item is unequipped first), every user controlling `from_name` controls `to_name` and is allowed it, and `location_changed` + `sync_topics.moved` go out for both. `reason` is only logged. The transformation package's transform/revert is this call |
+| `repair_families()` | Number of families repaired — "exactly one present member per family": none present → the expected member stands at its own `dormant_from`, else at the most recent one of any member (never an invented location); two present → all but the expected member (else the leader) become dormant; users controlling a dormant member are switched to the present one. Runs at boot (after the packages loaded) and every 60 s in the periodic tick (not while the world is frozen or the queue paused) |
+| `EXPECTED_PRESENT_PROVIDER` | `"linked.expected_present"` — an optional provider (`hooks.register_provider`): a callable given the leader that returns the member that SHOULD stand in the world (the transformation package answers with the body while transformed). Absent, `None` or a name outside the family = the leader |
 | `describe(name)` | `{leader, bodies: [{name, status}], shared_soul_sections, status: "dormant"/"present", shareable, candidates}` — the editor payload of `GET /characters/{name}/link` |
 | `invalidate()` | Drop the cached link map. `save_character_profile` calls `note_saved(name, linked_to, shared)` after every committed write and `delete_character` invalidates — a writer of `linked_to` outside those needs it |
 | `note_saved(name, linked_to, shared)` | The save hook: invalidates the map only when the stored link differs from it |

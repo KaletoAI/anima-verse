@@ -2565,6 +2565,19 @@ async function startApp(username: string, role: string) {
     // A show-all switch publishes its own snapshot; reject the previous view.
     if (p.viewRev !== viewRev || viewSwitchBusy) return;
     const { polledAt } = p;
+    // The server switched this account to ANOTHER avatar on its own — a
+    // linked character's swap (transform/revert) hands the player the body
+    // that now stands in the world. Avatar, HUD and known-places view were
+    // built for the old one, so the page loads again, exactly like a takeover
+    // from the game menu (resume marker: no title gate). The menu's own switch
+    // reloads by itself and is excluded through `avatarChanging`.
+    if (firstMap.avatar && p.map.avatar && p.map.avatar !== firstMap.avatar && !avatarChanging) {
+      avatarChanging = true;
+      console.info(`[client3d] avatar switched by the server: '${firstMap.avatar}' -> '${p.map.avatar}'`);
+      markResume();
+      location.reload();
+      return;
+    }
     const map = preserveOfferRoom(p.map, polledAt);
     try {
       if (map.locations_rev !== locationsRev) void syncLocations();
