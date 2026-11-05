@@ -5121,6 +5121,8 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
         # Also check variants with a _variant suffix.
         for variant in images_dir.glob(f"{stem}_*{video_ext}"):
             try:
+                if video_ext == ".mp4":
+                    remove_companion(variant)
                 variant.unlink()
             except Exception:
                 pass
