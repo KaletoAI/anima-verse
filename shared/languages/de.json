@@ -3953,6 +3953,7 @@
     "Stands nowhere right now: another body of the same mind is in the world.": "Steht gerade nirgends: Ein anderer Körper desselben Geistes ist in der Welt.",
     "A linked character reads this field from its leading character.": "Ein verknüpfter Charakter liest dieses Feld von seinem führenden Charakter.",
     "from {name}": "von {name}",
-    "A linked character reads this section from its leading character; edit it there.": "Ein verknüpfter Charakter liest diesen Abschnitt von seinem führenden Charakter; dort bearbeiten."
+    "A linked character reads this section from its leading character; edit it there.": "Ein verknüpfter Charakter liest diesen Abschnitt von seinem führenden Charakter; dort bearbeiten.",
+    "Pick another avatar for {user} first: {name} is their active character.": "Wähle zuerst einen anderen Avatar für {user}: {name} ist dessen aktiver Charakter."
   }
 }

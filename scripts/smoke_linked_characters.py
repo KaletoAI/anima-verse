@@ -43,6 +43,9 @@ WHAT FOLLOWS BY HAND
       link(Nobody, Tilda)  -> "Unknown character: Nobody."
       link(Tess, Tilda)    -> "Temporary NPCs cannot be linked."
       link(Kim, Tilda, shared [goals]) -> "This soul section cannot be shared: goals."
+      Kim is the ACTIVE character of user "play" (settings.active_character)
+      -> "Pick another avatar for play first: Kim is their active character."
+      (avatar_owner(Kim) "play"); the setting cleared again -> avatar_owner "".
       Kim with a movement target -> "Cannot link Kim right now: Travelling
       right now — wait until the journey ends."  (swap_refusal(Kim) "journey")
 [C] create_linked(Tilda, "Glut") -> ok. Glut: linked_to Tilda in the stored
@@ -238,6 +241,13 @@ check("unknown body", lc.link("Nobody", "Tilda")["error"], "Unknown character: N
 check("temporary NPC", lc.link("Tess", "Tilda")["error"], "Temporary NPCs cannot be linked.")
 check("goals not shareable", lc.link("Kim", "Tilda", shared=["goals"])["error"],
       "This soul section cannot be shared: goals.")
+PLAY = users.create_user("play", "play-password-1", allowed_characters=["Kim"])
+users.update_user(PLAY, settings={"active_character": "Kim"})
+check("avatar_owner(Kim)", lc.avatar_owner("Kim"), "play")
+check("active avatar refused", lc.link("Kim", "Tilda")["error"],
+      "Pick another avatar for play first: Kim is their active character.")
+users.update_user(PLAY, settings={"active_character": ""})
+check("avatar_owner(Kim) cleared", lc.avatar_owner("Kim"), "")
 edit("Kim", movement_target="somewhere")
 check("swap_refusal(Kim)", lc.swap_refusal("Kim"), "journey")
 check("refusal state", lc.link("Kim", "Tilda")["error"],

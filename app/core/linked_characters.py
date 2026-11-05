@@ -56,6 +56,9 @@ SWAP_REFUSAL_TEXT: Dict[str, str] = {
     "party": "In a party — leave it first.",
 }
 
+#: :func:`link` of a character that is some user's active avatar.
+AVATAR_REFUSAL_TEXT = "Pick another avatar for {user} first: {name} is their active character."
+
 PROFILE_KEY = "linked_to"
 SHARED_KEY = "shared_soul_sections"
 
@@ -404,6 +407,22 @@ def _clean_shared(shared: Any) -> Tuple[List[str], str]:
     return [s for s in SHAREABLE_SOUL_SECTIONS if s in wanted], ""
 
 
+def avatar_owner(name: str) -> str:
+    """The username of a user whose ACTIVE character is ``name`` ("" if none).
+
+    Background-safe (reads the users table, no request context). Linking such
+    a character would leave that player controlling a dormant body.
+    """
+    from app.core.users import list_users
+    for user in list_users():
+        settings = user.get("settings") or {}
+        active = str(settings.get("active_character")
+                     or settings.get("current_character") or "").strip()
+        if active and active == name:
+            return str(user.get("username") or user.get("id") or "")
+    return ""
+
+
 def _grant_like_leader(body: str, leader: str) -> None:
     """Add ``body`` to ``allowed_characters`` of every user allowed ``leader``."""
     from app.core.users import list_users, update_user
@@ -424,7 +443,8 @@ def link(body: str, leader: str, *, shared: Any = DEFAULT_SHARED_SOUL) -> Dict[s
     Refused: a self-link, an unknown character, a temporary NPC, a leader that
     is itself linked (no chains), a body that leads bodies of its own, a body
     already linked to another leader, a section outside
-    ``SHAREABLE_SOUL_SECTIONS``, and a present body in a refusal state
+    ``SHAREABLE_SOUL_SECTIONS``, a body that is some user's active character
+    (:func:`avatar_owner`) and a present body in a refusal state
     (:func:`swap_refusal`). A body already linked to the same leader only gets
     its shared sections updated. A newly linked body becomes DORMANT
     (:func:`make_dormant`); its own former mind rows stay untouched in storage.
@@ -456,6 +476,10 @@ def link(body: str, leader: str, *, shared: Any = DEFAULT_SHARED_SOUL) -> Dict[s
     if current and current != leader:
         return _fail(f"{body} is already linked to {current} — unlink it first.")
     newly = current is None
+    if newly:
+        player = avatar_owner(body)
+        if player:
+            return _fail(AVATAR_REFUSAL_TEXT.format(user=player, name=body))
     if newly and get_character_status(body) != DORMANT_STATUS:
         code = swap_refusal(body)
         if code:
