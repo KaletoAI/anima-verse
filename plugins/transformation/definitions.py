@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set, Tuple
 
 from app.core.log import get_logger
@@ -52,6 +52,14 @@ class Definition:
     max_duration_minutes: int
     cooldown_minutes: int
     transform_activity: str
+    #: Character prompt fields replaced while the persona is worn
+    #: (``store.OVERRIDE_KEYS``; a missing key = the character's own value).
+    prompt_overrides: Dict[str, str] = field(default_factory=dict, hash=False)
+    #: Whether the daily routine rests while the persona is worn.
+    pause_routine: bool = True
+    #: Image settings while worn, the full ``store.normalize_imagegen`` shape.
+    #: The two dicts belong to the cache: hand out copies, never mutate them.
+    imagegen: Dict[str, Any] = field(default_factory=dict, hash=False)
 
 
 _warned: Set[Tuple[str, str]] = set()
@@ -102,6 +110,9 @@ def _parse(rows: Any) -> Dict[str, Definition]:
             cooldown_minutes=max(0, int(row.get("cooldown_minutes") or 0)),
             transform_activity=(str(row.get("transform_activity") or "").strip()
                                 or DEFAULT_TRANSFORM_ACTIVITY),
+            prompt_overrides=store.normalize_overrides(row.get("prompt_overrides")),
+            pause_routine=bool(row.get("pause_routine", True)),
+            imagegen=store.normalize_imagegen(row.get("imagegen")),
         )
         aliases.add(folded)
     return out

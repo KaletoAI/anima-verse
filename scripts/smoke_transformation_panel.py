@@ -23,7 +23,8 @@ THE RULES (task brief), and what follows BY HAND
     ``on_load``; an empty world describes title "Transformation", intro "The
     power belongs to the item: whoever holds it can transform.", no cards, a
     create form with the keys [item_id, alias, description] (item + alias
-    required). German: title "Verwandlung".
+    required; description labelled "Persona appearance"). German: title
+    "Verwandlung".
 [B] Create, refusals first (nothing stored by any of them):
     no alias               -> "Alias is required."          (core, required)
     alias "Kim"            -> "Kim is the name of a character."
@@ -39,11 +40,29 @@ THE RULES (task brief), and what follows BY HAND
 [C] describe(Cara): moonveil first (she holds the amulet; badge "holds the
     item", subtitle "Held by Cara", actions [transform]), starlace second
     (subtitle "Held by Kim", no badge, action give "Give Ring to Cara" with
-    confirm "Kim loses the item."). Field keys in brief order: item_id, alias,
-    description, suit_items (filter "outfit"), condition_id, activation_phrase,
-    revert_phrase, max_duration_minutes (unit "min", min 0), cooldown_minutes,
-    transform_activity, enabled, knowers. Values: max 60, cooldown 30,
-    activity "transforming", enabled True, knowers []. Status "Ordinary self".
+    confirm "Kim loses the item."). Tabs (editor v2 brief), in order:
+    persona "Persona", transform "Transformation", suit "Suit & images",
+    behaviour "Behaviour" (hint "Empty = unchanged. Filled = replaces it while
+    transformed."), knowers "In on the secret". Field keys tab by tab, with
+    (tab, width[, rows]):
+      persona:   item_id m, alias m, enabled s, description full rows 3
+                 (label "Persona appearance", hint "Body, face and hair as
+                 everyone — and every picture — sees them while transformed.
+                 The suit comes from the suit pieces.")
+      transform: activation_phrase l, revert_phrase l, max_duration_minutes s
+                 (unit "min", min 0), cooldown_minutes s, transform_activity m,
+                 condition_id l
+      suit:      suit_items full (filter "outfit"), image_backend l (backend),
+                 tpose_backend l (backend), image_loras l (loras,
+                 backend_field image_backend, target render), tpose_loras l
+                 (loras, backend_field tpose_backend, fallback_field
+                 image_backend, target tpose)
+      behaviour: personality l rows 4, dialogue_style l rows 4, presence l
+                 rows 3, task l rows 3, goals l rows 3, pause_routine l (bool)
+      knowers:   knowers full
+    Values: max 60, cooldown 30, activity "transforming", enabled True,
+    knowers [], the five behaviour texts "", pause_routine True, both backends
+    "", both LoRA lists []. Status "Ordinary self".
     describe(Obs): nobody's item -> alphabetical (Moonveil, Starlace).
 [D] Update moonveil from Cara's panel: suit [suit_top, cape], phrase "by the
     moon", knowers ["Kim"] -> ok; knower_names(Cara, moonveil) = ["Kim"] and
@@ -77,9 +96,38 @@ THE RULES (task brief), and what follows BY HAND
 [H] Delete starlace (Obs has a knower secret for it from set_knowers) -> ok;
     Obs's secret with ref "transformation:starlace" is gone, Obs's cooldown
     row for starlace is gone, stored ids [moonveil].
-[I] German: in describe(Cara, "de") every field label and hint, the badges,
-    status, action labels, intro, create label differ from the English ones
-    (the unit "min" is the same word in both).
+[I] German: in describe(Cara, "de") every field label and hint, the tab
+    labels and hints, the badges, status, action labels, intro, create label
+    differ from the English ones — except the words that are the same in
+    German: the unit "min", the label "LoRAs" and the tab "Persona".
+[K] Persona settings (editor v2 brief). The clock moves to T0+31 min (Cara's
+    cooldown from [E] has run out). Save through the core
+    (``save_panel_card``) on moonveil: personality "Bold and loud.",
+    dialogue_style "Short, clipped sentences.", presence "   ", task
+    "Guard the harbour.", goals "", pause_routine False, image_backend
+    "flux-local", tpose_backend "", image_loras [moon_face "0.8", moon_face 1
+    (duplicate), "" (no name)] -> ok. By hand:
+      core coercion: image_loras -> [{"name": "moon_face", "strength": 0.8}];
+      stored prompt_overrides = {character_personality: "Bold and loud.",
+        dialogue_style: "Short, clipped sentences.", character_task:
+        "Guard the harbour."} — the raw column has exactly these three keys
+        (empty strings are not stored);
+      stored pause_routine False; imagegen {workflow "flux-local",
+        tpose_workflow "", loras [moon_face 0.8], tpose_loras []}, the raw
+        column only the non-empty keys {workflow, loras};
+      describe values: the same texts under the panel keys, presence "" and
+        goals "", image_backend "flux-local", tpose_backend "", the lists;
+      definitions.load()["moonveil"] carries the same three values.
+    Partial saves: {tpose_backend: "sdxl"} keeps workflow + loras;
+    {personality: ""} drops only character_personality.
+    Transform Cara -> the ``identity.active_persona`` answer carries
+      field_overrides = the stored overrides, pause_routine False, imagegen =
+      the stored dict, suit_items ["suit_top", "cape"] (cape's item was
+      deleted in [F]; the definition still lists it). Appending to the
+      answer's LoRA list leaves definitions.load() untouched. Revert.
+    ``identity.costume_items``: {"suit_top": "moonveil", "cape": "moonveil"};
+      a new persona Sunward (item sun_ring, suit [sun_mask]) adds
+      "sun_mask": "sunward"; Sunward disabled -> back to the moonveil map.
 [J] Deletion test: providers of "transformation" unregistered -> has_panel
     False, describe_panel raises PanelNotFound.
 """
@@ -209,6 +257,7 @@ check("intro", _empty["intro"], "The power belongs to the item: whoever holds it
 check("no cards", _empty["cards"], [])
 check("create keys", [f["key"] for f in _empty["create"]["fields"]], ["item_id", "alias", "description"])
 check("create required", [f["required"] for f in _empty["create"]["fields"]], [True, True, False])
+check("create appearance label", _empty["create"]["fields"][2]["label"], "Persona appearance")
 check("German title", describe(lang="de")["title"], "Verwandlung")
 
 # ── [B] create ──────────────────────────────────────────────────────────────
@@ -246,11 +295,58 @@ check("star badge", _s["badges"], [])
 check("star subtitle", _s["subtitle"], "Held by Kim")
 check("star actions", [(a["id"], a["label"], a["confirm"]) for a in _s["actions"]],
       [("give", "Give Ring to Cara", "Kim loses the item.")])
+check("tabs", [(tb["id"], tb["label"], tb["hint"]) for tb in describe()["tabs"]],
+      [("persona", "Persona", ""), ("transform", "Transformation", ""),
+       ("suit", "Suit & images", ""),
+       ("behaviour", "Behaviour", "Empty = unchanged. Filled = replaces it while transformed."),
+       ("knowers", "In on the secret", "")])
 check("field order", [f["key"] for f in _m["fields"]],
-      ["item_id", "alias", "description", "suit_items", "condition_id", "activation_phrase",
-       "revert_phrase", "max_duration_minutes", "cooldown_minutes", "transform_activity",
-       "enabled", "knowers"])
+      ["item_id", "alias", "enabled", "description",
+       "activation_phrase", "revert_phrase", "max_duration_minutes", "cooldown_minutes",
+       "transform_activity", "condition_id",
+       "suit_items", "image_backend", "tpose_backend", "image_loras", "tpose_loras",
+       "personality", "dialogue_style", "presence", "task", "goals", "pause_routine",
+       "knowers"])
+check("layout", [(f["key"], f["tab"], f["width"], f.get("rows")) for f in _m["fields"]],
+      [("item_id", "persona", "m", None), ("alias", "persona", "m", None),
+       ("enabled", "persona", "s", None), ("description", "persona", "full", 3),
+       ("activation_phrase", "transform", "l", None), ("revert_phrase", "transform", "l", None),
+       ("max_duration_minutes", "transform", "s", None),
+       ("cooldown_minutes", "transform", "s", None),
+       ("transform_activity", "transform", "m", None), ("condition_id", "transform", "l", None),
+       ("suit_items", "suit", "full", None), ("image_backend", "suit", "l", None),
+       ("tpose_backend", "suit", "l", None), ("image_loras", "suit", "l", None),
+       ("tpose_loras", "suit", "l", None),
+       ("personality", "behaviour", "l", 4), ("dialogue_style", "behaviour", "l", 4),
+       ("presence", "behaviour", "l", 3), ("task", "behaviour", "l", 3),
+       ("goals", "behaviour", "l", 3), ("pause_routine", "behaviour", "l", None),
+       ("knowers", "knowers", "full", None)])
 _f = {f["key"]: f for f in _m["fields"]}
+check("appearance label/hint", (_f["description"]["label"], _f["description"]["hint"]),
+      ("Persona appearance", "Body, face and hair as everyone — and every picture — sees them "
+       "while transformed. The suit comes from the suit pieces."))
+check("new labels", [(k, _f[k]["type"], _f[k]["label"]) for k in (
+          "image_backend", "tpose_backend", "image_loras", "tpose_loras", "personality",
+          "dialogue_style", "presence", "task", "goals", "pause_routine")],
+      [("image_backend", "backend", "Image backend"), ("tpose_backend", "backend", "T-pose backend"),
+       ("image_loras", "loras", "LoRAs"), ("tpose_loras", "loras", "T-pose LoRAs"),
+       ("personality", "textarea", "Personality"), ("dialogue_style", "textarea", "Speech"),
+       ("presence", "textarea", "Presence"), ("task", "textarea", "Tasks"),
+       ("goals", "textarea", "Goals"), ("pause_routine", "bool", "Daily routine rests")])
+check("new hints", [_f[k]["hint"] for k in ("image_backend", "tpose_backend", "image_loras",
+                                             "tpose_loras", "presence")],
+      ["Empty = the character's own.", "Empty = image backend.",
+       "Replace the character's LoRAs while transformed.", "Empty = the LoRAs above.",
+       "Also what others sense of the persona."])
+check("lora wiring", [(_f[k]["backend_field"], _f[k]["fallback_field"], _f[k]["target"])
+                      for k in ("image_loras", "tpose_loras")],
+      [("image_backend", "", "render"), ("tpose_backend", "image_backend", "tpose")])
+check("new defaults", {k: _m["values"][k] for k in (
+          "personality", "dialogue_style", "presence", "task", "goals", "pause_routine",
+          "image_backend", "tpose_backend", "image_loras", "tpose_loras")},
+      {"personality": "", "dialogue_style": "", "presence": "", "task": "", "goals": "",
+       "pause_routine": True, "image_backend": "", "tpose_backend": "", "image_loras": [],
+       "tpose_loras": []})
 check("suit filter", _f["suit_items"]["filter"], "outfit")
 check("max unit/min", (_f["max_duration_minutes"]["unit"], _f["max_duration_minutes"]["min"]), ("min", 0))
 check("defaults", {k: _m["values"][k] for k in ("max_duration_minutes", "cooldown_minutes",
@@ -352,11 +448,16 @@ check("stored ids", ids(), ["moonveil"])
 print("[I] German")
 _en, _de = describe(), describe(lang="de")
 _ce, _cd = _en["cards"][0], _de["cards"][0]
+_SAME_IN_GERMAN = {"LoRAs", "Persona"}
 _untranslated = []
 for _a, _b in zip(_ce["fields"], _cd["fields"]):
     for _k in ("label", "hint"):
-        if _a[_k] and _a[_k] == _b[_k]:
+        if _a[_k] and _a[_k] == _b[_k] and _a[_k] not in _SAME_IN_GERMAN:
             _untranslated.append(f"{_a['key']}.{_k}")
+for _a, _b in zip(_en["tabs"], _de["tabs"]):
+    for _k in ("label", "hint"):
+        if _a[_k] and _a[_k] == _b[_k] and _a[_k] not in _SAME_IN_GERMAN:
+            _untranslated.append(f"tab {_a['id']}.{_k}")
 for _k in ("status", "subtitle"):
     if _ce[_k] == _cd[_k]:
         _untranslated.append(_k)
@@ -370,6 +471,80 @@ if _en["create"]["label"] == _de["create"]["label"]:
 if _ce["delete_confirm"] == _cd["delete_confirm"]:
     _untranslated.append("delete_confirm")
 check("every visible string translated", _untranslated, [])
+check("German tab count", len(_de["tabs"]), 5)
+
+# ── [K] persona settings ────────────────────────────────────────────────────
+print("[K] persona settings")
+from app.core import hooks  # noqa: E402
+from app.core.db import get_connection  # noqa: E402
+from app.core.identity_view import PROVIDER_ACTIVE  # noqa: E402
+
+set_game_time(T0 + GameDuration.of(minutes=31))
+_r = save({"personality": "Bold and loud.", "dialogue_style": "Short, clipped sentences.",
+           "presence": "   ", "task": "Guard the harbour.", "goals": "", "pause_routine": False,
+           "image_backend": "flux-local", "tpose_backend": "",
+           "image_loras": [{"name": "moon_face", "strength": "0.8"},
+                           {"name": "moon_face", "strength": 1}, {"name": ""}],
+           "tpose_loras": []}, "moonveil")
+check("save persona settings", _r, {"ok": True, "error": "", "card_id": "moonveil"})
+_OVERRIDES = {"character_personality": "Bold and loud.",
+              "dialogue_style": "Short, clipped sentences.",
+              "character_task": "Guard the harbour."}
+_IMAGE = {"workflow": "flux-local", "tpose_workflow": "",
+          "loras": [{"name": "moon_face", "strength": 0.8}], "tpose_loras": []}
+_row = store.get_definition("moonveil")
+check("stored overrides", _row["prompt_overrides"], _OVERRIDES)
+check("stored pause_routine", _row["pause_routine"], False)
+check("stored imagegen", _row["imagegen"], _IMAGE)
+_raw = get_connection().execute("SELECT prompt_overrides, pause_routine, imagegen FROM "
+                                "transformation_definitions WHERE id='moonveil'").fetchone()
+check("raw overrides: no empty strings", json.loads(_raw[0]), _OVERRIDES)
+check("raw pause_routine", _raw[1], 0)
+check("raw imagegen: only set keys", json.loads(_raw[2]),
+      {"workflow": "flux-local", "loras": [{"name": "moon_face", "strength": 0.8}]})
+_v = card("moonveil")["values"]
+check("describe values", {k: _v[k] for k in (
+          "personality", "dialogue_style", "presence", "task", "goals", "pause_routine",
+          "image_backend", "tpose_backend", "image_loras", "tpose_loras")},
+      {"personality": "Bold and loud.", "dialogue_style": "Short, clipped sentences.",
+       "presence": "", "task": "Guard the harbour.", "goals": "", "pause_routine": False,
+       "image_backend": "flux-local", "tpose_backend": "",
+       "image_loras": [{"name": "moon_face", "strength": 0.8}], "tpose_loras": []})
+_d = definitions.load()["moonveil"]
+check("definition values", (_d.prompt_overrides, _d.pause_routine, _d.imagegen),
+      (_OVERRIDES, False, _IMAGE))
+check("partial save: T-pose backend", save({"tpose_backend": "sdxl"}, "moonveil")["ok"], True)
+_IMAGE = {**_IMAGE, "tpose_workflow": "sdxl"}
+check("image kept beside it", store.get_definition("moonveil")["imagegen"], _IMAGE)
+check("clear personality", save({"personality": ""}, "moonveil")["ok"], True)
+_OVERRIDES = {k: v for k, v in _OVERRIDES.items() if k != "character_personality"}
+check("only personality dropped", store.get_definition("moonveil")["prompt_overrides"], _OVERRIDES)
+
+check("transform for the provider", act("moonveil", "transform")["ok"], True)
+_ans = hooks.get_provider(PROVIDER_ACTIVE)("Cara")
+check("answer: new keys", {k: _ans.get(k) for k in ("field_overrides", "pause_routine",
+                                                    "imagegen", "suit_items")},
+      {"field_overrides": _OVERRIDES, "pause_routine": False, "imagegen": _IMAGE,
+       "suit_items": ["suit_top", "cape"]})
+_ans["imagegen"]["loras"].append({"name": "x", "strength": 1.0})
+_ans["field_overrides"]["character_goals"] = "x"
+check("answer is a copy", (definitions.load()["moonveil"].imagegen,
+                           definitions.load()["moonveil"].prompt_overrides),
+      (_IMAGE, _OVERRIDES))
+check("revert", act("moonveil", "revert")["ok"], True)
+
+_costume = hooks.get_provider("identity.costume_items")
+check("costume_items registered", _costume is not None, True)
+check("costume map", _costume(), {"suit_top": "moonveil", "cape": "moonveil"})
+inventory.add_item("Sun ring", item_id="sun_ring")
+inventory.add_item("Sun mask", category="outfit_piece", item_id="sun_mask",
+                   outfit_piece={"slots": ["head"]})
+check("create Sunward", save({"item_id": "sun_ring", "alias": "Sunward"})["card_id"], "sunward")
+check("Sunward suit", save({"suit_items": ["sun_mask"]}, "sunward")["ok"], True)
+check("costume map with Sunward", _costume(),
+      {"suit_top": "moonveil", "cape": "moonveil", "sun_mask": "sunward"})
+check("disable Sunward", save({"enabled": False}, "sunward")["ok"], True)
+check("disabled persona skipped", _costume(), {"suit_top": "moonveil", "cape": "moonveil"})
 
 # ── [J] deletion test ───────────────────────────────────────────────────────
 print("[J] package providers removed")

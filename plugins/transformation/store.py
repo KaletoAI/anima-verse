@@ -8,6 +8,10 @@ Three package tables (prefix ``transformation_``):
   the reset store: a memory wipe of a character never touches world content.
   Rows are stored as written; the usability rules (disabled, incomplete,
   alias clash) belong to ``definitions.load()``, the save rules to the panel.
+  The persona settings added later (``prompt_overrides``, ``pause_routine``,
+  ``imagegen``) are brought into an existing table by ``ensure_schema``
+  (``PRAGMA table_info`` + ``ALTER TABLE ADD COLUMN``); a fresh table creates
+  them in the same order, so both shapes are identical.
 * ``transformation_active`` / ``transformation_cooldown`` — per-character
   state. The character column is named ``character_name`` so the
   character-deletion sweep (``app.models.character.delete_character``)
@@ -49,12 +53,31 @@ _lock = threading.Lock()
 _generation = 0
 _cache: Optional[Dict[str, ActiveRow]] = None
 
+#: Columns of ``transformation_definitions`` added after the table first
+#: shipped, in table order: ``ensure_schema`` creates them with a fresh table
+#: and appends the missing ones to an existing table.
+_ADDED_DEFINITION_COLUMNS = (
+    ("prompt_overrides", "TEXT NOT NULL DEFAULT '{}'"),
+    ("pause_routine", "INTEGER NOT NULL DEFAULT 1"),
+    ("imagegen", "TEXT NOT NULL DEFAULT '{}'"),
+)
+
+#: The character prompt fields a persona may replace while it is worn
+#: (``prompt_overrides``; empty = the character's own value stays).
+OVERRIDE_KEYS = ("character_personality", "dialogue_style", "character_presence",
+                 "character_task", "character_goals")
+
+#: The image settings of a persona (``imagegen``): backend names and LoRA lists.
+IMAGEGEN_TEXT_KEYS = ("workflow", "tpose_workflow")
+IMAGEGEN_LORA_KEYS = ("loras", "tpose_loras")
+
 
 def ensure_schema() -> None:
     from plugins.transformation.definitions import (DEFAULT_COOLDOWN_MINUTES,
                                                     DEFAULT_MAX_DURATION_MINUTES,
                                                     DEFAULT_TRANSFORM_ACTIVITY)
     activity = DEFAULT_TRANSFORM_ACTIVITY.replace("'", "''")
+    added = "".join(f",\n            {name} {decl}" for name, decl in _ADDED_DEFINITION_COLUMNS)
     with transaction() as conn:
         conn.execute(f"""CREATE TABLE IF NOT EXISTS transformation_definitions (
             id TEXT PRIMARY KEY,
@@ -69,7 +92,13 @@ def ensure_schema() -> None:
             cooldown_minutes INTEGER NOT NULL DEFAULT {int(DEFAULT_COOLDOWN_MINUTES)},
             transform_activity TEXT NOT NULL DEFAULT '{activity}',
             enabled INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT NOT NULL DEFAULT '')""")
+            updated_at TEXT NOT NULL DEFAULT ''{added})""")
+        # A table from before the persona settings: add what it lacks (appended,
+        # the same order the CREATE above uses).
+        have = {r[1] for r in conn.execute("PRAGMA table_info(transformation_definitions)")}
+        for name, decl in _ADDED_DEFINITION_COLUMNS:
+            if name not in have:
+                conn.execute(f"ALTER TABLE transformation_definitions ADD COLUMN {name} {decl}")
         conn.execute("""CREATE TABLE IF NOT EXISTS transformation_active (
             character_name TEXT PRIMARY KEY,
             persona_id TEXT NOT NULL,
@@ -194,14 +223,12 @@ def delete_character_rows(conn, bearer: str) -> int:
 # Persona definitions
 # ---------------------------------------------------------------------------
 
-#: The columns of a definition row besides ``id``, in table order.
+#: The written columns of a definition row (all but ``id`` and ``updated_at``).
 DEFINITION_FIELDS = (
     "item_id", "alias", "description", "activation_phrase", "revert_phrase",
     "suit_items", "condition_id", "max_duration_minutes", "cooldown_minutes",
-    "transform_activity", "enabled",
+    "transform_activity", "enabled", "prompt_overrides", "pause_routine", "imagegen",
 )
-_TEXT_FIELDS = frozenset({"item_id", "alias", "description", "activation_phrase",
-                          "revert_phrase", "condition_id", "transform_activity"})
 _INT_FIELDS = frozenset({"max_duration_minutes", "cooldown_minutes"})
 
 _def_lock = threading.Lock()
@@ -233,23 +260,85 @@ def _suit_list(value: Any) -> List[str]:
     return out
 
 
+def normalize_overrides(value: Any) -> Dict[str, str]:
+    """Prompt overrides as stored and read: only ``OVERRIDE_KEYS``, stripped
+    strings, empty ones left out (empty = the character's own value)."""
+    out: Dict[str, str] = {}
+    if isinstance(value, dict):
+        for key in OVERRIDE_KEYS:
+            text = value.get(key)
+            text = text.strip() if isinstance(text, str) else ""
+            if text:
+                out[key] = text
+    return out
+
+
+def _lora_list(value: Any) -> List[Dict[str, Any]]:
+    """LoRA entries ``{"name", "strength"}``: a non-empty name, a numeric
+    strength (anything else 1.0), the first entry of a name wins."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for entry in value if isinstance(value, (list, tuple)) else ():
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        strength = entry.get("strength")
+        try:
+            strength = 1.0 if isinstance(strength, bool) else float(strength)
+        except (TypeError, ValueError):
+            strength = 1.0
+        out.append({"name": name, "strength": strength})
+    return out
+
+
+def normalize_imagegen(value: Any) -> Dict[str, Any]:
+    """Image settings in their full read shape: ``workflow`` /
+    ``tpose_workflow`` (backend names, ``""`` = the character's own resp. the
+    image backend) and ``loras`` / ``tpose_loras`` (lists; an empty ``loras``
+    = no LoRA while transformed, an empty ``tpose_loras`` = ``loras``)."""
+    value = value if isinstance(value, dict) else {}
+    out: Dict[str, Any] = {}
+    for key in IMAGEGEN_TEXT_KEYS:
+        text = value.get(key)
+        out[key] = text.strip() if isinstance(text, str) else ""
+    for key in IMAGEGEN_LORA_KEYS:
+        out[key] = _lora_list(value.get(key))
+    return out
+
+
 def _column_value(name: str, value: Any) -> Any:
     if name == "suit_items":
         return json.dumps(_suit_list(value), ensure_ascii=False)
-    if name == "enabled":
+    if name in ("enabled", "pause_routine"):
         return 1 if value else 0
     if name in _INT_FIELDS:
         return max(0, int(value))
+    if name == "prompt_overrides":
+        return json.dumps(normalize_overrides(value), ensure_ascii=False)
+    if name == "imagegen":
+        # Only the keys that are set; the read fills in the rest.
+        return json.dumps({k: v for k, v in normalize_imagegen(value).items() if v},
+                          ensure_ascii=False)
     return "" if value is None else str(value).strip()
 
 
 def _definition_row(r) -> Dict[str, Any]:
+    c = dict(zip(("id",) + DEFINITION_FIELDS + ("updated_at",), r))
     return {
-        "id": r[0], "item_id": r[1] or "", "alias": r[2] or "", "description": r[3] or "",
-        "activation_phrase": r[4] or "", "revert_phrase": r[5] or "",
-        "suit_items": _suit_list(_json(r[6], [])), "condition_id": r[7] or "",
-        "max_duration_minutes": int(r[8] or 0), "cooldown_minutes": int(r[9] or 0),
-        "transform_activity": r[10] or "", "enabled": bool(r[11]), "updated_at": r[12] or "",
+        "id": c["id"], "item_id": c["item_id"] or "", "alias": c["alias"] or "",
+        "description": c["description"] or "",
+        "activation_phrase": c["activation_phrase"] or "", "revert_phrase": c["revert_phrase"] or "",
+        "suit_items": _suit_list(_json(c["suit_items"], [])), "condition_id": c["condition_id"] or "",
+        "max_duration_minutes": int(c["max_duration_minutes"] or 0),
+        "cooldown_minutes": int(c["cooldown_minutes"] or 0),
+        "transform_activity": c["transform_activity"] or "", "enabled": bool(c["enabled"]),
+        "prompt_overrides": normalize_overrides(_json(c["prompt_overrides"], {})),
+        "pause_routine": bool(c["pause_routine"]),
+        "imagegen": normalize_imagegen(_json(c["imagegen"], {})),
+        "updated_at": c["updated_at"] or "",
     }
 
 

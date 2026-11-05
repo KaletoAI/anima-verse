@@ -1248,7 +1248,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `sleep` | `sleep`, `wakeup` | Schlaf-Flag setzen und den Charakter währenddessen von der Karte nehmen |
 | `take_photo` | `image_generation` | Der Charakter macht ein Foto / erzeugt ein Bild (Verb über den Core-Bild-Service) |
 | `talk_to` | `talk_to` | Dialog von Angesicht zu Angesicht, in Hörweite |
-| `transformation` | `transform`, `revert`, `reveal_identity` | Transformation through a power item into a persona with an alias; non-knowers perceive only the alias. Personas are rows of the package table `transformation_definitions`, edited in the package's character panel (Game-Admin → Characters → <character> → Skills → Transformation); `on_load` creates the `transformation_*` tables and registers the `identity.active_persona` / `identity.knows` / `identity.persona_names` providers, the panel provider `character_panel:transformation` and a reinit reset store. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in the same panel (details: [Package `transformation`](#package-transformation)) |
+| `transformation` | `transform`, `revert`, `reveal_identity` | Transformation through a power item into a persona with an alias; non-knowers perceive only the alias. Personas are rows of the package table `transformation_definitions`, edited in the package's character panel (Game-Admin → Characters → <character> → Skills → Transformation); `on_load` creates the `transformation_*` tables and registers the `identity.active_persona` / `identity.knows` / `identity.persona_names` / `identity.costume_items` providers, the panel provider `character_panel:transformation` and a reinit reset store. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in the same panel (details: [Package `transformation`](#package-transformation)) |
 | `undress` | `undress`, `get_dressed` | Aus-/Anziehen für Freitext-Garderoben |
 | `wet` | `enter_water`, `dry_off` | Nässe-Zustand — Schwimm-Ausnahme solange nass, Auto-Trocknung per TTL |
 
@@ -1269,10 +1269,13 @@ comes from world content.
 
 **Editor** — Game-Admin → Characters → <character> → Skills → **Transformation** (the package's character
 panel, `panel.py`; contract in [Character panels](#character-panels)). One card per persona of the world —
-those whose power item the opened character holds first, badge "holds the item" — with pickers instead of
-ids (power item, suit pieces, condition), the knowers as character checkboxes ("In on the secret", i.e. the
-knowers of (persona, opened character)), a status line (ordinary self / transformed since … / on cooldown
-until …) and test actions: **Transform now** (engine source `admin`; a refusal shows the engine's reason),
+those whose power item the opened character holds first, badge "holds the item" — in five tabs: **Persona**
+(power item, alias, enabled, persona appearance), **Transformation** (phrases, durations, activity, effect),
+**Suit & images** (suit pieces, image backend, T-pose backend, LoRAs, T-pose LoRAs — picked from lists, the
+LoRA lists scoped to the chosen backend), **Behaviour** (personality, speech, presence, tasks, goals, "Daily
+routine rests"; empty = unchanged, filled = replaces it while transformed) and **In on the secret** (the
+knowers of (persona, opened character) as character checkboxes). Pickers instead of ids, a status line
+(ordinary self / transformed since … / on cooldown until …) and test actions: **Transform now** (engine source `admin`; a refusal shows the engine's reason),
 **Revert now**, **Give <item> to <character>** (moves the item from its current holder). There is no Setup
 section and no config key: the persona belongs to its ITEM, so the same cards show on every character.
 
@@ -1284,7 +1287,7 @@ store, a character reset never touches it), one row per persona:
 | `id` | Stable persona id, a slug of the alias at creation (`moonveil`, `moonveil_2`, …); renaming the alias keeps it |
 | `item_id` | The power item (UNIQUE — one persona per item). Whoever carries it can transform; the power travels with the item |
 | `alias` | The name non-knowers perceive. While the persona is enabled no character can be created or imported under it (`identity.persona_names` → `validate_character_name` code `reserved`) |
-| `description` | What non-knowers perceive instead of the real appearance (may be empty — it still masks) |
+| `description` | "Persona appearance": body, face and hair while transformed — what non-knowers perceive instead of the real appearance (may be empty — it still masks); the suit comes from `suit_items` |
 | `activation_phrase` / `revert_phrase` | What the avatar says to transform / to return (see below) |
 | `suit_items` | JSON list of item ids worn while transformed; the outfit worn before is restored on revert |
 | `condition_id` | Condition applied while transformed (prompt/image/stat modifiers); empty = none |
@@ -1292,9 +1295,14 @@ store, a character reset never touches it), one row per persona:
 | `cooldown_minutes` | GAME minutes after a revert before the same bearer can use this persona again; default 30 |
 | `transform_activity` | Activity shown while the transformation takes place; default `transforming` |
 | `enabled` | Default on; off takes the persona out of the world and frees its alias (a worn one ends on the next tick) |
+| `prompt_overrides` | JSON object of the character prompt fields the persona replaces while worn — keys exactly `character_personality`, `dialogue_style`, `character_presence`, `character_task`, `character_goals` (panel: Personality, Speech, Presence, Tasks, Goals); an empty value is not stored and leaves the character's own. Default `{}` |
+| `pause_routine` | "Daily routine rests" while worn; default on |
+| `imagegen` | JSON object of the image settings while worn: `workflow` / `tpose_workflow` (backend names; empty = the character's own resp. the image backend), `loras` / `tpose_loras` (`[{"name", "strength"}]`; the persona's LoRAs replace the character's, an empty `tpose_loras` = `loras`). Only set keys are stored; reads fill in the empty shape. Default `{}` |
 | `updated_at` | SYSTEM stamp of the last write |
 
-The defaults are the constants in `definitions.py`. **Save rules** (refused inline in the panel, nothing
+The defaults are the constants in `definitions.py`. A table from before the last three columns is migrated by
+`store.ensure_schema` (`PRAGMA table_info` + `ALTER TABLE … ADD COLUMN`, on every package load;
+`scripts/smoke_transformation_store_migration.py`). **Save rules** (refused inline in the panel, nothing
 saved): power item and alias required; the alias passes the character-name rule (its own current alias
 excepted from the persona-name refusal), is not an existing character's name and not another persona's alias
 (casefold); the item is not bound to another persona and exists when it is (re)chosen; minutes ≥ 0; the alias
@@ -1325,7 +1333,13 @@ avatar alone.
 
 **Core surface it uses**:
 - providers `identity.active_persona`, `identity.knows`, `identity.persona_names` (owner
-  `transformation`), read through `app.core.identity_view` (`docs/skill-core-api.md` § Identity view);
+  `transformation`), read through `app.core.identity_view` (`docs/skill-core-api.md` § Identity view).
+  Besides the identity keys the `identity.active_persona` answer carries the worn persona's settings as
+  copies: `field_overrides` (= `prompt_overrides`), `pause_routine`, `imagegen` (full shape) and
+  `suit_items` (list of item ids);
+- provider `identity.costume_items` (owner `transformation`): `() -> {suit item id: persona id}` over every
+  enabled, usable persona (an item in two suits belongs to the older persona) — the suit pieces of the
+  costume lock;
 - events `character.prompt_context` (chat / NPC prompts) and `character.thought_context` (thought prompt)
   for the identity lines — the bearer's "You are currently <alias>. Only … knows …" and a knower's
   "<alias> here is actually <name>. … do not know — …". Both land in the scene state, never in the stable
