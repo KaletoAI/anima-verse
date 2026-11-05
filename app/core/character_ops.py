@@ -942,25 +942,33 @@ def build_memory_history(character_name: str,
     Every date key here is a GAME calendar key (``Y0002-D109`` /
     ``Y0002-W016`` / ``Y0002-S01``); the server ships the readable ``label``
     alongside it so the client never has to know the world calendar.
+
+    A linked body shows its MIND's stores like every other reader: the general
+    day entries (partner ''), the rollups and the diary are its leader's, the
+    per-partner day summaries and the conversation history its own.
     """
     from app.core.db import get_connection
+    from app.core.linked_characters import mind_of
     import json as _json
 
     conn = get_connection()
+    mind = mind_of(character_name)
 
     if kind == "daily":
-        rows = conn.execute("""
+        daily_where = ("kind='daily' AND ((character_name=? AND partner<>'') "
+                       "OR (character_name=? AND partner=''))")
+        rows = conn.execute(f"""
             SELECT date_key, partner, content
             FROM summaries
-            WHERE character_name=? AND kind='daily'
+            WHERE {daily_where}
             ORDER BY date_key DESC, partner ASC
             LIMIT ? OFFSET ?
-        """, (character_name, limit, offset)).fetchall()
+        """, (character_name, mind, limit, offset)).fetchall()
         items = [{"date": r[0], "label": _day_key_label(r[0], lang),
                   "partner": r[1] or "", "content": r[2]} for r in rows]
         total = conn.execute(
-            "SELECT COUNT(*) FROM summaries WHERE character_name=? AND kind='daily'",
-            (character_name,),
+            f"SELECT COUNT(*) FROM summaries WHERE {daily_where}",
+            (character_name, mind),
         ).fetchone()[0]
         return {"character": character_name, "kind": kind,
                 "total": total, "limit": limit, "offset": offset, "items": items}
@@ -992,7 +1000,7 @@ def build_memory_history(character_name: str,
             WHERE character_name=?
             ORDER BY game_ts DESC, ts DESC
             LIMIT ? OFFSET ?
-        """, (character_name, limit, offset)).fetchall()
+        """, (mind, limit, offset)).fetchall()
         items = []
         for r in rows:
             try: tags = _json.loads(r[4] or "[]")
@@ -1004,7 +1012,7 @@ def build_memory_history(character_name: str,
                           "content": r[3], "tags": tags})
         total = conn.execute(
             "SELECT COUNT(*) FROM diary_entries WHERE character_name=?",
-            (character_name,),
+            (mind,),
         ).fetchone()[0]
         return {"character": character_name, "kind": kind,
                 "total": total, "limit": limit, "offset": offset, "items": items}

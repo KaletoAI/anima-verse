@@ -208,6 +208,19 @@ export function CharactersTab() {
   const [freshOpen, setFreshOpen] = useState(false)
   const [freshIntro, setFreshIntro] = useState('')
   const [freshing, setFreshing] = useState(false)
+  // Leader whose MIND a linked body shares ('' = not linked). Fetched when a
+  // wipe/fresh-start confirmation opens: memories, thoughts, secrets and the
+  // diary are the leader's and stay (ruling R3 of the linked characters).
+  const [mindOwner, setMindOwner] = useState('')
+  useEffect(() => {
+    setMindOwner('')
+    if (!selected || !(confirmWipe || freshOpen)) return
+    let alive = true
+    apiGet<{ leader?: string }>(`/characters/${encodeURIComponent(selected)}/link`)
+      .then(s => { if (alive) setMindOwner(s?.leader || '') })
+      .catch(() => { /* no link info: the plain confirmation stays */ })
+    return () => { alive = false }
+  }, [selected, confirmWipe, freshOpen])
   const [consolidating, setConsolidating] = useState(false)
 
   useEffect(() => {
@@ -385,12 +398,15 @@ export function CharactersTab() {
     if (!selected || freshing) return
     setFreshing(true)
     try {
-      const r = await apiPost<{ errors?: { store: string; error: string }[] }>(
+      const r = await apiPost<{ errors?: { store: string; error: string }[]; mind_owner?: string }>(
         `/characters/${encodeURIComponent(selected)}/fresh-start`, { intro: freshIntro.trim() })
       if (r.errors?.length) {
         toast(t('Fresh start incomplete: {n} reset errors')
           .replace('{n}', String(r.errors.length)) + ': ' +
           r.errors.map(e => `${e.store}: ${e.error}`).join('; '), 'error')
+      } else if (r.mind_owner) {
+        toast(t("{name} starts fresh — memories, thoughts, secrets and diary stay with {leader}'s mind")
+          .replace('{name}', selected).replace('{leader}', r.mind_owner))
       } else {
         toast(t('{name} starts fresh').replace('{name}', selected))
       }
@@ -413,12 +429,15 @@ export function CharactersTab() {
     if (!selected || wiping) return
     setWiping(true)
     try {
-      const r = await apiPost<{ memories?: number; summaries?: number; errors?: { store: string; error: string }[] }>(
+      const r = await apiPost<{ memories?: number; summaries?: number; mind_owner?: string; errors?: { store: string; error: string }[] }>(
         `/characters/${encodeURIComponent(selected)}/memory/wipe`, {})
       if (r.errors?.length) {
         toast(t('Memory partially wiped: {n} reset errors')
           .replace('{n}', String(r.errors.length)) + ': ' +
           r.errors.map(e => `${e.store}: ${e.error}`).join('; '), 'error')
+      } else if (r.mind_owner) {
+        toast(t("Body memory of {name} wiped — memories, thoughts, secrets and diary stay with {leader}'s mind")
+          .replace('{name}', selected).replace('{leader}', r.mind_owner))
       } else {
         toast(t('Memory wiped: {m} memories, {s} summaries')
           .replace('{m}', String(r.memories ?? 0))
@@ -904,6 +923,7 @@ export function CharactersTab() {
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
                         {t('Wipe ALL memory of {name}? Memories, summaries, rollups and the whole day timeline (diary, thoughts, mood/state history) — chat history stays. Irreversible.').replace('{name}', selected)}
+                        {mindOwner ? ' ' + t("Memories, thoughts, secrets and diary belong to {leader}'s mind and stay.").replace('{leader}', mindOwner) : null}
                       </span>
                       <button className="ga-btn ga-btn-sm ga-btn-danger" disabled={wiping} onClick={() => { void wipeMemory() }}>
                         {wiping ? t('Wiping…') : t('Wipe')}
@@ -942,6 +962,11 @@ export function CharactersTab() {
                           <p>
                             {t('Kept: profile, authored soul files, outfits, inventory, manual secrets, daily routine, gallery. Other characters keep their own memories of it.')}
                           </p>
+                          {mindOwner ? (
+                            <p style={{ color: '#e0a356' }}>
+                              {t("Memories, thoughts, secrets and diary belong to {leader}'s mind and stay.").replace('{leader}', mindOwner)}
+                            </p>
+                          ) : null}
                           <label style={{ display: 'block', fontSize: '0.85em', opacity: 0.8, marginBottom: 4 }}>
                             {t('Starting memory')}
                           </label>

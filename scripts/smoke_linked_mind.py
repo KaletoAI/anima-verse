@@ -79,6 +79,12 @@ WHAT FOLLOWS BY HAND
     {"": "General.", "Luna": "Talked with Luna."}. chat_retention
     _summarized_keys(Glut) daily set contains Tilda's day key from [E] and
     "Y0001-D050".
+    The admin History tab reads the same way:
+    character_ops.build_memory_history(Glut, "daily") lists the mind's
+    general entry ("", "General.") AND Glut's own Luna row, and
+    build_memory_history(Glut, "diary") has the same total as Tilda's (>= 1,
+    the [D] entry).
+
 [G] Prompts. _build_chat_prompt(Glut, partner Luna).system contains "You are
     also Tilda — one mind in another body" exactly once, in the IDENTITY part
     (after "=== YOUR IDENTITY ==="), not in the scene state; Luna's system
@@ -386,6 +392,15 @@ _daily = chat_retention._summarized_keys("Glut")[0]
 _tilda_days = {r[0] for r in db.get_connection().execute(
     "SELECT date_key FROM summaries WHERE character_name='Tilda' AND kind='daily'")}
 check("retention sees the mind's days", _tilda_days <= _daily and "Y0001-D050" in _daily, True)
+from app.core import character_ops as _cops
+_hist = _cops.build_memory_history("Glut", "daily", limit=200)
+_d050 = sorted((i["partner"], i["content"]) for i in _hist["items"] if i["date"] == "Y0001-D050")
+check("History tab of the body: mind's general entry + own partner row", _d050,
+      [("", "General."), ("Luna", "Talked with Luna.")])
+_diary_glut = _cops.build_memory_history("Glut", "diary")["total"]
+check("History tab diary of the body is the mind's",
+      (_diary_glut, _diary_glut >= 1),
+      (_cops.build_memory_history("Tilda", "diary")["total"], True))
 
 # ── [G] prompts ─────────────────────────────────────────────────────────────
 section("[G] prompts")
