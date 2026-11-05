@@ -15,6 +15,10 @@ import { loadCharacters } from '../../lib/refs'
  *   GET /characters/{c}/relationships/addresses
  *   PUT /characters/{c}/relationships/{other}/address  ({outgoing?, incoming?})
  * Both are admin-only: this is world authoring.
+ *
+ * A linked body addresses others as its mind does: its own direction is the
+ * leader's value (read and written there by the server), marked "from
+ * <leader>". Members of one family never form a pair with each other.
  */
 
 const MAX_LEN = 120
@@ -22,6 +26,8 @@ const MAX_LEN = 120
 interface AddressItem {
   other: string
   outgoing: string
+  /** The leader whose address the body's own direction is ("" if none). */
+  outgoing_from?: string
   incoming: string
   type: string
   strength: number
@@ -38,15 +44,17 @@ export function RelationshipAddresses({ character }: { character: string }) {
   const [draft, setDraft] = useState<Record<string, RowState>>({})
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string>('')
+  const [family, setFamily] = useState<string[]>([])
   const [names, setNames] = useState<string[]>([])
   const [picked, setPicked] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const d = await apiGet<{ items?: AddressItem[] }>(`/characters/${enc}/relationships/addresses`)
+      const d = await apiGet<{ items?: AddressItem[]; family?: string[] }>(`/characters/${enc}/relationships/addresses`)
       const list = d.items || []
       setItems(list)
+      setFamily(d.family || [])
       const next: Record<string, RowState> = {}
       for (const it of list) next[it.other] = { outgoing: it.outgoing, incoming: it.incoming }
       setDraft(next)
@@ -67,8 +75,10 @@ export function RelationshipAddresses({ character }: { character: string }) {
 
   const known = useMemo(() => new Set(items.map((i) => i.other)), [items])
   const addable = useMemo(
-    () => names.filter((n) => n !== character && !known.has(n)).sort((a, b) => a.localeCompare(b)),
-    [names, character, known],
+    () => names
+      .filter((n) => n !== character && !known.has(n) && !family.includes(n))
+      .sort((a, b) => a.localeCompare(b)),
+    [names, character, known, family],
   )
 
   const save = async (other: string) => {
@@ -172,6 +182,11 @@ export function RelationshipAddresses({ character }: { character: string }) {
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.82em' }}>
                     <span style={{ opacity: 0.7 }}>
                       {t('How {a} addresses {b}').replace('{a}', character).replace('{b}', it.other)}
+                      {it.outgoing_from && (
+                        <em style={{ marginLeft: 6, opacity: 0.85 }}>
+                          {t('from {leader} (one mind)').replace('{leader}', it.outgoing_from)}
+                        </em>
+                      )}
                     </span>
                     <input
                       className="ga-input"

@@ -177,14 +177,17 @@ def handle_relationship_decay(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not touched:
             continue
 
-        # Re-classify the type after the decay
-        from app.models.relationship import are_romantically_compatible
+        # Re-classify the type after the decay (a linked body's side reads
+        # its own sentiment from the leader row — ruling R1)
+        from app.models.relationship import (are_romantically_compatible,
+                                             row_sentiments)
         compatible = are_romantically_compatible(
             rel.get("character_a", ""), rel.get("character_b", ""))
+        sent_ab, sent_ba = row_sentiments(rel)
         rel["type"] = classify_type(
             rel.get("strength", 0),
-            rel.get("sentiment_a_to_b", 0),
-            rel.get("sentiment_b_to_a", 0),
+            sent_ab,
+            sent_ba,
             rel.get("romantic_tension", 0),
             romantic_compatible=compatible)
 

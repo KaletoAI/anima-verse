@@ -259,16 +259,12 @@ def _relationship_line(invitee: str, inviter: str) -> str:
     neutral = f"{invitee} and {inviter} do not know each other well yet."
     try:
         from app.models.relationship import (TYPE_LABELS, get_relationship,
-                                             sentiment_label)
+                                             own_sentiment, sentiment_label)
         rel = get_relationship(invitee, inviter)
         if not rel:
             return neutral
-        # The row keeps the pair in stored order: a_to_b is character_a's
-        # feeling toward character_b. Pick the invitee's own direction.
-        if str(rel.get("character_a") or "").lower() == invitee.lower():
-            sentiment = rel.get("sentiment_a_to_b", 0.0)
-        else:
-            sentiment = rel.get("sentiment_b_to_a", 0.0)
+        # The invitee's own direction (a linked body's comes from its mind).
+        sentiment = own_sentiment(invitee, inviter, rel=rel)
         rtype = str(rel.get("type") or "neutral")
         label = TYPE_LABELS.get(rtype, rtype).lower()
         strength = int(rel.get("strength") or 0)

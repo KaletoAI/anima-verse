@@ -188,6 +188,9 @@ _fake.load_relationships = lambda: _store["rels"]
 _fake.save_relationships = lambda rels: _store.__setitem__("saved", True)
 _fake.are_romantically_compatible = lambda a, b: True
 _fake.classify_type = REAL_CLASSIFY
+# No linked bodies in this fixture: the classification reads the stored pair.
+_fake.row_sentiments = lambda rel: (rel.get("sentiment_a_to_b", 0),
+                                    rel.get("sentiment_b_to_a", 0))
 sys.modules["app.models.relationship"] = _fake
 
 from app.core import relationship_decay as RD  # noqa: E402

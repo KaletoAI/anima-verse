@@ -4370,7 +4370,8 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
     avatar = (avatar or "").strip()
     if not avatar:
         return {}
-    from app.models.relationship import get_character_relationships
+    from app.models.relationship import (get_character_relationships,
+                                         own_sentiment, visible_to)
     try:
         rels = get_character_relationships(avatar)
     except Exception as e:
@@ -4378,6 +4379,10 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
         return {}
     out: Dict[str, Dict[str, Any]] = {}
     for r in rels:
+        # A leader row that only carries another mind's side is no
+        # relationship of the avatar's (it never met that leader).
+        if not visible_to(r, avatar):
+            continue
         # Partner = the other side. _row_to_rel fills character_a/b with
         # from_char/to_char (DB order); we want the non-self name.
         a = r.get("character_a") or ""
@@ -4385,10 +4390,9 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
         partner = (b if a == avatar else a).strip()
         if not partner:
             continue
-        # a_to_b is the sentiment from a towards b — flip it to the avatar's
-        # point of view when the avatar is the b side.
-        sentiment = (r.get("sentiment_a_to_b", 0.0) if a == avatar
-                     else r.get("sentiment_b_to_a", 0.0))
+        # The avatar's own feeling — a linked body feels with its mind, so
+        # the value comes from the leader row (ruling R1).
+        sentiment = own_sentiment(avatar, partner, rel=r)
         out[partner] = {
             "type": r.get("type", "neutral"),
             "strength": r.get("strength", 10),

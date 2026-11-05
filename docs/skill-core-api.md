@@ -385,8 +385,10 @@ liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getri
 | Funktion | Semantik |
 |---|---|
 | `get_relationship(char_a, char_b, *, strict=False) -> Optional[Dict]` | Exact pair data; strict storage/decoding failures propagate, while a successful absent row remains `None` |
-| `record_interaction(char_a, char_b, …)` | Eine Interaktion verbuchen (Sentiment/Stärke) |
-| `get_address(speaker, addressee) -> str` | Anrede-Freitext DIESER Richtung des Paares (`""` wenn nichts gesetzt) |
+| `record_interaction(char_a, char_b, …)` | Eine Interaktion verbuchen (Sentiment/Stärke). A linked body's OWN delta goes to its leader row (leader, other) and touches that row's `last_interaction_game`; everything else stays on the body row. No-op between two members of one family |
+| `own_sentiment(speaker, other, *, rel=None) -> float` | How `speaker` feels about `other` (-1..1, `0.0` without a row). THE reader of "my own direction" — never pick `sentiment_a_to_b`/`_b_to_a` by hand: a linked body's feeling lives on its leader row. `rel` = the (speaker, other) row when already held. Only the speaker is mapped to its mind |
+| `visible_to(rel, name) -> bool` | Whether a row is a relationship of `name`: a `mind_only` leader row (created because a body acted) belongs to that mind's family only |
+| `get_address(speaker, addressee) -> str` | Anrede-Freitext DIESER Richtung des Paares (`""` wenn nichts gesetzt); a linked body's own direction is its leader's |
 | `address_line(speaker, addressee) -> str` | Dieselbe Angabe als fertige Prompt-Zeile `Form of address: …` (`""` wenn nichts gesetzt) |
 | `get_romantic_interests(character_name) -> str` | Freitext-Interessen aus dem Profil |
 | `are_romantically_compatible(char_a, char_b) -> bool` | Fragt den Capability-Provider `romantic_compatibility` (siehe „Hooks"); ohne Paket immer `True` |

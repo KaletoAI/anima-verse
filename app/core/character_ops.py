@@ -749,7 +749,8 @@ def build_memory_relationships(character_name: str,
     the client never formats a game stamp itself. The system stamp is not in
     the payload; nothing here sorts or filters by it.
     """
-    from app.models.relationship import get_character_relationships
+    from app.models.relationship import (get_character_relationships,
+                                         own_sentiment, visible_to)
     from app.models.memory import load_memories
     from collections import Counter
 
@@ -779,14 +780,14 @@ def build_memory_relationships(character_name: str,
         partner = b if a == character_name else a
         if existing and partner not in existing:
             continue
-        # Flip the sentiment to the calling character's point of view if
-        # needed: a_to_b is the sentiment from a towards b.
-        if a == character_name:
-            self_sent = r.get("sentiment_a_to_b", 0.0)
-            other_sent = r.get("sentiment_b_to_a", 0.0)
-        else:
-            self_sent = r.get("sentiment_b_to_a", 0.0)
-            other_sent = r.get("sentiment_a_to_b", 0.0)
+        # A leader row that only carries another mind's side: never met.
+        if not visible_to(r, character_name):
+            continue
+        # The own feeling — a linked body's comes from its mind (ruling R1);
+        # the partner's feeling is the stored other direction of this row.
+        self_sent = own_sentiment(character_name, partner, rel=r)
+        other_sent = (r.get("sentiment_b_to_a", 0.0) if a == character_name
+                      else r.get("sentiment_a_to_b", 0.0))
         history = r.get("history") or []
         # Most recent N events
         recent = history[-history_limit:][::-1] if history else []
@@ -814,9 +815,12 @@ def build_memory_relationships(character_name: str,
 # ---------------------------------------------------------------------------
 
 def _known_character_or_404(name: str) -> str:
-    """Return *name* if it is an existing character, else raise 404."""
+    """Return *name* if it is an existing character, else raise 404.
+
+    A DORMANT character (a linked family member standing nowhere) exists.
+    """
     from app.models.character import list_available_characters
-    if name not in list_available_characters():
+    if name not in list_available_characters(include_dormant=True):
         raise HTTPException(status_code=404,
                             detail=f"Character '{name}' not found")
     return name
@@ -829,28 +833,39 @@ def build_relationship_addresses(character_name: str) -> Dict[str, Any]:
     = how the other one addresses *character_name*. Pairs whose other side no
     longer exists in the world are skipped (the rows stay in the DB and come
     back with a re-import, exactly like the Mind panel does it).
+
+    A linked body lists its own (body) rows, but its outgoing address is its
+    mind's — read from and written to the leader row; ``outgoing_from`` names
+    that leader ("" otherwise). ``family`` lists the members of the
+    character's family (leader first): they never get a pair with each other.
     """
+    from app.core.linked_characters import family_of, leader_of
     from app.models.character import list_available_characters
-    from app.models.relationship import get_address, get_character_relationships
+    from app.models.relationship import (get_address, get_character_relationships,
+                                         visible_to)
 
     _known_character_or_404(character_name)
-    existing = set(list_available_characters())
+    existing = set(list_available_characters(include_dormant=True))
+    family = family_of(character_name)
+    outgoing_from = leader_of(character_name) or ""
     items: List[Dict[str, Any]] = []
     for r in get_character_relationships(character_name):
         a = r.get("character_a") or ""
         b = r.get("character_b") or ""
         other = b if a.lower() == character_name.lower() else a
-        if not other or other == character_name or other not in existing:
+        if (not other or other == character_name or other not in existing
+                or other in family or not visible_to(r, character_name)):
             continue
         items.append({
             "other": other,
             "outgoing": get_address(character_name, other),
+            "outgoing_from": outgoing_from,
             "incoming": get_address(other, character_name),
             "type": r.get("type", "neutral"),
             "strength": r.get("strength", 10),
         })
     items.sort(key=lambda x: x["other"].lower())
-    return {"character": character_name, "items": items}
+    return {"character": character_name, "family": family, "items": items}
 
 
 def set_relationship_address(character_name: str, other: str, *,
@@ -862,6 +877,7 @@ def set_relationship_address(character_name: str, other: str, *,
     adds a new one. ``None`` leaves a direction untouched, an empty string
     clears it.
     """
+    from app.core.linked_characters import leader_of, mind_of
     from app.models.relationship import (AddressTextError, get_address,
                                          set_address)
 
@@ -870,6 +886,10 @@ def set_relationship_address(character_name: str, other: str, *,
     if other == character_name:
         raise HTTPException(status_code=400,
                             detail="a character has no form of address for itself")
+    if mind_of(other) == mind_of(character_name):
+        raise HTTPException(status_code=400,
+                            detail="one mind in two bodies has no form of address "
+                                   "for itself")
     if outgoing is None and incoming is None:
         raise HTTPException(status_code=400,
                             detail="outgoing or incoming is required")
@@ -885,6 +905,7 @@ def set_relationship_address(character_name: str, other: str, *,
         "character": character_name,
         "other": other,
         "outgoing": get_address(character_name, other),
+        "outgoing_from": leader_of(character_name) or "",
         "incoming": get_address(other, character_name),
     }
 

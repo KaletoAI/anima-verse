@@ -848,7 +848,8 @@ def _enrich_with_relationships(
     """Tag existing diary entries with relationship sentiment if a matching
     relationship history entry exists (matched by timestamp within 120s)."""
     try:
-        from app.models.relationship import get_character_relationships
+        from app.models.relationship import (get_character_relationships,
+                                             own_sentiment)
         rels = get_character_relationships(character_name)
     except Exception:
         return
@@ -862,7 +863,8 @@ def _enrich_with_relationships(
 
         # Fallback for old history entries without sentiment_delta:
         # estimate from overall sentiment / interaction_count
-        overall_sent = rel.get("sentiment_a_to_b", 0.0) if is_a else rel.get("sentiment_b_to_a", 0.0)
+        # Own direction; a linked body's comes from its mind.
+        overall_sent = own_sentiment(character_name, other, rel=rel)
         count = max(rel.get("interaction_count", 1), 1)
         estimated_delta = overall_sent / count
 

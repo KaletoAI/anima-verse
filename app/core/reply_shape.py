@@ -182,6 +182,7 @@ def build_reply_shape_section(character_name: str, partner_name: str = "",
             from app.models.relationship import (
                 TYPE_LABELS,
                 get_relationship,
+                own_sentiment,
                 sentiment_label,
             )
 
@@ -191,10 +192,8 @@ def build_reply_shape_section(character_name: str, partner_name: str = "",
 
             rel = get_relationship(character_name, partner_name)
             if rel:
-                if (rel.get("character_a") or "").lower() == character_name.lower():
-                    my_sentiment = rel.get("sentiment_a_to_b", 0)
-                else:
-                    my_sentiment = rel.get("sentiment_b_to_a", 0)
+                # Own direction; a linked body's comes from its mind.
+                my_sentiment = own_sentiment(character_name, partner_name, rel=rel)
                 facts["relationship"] = {
                     "type": TYPE_LABELS.get(rel.get("type", "neutral"), "Known"),
                     "closeness": int(rel.get("strength", 0) or 0),
