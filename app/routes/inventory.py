@@ -852,7 +852,12 @@ def _update_inventory_item_route_sync(character_name: str, item_id: str,
 def remove_inventory_item_route(
     character_name: str,
     item_id: str) -> Dict[str, Any]:
-    """Remove an item from a character's inventory."""
+    """Remove an item from a character's inventory. The costume she wears
+    right now is refused with 409 (``identity_view.costume_pinned``)."""
+    from app.core.identity_view import COSTUME_PINNED, costume_detail, costume_pinned
+    if costume_pinned(character_name, item_id):
+        raise HTTPException(status_code=409, detail=costume_detail(
+            COSTUME_PINNED, character_name, item_id))
     success = remove_from_inventory(character_name, item_id)
     if not success:
         raise HTTPException(status_code=404, detail="Item not in inventory")
@@ -888,8 +893,31 @@ def _give_inventory_item_route_sync(character_name: str, item_id: str,
         raise HTTPException(status_code=400, detail="A character cannot give items to itself")
     result = gift_item(character_name, to_character, item_id)
     if not result.get("success"):
+        _costume_conflict(result.get("reason", ""), character_name, item_id)
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to give item"))
     return {"ok": True, **result}
+
+
+def _costume_conflict(reason: str, character_name: str, item_id: str) -> None:
+    """Raise the 409 of a costume-lock refusal (``{"reason", "message"}``,
+    worded in the character's language); any other reason passes."""
+    from app.core.identity_view import costume_detail
+    detail = costume_detail(reason, character_name, item_id)
+    if detail:
+        raise HTTPException(status_code=409, detail=detail)
+
+
+def _apply_result(character_name: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """A whole-outfit apply blocked by the costume lock alone (nothing
+    changed, a costume skip) is a 409; a partial one answers 200 with the
+    costume sentence in ``message``."""
+    from app.core.identity_view import costume_skip_detail
+    detail = costume_skip_detail(character_name, result.get("skipped") or [])
+    if detail is None:
+        return {}
+    if not result.get("changed"):
+        raise HTTPException(status_code=409, detail=detail)
+    return {"message": detail["message"]}
 
 
 # ============================================================
@@ -952,6 +980,8 @@ def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
         else:
             result = equip_item(character_name, item_id, source="wardrobe_ui")
     if result.get("status") != "ok":
+        _costume_conflict(result.get("reason", ""), character_name,
+                          result.get("item_id") or item_id)
         raise HTTPException(status_code=400, detail=result.get("reason", "equip failed"))
     # Direct (UI) action is world-visible: narrator line -> others can react.
     try:
@@ -995,9 +1025,11 @@ def _unequip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
         # First as a piece (slot or item_id), then as an equipped item.
         result = unequip_piece(character_name, slot=slot, item_id=item_id,
                                source="wardrobe_ui")
-        if result.get("status") != "ok" and item_id:
+        if result.get("status") != "ok" and item_id and result.get("reason") == "not_equipped":
             result = unequip_item(character_name, item_id, source="wardrobe_ui")
     if result.get("status") != "ok":
+        _costume_conflict(result.get("reason", ""), character_name,
+                          result.get("item_id") or item_id)
         raise HTTPException(status_code=400, detail=result.get("reason", "unequip failed"))
     # Direct (UI) action is world-visible: narrator line -> others can react.
     try:
@@ -1069,6 +1101,7 @@ def _apply_equipped_route_sync(character_name: str,
         "applied": result["applied"],
         "skipped": result["skipped"],
         "cleared": result["cleared"],
+        **_apply_result(character_name, result),
     }
 
 
@@ -1175,4 +1208,5 @@ def _apply_outfit_set_route_sync(character_name: str,
         "applied": result["applied"],
         "skipped": result["skipped"],
         "cleared": result["cleared"],
+        **_apply_result(character_name, result),
     }

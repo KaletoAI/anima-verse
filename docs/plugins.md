@@ -1289,7 +1289,7 @@ store, a character reset never touches it), one row per persona:
 | `alias` | The name non-knowers perceive. While the persona is enabled no character can be created or imported under it (`identity.persona_names` → `validate_character_name` code `reserved`) |
 | `description` | "Persona appearance": body, face and hair while transformed — what non-knowers perceive instead of the real appearance (may be empty — it still masks); the suit comes from `suit_items` |
 | `activation_phrase` / `revert_phrase` | What the avatar says to transform / to return (see below) |
-| `suit_items` | JSON list of item ids worn while transformed; the outfit worn before is restored on revert |
+| `suit_items` | JSON list of item ids worn while transformed; the outfit worn before is restored on revert. The pieces are a COSTUME (core costume lock): only the character wearing exactly this persona can put them on — whoever owns them; a piece owned before stays owned but unwearable (wardrobe tag "Costume — only while transformed") — and while transformed the suit cannot be taken off, displaced, dropped or given away except by reverting |
 | `condition_id` | Condition applied while transformed (prompt/image/stat modifiers); empty = none |
 | `max_duration_minutes` | GAME minutes until the transformation ends by itself; default 60, `0` = until reverted |
 | `cooldown_minutes` | GAME minutes after a revert before the same bearer can use this persona again; default 30 |
@@ -1339,7 +1339,10 @@ avatar alone.
   `suit_items` (list of item ids);
 - provider `identity.costume_items` (owner `transformation`): `() -> {suit item id: persona id}` over every
   enabled, usable persona (an item in two suits belongs to the older persona) — the suit pieces of the
-  costume lock;
+  costume lock (`identity_view.wear_refusal` / `costume_pinned`). Transform and revert pass
+  `allow_costume=True` to `apply_equipped_pieces` (the suit goes on before the active row exists and comes
+  off while it still does) and take granted pieces back with `remove_from_inventory(..., force=True)` —
+  also when a transform fails half-way;
 - events `character.prompt_context` (chat / NPC prompts) and `character.thought_context` (thought prompt)
   for the identity lines — the bearer's "You are currently <alias>. Only … knows …" and a knower's
   "<alias> here is actually <name>. … do not know — …". Both land in the scene state, never in the stable

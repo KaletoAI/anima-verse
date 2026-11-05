@@ -13,7 +13,8 @@ from contextlib import contextmanager
 from app.core import hooks
 from app.core.character_panels import panel_capability
 from app.core.character_reset import SCOPE_REINIT, register_reset_store
-from app.core.identity_view import PROVIDER_ACTIVE, PROVIDER_KNOWS, PROVIDER_NAMES
+from app.core.identity_view import (PROVIDER_ACTIVE, PROVIDER_COSTUME, PROVIDER_KNOWS,
+                                    PROVIDER_NAMES)
 from app.models.inventory import get_item
 
 from plugins.transformation import (definitions, engine, intercept, knowers, panel,
@@ -22,8 +23,6 @@ from plugins.transformation import (definitions, engine, intercept, knowers, pan
 OWNER = "transformation"
 #: The /play/say intercept capability (app.routes.play.SAY_INTERCEPT_CAPABILITY).
 SAY_INTERCEPT = "play.say_intercept"
-#: Which items are suit pieces of a persona (read by the core's costume lock).
-COSTUME_ITEMS = "identity.costume_items"
 
 store.ensure_schema()
 store.invalidate()
@@ -81,7 +80,7 @@ def costume_items():
 hooks.register_provider(PROVIDER_ACTIVE, active_persona, owner=OWNER)
 hooks.register_provider(PROVIDER_KNOWS, knows, owner=OWNER)
 hooks.register_provider(PROVIDER_NAMES, persona_names, owner=OWNER)
-hooks.register_provider(COSTUME_ITEMS, costume_items, owner=OWNER)
+hooks.register_provider(PROVIDER_COSTUME, costume_items, owner=OWNER)
 hooks.register_provider(SAY_INTERCEPT, intercept.say_intercept, owner=OWNER, multiple=True)
 hooks.register_provider(panel_capability(OWNER), panel, owner=OWNER)
 hooks.register("character.prompt_context", prompt_lines.on_prompt_context,

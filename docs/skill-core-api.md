@@ -214,7 +214,7 @@ and an `owner` (the package id):
 | `identity.active_persona` (`PROVIDER_ACTIVE`) | `subject` → `{"persona_id", "alias", "description", "portrait_url"}` while C is transformed, else `None`. Optional keys: `"field_overrides"` (`{field: text}`, keys from `OVERRIDABLE_FIELDS`; empty ones omitted), `"pause_routine"` (bool), `"imagegen"` (dict of image settings), `"suit_items"` (list of item ids) |
 | `identity.knows` (`PROVIDER_KNOWS`) | `observer, subject` → `bool`: O is in on C's current persona |
 | `identity.persona_names` (`PROVIDER_NAMES`) | nothing → iterable of every configured alias, transformed or not |
-| `identity.costume_items` | nothing → `{item_id: persona_id}`: the suit pieces of every usable persona (the costume lock; core consumer follows) |
+| `identity.costume_items` (`PROVIDER_COSTUME`) | nothing → `{item_id: persona_id}`: the suit pieces of every usable persona — read by the costume lock (`costume_owner`, `wear_refusal`) |
 
 With no provider every function answers the real name (deletion test). A
 provider that raises is logged once at debug and treated as absent for that
@@ -251,6 +251,23 @@ URLs, DB keys other than the identity key) stay the real name.
 | `pair_stamp(a, b)` | `{"identity": {subject: alias}, "identity_shown": {subject: label the other side sees}}` for the side(s) of a pairwise message that wear a persona now, else `{}`. `UnifiedChatManager.save_message` stores it in an in-person message's `metadata` (never on a phone message). |
 | `stamped_name(observer, subject, stamp)` | The name O reads for C on a stamped message: no alias stamped → C; C still wears the stamped alias → `shown_name`; persona no longer worn → the stamped label (said as the persona stays the persona's); no provider → C. |
 | `rewrite_names(observer, text, subjects)` | Each transformed subject's real name (whole word, case-sensitive, one pass) → `shown_name(observer, subject)`. For system/storyteller text only, never a character's own speech. |
+| `costume_owner(item_id)` | The persona id whose suit the item belongs to (`identity.costume_items`), else `None` — no suit piece, no provider, a raising provider (every item wearable). |
+| `wear_refusal(character, item_id)` | `""` = C may wear the item; `COSTUME_REFUSED` (`"costume"`) when it is a suit piece of persona P and C does not wear P right now. Ownership is irrelevant: a piece she owned before the persona existed stays hers but unwearable. A piece in the suit of the persona she wears is always wearable. |
+| `costume_pinned(character, item_id)` | True when the item is in the `suit_items` of the persona C wears now: it may not be taken off, displaced, removed from the inventory, dropped or given away until she turns back. No persona/provider → False. |
+| `costume_message(reason, character, item_id, lang=None)` | The sentence for `COSTUME_REFUSED` (`"{item} is a costume piece: it can only be worn while transformed."`) / `COSTUME_PINNED` (`"The costume stays on until {name} turns back."`) via `t(en, lang)`; `""` for any other reason. |
+| `costume_detail(reason, character, item_id)` / `costume_skip_detail(character, skipped)` | `{"reason", "message"}` (message in C's language) for a costume reason — the HTTP 409 detail of the equip/unequip/give/drop/remove routes — else `None`; the second takes an `apply_equipped_pieces` `skipped` list and answers for its first costume skip. |
+| `COSTUME_TAG` | `"Costume — only while transformed"` — the English `wear_lock` value of a refused item in the belongings payload (`/play/belongings`, Game-Admin wardrobe); the clients translate it with `t()`. |
+
+**Costume lock in the inventory core** (`app.models.inventory`): `equip_piece`, `equip_item` and
+`apply_equipped_pieces` refuse a piece `wear_refusal` refuses (reason `"costume"`; the apply skips it,
+and takes it off when C still wears it and the target names it); `equip_piece` refuses a piece that
+would displace the worn costume and `unequip_piece` / `unequip_item` refuse taking it off (reason
+`"costume_pinned"`, `item_id` = the pinned piece); `apply_equipped_pieces` keeps it on (skipped once
+with `"costume_pinned"`). All four take the keyword `allow_costume=False`; only the transformation
+itself passes `True` (it puts the suit on before its persona row exists and takes it off on revert).
+`remove_from_inventory` refuses the worn costume unless `force=True`; `transfer_item`, `gift_item`,
+`drop_item` and `give_item(consume_source=True)` refuse it outright. The compliance auto-fill and the
+ChangeOutfit index/menu never offer a refused piece.
 
 ## Persona image settings — `app.core.outfit_imagegen` ✅
 
@@ -482,7 +499,8 @@ apply_condition; liefert `{success, changes, condition_applied}`). `consume_item
 Core-Vokabular — Routen rufen sie direkt, ohne Skill-Bezug.
 
 Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
-`equip_item`/`unequip_item`, `add_to_inventory`,
+`equip_item`/`unequip_item` (each with the keyword `allow_costume=False`, see the costume lock under
+Identity view), `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
 Inventory and equipment calls used by the **transformation package** (stable):
@@ -491,8 +509,8 @@ Inventory and equipment calls used by the **transformation package** (stable):
 |---|---|
 | `app.models.inventory.get_carried_item_ids(character_name) -> set[str]` | IDs of the items the character holds (quantity > 0), in ONE query, without profile reads or item enrichment — for "does she carry the power item" checks on hot paths |
 | `app.models.inventory.add_to_inventory(character_name, item_id, quantity=1, obtained_from="", obtained_method="manual", locked=None) -> bool` | Add a world item to the inventory; `False` for an unknown item or a failed write. Passive: effects apply only through `consume_item`. `locked=True` protects it from removal without `force` |
-| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry only with `force=True`. `False` when nothing was removed |
-| `app.models.inventory.apply_equipped_pieces(character_name, *, pieces=None, items=None, remove_slots=None, source="") -> dict` | Atomic equip change with diff detection. `pieces` = COMPLETE target state of the piece slots (slot → item ID; occupied slots missing from it are cleared), `items` = target list of the non-piece items, `None` = untouched; `remove_slots` clears explicitly. Returns `{status, changed, applied, cleared, skipped, pieces_before, pieces_after, items_before, items_after}`. A profile read-modify-write: call it under `keyed_lock("character_profile", name)` |
+| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry and the costume the character wears right now (`identity_view.costume_pinned`) only with `force=True`. `False` when nothing was removed |
+| `app.models.inventory.apply_equipped_pieces(character_name, *, pieces=None, items=None, remove_slots=None, source="", allow_costume=False) -> dict` | Atomic equip change with diff detection. `pieces` = COMPLETE target state of the piece slots (slot → item ID; occupied slots missing from it are cleared), `items` = target list of the non-piece items, `None` = untouched; `remove_slots` clears explicitly. Returns `{status, changed, applied, cleared, skipped, pieces_before, pieces_after, items_before, items_after}`. Costume lock: a refused suit piece is skipped (`"costume"`), the worn costume stays on (`"costume_pinned"`); `allow_costume=True` bypasses both — the transformation's transform and revert only. A profile read-modify-write: call it under `keyed_lock("character_profile", name)` |
 
 Public discovery helpers (stable):
 

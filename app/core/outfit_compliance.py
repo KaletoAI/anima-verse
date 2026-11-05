@@ -236,8 +236,10 @@ def _find_inventory_piece_for_slot(
     style_hint preference is gone with the outfit_types model; style_hint is
     only a creation hint now, no mechanical selection rule.) Multi-slot
     pieces are skipped — they come through ChangeOutfit / the wardrobe,
-    otherwise they would displace occupied slots.
+    otherwise they would displace occupied slots. A costume piece the
+    character may not wear (``identity_view.wear_refusal``) is never picked.
     """
+    from app.core.identity_view import wear_refusal
     exclude_ids = exclude_ids or set()
     inv = _load_inventory(character_name).get("inventory", [])
     for entry in inv:
@@ -249,6 +251,8 @@ def _find_inventory_piece_for_slot(
             continue
         slots = _piece_slots(item)
         if target_slot not in slots or len(slots) > 1:
+            continue
+        if wear_refusal(character_name, iid):
             continue
         return iid
     return None
@@ -415,10 +419,12 @@ def apply_outfit_compliance(
             if eq_pieces.get(slot):
                 # unequip_piece takes care of the multi-slot mirrors
                 try:
-                    unequip_piece(character_name, slot=slot, source="compliance")
-                    eq_pieces.pop(slot, None)
-                    result["forbidden_cleared"].append(slot)
-                    changed = True
+                    res = unequip_piece(character_name, slot=slot, source="compliance")
+                    # A refusal (the worn costume stays on) leaves the slot.
+                    if res.get("status") == "ok":
+                        eq_pieces.pop(slot, None)
+                        result["forbidden_cleared"].append(slot)
+                        changed = True
                 except Exception as e:
                     logger.debug("forbidden_slots clear [%s/%s]: %s",
                                  character_name, slot, e)
@@ -457,7 +463,11 @@ def apply_outfit_compliance(
         # Equip through equip_piece (handles mirrors and persistence)
         from app.models.inventory import equip_piece
         try:
-            equip_piece(character_name, cand_id, source="compliance")
+            res = equip_piece(character_name, cand_id, source="compliance")
+            if res.get("status") != "ok":
+                result["violations"].append(
+                    {"slot": slot, "reason": f"equip_failed: {res.get('reason', '')}"})
+                continue
             eq_pieces[slot] = cand_id
             result["auto_filled"].append({"slot": slot, "item_id": cand_id})
             changed = True
@@ -471,7 +481,7 @@ def apply_outfit_compliance(
     # 5. Persist + Event
     if changed:
         # equipped_pieces were persisted by equip/unequip_piece already.
-        # outfit_events wurden dabei auch schon publiziert.
+        # Their outfit events were published there as well.
         logger.info(
             "outfit_compliance [%s] decency=%s: filled=%d, cleared=%d, violations=%d",
             character_name, decency,

@@ -115,10 +115,14 @@ def _restore(bearer: str, snapshot: Dict[str, Any], granted: tuple,
     """Undo the profile part of a transform. Caller holds the profile lock.
 
     The outfit is restored FIRST: the granted suit pieces are still worn and
-    would otherwise be taken out of an inventory that still equips them."""
+    would otherwise be taken out of an inventory that still equips them. The
+    suit is the bearer's pinned costume while the active row exists, so the
+    restore bypasses the core's costume lock (``allow_costume``) and takes the
+    granted pieces back with ``force`` — also for a transform that failed
+    half-way."""
     apply_equipped_pieces(bearer, pieces=dict(snapshot.get("pieces") or {}),
                           items=list(snapshot.get("items") or []),
-                          source="transformation_revert")
+                          source="transformation_revert", allow_costume=True)
     for iid in granted:
         remove_from_inventory(bearer, iid, force=True)
     set_outfit_locked(bearer, lock_before)
@@ -207,7 +211,10 @@ def transform(bearer: str, persona_id: str, *, source: str) -> TransformResult:
                     else:
                         logger.warning("suit item %s could not be granted to %s", iid, bearer)
                 pieces, items = _suit_outfit(snapshot["pieces"], snapshot["items"], d.suit_items)
-                apply_equipped_pieces(bearer, pieces=pieces, items=items, source=SOURCE)
+                # The persona row is recorded only after this, so the suit
+                # goes on past the core's costume lock.
+                apply_equipped_pieces(bearer, pieces=pieces, items=items, source=SOURCE,
+                                      allow_costume=True)
                 set_outfit_locked(bearer, True)
                 set_state_flag(bearer, FLAG, True)
                 _condition(bearer, d.condition_id, add=True)

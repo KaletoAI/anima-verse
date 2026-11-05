@@ -15,6 +15,11 @@ it (``hooks.register_provider(..., owner="<package id>")``):
     Whether the observer is in on C's current persona.
 ``identity.persona_names``   ``fn() -> Iterable[str]``
     Every configured alias, transformed or not (reserved character names).
+``identity.costume_items``   ``fn() -> dict``
+    ``{item id: persona id}`` — the suit pieces of every usable persona. A
+    suit piece is a COSTUME: only the character wearing exactly that persona
+    may wear it (:func:`wear_refusal`), and while she wears it she cannot take
+    it off except by turning back (:func:`costume_pinned`).
 
 With no provider registered every function here answers with the real name —
 removing the package removes the feature and nothing else (deletion test).
@@ -38,6 +43,15 @@ logger = get_logger("identity_view")
 PROVIDER_ACTIVE = "identity.active_persona"
 PROVIDER_KNOWS = "identity.knows"
 PROVIDER_NAMES = "identity.persona_names"
+PROVIDER_COSTUME = "identity.costume_items"
+
+#: Refusal reasons of the costume lock (``equip_piece`` & co. report them).
+COSTUME_REFUSED = "costume"
+COSTUME_PINNED = "costume_pinned"
+#: English source strings (``t(en, lang)``; de.json keys).
+COSTUME_TAG = "Costume — only while transformed"
+_COSTUME_REFUSED_TEXT = "{item} is a costume piece: it can only be worn while transformed."
+_COSTUME_PINNED_TEXT = "The costume stays on until {name} turns back."
 
 _MISSING = object()   # no provider registered
 _FAILED = object()    # the provider raised
@@ -198,6 +212,87 @@ def routine_paused(subject: str) -> bool:
     provider → False."""
     persona = active_persona(subject)
     return persona is not None and persona.pause_routine
+
+
+def costume_owner(item_id: str) -> Optional[str]:
+    """The persona id whose suit ``item_id`` belongs to, or ``None`` — no
+    suit piece, no provider, or a raising provider (every item wearable)."""
+    iid = (item_id or "").strip()
+    if not iid:
+        return None
+    got = _call(PROVIDER_COSTUME)
+    if not isinstance(got, dict):
+        return None
+    owner = got.get(iid)
+    return (owner.strip() or None) if isinstance(owner, str) else None
+
+
+def wear_refusal(character: str, item_id: str) -> str:
+    """Why ``character`` may not put ``item_id`` on: ``""`` = she may;
+    :data:`COSTUME_REFUSED` (``"costume"``) when the item is a suit piece of
+    persona P and she does not wear P right now. Who OWNS the piece does not
+    matter — a piece she owned before the persona existed stays hers but
+    unwearable. A piece in the suit of the persona she wears is always
+    wearable (also when an older persona claims it too)."""
+    iid = (item_id or "").strip()
+    owner = costume_owner(iid)
+    if owner is None:
+        return ""
+    persona = active_persona(character)
+    if persona is not None and (persona.persona_id == owner or iid in persona.suit_items):
+        return ""
+    return COSTUME_REFUSED
+
+
+def costume_pinned(character: str, item_id: str) -> bool:
+    """Whether ``item_id`` belongs to the suit of the persona ``character``
+    wears now: it may not be taken off, replaced or given away until she
+    turns back (the transformation's own revert passes the core's
+    ``allow_costume`` / ``force``). No persona or no provider → False."""
+    iid = (item_id or "").strip()
+    if not iid:
+        return False
+    persona = active_persona(character)
+    return persona is not None and iid in persona.suit_items
+
+
+def costume_message(reason: str, character: str, item_id: str,
+                    lang: Optional[str] = None) -> str:
+    """The sentence for a costume-lock refusal ``reason``
+    (:data:`COSTUME_REFUSED` / :data:`COSTUME_PINNED`) in ``lang``; ``""``
+    for any other reason. Names the item by its name, the bearer by her
+    real name (the reader is she herself or the admin)."""
+    from app.core.i18n import t
+    if reason == COSTUME_REFUSED:
+        from app.models.inventory import get_item
+        name = (get_item(item_id) or {}).get("name") or item_id
+        return t(_COSTUME_REFUSED_TEXT, lang).format(item=name)
+    if reason == COSTUME_PINNED:
+        return t(_COSTUME_PINNED_TEXT, lang).format(name=character)
+    return ""
+
+
+def costume_detail(reason: str, character: str, item_id: str) -> Optional[Dict[str, str]]:
+    """``{"reason", "message"}`` for a costume-lock refusal — the HTTP 409
+    detail of an equip/unequip/give/drop route, worded in ``character``'s
+    language — or ``None`` when ``reason`` is no costume reason."""
+    if reason not in (COSTUME_REFUSED, COSTUME_PINNED):
+        return None
+    from app.models.character import get_character_language
+    lang = (get_character_language(character) or "en").strip() or "en"
+    return {"reason": reason, "message": costume_message(reason, character, item_id, lang)}
+
+
+def costume_skip_detail(character: str, skipped: Iterable[Any]) -> Optional[Dict[str, str]]:
+    """:func:`costume_detail` of the first costume skip in an
+    ``apply_equipped_pieces`` result's ``skipped`` list, or ``None``."""
+    for skip in skipped or []:
+        if isinstance(skip, dict):
+            detail = costume_detail(str(skip.get("reason") or ""), character,
+                                    str(skip.get("item_id") or ""))
+            if detail:
+                return detail
+    return None
 
 
 def _knows_state(observer: str, subject: str, persona: Optional[Persona]) -> Any:
