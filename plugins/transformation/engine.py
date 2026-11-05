@@ -12,15 +12,17 @@ row is recorded and the present knowers are told.
 
 ``revert(leader, reason=...)`` swaps back (``swap_presence(body, leader,
 items=[item_id])``). The in-game paths (verb, phrase) need the item on the
-body; the automatic ones (``expired``, ``item_lost``) and the admin's
+body; the automatic ones (``expired``, ``disabled``, ``item_lost``) and the admin's
 "Revert now" do not. A refused swap leaves everything as it is and answers
 the refusal — ``tick`` retries it on every following tick, never forcing it.
 After a revert the condition and flag leave the body, the transform activity
 is cleared on the leader if the swap carried it back, and the leader's
 cooldown starts.
 
-``tick`` (the ``world_tick`` hook) reverts what ran out (``expired``) and a
-body that no longer holds the power item (``item_lost``, wherever it stands).
+``tick`` (the ``world_tick`` hook) reverts what ran out (``expired``), a
+transformation whose definition was switched off or removed (``disabled``)
+and a body that no longer holds the power item (``item_lost``, wherever it
+stands).
 
 Locks: one ``keyed_lock("transformation", leader)`` spans a whole transform or
 revert. ``swap_presence`` takes the family, places and profile locks itself,
@@ -55,7 +57,7 @@ logger = get_logger("transformation")
 
 FLAG = "is_transformed"
 SOURCE = "transformation"
-REVERT_REASONS = ("verb", "phrase", "expired", "item_lost", "admin")
+REVERT_REASONS = ("verb", "phrase", "expired", "item_lost", "disabled", "admin")
 #: Revert reasons that need the power item on the body.
 _ITEM_NEEDED = ("verb", "phrase")
 
@@ -257,13 +259,17 @@ def revert(leader: str, *, reason: str) -> Result:
 
 
 def _due(row: ActiveRow, now: GameTime) -> Tuple[bool, str]:
-    """Whether ``row`` ends now, and why (``expired`` / ``item_lost``)."""
+    """Whether ``row`` ends now, and why (``expired`` / ``disabled`` /
+    ``item_lost``)."""
     if row.until_game:
         try:
             if now >= GameTime.parse(row.until_game):
                 return True, "expired"
         except ValueError:
             logger.warning("unusable until stamp %r for %s — ignored", row.until_game, row.leader)
+    d = store.get_definition(row.def_id)
+    if d is None or not d.get("enabled"):
+        return True, "disabled"
     item_id = str((row.snapshot or {}).get("item_id") or "")
     if item_id and item_id not in get_carried_item_ids(row.body):
         return True, "item_lost"
@@ -271,7 +277,8 @@ def _due(row: ActiveRow, now: GameTime) -> Tuple[bool, str]:
 
 
 def tick() -> None:
-    """``world_tick``: end what ran out or whose body lost the power item.
+    """``world_tick``: end what ran out, was switched off, or whose body lost
+    the power item.
 
     A refused revert (the body is travelling, asleep, busy, ...) stays as it
     is and is tried again on the next tick — never forced. The refusal is

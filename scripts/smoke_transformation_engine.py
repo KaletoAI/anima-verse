@@ -72,6 +72,19 @@ THE RULES, and what follows BY HAND
     tick -> reverted with reason "item_lost" (spy on engine.revert): Tilda
     present, Glut dormant, the amulet stays with Kim.
 [G] revert of nobody -> {"ok": False, "reason": "not_transformed"}.
+[H] Disabled while running (review fix round 1): the amulet goes back to
+    Tilda, the admin transform (ignores the cooldown) -> ok. Glut gets a
+    movement_target, the definition is switched off -> tick -> revert reason
+    "disabled" refused, still active; tick again -> still active (retried,
+    never forced). Target cleared -> tick -> reverted with "disabled": Tilda
+    present, Glut dormant, the amulet back with Tilda. Switched on again.
+[I] Reset while transformed (review fix round 1, spec R3): admin transform
+    -> ok. reset_character("Tilda", reinit) -> ValueError "… revert first …"
+    (the core refuses re-placing a dormant leader); the active row stays. The
+    package's reset handler called directly on Tilda (store.delete_character_
+    rows) keeps the active row too (its body Glut stands in the world); it
+    deletes only Tilda's cooldown row for glut (from [H]) -> 1. Admin revert
+    -> ok; the handler now finds no active row.
 """
 import json
 import os
@@ -339,6 +352,56 @@ check("amulet stays with Kim", "amulet" in inventory.get_carried_item_ids("Kim")
 print("[G] revert without a transformation")
 check("revert Obs", engine.revert("Obs", reason="admin"),
       {"ok": False, "reason": "not_transformed", "error": ""})
+
+# ── [H] disabled while running ──────────────────────────────────────────────
+print("[H] definition switched off while running")
+check("amulet back to Tilda", inventory.transfer_item("Kim", "Tilda", "amulet"), True)
+check("admin transform", engine.transform("Tilda", "glut", source="admin",
+                                          ignore_cooldown=True)["ok"], True)
+edit("Glut", movement_target="somewhere")
+store.update_definition("glut", {"enabled": False})
+_reasons = []
+engine.revert = _spy
+try:
+    engine.tick()
+    check("disabled -> revert tried, refused", (_reasons, store.get_active("Tilda") is not None),
+          ([("Tilda", "disabled")], True))
+    engine.tick()
+    check("retried, still refused", (len(_reasons), store.get_active("Tilda") is not None),
+          (2, True))
+    edit("Glut", movement_target="")
+    engine.tick()
+finally:
+    engine.revert = _real_revert
+check("reverted as disabled", (_reasons[-1:], store.get_active("Tilda")),
+      ([("Tilda", "disabled")], None))
+check("Tilda present, Glut dormant", (where("Tilda")[0], ch.get_character_status("Glut")),
+      ("", "dormant"))
+check("amulet back with Tilda", "amulet" in inventory.get_carried_item_ids("Tilda"), True)
+store.update_definition("glut", {"enabled": True})
+
+# ── [I] reset while transformed ─────────────────────────────────────────────
+print("[I] reset of a transformed leader")
+from app.core.character_reset import SCOPE_REINIT, reset_character  # noqa: E402
+check("admin transform", engine.transform("Tilda", "glut", source="admin",
+                                          ignore_cooldown=True)["ok"], True)
+try:
+    reset_character("Tilda", SCOPE_REINIT)
+    _err = ""
+except ValueError as e:
+    _err = str(e)
+check("reinit of the dormant leader refused", "revert first" in _err, True)
+check("active row kept", store.get_active("Tilda") is not None, True)
+with transaction() as conn:
+    _n = store.delete_character_rows(conn, "Tilda")
+store.invalidate()
+check("handler keeps the active row while Glut stands",
+      (_n, store.get_active("Tilda") is not None), (1, True))
+check("admin revert", engine.revert("Tilda", reason="admin")["ok"], True)
+with transaction() as conn:
+    _n = store.delete_character_rows(conn, "Tilda")
+store.invalidate()
+check("handler afterwards: the new cooldown row", _n, 1)
 
 print()
 print(f"{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

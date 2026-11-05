@@ -1115,7 +1115,7 @@ in `shared/languages/de.json`):
 | describe — `(character, lang)` | `{"title", "intro", "tabs"?: [tab], "actions"?: [action], "cards": [card], "create": {"label", "fields": [field]} \| None}` |
 | save — `(character, card_id, values, lang)` | `{"ok", "error"?, "card_id"?}`; `card_id` `None` = create from `create.fields` |
 | delete — `(character, card_id, lang)` | `{"ok", "error"?}` |
-| action — `(character, card_id, action_id, lang)` (+ keyword `value` for an action with `input`) | `{"ok", "message"?, "error"?}` |
+| action — `(character, card_id, action_id, lang)` (+ keyword `value` for an action with `input`) | `{"ok", "message"?, "error"?, "open_character"?}` |
 
 A **card** is `{"id", "title", "subtitle", "badges": [str], "fields": [field],
 "values": {key: value}, "status", "actions": [action], "deletable", "delete_confirm"?}`;
@@ -1128,7 +1128,9 @@ one ("<input label> is required.", the provider is not called) and hands it to t
 argument `value` — an action without `input` is called without it. The panel-level `actions` (top bar,
 not bound to a card — e.g. "Create linked character") run with `card_id` `""`; the core runs only a
 declared one. After every save, delete and action the panel reloads `describe` — the server is the
-truth. A card with no fields is a status card: it shows no Save/Discard.
+truth — except when an action answers `open_character`: then Game-Admin refreshes its character list
+and opens that character in the editor on its first field tab (e.g. a character the action just
+created). A card with no fields is a status card: it shows no Save/Discard.
 
 **Layout.** The panel shows ONE card at a time: a strip of chips on top (card
 title + its badges, plus a "+ <create label>" chip) selects it; the first card
@@ -1283,8 +1285,9 @@ tabs: **Transformation** (the linked character to become — a `select` of `bodi
 item, enabled; transform/revert phrase; max duration, cooldown, activity, effect on the body; short
 fields side by side on the 12-column grid) and **Knowers** (character checkboxes: who knows that the body
 is the leader). The panel-level action **Create linked character** asks only for a name
-(`create_linked(leader, name)`: a new dormant body from the leader's template); it is selectable right
-after. Status line (ordinary self / transformed into <body> since … / on cooldown until …) and test
+(`create_linked(leader, name)`: a new dormant body from the leader's template); the new character opens
+in the editor right away (`open_character`) so its appearance can be filled in, and it is selectable on
+the leader's cards. Status line (ordinary self / transformed into <body> since … / on cooldown until …) and test
 actions: **Transform now** (engine source `admin`, `ignore_cooldown=True` — the admin overrides a running
 cooldown; any other refusal, including a swap refusal state, shows its reason), **Revert now** (shows a
 swap refusal's reason), **Give <item> to <leader>** (moves the item from its current holder). On a linked
@@ -1308,7 +1311,7 @@ persona shape is dropped and re-created once (no data migration).
 | `cooldown_minutes` | GAME minutes after a revert before the leader can use this definition again; default 30 |
 | `transform_activity` | Activity of the body while the transformation takes place; default `transforming` |
 | `condition_id` | Condition applied to the BODY while it stands in the world (removed on revert); empty = none |
-| `enabled` | Default on; off = this transformation cannot start (a running one keeps going) |
+| `enabled` | Default on; off = this transformation cannot start, and a running one is reverted on the next tick (reason `disabled`, retried while refused) |
 | `updated_at` | SYSTEM stamp of the last write |
 
 `transformation_active` — `{leader, body, def_id, started_game, until_game, snapshot}` (snapshot:
@@ -1331,9 +1334,11 @@ reason=…)`: the in-game paths (verb, phrase) need the item on the body; the au
 `item_lost`) and the admin's revert do not → `swap_presence(body, leader, items=[item_id])`; then the
 condition and flag leave the body, the transform activity is cleared on the leader if the swap carried it
 back, the leader's cooldown starts, "<body> turns back into <leader>." for the present knowers. The
-`world_tick` hook reverts what ran out (`expired`) and a body that no longer carries the item
-(`item_lost`, wherever it stands); a refused automatic revert stays and is retried on every following
-tick — never forced. The package answers the provider `linked.expected_present` with the body while a
+`world_tick` hook reverts what ran out (`expired`), a transformation whose definition was switched off
+(`disabled`) and a body that no longer carries the item (`item_lost`, wherever it stands); a refused
+automatic revert stays and is retried on every following tick — never forced. The `reinit` reset store
+never deletes the active row while its body stands in the world (the core refuses a re-init of a dormant
+leader: "revert first"). The package answers the provider `linked.expected_present` with the body while a
 transformation runs, so the core's family repair keeps the body in the world.
 
 **Verbs** (one class `TransformationSkill`, all `always_load`):

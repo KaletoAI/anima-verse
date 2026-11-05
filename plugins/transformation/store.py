@@ -214,11 +214,27 @@ def set_cooldown(leader: str, def_id: str, until_game: str) -> None:
 
 
 def delete_character_rows(conn, name: str) -> int:
-    """Delete the leader's active row and cooldowns on ``conn`` (no commit) and
-    return how many went. For the character-reset handler (a body owns no rows)."""
-    count = 0
-    for table in ("transformation_active", "transformation_cooldown"):
-        count += conn.execute(f"DELETE FROM {table} WHERE character_name=?", (name,)).rowcount
+    """Delete the leader's cooldowns and active row on ``conn`` (no commit) and
+    return how many went. For the character-reset handler (a body owns no rows).
+
+    The active row is KEPT while its body stands in the world: without it the
+    family repair would no longer expect the body and nothing could turn it
+    back (the core refuses a re-init of a dormant leader anyway — this is the
+    package's own guard)."""
+    from app.models.character import DORMANT_STATUS
+    count = conn.execute("DELETE FROM transformation_cooldown WHERE character_name=?",
+                         (name,)).rowcount
+    row = conn.execute("SELECT body FROM transformation_active WHERE character_name=?",
+                       (name,)).fetchone()
+    if row is not None:
+        body = conn.execute("SELECT COALESCE(status,'') FROM characters WHERE name=?",
+                            (row[0] or "",)).fetchone()
+        if body is not None and body[0] != DORMANT_STATUS:
+            logger.warning("reset of %s: %s stands in the world for it — the active "
+                           "transformation is kept", name, row[0])
+        else:
+            count += conn.execute("DELETE FROM transformation_active WHERE character_name=?",
+                                  (name,)).rowcount
     return count
 
 

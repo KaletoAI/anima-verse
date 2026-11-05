@@ -19,7 +19,9 @@ renders the answer generically (``frontend/src/tabs/characters/PackagePanel.tsx`
 - ``save(character, card_id, values, lang) -> {"ok", "error"?, "card_id"?}``
   (``card_id`` None = create)
 - ``delete(character, card_id, lang) -> {"ok", "error"?}``
-- ``action(character, card_id, action_id, lang) -> {"ok", "message"?, "error"?}``
+- ``action(character, card_id, action_id, lang) -> {"ok", "message"?, "error"?,
+  "open_character"?}`` (``open_character`` = a character the panel opens in the
+  editor after the action, e.g. one the action just created)
   — an action that declares ``input`` (``{"label", "placeholder"?,
   "message"?}``: the panel asks for one line of text first) receives the
   entered, stripped, non-empty text as the keyword argument ``value``
@@ -468,7 +470,7 @@ def _declared_action(panel: Dict[str, Any], cid: str, aid: str) -> Optional[Dict
 
 def run_panel_action(package_id: str, character: str, card_id: str, action_id: str,
                      lang: str = "en", *, value: Any = None) -> Dict[str, Any]:
-    """Run one action → ``{"ok", "error", "message"?}``.
+    """Run one action → ``{"ok", "error", "message"?, "open_character"?}``.
 
     ``card_id`` ``""`` = a panel-level action (it must be declared in the
     panel's ``actions``). An action declaring ``input`` needs a non-empty
@@ -491,4 +493,4 @@ def run_panel_action(package_id: str, character: str, card_id: str, action_id: s
         raw = _call(provider, "action", character, cid, aid, lang, value=text)
     else:
         raw = _call(provider, "action", character, cid, aid, lang)
-    return _result(raw, "action", lang, "message")
+    return _result(raw, "action", lang, "message", "open_character")

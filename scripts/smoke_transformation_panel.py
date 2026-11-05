@@ -34,13 +34,15 @@ THE RULES, and what follows BY HAND
     character through a power item."; tabs [transform "Transformation",
     knowers "Knowers"]; panel actions [create_linked "Create linked
     character", input {label "Name", placeholder "", message "A new character
-    linked to Tilda, built from Tilda's template — edit it on its own page."}];
+    linked to Tilda, built from Tilda's template. It opens for editing right
+    away."}];
     no cards; create form [body (select, required, options [Glut]),
     item_id (item, required)]. describe(Obs) (no bodies): no create form, the
     same action. German title "Verwandlung".
 [B] Panel action create_linked on Tilda (card_id ""):
     value "Ember" -> ok, message "Ember was created as a linked character of
-    Tilda."; bodies_of(Tilda) == [Ember, Glut], Ember dormant; the create
+    Tilda.", open_character "Ember" (Game-Admin opens it for editing — review
+    fix round 1); bodies_of(Tilda) == [Ember, Glut], Ember dormant; the create
     form's body options are now [Ember, Glut].
     value "" -> core error "Name is required."; value "Glut" -> the core's
     'A character named "Glut" already exists.'.
@@ -216,7 +218,7 @@ CREATE_ACTION = {"id": "create_linked", "label": "Create linked character", "con
                  "primary": False,
                  "input": {"label": "Name", "placeholder": "",
                            "message": "A new character linked to Tilda, built from Tilda's "
-                                      "template — edit it on its own page."}}
+                                      "template. It opens for editing right away."}}
 check("panel actions", _p["actions"], [CREATE_ACTION])
 check("no cards", _p["cards"], [])
 _cf = (_p["create"] or {}).get("fields") or []
@@ -231,7 +233,8 @@ check("German title", describe(lang="de")["title"], "Verwandlung")
 # ── [B] create a linked character ───────────────────────────────────────────
 print("[B] create linked character")
 check("create Ember", act("", "create_linked", value="Ember"),
-      {"ok": True, "error": "", "message": "Ember was created as a linked character of Tilda."})
+      {"ok": True, "error": "", "message": "Ember was created as a linked character of Tilda.",
+       "open_character": "Ember"})
 check("bodies", lc.bodies_of("Tilda"), ["Ember", "Glut"])
 check("Ember dormant", ch.get_character_status("Ember"), "dormant")
 check("options now", [o["value"] for o in describe()["create"]["fields"][0]["options"]],

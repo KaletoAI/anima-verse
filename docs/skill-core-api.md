@@ -1589,7 +1589,8 @@ of a name wins, anything else dropped, `select` → stripped string that must be
 `{"ok": false, "error": ...}` without calling the provider, so the provider
 validates only what is specific to it (uniqueness, references, state). An
 action runs only when declared (panel-level `actions` with `card_id` `""`, or
-the card's); one with `input` needs a non-empty text, handed over as `value=`.
+the card's); one with `input` needs a non-empty text, handed over as `value=`;
+an action result's `open_character` passes through (Game-Admin opens it).
 
 ## Linked characters — `app.core.linked_characters` ✅
 

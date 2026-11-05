@@ -1108,7 +1108,20 @@ export function CharactersTab() {
             ) : subTab === 'expressions' ? (
               <ExpressionsTab character={selected} />
             ) : subTab === 'skills' ? (
-              <SkillsTab character={selected} />
+              <SkillsTab
+                character={selected}
+                onOpenCharacter={(name) => {
+                  // A panel action created/named a character: refresh the
+                  // list and open it on its first field tab for editing.
+                  const open = () => {
+                    onSelect(name)
+                    if (fieldTabs.length) setSubTab(fieldTabs[0].id)
+                  }
+                  loadCharacters()
+                    .then((list) => { setCharacters(list); open() })
+                    .catch(open)
+                }}
+              />
             ) : subTab === 'wardrobe' ? (
               <WardrobeTab key={selected} character={selected} />
             ) : subTab === 'secrets' ? (

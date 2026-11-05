@@ -10,8 +10,8 @@ two tabs: **Transformation** (the linked character to become, picked from the
 leader's bodies; power item, enabled; phrases; durations, activity, effect on
 the body — short fields side by side) and **Knowers** (who knows that the body
 is the leader). A panel-level action **Create linked character** asks only for
-a name (``app.core.linked_characters.create_linked``); the new body is then
-selectable. Test actions per card: Transform now (ignores the cooldown),
+a name (``app.core.linked_characters.create_linked``); the new body opens in
+the editor right away (``open_character``) and is selectable on the cards. Test actions per card: Transform now (ignores the cooldown),
 Revert now, Give <item> to <leader>.
 
 On a linked BODY: only status + "Revert now" per definition that turns its
@@ -167,7 +167,7 @@ def _create_action(leader: str, lang: str) -> Dict[str, Any]:
     return {"id": "create_linked", "label": t("Create linked character", lang),
             "input": {"label": t("Name", lang),
                       "message": t("A new character linked to {name}, built from {name}'s "
-                                   "template — edit it on its own page.", lang).format(
+                                   "template. It opens for editing right away.", lang).format(
                                        name=leader)}}
 
 
@@ -436,8 +436,10 @@ def _create_linked(leader: str, name: str, lang: str) -> Dict[str, Any]:
     if not result.get("ok"):
         return {"ok": False, "error": t(str(result.get("error") or ""), lang)
                 or t("That did not work.", lang)}
-    return {"ok": True, "message": t("{name} was created as a linked character of {leader}.",
-                                     lang).format(name=result.get("name") or name, leader=leader)}
+    created = str(result.get("name") or name)
+    return {"ok": True, "open_character": created,
+            "message": t("{name} was created as a linked character of {leader}.",
+                         lang).format(name=created, leader=leader)}
 
 
 _LEADER_ACTIONS = {"transform": _transform, "revert": _revert, "give": _give}

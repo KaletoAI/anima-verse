@@ -56,7 +56,9 @@ THE RULES, and what follows BY HAND
     set_cooldown(Tilda, glut, "Y0002-D100T13:30:00") -> cooldown_until the
     same; delete_definition("glut") -> True and its cooldown is gone ("").
     set_cooldown(Tilda, glut_2, ...) then delete_character_rows(conn, Tilda)
-    -> 2 (the active row + that cooldown); get_active("Tilda") None.
+    -> 2 (the active row + that cooldown — Glut has no character row here,
+    so it stands nowhere); get_active("Tilda") None. (A body that stands in
+    the world keeps the row: smoke_transformation_engine [I].)
 [F] Deletion sweep: delete_character("Hans") removes the definition "hero"
     (its leader column is character_name).
 """

@@ -61,7 +61,13 @@ interface LocationOpt {
   name: string
 }
 
-export function SkillsTab({ character }: { character: string }) {
+export function SkillsTab({
+  character, onOpenCharacter,
+}: {
+  character: string
+  /** Opens another character in the editor (a package panel action may ask for it). */
+  onOpenCharacter?: (name: string) => void
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [skills, setSkills] = useState<SkillInfo[]>([])
@@ -272,7 +278,8 @@ export function SkillsTab({ character }: { character: string }) {
               </div>
             )}
             {current.panel_package ? (
-              <PackagePanel character={character} packageId={current.panel_package} />
+              <PackagePanel character={character} packageId={current.panel_package}
+                onOpenCharacter={onOpenCharacter} />
             ) : null}
             {current.enabled && fields.length > 0 && (
               <div className="ga-form" style={{ marginTop: 14, gap: 8 }}>

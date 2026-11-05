@@ -99,7 +99,8 @@ J) ``select`` FIELD, PANEL-LEVEL ACTIONS, ACTION ``input`` — a third fake prov
    called; ``"gone"`` (the stored value the options no longer list) → kept,
    provider gets ``{"who": "gone"}``.
    ACTION ``make`` with card_id ``""`` and value ``"  Zed "`` → the provider gets
-   ``("action", "Ada", "", "make", "en", "Zed")`` (value stripped, as keyword);
+   ``("action", "Ada", "", "make", "en", "Zed")`` (value stripped, as keyword)
+   and its answer's ``open_character`` ``"Zed"`` passes through;
    value ``"  "`` → "Name is required." without a provider call; an undeclared
    panel action ``nope`` → "This entry no longer exists." without a call;
    ``plain`` on ``s1`` → the provider is called WITHOUT a value (``value``
@@ -480,7 +481,7 @@ try:
 
         def action(self, character, card_id, action_id, lang, value=None):
             self.calls.append(("action", character, card_id, action_id, lang, value))
-            return {"ok": True}
+            return {"ok": True, "open_character": value or ""}
 
     PKG3 = "smoke-panel-pkg3"
     sp = SelectProvider()
@@ -508,6 +509,7 @@ try:
                                                                "value": "  Zed "}, lang="en", _={})
     check("panel action with value", (res["ok"], sp.calls[-1]),
           (True, ("action", "Ada", "", "make", "en", "Zed")))
+    check("open_character passes through", res.get("open_character"), "Zed")
     n = len(sp.calls)
     res = routes.run_character_panel_action("Ada", PKG3, body={"card_id": "", "action_id": "make",
                                                                "value": "  "}, lang="en", _={})

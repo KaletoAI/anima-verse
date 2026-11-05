@@ -76,6 +76,8 @@ interface OpResult {
   error?: string
   message?: string
   card_id?: string
+  /** After an action: open this character in the editor. */
+  open_character?: string
 }
 
 /** Selection value of the create form in the chip strip. */
@@ -110,7 +112,14 @@ function fieldSpan(f: PanelField): number {
   return WIDTH_SPAN[w]
 }
 
-export function PackagePanel({ character, packageId }: { character: string; packageId: string }) {
+export function PackagePanel({
+  character, packageId, onOpenCharacter,
+}: {
+  character: string
+  packageId: string
+  /** Opens a character in the editor — an action result's `open_character`. */
+  onOpenCharacter?: (name: string) => void
+}) {
   const { t, lang } = useI18n()
   const { toast } = useToast()
   const [panel, setPanel] = useState<Panel | null>(null)
@@ -226,7 +235,8 @@ export function PackagePanel({ character, packageId }: { character: string; pack
       const r = await call('action', { card_id: '', action_id: a.id, ...(value !== undefined ? { value } : {}) })
       if (r.ok) {
         if (r.message) toast(r.message)
-        await reload()
+        if (r.open_character && onOpenCharacter) onOpenCharacter(r.open_character)
+        else await reload()
       } else {
         setPanelError(r.error || t('That did not work.'))
       }
@@ -368,7 +378,8 @@ export function PackagePanel({ character, packageId }: { character: string; pack
             })
             if (r.ok) {
               if (r.message) toast(r.message)
-              await reload()
+              if (r.open_character && onOpenCharacter) onOpenCharacter(r.open_character)
+              else await reload()
             }
             return r
           }}

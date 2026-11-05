@@ -3906,7 +3906,7 @@
     "Currently transformed into {body}": "Gerade verwandelt in {body}",
     "Not transformed": "Nicht verwandelt",
     "Create linked character": "Verknüpften Charakter anlegen",
-    "A new character linked to {name}, built from {name}'s template — edit it on its own page.": "Ein neuer, mit {name} verknüpfter Charakter aus {name}s Vorlage — bearbeite ihn auf seiner eigenen Seite.",
+    "A new character linked to {name}, built from {name}'s template. It opens for editing right away.": "Ein neuer, mit {name} verknüpfter Charakter aus {name}s Vorlage. Er öffnet sich gleich zum Bearbeiten.",
     "{name} was created as a linked character of {leader}.": "{name} wurde als verknüpfter Charakter von {leader} angelegt.",
     "{body} stands in the world for {leader} since {time}": "{body} steht seit {time} für {leader} in der Welt",
     "Dormant — {leader} stands in the world.": "Ruhend — {leader} steht in der Welt.",
