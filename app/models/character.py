@@ -338,8 +338,8 @@ def _load_character_state(character_name: str, *, strict: bool = False) -> Dict[
             "FROM character_state WHERE character_name=?",
             (character_name,),
         ).fetchone()
-        if strict and row is None:
-            raise LookupError(f"Character state not found: {character_name}")
+        # No row is legitimate absence, not a read failure: a reset drops the
+        # row on purpose and the profile's own values take over (default state).
         if row:
             result.update({
                 "current_location": row[0] or "",
@@ -1939,8 +1939,7 @@ def get_character_pos(character_name: str = "", *, strict: bool = False) -> Opti
             raise
         logger.error("get_character_pos DB error for %s: %s", character_name, e)
         return None
-    if strict and row is None:
-        raise LookupError(f"Character state not found: {character_name}")
+    # No row = no metre point (legitimate after a reset), not a read failure.
     if not row or row[0] is None or row[1] is None:
         return None
     return {"x": float(row[0]), "z": float(row[1])}
