@@ -82,9 +82,7 @@ class StoryArcEngine:
             logger.debug("Generation nicht erlaubt (Cooldown/max aktive Arcs)")
             return None
 
-        # Load characters + relationships (a worn persona's personality
-        # override replaces the bearer's own)
-        from app.core.identity_view import self_field
+        # Load characters + relationships
         from app.models.character import (
             list_available_characters,
             get_character_personality,
@@ -99,8 +97,7 @@ class StoryArcEngine:
 
         char_infos = []
         for name in characters:
-            personality = (self_field(name, "character_personality")
-                           or get_character_personality(name) or "")
+            personality = get_character_personality(name) or ""
             loc_id = get_character_current_location(name)
             loc_name = get_location_name(loc_id) if loc_id else "unbekannt"
             char_infos.append(

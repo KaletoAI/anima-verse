@@ -289,9 +289,7 @@ def avatar_at_place(name: str) -> bool:
 
 def present_partners(name: str) -> List[Dict[str, str]]:
     """The OTHER temporary NPCs this one could address right now:
-    ``{name, shown, role, task, activity}`` each — ``shown`` is the name as
-    ``name`` perceives that person (``identity_view.shown_name``), the one
-    the prompt prints.
+    ``{name, role, task, activity}`` each.
 
     Earshot follows ``perception.addressable_for`` — the room plus the
     open-air hearing circle. Only temporary NPCs: avatars and
@@ -301,7 +299,6 @@ def present_partners(name: str) -> List[Dict[str, str]]:
     from app.models.character import (get_character_profile,
                                       get_effective_activity,
                                       is_character_sleeping, is_temporary_npc)
-    from app.core.identity_view import shown_name
     from app.core.perception import addressable_for
     names = addressable_for(name)
     out: List[Dict[str, str]] = []
@@ -312,7 +309,6 @@ def present_partners(name: str) -> List[Dict[str, str]]:
         if is_character_sleeping(other) or prof.get("journey") or _is_busy(other, prof) or not action_available(other):
             continue
         out.append({"name": other,
-                    "shown": shown_name(name, other),
                     "role": str(prof.get("npc_slot_role") or "").strip(),
                     "task": str(prof.get("standing_task") or "").strip(),
                     "activity": get_effective_activity(other) or ""})
@@ -339,14 +335,12 @@ def _recent_conversation(name: str) -> List[Dict[str, str]]:
     for row in rows:
         if row.get("source") == "movement":
             continue
-        meta = row.get("meta") or {}
-        speaker = meta.get("speaker") or ""
+        speaker = (row.get("meta") or {}).get("speaker") or ""
         line = row.get("content") or ""
         if not line.strip():
             continue
         recent.append({
-            "speaker": ("Narrator" if speaker == STORYTELLER_SPEAKER
-                        else meta.get("speaker_shown") or speaker),
+            "speaker": "Narrator" if speaker == STORYTELLER_SPEAKER else speaker,
             "line": line,
         })
     return recent[-_RECENT_LINES:]
@@ -408,20 +402,11 @@ def _apply_talk(name: str, answer: Dict[str, Any],
             logger.info("npc_action(%s): structured proposal rejected: %s", name, error)
             return {}
         return result if isinstance(result, dict) else {}
-    # A name in the answer is the NPC's view of the person — an alias or a
-    # knower's label resolves to the real character, the real name of a
-    # transformed person only for a knower — then the presence check.
-    from app.core.identity_view import resolve_present
-    present = {p["name"] for p in variables.get("present") or []
+    present = {p["name"].casefold(): p["name"] for p in variables.get("present") or []
                if action_available(p["name"])}
-
-    def _present(token: Any) -> str:
-        real = resolve_present(name, str(token or ""))
-        return real if real in present else ""
-
     say = answer.get("say")
     if isinstance(say, dict) and str(say.get("line") or "").strip():
-        to = _present(say.get("to"))
+        to = present.get(str(say.get("to") or "").strip().casefold(), "")
         if not to:
             logger.info("npc_action(%s): say to %r, who is not here — dropped",
                         name, say.get("to"))
@@ -453,7 +438,7 @@ def _apply_talk(name: str, answer: Dict[str, Any],
         return {"said_to": to}
     pair = answer.get("pair")
     if isinstance(pair, dict):
-        partner = _present(pair.get("with"))
+        partner = present.get(str(pair.get("with") or "").strip().casefold(), "")
         pose = _pose_from_answer({"pose": pair.get("pose")},
                                  variables.get("pair_keys") or [])
         if not partner or not pose:

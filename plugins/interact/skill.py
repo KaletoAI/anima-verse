@@ -95,25 +95,21 @@ class InteractSkill(PluginSkill):
 
         The answer shape is offered only while something is open: offered on
         every turn, a small model "answered" a cup of tea with a handshake."""
-        from app.core.identity_view import shown_name
         from app.core.interaction_engine import (partner_poses, check_can_pair,
                                                  pending_invites_for)
         from app.core.prop_action_engine import state_for
         from app.models.character import list_available_characters
 
-        # Who asks is named as this character perceives them; the label
-        # resolves back to the real character when it comes back as partner.
         lines = []
         for invite in pending_invites_for(character_name):
-            inviter, key = shown_name(character_name, invite["inviter"]), invite["pose_key"]
+            inviter, key = invite["inviter"], invite["pose_key"]
             lines.append(f"invitation from {inviter}: {key} - to answer: "
                          + json.dumps({"partner": inviter, "action": key, "answer": "yes|no"},
                                       ensure_ascii=False))
         for run in state_for(character_name)["incoming"]:
             if run.get("can_respond"):
-                asker = shown_name(character_name, run["actor"])
-                lines.append(f"furniture invitation from {asker}: {run['label']} - to answer: "
-                             + json.dumps({"partner": asker, "answer": "yes|no"},
+                lines.append(f"furniture invitation from {run['actor']}: {run['label']} - to answer: "
+                             + json.dumps({"partner": run["actor"], "answer": "yes|no"},
                                           ensure_ascii=False))
         if any(name != character_name and not check_can_pair(character_name, name)
                for name in list_available_characters()):
@@ -149,18 +145,12 @@ class InteractSkill(PluginSkill):
         partner_raw = str(data.get("partner") or data.get("name")
                           or data.get("target") or "").strip()
         action = str(data.get("action") or data.get("pose") or "").strip()
-        # The partner as the actor names them: an alias or a knower's label
-        # resolves to the real character; the real name of a transformed
-        # person only for a knower (identity_view.resolve_present).
-        from app.core.identity_view import (resolve_present, rewrite_names,
-                                            shown_name, shown_names)
-        partner_real = resolve_present(actor, partner_raw) if partner_raw else None
         if partner_raw and not action and data.get("answer") is not None:
             # A furniture invitation is answered by naming who asked; without
             # one this is the answer to a pair invitation, as before.
             from app.core.prop_action_engine import state_for
             run = next((r for r in state_for(actor)["incoming"]
-                        if partner_real and r["actor"] == partner_real), None)
+                        if r["actor"].lower() == partner_raw.lower()), None)
             if run is not None:
                 return self._answer_prop(actor, {**data, "execution_id": run["execution_id"],
                                                  "partner": run["actor"]})
@@ -171,12 +161,10 @@ class InteractSkill(PluginSkill):
             from app.core.pose_catalog import resolve_to_catalog
             from app.models.character import list_available_characters
             available = list_available_characters()
-            partner = partner_real or ""
+            partner = next((n for n in available
+                            if n.lower() == partner_raw.lower()), "")
             if not partner:
-                return ToolRefusal(f"Character '{partner_raw}' not found. "
-                                   f"Available: {', '.join(shown_names(actor, available))}")
-            # Every answer below names the partner as the actor perceives them.
-            shown = shown_name(actor, partner)
+                return ToolRefusal(f"Character '{partner_raw}' not found. Available: {', '.join(available)}")
             known = dict(IE.partner_poses())
             key, _how = resolve_to_catalog(action, "pose")
             if key not in known:
@@ -198,43 +186,40 @@ class InteractSkill(PluginSkill):
                 # invitation once came back as the wrong pose three times).
                 ask = other_ask["pose_key"]
                 return ToolRefusal(
-                    f"{shown} asked {actor} for \"{ask}\" and is waiting for the answer. "
-                    f"To agree: {{\"partner\": \"{shown}\", \"action\": \"{ask}\"}}; "
+                    f"{partner} asked {actor} for \"{ask}\" and is waiting for the answer. "
+                    f"To agree: {{\"partner\": \"{partner}\", \"action\": \"{ask}\"}}; "
                     f"to refuse, add \"answer\": \"no\". Propose something else only after answering.")
             if open_ask:
                 _record_answer(open_ask["invite_id"], not _is_refusal(data))
                 if _is_refusal(data):
                     IE.resolve_invite(open_ask["invite_id"], False)
-                    return (f"{actor} turns {shown} down — no {open_ask['pose_key']}. "
+                    return (f"{actor} turns {partner} down — no {open_ask['pose_key']}. "
                             f"Say why in character.")
                 res = IE.resolve_invite(open_ask["invite_id"], True)
                 if res.get("status") == "started":
                     inter = res.get("interaction") or {}
                     how_long = ("until one of them stops" if inter.get("loop") else
                                 f"for about {float(inter.get('clip_duration_s') or 0):.0f} seconds")
-                    return f"{actor} accepts: {actor} and {shown} now {key} ({how_long})."
+                    return f"{actor} accepts: {actor} and {partner} now {key} ({how_long})."
                 if res.get("status") == "approaching":
                     # Agreed, but not close enough yet — the walk over is
                     # already running and the pair starts on arrival.
-                    return (f"{actor} agrees and walks over to {shown} "
+                    return (f"{actor} agrees and walks over to {partner} "
                             f"— the {key} starts when they get there.")
-                return ToolRefusal("Cannot: " + rewrite_names(
-                    actor, str(res.get('reason') or res.get('status')), [partner]))
+                return ToolRefusal(f"Cannot: {res.get('reason') or res.get('status')}")
             if _is_refusal(data):
                 # Nothing to refuse — never turn a "no" into a fresh proposal
                 # of the very thing that was refused.
-                return ToolRefusal(f"{shown} has not asked {actor} for anything.")
+                return ToolRefusal(f"{partner} has not asked {actor} for anything.")
             blocked = IE.check_can_pair(actor, partner, key)
             if blocked:
-                return ToolRefusal("Cannot: " + rewrite_names(actor, str(blocked), [partner]))
+                return ToolRefusal(f"Cannot: {blocked}")
             invite_id = IE.create_invite(actor, partner, key)
             if not invite_id:
-                return ToolRefusal(f"Cannot ask {shown} right now.")
-            return self._ask(actor, partner, key, invite_id, shown)
+                return ToolRefusal(f"Cannot ask {partner} right now.")
+            return self._ask(actor, partner, key, invite_id)
         except ValueError as e:
-            # An engine reason may name the partner — in the actor's view.
-            return ToolRefusal("Cannot: " + rewrite_names(
-                actor, str(e), [partner_real] if partner_real else []))
+            return ToolRefusal(f"Cannot: {e}")
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, actor, e)
             return ToolRefusal(f"Error in {self.name}: {e}")
@@ -247,13 +232,8 @@ class InteractSkill(PluginSkill):
         run = runs.get(ref)
         if not run or actor not in run["members"]:
             return "Cannot: this exact prop invitation is not addressed to you."
-        named = data.get("partner")
-        if named and named != run["actor"]:
-            # The run is addressed by its id; a partner named by the actor's
-            # view (alias / label) must still be the run's actor.
-            from app.core.identity_view import resolve_present
-            if resolve_present(actor, str(named)) != run["actor"]:
-                return "Cannot: invitation partner mismatch."
+        if data.get("partner") and data["partner"] != run["actor"]:
+            return "Cannot: invitation partner mismatch."
         answer = data.get("answer")
         accepted = answer is True or (isinstance(answer, str) and answer.strip().lower() in
                                       {"yes", "ja", "accept", "agree", "true"})
@@ -266,16 +246,13 @@ class InteractSkill(PluginSkill):
         return f"{run['definition']['name']}: {result['status']} ({result['reason'] or 'answer recorded'})."
 
     def _ask(self, actor: str, partner: str, key: str,
-             invite_id: str = "", shown: str = "") -> str:
+             invite_id: str = "") -> str:
         """Hand the recorded question to whoever has to answer it: the player
         sees it in the UI, an NPC is nudged to answer in its own turn.
 
         A decision model may already have explicitly answered inside the hook.
         Read the real row back rather than claiming a still-open question.
-        ``shown`` is the partner as the actor perceives them (the answer
-        goes back to the actor's LLM); default the real name.
         """
-        shown = shown or partner
         try:
             from app.models.account import is_player_controlled
             is_avatar = is_player_controlled(partner)
@@ -284,20 +261,19 @@ class InteractSkill(PluginSkill):
         if is_avatar:
             # A player is not asked through an LLM — the recorded invitation
             # IS the question, and /play/interact/respond is the answer.
-            return (f"{actor} asks {shown} to {key} together "
+            return (f"{actor} asks {partner} to {key} together "
                     f"— waiting for their answer.")
-        answered = self._answered_at_once(shown, invite_id, key)
+        answered = self._answered_at_once(partner, invite_id, key)
         if answered:
             return answered
         # An NPC invitee gets its turn from this package's own hook handler
         # (register.py), which the core fires on every recorded invitation —
         # so the route and this verb nudge it in exactly one place.
-        return f"{actor} asks {shown} to {key} together."
+        return f"{actor} asks {partner} to {key} together."
 
     def _answered_at_once(self, partner: str, invite_id: str,
                           key: str) -> str:
-        """Describe an explicit decision already recorded, or an open question.
-        ``partner`` is the name to print — the actor's view of the partner."""
+        """Describe an explicit decision already recorded, or an open question."""
         if not invite_id:
             return ""
         try:

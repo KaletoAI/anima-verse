@@ -188,12 +188,9 @@ export interface PortraitLine {
   meta?: Record<string, unknown>;
 }
 
-/** The speaker KEY: the `/play/scene` payload carries the real name in
- *  `meta.speaker`, the objective observer rows in `speaker`. Never a display
- *  string — neither the narrator's LOCALIZED label nor `meta.speaker_shown`
- *  (the avatar's view of a disguised speaker, which `SceneView` prints): the
- *  key picks the portrait slot and its version, and `ChatPortraits` turns it
- *  into the shown name and persona portrait itself. */
+/** Same derivation `SceneView` uses, and for the same reason: the `/play/scene`
+ *  payload carries the name in `meta.speaker`, the objective observer rows in
+ *  `speaker`. Never the LOCALIZED display string — that is a rendering. */
 function speakerOf(line: PortraitLine): string {
   return line.speaker || (line.meta?.speaker as string) || '';
 }

@@ -252,21 +252,6 @@ class UnifiedChatManager:
 
         partner = UnifiedChatManager._resolve_partner_key(partner_name, character_name)
 
-        # Identity stamp: who wore which persona when this was said in person,
-        # so the line keeps the persona's name for a non-knower — also after
-        # the bearer reverted (identity_view.stamped_name renders it). Phone
-        # and other remote messages are sent by the person herself: the
-        # persona has no remote contact, so they are never stamped.
-        if getattr(message, "medium", "in_person") == "in_person":
-            try:
-                from app.core.identity_view import pair_stamp
-                stamp = pair_stamp(character_name, partner)
-            except Exception as e:
-                logger.debug("identity stamp failed for %s/%s: %s", character_name, partner, e)
-                stamp = {}
-            if stamp:
-                message.metadata = {**(message.metadata or {}), **stamp}
-
         # Meta: every field except the standard columns
         msg_dict = message.to_dict()
         meta = {k: v for k, v in msg_dict.items()

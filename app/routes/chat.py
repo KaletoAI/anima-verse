@@ -1003,19 +1003,6 @@ class ChatPrompt(NamedTuple):
     room_offer: str = ""
 
 
-def _masked_partner_data(partner: str, label: str, masked: str) -> dict:
-    """The only partner fields a NON-KNOWER of ``partner``'s persona gets:
-    the shown name, the persona description as appearance and — only when
-    the persona overrides it — the persona's presence. Never a value of the
-    real character (her presence.md would give her away)."""
-    from app.core.identity_view import self_field
-    data = {"character_name": label, "character_appearance": masked}
-    presence = self_field(partner, "character_presence")
-    if presence is not None:
-        data["character_presence"] = presence
-    return data
-
-
 def _build_chat_prompt(character_name: str,
     lang_instruction: str,
     history_summary: str,
@@ -1067,16 +1054,6 @@ def _build_chat_prompt(character_name: str,
     # ---- Conversation partner ----------------------------------------
     from app.models.account import get_active_character
     _partner_name = "" if skip_partner else (partner_override or get_active_character())
-    # _partner_name stays the REAL name (every lookup key); the prompt names
-    # the partner as this character perceives them — a persona's alias for a
-    # non-knower, "<alias> (<name>)" for a knower (identity_view).
-    from app.core.identity_view import (identity_key, masked_description,
-                                        shown_name, shown_names)
-    _partner_label = shown_name(character_name, _partner_name) if _partner_name else ""
-    # Not None = a persona this character is not in on: its description
-    # replaces the partner's real appearance ("" still masks).
-    _partner_masked = (masked_description(character_name, _partner_name)
-                       if _partner_name and _partner_name != character_name else None)
     _partner_lines: list = []
     # The partner's per-turn facts (mood, doing, volatile fields) — they go
     # to the scene state; _partner_lines keeps only the stable sheet.
@@ -1101,33 +1078,18 @@ def _build_chat_prompt(character_name: str,
                 if p_loc_id:
                     p_loc_name = get_location_name(p_loc_id)
                     partner_profile["current_location"] = p_loc_name or p_loc_id
-                _shown_profile = dict(partner_profile, character_name=_partner_label)
-                if _partner_masked is not None:
-                    # A non-knower sees the persona only: its name, its look
-                    # and — when the persona sets one — its presence. No
-                    # real-profile field and no source file of the real
-                    # character (character_name="") — each would identify the
-                    # person behind it.
-                    _partner_lines = build_prompt_section(
-                        partner_template,
-                        _masked_partner_data(_partner_name, _partner_label,
-                                             _partner_masked),
-                        active_features=char_features,
-                        is_partner=True, character_name="",
-                        volatile=False)
-                else:
-                    _partner_lines = build_prompt_section(
-                        partner_template, _shown_profile,
-                        active_features=char_features,
-                        is_partner=True, character_name=_partner_name,
-                        volatile=False)
+                _partner_lines = build_prompt_section(
+                    partner_template, partner_profile,
+                    active_features=char_features,
+                    is_partner=True, character_name=_partner_name,
+                    volatile=False)
                 _partner_state_lines = build_prompt_section(
-                    partner_template, _shown_profile,
+                    partner_template, partner_profile,
                     active_features=char_features,
                     is_partner=True, character_name=_partner_name,
                     volatile=True)
             if not _partner_lines:
-                _partner_lines = [f"Name: {_partner_label}"]
+                _partner_lines = [f"Name: {_partner_name}"]
 
             try:
                 _p_feeling = (partner_profile.get("current_feeling") or "").strip()
@@ -1146,9 +1108,7 @@ def _build_chat_prompt(character_name: str,
             # of the system prompt — the template's "unless a different form
             # of address is specified above" refers to exactly this line.
             from app.models.relationship import address_line as _address_line
-            # Keyed by who the partner is right now (the persona while
-            # transformed), never by a name this character may not know.
-            _addr = _address_line(character_name, identity_key(_partner_name))
+            _addr = _address_line(character_name, _partner_name)
             if _addr:
                 _partner_lines.append(_addr)
     elif not skip_partner:
@@ -1218,7 +1178,7 @@ def _build_chat_prompt(character_name: str,
     if _partner_name and _partner_name != character_name and not skip_partner:
         # What is uncovered on a partner only counts face to face; in room
         # mode the presence lines below carry it for everyone present.
-        partner_wearing = _build_wearing_block(_partner_name, _partner_label,
+        partner_wearing = _build_wearing_block(_partner_name, _partner_name,
                                                 include_inventory=False,
                                                 with_uncovered=medium == "in_person")
 
@@ -1266,11 +1226,8 @@ def _build_chat_prompt(character_name: str,
     else:
         char_lines = [f"Name: {character_name}"]
         self_state_lines = []
-        from app.core.identity_view import self_field
-        _personality = (self_field(character_name, "character_personality")
-                        or char_profile.get("character_personality"))
-        if _personality:
-            char_lines.append(f"Personality: {_personality}")
+        if char_profile.get("character_personality"):
+            char_lines.append(f"Personality: {char_profile['character_personality']}")
 
     # ---- Feature-Check Helper -----------------------------------------
     from app.models.character_template import is_feature_enabled as _feat
@@ -1347,7 +1304,7 @@ def _build_chat_prompt(character_name: str,
     memory_section = ""
     if _has("memory_enabled"):
         memory_section = build_memory_prompt_section(
-            character_name, partner_name=_partner_label, current_message="") or ""
+            character_name, partner_name=_partner_name, current_message="") or ""
 
     # ---- Relationships -------------------------------------------------
     relationships_section = ""
@@ -1510,7 +1467,7 @@ def _build_chat_prompt(character_name: str,
         _others = list(dict.fromkeys(
             c for c in present_characters if c and c != character_name))
         if _others:
-            _present_str = ", ".join(shown_names(character_name, _others))
+            _present_str = ", ".join(_others)
             partner_mode = "room"
             # Visible outfit/states per present person — same builder as
             # the thought context (a character SEES the people around it).
@@ -1522,12 +1479,12 @@ def _build_chat_prompt(character_name: str,
                 # respond-turn (broken 07-09..07-18 exactly this way).
                 _loc = get_character_current_location(character_name) or ""
                 _present_details = present_people_details(
-                    [(n, n) for n in _others], _loc, observer=character_name)
+                    [(n, n) for n in _others], _loc)
             except Exception:
                 _present_details = ""
             if partner_wearing:
                 partner_wearing = _build_wearing_block(
-                    _partner_name, _partner_label, include_inventory=False,
+                    _partner_name, _partner_name, include_inventory=False,
                     with_uncovered=False)
 
     # ---- Scenes as the canonical "earlier conversations" --------------
@@ -1628,7 +1585,7 @@ def _build_chat_prompt(character_name: str,
     partner_address = ""
     if partner_mode == "room" and _partner_name and _partner_name != character_name:
         from app.models.relationship import get_address as _get_address
-        partner_address = _get_address(character_name, identity_key(_partner_name))
+        partner_address = _get_address(character_name, _partner_name)
 
     # ---- Who was addressed ---------------------------------------------
     # Only meaningful in room mode; a 1:1 chat has no addressee list and the
@@ -1638,8 +1595,7 @@ def _build_chat_prompt(character_name: str,
         addressed_names = ""
     else:
         addressed_to_me = bool(character_name in addressed_to)
-        addressed_names = ", ".join(shown_name(character_name, n)
-                                    for n in addressed_to if n != character_name)
+        addressed_names = ", ".join(n for n in addressed_to if n != character_name)
 
     system_template = (
         "chat/npc_talk.md" if is_temporary_npc(character_name)
@@ -1652,7 +1608,7 @@ def _build_chat_prompt(character_name: str,
         lang_instruction=lang_instruction,
         char_lines=char_lines,
         partner_mode=partner_mode,
-        partner_name=_partner_label,
+        partner_name=_partner_name,
         partner_lines=_partner_lines,
         medium=medium,
         secrets_section=secrets_section,
@@ -1689,8 +1645,7 @@ def _build_chat_prompt(character_name: str,
             _in_sight = []
         uncovered = [(label, text) for label, text in
                      [("you", uncovered_summary(character_name))]
-                     + [(shown_name(character_name, n), uncovered_summary(n))
-                        for n in _in_sight] if text]
+                     + [(n, uncovered_summary(n)) for n in _in_sight] if text]
         if uncovered:
             emit("chat.moment_facts", character_name=character_name,
                  uncovered=uncovered, facts=moment_facts)
@@ -1702,7 +1657,7 @@ def _build_chat_prompt(character_name: str,
         # furniture contract; the rp_first roleplay reply gets names.
         prop_actions_executable=bool(tools_enabled and not has_tool_llm),
         partner_mode=partner_mode,
-        partner_name=_partner_label,
+        partner_name=_partner_name,
         partner_state_lines=_partner_state_lines,
         partner_address=partner_address,
         present_characters=_present_str,
@@ -1737,14 +1692,8 @@ def _build_chat_prompt(character_name: str,
             v for v in moment_ctx.values() if isinstance(v, str)] + [
             line for key in ("self_state_lines", "moment_notes", "partner_state_lines")
             for line in (moment_ctx.get(key) or []) if isinstance(line, str)]
-        # A present person wearing a persona this character is not in on is
-        # never scanned for: a real name in the prompt is not hers to this
-        # character, and the away note would print it.
-        _masked_here = [n for n in dict.fromkeys([_partner_name or ""]
-                                                 + list(present_characters or []))
-                        if n and masked_description(character_name, n) is not None]
         moment_ctx["away_block"] = away_block(away_mentioned(
-            _scan, exclude=[character_name, _partner_name or ""] + _masked_here))
+            _scan, exclude=[character_name, _partner_name or ""]))
     except Exception as e:
         logger.debug("away block for %s failed: %s", character_name, e)
         moment_ctx["away_block"] = ""

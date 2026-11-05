@@ -29,7 +29,8 @@ logger = get_logger("go_to_character")
 
 from app.models.character import (
     get_character_current_location,
-    get_character_current_room)
+    get_character_current_room,
+    list_available_characters)
 from app.models.world import (
     get_location_by_id, get_location_rooms, list_locations_for_character)
 
@@ -88,18 +89,8 @@ class GoToCharacterSkill(PluginSkill):
         if not requested:
             return "Error: no person given. Name the character you want to go to."
 
-        target = self._canonical_name(character_name, requested)
+        target = self._canonical_name(requested)
         if not target:
-            from app.core.identity_view import resolve_name
-            if resolve_name(character_name, requested):
-                _ids, known_names = self._known_places(character_name)
-                # A real person the actor cannot find under that name right
-                # now (she wears a persona the actor is not in on): her
-                # whereabouts are simply unknown — the ordinary not-found
-                # answer, which reveals nothing.
-                places = ", ".join(known_names) if known_names else "nowhere yet"
-                return (f"You do not know where {requested} is right now — you only "
-                        f"know how to reach: {places}.")
             # Deliberately NO first-/last-name resolution and no substring
             # magic (house rule): an ambiguous guess would send the
             # character to a stranger's place.
@@ -107,9 +98,6 @@ class GoToCharacterSkill(PluginSkill):
                     f"world. Use the exact name.")
         if target.lower() == character_name.lower():
             return "That is you — name someone else to go to."
-        # Every answer names the target as the actor perceives them.
-        from app.core.identity_view import shown_name
-        shown = shown_name(character_name, target)
 
         actor_loc = get_character_current_location(character_name) or ""
         actor_room = get_character_current_room(character_name) or ""
@@ -124,16 +112,16 @@ class GoToCharacterSkill(PluginSkill):
                     payload)
 
         if kind == "same_room":
-            return f"You are already in the same room as {shown}."
+            return f"You are already in the same room as {target}."
 
         if kind == "unknown":
             places = ", ".join(known_names) if known_names else "nowhere yet"
-            return (f"You do not know where {shown} is right now — you only "
+            return (f"You do not know where {target} is right now — you only "
                     f"know how to reach: {places}.")
 
         location = get_location_by_id(target_loc)
         if not location:
-            return (f"You do not know where {shown} is right now — you only "
+            return (f"You do not know where {target} is right now — you only "
                     f"know how to reach: "
                     f"{', '.join(known_names) if known_names else 'nowhere yet'}.")
         location_name = location.get("name", "") or target_loc
@@ -152,20 +140,22 @@ class GoToCharacterSkill(PluginSkill):
             json.dumps({"input": move_input,
                         "agent_name": character_name,
                         "user_id": (ctx.get("user_id") or "").strip()}))
-        return f"(going to {shown}) {result}"
+        return f"(going to {target}) {result}"
 
     @staticmethod
-    def _canonical_name(actor: str, requested: str) -> str:
-        """Exact, case-insensitive name match from the actor's view — nothing
-        else (``identity_view.resolve_present``): a roster name, the alias of
-        an active persona or a knower's label ``"<alias> (<name>)"``; the
-        real name of a person who wears a persona only for a knower.
+    def _canonical_name(requested: str) -> str:
+        """Exact, case-insensitive name match — nothing else.
 
-        Returns the character's name in its stored spelling, or "" when the
-        actor names nobody it can find that way.
+        Returns the character's name in its stored spelling, or "" when no
+        character carries exactly that name.
         """
-        from app.core.identity_view import resolve_present
-        return resolve_present(actor, requested) or ""
+        wanted = (requested or "").strip().lower()
+        if not wanted:
+            return ""
+        for name in list_available_characters():
+            if name.lower() == wanted:
+                return name
+        return ""
 
     @staticmethod
     def _room_display_name(location: Dict[str, Any], room_id: str) -> str:

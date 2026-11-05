@@ -49,8 +49,7 @@ export interface HudGameState {
   talkTarget: { name: string; dist: number } | null;
   /** avatar cannot move on its own (party follower) — HUD hint, server enforces */
   movementLocked: boolean;
-  /** the party leader's SHOWN name (the avatar's view, a display string)
-   *  while `movementLocked` is set, else empty */
+  /** name of the party leader while `movementLocked` is set, else empty */
   partyLeader: string;
   /** Id of the ground room of the avatar's CURRENT location, from the
    *  `/play/scene` room list (`is_ground`) — empty while no payload has

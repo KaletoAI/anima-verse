@@ -501,13 +501,8 @@ def request_consent(invite_id: str) -> bool:
         party = P.get_party_of(invitation["inviter"]) or {}
         details = {"participants": [invitation["inviter"],
                                     *(party.get("members") or []), invitation["invitee"]]}
-    # The invitee reads the inviter and the group as it perceives them; the
-    # label resolves back to the real leader when JoinParty names it.
-    from app.core.identity_view import shown_name, shown_names
-    invitee = invitation["invitee"]
     variables = {**invitation, **details, "destination_label": details.get("destination_label", ""),
-                 "inviter_shown": shown_name(invitee, invitation["inviter"]),
-                 "participants": shown_names(invitee, details.get("participants", [])),
+                 "participants": details.get("participants", []),
                  "after_arrival_label": details.get("after_arrival_label", "")}
     content = render("party/consent.md", **variables)
     from app.core import decision, decision_points
@@ -674,10 +669,8 @@ def open_questions(name: str, tool_names: list[str]) -> list[str]:
     if "JoinParty" not in tool_names:
         return []
     lines = []
-    from app.core.identity_view import shown_name
     for invitation in P.get_pending_invites_for(name):
-        # The invitee's view of the inviter; JoinParty resolves it back.
-        leader = shown_name(name, invitation["inviter"])
+        leader = invitation["inviter"]
         destination = invitation.get("destination_label", "")
         yes = json.dumps({"leader": leader, "answer": "yes", "invite_id": invitation["invite_id"]}, ensure_ascii=False)
         no = json.dumps({"leader": leader, "answer": "no", "invite_id": invitation["invite_id"]}, ensure_ascii=False)
@@ -708,15 +701,12 @@ def trip_context(name: str, verb: str) -> str:
         projection = invite_projection({"intent_id": intent["id"]})
         if not projection:
             continue
-        from app.core.identity_view import rewrite_names, shown_name, shown_names
         return render("party/trip_context.md", character_name=name,
                       intent_id=intent["id"], owner=intent["owner"],
-                      owner_shown=shown_name(name, intent["owner"]),
                       invite_id=state.get("invite_id", ""),
                       destination_label=projection.get("destination_label", ""),
-                      participants=shown_names(name, members), phase=state.get("phase", "blocked"),
-                      reason=rewrite_names(name, state.get("reason", ""), members),
-                      after_arrival_label=projection.get("after_arrival_label", ""))
+                      participants=members, phase=state.get("phase", "blocked"),
+                      reason=state.get("reason", ""), after_arrival_label=projection.get("after_arrival_label", ""))
     return ""
 
 
@@ -724,12 +714,8 @@ def npc_action_context(name: str, variables: Dict) -> str:
     if not _can_propose(name) or not variables.get("talk_allowed") or not variables.get("present") or not npc_action_available(name):
         return ""
     activities = hooks.get_provider("shared_activity_options")
-    # The partners as this NPC perceives them; npc_action_execute resolves
-    # the named target back to the real character.
-    from app.core.identity_view import shown_names
     return render("party/npc_action.md", destinations=_destinations(name),
-                  present_names=shown_names(name, [p["name"] for p in variables["present"]]),
-                  npc_name=name,
+                  present=variables["present"], npc_name=name,
                   shared_activities=activities() if activities else [])
 
 
@@ -742,12 +728,8 @@ def npc_action_execute(name: str, action: Any, variables: Dict, *, moved: bool =
     if ("location_id" in variables and variables["location_id"] != position["location_id"]) \
             or ("current_room_id" in variables and variables["current_room_id"] != position["room_id"]):
         return {}
-    # The target as this NPC named it (its view: an alias or a knower's
-    # label reaches the real character), then the presence check.
-    from app.core.identity_view import resolve_present
-    present = {p["name"] for p in variables.get("present") or []}
-    target = resolve_present(name, str(action.get("target") or ""))
-    target = target if target in present else None
+    present = {p["name"].casefold(): p["name"] for p in variables.get("present") or []}
+    target = present.get(str(action.get("target") or "").strip().casefold())
     line = str(action.get("line") or "").strip()[:600]
     if not target or not line:
         return {}

@@ -75,11 +75,8 @@ function ringColor(name: string): string {
   return `hsl(${Math.floor(rnd() * 360)}, 65%, 55%)`;
 }
 
-/** Uncropped cutout sprite with a coloured pointer; initials while its image
- *  loads. `label` is the SHOWN name (colour + initials) — never the real key
- *  of a disguised character. */
-function makePortraitTexture(label: string, avatarUrl: string | undefined,
-  isAvatar: boolean): THREE.CanvasTexture {
+/** Uncropped cutout sprite with a coloured pointer; initials while its image loads. */
+function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvatar: boolean): THREE.CanvasTexture {
   const S = 144;
   const c = document.createElement('canvas');
   c.width = c.height = S;
@@ -90,7 +87,7 @@ function makePortraitTexture(label: string, avatarUrl: string | undefined,
   const draw = (img: HTMLImageElement | null) => {
     ctx.clearRect(0, 0, S, S);
     const r = S / 2 - 6;
-    ctx.fillStyle = isAvatar ? '#e8b83a' : ringColor(label);
+    ctx.fillStyle = isAvatar ? '#e8b83a' : ringColor(name);
     ctx.beginPath();
     ctx.moveTo(S / 2 - 10, S - 26);
     ctx.lineTo(S / 2 + 10, S - 26);
@@ -110,7 +107,7 @@ function makePortraitTexture(label: string, avatarUrl: string | undefined,
       ctx.font = `bold ${S / 3}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const initials = label.split(/\s+/).map((p) => p[0] ?? '').join('').slice(0, 2).toUpperCase();
+      const initials = name.split(/\s+/).map((p) => p[0] ?? '').join('').slice(0, 2).toUpperCase();
       ctx.fillText(initials, S / 2, S / 2 - 6);
     }
     tex.needsUpdate = true;
@@ -951,7 +948,7 @@ export class NpcManager {
           npc.activity = st.char.activity || '';
           npc.animation = st.char.activity_animation || undefined;
           npc.labelActivity.textContent = npc.activity;
-          npc.labelName.textContent = st.char.display_name || st.char.name;
+          npc.labelName.textContent = st.char.name;
         } else if (created) {
           // A figure BUILT from this payload got the stale clip through
           // `createNpc` before the guard could run — and that is the live
@@ -1091,9 +1088,7 @@ export class NpcManager {
       // is getting out of its pose and stays where it is. Reading `travel`
       // alone walked it while the standing-up clip was still running.
       const travelling = tagTravelling(st.char.travel);
-      // The tag prints the AVATAR's view of the person (`display_name`, a
-      // disguised character's alias); everything keyed stays on `name`.
-      npc.labelName.textContent = tagName(st.char.display_name || st.char.name, st.char.travel);
+      npc.labelName.textContent = tagName(st.char.name, st.char.travel);
       const badges = tagBadges(st.char.badges);
       if (badges.key !== npc.badgeKey) {
         npc.badgeKey = badges.key;
@@ -1163,11 +1158,7 @@ export class NpcManager {
       root.add(figure.root);
       labelY = tagAnchorY(figure.height);
     } else {
-      // A persona portrait replaces the real one whenever the field is there
-      // (`''` → the initials disc); colour and initials follow the shown name,
-      // so a disguise does not wear the real person's colour.
-      const tex = makePortraitTexture(st.char.display_name || st.char.name,
-        st.char.portrait_url !== undefined ? st.char.portrait_url : st.char.avatar_url, isAvatar);
+      const tex = makePortraitTexture(st.char.name, st.char.avatar_url, isAvatar);
       sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true }));
       sprite.center.set(0.5, 0.02);
       sprite.scale.setScalar(2.6);
@@ -1187,7 +1178,7 @@ export class NpcManager {
     el.className = 'npc-label' + (isAvatar ? ' npc-avatar' : '') + (figure ? ' above' : '');
     const nameEl = document.createElement('span');
     nameEl.className = 'npc-name';
-    nameEl.textContent = st.char.display_name || st.char.name;
+    nameEl.textContent = st.char.name;
     // Icons behind the name — their own span, so the name line (`tagName`)
     // stays the plain name and the badges change without touching it.
     const badgeEl = document.createElement('span');

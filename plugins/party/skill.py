@@ -64,22 +64,12 @@ def _record_answer(invite_id: str, accepted: bool) -> None:
 
 
 def _resolve_target(data: Dict[str, Any]) -> str:
-    """The name token the call carries (not resolved yet)."""
     target = (data.get("leader") or data.get("target") or data.get("partner")
               or data.get("partner_name") or "").strip()
     if target:
         return target
     text = (data.get("input") or "").strip()
     return text.split()[0] if text else ""
-
-
-def _resolve_present(character_name: str, raw: str) -> str:
-    """The real character ``character_name`` means with ``raw`` — an alias
-    or a knower's label resolves to the bearer; the real name of a person
-    who wears a persona only for a knower (``identity_view.resolve_present``).
-    "" when the token names nobody the character can reach in person."""
-    from app.core.identity_view import resolve_present
-    return resolve_present(character_name, raw) or ""
 
 
 class PartySkill(PluginSkill):
@@ -184,24 +174,13 @@ class PartySkill(PluginSkill):
 
     def _invite(self, character_name: str, data: Dict[str, Any]) -> str:
         from app.core import party_engine as P
-        from app.core.identity_view import shown_name
-        raw = _resolve_target(data)
-        if not raw:
-            return "Who exactly to invite? (no valid target)"
-        target = _resolve_present(character_name, raw)
-        if target == character_name:
+        target = _resolve_target(data)
+        if not target or target == character_name:
             return "Who exactly to invite? (no valid target)"
         if P.is_party_follower(character_name):
             return f"{character_name} is part of a party and cannot invite anyone."
-        if not target:
-            # Nobody the character can find by that name here — the same
-            # answer as for someone who is elsewhere, so it reveals nothing.
-            return (f"{raw} is not at your location. "
-                    f"You can only invite someone who is here with you.")
-        # Every answer names the invitee as the inviter perceives them.
-        shown = shown_name(character_name, target)
         if target in P.party_followers(character_name):
-            return (f"{shown} is already travelling with you — no new invitation is needed. "
+            return (f"{target} is already travelling with you — no new invitation is needed. "
                     "If a shared trip is active, wait until it ends before proposing another.")
         incoming = P.find_pending_invite(target, character_name)
         if incoming and (data.get("destination") or data.get("intent_id")):
@@ -224,13 +203,13 @@ class PartySkill(PluginSkill):
                     return "The counter-proposal differs from the destination awaiting your answer."
             if data.get("after_arrival") is not None and data["after_arrival"] != action.get("after_arrival"):
                 return "The counter-proposal differs from the activity awaiting your answer."
-            return self._join(character_name, {**data, "leader": shown,
+            return self._join(character_name, {**data, "leader": target,
                                                 "invite_id": incoming["invite_id"]})
         if not P.same_location(character_name, target):
             # The tool description says "present at your current location" —
             # this is the enforcement. An RP turn that hallucinates someone
             # into the scene must not reach them across the map.
-            return (f"{shown} is not at your location. "
+            return (f"{target} is not at your location. "
                     f"You can only invite someone who is here with you.")
         if data.get("destination") or data.get("intent_id"):
             from plugins.party.trip_intents import propose_trip
@@ -240,10 +219,7 @@ class PartySkill(PluginSkill):
                                       intent_id=str(data.get("intent_id") or ""),
                                       after_arrival=data.get("after_arrival"))
             except ValueError as e:
-                # An engine reason names members by real name — in the
-                # inviter's view here.
-                from app.core.identity_view import rewrite_names
-                return f"Trip proposal refused: {rewrite_names(character_name, str(e), [target])}"
+                return f"Trip proposal refused: {e}"
             travel = (intent.get("meta") or {}).get("travel") or {}
             return (f"Shared trip {intent['id']}: {travel.get('phase', 'waiting_consent')}"
                     f" — {travel.get('reason', '')}")
@@ -259,9 +235,9 @@ class PartySkill(PluginSkill):
                 "invite_to_party [%s -> %s]: open invitation the other way "
                 "round — joining instead of counter-inviting", character_name,
                 target)
-            return self._join(character_name, {**data, "leader": shown})
+            return self._join(character_name, {**data, "leader": target})
         if P.get_party_of(target) is not None:
-            return f"{shown} is already in a party."
+            return f"{target} is already in a party."
         from app.models.character import is_temporary_npc
         from app.models.account import is_player_controlled
         _is_avatar = is_player_controlled(target)
@@ -276,31 +252,20 @@ class PartySkill(PluginSkill):
         if _is_avatar:
             # An avatar cannot decide via LLM -> the pending invite is the UI
             # question.
-            return (f"{character_name} invited {shown} to the party "
+            return (f"{character_name} invited {target} to the party "
                     f"— waiting for their answer.")
         from plugins.party.trip_intents import request_consent
         request_consent(invite_id)
         invitation = P.get_invite(invite_id) or {}
-        return (f"{character_name} invites {shown} to come along "
+        return (f"{character_name} invites {target} to come along "
                 f"— {invitation.get('status', 'pending')}.")
 
 
     def _join(self, character_name: str, data: Dict[str, Any]) -> str:
         from app.core import party_engine as P
-        from app.core.identity_view import shown_name
-        raw = _resolve_target(data)
-        if not raw:
+        leader = _resolve_target(data)
+        if not leader or leader == character_name:
             return "Whose party to join? (no valid target)"
-        leader = _resolve_present(character_name, raw)
-        if leader == character_name:
-            return "Whose party to join? (no valid target)"
-        if not leader:
-            # Nobody the character can find by that name here — the same
-            # answer as for a leader who is not present.
-            return (f"{character_name} cannot join {raw}'s party "
-                    f"(not present / membership conflict).")
-        # Every answer names the leader as the joiner perceives them.
-        shown = shown_name(character_name, leader)
         reference = data.get("invite_id")
         if reference:
             invitation = P.get_invite(reference) if isinstance(reference, str) else None
@@ -319,23 +284,23 @@ class PartySkill(PluginSkill):
                 if invitation["status"] == "pending":
                     from plugins.party.trip_intents import _narrate_answer
                     _narrate_answer(invitation, True)
-                return f"{character_name} joins {shown}'s party."
+                return f"{character_name} joins {leader}'s party."
             if result["status"] == "declined":
-                return f"{character_name} turns down {shown}'s invitation. Say why in character."
+                return f"{character_name} turns down {leader}'s invitation. Say why in character."
             return f"The invitation could not be answered: {result['status']}."
         if _is_refusal(data):
-            return f"{shown} has not invited {character_name}."
+            return f"{leader} has not invited {character_name}."
         # An ordinary join without a recorded proposal keeps its existing
         # meaning. A managed trip always reaches the linked resolver above.
         if P.is_in_party(character_name):
             return f"{character_name} is already in a party."
         pid = P.add_to_party(leader, character_name)
         if not pid:
-            return f"{character_name} cannot join {shown}'s party (not present / membership conflict)."
+            return f"{character_name} cannot join {leader}'s party (not present / membership conflict)."
         P.clear_invites_for(character_name)
         from plugins.party.trip_intents import _narrate_answer
         _narrate_answer({"inviter": leader, "invitee": character_name}, True)
-        return f"{character_name} joins {shown}'s party."
+        return f"{character_name} joins {leader}'s party."
 
     def _leave(self, character_name: str, data: Dict[str, Any]) -> str:
         from app.core import party_engine as P

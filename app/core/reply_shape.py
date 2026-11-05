@@ -155,13 +155,7 @@ def compose_reply_shape(facts: Dict[str, Any]) -> str:
 def build_reply_shape_section(character_name: str, partner_name: str = "",
                               incoming_text: str = "") -> str:
     """Load the facts from the world (profile, config, relationship) and
-    return compose_reply_shape(...). Never raises.
-
-    ``partner_name`` is the partner's REAL name (the lookup key); the lines
-    name the partner as ``character_name`` perceives them
-    (``identity_view.shown_name``). For a partner wearing a persona this
-    character is not in on, the relationship is the one with the persona
-    (``identity_key``) — never the real person's."""
+    return compose_reply_shape(...). Never raises."""
     try:
         from app.models.character import get_character_config, get_character_profile
 
@@ -191,16 +185,11 @@ def build_reply_shape_section(character_name: str, partner_name: str = "",
                 sentiment_label,
             )
 
-            from app.core.identity_view import identity_key, masked_description, shown_name
-
             partner_config = get_character_config(partner_name) or {}
-            facts["partner"] = shown_name(character_name, partner_name)
+            facts["partner"] = partner_name
             facts["partner_attention"] = tier(partner_config.get("popularity"))
 
-            rel_key = (identity_key(partner_name)
-                       if masked_description(character_name, partner_name) is not None
-                       else partner_name)
-            rel = get_relationship(character_name, rel_key)
+            rel = get_relationship(character_name, partner_name)
             if rel:
                 if (rel.get("character_a") or "").lower() == character_name.lower():
                     my_sentiment = rel.get("sentiment_a_to_b", 0)

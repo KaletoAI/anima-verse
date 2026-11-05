@@ -230,17 +230,6 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     ``speaker_expr_versions`` and cannot be told from a speaker the server
     simply failed to version.
 
-    NAMES ARE SHOWN FROM THE AVATAR'S VIEW, KEYS STAY REAL (display-only
-    secrecy of a disguised character, ``identity_view.player_view``):
-    ``present_detail[]`` and ``follow_suggestions[]`` carry ``display_name``
-    and — for a person whose disguise the avatar is not in on — ``portrait_url``
-    ("" = show the no-portrait placeholder); ``display_names`` maps every
-    other name the payload uses (chips, speakers, invitations, party, pair) to
-    its shown name and ``portrait_urls`` the disguised ones to the persona
-    portrait. A scene line prints ``meta.speaker_shown`` /
-    ``meta.addressees_shown`` when present — the view at the moment the line
-    was heard — and its real ``meta.speaker`` otherwise.
-
     A PLAIN ``def`` on purpose: nothing here is awaited — it is perception
     reads, character profiles and the journey block, all synchronous SQLite —
     and FastAPI runs a plain handler in the threadpool. As a coroutine it held
@@ -256,7 +245,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
 
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
-             "present_badges": {}, "display_names": {}, "portrait_urls": {},
+             "present_badges": {},
              "scene": [], "rooms": [], "travel": None,
              "speaker_expr_versions": {},
              "avatar_expr_version": "", "bg_version": "",
@@ -316,21 +305,8 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         figures = [c for c in present if c in _in_room]
     else:
         figures = list(present)
-    # The AVATAR's view of each person (display-only secrecy): ``name`` and
-    # every URL stay the real key, ``display_name`` is what the HUD prints and
-    # ``portrait_url`` (only for a disguised person the avatar is not in on;
-    # "" = placeholder) replaces the real portrait.
-    from app.core.identity_view import player_view
-    _views: Dict[str, Dict[str, str]] = {}
-
-    def _view(name: str) -> Dict[str, str]:
-        view = _views.get(name)
-        if view is None:
-            view = _views[name] = player_view(avatar, name)
-        return view
-
     present_detail = [{"name": c, "avatar_url": _portrait(c),
-                       "expr_version": _expr_v(c), **_view(c)} for c in figures]
+                       "expr_version": _expr_v(c)} for c in figures]
     # Every speaker of the returned history, not just the present (see the
     # docstring). Computed BEFORE the storyteller label is localised below —
     # the selection reads the canonical speaker value.
@@ -381,8 +357,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
             if c_loc == loc and c_room and c_room != room:
                 _seen.add(sp)
                 rn = next((r["name"] for r in rooms_out if r["id"] == c_room), c_room)
-                follow_suggestions.append({"character": sp, "room_id": c_room, "room_name": rn,
-                                           **_view(sp)})
+                follow_suggestions.append({"character": sp, "room_id": c_room, "room_name": rn})
     except Exception as _fe:
         logger.debug("follow_suggestions failed: %s", _fe)
 
@@ -452,11 +427,6 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
                 continue
             _m["narrator"] = True
             _m["speaker"] = _st_label
-            # The ONE display field every line carries a value for: the
-            # perceived rows got theirs from ``record_utterance`` (Task 6),
-            # the narrator's is its label. Clients print
-            # ``speaker_shown ?? speaker``.
-            _m["speaker_shown"] = _st_label
     except Exception as _le:
         logger.debug("storyteller label localisation failed: %s", _le)
 
@@ -469,40 +439,11 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
             if isinstance(_m, dict):
                 _m.pop("llm_usage", None)
 
-    # Every person this payload names outside the scene lines, in the
-    # avatar's view: the address chips (``present``), the figures, the
-    # speakers of the history (portrait column), invitations, the party and
-    # the pair. ``display_names`` maps each real key to its shown name,
-    # ``portrait_urls`` only the disguised ones to the persona portrait.
-    _named: List[str] = [*present, *figures, *speaker_expr_versions,
-                         *(f["character"] for f in follow_suggestions)]
-    if party:
-        _named += [party.get("leader") or "", *(party.get("members") or [])]
-    for _inv in party_invites:
-        _named += [_inv.get("inviter") or "", *(_inv.get("participants") or [])]
-    _named += [i.get("inviter") or "" for i in interaction_invites]
-    for _blk, _key in ((interaction_pending, "invitee"), (interaction_answered, "invitee"),
-                       (interaction_approaching, "partner")):
-        if _blk:
-            _named.append(_blk.get(_key) or "")
-    if interaction:
-        _named += list((interaction.get("members") or {}).values())
-    display_names: Dict[str, str] = {}
-    portrait_urls: Dict[str, str] = {}
-    for _n in _named:
-        if not _n or _n in display_names or _n == avatar:
-            continue
-        _v = _view(_n)
-        display_names[_n] = _v["display_name"]
-        if "portrait_url" in _v:
-            portrait_urls[_n] = _v["portrait_url"]
-
     return {
         "avatar": avatar,
         "location_id": loc, "location_name": location_name,
         "room_id": room, "room_name": room_name,
         "present": present, "present_detail": present_detail, "scene": scene,
-        "display_names": display_names, "portrait_urls": portrait_urls,
         "present_badges": present_badges,
         "follow_suggestions": follow_suggestions,
         "party": party, "party_invites": party_invites,
@@ -2612,7 +2553,7 @@ def play_self(user=Depends(get_current_user)):
     return out
 
 
-def _state_block(name: str, lang: str = "en", observer: str = "") -> dict:
+def _state_block(name: str, lang: str = "en") -> dict:
     """Mood + status bars + conditions + profile image of a character (shared
     with the /play/self logic, used by /play/others) — plus the place it holds
     (plan-posen-plaetze.md § 7: the presence list shows "on the armchair"):
@@ -2625,11 +2566,6 @@ def _state_block(name: str, lang: str = "en", observer: str = "") -> dict:
 
     ``interaction`` names the partner of a running pair, so the card can say
     "dancing together with Kira" instead of a pose that reads as a solo one.
-
-    ``display_name`` (+ ``portrait_url`` for a disguise ``observer`` is not in
-    on, "" = placeholder) is ``identity_view.player_view(observer, name)``;
-    ``name`` and ``profile_image`` stay the real key. No ``observer`` → the
-    real name.
     """
     from app.core import places
     from app.models.character import (get_effective_activity,
@@ -2640,8 +2576,6 @@ def _state_block(name: str, lang: str = "en", observer: str = "") -> dict:
            "place_label": "", "place_group": "", "place_phrase": "",
            "interaction": None}
     blk["expression_version"] = _expr_version(name)
-    from app.core.identity_view import player_view
-    blk.update(player_view(observer, name))
     try:
         blk["mood"] = get_character_current_feeling(name) or ""
     except Exception:
@@ -2706,37 +2640,25 @@ def _present_characters(avatar: str) -> list:
 def _require_present_target(avatar: str, raw_target) -> str:
     """Gate for every targeted player action: the target must be a character
     the avatar can reach — in its room, or standing within earshot out in the
-    open. No first-/last-name resolution (house rule).
-
-    The HUD posts the REAL name as the target key (display-only secrecy), so
-    an exact present name is accepted as it is. Any other token is read from
-    the avatar's view (``identity_view.resolve_present``): the alias of a
-    persona or a knower's label reaches the real character. The refusal
-    names the reachable people as the avatar perceives them."""
+    open. Exact name match only — no first-/last-name resolution (house
+    rule)."""
     target = str(raw_target or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="target required")
     present = _present_characters(avatar)
-    if target in present:
-        return target
-    from app.core.identity_view import resolve_present, shown_names
-    resolved = resolve_present(avatar, target)
-    if resolved in present:
-        return resolved
-    shown = shown_names(avatar, present)
-    detail = (f"{target} is not here. You can only reach characters within reach"
-              + (f": {', '.join(shown)}." if shown else " — and nobody else is here."))
-    raise HTTPException(status_code=400, detail=detail)
+    if target not in present:
+        detail = (f"{target} is not here. You can only reach characters within reach"
+                  + (f": {', '.join(present)}." if present else " — and nobody else is here."))
+        raise HTTPException(status_code=400, detail=detail)
+    return target
 
 
 @router.get("/play/others")
 def play_others(user=Depends(get_current_user)):
     """Read-only state of every other present character, as in /play/self,
-    for the Others panel — each block in the avatar's view (``display_name``,
-    ``portrait_url``; see :func:`_state_block`), plus ``display_names`` for
-    every name a card prints."""
+    for the Others panel."""
     from app.models.account import get_active_character
-    out = {"avatar": "", "characters": [], "display_names": {}}
+    out = {"avatar": "", "characters": []}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
@@ -2744,8 +2666,7 @@ def play_others(user=Depends(get_current_user)):
     try:
         from app.models.character import get_character_language
         lang = get_character_language(avatar)
-        out["characters"] = [_state_block(c, lang, observer=avatar)
-                             for c in _present_characters(avatar)]
+        out["characters"] = [_state_block(c, lang) for c in _present_characters(avatar)]
         # Relationship of the avatar TO each present character. Built ONCE
         # per request, then looked up per character.
         try:
@@ -2766,15 +2687,6 @@ def play_others(user=Depends(get_current_user)):
                 blk["in_party"] = blk["name"] in members
         except Exception:
             pass
-        # Shown names of the pair partners on the cards ("dancing with …"):
-        # members are real keys, a partner need not be present.
-        from app.core.identity_view import shown_name
-        names = {blk["name"]: blk["display_name"] for blk in out["characters"]}
-        for blk in out["characters"]:
-            for member in ((blk.get("interaction") or {}).get("members") or {}).values():
-                if member and member != avatar and member not in names:
-                    names[member] = shown_name(avatar, member)
-        out["display_names"] = names
     except Exception as e:
         logger.debug("play_others failed: %s", e)
     return out
@@ -4056,9 +3968,7 @@ def get_heightfield_stats_route(keys: str = "", user=Depends(get_current_user)):
 @router.get("/play/scenes")
 def play_scenes(user=Depends(get_current_user), limit: int = 5):
     """Recent consolidated scenes involving the avatar, newest first:
-    time, location/room, fellow participants (real keys + ``participants_shown``
-    in the avatar's view) and summary for the chat recap."""
-    from app.core.identity_view import shown_names
+    time, location/room, fellow participants and summary for the chat recap."""
     from app.models.account import get_active_character
     from app.models import scene_store
     from app.models.world import get_location_by_id
@@ -4080,11 +3990,7 @@ def play_scenes(user=Depends(get_current_user), limit: int = 5):
         out["scenes"].append({
             "ts": sc.get("last_activity_ts", ""),
             "location_name": loc_name, "room_name": room_name,
-            "participants": others,
-            # The avatar's view of them NOW — the stored participants stay
-            # real keys (memory routing); only the recap prints these.
-            "participants_shown": shown_names(avatar, others),
-            "summary": sc.get("summary", ""),
+            "participants": others, "summary": sc.get("summary", ""),
         })
     return out
 

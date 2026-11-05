@@ -264,15 +264,7 @@ export interface MapPropActionEntry {
 }
 
 export interface MapCharacter {
-  /** The REAL name — the key for figures, URLs and every posted action. */
   name: string;
-  /** What the tag, plaque and info panel print: the avatar's view of a
-   *  disguised character (display-only secrecy). Absent from an older
-   *  server → print `name`. */
-  display_name?: string;
-  /** Present only for a disguise the avatar is not in on: the persona
-   *  portrait in place of `avatar_url`, `''` = the no-portrait placeholder. */
-  portrait_url?: string;
   location_id: string;
   /** Free metre point of the figure, or `null` when it has none (its
    *  location is unplaced). Clients place the figure BY `pos` and only fall

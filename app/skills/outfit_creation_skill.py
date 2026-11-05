@@ -487,13 +487,9 @@ class OutfitCreationSkill(BaseSkill):
         _track_id = _tq.track_start("outfit_create", "Outfit-Pieces generieren",
                                       agent_name=character_name)
         try:
-            # Gather the context. A worn persona's personality / look
-            # replace her own.
-            from app.core.identity_view import self_field
-            personality = (self_field(character_name, "character_personality")
-                           or get_character_personality(character_name) or "")
-            appearance = (self_field(character_name, "character_appearance")
-                          or get_character_appearance(character_name) or "")
+            # Gather the context
+            personality = get_character_personality(character_name) or ""
+            appearance = get_character_appearance(character_name) or ""
             loc_id = get_character_current_location(character_name) or ""
             activity = get_effective_activity(character_name) or ""
             feeling = get_character_current_feeling(character_name) or ""

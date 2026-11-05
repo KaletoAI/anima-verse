@@ -145,18 +145,10 @@ class SendMessageSkill(PluginSkill):
         if not message:
             return f"Error: no message for {target_raw}."
 
-        # A message reaches the REAL person (as herself) — also while she
-        # wears a persona; the persona itself has no contact, so a call that
-        # names only an active alias is refused (identity_view.resolve_remote).
-        from app.core.identity_view import resolve_remote, shown_names
         available = list_available_characters()
-        target_name, refusal = resolve_remote(sender_name, target_raw)
-        if refusal:
-            return refusal
-        target_name = target_name or _resolve_name(target_raw, available)
+        target_name = _resolve_name(target_raw, available)
         if not target_name:
-            return (f"Character '{target_raw}' not found. "
-                    f"Available: {', '.join(shown_names(sender_name, available))}")
+            return f"Character '{target_raw}' not found. Available: {', '.join(available)}"
         if target_name == sender_name:
             return "You cannot message yourself."
 
@@ -474,8 +466,6 @@ def _waiting_block(character_name: str, ctx) -> str:
 
 
 def _resolve_name(raw: str, available: list) -> str:
-    """Fuzzy fallback after ``resolve_remote``: a substring match against the
-    real names — the names a message can reach."""
     raw_lower = raw.lower()
     for name in available:
         if name.lower() == raw_lower:

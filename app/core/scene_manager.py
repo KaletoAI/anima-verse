@@ -297,38 +297,16 @@ def consolidate_scene(scene: Dict[str, Any]) -> None:
 
     # Empty scene (only whisper meta or similar / nothing substantive) → close
     # without a summary, but still prune so it doesn't stay open.
-    # ONE summary for everyone, in the PUBLIC view: each line names its
-    # speaker as the identity snapshot of speaking time had it (the alias of
-    # a persona worn then), a storyteller line is rewritten with the same
-    # snapshot; a character's own words stay as spoken.
-    from app.core import identity_view
     lines = []
-    shown_by_participant: Dict[str, List[str]] = {}
     for u in utterances:
         sp = (u.get("speaker") or "").strip()
         content = (u.get("content") or "").strip()
         if sp and content:
-            identity = (u.get("meta") or {}).get("identity")
-            label = identity_view.snapshot_name(sp, identity)
-            if sp == STORYTELLER_SPEAKER:
-                content = identity_view.rewrite_snapshot(content, identity)
-            else:
-                shown = shown_by_participant.setdefault(sp, [])
-                if label not in shown:
-                    shown.append(label)
-            lines.append(f"{label}: {content}")
-    # The stored participants stay REAL names (memory owners, recap lookup);
-    # the prompt lists them as the transcript showed them.
-    public_participants: List[str] = []
-    for p in participants:
-        for label in (shown_by_participant.get(p)
-                      or [identity_view.public_label(p)]):
-            if label not in public_participants:
-                public_participants.append(label)
+            lines.append(f"{sp}: {content}")
 
     summary = ""
     if lines and participants:
-        summary = _summarize(scene, lines, public_participants)
+        summary = _summarize(scene, lines)
         if not summary:
             # LLM summary failed for a scene WITH content: leave the scene
             # OPEN (no prune, no mark_consolidated) so the next idle pass
@@ -381,12 +359,8 @@ def consolidate_scene(scene: Dict[str, Any]) -> None:
                 sid, len(lines), len(participants), pruned)
 
 
-def _summarize(scene: Dict[str, Any], lines: list,
-               participants: List[str]) -> str:
-    """LLM summary of the scene (reused consolidation pattern).
-
-    ``participants`` are the PUBLIC labels for the prompt; the language still
-    comes from the scene's first real participant."""
+def _summarize(scene: Dict[str, Any], lines: list) -> str:
+    """LLM summary of the scene (reused consolidation pattern)."""
     try:
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
@@ -413,7 +387,7 @@ def _summarize(scene: Dict[str, Any], lines: list,
         sys_prompt, user_prompt = render_task(
             "consolidation_scene",
             location_name=loc_name, room_name=room_name,
-            participants=", ".join(participants),
+            participants=", ".join(scene.get("participants") or []),
             transcript="\n".join(lines[:200]),
             lang_instruction=lang_instruction)
         resp = llm_call(task="consolidation", system_prompt=sys_prompt,

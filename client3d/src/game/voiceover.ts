@@ -79,10 +79,8 @@ export function roomChanged(prev: SceneSnapshot | null, cur: SceneSnapshot): boo
   return !!prev && prev.room !== cur.room;
 }
 
-/** The REAL speaker of a line — the top-level speaker first, then the one in
- *  `meta`. It is a KEY (the voice to synthesize, the figure whose bubble
- *  shows the words), never printed: what the transcript prints for a
- *  disguised speaker is `meta.speaker_shown` (see `SceneView`). */
+/** The name the player sees, read exactly as `SceneView` reads it: the
+ *  top-level speaker first, then the one in `meta`. */
 export function speakerOf(line: SceneLine): string {
   return line.speaker || (line.meta?.speaker as string) || '';
 }

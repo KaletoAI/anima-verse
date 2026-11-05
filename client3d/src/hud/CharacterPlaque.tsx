@@ -26,23 +26,18 @@ export function CharacterPlaque() {
 
   const char = sel.char;
   const travelTo = char.movement_target_name || '';
-  // The avatar's view of the person (display-only secrecy): `display_name`
-  // and a persona `portrait_url` ('' = the initial) are what is SHOWN, while
-  // every action below keeps the real `name`.
-  const label = char.display_name || char.name;
-  const portrait = char.portrait_url !== undefined ? char.portrait_url : char.avatar_url;
 
   return (
     <div className="hud-plaque">
       <div className="hud-plaque-portrait">
-        {portrait
-          ? <img src={transparentPortraitUrl(portrait)} alt="" />
-          : <span>{label.slice(0, 1).toUpperCase()}</span>}
+        {char.avatar_url
+          ? <img src={transparentPortraitUrl(char.avatar_url)} alt="" />
+          : <span>{char.name.slice(0, 1).toUpperCase()}</span>}
       </div>
 
       <div className="hud-plaque-body">
         <div className="hud-plaque-name">
-          {label}
+          {char.name}
           {sel.isAvatar && <span className="hud-plaque-badge">{t('Your avatar')}</span>}
         </div>
         {char.activity && (

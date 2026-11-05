@@ -429,8 +429,8 @@ def record_interaction(char_a: str,
 
     Parameters
     ----------
-    char_a : initiator (a real character name; keyed by its identity key)
-    char_b : receiver (likewise)
+    char_a : initiator
+    char_b : receiver
     interaction_type : e.g. "talkto", "instagram_like", "instagram_comment",
                        "social_dialog", "instagram_reply"
     summary : short human-readable description
@@ -462,17 +462,6 @@ def record_interaction(char_a: str,
     except Exception:
         pass
 
-    # The ONE choke point of the identity view: a character who wears a
-    # persona right now meets the other side AS the persona, so the pair is
-    # keyed by each side's identity key (alias while transformed). Pair
-    # (Obs, <alias>) is a separate row from (Obs, <name>). Compatibility below
-    # still asks about the real people.
-    real_a, real_b = char_a, char_b
-    from app.core.identity_view import identity_key
-    char_a, char_b = identity_key(real_a), identity_key(real_b)
-    if char_a.lower() == char_b.lower():
-        return {}
-
     rels, rel = _ensure_relationship(char_a, char_b)
 
     # Determine which direction is a/b in the canonical pair
@@ -498,7 +487,7 @@ def record_interaction(char_a: str,
         rel["sentiment_a_to_b"] = max(-1, min(1, rel.get("sentiment_a_to_b", 0) + sentiment_delta_b))
 
     # Romantic tension — only apply if characters are romantically compatible
-    compatible = are_romantically_compatible(real_a, real_b)
+    compatible = are_romantically_compatible(char_a, char_b)
     if compatible and romantic_delta != 0:
         rel["romantic_tension"] = max(0, min(1, rel.get("romantic_tension", 0) + romantic_delta))
     elif not compatible:
@@ -659,28 +648,10 @@ def address_line(speaker: str, addressee: str) -> str:
 
 def build_relationship_prompt_section(character_name: str
 ) -> str:
-    """Build a short prompt section describing this character's relationships.
-
-    Identity view: the rows are those of the character's identity key — a
-    character who wears a persona right now sees her persona's relationships,
-    otherwise her own. Each partner is labelled from her view
-    (``identity_view.key_label``): a persona row reads the alias, a knower of
-    its current bearer reads ``"<alias> (<name>)"``. The real-name row of
-    someone who wears a persona right now is left out for a non-knower — from
-    her view that person is not around, and relabelling the row would merge
-    the two people.
-    """
-    from app.core import identity_view
-    own = identity_view.identity_key(character_name)
-    own_l = own.lower()
-    rels = get_character_relationships(own)
+    """Build a short prompt section describing this character's relationships."""
+    rels = get_character_relationships(character_name)
     if not rels:
         return ""
-
-    def _other(r: Dict[str, Any]) -> str:
-        a = r.get("character_a", "") or ""
-        b = r.get("character_b", "") or ""
-        return b if a.lower() == own_l else a
 
     account_names: set[str] = set()
     try:
@@ -697,34 +668,28 @@ def build_relationship_prompt_section(character_name: str
         pass
 
     if account_names:
-        rels = [r for r in rels if _other(r).lower() not in account_names]
+        def _other(r: Dict[str, Any]) -> str:
+            a = (r.get("character_a") or "").lower()
+            b = (r.get("character_b") or "").lower()
+            return b if a == character_name.lower() else a
+        rels = [r for r in rels if _other(r) not in account_names]
         if not rels:
             return ""
 
-    # Omit relationships to characters no longer present in this world (a
-    # persona name is no character but a person of its own). Keep the rows in
-    # the DB so they become visible again if the character is imported later.
+    # Omit relationships to characters no longer present in this world.
+    # Keep the rows in the DB so they become visible again if the character
+    # is imported later.
     try:
         from app.models.character import character_exists
-        rels = [r for r in rels
-                if character_exists(_other(r))
-                or identity_view.is_persona_name(_other(r))]
+        def _other_name(r: Dict[str, Any]) -> str:
+            a = r.get("character_a", "") or ""
+            b = r.get("character_b", "") or ""
+            return b if a.lower() == character_name.lower() else a
+        rels = [r for r in rels if character_exists(_other_name(r))]
         if not rels:
             return ""
     except Exception:
         pass
-
-    def _hidden(other: str) -> bool:
-        """A real person who wears a persona the viewer is not in on."""
-        if identity_view.is_persona_name(other):
-            return False
-        if identity_view.active_persona(other) is None:
-            return False
-        return not identity_view.knows(character_name, other)
-
-    rels = [r for r in rels if not _hidden(_other(r))]
-    if not rels:
-        return ""
 
     # Sort by strength descending, take top 8
     rels.sort(key=lambda r: r.get("strength", 0), reverse=True)
@@ -733,19 +698,20 @@ def build_relationship_prompt_section(character_name: str
     lines = ["\nYour relationships with other characters:"]
     for rel in rels:
         a = rel.get("character_a", "")
-        other = _other(rel)
+        b = rel.get("character_b", "")
+        other = b if a.lower() == character_name.lower() else a
         rtype = TYPE_LABELS.get(rel.get("type", "neutral"), "Known")
         strength = int(rel.get("strength", 0))
 
         # Determine this character's sentiment toward the other
-        if a.lower() == own_l:
+        if a.lower() == character_name.lower():
             my_sentiment = rel.get("sentiment_a_to_b", 0)
         else:
             my_sentiment = rel.get("sentiment_b_to_a", 0)
 
         feeling = sentiment_label(my_sentiment)
-        label = identity_view.key_label(character_name, other)
 
-        lines.append(f"- {label}: {rtype} (closeness {strength}/100, feeling: {feeling})")
+        lines.append(f"- {other}: {rtype} (closeness {strength}/100, feeling: {feeling})")
 
     return "\n".join(lines)
+

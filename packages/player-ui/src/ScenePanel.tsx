@@ -16,7 +16,6 @@
  * the host slots it in via the `photoDialog` prop.
  */
 import { othersIn, type InteractionMembers } from './interactionMembers'
-import { shownName } from './displayNames'
 import { respondPair } from './pairInteractions'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent,
@@ -91,19 +90,8 @@ export interface SceneData {
   location_name: string
   room_id: string
   room_name: string
-  /** The addressable people — REAL names, the keys the chips post. */
   present: string[]
-  /** `display_name` is what to print (the avatar's view of a disguised
-   *  person); `portrait_url`, when present, replaces the real portrait (`''` =
-   *  the no-portrait placeholder). `name` and `avatar_url` stay the real key. */
-  present_detail: Array<{ name: string; avatar_url: string; expr_version?: string
-    display_name?: string; portrait_url?: string }>
-  /** Real name → shown name for every person the payload names (chips,
-   *  speakers, invitations, party, pair). Absent entry = print the key. */
-  display_names?: Record<string, string>
-  /** Real name → persona portrait for the disguised people only (`''` = the
-   *  no-portrait placeholder). Absent entry = the real portrait. */
-  portrait_urls?: Record<string, string>
+  present_detail: Array<{ name: string; avatar_url: string; expr_version?: string }>
   /** Icons behind each present name (plan-intim-privatsphaere.md, part E),
    *  contributed by packages on the server; `title` is already localised.
    *  A name without any is absent. */
@@ -113,8 +101,7 @@ export interface SceneData {
    *  speakers who have left the room since (they stay in the history). The
    *  present and the avatar keep their own fields above/below. */
   speaker_expr_versions?: Record<string, string>
-  follow_suggestions?: Array<{ character: string; room_id: string; room_name: string
-    display_name?: string; portrait_url?: string }>
+  follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
   party_invites?: Array<{ invite_id: string; inviter: string; intent_id?: string; destination_label?: string; after_arrival_label?: string; participants?: string[] }>
   /** Pair interactions (app/core/interaction_engine.py). A shared action is
@@ -199,9 +186,6 @@ export interface PhotoDialogControl {
   available: string[]
   /** The active avatar — the character the "photo" routing resolves for. */
   avatar: string
-  /** Optional: the label to print for a subject (the avatar's view of a
-   *  disguised person); the subject itself stays the real key. */
-  labelOf?: (name: string) => string
   /** Generate: posts `/play/scene-photo` and closes the dialog. */
   onSubmit: (payload: ScenePhotoSubmit) => void | Promise<void>
   /** Dismiss without generating. */
@@ -374,12 +358,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     setAttach(null)
     try {
       const addr = volume === 'whisper' ? addressees.slice(0, 1) : addressees
-      // An INTERCEPTED line (a package consumed the words, e.g. a phrase that
-      // transforms the avatar) answers `{ok, intercepted: {kind, ok, reason,
-      // …}}` without an utterance: nothing was broadcast, and the outcome is a
-      // private line in the avatar's own stream — the refresh below shows it.
-      const said = await apiPost<{ spell_routing_missing?: boolean
-        intercepted?: { kind?: string; ok?: boolean; reason?: string } }>('/play/say', {
+      const said = await apiPost<{ spell_routing_missing?: boolean }>('/play/say', {
         content: text, volume, addressees: addr,
         ...(attach?.image_id ? { image_id: attach.image_id } : {}),
         ...(attach?.image_url ? { image_url: attach.image_url } : {}),
@@ -531,12 +510,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
       // meantime, joining fails — say so instead of letting the row vanish.
       if (res?.status === 'not_present') {
         toast(t('{name} is no longer here — you cannot travel together.')
-          .replace('{name}', res.inviter ? shownName(data?.display_names, res.inviter) : ''), 'error')
+          .replace('{name}', res.inviter || ''), 'error')
       }
       await refreshScene()
     }
     catch { /* ignore */ }
-  }, [refreshScene, toast, t, data?.display_names])
+  }, [refreshScene, toast, t])
 
   /** Answer a shared action the avatar was offered. A "no" is an ordinary
    *  answer; a "yes" the world refuses (the other one walked off while the
@@ -582,15 +561,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     id: p.id, ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,
   }))
   const present = data?.present || []
-  // What to PRINT for a real key — the avatar's view (display-only secrecy);
-  // chips, invitations and gifts still post the key itself.
-  const shown = (name: string) => shownName(data?.display_names, name)
   // Scene indicator: ONLY replies ("X is responding …"), no background
   // thoughts. The task panel shows all LLM calls (thoughts too) independently.
   const { agentActivity } = useQueue(2000)
   const thinkingHere = present
     .filter((p) => agentActivity[p]?.responding)
-    .map((p) => ({ name: shown(p), responding: true }))
+    .map((p) => ({ name: p, responding: true }))
 
   // Auto-scroll the scene to the end (newest perception at the bottom). "Stick
   // to bottom": only follow along when the user already is at the bottom — do
@@ -626,7 +602,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   // between — so a host that asks for nothing gets the markup of before.
   const transcript = (
     <div className="player-scene-scroll" ref={sceneScrollRef} onScroll={onSceneScroll}>
-      <SceneView lines={lines} perceived emptyHint={t('Nothing here yet.')} thinking={thinkingHere}
+      <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere}
         onOpenImage={(u) => lightbox.open({ src: u })}
         highlightedId={highlightedId} onRowHover={onRowHover} />
     </div>
@@ -656,7 +632,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
             {data!.follow_suggestions!.map((f) => (
               <span key={f.character} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
-                  {f.display_name || shown(f.character)} {t('went to')} {f.room_name}.
+                  {f.character} {t('went to')} {f.room_name}.
                 </span>
                 <button onClick={() => onEnterRoom(f.room_id)} disabled={moving}
                   className="player-chip player-chip-follow">
@@ -678,7 +654,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
               <span key={inv.invite_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
                   🤝 {t('{name} suggests {pose} to you.')
-                    .replace('{name}', shown(inv.inviter)).replace('{pose}', inv.pose_label || inv.pose_key)}
+                    .replace('{name}', inv.inviter).replace('{pose}', inv.pose_label || inv.pose_key)}
                 </span>
                 <button onClick={() => handleInteractRespond(inv.invite_id, true)}
                   disabled={!!answering} className="player-chip player-chip-follow">
@@ -694,7 +670,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
                   🤝 {t('Waiting for {name} to answer about {pose}.')
-                    .replace('{name}', shown(data.interaction_pending.invitee))
+                    .replace('{name}', data.interaction_pending.invitee)
                     .replace('{pose}', data.interaction_pending.pose_label || data.interaction_pending.pose_key)}
                 </span>
                 <button onClick={() => handleInteractCancel(data!.interaction_pending!.invite_id)}
@@ -709,7 +685,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                   🤝 {(data.interaction_answered.status === 'declined'
                     ? t('{name} does not feel like {pose} right now.')
                     : t('{pose} with {name} is not possible: {reason}'))
-                    .replace('{name}', shown(data.interaction_answered.invitee))
+                    .replace('{name}', data.interaction_answered.invitee)
                     .replace('{pose}', data.interaction_answered.pose_label || data.interaction_answered.pose_key)
                     .replace('{reason}', data.interaction_answered.reason)}
                 </span>
@@ -725,7 +701,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                   🤝 {(data.interaction_approaching.walking
                     ? t('On your way to {name} for {pose}.')
                     : t('{name} is on their way to you for {pose}.'))
-                    .replace('{name}', shown(data.interaction_approaching.partner))
+                    .replace('{name}', data.interaction_approaching.partner)
                     .replace('{pose}', data.interaction_approaching.pose_label || data.interaction_approaching.pose_key)}
                 </span>
                 <button onClick={() => handleInteractCancel(data!.interaction_approaching!.invite_id)}
@@ -739,7 +715,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
                   🤝 {t('{pose} with {name}.')
                     .replace('{pose}', data.interaction.pose_label || data.interaction.pose_key)
-                    .replace('{name}', othersIn(data.interaction.members, data.avatar).map(shown).join(', '))}
+                    .replace('{name}', othersIn(data.interaction.members, data.avatar).join(', '))}
                 </span>
                 <button onClick={handleInteractEnd} className="player-chip">
                   {t('Stop')}
@@ -758,10 +734,10 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
             {data!.party_invites!.map((inv) => (
               <span key={inv.invite_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#78aaff' }}>
-                  👥 {shown(inv.inviter)} {t('invites you to travel together.')}
+                  👥 {inv.inviter} {t('invites you to travel together.')}
                   {inv.destination_label ? <span> {t('Destination')}: {inv.destination_label}.</span> : null}
                   {inv.intent_id || inv.after_arrival_label ? <span> {t('After arrival')}: {inv.after_arrival_label || t('Travel only')}.</span> : null}
-                  {inv.participants?.length ? <span> {t('Participants')}: {inv.participants.map(shown).join(', ')}.</span> : null}
+                  {inv.participants?.length ? <span> {t('Participants')}: {inv.participants.join(', ')}.</span> : null}
                 </span>
                 <button onClick={() => handlePartyRespond(inv.invite_id, true)}
                   className="player-chip player-chip-follow">
@@ -787,7 +763,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                 return (
                   <button key={name} onClick={() => toggleAddressee(name)}
                     className={`player-chip${on ? ' on' : ''}`}>
-                    {shown(name)}
+                    {name}
                     {(data?.present_badges?.[name] || []).map((b, i) => (
                       <span key={i} title={b.title} style={{ marginLeft: 3 }}>{b.icon}</span>
                     ))}
@@ -883,7 +859,6 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         referenceImageId: photoDlg.screenshot?.imageId,
         referenceImageUrl: photoDlg.screenshot?.imageUrl,
         avatar,
-        labelOf: shown,
         error: photoError || photoDlg.error,
         onSubmit: submitPhoto,
         onClose: () => { ++photoGeneration; setPhotoDlg(null); setPhotoError('') },
@@ -892,13 +867,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         <GiftPicker
           avatar={avatar}
           recipients={present}
-          labelOf={shown}
           defaultRecipient={addressees.length === 1 ? addressees[0] : undefined}
           onClose={() => setGiftOpen(false)}
           onGifted={(r: GiftResult) => {
             setGiftOpen(false)
             toast(
-              `${t('Gift sent')}: ${r.item_name} → ${shown(r.to_character)}` +
+              `${t('Gift sent')}: ${r.item_name} → ${r.to_character}` +
                 (r.boost ? ` (+${r.boost} ${t('relationship')})` : ''),
               'success',
             )

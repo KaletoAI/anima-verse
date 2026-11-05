@@ -1,11 +1,6 @@
 import type { MapCharacter, MapEvent, WorldLocation } from '../types';
 
-/** What the panel prints for a character: the avatar's view (`display_name`,
- *  a disguised character's alias), else the real name. */
-const shown = (c: MapCharacter): string => c.display_name || c.name || '';
-
-/** Plain location information, computed by the scene and rendered by the HUD.
- *  Its names are DISPLAY strings (`shown`), never keys. */
+/** Plain location information, computed by the scene and rendered by the HUD. */
 export interface InfoPanelData {
   id: string; name: string; description: string;
   rooms: Array<{ name: string; who: string[] }>;
@@ -24,8 +19,8 @@ export function infoPanelData(loc: WorldLocation, chars: MapCharacter[], events:
   return {
     id: loc.id, name: loc.name || '', description: loc.description || '',
     rooms: area ? [] : loc.rooms.map(r => ({ name: r.name || '',
-      who: chars.filter(c => roomOf.get(c.name) === r.name || roomOf.get(c.name) === r.id).map(shown) })),
-    present: chars.map(c => ({ name: shown(c), activity: c.activity || '', mood: c.mood || '',
+      who: chars.filter(c => roomOf.get(c.name) === r.name || roomOf.get(c.name) === r.id).map(c => c.name || '') })),
+    present: chars.map(c => ({ name: c.name || '', activity: c.activity || '', mood: c.mood || '',
       travelTo: c.movement_target_name || '', eta: c.travel?.eta_hhmm || '' })),
     events: events.map(e => ({ danger: e.category === 'danger', text: e.text || '' })),
     travel: avatar && avatar.locationId !== loc.id ? {

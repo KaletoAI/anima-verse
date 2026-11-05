@@ -936,12 +936,10 @@ def try_resolve_events():
 def _generate_solution_rp(actor: str, event: Dict[str, Any],
     joint: Optional[List[str]] = None) -> str:
     """Ask the character roleplay LLM for a short account of how it resolves the event."""
-    from app.core.identity_view import self_field
     from app.models.character import get_character_personality, get_character_language
     from app.core.llm_router import llm_call
 
-    personality = (self_field(actor, "character_personality")
-                   or get_character_personality(actor) or "")
+    personality = get_character_personality(actor) or ""
     joint_txt = f" You are with {', '.join(joint)}." if joint else ""
     from app.core.i18n import language_name
     _lang = (get_character_language(actor) or "de")

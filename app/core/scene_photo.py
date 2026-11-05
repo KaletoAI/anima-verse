@@ -77,8 +77,7 @@ def _room_transcript(avatar: str, loc: str, room: str) -> str:
     from app.models import perception_store
     lines: List[str] = []
     for r in perception_store.get_character_room_stream(avatar, loc, room, 20):
-        meta = r.get("meta") or {}
-        sp = (meta.get("speaker_shown") or meta.get("speaker") or "").strip()
+        sp = ((r.get("meta") or {}).get("speaker") or "").strip()
         txt = (r.get("content") or "").strip()
         if not sp or not txt:
             continue

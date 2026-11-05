@@ -88,11 +88,6 @@ def _messages_from_room_stream(responder: str,
     Without it a character cannot tell a line meant for it from one it merely
     overheard. The responder's own lines stay role "assistant" with no prefix.
     Whisper meta (no content) is dropped.
-
-    Names are the responder's VIEW: ``meta.speaker_shown`` /
-    ``meta.addressees_shown`` (a transformed character's alias, written by
-    ``perception.record_utterance``) win over the real names, which still
-    decide "own line" and "you".
     """
     out: List[Dict[str, str]] = []
     for row in stream or []:
@@ -105,19 +100,14 @@ def _messages_from_room_stream(responder: str,
         if sp and sp == responder:
             out.append({"role": "assistant", "content": content})
         else:
-            sp_shown = (meta.get("speaker_shown") or sp).strip()
-            real = [str(a).strip() for a in (meta.get("addressees") or [])]
-            shown_addr = meta.get("addressees_shown")
-            if not isinstance(shown_addr, list) or len(shown_addr) != len(real):
-                shown_addr = real
-            addressees = [(a, str(s).strip() or a)
-                          for a, s in zip(real, shown_addr) if a]
+            addressees = [str(a).strip() for a in (meta.get("addressees") or [])
+                          if str(a).strip()]
             if addressees:
-                shown = ", ".join("you" if a == responder else s
-                                  for a, s in addressees)
-                prefix = f"{sp_shown or '?'} (to {shown})"
+                shown = ", ".join("you" if a == responder else a
+                                  for a in addressees)
+                prefix = f"{sp or '?'} (to {shown})"
             else:
-                prefix = sp_shown or "?"
+                prefix = sp or "?"
             out.append({"role": "user", "content": f"{prefix}: {content}"})
     return out
 
@@ -1530,21 +1520,13 @@ def post_process_response(
 
                 _speaker_a = _extract_partner
                 _speaker_b = character_name
-                # Names in the pair's texts (history summary, sentiment
-                # prompt, the type-change line) are the pair ROW's names:
-                # each side's identity key — the alias of a persona worn
-                # right now — exactly what record_interaction keys it by.
-                # The real names stay for lookups (romantic interests).
-                from app.core.identity_view import identity_key as _ikey
-                _label_a = _ikey(_speaker_a)
-                _label_b = _ikey(_speaker_b)
 
                 if synthetic_input:
-                    summary = f"{_label_b}: {cleaned[:80]}"
+                    summary = f"{character_name}: {cleaned[:80]}"
                 else:
-                    summary = f"{_label_a}: {user_input[:100]}"
+                    summary = f"{_speaker_a}: {user_input[:100]}"
                     if cleaned:
-                        summary += f" — {_label_b}: {cleaned[:80]}"
+                        summary += f" — {_speaker_b}: {cleaned[:80]}"
 
                 analysis = {"sentiment_a": 0.05, "sentiment_b": 0.05, "romantic_delta": 0.0}
                 # Admin switch "Analyse sentiment after conversations"
@@ -1559,17 +1541,17 @@ def post_process_response(
                         if ri_a or ri_b:
                             romantic_context = "\nRomantic interest context:\n"
                             if ri_a:
-                                romantic_context += f"- {_label_a}'s romantic interests: {ri_a}\n"
+                                romantic_context += f"- {_speaker_a}'s romantic interests: {ri_a}\n"
                             if ri_b:
-                                romantic_context += f"- {_label_b}'s romantic interests: {ri_b}\n"
+                                romantic_context += f"- {_speaker_b}'s romantic interests: {ri_b}\n"
                             romantic_context += "Only set romantic_delta > 0 if the conversation matches these interests."
 
                         from app.core.llm_router import llm_call as _llm_call
                         from app.core.prompt_templates import render_task
                         rel_system_prompt, conversation_text = render_task(
                             "relationship_summary",
-                            speaker_a=_label_a,
-                            speaker_b=_label_b,
+                            speaker_a=_speaker_a,
+                            speaker_b=_speaker_b,
                             text_a=user_input[:300],
                             text_b=cleaned[:300] if cleaned else "",
                             romantic_context=romantic_context)
@@ -1599,7 +1581,7 @@ def post_process_response(
                 _old_type = ""
                 try:
                     from app.models.relationship import get_relationship
-                    _old_type = (get_relationship(_label_a, _label_b)
+                    _old_type = (get_relationship(_speaker_a, _speaker_b)
                                  or {}).get("type") or ""
                 except Exception:
                     pass
@@ -1625,7 +1607,7 @@ def post_process_response(
                             get_character_current_room)
                         _r_loc = get_character_current_location(character_name) or ""
                         _r_room = get_character_current_room(character_name) or ""
-                        _txt = (f"💞 {_label_a} ⇄ {_label_b}: "
+                        _txt = (f"💞 {_speaker_a} ⇄ {_speaker_b}: "
                                 + (f"{_old_type} → {_new_type}"
                                    if _old_type else _new_type))
                         # No location gate: an empty location is the

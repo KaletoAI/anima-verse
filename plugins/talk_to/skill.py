@@ -79,19 +79,13 @@ class TalkToSkill(PluginSkill):
         if not message:
             return f"Error: no message for {target_raw}."
 
-        # Resolve target name — from the sender's view: an alias or a
-        # knower's label reaches the real character, the real name of a
-        # transformed person only for a knower (identity_view.resolve_present).
-        from app.core.identity_view import shown_name, shown_names
+        # Resolve target name
         available = list_available_characters()
-        target_name = _resolve_name(sender_name, target_raw, available)
+        target_name = _resolve_name(target_raw, available)
         if not target_name:
-            return (f"Character '{target_raw}' not found. "
-                    f"Available: {', '.join(shown_names(sender_name, available))}")
+            return f"Character '{target_raw}' not found. Available: {', '.join(available)}"
         if target_name == sender_name:
             return "You cannot talk to yourself."
-        # Every answer below names the target as the sender perceives them.
-        target_shown = shown_name(sender_name, target_name)
 
         # TalkTo is for THIRD parties. In a reactive chat turn the character
         # is ALREADY answering somebody — the prose of that turn is delivered
@@ -105,7 +99,7 @@ class TalkToSkill(PluginSkill):
         initiator = str(data.get("initiator") or "").strip()
         if initiator and target_name == initiator:
             return (
-                f"{target_shown} is the one you are answering right now — "
+                f"{target_name} is the one you are answering right now — "
                 f"address them directly through your RP speech, not via TalkTo. "
                 f"TalkTo is only for third characters within earshot."
             )
@@ -120,16 +114,16 @@ class TalkToSkill(PluginSkill):
             if not self_loc:
                 if target_loc:
                     return (
-                        f"{target_shown} is not out here with you — they are "
+                        f"{target_name} is not out here with you — they are "
                         f"inside a location. Use SendMessage for remote contact."
                     )
                 return (
-                    f"{target_shown} is too far away out here to hear you. "
+                    f"{target_name} is too far away out here to hear you. "
                     f"Go to them first or use SendMessage for remote contact."
                 )
             if self_loc != target_loc:
                 return (
-                    f"{target_shown} is not at your location. "
+                    f"{target_name} is not at your location. "
                     f"Use SendMessage for remote contact."
                 )
             from app.models.character import (get_character_current_room,
@@ -139,7 +133,7 @@ class TalkToSkill(PluginSkill):
                 self_loc, get_character_current_room(target_name) or "",
                 get_character_language(sender_name) or "de")
             return (
-                f"{target_shown} is at this location but in another room "
+                f"{target_name} is at this location but in another room "
                 f"({room_label}) — they cannot hear you from here. Go to "
                 f"them first with SetLocation (a room of your current "
                 f"location is a valid target) or use SendMessage."
@@ -148,7 +142,7 @@ class TalkToSkill(PluginSkill):
         # Sleep check
         from app.models.character import is_character_sleeping
         if is_character_sleeping(target_name):
-            return f"{target_shown} is sleeping and cannot be reached."
+            return f"{target_name} is sleeping and cannot be reached."
 
         self.ctx.logger.info("TalkTo %s -> %s: %s", sender_name, target_name, message[:100])
 
@@ -193,7 +187,7 @@ class TalkToSkill(PluginSkill):
                 ]
         except Exception as e:
             self.ctx.logger.error("TalkTo: chat-history save failed: %s", e)
-            return f"Error saving message to {target_shown}."
+            return f"Error saving message to {target_name}."
         # A write that merely returned False is the same lost message as one
         # that raised (DATA-13) — and the recipient's inbox IS the delivery
         # here, so the tool must not report a line that was never said.
@@ -202,13 +196,13 @@ class TalkToSkill(PluginSkill):
                 "TalkTo: chat-history save for %s -> %s failed (%d of 2 writes) "
                 "— the message was not delivered",
                 sender_name, target_name, stored.count(False))
-            return f"Error saving message to {target_shown}."
+            return f"Error saving message to {target_name}."
         from app.core.perception import record_utterance
         utterance_id = record_utterance(
             speaker=sender_name, content=message, volume=volume or "normal",
             addressees=[target_name], source="talk_to", ts=ts)
         if utterance_id is None:
-            return f"Error publishing message to {target_shown}."
+            return f"Error publishing message to {target_name}."
 
         # The addressee OWES an answer: queue it into the respond lane, the
         # same path a room utterance with an addressee takes. A thought bump
@@ -240,7 +234,7 @@ class TalkToSkill(PluginSkill):
         except Exception as e:
             self.ctx.logger.debug("pending_report resolve failed: %s", e)
 
-        return f"Spoke to {target_shown}. They will reply when they get to it."
+        return f"Spoke to {target_name}. They will reply when they get to it."
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
@@ -260,25 +254,13 @@ class TalkToSkill(PluginSkill):
             func=self.execute)
 
 
-def _resolve_name(sender: str, raw: str, available: list) -> str:
-    """The real character ``sender`` means with ``raw``.
-
-    Exact first (``identity_view.resolve_present``: roster name, an active
-    alias, a knower's label), then a fuzzy substring match against the names
-    the sender PERCEIVES (``shown_name``) — never against the real name of a
-    person the sender only knows by an alias. A real name the sender may not
-    use right now (a transformed person, a non-knower) resolves to nothing:
-    no fuzzy fallback for it either.
-    """
-    from app.core.identity_view import resolve_name, resolve_present, shown_name
-    exact = resolve_present(sender, raw)
-    if exact:
-        return exact
-    if resolve_name(sender, raw):
-        return ""
+def _resolve_name(raw: str, available: list) -> str:
+    """Case-insensitive + fuzzy name resolution."""
     raw_lower = raw.lower()
     for name in available:
-        label = shown_name(sender, name).lower()
-        if raw_lower in label or label in raw_lower:
+        if name.lower() == raw_lower:
+            return name
+    for name in available:
+        if raw_lower in name.lower() or name.lower() in raw_lower:
             return name
     return ""

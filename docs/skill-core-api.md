@@ -201,55 +201,6 @@ entry without an icon dropped. Answer `[]` for a character the badge does not
 concern — this runs on every 3-second poll for every character, so keep it to
 profile reads (no DB query per call).
 
-## Identity view — `app.core.identity_view` ✅
-
-"How does observer O see character C": a character may wear a persona (an alias
-with its own description) that every non-knower perceives as a separate person.
-The core names no package; three singleton providers answer it, registered with
-`app.core.hooks.register_provider(capability, fn, *, owner=None, multiple=False)`
-and an `owner` (the package id):
-
-| Capability (constant) | Called with → answer |
-|---|---|
-| `identity.active_persona` (`PROVIDER_ACTIVE`) | `subject` → `{"persona_id", "alias", "description", "portrait_url"}` while C is transformed, else `None`. Optional keys: `"field_overrides"` (`{field: text}`, keys from `OVERRIDABLE_FIELDS`; empty ones omitted), `"pause_routine"` (bool), `"imagegen"` (dict of image settings), `"suit_items"` (list of item ids) |
-| `identity.knows` (`PROVIDER_KNOWS`) | `observer, subject` → `bool`: O is in on C's current persona |
-| `identity.persona_names` (`PROVIDER_NAMES`) | nothing → iterable of every configured alias, transformed or not |
-| `identity.costume_items` | nothing → `{item_id: persona_id}`: the suit pieces of every usable persona (no core consumer) |
-
-With no provider every function answers the real name (deletion test). A
-provider that raises is logged once at debug and treated as absent for that
-answer; nothing is cached in the core, the provider caches. Call these where a
-text NAMES a character to an observer; technical identifiers (payload keys,
-URLs, DB keys other than the identity key) stay the real name.
-
-| Function | Semantics |
-|---|---|
-| `Persona(subject, persona_id, alias, description, portrait_url, field_overrides, pause_routine, imagegen, suit_items)` | Frozen dataclass of the persona C wears. Sanitized from the provider answer: `field_overrides` = read-only mapping of the non-empty string overrides under `OVERRIDABLE_FIELDS`; `pause_routine` = True only for a literal `True`; `imagegen` = read-only mapping over a deep copy (string keys only); `suit_items` = tuple of the non-empty string ids (non-strings dropped). Missing keys → empty / `False`. `Persona.own_field(key)` = what `self_field` answers for this persona. |
-| `OVERRIDABLE_FIELDS` | `("character_personality", "dialogue_style", "character_presence", "character_task", "character_goals")` — the character prompt fields a persona may replace. |
-| `self_field(subject, key)` | While C wears a persona: a key of `OVERRIDABLE_FIELDS` → the persona's non-empty override; `"character_appearance"` → the persona description when non-empty; else (and with no persona/provider) `None` = use the real value. For C's OWN prompts and a knower's partner block (`build_prompt_section` applies it before the `source_file`/status/state branches); readers use `self_field(name, key) or <real value>`. |
-| `routine_paused(subject)` | True while C wears a persona with `pause_routine`: the thought context leaves her daily schedule and its sleep nudge out. No persona/provider → False. |
-| `active_persona(subject)` | `Persona` or `None` (not transformed, no/raising provider, answer without alias). |
-| `knows(observer, subject)` | True when O is C (casefold), C wears no persona, or the provider says so; a raising provider counts as True. |
-| `shown_name(observer, subject)` | `C` when no persona or O is C; `"<alias> (<C>)"` for a knower; the alias otherwise. |
-| `shown_names(observer, subjects)` | `shown_name` per subject, in order. |
-| `identity_key(subject)` | Alias while transformed, else C — observer-independent key for relationship rows and memory `related_character`. |
-| `public_label(subject)` | Alias while transformed, else C — the public view for shared texts (scene summaries). |
-| `masked_description(observer, subject)` | The persona description (may be `""`) when O is a non-knower of C's active persona — it replaces the real appearance; else `None`. |
-| `player_view(observer, subject)` | Display fields of C in a player payload whose avatar is O: `display_name` = what `shown_name` answers for the pair, plus `portrait_url` (the persona portrait, `""` = placeholder) exactly when `masked_description` is not `None` for the pair; an empty O → just `display_name` = C. Keys and URLs of the payload stay the real name. |
-| `resolve_name(observer, token)` | Roster name (exact, then casefold) → itself as stored; casefolded alias of an ACTIVE persona → its subject; else `None`. A `"<alias> (<name>)"` label is the caller's to split. |
-| `resolve_present(observer, token)` | For a resolver that reaches someone IN PERSON (talk, walk over, invite, interact, furniture partner): `resolve_name`, and a `"<head> (<inner>)"` token (a knower's label, a `"<name> (avatar)"` suffix) by its head; the REAL name of a character who wears a persona right now answers only for an observer who `knows` her — for everyone else `None` (the real person is not here; take the resolver's ordinary unknown/not-present path, whose text names nobody). Presence stays the caller's check. |
-| `resolve_remote(observer, token)` | For a resolver that reaches someone REMOTELY (messages): `(real name, "")` for a real name — also the `<name>` inside a label — for every observer (the message reaches her as herself); `(None, "Error: <alias> cannot be reached that way.")` for a token that names the subject only by an active alias (a persona has no contact); `(None, "")` otherwise. |
-| `is_persona_name(name)` | Casefolded membership in `identity.persona_names`. `app.core.character_name.validate_character_name` refuses such a name with code `reserved` (creation/import only). |
-| `identity_snapshot(names)` | `{subject: alias}` for the transformed ones. |
-| `bearer_of(alias)` | The character who wears the persona `alias` right now (casefolded), else `None` (nobody wears it, no provider). |
-| `key_label(observer, key)` | The name O reads for a stored identity key (relationship partner, memory `related_character`): a persona name → `"<alias> (<bearer>)"` while someone wears it and O knows that bearer, else the alias; a real name → itself (the row is about the person). |
-| `label_key(token)` | Inverse of `key_label` for text an LLM wrote back: a `"<alias> (<name>)"` label whose head is a persona name → the alias; anything else unchanged. |
-| `snapshot_name(subject, identity)` | The public name of C on a line carrying an utterance's `identity` snapshot (speaking time): the stamped alias, else C; no provider → C. |
-| `rewrite_snapshot(text, identity)` | Each real name of the snapshot (whole word, case-sensitive, one pass) → its stamped alias — the public view of a storyteller line for shared readers (scene summaries); no provider → unchanged. |
-| `pair_stamp(a, b)` | `{"identity": {subject: alias}, "identity_shown": {subject: label the other side sees}}` for the side(s) of a pairwise message that wear a persona now, else `{}`. `UnifiedChatManager.save_message` stores it in an in-person message's `metadata` (never on a phone message). |
-| `stamped_name(observer, subject, stamp)` | The name O reads for C on a stamped message: no alias stamped → C; C still wears the stamped alias → `shown_name`; persona no longer worn → the stamped label (said as the persona stays the persona's); no provider → C. |
-| `rewrite_names(observer, text, subjects)` | Each transformed subject's real name (whole word, case-sensitive, one pass) → `shown_name(observer, subject)`. For system/storyteller text only, never a character's own speech. |
-
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
 | Function / value | Semantics |
@@ -456,7 +407,7 @@ Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
 `equip_item`/`unequip_item`, `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
-Inventory and equipment calls used by the **transformation package** (stable):
+Inventory and equipment calls for packages (stable):
 
 | Function | Contract |
 |---|---|
@@ -689,7 +640,7 @@ placement; destination-bound shared trips always use timed cross-location travel
 | `get_character_config(character_name, *, profile=None, strict=False) -> Dict` | Reuse a held profile; strict mode never repairs/writes failed config reads. Valid empty config gets defaults in memory; malformed/null/non-object JSON or missing rows fail |
 | `save_character_profile(character_name, profile, create_new=False) -> bool` | Schreibt den GANZEN Blob. **Wirft nie** — `False` heißt: nichts gespeichert (reservierter/unbekannter Name oder fehlgeschlagener Write). Rückgabe prüfen. Bei Neuanlage `create_new=True` Pflicht — der Name muss dann die Namensregel erfüllen, sonst `False`. Nur unter `keyed_lock("character_profile", name)` (siehe „Sperren") |
 | `app.core.character_name.validate_character_name(name) -> str` | Die EINE Namensregel für NEUE Charaktere: Buchstaben jeder Schrift, Ziffern, einfache Leerzeichen, `-`, `'`, `.`, `_` (nicht am Anfang), 1–60 Zeichen. Gibt den NFC-normalisierten Namen zurück oder wirft `CharacterNameError` (Feld `code`). Gilt nur beim Anlegen/Import — bestehende Namen werden nie geprüft, nie umbenannt |
-| `app.core.character_name.localized_message(err, lang='') -> str` | The text of a `CharacterNameError` in the UI language (its English template through `i18n.t`, then its params filled in) — for an editor that shows the name rule's refusal, e.g. a persona alias in the Transformation panel |
+| `app.core.character_name.localized_message(err, lang='') -> str` | The text of a `CharacterNameError` in the UI language (its English template through `i18n.t`, then its params filled in) — for an editor that shows the name rule's refusal |
 | `save_character_current_location(character_name='', location='', …)` | ZENTRALE Bewegung — löst Entry-Room, Compliance, Party-Drag, Flag-Location-Resets, Discovery aus. Nie umgehen |
 | `get_character_current_location(character_name='', profile=None) -> str` / `get_character_current_room(character_name, profile=None) -> str` | Aufenthaltsort/-raum. Bei laufender Reise ist das die NÄCHSTE Position, nicht das Reiseziel; unterwegs im freien Gelände ist `current_location` leer |
 | `is_character_sleeping(character_name, profile=None) -> bool` | Schläft der Charakter? (nicht erreichbar) |
@@ -1125,7 +1076,7 @@ LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
 
 | Function | Contract |
 |---|---|
-| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. `observer=` (keyword, default `""`) gives what that character sees: for a person wearing a persona the observer is not in on, the persona description replaces appearance and body slots (the outfit stays); without it, the real appearance (image prompts). Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
+| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
 | `app.core.prompt_compose.compose(*, use_case, subject, backend, hints=None, negative_extra="", style_override=None, conditions="")` | Compose the selected backend family's use-case style and negative prompt. Returns `.prompt`, `.negative`, `.warnings`, `.meta`. Call inside the routing callback so each fallback backend gets its own composition. |
 | `app.core.llm_json.parse_json(raw: str) -> dict \| None` | Extract a JSON object from a queued LLM answer, tolerating code fences; returns None when it cannot be parsed. A bare array is returned under `_list`. Validate task-specific fields in the caller. |
 

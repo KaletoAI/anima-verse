@@ -14,9 +14,6 @@ interface SceneRecap {
   location_name: string
   room_name: string
   participants: string[]
-  /** The same people in the avatar's view (a disguised one by the name the
-   *  avatar knows); absent from an older server → print `participants`. */
-  participants_shown?: string[]
   summary: string
 }
 
@@ -72,7 +69,7 @@ export function ScenesRecap() {
             }}>
               <div style={{ opacity: 0.55, fontSize: '0.92em' }}>
                 {fmtTime(s.ts)} · {s.location_name}{s.room_name ? ` – ${s.room_name}` : ''}
-                {s.participants.length ? ` · ${t('with')} ${(s.participants_shown || s.participants).join(', ')}` : ''}
+                {s.participants.length ? ` · ${t('with')} ${s.participants.join(', ')}` : ''}
               </div>
               <div style={{ opacity: 0.9 }}>{s.summary}</div>
             </div>

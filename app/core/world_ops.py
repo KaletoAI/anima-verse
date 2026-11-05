@@ -823,7 +823,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # Icons behind the name tag (``name_badges``), titled in the avatar's
     # language — the same badges the chat's address chips show.
     from app.core.name_badges import badges_for as _badges_for
-    from app.core.identity_view import player_view as _player_view
     from app.models.character import get_character_language as _char_lang
     _badge_lang = (_char_lang(avatar) if avatar else "") or "de"
     characters = []
@@ -1003,17 +1002,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         from app.core.model3d import model_revision
         from app.core.extension_rig import motion_payload
         _model_rev = model_revision(_MODEL_SIG_CACHE[name][2]) if _model_sig else ""
-        _shown = _player_view(avatar, name)
         characters.append({
             "name": name,
-            # What the tag, plaque and info panel print: the AVATAR's view of
-            # a disguised character (display-only secrecy — ``name`` and every
-            # URL stay the real key), plus ``portrait_url`` ("" = placeholder)
-            # in place of ``avatar_url`` when the avatar is not in on it.
-            # No avatar (spectator without lens, admin view) → the real name.
-            "display_name": _shown["display_name"],
-            **({"portrait_url": _persona_portrait}
-               if (_persona_portrait := _shown.get("portrait_url")) is not None else {}),
             "location_id": loc_id,
             # Free metre point, or null when the character has none (its
             # location is unplaced). Clients place the figure by `pos` and
@@ -4372,21 +4362,13 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
     No ghost filter is needed here: this returns a map, and the caller only
     looks up characters that are PRESENT in the room. A relationship row
     pointing at a deleted character therefore has no key anyone asks for.
-
-    Identity view: rows are keyed by identity keys (the alias of a persona
-    worn at the time). The map stays keyed by REAL names — the caller looks
-    up present characters by name — but a character who wears a persona
-    right now answers with the (avatar, alias) row, never with the row of
-    her real name; the avatar's own rows are those of its identity key.
     """
     avatar = (avatar or "").strip()
     if not avatar:
         return {}
-    from app.core import identity_view
     from app.models.relationship import get_character_relationships
-    own = identity_view.identity_key(avatar)
     try:
-        rels = get_character_relationships(own)
+        rels = get_character_relationships(avatar)
     except Exception as e:
         logger.warning("build_relation_map(%s): %s", avatar, e)
         return {}
@@ -4396,21 +4378,12 @@ def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
         # from_char/to_char (DB order); we want the non-self name.
         a = r.get("character_a") or ""
         b = r.get("character_b") or ""
-        partner = (b if a == own else a).strip()
+        partner = (b if a == avatar else a).strip()
         if not partner:
-            continue
-        if identity_view.is_persona_name(partner):
-            # A persona row belongs to whoever wears it right now; nobody →
-            # nobody present to show it on.
-            partner = identity_view.bearer_of(partner) or ""
-            if not partner:
-                continue
-        elif identity_view.identity_key(partner) != partner:
-            # Her real-name row is not the person standing here.
             continue
         # a_to_b is the sentiment from a towards b — flip it to the avatar's
         # point of view when the avatar is the b side.
-        sentiment = (r.get("sentiment_a_to_b", 0.0) if a == own
+        sentiment = (r.get("sentiment_a_to_b", 0.0) if a == avatar
                      else r.get("sentiment_b_to_a", 0.0))
         out[partner] = {
             "type": r.get("type", "neutral"),

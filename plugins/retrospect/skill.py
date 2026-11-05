@@ -57,13 +57,6 @@ class RetrospectSkill(PluginSkill):
         if not is_feature_enabled(character_name, "retrospect_enabled"):
             return "Retrospect disabled for this character."
 
-        # While she wears a persona she is someone else: no reflection, no
-        # soul write — her beliefs/lessons/goals stay her own.
-        from app.core.identity_view import active_persona
-        if active_persona(character_name) is not None:
-            self.ctx.logger.info("Retrospect skipped for %s: transformed", character_name)
-            return "Retrospect pauses while you are transformed."
-
         from app.models.character import (
             get_character_profile, get_character_language, LANGUAGE_MAP)
         profile = get_character_profile(character_name)

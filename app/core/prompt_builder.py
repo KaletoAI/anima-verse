@@ -237,12 +237,30 @@ def strip_face_terms(text: str) -> str:
             if seg.strip() and not _FACE_TERMS_RE.search(seg)]
     return ", ".join(kept)
 
+def person_description(name: str, *,
+                       include_outfit: bool = False,
+                       apply_state_modifiers: bool = True,
+                       back_view: bool = False,
+                       mesh_input: bool = False,
+                       body_profile: Optional[Dict[str, Any]] = None,
+                       include_exposed: bool = True,
+                       neutral_state: bool = False) -> str:
+    """THE text description of a person for image prompts.
 
-def _real_appearance(name: str, *, body_profile: Optional[Dict[str, Any]],
-                     back_view: bool, mesh_input: bool, include_exposed: bool,
-                     neutral_state: bool) -> str:
-    """The real appearance of ``name``: profile tokens resolved, whitespace
-    collapsed, the body-slot suffix appended (see :func:`person_description`)."""
+    Every path that describes a person — PromptBuilder (chat images,
+    expression variants, outfit images), the scene render / scene photo
+    (``include_outfit=True``) and every prompt PREVIEW — goes through this
+    one function, so a preview always shows what the render would send.
+
+    Layers: appearance (profile tokens resolved, whitespace collapsed)
+    → body-slot suffix (species packages; exposed fragments only while
+    uncovered, and in a ``back_view`` render only from slots visible from
+    behind; left out with ``include_exposed=False``) → optionally the
+    worn-outfit line → triggered
+    image_modifier directives over the composed text (with the outfit
+    included, a replacement may rewrite outfit text too — scene-render
+    semantics) → in a ``back_view`` render, every segment naming a facial
+    feature dropped (``strip_face_terms``)."""
     from app.models.character import get_character_appearance, get_character_profile
     from app.models.character_template import get_template, resolve_profile_tokens
     appearance = ((body_profile or {}).get("character_appearance", "")
@@ -270,51 +288,6 @@ def _real_appearance(name: str, *, body_profile: Optional[Dict[str, Any]],
         suffix = ""
     if suffix:
         appearance = f"{appearance}, {suffix}" if appearance else suffix
-    return appearance
-
-
-def person_description(name: str, *,
-                       include_outfit: bool = False,
-                       apply_state_modifiers: bool = True,
-                       back_view: bool = False,
-                       mesh_input: bool = False,
-                       body_profile: Optional[Dict[str, Any]] = None,
-                       include_exposed: bool = True,
-                       neutral_state: bool = False,
-                       observer: str = "") -> str:
-    """THE text description of a person for image prompts.
-
-    Every path that describes a person — PromptBuilder (chat images,
-    expression variants, outfit images), the scene render / scene photo
-    (``include_outfit=True``) and every prompt PREVIEW — goes through this
-    one function, so a preview always shows what the render would send.
-
-    Layers: appearance (profile tokens resolved, whitespace collapsed)
-    → body-slot suffix (species packages; exposed fragments only while
-    uncovered, and in a ``back_view`` render only from slots visible from
-    behind; left out with ``include_exposed=False``) → optionally the
-    worn-outfit line → triggered
-    image_modifier directives over the composed text (with the outfit
-    included, a replacement may rewrite outfit text too — scene-render
-    semantics) → in a ``back_view`` render, every segment naming a facial
-    feature dropped (``strip_face_terms``).
-
-    ``observer``: whose eyes the text is for (prompt text a character reads,
-    not an image prompt). When the person wears a persona the observer is
-    not in on (``identity_view.masked_description``), the persona's
-    description replaces the appearance AND the body-slot suffix — both are
-    the real body; the worn outfit (the suit) stays. ``""`` = no observer,
-    the real appearance (every image-prompt path)."""
-    masked = None
-    if observer:
-        from app.core.identity_view import masked_description
-        masked = masked_description(observer, name)
-    if masked is not None:
-        appearance = " ".join(masked.split())
-    else:
-        appearance = _real_appearance(name, body_profile=body_profile, back_view=back_view,
-                                      mesh_input=mesh_input, include_exposed=include_exposed,
-                                      neutral_state=neutral_state)
     if include_outfit:
         try:
             from app.core.outfit_renderer import render_outfit

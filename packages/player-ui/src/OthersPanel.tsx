@@ -16,7 +16,6 @@ import { EmptyState } from './EmptyState'
 import { HoverHint } from './HoverHint'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
-import { shownName } from './displayNames'
 import { PropActionsPanel } from './PropActionsPanel'
 import { onPropActionChanged } from './propActions'
 
@@ -25,13 +24,7 @@ interface BarMeta { color?: string; label?: string; name?: string; name_de?: str
  *  Absent/null when there is no relationship at all. */
 interface Relation { type: string; strength: number; sentiment: number }
 interface CharState {
-  /** The REAL name — the key every action posts. */
   name: string
-  /** What the card prints: the avatar's view of a disguised person. */
-  display_name?: string
-  /** Present only for a disguise the avatar is not in on: the persona
-   *  portrait in place of the real one, `''` = the no-portrait placeholder. */
-  portrait_url?: string
   mood: string
   activity: string
   status_effects: Record<string, number>
@@ -52,12 +45,7 @@ interface CharState {
    *  without the people it is shared with. `members` includes `name`. */
   interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string } | null
 }
-interface Others {
-  avatar: string
-  characters: CharState[]
-  /** Real name → shown name for every name a card prints (pair partners). */
-  display_names?: Record<string, string>
-}
+interface Others { avatar: string; characters: CharState[] }
 interface PairPose { key: string; kind: string; label: string }
 
 /** "reading, on the armchair" — activity and place, either alone when the
@@ -68,13 +56,11 @@ interface PairPose { key: string; kind: string; label: string }
  *  preposition table here, because the same one lives in the server
  *  (`places._PREPOSITION`) and two copies drift apart — that is what this
  *  field was added for. An empty or absent phrase prints no place. */
-function whereabouts(c: CharState, t: (s: string) => string,
-  displayNames?: Record<string, string>): string {
+function whereabouts(c: CharState, t: (s: string) => string): string {
   const place = (c.place_phrase || '').trim().toLowerCase()
   const doing = c.interaction
     ? t('{pose} with {name}').replace('{pose}', c.interaction.pose_label || c.interaction.pose_key)
-      .replace('{name}', othersIn(c.interaction.members, c.name)
-        .map((n) => shownName(displayNames, n)).join(', '))
+      .replace('{name}', othersIn(c.interaction.members, c.name).join(', '))
     : c.activity
   return [doing, place].filter(Boolean).join(', ')
 }
@@ -82,10 +68,7 @@ function whereabouts(c: CharState, t: (s: string) => string,
 /** Roster portrait: 44 CSS px. The magnifier opens the full-size cutout. */
 const AVATAR_W = thumbWidth(44)
 
-/** The card's portrait; `''` = draw the placeholder. A persona portrait
- *  (`portrait_url`) wins over the real one whenever the field is present. */
 function portraitUrl(c: CharState): string {
-  if (c.portrait_url !== undefined) return c.portrait_url ? transparentPortraitUrl(c.portrait_url) : ''
   return c.profile_image
     ? transparentPortraitUrl(`/characters/${encodeURIComponent(c.name)}/images/${encodeURIComponent(c.profile_image)}`)
     : `/characters/${encodeURIComponent(c.name)}/outfit-expression?fallback=default&v=${encodeURIComponent(c.expression_version || '')}`
@@ -198,11 +181,7 @@ export function OthersPanel() {
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignContent: 'flex-start', height: '100%', minHeight: 0, overflow: 'auto', fontSize: '0.9em' }}>
-      {data.characters.map((c) => {
-        const label = c.display_name || c.name
-        const portrait = portraitUrl(c)
-        const where = whereabouts(c, t, data.display_names)
-        return (
+      {data.characters.map((c) => (
         <div key={c.name} style={{
           flex: '1 1 190px', minWidth: 160, maxWidth: '100%', alignSelf: 'flex-start',
           display: 'flex', flexDirection: 'column', gap: 4, padding: 8, borderRadius: 8,
@@ -211,20 +190,16 @@ export function OthersPanel() {
           border: c.in_party ? '1px solid rgba(120,170,255,0.55)' : '1px solid rgba(255,255,255,0.08)',
         }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {portrait
-              ? <img src={thumbUrl(portrait, AVATAR_W)} alt={label} loading="lazy" decoding="async"
-                  onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
-                  {...enlarge({ src: portrait, alt: label },
-                    { width: 44, height: 44, objectFit: 'contain', flex: '0 0 auto' })} />
-              // No portrait to show: an empty box of the same size — what a
-              // portrait that fails to load leaves behind, too.
-              : <span aria-hidden="true" style={{ width: 44, height: 44, flex: '0 0 auto' }} />}
+            <img src={thumbUrl(portraitUrl(c), AVATAR_W)} alt={c.name} loading="lazy" decoding="async"
+              onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
+              {...enlarge({ src: portraitUrl(c), alt: c.name },
+                { width: 44, height: 44, objectFit: 'contain', flex: '0 0 auto' })} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {label}{c.in_party ? <span title={t('In your party')} style={{ marginLeft: 4 }}>👥</span> : null}
+                {c.name}{c.in_party ? <span title={t('In your party')} style={{ marginLeft: 4 }}>👥</span> : null}
               </div>
               {c.mood && <div style={{ opacity: 0.6, fontSize: '0.78em', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.mood}</div>}
-              {where && <div title={where} style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{where}</div>}
+              {whereabouts(c, t) && <div title={whereabouts(c, t)} style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{whereabouts(c, t)}</div>}
               <RelationLine c={c} t={t} />
             </div>
           </div>
@@ -257,8 +232,7 @@ export function OthersPanel() {
             })}
           </> : undefined} />
         </div>
-        )
-      })}
+      ))}
       {note && (
         <div style={{ flex: '1 1 100%', fontSize: '0.76em', color: '#ff9b9b' }}>{note}</div>
       )}

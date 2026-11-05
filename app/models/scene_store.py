@@ -146,8 +146,7 @@ def get_scene_utterances(scene: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     Private lines are left out: the summary built from these rows becomes a
     memory of EVERY participant, and a private line belongs only to its
-    recipients. ``meta`` comes parsed (a dict) — it carries the ``identity``
-    snapshot of speaking time, the public view of a shared reader."""
+    recipients. ``meta`` comes parsed (a dict)."""
     from app.models.perception_store import NOT_PRIVATE_SQL
     conn = get_connection()
     rows = conn.execute(

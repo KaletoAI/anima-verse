@@ -82,7 +82,6 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     when it has content. The template renders nothing for empty blocks.
     """
     from app.core.birthday import is_birthday_today
-    from app.core.identity_view import self_field
     from app.models.world import get_room_name
     from app.core.perception import prompt_place
     from app.models.character import (
@@ -113,9 +112,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # The character's language instruction (e.g. "Always respond in
         # German.") — otherwise the thought turn produces English asides.
         "lang_instruction": get_character_language_instruction(character_name),
-        # A worn persona's override replaces the bearer's own personality.
-        "personality": (self_field(character_name, "character_personality")
-                        or (profile.get("character_personality", "") or "").strip()),
+        "personality": (profile.get("character_personality", "") or "").strip(),
         "location_name": location_name,
         "room_name": get_room_name(location_id, room_id, lang) if location_id and room_id else "",
         # DISPLAY text, not a render key: the sanitized flavor if there is
@@ -139,7 +136,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "inbox_block": _build_inbox_block(character_name),
         "events_block": _build_events_block(location_id, character_name),
         "assignments_block": _build_assignments_block(character_name),
-        "general_task": _build_general_task(profile, character_name),
+        "general_task": _build_general_task(profile),
         "state_flags_block": _build_state_flags_block(character_name),
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
@@ -153,7 +150,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # to this character: it never reaches anyone else's prompt.
         "recent_thoughts": recent_thoughts_block(character_name),
         "outfit_self_block": _build_outfit_block(character_name, "Your outfit"),
-        "outfit_avatar_block": _build_avatar_outfit_block(character_name),
+        "outfit_avatar_block": _build_avatar_outfit_block(),
         "known_secrets_block": _build_known_secrets_block(character_name),
         "room_items_block": _build_room_items_block(location_id, room_id, character_name, profile=profile),
         "inventory_block": _build_inventory_block(character_name),
@@ -251,16 +248,12 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
          if key not in excluded and isinstance(value, str)]))
     ctx["away_block"] = away_block(ctx["away_people"])
     from app.models.account import get_active_character
-    from app.core.identity_view import shown_names
     avatar = (get_active_character() or "").strip()
     ctx["absent_block"] = "\n".join(
         f"- {name} (avatar)" if name == avatar else f"- {name}"
         for name in ctx["absent_people"])
     presence = room_presence_names(character_name, location_id, room_id)
-    # Labels for the prompt (the observer's view of each present person);
-    # ``presence`` itself stays real names for the absent-people lookup below.
-    ctx["room_presence_names"] = (shown_names(character_name, presence[0])
-                                  if presence is not None else None)
+    ctx["room_presence_names"] = presence[0] if presence is not None else None
     # Alone, the own last turns waiting for an absent person lead an RP model
     # to narrate that person entering. Only the journal's own mentions count:
     # every prompt names the avatar (its outfit block), and a name in the chat
@@ -408,14 +401,8 @@ def _build_assignments_block(character_name: str) -> str:
         return ""
 
 
-def _build_general_task(profile: Dict[str, Any], character_name: str = "") -> str:
-    """Static general task from the character profile (long-running purpose);
-    while ``character_name`` wears a persona with a task override, that."""
-    if character_name:
-        from app.core.identity_view import self_field
-        override = self_field(character_name, "character_task")
-        if override is not None:
-            return override
+def _build_general_task(profile: Dict[str, Any]) -> str:
+    """Static general task from the character profile (long-running purpose)."""
     return (profile.get("character_task", "") or "").strip()
 
 
@@ -726,24 +713,15 @@ def _build_retrospective_block(character_name: str) -> str:
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "retrospect_enabled"):
             return ""
-        from app.core.identity_view import active_persona
         from app.core.soul_writer import load_all_body_lines, get_last_retrospect_at
 
-        # A worn persona's goals override replaces the goals lines only;
-        # beliefs and lessons stay hers. Retrospect pauses while she wears
-        # one, so no "time to reflect" nudge either.
-        persona = active_persona(character_name)
-        goals_override = persona.own_field("character_goals") if persona else None
         beliefs = load_all_body_lines(character_name, "beliefs", limit=6)
         lessons = load_all_body_lines(character_name, "lessons", limit=6)
-        if goals_override is not None:
-            goals = [ln.strip() for ln in goals_override.splitlines() if ln.strip()]
-        else:
-            goals = load_all_body_lines(character_name, "goals", limit=6)
+        goals = load_all_body_lines(character_name, "goals", limit=6)
         last_at = get_last_retrospect_at(character_name)
 
-        overdue = persona is None
-        if overdue and last_at:
+        overdue = True
+        if last_at:
             try:
                 last_dt = parse_iso(last_at)
                 overdue = utc_now() - last_dt > timedelta(hours=_RETROSPECT_BOOST_HOURS)
@@ -869,7 +847,6 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
     """
     try:
         from app.core.db import get_connection
-        from app.core.identity_view import stamped_name
         from app.models.unified_chat import UnifiedChatManager
         conn = get_connection()
         # Find the latest partner in either storage direction.
@@ -904,11 +881,6 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
             if not content:
                 continue
             speaker = partner if role == "user" else character_name
-            # Said while a persona was worn → the persona's name, from this
-            # character's view (the message's identity stamp); unstamped
-            # messages keep the stored name.
-            speaker = stamped_name(character_name, speaker,
-                                   getattr(msg, "metadata", None))
             if len(content) > 400:
                 content = content[:400].rstrip() + " […]"
             lines.append(f"  {speaker}: {content}")
@@ -939,19 +911,14 @@ def _build_outfit_block(character_name: str, label: str) -> str:
         return ""
 
 
-def _build_avatar_outfit_block(observer: str = "") -> str:
-    """Avatar outfit. Returns 'Avatar outfit (<name>): ...' or ''.
-
-    ``<name>`` is the observer's view of the avatar (the alias of a persona
-    the observer is not in on)."""
+def _build_avatar_outfit_block() -> str:
+    """Avatar outfit. Returns 'Avatar outfit (<name>): ...' or ''."""
     try:
-        from app.core.identity_view import shown_name
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
         if not avatar:
             return ""
-        label = shown_name(observer, avatar) if observer else avatar
-        return _build_outfit_block(avatar, f"Avatar outfit ({label})")
+        return _build_outfit_block(avatar, f"Avatar outfit ({avatar})")
     except Exception as e:
         logger.debug("avatar outfit block failed: %s", e)
         return ""
@@ -1032,7 +999,6 @@ def _build_tracker_block(character_name: str, current_location_id: str) -> str:
     requires SetLocation.
     """
     try:
-        from app.core.identity_view import masked_description
         from app.models.inventory import get_character_inventory, get_item
         from app.models.character import get_character_current_location
         from app.models.world import get_location_name
@@ -1057,10 +1023,7 @@ def _build_tracker_block(character_name: str, current_location_id: str) -> str:
             seen_targets.add(target)
             target_loc = get_character_current_location(target) or ""
             item_name = (item.get("name") or iid).strip()
-            # A target hidden behind a persona this carrier is not in on
-            # cannot be found: pinpointing "Cara is here" next to a stranger
-            # would give the persona away.
-            if not target_loc or masked_description(character_name, target) is not None:
+            if not target_loc:
                 lines.append(f"- Your {item_name} reaches for {target}, but cannot find them right now.")
                 continue
             if target_loc == current_location_id:
@@ -1083,8 +1046,7 @@ def _visible_activity(name: str) -> str:
 
 
 def present_people_details(entries, location_id: str = "",
-                           with_activity: bool = False, *,
-                           observer: str = "") -> str:
+                           with_activity: bool = False) -> str:
     """Visible-detail lines for present characters. ``entries`` =
     [(name, display_label)]. Shared by the thought context AND the chat
     scene state (R5): what a character can SEE of the people around it.
@@ -1096,18 +1058,9 @@ def present_people_details(entries, location_id: str = "",
     Both used to ride at the end of the capped description, where the cap
     cut them off ("exposed large breasts, expos…"). A state's NAME never
     goes in: it is an internal label ("Drunk — clouded memory"), what
-    others see of it is its image_modifier.
-
-    ``observer``: who looks. With it, the leading name of each label becomes
-    ``identity_view.shown_name(observer, name)`` (a caller's suffix such as
-    " (avatar)" stays) and the description is the observer's view
-    (``person_description(..., observer=)`` — a persona's description for a
-    non-knower). ``""`` = real names and appearance."""
-    from app.core.identity_view import shown_name
+    others see of it is its image_modifier."""
     lines = []
     for n, label in entries[:8]:
-        if observer and label.startswith(n):
-            label = shown_name(observer, n) + label[len(n):]
         details = []
         try:
             from app.core.prompt_filters import (apply_image_replacements,
@@ -1116,13 +1069,12 @@ def present_people_details(entries, location_id: str = "",
         except Exception:
             replacements, additive = [], []
         try:
-            # The person description (appearance + body-slot fragments +
-            # worn outfit; the observer's view of the appearance) — same
-            # composition the scene renderer uses for text persons; the
-            # state replacements rewrite it the same way.
+            # The REAL person description (appearance + body-slot fragments +
+            # worn outfit) — same composition the scene renderer uses for
+            # text persons; the state replacements rewrite it the same way.
             from app.core.prompt_builder import person_description
             desc = person_description(n, include_outfit=True, include_exposed=False,
-                                      apply_state_modifiers=False, observer=observer)
+                                      apply_state_modifiers=False)
             desc = " ".join(apply_image_replacements(desc, replacements).split()).strip()
             if desc:
                 if len(desc) > 180:
@@ -1188,7 +1140,6 @@ def _build_presence(character_name: str, location_id: str,
     character the map does not place at all: without a point there is no
     circle to be empty."""
     try:
-        from app.core.identity_view import shown_name
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
         presence = _room_presence(character_name, location_id, room_id)
@@ -1196,16 +1147,11 @@ def _build_presence(character_name: str, location_id: str,
             return "", "", False
         here_names, elsewhere_pairs = presence
         here = [(n, f"{n} (avatar)" if n == avatar else n) for n in here_names]
-        # Names as this character perceives them (identity view): a persona
-        # it is not in on is its alias, also in another room.
-        elsewhere = []
-        for n, room in elsewhere_pairs:
-            label = shown_name(character_name, n)
-            elsewhere.append(f"- {label} (avatar) — in: {room}" if n == avatar
-                             else f"- {label} — in: {room}")
+        elsewhere = [
+            f"- {n} (avatar) — in: {room}" if n == avatar else f"- {n} — in: {room}"
+            for n, room in elsewhere_pairs]
         room_block = present_people_details(
-            here[:8], location_id, with_activity=True,
-            observer=character_name) if here else ""
+            here[:8], location_id, with_activity=True) if here else ""
         return room_block, "\n".join(elsewhere[:8]), not here
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)
@@ -1392,10 +1338,6 @@ def _build_daily_schedule_context(character_name: str) -> tuple[str, bool]:
     Neither note enforces travel.
     """
     try:
-        # A worn persona whose routine rests: no rhythm, no sleep outlook.
-        from app.core.identity_view import routine_paused
-        if routine_paused(character_name):
-            return "", False
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "activity_home_enabled"):
             return "", False

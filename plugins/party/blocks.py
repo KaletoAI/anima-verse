@@ -43,15 +43,13 @@ def party_section(character_name: str) -> str:
         return ""
     if not party:
         return ""
-    # Members are named as this character perceives them.
-    from app.core.identity_view import shown_name, shown_names
 
     if party.get("role") == "leader":
         members = [m for m in party.get("members", [])
                    if m and m != character_name]
         if not members:
             return ""
-        followers = _and_list(shown_names(character_name, members))
+        followers = _and_list(members)
         verb = "travels" if len(members) == 1 else "travel"
         return (
             "=== Your party ===\n"
@@ -64,7 +62,6 @@ def party_section(character_name: str) -> str:
     leader = (party.get("leader") or "").strip()
     if not leader:
         return ""
-    leader = shown_name(character_name, leader)
     return (
         "=== Your party ===\n"
         f"You travel with {leader}'s party. {leader} chooses where the group "

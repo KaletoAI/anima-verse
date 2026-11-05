@@ -49,13 +49,10 @@ def pair_verb_name() -> str:
 
 def open_questions(agent_name: str, tool_names: list) -> list:
     """One line per open pair invitation to ``agent_name`` (only while it
-    has the verb): who asks, the exact action, the yes and the no call.
-    Who asks is named as ``agent_name`` perceives them (``shown_name``);
-    the verb resolves that label back to the real character."""
+    has the verb): who asks, the exact action, the yes and the no call."""
     if VERB_NAME not in (tool_names or []):
         return []
     from app.core import interaction_engine as IE
-    from app.core.identity_view import shown_name
     from app.core.prop_action_engine import state_for
     from app.core.prop_actions import piece_label
     lines = []
@@ -66,17 +63,15 @@ def open_questions(agent_name: str, tool_names: list) -> list:
         incoming = []
     for run in incoming:
         piece = piece_label(run["target"])
-        asker = shown_name(agent_name, run["actor"])
         lines.append(
-            f'{asker} invited {agent_name} to "{run["label"]}"'
+            f'{run["actor"]} invited {agent_name} to "{run["label"]}"'
             + (f" on {piece}" if piece else "")
-            + f'. Yes: {VERB_NAME} {{"partner": "{asker}", "answer": "yes"}}. '
-            f'No: {VERB_NAME} {{"partner": "{asker}", "answer": "no"}}.')
+            + f'. Yes: {VERB_NAME} {{"partner": "{run["actor"]}", "answer": "yes"}}. '
+            f'No: {VERB_NAME} {{"partner": "{run["actor"]}", "answer": "no"}}.')
     for invite in IE.pending_invites_for(agent_name):
-        inviter = shown_name(agent_name, invite["inviter"])
-        call = f'{{"partner": "{inviter}", "action": "{invite["pose_key"]}"}}'
+        call = f'{{"partner": "{invite["inviter"]}", "action": "{invite["pose_key"]}"}}'
         lines.append(
-            f'{inviter} invited {agent_name} to "{invite["pose_key"]}". '
+            f'{invite["inviter"]} invited {agent_name} to "{invite["pose_key"]}". '
             f'Yes: {VERB_NAME} {call} — exactly this action, even if the reply '
             f'describes it in other words. No: {VERB_NAME} '
             f'{call[:-1]}, "answer": "no"}}.')
@@ -110,17 +105,15 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
         from app.core.agent_loop import get_agent_loop
         from app.core.pose_catalog import pose_label
         from app.models.character import get_character_language
-        from app.core.identity_view import shown_name
         label = pose_label(pose_key, get_character_language(invitee))
-        asker = shown_name(invitee, inviter)
         # Prose only: the roleplay reply of an rp_first character calls no
         # tool. The exact yes/no call reaches whoever does (tool decision,
         # or a single-mode chat) through open_questions.
         get_agent_loop().bump_respond(
             invitee, speaker=inviter,
-            content=f"{asker} suggests {label} to you.",
+            content=f"{inviter} suggests {label} to you.",
             on_demand=True,
-            hint=(f"{asker} suggests {label} to you. Decide in "
+            hint=(f"{inviter} suggests {label} to you. Decide in "
                   f"character whether you want to, and make your answer clear."))
     except Exception as e:
         logger.debug("interaction invite bump failed: %s", e)
@@ -212,13 +205,11 @@ def _on_prop_invited(execution_id: str = "", inviter: str = "", invitee: str = "
         logger.debug("prop consent decision failed for %s: %s", invitee, exc)
     try:
         from app.core.agent_loop import get_agent_loop
-        from app.core.identity_view import shown_name
-        asker = shown_name(invitee, inviter)
         get_agent_loop().bump_respond(
-            invitee, speaker=inviter, content=f"{asker} invites you {offer}.", on_demand=True,
+            invitee, speaker=inviter, content=f"{inviter} invites you {offer}.", on_demand=True,
             # Prose only, like the pair invitation: the exact yes/no call
             # reaches the tool-calling reader through open_questions.
-            hint=(f"{asker} invites you {offer}. Decide in character whether you "
+            hint=(f"{inviter} invites you {offer}. Decide in character whether you "
                   f"want to, and make your answer clear."))
     except Exception as exc:
         logger.debug("prop consent respond request failed for %s: %s", invitee, exc)
