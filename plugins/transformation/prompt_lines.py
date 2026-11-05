@@ -6,7 +6,14 @@
   transformation): "You are <body>, and secretly <leader>. Nobody may learn
   that you are <leader>, except <knowers>." plus who present does not know;
 * the character knows a present, transformed body: "<body> here is secretly
-  <leader>." plus who present does not know.
+  <leader>." plus who present does not know;
+* the character is a leader standing in the world, one line per body of its
+  usable definitions: "You are <leader>, and secretly also <body>. Nobody may
+  learn that you are <body>, except <knowers>." plus who present does not know
+  — the mind remembers being the body ("(as <body>)" memories), so it needs
+  the same discretion when it is itself;
+* the character knows a body whose present leader is not transformed:
+  "<leader> here is secretly <body>." plus who present does not know.
 
 A non-knower gets nothing; the mapping itself reaches knowers through their
 known-about-others secrets. The lines are volatile (they change with every
@@ -23,7 +30,7 @@ from app.core.log import get_logger
 from app.core.perception import addressable_for
 from app.core.prompt_templates import render
 
-from plugins.transformation import knowers, store
+from plugins.transformation import definitions, knowers, store
 
 logger = get_logger("transformation")
 
@@ -43,9 +50,11 @@ def blocks_for(character: str) -> List[str]:
     if not character:
         return []
     rows = store.all_active()
-    if not rows:
+    defs = definitions.load().values()
+    if not rows and not defs:
         return []
     present = addressable_for(character)
+    transformed = {row.leader for row in rows}
     lines: List[str] = []
     for row in sorted(rows, key=lambda r: r.body.casefold()):
         if row.body == character:
@@ -56,6 +65,19 @@ def blocks_for(character: str) -> List[str]:
         elif row.body in present and knowers.knows(character, row.body):
             non = [n for n in present if n != row.body and not knowers.knows(n, row.body)]
             lines.append(_line("knower_present", body=row.body, leader=row.leader,
+                               non_knowers=_sorted(non)))
+    # A leader standing as itself (not transformed): one line per secret body.
+    pairs = sorted({(d.leader, d.body) for d in defs if d.leader not in transformed},
+                   key=lambda p: (p[1].casefold(), p[0].casefold()))
+    for leader, body in pairs:
+        if leader == character:
+            non = [n for n in present if not knowers.knows(n, body)]
+            lines.append(_line("leader", body=body, leader=leader,
+                               knower_list=_sorted(knowers.knower_names(body)),
+                               non_knowers=_sorted(non)))
+        elif leader in present and knowers.knows(character, body):
+            non = [n for n in present if n != leader and not knowers.knows(n, body)]
+            lines.append(_line("knower_leader_present", body=body, leader=leader,
                                non_knowers=_sorted(non)))
     return [line for line in lines if line]
 

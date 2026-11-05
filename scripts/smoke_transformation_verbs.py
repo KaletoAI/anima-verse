@@ -74,6 +74,17 @@ THE RULES, and what follows BY HAND
     Tilda." reaches exactly {Glut, Obs}; again -> "Error"; "Nobody" -> "Error".
 [F] revert verb by Glut -> no "Error"; Tilda present, Glut dormant; revert
     not visible for Glut any more; a second revert -> "Error".
+[G] Secrecy while the LEADER stands in the world (after [F]: Tilda present in
+    the taproom with Kim, Obs, Ava; Kim and Obs know Glut; nobody knows Star):
+    - Tilda: "You are Tilda, and secretly also Glut. Nobody may learn that you
+      are Glut, except Kim and Obs. Ava does not know — never reveal it in
+      front of them."
+    - Kim (and Obs alike): 'Tilda here is secretly Glut. Ava does not know —
+      do not call Tilda "Glut" in front of them.'
+    - Ava (leads Star, nobody in on it): "You are Ava, and secretly also Star.
+      Nobody may learn that you are Star. Kim, Obs and Tilda do not know —
+      never reveal it in front of them."; Ava gets no line naming Glut.
+    - Thought event for Tilda: "=== Secret identity ===\n- <the Tilda line>".
 """
 import json
 import os
@@ -328,6 +339,27 @@ check("Tilda present, Glut dormant", (ch.get_character_status("Tilda"),
                                       ch.get_character_status("Glut")), ("", "dormant"))
 check("revert hidden for Glut again", revert.visible_for("Glut"), False)
 check("revert of nobody -> error", is_error(revert.execute('{"agent_name":"Glut"}')), True)
+
+# ── [G] secrecy while the leader stands ─────────────────────────────────────
+print("[G] leader secrecy")
+TILDA_LINE = ("You are Tilda, and secretly also Glut. Nobody may learn that you are Glut, "
+              "except Kim and Obs. Ava does not know — never reveal it in front of them.")
+KNOWER_LINE = ('Tilda here is secretly Glut. Ava does not know — do not call Tilda "Glut" '
+               'in front of them.')
+AVA_LINE = ("You are Ava, and secretly also Star. Nobody may learn that you are Star. "
+            "Kim, Obs and Tilda do not know — never reveal it in front of them.")
+for _who, _want in (("Tilda", [TILDA_LINE]), ("Kim", [KNOWER_LINE]), ("Obs", [KNOWER_LINE]),
+                    ("Ava", [])):
+    _blocks = []
+    hooks.emit("character.prompt_context", character_name=_who, mode="chat", blocks=_blocks)
+    check(f"leader-present line for {_who}", [b for b in _blocks if "Glut" in str(b)], _want)
+_blocks = []
+hooks.emit("character.prompt_context", character_name="Ava", mode="chat", blocks=_blocks)
+check("Ava's own leader line", [b for b in _blocks if "Star" in str(b)], [AVA_LINE])
+_sections = []
+hooks.emit("character.thought_context", character_name="Tilda", blocks=_sections)
+check("thought event for Tilda", [s for s in _sections if "Glut" in str(s)],
+      ["=== Secret identity ===\n- " + TILDA_LINE])
 
 print()
 print(f"{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
