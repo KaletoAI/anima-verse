@@ -1,4 +1,4 @@
-"""Chat History Management - Zusammenfassung, zeitgesteuertes Window und Tages-Summaries
+"""Chat history management — summaries, the time-based window and day summaries
 
 Storage: world.db — Tabellen summaries, chat_messages
 """
@@ -18,19 +18,19 @@ logger = get_logger("history_manager")
 
 
 # ---------------------------------------------------------------------------
-# Memory Thresholds — zentrale Konfiguration fuer das 3-Stufen-System
+# Memory thresholds — central configuration of the three-tier system
 # ---------------------------------------------------------------------------
 
 def get_memory_thresholds() -> dict:
-    """Drei unabhaengig konfigurierbare Grenzen fuer das Gedaechtnis-System.
+    """Three independently configurable limits of the memory system.
 
     Returns dict with:
-        short_term_days: Stufe 1 (Chat-History im Prompt)
-        mid_term_days:   Stufe 2 → 3 Grenze (Tages → Wochen)
-        long_term_days:  Wochen → Monats-Grenze
-        max_messages:    Safety-Cap fuer Chat-History
-        session_gap_hours: Zeitluecke zwischen Turns, die als Session-Bruch
-                           zaehlt — alles vor der Luecke wandert in old_history.
+        short_term_days: tier 1 (chat history in the prompt)
+        mid_term_days:   tier 2 → 3 boundary (days → weeks)
+        long_term_days:  weeks → season boundary
+        max_messages:    safety cap for the chat history
+        session_gap_hours: gap between turns that counts as a session break —
+                           everything before the gap moves to old_history.
     """
     return {
         "short_term_days": int(os.environ.get("MEMORY_SHORT_TERM_DAYS", "3")),
@@ -42,32 +42,31 @@ def get_memory_thresholds() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Zeitgesteuertes History-Window
+# Time-based history window
 # ---------------------------------------------------------------------------
 
 def get_time_based_history(
     full_history: List[Dict],
     days: int = 0,
     max_messages: int = 0) -> Tuple[List[Dict], List[Dict]]:
-    """Gibt Chat-History der letzten N Tage zurueck.
+    """Return the chat history of the last N days.
 
-    Filtert nach Timestamp statt nach fixer Anzahl.
-    Nachrichten ohne Timestamp zaehlen als aktuell.
+    Filters by timestamp instead of a fixed count. Messages without a
+    timestamp count as current.
 
-    Zusaetzlich: Session-Gap. Wenn zwischen zwei aufeinanderfolgenden
-    recent-Turns eine Pause groesser als ``session_gap_hours`` liegt,
-    werden alle Turns VOR der letzten solchen Luecke nach ``old`` umgehaengt.
-    Dadurch sieht das LLM nur die aktuelle Session verbatim — alles davor
-    wandert in die Session-Summary.
+    Additionally: the session gap. When two consecutive recent turns are more
+    than ``session_gap_hours`` apart, every turn BEFORE the last such gap is
+    moved to ``old``. The LLM thus sees only the current session verbatim —
+    everything before goes into the session summary.
 
     Args:
-        full_history: Vollstaendige Chat-History (dicts mit 'timestamp')
-        days: Zeitfenster in Tagen (0 = aus Config)
-        max_messages: Safety-Cap (0 = aus Config)
+        full_history: complete chat history (dicts with 'timestamp')
+        days: time window in days (0 = from config)
+        max_messages: safety cap (0 = from config)
 
     Returns:
         (recent_messages, old_messages)
-        recent = im Prompt, old = fuer Summary-Generierung
+        recent = in the prompt, old = for summary generation
     """
     if not days or not max_messages:
         thresholds = get_memory_thresholds()
@@ -90,16 +89,16 @@ def get_time_based_history(
                     old.append(msg)
                     continue
             except (ValueError, TypeError):
-                pass  # Kein gueltiger Timestamp → als aktuell behandeln
+                pass  # no valid timestamp → treat as current
         recent.append(msg)
 
-    # Safety-Cap: bei Ueberschreitung aelteste recent-Nachrichten abschneiden
+    # Safety cap: when exceeded, cut the oldest recent messages
     if len(recent) > max_messages:
         overflow = recent[:-max_messages]
         old.extend(overflow)
         recent = recent[-max_messages:]
 
-    # Session-Gap: an der letzten Luecke > gap_hours abschneiden.
+    # Session gap: cut at the last gap > gap_hours.
     if gap_hours > 0 and len(recent) >= 2:
         gap = timedelta(hours=gap_hours)
         for i in range(len(recent) - 1, 0, -1):
@@ -373,20 +372,20 @@ def anti_repetition_overrides(
 
 
 def strip_history_artifacts(content: str) -> str:
-    """Entfernt Artefakte aus Chat-Content bevor er ins messages-Array geht.
+    """Remove artifacts from chat content before it enters the messages array.
 
-    Stoer-Faktoren fuer das LLM, die nicht in die Recent-History gehoeren:
-    - Markdown-Bild-Embeds ``![alt](url)`` — der LLM sieht sie als kryptische
-      URL-Bloecke und imitiert sie ggf. in eigenen Antworten
-    - Generated-Image-Marker / Image-URL-Reste
+    Noise for the LLM that does not belong into the recent history:
+    - Markdown image embeds ``![alt](url)`` — the LLM sees them as cryptic URL
+      blocks and may imitate them in its own replies
+    - generated-image markers / image URL leftovers
 
-    DB-Inhalt bleibt unveraendert; nur der vorbei-an-LLM-Stream wird saeubert.
+    The DB content stays unchanged; only the stream sent to the LLM is cleaned.
     """
     if not content:
         return content
-    # Markdown-Bild-Embeds in einer oder mehrerer Zeilen
+    # Markdown image embeds on one or more lines
     content = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', content)
-    # Mehrfache Leerzeilen normalisieren
+    # Normalise repeated blank lines
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content.strip()
 
@@ -394,16 +393,15 @@ def strip_history_artifacts(content: str) -> str:
 def resolve_speaker(msg: Dict[str, str],
                     partner: str,
                     character_name: str) -> str:
-    """Bestimmt den tatsaechlichen Sprecher einer chat_messages-Zeile.
+    """Determine the actual speaker of a chat_messages row.
 
-    Priorisiert:
-      1. metadata.speaker  (gesetzt bei TalkTo, Group, Inbox)
-      2. partner           (bei role='user' = Gegenueber sprach)
-      3. character_name    (bei role='assistant' = Selbst sprach)
+    Priority:
+      1. metadata.speaker  (set by TalkTo, group, inbox)
+      2. partner           (role='user' = the counterpart spoke)
+      3. character_name    (role='assistant' = the character itself spoke)
 
-    Gibt einen Charakternamen zurueck. Kein "Player"-Fallback.
-    Leerstring nur, wenn weder partner noch character_name bekannt sind —
-    Aufrufer sollen solche Zeilen ueberspringen.
+    Returns a character name, no "Player" fallback. An empty string only when
+    neither partner nor character_name is known — callers skip such rows.
     """
     meta = msg.get("metadata") or {}
     if isinstance(meta, str):
@@ -460,17 +458,15 @@ def _create_history_summary(
     old_history: List[Dict[str, str]],
     character_name: str = "",
     partner_name: str = "") -> str:
-    """Erstellt eine Zusammenfassung aelterer Chat-Nachrichten zwischen ZWEI
-    Charakteren via Router (Task: consolidation).
+    """Summarise older chat messages between TWO characters via the router
+    (task: consolidation).
 
     Args:
-        old_history: Aeltere Chat-Nachrichten dieser dyadischen Konversation.
-                     Kann Felder `partner`, `metadata` enthalten — werden zur
-                     Sprecher-Aufloesung benutzt.
-        character_name: Memory-Owner (Speaker B)
-        partner_name:   Konversationspartner (Speaker A). Wenn leer, wird er
-                        aus dem ersten Message-Eintrag mit role='user'
-                        abgeleitet.
+        old_history: older chat messages of this dyadic conversation. May
+                     carry `partner`, `metadata` — used to resolve speakers.
+        character_name: memory owner (speaker B)
+        partner_name:   conversation partner (speaker A). When empty, derived
+                        from the first message with role='user'.
     """
     if not old_history:
         return ""
@@ -546,15 +542,15 @@ def _create_history_summary(
             agent_name=character_name)
         summary = (response.content or "").strip()
 
-        # Sicherheitsnetz: Tool-Call-Patterns auch aus der Summary entfernen
+        # Safety net: strip tool-call patterns from the summary too
         summary = _clean_message_for_summary(summary)
 
         return summary
     except Exception as e:
         err_str = str(e)
-        # Context-Size Error: Prompt kuerzen und erneut versuchen
+        # Context-size error: shorten the prompt and retry
         if "exceed" in err_str and "context" in err_str:
-            logger.warning("Context-Size Fehler, kuerze Prompt und retry...")
+            logger.warning("Context-size error, shortening the prompt and retrying...")
             shorter = "\n".join(cleaned_parts[-30:])
             if len(shorter) > 12000:
                 shorter = shorter[-12000:]
@@ -592,7 +588,7 @@ def get_cached_summary(character_name: str) -> str:
 
 
 def _save_cached_summary(character_name: str, summary: str, message_count: int = 0):
-    """Speichert eine History-Summary in der DB."""
+    """Store a history summary in the DB."""
     now = utc_now_iso()
     try:
         with transaction() as conn:
@@ -609,14 +605,14 @@ def _save_cached_summary(character_name: str, summary: str, message_count: int =
                            ensure_ascii=False),
             ))
     except Exception as e:
-        logger.error("_save_cached_summary DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("_save_cached_summary DB error for %s: %s", character_name, e)
 
 
-_SUMMARY_THROTTLE_MINUTES = 30  # Mindestabstand zwischen Summary-Updates
+_SUMMARY_THROTTLE_MINUTES = 30  # minimum gap between summary updates
 
 
 def _is_summary_fresh(character_name: str) -> bool:
-    """Prueft ob die gecachte Summary juenger als THROTTLE_MINUTES ist."""
+    """Whether the cached summary is younger than THROTTLE_MINUTES."""
     try:
         conn = get_connection()
         row = conn.execute("""
@@ -637,19 +633,19 @@ def _is_summary_fresh(character_name: str) -> bool:
 def update_summary_background(character_name: str,
                               old_messages: List[Dict[str, str]],
                               partner_name: str = ""):
-    """Aktualisiert die Sitzungs-Summary (Chat vor Sliding Window).
+    """Update the session summary (the chat before the sliding window).
 
-    Wird nach dem Chat aufgerufen, blockiert den Chat NICHT.
-    Throttled: Maximal alle 30 Minuten ein Update.
+    Called after the chat, does NOT block it. Throttled: at most one update
+    every 30 minutes.
 
-    NUR die History-Summary — Tages-Summaries werden in der
-    Konsolidierungs-Pipeline erstellt (alle 6h), nicht im Chat-Path.
+    ONLY the history summary — day summaries are built by the consolidation
+    pipeline (every 6h), not in the chat path.
 
-    `partner_name` ist optional — wenn leer, wird der erste Partner aus
-    den Messages abgeleitet.
+    `partner_name` is optional — when empty, the first partner is derived
+    from the messages.
     """
     if _is_summary_fresh(character_name):
-        logger.debug("Summary fuer %s noch frisch, ueberspringe Update", character_name)
+        logger.debug("Summary for %s still fresh, skipping the update", character_name)
         return
 
     try:
@@ -658,9 +654,9 @@ def update_summary_background(character_name: str,
                                           partner_name=partner_name)
         if summary:
             _save_cached_summary(character_name, summary, len(old_messages))
-            logger.info("Session-Summary aktualisiert fuer %s (%d Nachrichten)", character_name, len(old_messages))
+            logger.info("Session summary updated for %s (%d messages)", character_name, len(old_messages))
     except Exception as e:
-        logger.error("Session-Summary fehlgeschlagen: %s", e)
+        logger.error("Session summary failed: %s", e)
 
 
 def _summary_updated_at(character_name: str) -> "datetime | None":
@@ -684,15 +680,15 @@ def _summary_updated_at(character_name: str) -> "datetime | None":
 def refresh_summary_if_uncovered(
     character_name: str,
     old_messages: List[Dict[str, str]]) -> str:
-    """Synchroner Refresh — gibt Summary zurueck, regeneriert wenn alte
-    Cache-Summary den aktuellen ``old_messages``-Stand nicht abdeckt.
+    """Synchronous refresh — returns the summary, regenerating it when the
+    cached one does not cover the current ``old_messages``.
 
-    Wird vor dem Bau des System-Prompts aufgerufen. Erkennt: enthaelt
-    ``old_messages`` Eintraege juenger als ``updated_at`` der gecachten
-    Summary? Falls ja → die Summary ist stale (z.B. nach Session-Gap-Cut),
-    regen via LLM (~5-15s). Throttle wird hier bewusst ignoriert.
+    Called before the system prompt is built. Does ``old_messages`` hold
+    entries younger than the cached summary's ``updated_at``? Then the summary
+    is stale (e.g. after a session-gap cut) and is regenerated via the LLM
+    (~5-15s). The throttle is ignored here on purpose.
 
-    Returns: aktuelle (ggf. neu generierte) Summary.
+    Returns: the current (possibly regenerated) summary.
     """
     cached = get_cached_summary(character_name)
     if not old_messages:
@@ -727,11 +723,11 @@ def refresh_summary_if_uncovered(
         if summary:
             _save_cached_summary(character_name, summary, len(old_messages))
             logger.info(
-                "Session-Summary synchron refreshed fuer %s (%d Nachrichten)",
+                "Session summary refreshed synchronously for %s (%d messages)",
                 character_name, len(old_messages))
             return summary
     except Exception as e:
-        logger.error("Sync-Summary-Refresh fehlgeschlagen: %s", e)
+        logger.error("Synchronous summary refresh failed: %s", e)
 
     return cached
 
@@ -745,7 +741,12 @@ def load_daily_summaries(character_name: str,
     Returns:
         `partner` empty: {day_key: {partner_name: summary_text, ...}}
         `partner` set:   {day_key: summary_text} (single-partner form)
+
+    Two owners (linked characters): the per-partner rows are the character's
+    own (they follow its chat), the general slot (partner '') is its MIND's
+    day entry — a linked body reads its leader's.
     """
+    from app.core.linked_characters import mind_of
     try:
         conn = get_connection()
         if partner:
@@ -757,43 +758,43 @@ def load_daily_summaries(character_name: str,
             return {r[0]: r[1] for r in rows} if rows else {}
         rows = conn.execute("""
             SELECT date_key, partner, content FROM summaries
-            WHERE character_name=? AND kind='daily'
+            WHERE kind='daily' AND ((character_name=? AND partner<>'')
+                                    OR (character_name=? AND partner=''))
             ORDER BY date_key ASC
-        """, (character_name,)).fetchall()
+        """, (character_name, mind_of(character_name))).fetchall()
         result: Dict[str, Dict[str, str]] = {}
         for date_key, p, content in rows:
             result.setdefault(date_key, {})[p or ""] = content
         return result
     except Exception as e:
-        logger.debug("load_daily_summaries DB-Fehler fuer %s: %s", character_name, e)
+        logger.debug("load_daily_summaries DB error for %s: %s", character_name, e)
         return {}
 
 
 def load_daily_summaries_combined(character_name: str) -> Dict[str, str]:
     """Variant of load_daily_summaries for consumers that are not partner-aware
-    (the week/season consolidation).
+    (the week/season consolidation) — over the character's whole MIND.
 
-    Folds all partner entries of a day into one combined string:
-        "Mit Kahiro: ...
-         Mit Rosi: ...
-         <general>: ..."
+    Folds all entries of a day into one combined string, the mind's general
+    entry and per-partner entries first, then those of every linked body of
+    the family marked "(as <body>)" (ruling R4):
+        "<general>
+         With Kahiro: ...
+         (as Glut) With Rosi: ..."
     """
-    by_day = load_daily_summaries(character_name)  # {day_key: {partner: text}}
-    flat: Dict[str, str] = {}
-    for day_key, by_partner in by_day.items():
-        if not by_partner:
-            continue
-        parts = []
-        for partner, text in by_partner.items():
-            if not text:
-                continue
-            if partner:
-                parts.append(f"Mit {partner}: {text}")
-            else:
-                parts.append(text)
-        if parts:
-            flat[day_key] = "\n".join(parts)
-    return flat
+    from app.core.linked_characters import family_of, mind_of
+    mind = mind_of(character_name)
+    flat_parts: Dict[str, List[str]] = {}
+    for member in family_of(mind):
+        by_day = load_daily_summaries(member)  # {day_key: {partner: text}}
+        mark = f"(as {member}) " if member != mind else ""
+        for day_key, by_partner in by_day.items():
+            for partner, text in sorted((by_partner or {}).items()):
+                if not text or (member != mind and not partner):
+                    continue  # a body's general slot is the mind's, counted once
+                flat_parts.setdefault(day_key, []).append(
+                    f"{mark}With {partner}: {text}" if partner else text)
+    return {day_key: "\n".join(parts) for day_key, parts in flat_parts.items() if parts}
 
 
 def save_daily_summary(character_name: str, day_key: str, summary: str,
@@ -801,9 +802,13 @@ def save_daily_summary(character_name: str, day_key: str, summary: str,
     """Stores/overwrites a day summary in the DB. ``day_key`` is a GAME day
     ("Y0002-D109").
 
-    `partner` is the conversation partner (character name). Mandatory for new
-    write paths — callers without a partner write into the legacy slot ('').
+    `partner` is the conversation partner (character name) — such a row is
+    the character's own. Without a partner the row is the general day entry
+    of the character's MIND (linked characters: a body writes its leader's).
     """
+    if not partner:
+        from app.core.linked_characters import mind_of
+        character_name = mind_of(character_name)
     try:
         with transaction() as conn:
             conn.execute("""
@@ -818,11 +823,12 @@ def save_daily_summary(character_name: str, day_key: str, summary: str,
 
 
 def delete_daily_summaries(character_name: str, date_keys: List[str],
-                           partner: str = ""):
-    """Loescht Tages-Summaries aus der DB.
+                           partner: str = "", *, partners_only: bool = False):
+    """Delete day summaries of the character from the DB.
 
-    Wenn `partner` gesetzt: nur Eintraege fuer diesen Partner. Sonst alle
-    Partner-Eintraege fuer die Date-Keys.
+    `partner` set: only that partner's entries. `partners_only`: every
+    per-partner entry, the general slot (partner '') stays — what a mind's
+    rollup removes from a linked body. Otherwise every entry of the date keys.
     """
     if not date_keys:
         return
@@ -836,6 +842,13 @@ def delete_daily_summaries(character_name: str, date_keys: List[str],
                     f"date_key IN ({placeholders})",
                     (character_name, partner, *date_keys),
                 )
+            elif partners_only:
+                conn.execute(
+                    f"DELETE FROM summaries WHERE character_name=? AND "
+                    f"kind='daily' AND partner<>'' AND "
+                    f"date_key IN ({placeholders})",
+                    (character_name, *date_keys),
+                )
             else:
                 conn.execute(
                     f"DELETE FROM summaries WHERE character_name=? AND "
@@ -843,7 +856,7 @@ def delete_daily_summaries(character_name: str, date_keys: List[str],
                     (character_name, *date_keys),
                 )
     except Exception as e:
-        logger.error("delete_daily_summaries DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("delete_daily_summaries DB error for %s: %s", character_name, e)
 
 
 def get_recent_daily_summaries(character_name: str,
@@ -878,16 +891,15 @@ def get_recent_daily_summaries(character_name: str,
 def build_daily_summary_prompt_section(character_name: str,
                                        max_days: int = 0,
                                        partner: str = "") -> str:
-    """Baut den Prompt-Abschnitt fuer Tages-Summaries (Stufe 2: SHORT bis MID).
+    """Build the prompt section of the day summaries (tier 2: SHORT to MID).
 
-    Laedt Tages-Summaries ab SHORT_TERM_DAYS (Default 3) bis max_days.
-    Tage innerhalb SHORT_TERM_DAYS werden uebersprungen — die Chat-History
-    deckt diese bereits ab.
+    Loads day summaries from SHORT_TERM_DAYS (default 3) up to max_days. Days
+    within SHORT_TERM_DAYS are skipped — the chat history covers them.
 
-    max_days: 0 = MID_TERM_DAYS (Default 30). Kann reduziert werden
-              fuer TalkTo/Social (z.B. 7 Tage).
-    partner: Wenn gesetzt, nur Summaries fuer diesen Konversationspartner.
-             Sonst werden Summaries pro Tag/Partner gerendert.
+    max_days: 0 = MID_TERM_DAYS (default 30). May be reduced for
+              TalkTo/social (e.g. 7 days).
+    partner: when set, only the summaries with this conversation partner.
+             Otherwise summaries are rendered per day/partner.
 
     Format:
     Recent days:
@@ -1011,11 +1023,11 @@ def _get_day_messages(character_name: str, day_key: str) -> List[Dict[str, str]]
 
 
 def _group_by_partner(messages: List[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
-    """Gruppiert Tagesnachrichten nach Partner-Charakter.
+    """Group a day's messages by partner character.
 
-    Partner ist der tatsaechliche Konversationspartner. Group-Chat-Zeilen
-    (mehrere Sprecher) landen unter dem `partner`-Feld der Zeile.
-    Zeilen ohne Partner werden geskipped.
+    The partner is the actual conversation partner. Group-chat rows (several
+    speakers) go under the row's `partner` field. Rows without a partner are
+    skipped.
     """
     grouped: Dict[str, List[Dict[str, str]]] = {}
     for msg in messages:
@@ -1029,14 +1041,14 @@ def _group_by_partner(messages: List[Dict[str, str]]) -> Dict[str, List[Dict[str
 def _create_daily_summary(messages: List[Dict[str, str]],
                           character_name: str = "",
                           partner_name: str = "") -> str:
-    """Erstellt eine Tages-Summary fuer einen Konversationspartner.
+    """Create a day summary for one conversation partner.
 
     Args:
-        messages: Tagesnachrichten ZWISCHEN character_name und partner_name.
-                  Aufrufer hat bereits per `_group_by_partner` gefiltert.
-        character_name: Memory-Owner (Speaker B)
-        partner_name:   Konversationspartner (Speaker A). Pflichtfeld — ohne
-                        Partner gibt es keine dyadische Summary.
+        messages: the day's messages BETWEEN character_name and partner_name,
+                  already filtered by the caller via `_group_by_partner`.
+        character_name: memory owner (speaker B)
+        partner_name:   conversation partner (speaker A). Mandatory — without
+                        a partner there is no dyadic summary.
     """
     if not messages:
         return ""
@@ -1134,7 +1146,7 @@ def _update_daily_summary(character_name: str):
 
 
 def _is_bad_summary(summary: str) -> bool:
-    """Prueft ob eine Summary offensichtlich kaputt ist und neu generiert werden sollte."""
+    """Whether a summary is obviously broken and should be regenerated."""
     if not summary or len(summary) < 30:
         return True
     s = summary.lower()
@@ -1186,7 +1198,7 @@ def backfill_missing_daily_summaries(character_name: str):
                 break
             if len(msgs) < 4:
                 continue
-            # Bereits vorhanden und sauber → skip
+            # already there and clean → skip
             if (partner in existing_for_day
                     and not _is_bad_summary(existing_for_day[partner])):
                 continue

@@ -9,6 +9,13 @@ A week is a block of ``len(week_days)`` game days (7 when the world has no
 weekdays), a "monthly" summary is one SEASON of the world calendar — the
 calendar has no months. All three keys sort lexicographically in chronological
 order, so the plain SQL ordering keeps working.
+
+**Consolidation runs once per MIND** (linked characters, ruling R4): the
+pipeline works on ``mind_of(name)``, its week/season rows are the mind's, the
+day material of every linked body is folded in marked "(as <body>)", and the
+per-partner chat summaries (phase 5) are still built for each family member
+from its own chat. The all-characters submit skips linked bodies and keeps
+dormant leaders (their body is acting).
 """
 import json
 import re
@@ -19,6 +26,7 @@ from app.core.timeutils import game_time, parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.core.linked_characters import family_of, mind_of
 from app.core.log import get_logger
 
 logger = get_logger("memory_service")
@@ -561,7 +569,7 @@ def consolidate_memories(character_name: str) -> int:
             return
         deduped = [e for e in deduped if e.get("id") not in kill_ids]
         removed += len(kill_ids)
-        logger.info("%s-Cap [%s]: %d Eintraege ueber Cap (%d) entfernt",
+        logger.info("%s cap [%s]: %d entries over the cap (%d) removed",
                     label, character_name, len(kill_ids), cap)
 
     # Semantic facts (relationship-tagged entries are structural — excluded,
@@ -574,7 +582,7 @@ def consolidate_memories(character_name: str) -> int:
 
     if removed > 0:
         save_memories(character_name, deduped)
-        logger.info("Konsolidiert %s: %d Memories entfernt", character_name, removed)
+        logger.info("Consolidated %s: %d memories removed", character_name, removed)
 
     return removed
 
@@ -588,10 +596,14 @@ def handle_memory_consolidation(payload: Dict[str, Any]) -> Dict[str, Any]:
       Phase 3: Weekly consolidation (day summaries → week summary)
       Phase 4: Season consolidation (week summaries → season summary)
       Phase 5: Update daily summaries and backfill
+
+    A linked body's name runs its MIND's pipeline; phase 5 (per-partner chat
+    summaries, a body store) runs for every family member.
     """
     character_name = payload.get("character_name", "")
     if not character_name:
         return {"error": "character_name missing"}
+    character_name = mind_of(character_name)
 
     total = 0
 
@@ -624,24 +636,30 @@ def handle_memory_consolidation(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("Consolidation Phase 4 error %s: %s", character_name, e)
 
     # Phase 5: Update daily summaries and backfill (via Router/Task=consolidation)
-    try:
-        from app.utils.history_manager import _update_daily_summary, backfill_missing_daily_summaries
-        _update_daily_summary(character_name)
-        backfill_missing_daily_summaries(character_name)
-    except Exception as e:
-        logger.error("Consolidation Phase 5 (daily summaries) error %s: %s", character_name, e)
+    from app.utils.history_manager import _update_daily_summary, backfill_missing_daily_summaries
+    for member in family_of(character_name):
+        try:
+            _update_daily_summary(member)
+            backfill_missing_daily_summaries(member)
+        except Exception as e:
+            logger.error("Consolidation Phase 5 (daily summaries) error %s: %s", member, e)
 
     return {"success": True, "character": character_name, "removed": total}
 
 
 def submit_consolidation_for_all():
-    """Submits a consolidation task for every character to the task queue."""
+    """Submits a consolidation task for every MIND to the task queue.
+
+    Dormant characters count (a dormant leader's mind is maintained while its
+    body acts); a linked body never runs its own — its mind does.
+    """
     from app.models.character import list_available_characters
     from app.core.task_queue import get_task_queue
 
     tq = get_task_queue()
     count = 0
-    for char_name in list_available_characters():
+    minds = dict.fromkeys(mind_of(n) for n in list_available_characters(include_dormant=True))
+    for char_name in minds:
         tq.submit(
             task_type="memory_consolidation",
             payload={"character_name": char_name},
@@ -700,7 +718,7 @@ def _llm_summarize(system_prompt: str, user_prompt: str, character_name: str) ->
         result = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', result).strip()
         return result if len(result) >= 20 else ""
     except Exception as e:
-        logger.error("LLM-Summarize Fehler fuer %s: %s", character_name, e)
+        logger.error("LLM summarize failed for %s: %s", character_name, e)
         return ""
 
 
@@ -755,7 +773,10 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
         if days_processed >= 3:
             break
 
-        contents = "\n".join(f"- {e.get('content', '')}" for e in day_entries if e.get('content', '').strip())
+        from app.models.memory import memory_body
+        contents = "\n".join(
+            f"- {'(as ' + memory_body(e) + ') ' if memory_body(e) else ''}{e.get('content', '')}"
+            for e in day_entries if e.get('content', '').strip())
         if not contents:
             # Every episodic of that day is empty → just delete
             for e in day_entries:
@@ -810,14 +831,15 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
 # ---------------------------------------------------------------------------
 
 def load_weekly_summaries(character_name: str) -> Dict[str, str]:
-    """Weekly summaries from the ``summaries`` table (kind='weekly',
-    partner=''). Returns {week_key: summary_text}, key = 'Y0002-W016'."""
+    """Weekly summaries of the character's MIND from the ``summaries`` table
+    (kind='weekly', partner=''). Returns {week_key: summary_text}, key =
+    'Y0002-W016'."""
     from app.core.db import get_connection
     try:
         rows = get_connection().execute(
             "SELECT date_key, content FROM summaries "
             "WHERE character_name=? AND kind='weekly' AND partner=''",
-            (character_name,)).fetchall()
+            (mind_of(character_name),)).fetchall()
         return {r[0]: r[1] for r in rows}
     except Exception as e:
         logger.error("load_weekly_summaries failed for %s: %s", character_name, e)
@@ -831,6 +853,7 @@ def save_weekly_summary(character_name: str, week_key: str, summary: str):
 def _save_rollup_summary(character_name: str, kind: str, date_key: str,
                          content: str) -> None:
     from app.core.db import transaction
+    character_name = mind_of(character_name)
     try:
         with transaction() as conn:
             conn.execute(
@@ -845,10 +868,11 @@ def _save_rollup_summary(character_name: str, kind: str, date_key: str,
 
 
 def delete_weekly_summaries(character_name: str, week_keys) -> None:
-    """Removes weekly rows that were rolled up into a monthly summary."""
+    """Removes the mind's weekly rows that were rolled up into a monthly summary."""
     keys = [k for k in (week_keys or []) if k]
     if not keys:
         return
+    character_name = mind_of(character_name)
     from app.core.db import transaction
     try:
         with transaction() as conn:
@@ -942,8 +966,13 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
                         character_name, week_key, len(week_days))
 
     if days_to_remove:
+        # The days were read over the whole family (load_daily_summaries_combined),
+        # so they are folded away over the whole family: the mind's rows, and
+        # each linked body's per-partner rows.
         from app.utils.history_manager import delete_daily_summaries
         delete_daily_summaries(character_name, days_to_remove)
+        for member in family_of(character_name)[1:]:
+            delete_daily_summaries(member, days_to_remove, partners_only=True)
 
     return removed_total
 
@@ -953,8 +982,8 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
 # ---------------------------------------------------------------------------
 
 def load_monthly_summaries(character_name: str) -> Dict[str, str]:
-    """Season summaries from the ``summaries`` table (kind='monthly',
-    partner=''). Returns {season_key: summary_text}, key = 'Y0002-S01'.
+    """Season summaries of the character's MIND from the ``summaries`` table
+    (kind='monthly', partner=''). Returns {season_key: summary_text}, key = 'Y0002-S01'.
 
     The DB ``kind`` stays 'monthly' — it names the TIER (the coarsest one),
     and the world calendar's coarsest bucket below a year is the season.
@@ -964,7 +993,7 @@ def load_monthly_summaries(character_name: str) -> Dict[str, str]:
         rows = get_connection().execute(
             "SELECT date_key, content FROM summaries "
             "WHERE character_name=? AND kind='monthly' AND partner=''",
-            (character_name,)).fetchall()
+            (mind_of(character_name),)).fetchall()
         return {r[0]: r[1] for r in rows}
     except Exception as e:
         logger.error("load_monthly_summaries failed for %s: %s", character_name, e)

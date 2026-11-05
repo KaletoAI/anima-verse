@@ -14,12 +14,18 @@ the cursor are folded into day entries, newer ones are still shown one by one.
 world writes with SYSTEM stamps (scenes, chat messages, memories) are sorted
 into game days by :func:`game_time_at` — see its docstring for what that
 projection can and cannot promise.
+
+**One consolidation per MIND** (linked characters, ruling R4): the cursor, the
+day entry and the thoughts belong to ``mind_of(name)``; the block folds in the
+scenes of EVERY family member (``family_of``), a body's scenes and thoughts
+marked "(as <body>)", and any member's wake trigger starts the mind's run.
 """
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.game_time import DAY_SECONDS, GameTime
+from app.core.linked_characters import family_of, mind_of
 from app.core.log import get_logger
 from app.core.timeutils import (_start_of_day_key, game_time, game_time_at,
                                 parse_iso, utc_now, utc_now_iso)
@@ -98,6 +104,10 @@ def thoughts_of_day_block(character_name: str, start_ts: str,
     return _thought_lines(rows)
 
 
+def _as_prefix(member: str) -> str:
+    return f"(as {member}) " if member else ""
+
+
 def _thought_lines(rows: List[Dict[str, Any]]) -> str:
     lines: List[str] = []
     used = 0
@@ -105,6 +115,7 @@ def _thought_lines(rows: List[Dict[str, Any]]) -> str:
         text = " ".join((row.get("content") or "").split())
         if not text:
             continue
+        text = _as_prefix((row.get("body") or "").strip()) + text
         overhead = 2 + (1 if lines else 0)
         room = THOUGHTS_OF_DAY_CHARS - used - overhead
         if room <= 0:
@@ -175,25 +186,60 @@ def _kv_set(key: str, value: str) -> None:
 
 
 def get_cursor(character_name: str) -> str:
-    return _kv_get(f"day_cursor:{character_name}")
+    """The MIND's consolidation cursor (system stamp)."""
+    return _kv_get(f"day_cursor:{mind_of(character_name)}")
 
 
 def set_cursor(character_name: str, ts: str) -> None:
-    _kv_set(f"day_cursor:{character_name}", ts or "")
+    _kv_set(f"day_cursor:{mind_of(character_name)}", ts or "")
+
+
+def family_scenes(character_name: str, after_ts: str = "",
+                  limit: int = 50) -> List[Dict[str, Any]]:
+    """Consolidated scenes of the character's whole FAMILY (linked
+    characters) whose last activity is after ``after_ts`` and that have a
+    summary — each scene once, newest first, at most ``limit``.
+
+    An unlinked character's family is itself, so this is then exactly its own
+    scene list. :func:`scene_as` says how to mark a scene for a reader.
+    """
+    seen: Dict[Any, Dict[str, Any]] = {}
+    from app.models import scene_store
+    for member in family_of(character_name):
+        for s in scene_store.get_recent_scenes_for(member, limit=limit):
+            if not ((s.get("last_activity_ts") or "") > (after_ts or "")
+                    and (s.get("summary") or "").strip()):
+                continue
+            key = s.get("id") if s.get("id") is not None else id(s)
+            seen.setdefault(key, s)
+    out = sorted(seen.values(), key=lambda s: s.get("last_activity_ts") or "",
+                 reverse=True)
+    return out[:max(1, limit)]
+
+
+def scene_as(scene: Dict[str, Any], reader: str) -> str:
+    """The family member a reader lived a scene as, when not as itself: ""
+    if ``reader`` took part, else the first member of its family that did
+    (a recap line then reads "(as <member>) …")."""
+    participants = scene.get("participants") or []
+    if reader in participants:
+        return ""
+    return next((m for m in family_of(reader) if m in participants), "")
 
 
 # --- Consolidation ----------------------------------------------------------
 
 def consolidate_block_for(character_name: str, reason: str = "") -> int:
-    """Condenses the character's not-yet-folded scenes into one day entry.
-    Returns the number of scenes folded (0 = nothing)."""
+    """Condenses the MIND's not-yet-folded scenes into one day entry.
+    Returns the number of scenes folded (0 = nothing).
+
+    A body's name consolidates its leader: the scenes of every family member
+    are folded in, a body's marked "(as <body>)" (ruling R4)."""
     if not character_name:
         return 0
-    from app.models import scene_store
+    character_name = mind_of(character_name)
     cursor = get_cursor(character_name)
-    scenes = [s for s in scene_store.get_recent_scenes_for(character_name, limit=50)
-              if (s.get("last_activity_ts") or "") > cursor
-              and (s.get("summary") or "").strip()]
+    scenes = family_scenes(character_name, cursor)
     now = utc_now_iso()
     if not scenes:
         set_cursor(character_name, now)  # empty block closed
@@ -258,8 +304,10 @@ def _summarize_day(character_name: str, scenes: List[Dict[str, Any]],
         from app.models.character import get_character_language, LANGUAGE_MAP
         code = (get_character_language(character_name) or "en").strip()
         lang = LANGUAGE_MAP.get(code, "English")
-        bullets = "\n".join(f"- {(s.get('summary') or '').strip()}"
-                            for s in scenes if (s.get("summary") or "").strip())
+        bullets = "\n".join(
+            f"- {_as_prefix(scene_as(s, character_name))}"
+            f"{(s.get('summary') or '').strip()}"
+            for s in scenes if (s.get("summary") or "").strip())
         sys_prompt = (
             f"You compress a character's day into ONE short recap from the scene "
             f"summaries below. Write 2-4 sentences in {lang}, past tense, from "
@@ -279,6 +327,7 @@ def _summarize_day(character_name: str, scenes: List[Dict[str, Any]],
 
 
 def _save_daily(character_name: str, date_key: str, content: str) -> None:
+    character_name = mind_of(character_name)
     try:
         with transaction() as conn:
             conn.execute(
@@ -294,13 +343,15 @@ def recent_daily_entries(character_name: str, limit: int = 7) -> List[Tuple[str,
     """(day_key, content) of the most recent day entries, newest first.
 
     ``day_key`` sorts lexicographically in chronological order, so the plain
-    ``ORDER BY`` keeps working on the game calendar.
+    ``ORDER BY`` keeps working on the game calendar. The day entries are the
+    MIND's.
     """
     try:
         rows = get_connection().execute(
             "SELECT date_key, content FROM summaries WHERE character_name=? "
             "AND kind='daily' AND partner='' AND content!='' "
-            "ORDER BY date_key DESC LIMIT ?", (character_name, max(1, limit))).fetchall()
+            "ORDER BY date_key DESC LIMIT ?",
+            (mind_of(character_name), max(1, limit))).fetchall()
         return [(r[0], r[1]) for r in rows]
     except Exception:
         return []
@@ -309,23 +360,27 @@ def recent_daily_entries(character_name: str, limit: int = 7) -> List[Tuple[str,
 # --- Trigger (called by the periodic job) -----------------------------------
 
 def maybe_consolidate(character_name: str) -> int:
-    """Checks the triggers and consolidates if due:
-      1) main sleep: on waking, `woke_main_sleep:<c>` was set.
-      2) backlog fallback: open block (cursor) older than max_block_open_hours.
+    """Checks the triggers of the character's MIND and consolidates if due:
+      1) main sleep: on waking, `woke_main_sleep:<c>` was set — for ANY family
+         member; every member's flag is cleared and the mind runs ONCE.
+      2) backlog fallback: open block (cursor) older than max_block_open_hours,
+         over the scenes of the whole family.
     """
-    flag_key = f"woke_main_sleep:{character_name}"
-    if _kv_get(flag_key):
-        _kv_set(flag_key, "")
+    character_name = mind_of(character_name)
+    woke = False
+    for member in family_of(character_name):
+        flag_key = f"woke_main_sleep:{member}"
+        if _kv_get(flag_key):
+            _kv_set(flag_key, "")
+            woke = True
+    if woke:
         return consolidate_block_for(character_name, "main_sleep")
 
     # Fallback: is the oldest not-yet-folded block too old?
     cursor = get_cursor(character_name)
     max_hours = int(_cfg("memory.max_block_open_hours", _DEFAULT_MAX_BLOCK_OPEN_HOURS))
     try:
-        from app.models import scene_store
-        scenes = [s for s in scene_store.get_recent_scenes_for(character_name, limit=50)
-                  if (s.get("last_activity_ts") or "") > cursor
-                  and (s.get("summary") or "").strip()]
+        scenes = family_scenes(character_name, cursor)
         if not scenes:
             return 0
         oldest = min(s.get("last_activity_ts") or "" for s in scenes)

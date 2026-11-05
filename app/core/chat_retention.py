@@ -66,15 +66,18 @@ def _configured_days() -> int:
 
 
 def _summarized_keys(character_name: str) -> Tuple[Set[str], Set[str], Set[str]]:
-    """The (daily, weekly, seasonal) ``date_key`` sets this character has."""
+    """The (daily, weekly, seasonal) ``date_key`` sets this character has —
+    its own rows plus its MIND's (linked characters: a body's days are rolled
+    up into its leader's day/week/season entries)."""
+    from app.core.linked_characters import mind_of
     daily: Set[str] = set()
     weekly: Set[str] = set()
     seasonal: Set[str] = set()
     try:
         rows = get_connection().execute(
             "SELECT kind, date_key FROM summaries "
-            "WHERE character_name=? AND kind IN ('daily','weekly','monthly')",
-            (character_name,)).fetchall()
+            "WHERE character_name IN (?, ?) AND kind IN ('daily','weekly','monthly')",
+            (character_name, mind_of(character_name))).fetchall()
     except Exception as e:  # noqa: BLE001
         logger.debug("chat_retention: summary read failed for %s: %s",
                      character_name, e)

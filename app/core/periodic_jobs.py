@@ -447,13 +447,18 @@ def _sub_day_consolidation():
     """Close a character's awake block after main sleep or a backlog fallback.
 
     Fold its scenes into one daily entry (history-consolidation plan, phase 2).
+    Once per MIND (linked characters, ruling R4): a dormant leader counts —
+    its body is acting — and a linked body never runs on its own; the mind's
+    run reads every family member's trigger and scenes.
     """
     try:
         from app.core import day_consolidation as dc
+        from app.core.linked_characters import mind_of
         from app.models.character import list_available_characters
         from app.models.character_template import feature_disabled
         total = 0
-        for name in list_available_characters():
+        minds = dict.fromkeys(mind_of(n) for n in list_available_characters(include_dormant=True))
+        for name in minds:
             try:
                 # A character that remembers nothing has no day to fold up —
                 # and the fold is an LLM call, so the gate belongs here, not
