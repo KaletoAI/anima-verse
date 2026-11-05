@@ -1277,7 +1277,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `sleep` | `sleep`, `wakeup` | Schlaf-Flag setzen und den Charakter währenddessen von der Karte nehmen |
 | `take_photo` | `image_generation` | Der Charakter macht ein Foto / erzeugt ein Bild (Verb über den Core-Bild-Service) |
 | `talk_to` | `talk_to` | Dialog von Angesicht zu Angesicht, in Hörweite |
-| `transformation` | `transform`, `revert`, `reveal_identity` | Transformation through a power item into a persona: the trigger (item, phrases, cooldown, duration, a condition and a transform activity while it lasts) — nothing masks a name or a look. Personas are rows of the package table `transformation_definitions`, edited in the package's character panel (Game-Admin → Characters → <character> → **Transformation**, a sub-tab of its own); `on_load` creates the `transformation_*` tables and registers the avatar's phrase intercept (`play.say_intercept`), the panel provider `character_panel:transformation`, a reinit reset store and the expiry tick. Knowers are the bearer's record secret (`source_ref = transformation:<persona id>`), edited in the same panel (details: [Package `transformation`](#package-transformation)) |
+| `transformation` | `transform`, `revert`, `reveal_identity` | A leading character holding a power item turns into one of its LINKED characters (a body swap through `linked_characters.swap_presence` — one mind, two bodies): the trigger (item, phrases, cooldown, duration, a condition on the body and a transform activity while it lasts). `transform` is opt-in per leader. Definitions are rows of the package table `transformation_definitions`, edited in the package's own character sub-tab (Game-Admin → Characters → <character> → **Transformation**, shown when `transform` is enabled for the character or its leader); `on_load` creates the `transformation_*` tables and registers the avatar's phrase intercept (`play.say_intercept`), the panel provider `character_panel:transformation`, the `linked.expected_present` provider, a reset store and the tick. Knowers are a record secret of the leader's mind (`source_ref = transformation:<body>`), edited in the same tab (details: [Package `transformation`](#package-transformation)) |
 | `undress` | `undress`, `get_dressed` | Aus-/Anziehen für Freitext-Garderoben |
 | `wet` | `enter_water`, `dry_off` | Nässe-Zustand — Schwimm-Ausnahme solange nass, Auto-Trocknung per TTL |
 
@@ -1337,7 +1337,7 @@ persona shape is dropped and re-created once (no data migration).
 | `max_duration_minutes` | GAME minutes until the transformation ends by itself; default 60, `0` = until reverted |
 | `cooldown_minutes` | GAME minutes after a revert before the leader can use this definition again; default 30 |
 | `transform_activity` | Activity of the body while the transformation takes place; default `transforming` |
-| `condition_id` | Condition applied to the BODY while it stands in the world (removed on revert); empty = none |
+| `condition_id` | Condition applied to the BODY while it stands in the world (removed on revert); empty = none. The tick keeps it there: a lost condition is applied again, an edited one replaces the old; an unknown or switched-off condition is logged once and shown as a badge on the definition card (`engine.condition_problem`) |
 | `enabled` | Default on; off = this transformation cannot start, and a running one is reverted on the next tick (reason `disabled`, retried while refused) |
 | `updated_at` | SYSTEM stamp of the last write |
 

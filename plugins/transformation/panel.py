@@ -256,6 +256,11 @@ def describe(character: str, lang: str) -> Dict[str, Any]:
             badges.append(t("disabled", lang))
         elif did not in usable:
             badges.append(t("not usable", lang))
+        _problem = engine.condition_problem(row.get("condition_id") or "")
+        if _problem == "unknown":
+            badges.append(t("Condition not found: {id}", lang).format(id=row["condition_id"]))
+        elif _problem == "disabled":
+            badges.append(t("Condition switched off: {id}", lang).format(id=row["condition_id"]))
         where = find_item_location(item_id) if item else None
         holder = where.get("character", "") if where and where.get("kind") == "character" else ""
         subtitle = (t("Held by {name}", lang).format(name=holder) if holder

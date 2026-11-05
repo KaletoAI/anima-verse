@@ -41,6 +41,7 @@ from app.core.linked_characters import leader_of, swap_presence
 from app.core.log import get_logger
 from app.core.perception import addressable_for, record_private_line
 from app.core.pose_catalog import PairPoseWithoutPartner
+from app.core.prompt_filters import load_filters
 from app.core.prompt_templates import render
 from app.core.timeutils import game_time
 from app.models.character import (DORMANT_STATUS, clear_pose_intent,
@@ -65,6 +66,8 @@ Result = Dict[str, Any]
 
 #: (leader, refusal) of the last refused automatic revert — logged once.
 _refused_logged: Dict[str, str] = {}
+#: leader -> "<condition>:<problem>" of the last unusable condition — logged once.
+_condition_logged: Dict[str, str] = {}
 
 
 def _result(ok: bool, reason: str = "", *, body: str = "", error: str = "",
@@ -85,6 +88,63 @@ def _condition(name: str, condition_id: str, add: bool) -> None:
     else:
         effect.update(type="condition_remove")
     apply_character_effects(name, [effect], game_time(), source=SOURCE)
+
+
+def condition_problem(condition_id: str) -> str:
+    """Why ``condition_id`` cannot be applied: ``"unknown"`` (no such
+    condition), ``"disabled"`` (switched off), ``""`` when it can — or when no
+    condition is configured. ``apply_character_effects`` drops such a
+    condition SILENTLY, so the package asks first."""
+    cid = (condition_id or "").strip()
+    if not cid:
+        return ""
+    for entry in load_filters():
+        if (entry.get("id") or "").strip() == cid:
+            return "" if entry.get("enabled", True) else "disabled"
+    return "unknown"
+
+
+def _carries(name: str, condition_id: str) -> bool:
+    return any(isinstance(c, dict) and c.get("name") == condition_id
+               for c in get_character_profile(name).get("active_conditions") or [])
+
+
+def _ensure_condition(leader: str) -> None:
+    """Tick guard while a transformation runs: the present body carries the
+    definition's CURRENT condition — an edited condition replaces the old one
+    (snapshot follows), a lost one is applied again. An unknown or switched-
+    off condition is logged once (the panel shows it) and never forced."""
+    with keyed_lock("transformation", leader):
+        row = store.get_active(leader)
+        if row is None or get_character_status(row.body) == DORMANT_STATUS:
+            return
+        d = store.get_definition(row.def_id) or {}
+        want = str(d.get("condition_id") or "").strip()
+        snapshot = dict(row.snapshot or {})
+        have = str(snapshot.get("condition_id") or "").strip()
+        if want != have:
+            if have:
+                _condition(row.body, have, add=False)
+            snapshot["condition_id"] = want
+            store.set_active(ActiveRow(leader=row.leader, body=row.body, def_id=row.def_id,
+                                       started_game=row.started_game,
+                                       until_game=row.until_game, snapshot=snapshot))
+            logger.info("%s: transformation condition %s -> %s", row.body, have or "-",
+                        want or "-")
+        if not want or _carries(row.body, want):
+            _condition_logged.pop(leader, None)
+            return
+        problem = condition_problem(want)
+        if problem:
+            key = f"{want}:{problem}"
+            if _condition_logged.get(leader) != key:
+                _condition_logged[leader] = key
+                logger.warning("%s transforms without condition %s (%s)", row.body, want,
+                               problem)
+            return
+        _condition(row.body, want, add=True)
+        logger.info("%s: condition %s was missing during the transformation — applied again",
+                    row.body, want)
 
 
 def _narrate(present: str, body: str, leader: str, template: str,
@@ -177,6 +237,10 @@ def transform(leader: str, def_id: str, *, source: str,
             _condition(d.body, d.condition_id, add=True)
         except Exception as e:  # noqa: BLE001 — the swap stands without its condition
             logger.error("condition %s on %s not applied: %s", d.condition_id, d.body, e)
+        problem = condition_problem(d.condition_id)
+        if problem:
+            logger.warning("%s transforms without condition %s (%s)", d.body,
+                           d.condition_id, problem)
         pose_key = _strike_activity(d.body, d.transform_activity)
         if pose_key:
             store.set_active(ActiveRow(leader=leader, body=d.body, def_id=d.id,
@@ -289,6 +353,7 @@ def tick() -> None:
         try:
             due, why = _due(row, now)
             if not due:
+                _ensure_condition(row.leader)
                 continue
             res = revert(row.leader, reason=why)
             if not res.get("ok"):

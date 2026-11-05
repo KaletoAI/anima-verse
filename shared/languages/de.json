@@ -3293,6 +3293,8 @@
     "Requirement": "Voraussetzung",
     "Effect": "Wirkung",
     "Condition while transformed": "Zustand während der Verwandlung",
+    "Condition not found: {id}": "Zustand nicht gefunden: {id}",
+    "Condition switched off: {id}": "Zustand abgeschaltet: {id}",
     "Linked characters share one place: {name} stands in the world right now, and placing here moves {name}.": "Verknüpfte Figuren teilen sich einen Ort: {name} steht gerade in der Welt, und ein Platzieren hier versetzt {name}.",
     "Configuration": "Konfiguration",
     "Check in room": "Im Raum prüfen",

@@ -85,6 +85,19 @@ THE RULES, and what follows BY HAND
     rows) keeps the active row too (its body Glut stands in the world); it
     deletes only Tilda's cooldown row for glut (from [H]) -> 1. Admin revert
     -> ok; the handler now finds no active row.
+[J] Condition guard: a second filter "other_state" (enabled) and a switched-
+    off filter "off_state" exist. condition_problem: ("transformed_state")
+    "", ("other_state") "", ("off_state") "disabled", ("ghost_state")
+    "unknown", ("") "". Admin transform -> Glut carries transformed_state.
+    The condition is removed by hand (condition_remove) -> tick -> Glut
+    carries transformed_state again, still transformed. The definition's
+    condition becomes other_state -> tick -> Glut carries other_state and no
+    transformed_state; the active snapshot names other_state. Panel card of
+    "glut" for Tilda: no condition badge. Definition condition "ghost_state"
+    -> tick -> other_state gone, ghost_state never set (unknown), snapshot
+    "ghost_state"; card badge "Condition not found: ghost_state".
+    "off_state" -> badge "Condition switched off: off_state". Admin revert ->
+    ok; Glut carries none of the four; definition back to transformed_state.
 """
 import json
 import os
@@ -120,7 +133,7 @@ from app.core import linked_characters as lc  # noqa: E402
 from app.core.db import get_connection, transaction  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.keyed_lock import keyed_lock  # noqa: E402
-from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
+from app.core.timeutils import game_time, set_game_factor, set_game_time  # noqa: E402
 from app.models import inventory  # noqa: E402
 from app.models import character as ch  # noqa: E402
 from app.models.world import _load_world_data, _save_world_data, add_location  # noqa: E402
@@ -402,6 +415,60 @@ with transaction() as conn:
     _n = store.delete_character_rows(conn, "Tilda")
 store.invalidate()
 check("handler afterwards: the new cooldown row", _n, 1)
+
+# ── [J] condition guard ─────────────────────────────────────────────────────
+print("[J] condition guard")
+with transaction() as conn:
+    for _fid, _on in (("other_state", 1), ("off_state", 0)):
+        conn.execute("INSERT OR REPLACE INTO prompt_filters (id, label, condition, "
+                     "prompt_modifier, enabled, meta) VALUES (?,?,?,?,?,?)",
+                     (_fid, _fid, "", "", _on, "{}"))
+invalidate_filter_snapshot()
+check("condition_problem", [engine.condition_problem(c) for c in
+                            ("transformed_state", "other_state", "off_state", "ghost_state", "")],
+      ["", "", "disabled", "unknown", ""])
+check("admin transform", engine.transform("Tilda", "glut", source="admin",
+                                          ignore_cooldown=True)["ok"], True)
+check("Glut carries the condition", "transformed_state" in conditions("Glut"), True)
+from app.core.effect_application import apply_character_effects  # noqa: E402
+apply_character_effects("Glut", [{"id": "x", "type": "condition_remove",
+                                  "condition_id": "transformed_state"}], game_time())
+check("condition removed by hand", "transformed_state" in conditions("Glut"), False)
+engine.tick()
+check("tick put it back", ("transformed_state" in conditions("Glut"),
+                           store.get_active("Tilda") is not None), (True, True))
+store.update_definition("glut", {"condition_id": "other_state"})
+engine.tick()
+check("tick follows the edited definition",
+      ("other_state" in conditions("Glut"), "transformed_state" in conditions("Glut")),
+      (True, False))
+check("snapshot names other_state",
+      (store.get_active("Tilda").snapshot or {}).get("condition_id"), "other_state")
+from plugins.transformation import panel as tpanel  # noqa: E402
+
+
+def glut_badges():
+    for _card in tpanel.describe("Tilda", "en").get("cards") or []:
+        if _card.get("id") == "glut":
+            return [b for b in _card.get("badges") or [] if "Condition" in b]
+    return None
+
+
+check("no condition badge", glut_badges(), [])
+store.update_definition("glut", {"condition_id": "ghost_state"})
+engine.tick()
+check("unknown condition: old gone, nothing set",
+      ("other_state" in conditions("Glut"), "ghost_state" in conditions("Glut")), (False, False))
+check("snapshot names ghost_state",
+      (store.get_active("Tilda").snapshot or {}).get("condition_id"), "ghost_state")
+check("badge unknown", glut_badges(), ["Condition not found: ghost_state"])
+store.update_definition("glut", {"condition_id": "off_state"})
+check("badge disabled", glut_badges(), ["Condition switched off: off_state"])
+check("admin revert", engine.revert("Tilda", reason="admin")["ok"], True)
+check("no condition left on Glut",
+      [c for c in conditions("Glut") if c in ("transformed_state", "other_state",
+                                              "off_state", "ghost_state")], [])
+store.update_definition("glut", {"condition_id": "transformed_state"})
 
 print()
 print(f"{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
