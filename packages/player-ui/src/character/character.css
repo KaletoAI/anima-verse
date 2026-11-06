@@ -138,18 +138,21 @@
   margin-bottom: 8px;
 }
 
-/* Fields of one section: short inputs fill the row side by side (as many as
-   fit at 140px each), text and prompt fields span it. A narrow column holds
-   one track, so its fields stack exactly as before. */
+/* Fields of one section: consecutive short inputs share a row (at least
+   140px each) and stretch to fill it; a short input with no short neighbour
+   takes the whole row like text and prompts do. A narrow column wraps every
+   short input onto its own row, so it stacks exactly as before. */
 .tpl-section-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   column-gap: 12px;
 }
 .tpl-section-fields > .tpl-field--wide {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
+  min-width: 0;
 }
 .tpl-section-fields > .tpl-field--short {
+  flex: 1 1 140px;
   min-width: 0;
 }
 

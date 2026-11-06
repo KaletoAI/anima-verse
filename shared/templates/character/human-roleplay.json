@@ -217,7 +217,7 @@
       "label": "Status",
       "label_de": "Status",
       "special": "stats",
-      "column": 1,
+      "column": 3,
       "row": 2,
       "fields": []
     },
