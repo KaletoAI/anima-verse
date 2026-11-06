@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 
 from animstudio import StudioError, rig
 from animstudio.compile import Compiled
-from animstudio.dsl import Animation
+from animstudio.dsl import AIRBORNE_MIN_CM, Animation
 
 FLOOR_CM = -1.0
 CONTACT_CM = 2.5
@@ -121,7 +121,16 @@ def run_checks(anim: Animation, compiled: Compiled, measure: Dict,
                      f"against a floor running back at {anim.treadmill_mps:g} m/s"
                      if anim.treadmill_mps else ""))
     group = anim.catalog.group if anim.catalog else None
-    if group == "stand":
+    if group == "stand" and anim.airborne:
+        # Hovering: the lowest foot point (toe ends included) stays clear of
+        # the floor in EVERY frame — a dangling foot that dips to the ground
+        # would read as a stumble, not a float.
+        feet = [j for j in ("LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase",
+                            "LeftToe_End", "RightToe_End") if j in frames[0]]
+        low_foot = min(min(f[j][1] for j in feet) for f in frames)
+        out.append(Check("airborne", low_foot >= AIRBORNE_MIN_CM, round(low_foot, 2),
+                         f">= {AIRBORNE_MIN_CM:g} cm (lowest foot point)"))
+    elif group == "stand":
         gap = max(min(f["LeftToeBase"][1], f["RightToeBase"][1],
                       f["LeftFoot"][1], f["RightFoot"][1]) for f in frames)
         out.append(Check("stand_contact", gap <= STAND_CM, round(gap, 2), f"<= {STAND_CM} cm"))

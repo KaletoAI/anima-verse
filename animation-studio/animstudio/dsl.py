@@ -176,6 +176,17 @@ class Animation:
     #: speed instead of a still one. 0 = the floor stands still.
     treadmill_mps: float = 0.0
     bridge: bool = False
+    #: The figure FLOATS on purpose (hovering, levitating): the feet never
+    #: touch the floor. Needs ``lift_cm >= AIRBORNE_MIN_CM`` (the height it
+    #: hovers at), catalog group "stand" and a still floor; the check
+    #: ``airborne`` (lowest foot point >= AIRBORNE_MIN_CM in every frame)
+    #: replaces ``stand_contact``. Point the toes down: the importer's foot
+    #: plant only acts on a foot standing on its sole.
+    airborne: bool = False
+
+
+#: The least hovering height of an airborne clip, cm (lift and check).
+AIRBORNE_MIN_CM = 10.0
 
 
 @dataclass(frozen=True)
@@ -296,6 +307,14 @@ def validate(anim: Animation) -> None:
         raise StudioError("lift_cm must be within 0..40")
     if not 0.0 <= anim.treadmill_mps <= 8.0:
         raise StudioError("treadmill_mps must be within 0..8")
+    if anim.airborne:
+        if anim.bridge or anim.catalog is None or anim.catalog.group != "stand":
+            raise StudioError("airborne clips need catalog.group 'stand' (no bridge)")
+        if anim.lift_cm < AIRBORNE_MIN_CM:
+            raise StudioError(f"airborne clips need lift_cm >= {AIRBORNE_MIN_CM:g} "
+                              "(the height the figure hovers at)")
+        if anim.treadmill_mps:
+            raise StudioError("airborne clips require a still floor (treadmill_mps 0)")
     planted = {s for g in anim.ik if isinstance(g, FeetPlanted) for s in g.sides}
     footed = [g.side for g in anim.ik if isinstance(g, FootTarget)]
     if planted & set(footed) or len(footed) != len(set(footed)):

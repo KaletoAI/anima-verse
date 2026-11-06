@@ -36,6 +36,17 @@ one check trips; the expectation is written next to it:
   back 4.5 cm per frame -> foot_slide fails (9 * 0.3333 = 3.0 > 2.0); and
   the still frames of the first case with treadmill 1.25 -> foot_slide fails
   (a still ball slides 37.5 cm against the moving floor)
+- airborne (a hovering clip, lift_cm 30): every joint of the clean standing
+  frame raised by 30 cm — lowest foot point LeftToe_End 0 + 30 = 30 cm in
+  every frame                                         -> ok (30 >= 10.0, no
+  stand_contact: the feet hang on purpose)
+- airborne with the clean standing frames (toe ends at 0 cm) -> airborne
+  fails (0 < 10.0)
+- the raised frames WITHOUT airborne                  -> stand_contact fails
+  (lowest foot point 30 > 3.0)
+- validate: airborne with lift_cm 5 -> StudioError (5 < 10.0); airborne in
+  group "seat" -> StudioError; airborne with treadmill_mps 1.0 -> StudioError;
+  airborne with lift_cm 30 in group "stand" -> accepted
 """
 import sys
 from pathlib import Path
@@ -60,8 +71,9 @@ def frame(**over):
     return f
 
 
-def anim(group="stand", loop=False, treadmill=0.0):
+def anim(group="stand", loop=False, treadmill=0.0, airborne=False, lift=0.0):
     return Animation(kind="s", duration_s=1.0, loop=loop, treadmill_mps=treadmill,
+                     airborne=airborne, lift_cm=lift,
                      catalog=Catalog(key="s", group=group, prompt="p"))
 
 
@@ -127,7 +139,29 @@ expect("treadmill_fast", run_checks(anim(treadmill=1.25), comp(), {"tracks": 22,
        ["foot_slide"])
 expect("treadmill_still", run_checks(anim(treadmill=1.25), comp(), still), ["foot_slide"])
 
+raised = [{j: [p[0], p[1] + 30, p[2]] for j, p in frame().items()} for _ in range(10)]
+expect("airborne", run_checks(anim(airborne=True, lift=30), comp(),
+                              {"tracks": 22, "frames": raised}), [])
+expect("airborne_grounded", run_checks(anim(airborne=True, lift=30), comp(), still),
+       ["airborne"])
+expect("raised_standing", run_checks(anim(), comp(), {"tracks": 22, "frames": raised}),
+       ["stand_contact"])
+
 from animstudio import StudioError                                    # noqa: E402
+from animstudio.dsl import validate                                   # noqa: E402
+
+for label, kw in (("low lift", dict(airborne=True, lift=5)),
+                  ("seat", dict(group="seat", airborne=True, lift=30)),
+                  ("treadmill", dict(airborne=True, lift=30, treadmill=1.0))):
+    try:
+        validate(anim(**kw))
+        FAIL.append(f"airborne {label}: validate accepted it")
+    except StudioError:
+        pass
+try:
+    validate(anim(airborne=True, lift=30))
+except StudioError as e:
+    FAIL.append(f"airborne stand: refused: {e}")
 
 gap = [frame() for _ in range(10)]
 del gap[3]["LeftToeBase"]
