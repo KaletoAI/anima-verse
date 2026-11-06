@@ -1,9 +1,8 @@
-import { useCallback, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { useMoods } from '../../lib/moods'
 import { Field } from '@anima/player-ui'
 import { ConfirmDialog } from '@anima/player-ui'
-import { ApiError, apiPost } from '../../lib/api'
+import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { LocationRef, RoomRef } from '../../lib/refs'
 import { roomLabel } from '../world/worldTypes'
@@ -43,7 +42,19 @@ export function PlacementEditor({
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const moods = useMoods()
+  // The moods are the members of the character's OWN expression set (its
+  // selection, else the automatic one) — what its expression images render.
+  const [moodSet, setMoodSet] = useState<{ set: string; moods: { key: string; label: string; value: string }[] }>({ set: '', moods: [] })
+  useEffect(() => {
+    let alive = true
+    if (!character) { setMoodSet({ set: '', moods: [] }); return }
+    apiGet<{ effective_set?: string; moods?: { key: string; label: string; value: string }[] }>(
+      `/characters/${encodeURIComponent(character)}/expression-options`)
+      .then((d) => { if (alive) setMoodSet({ set: d.effective_set || '', moods: d.moods || [] }) })
+      .catch(() => { if (alive) setMoodSet({ set: '', moods: [] }) })
+    return () => { alive = false }
+  }, [character])
+  const moods = moodSet.moods
   const [placing, setPlacing] = useState(false)
   /** Set while the server refused because the character follows a party. */
   const [followerNote, setFollowerNote] = useState('')
@@ -137,7 +148,7 @@ export function PlacementEditor({
           hint={
             currentFeeling
               ? t('Currently: {name}').replace('{name}', currentFeeling)
-              : t('Canonical mood id from shared/config/moods.json. Empty clears the mood.')
+              : t('The expressions of the set {set}. Empty clears the mood.').replace('{set}', moodSet.set || '—')
           }
         >
           <select
@@ -146,12 +157,12 @@ export function PlacementEditor({
             onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
           >
             <option value="">— {t('none')} —</option>
-            {draft.feeling && !moods.includes(draft.feeling) ? (
+            {draft.feeling && !moods.some((m) => m.value === draft.feeling) ? (
               <option value={draft.feeling}>{draft.feeling}</option>
             ) : null}
             {moods.map((m) => (
-              <option key={m} value={m}>
-                {m}
+              <option key={m.key} value={m.value}>
+                {m.label}
               </option>
             ))}
           </select>

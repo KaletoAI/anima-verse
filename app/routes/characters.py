@@ -769,16 +769,27 @@ def expression_options(character_name: str, request: Request):
     selected = str(profile.get("expression_set") or "")
     error = ""
     try:
-        set_for_character(character_name, profile=profile, catalog=cat)
+        effective = set_for_character(character_name, profile=profile, catalog=cat)
     except ExpressionSetError as exc:
         error = str(exc)
+        effective = cat.sets[automatic]
     backend, on_backend = _expression_lora_fit(character_name, cat.sets.values())
+    # The moods the character's own set renders: one per member. The stored
+    # mood stays readable free text — the member's first synonym (the import
+    # makes the label one), else its label; the mood resolver maps it back.
+    moods = []
+    for key in effective.members:
+        entry = cat.entries.get(key) or {}
+        label = str(entry.get("label") or key)
+        synonyms = [s for s in (entry.get("synonyms") or ()) if s]
+        moods.append({"key": key, "label": label, "value": synonyms[0] if synonyms else label})
     return {"options": [{"value": sid, "label": spec.label, "lora": spec.lora,
                          "lora_strength": spec.lora_strength,
                          "lora_on_backend": on_backend.get(sid)}
                         for sid, spec in cat.sets.items()],
             "lora_backend": backend,
-            "automatic_set": automatic, "selected_set": selected, "error": error}
+            "automatic_set": automatic, "selected_set": selected, "error": error,
+            "effective_set": effective.id, "moods": moods}
 
 
 def _expression_lora_fit(character_name, sets):

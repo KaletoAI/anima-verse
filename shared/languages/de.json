@@ -453,7 +453,7 @@
     "Cancel journey": "Reise abbrechen",
     "Cancel task": "Aufgabe abbrechen",
     "Cancelling…": "Wird abgebrochen …",
-    "Canonical mood id from shared/config/moods.json. Empty clears the mood.": "Kanonische Mood-ID aus shared/config/moods.json. Leer entfernt die Mood.",
+    "The expressions of the set {set}. Empty clears the mood.": "Die Ausdrücke des Sets {set}. Leer entfernt die Stimmung.",
     "Cast": "Zaubern",
     "Cast on": "Zaubern auf",
     "Category": "Kategorie",

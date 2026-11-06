@@ -151,6 +151,15 @@ with patch.object(er,'render_character_image',render):
         time.sleep(0.01)
     assert warmed['state'] == 'ready', warmed
     select('humanoid', 'happy')
+    # The mood picker offers the members of the character's OWN set, each as
+    # a readable value the mood resolver maps back to that member (2026-11-07).
+    from app.core.expression_sets import catalog_snapshot
+    from app.core.expression_pose_maps import resolve_expression_key
+    opts = client.get('/characters/demo/expression-options').json()
+    human = catalog_snapshot().sets['humanoid']
+    assert opts['effective_set'] == 'humanoid', opts.get('effective_set')
+    assert [m['key'] for m in opts['moods']] == list(human.members), opts['moods']
+    assert all(resolve_expression_key(m['value'], set_id='humanoid') == m['key'] for m in opts['moods'])
     instance = STORAGE/'instance'/'config.json'
     instance.parent.mkdir(exist_ok=True)
     instance.write_text(json.dumps({'image_generation':{'enabled':False}}))
