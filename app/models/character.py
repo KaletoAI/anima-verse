@@ -3464,8 +3464,9 @@ def _get_rembg_session(model: str = "u2net"):
 # Mesh inputs (T-pose and its views) feed image-to-3D, which reads the
 # silhouette from the alpha: u2net leaves a soft halo and background between
 # hair strands there, BiRefNet keeps hair edges (measured 2026-10-25, ~5 s CPU
-# per 1024 px render against a 30-170 s render).
-MESH_INPUT_REMBG_MODEL = "birefnet-portrait"
+# per 1024 px render against a 30-170 s render). Expression images use the
+# same matte since 2026-11-06 (u2net cut hair and shoulders poorly).
+PORTRAIT_REMBG_MODEL = "birefnet-portrait"
 
 
 # rembg/u2net leaves near-transparent background specks; ignore alpha <= 16 (~6%).
@@ -3483,7 +3484,8 @@ def trim_transparent_sides(img):
     return img
 
 
-def postprocess_outfit_image(image_path: Path, mesh_input: bool = False) -> Path:
+def postprocess_outfit_image(image_path: Path, mesh_input: bool = False,
+                             portrait_matte: bool = False) -> Path:
     """Remove the background (rembg) and trim transparent margins on the sides.
 
     Args:
@@ -3491,6 +3493,7 @@ def postprocess_outfit_image(image_path: Path, mesh_input: bool = False) -> Path
         mesh_input: A T-pose render for image-to-3D: BiRefNet's mask is put
             on the ORIGINAL colours. rembg's own cutout blends edge pixels
             toward black, which reads as a dark rim around hair and limbs.
+        portrait_matte: the same BiRefNet matte for an expression image.
 
     Returns:
         Path to the processed image (possibly renamed to .png).
@@ -3501,9 +3504,9 @@ def postprocess_outfit_image(image_path: Path, mesh_input: bool = False) -> Path
 
         img_data = image_path.read_bytes()
         png_path = image_path.with_suffix(".png")
-        if mesh_input:
+        if mesh_input or portrait_matte:
             import io as _io
-            mask = remove(img_data, session=_get_rembg_session(MESH_INPUT_REMBG_MODEL), only_mask=True)
+            mask = remove(img_data, session=_get_rembg_session(PORTRAIT_REMBG_MODEL), only_mask=True)
             with Image.open(_io.BytesIO(img_data)) as _src:
                 cut = _src.convert("RGB")
             cut.putalpha(Image.open(_io.BytesIO(mask)).convert("L").resize(cut.size))

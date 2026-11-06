@@ -149,11 +149,18 @@ def _framing_basis(profile, framing: str) -> dict:
             "slots": sorted([s.id, s.covered_by, s.prompt] for s in slots)}
 
 
+def _matte_model() -> str:
+    """The background matte of an expression image (BiRefNet portrait)."""
+    from app.models.character import PORTRAIT_REMBG_MODEL
+    return PORTRAIT_REMBG_MODEL
+
+
 def render_contract(pose_prompt: str, expression_prompt: str, framing: str, profile) -> str:
     """THE render contract of an expression image: the set's fixed pose, the
     member's facial prompt, the framing (and so the prompt composition, see
     ``render_character_image(framing=...)``) with the slots the species
-    packages let into that frame, its use-case style and the image size.
+    packages let into that frame, its use-case style, the image size and
+    the background matte.
     The snapshot, the cache check and the cleanup all compare against this
     one value, so changing any of them renders the images anew."""
     return _digest({"version": 2, "pose_prompt": pose_prompt,
@@ -161,7 +168,8 @@ def render_contract(pose_prompt: str, expression_prompt: str, framing: str, prof
                     "framing": framing,
                     "basis": _framing_basis(profile, framing),
                     "style": _style_fingerprint(EXPRESSION_USE_CASES[framing]),
-                    "size": list(expression_image_size())})
+                    "size": list(expression_image_size()),
+                    "matte": _matte_model()})
 
 
 @dataclass(frozen=True)
@@ -966,7 +974,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
         shutil.move(str(src_path), str(tmp_path))
 
         try:
-            final_tmp = postprocess_outfit_image(tmp_path, mesh_input=_mesh_input)
+            final_tmp = postprocess_outfit_image(tmp_path, mesh_input=_mesh_input,
+                                                 portrait_matte=bool(framing))
         except Exception as pp_err:
             logger.warning("Post-processing failed, using the original: %s", pp_err)
             final_tmp = tmp_path

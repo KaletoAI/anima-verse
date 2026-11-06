@@ -45,6 +45,9 @@ Expected, derived by hand from the spec:
     the CURRENT outfit (equipped_pieces None -> read from the profile) and
     an empty mood (the set's default), even when a current feeling is set;
     the old override body with empty pieces would have passed {} (undressed).
+  I an expression render (any framing) is matted with BiRefNet portrait
+    (postprocess portrait_matte=True); a full render keeps u2net
+    (portrait_matte=False); the matte model is part of the render contract.
   E render_contract(p, e, "upper_body", prof) != render_contract(p, e, "head", prof);
     and the contract changes when a package stops declaring underwear_top
     `portrait` (the composed prompt would change, so must the hash).
@@ -210,6 +213,36 @@ with patch("app.core.expression_regen.expression_snapshot",
 check(seen[0] == ("", {"equipped_pieces": None, "equipped_items": None}),
       f"default expression: current outfit, default mood (got {seen[0]})")
 check(seen[1][1]["equipped_pieces"] == {}, "an override with empty pieces is an empty outfit")
+
+print("I background matte")
+from app.models import character as char_model  # noqa: E402
+from app.models.character import get_character_images_dir  # noqa: E402
+
+
+class _FileCapture(_Capture):
+    def generate_from_input(self, raw):
+        self.payloads.append(json.loads(raw))
+        get_character_images_dir("demo").mkdir(parents=True, exist_ok=True)
+        (get_character_images_dir("demo") / "smoke.png").write_bytes(b"png")
+        return "![x](/images/smoke.png)"
+
+
+mattes = []
+for framing in ("upper_body", ""):
+    with patch("app.imagegen.service.get_image_service", lambda: _FileCapture()), \
+            patch.object(char_model, "postprocess_outfit_image",
+                         lambda path, **kw: mattes.append(kw) or path):
+        er.render_character_image(
+            "demo", output_stem=STORAGE / "out" / f"m{framing}", equipped_pieces={}, equipped_items=[],
+            pose_prompt="p", expression_prompt="e", apply_state_modifiers=False,
+            neutral_state=True, framing=framing)
+check(len(mattes) == 2 and mattes[0].get("portrait_matte") is True,
+      f"expression render uses the BiRefNet portrait matte (got {mattes[:1]})")
+check(len(mattes) == 2 and not mattes[1].get("portrait_matte"), "a full render keeps the default matte")
+with patch.object(er, "_matte_model", lambda: "u2net"):
+    other = er.render_contract("p", "e", "upper_body", get_character_profile("demo"))
+check(other != er.render_contract("p", "e", "upper_body", get_character_profile("demo")),
+      "the matte model is part of the render contract")
 
 print("E/F contract and full render")
 prof = get_character_profile("demo")
