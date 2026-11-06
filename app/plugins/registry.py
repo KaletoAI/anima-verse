@@ -314,6 +314,9 @@ class BodySlotSpec:
     attributes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     prompt: Dict[str, str] = field(default_factory=dict)  # always | covered | exposed
     face: bool = False  # fragment also belongs into face/portrait prompts
+    # Visible in a waist-up portrait (expression images): its fragments and
+    # LoRAs join the face prompt there; every other non-face slot stays out.
+    portrait: bool = False
     back: bool = False  # Include fragments in rear-view renders.
     rigs: List[RigSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
@@ -342,6 +345,10 @@ class Package:
     body_slots: List[BodySlotSpec] = field(default_factory=list)
     piece_slots: List[str] = field(default_factory=list)      # clothing-slot topology; empty = core default
     piece_slot_labels: Dict[str, str] = field(default_factory=dict)
+    # Clothing slots visible in a waist-up portrait (piece_slots entries
+    # declared `portrait: true`); their pieces are the outfit of an
+    # expression image.
+    portrait_piece_slots: List[str] = field(default_factory=list)
     capability_label: str = ""   # one UI toggle for ALL verbs of the package
     capability_description: str = ""  # human-facing UI text (LLM descriptions address the character)
     being: str = ""               # species prompt noun: person/animal/... (scene composition)  # optional UI labels per slot

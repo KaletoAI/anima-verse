@@ -17,9 +17,9 @@ silhouette:
 
 # A cat wears at most a collar and maybe headwear — no shoes (F2: the
 # species defines which clothing slots exist).
-piece_slots:
-  - {id: neck, label: Collar}
-  - {id: head, label: Headwear}
+piece_slots:   # portrait: shown in an expression image
+  - {id: neck, label: Collar, portrait: true}
+  - {id: head, label: Headwear, portrait: true}
 
 body_slots:
   - id: build

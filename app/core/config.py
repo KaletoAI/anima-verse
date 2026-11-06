@@ -640,6 +640,20 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the character emphasizing facial expression and pose.",
         },
     },
+    # Head-and-neck expression image (templates declaring the feature
+    # expression_head_only, e.g. temporary NPCs): face prompt only, no clothing.
+    "expression_head": {
+        "keywords": {
+            "prompt_style": "RAW photo, close-up head and neck portrait, bare shoulders at the lower edge, plain background, natural light, skin texture, detailed face, expressive, high detail",
+            "prompt_negative": _NEG_EXPRESSION + ", clothing, torso, hands",
+            "prompt_instruction": "Write comma-separated tags emphasizing the character's facial expression. Framing is a close-up of head and neck.",
+        },
+        "natural": {
+            "prompt_style": "a close-up portrait of the head and neck, the frame ends just below the neck, emphasizing the character's facial expression, natural light, high detail",
+            "prompt_negative": _NEG_EXPRESSION + ", clothing, torso, hands",
+            "prompt_instruction": "Describe the character's face emphasizing the facial expression.",
+        },
+    },
     "instagram": {
         "keywords": {
             "prompt_style": "candid smartphone photo, natural light, lifestyle, vibrant, high detail",

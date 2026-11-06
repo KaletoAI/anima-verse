@@ -323,7 +323,8 @@ def prompt_fragments(character_name: str,
                      profile: Optional[Dict[str, Any]] = None,
                      back_view: bool = False,
                      mesh_input: bool = False,
-                     neutral_state: bool = False) -> Dict[str, List[str]]:
+                     neutral_state: bool = False,
+                     portrait_only: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -337,10 +338,15 @@ def prompt_fragments(character_name: str,
     ``mesh_input`` (T-pose renders for image-to-3D) swaps an active
     ``mesh_part`` text in and adds a slot's ``mesh_input_prompt`` line
     (``back_values`` in a back view, ``values`` otherwise).
+    ``portrait_only`` keeps only slots declared ``portrait: true`` — the body
+    a waist-up portrait shows besides the face (expression images, whose
+    face part comes from the face prompt).
     """
     specs = slots_for_character(character_name, profile=profile)
     if face_only:
         specs = [s for s in specs if getattr(s, "face", False)]
+    if portrait_only:
+        specs = [s for s in specs if getattr(s, "portrait", False)]
     if not specs:
         return {"general": [], "exposed": []}
     if profile is None:
@@ -442,7 +448,8 @@ def exposed_slot_loras(character_name: str,
                        profile: Optional[Dict[str, Any]] = None,
                        equipped_pieces: Optional[Dict[str, str]] = None,
                        back_view: bool = False,
-                       mesh_input: bool = False) -> List[Dict[str, Any]]:
+                       mesh_input: bool = False,
+                       scope: str = "") -> List[Dict[str, Any]]:
     """LoRAs of currently EXPOSED body slots (lora_select attribute values),
     merged into image-generation inputs by
     the variant/expression path. Replaces the former per-clothing-slot
@@ -450,7 +457,10 @@ def exposed_slot_loras(character_name: str,
     (outfit renderer's variant path); ``equipped_pieces`` overrides the
     profile's equipped state (outfit-set previews). ``back_view`` follows the
     fragments: a LoRA whose slot is not visible from behind would render what
-    the prompt no longer asks for."""
+    the prompt no longer asks for. ``scope`` follows the framing the same
+    way: ``"portrait"`` keeps slots declared ``face`` or ``portrait`` (a
+    waist-up expression image), ``"face"`` only ``face`` slots (head and
+    neck); empty = every slot."""
     if profile is None:
         try:
             from app.models.character import get_character_profile
@@ -468,6 +478,10 @@ def exposed_slot_loras(character_name: str,
     out: List[Dict[str, Any]] = []
     seen = set()
     for spec in specs:
+        if scope == "face" and not spec.face:
+            continue
+        if scope == "portrait" and not (spec.face or spec.portrait):
+            continue
         if not is_slot_exposed(spec, profile):
             continue
         if back_view and not spec.back:
@@ -608,7 +622,8 @@ def appearance_suffix(character_name: str, face_only: bool = False,
                       back_view: bool = False,
                       mesh_input: bool = False,
                       include_exposed: bool = True,
-                      neutral_state: bool = False) -> str:
+                      neutral_state: bool = False,
+                      portrait_only: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
@@ -620,7 +635,7 @@ def appearance_suffix(character_name: str, face_only: bool = False,
     own (the "uncovered:" part of what a character sees of the others)."""
     frags = prompt_fragments(character_name, face_only=face_only,
                              profile=profile, back_view=back_view, mesh_input=mesh_input,
-                             neutral_state=neutral_state)
+                             neutral_state=neutral_state, portrait_only=portrait_only)
     parts = frags["general"] + (frags["exposed"] if include_exposed else [])
     return ", ".join(parts)
 
@@ -642,6 +657,19 @@ def declared_piece_slots(character_name: str) -> Optional[Tuple[Tuple[str, ...],
     except Exception as e:
         logger.debug("piece slots for %s failed: %s", character_name, e)
     return None
+
+
+def portrait_piece_slots(profile: Dict[str, Any]) -> Tuple[str, ...]:
+    """Clothing slots of the character's species declared ``portrait: true``
+    — what a waist-up portrait (expression image) shows of the outfit.
+    Empty without a declaring species package: then no piece is shown."""
+    try:
+        for pkg in _species_packages_for(profile or {}):
+            if pkg.piece_slots:
+                return tuple(pkg.portrait_piece_slots)
+    except Exception as e:
+        logger.debug("portrait piece slots failed: %s", e)
+    return ()
 
 
 def piece_slots_for_character(character_name: str) -> Tuple[str, ...]:

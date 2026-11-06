@@ -146,7 +146,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `silhouette` | nein | `{asset: <relpath>, anchors: {slot: [x%, y%]}}` — UI-Paper-Doll der Spezies |
 | `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) |
 | `undressed_prompt` | nein | Text, den ein ausgezogener Freitext-Charakter (Template ohne Outfit-System, `outfit_worn` aus) in allen Prompts statt des Core-Texts „no clothes" trägt; gilt für die `apply_to`-Templates des Pakets. Zählt als Paket-Beitrag |
-| `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label}`); ohne Deklaration gilt der Core-Default (`inventory.VALID_PIECE_SLOTS`) inkl. Core-Reihenfolge/-Labels |
+| `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label, portrait}`); ohne Deklaration gilt der Core-Default (`inventory.VALID_PIECE_SLOTS`) inkl. Core-Reihenfolge/-Labels. `portrait: true` = Kleidungsstücke dieses Slots erscheinen im Ausdrucksbild (Taille aufwärts); ohne Deklaration zeigt es keine Kleidung. Body-Slots tragen dasselbe Flag: Gesichts-Prompt + `face`- und `portrait`-Slots (exposed nur unbedeckt) samt deren LoRAs bilden dort den Charakter. Ein Template mit `features.expression_head_only` rendert nur Kopf und Hals: Gesichts-Prompt, keine Kleidung, nur `face`-LoRAs |
 
 `state_flags[].distracting` is an optional boolean (default `false`), exposed
 as `FlagSpec.distracting`. When true, a truthy value of that flag in the
@@ -266,10 +266,14 @@ apply_to: ["human-roleplay"]      # welche Templates diese Spezies sind
 silhouette:
   asset: assets/silhouette.svg
   anchors: {top: [50, 33], bottom: [50, 55]}   # Slot-Marker-Positionen (x%, y%) im Bild
-piece_slots: [top, bottom, underwear_top, underwear_bottom, feet]
+piece_slots:                              # String oder {id, label, portrait}
+  - top
+  - {id: outer, label: Coat, portrait: true}   # portrait: im Ausdrucksbild (Taille aufwärts) sichtbar
 body_slots:
   - id: hair
     face: true                            # Fragment gehört auch in Portrait-/Ausdrucks-Prompts
+  - id: torso
+    portrait: true                        # neben face: im Ausdrucksbild (Taille aufwärts) sichtbar
     attributes:
       color: {type: str}
     prompt:

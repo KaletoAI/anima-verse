@@ -195,8 +195,14 @@ def render_outfit(
     equipped_items: Optional[List[str]] = None,
     back_view: bool = False,
     mesh_input: bool = False,
+    portrait_only: bool = False,
 ) -> Dict[str, str]:
     """Builds the outfit description — pieces + items + fallback for empty slots.
+
+    ``portrait_only`` (a waist-up expression image): only pieces in the
+    species' ``portrait`` clothing slots are described and only LoRAs of
+    ``face``/``portrait`` body slots come along. Exposure still follows
+    EVERY worn piece — an undershirt nobody sees still covers the chest.
 
     Inputs:
         profile: character profile. When None and character_name is given,
@@ -245,10 +251,16 @@ def render_outfit(
     partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS))
 
     # 1) Piece fragments
+    shown_slots = None
+    if portrait_only:
+        from app.core.body_slots import portrait_piece_slots
+        shown_slots = set(portrait_piece_slots(profile))
     piece_fragments: List[str] = []
     for slot, iid, item in _iter_visible_pieces(
         pieces, list(VALID_PIECE_SLOTS), covered, suppressed,
     ):
+        if shown_slots is not None and slot not in shown_slots:
+            continue
         frag = (item.get("prompt_fragment") or "").strip()
         if not frag:
             continue
@@ -294,7 +306,8 @@ def render_outfit(
         slot_loras = exposed_slot_loras(character_name or "",
                                         profile=profile,
                                         equipped_pieces=dict(pieces or {}),
-                                        back_view=back_view, mesh_input=mesh_input)
+                                        back_view=back_view, mesh_input=mesh_input,
+                                        scope="portrait" if portrait_only else "")
     except Exception:
         slot_loras = []
 

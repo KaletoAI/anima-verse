@@ -283,6 +283,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
                         if isinstance(v, dict)},
             prompt={str(k): str(v) for k, v in (bdef.get("prompt") or {}).items()},
             face=bool(bdef.get("face", False)),
+            portrait=bool(bdef.get("portrait", False)),
             back=bool(bdef.get("back", False)),
             rigs=rigs,
             mesh_part=mesh_part,
@@ -297,6 +298,8 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             pkg.piece_slots.append(pid)
             if pdef.get("label"):
                 pkg.piece_slot_labels[pid] = str(pdef["label"])
+            if pdef.get("portrait"):
+                pkg.portrait_piece_slots.append(pid)
         else:
             pid = str(pdef).strip()
             if pid:

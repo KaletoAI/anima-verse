@@ -94,13 +94,31 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
-def _style_fingerprint():
-    """Digest of the resolved 'expression' use-case style for both prompt
-    families. The style (framing, lighting) is not part of the pose or
-    expression prompt, so without it a cached render made under an older
+# Framing of an expression image -> the use case whose style frames it.
+# "upper_body": waist-up, face prompt + portrait body slots + portrait clothing
+# slots. "head": head and neck, face prompt only, no clothing (a template
+# declaring the feature ``expression_head_only``, e.g. temporary NPCs).
+EXPRESSION_USE_CASES = {"upper_body": "expression", "head": "expression_head"}
+
+
+def expression_framing(profile) -> str:
+    """The framing a character's expression images use — a template
+    declaration (``features.expression_head_only``), failing to the
+    waist-up default when the template is unknown."""
+    from app.models.character_template import get_template
+    tid = (profile or {}).get("template") or ""
+    tmpl = get_template(tid) if tid else None
+    head = bool(((tmpl or {}).get("features") or {}).get("expression_head_only") is True)
+    return "head" if head else "upper_body"
+
+
+def _style_fingerprint(use_case: str = "expression"):
+    """Digest of the resolved style of the expression use case for both
+    prompt families. The style (framing, lighting) is not part of the pose
+    or expression prompt, so without it a cached render made under an older
     style would keep being served after the style changed."""
     from app.core import config as _cfg_mod
-    return _digest({fam: _cfg_mod.get_use_case_prompts("expression", fam)
+    return _digest({fam: _cfg_mod.get_use_case_prompts(use_case, fam)
                     for fam in ("natural", "keywords")})
 
 
@@ -118,17 +136,17 @@ def expression_image_size() -> tuple:
     return _px("expression_image_width"), _px("expression_image_height")
 
 
-def render_contract(pose_prompt: str, expression_prompt: str) -> str:
+def render_contract(pose_prompt: str, expression_prompt: str, framing: str) -> str:
     """THE render contract of an expression image: the set's fixed pose, the
-    member's facial prompt, the expression use-case style, the image size and
-    the character basis (the face prompt, see ``face_basis``).
-    The snapshot, the cache check and the cleanup all compare against this
-    one value, so changing any of them renders the images anew."""
+    member's facial prompt, the framing (and so the prompt composition, see
+    ``render_character_image(framing=...)``), its use-case style and the
+    image size. The snapshot, the cache check and the cleanup all compare
+    against this one value, so changing any of them renders the images anew."""
     return _digest({"version": 2, "pose_prompt": pose_prompt,
                     "expression_prompt": expression_prompt,
-                    "style": _style_fingerprint(),
-                    "size": list(expression_image_size()),
-                    "appearance": "face"})
+                    "framing": framing,
+                    "style": _style_fingerprint(EXPRESSION_USE_CASES[framing]),
+                    "size": list(expression_image_size())})
 
 
 @dataclass(frozen=True)
@@ -146,6 +164,7 @@ class ExpressionSnapshot:
     profile: object
     mood: str
     epoch: int
+    framing: str = "upper_body"
 
 
 def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None, equipped_items=None):
@@ -188,11 +207,13 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
         if expression not in spec.members:
             continue
         prompt = cat.entries[expression]["prompt"]
-        contract = render_contract(spec.pose_prompt, prompt)
+        framing = expression_framing(profile)
+        contract = render_contract(spec.pose_prompt, prompt, framing)
         identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
         return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
             f"{_safe_name(character)}_{identity[:24]}", spec.pose_prompt, prompt,
-            tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch)
+            tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch,
+            framing)
 
 
 def _metadata_matches(meta, request, *, exact=True):
@@ -206,7 +227,7 @@ def _metadata_matches(meta, request, *, exact=True):
     key = meta.get("expression_key")
     if spec is None or key not in spec.members or (exact and key != request.expression_key):
         return False
-    expected = render_contract(spec.pose_prompt, cat.entries[key]["prompt"])
+    expected = render_contract(spec.pose_prompt, cat.entries[key]["prompt"], request.framing)
     return meta.get("contract") == expected and (not exact or meta.get("identity") == request.stem)
 
 
@@ -377,7 +398,8 @@ def _execute(request, aid, force=False):
                 stage = Path(stage)
                 _w, _h = expression_image_size()
                 rendered = render_character_image(request.character, output_stem=stage / request.stem,
-                    override_width=_w, override_height=_h, face_basis=True,
+                    override_width=_w, override_height=_h, framing=request.framing,
+                    image_use_case=EXPRESSION_USE_CASES[request.framing],
                     equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
                     pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
                     appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
@@ -618,7 +640,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            mesh_input_profile: Optional[Dict[str, Any]] = None,
                            backend: str = "", dialog_loras: Optional[list] = None,
                            negative_prompt: str = "",
-                           face_basis: bool = False) -> Optional[Path]:
+                           framing: str = "") -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -661,7 +683,15 @@ def render_character_image(character_name: str, *, output_stem: Path,
         equipped_items=equipped_items,
         back_view=back_view,
         mesh_input=_mesh_input,
+        portrait_only=framing == "upper_body",
     )
+    if framing == "head" and _rendered:
+        # Head and neck: no clothing in the prompt at all, and only the LoRAs
+        # of face slots — a body LoRA would draw what the frame leaves out.
+        from app.core.body_slots import exposed_slot_loras
+        _rendered = {"pieces": "", "items": "", "fallback": "", "full": "",
+                     "loras": exposed_slot_loras(character_name, profile=_render_profile,
+                                                 scope="face")}
     outfit_desc = _rendered.get("pieces", "")
     items_desc = _rendered.get("items", "")
     _fallback_text = _rendered.get("fallback", "")
@@ -673,7 +703,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
     # nothing is equipped, so a real wardrobe can never be overridden; the
     # `wearing: ` prefix is stripped because the outfit layer below supplies
     # its own "is wearing".
-    if not outfit_desc and not items_desc and not (equipped_pieces or equipped_items):
+    if (framing != "head" and not outfit_desc and not items_desc
+            and not (equipped_pieces or equipped_items)):
         _free_text = _rendered.get("full", "") or ""
         if _free_text.startswith("wearing: "):
             outfit_desc = _free_text[len("wearing: "):].strip()
@@ -695,12 +726,13 @@ def render_character_image(character_name: str, *, output_stem: Path,
         persons = _expr_builder.detect_persons("", character_names=[character_name])
         appearance = persons[0].appearance if persons else get_character_appearance(character_name)
         actor_label = persons[0].actor_label if persons else character_name
-        if face_basis:
-            # Expression images are framed from the waist up: the full body
-            # description (build, legs, every body slot) pulled the model
-            # into a full-length picture. The face prompt — the profile
-            # image's basis, with the face slots (hair, eyes, skin) — is the
-            # character part; outfit, pose and expression follow as usual.
+        if framing:
+            # Expression images: the full body description (build, legs,
+            # every body slot) pulled the model into a full-length picture.
+            # The face prompt — the profile image's basis, with the face
+            # slots (hair, eyes, skin) — is the character part. A waist-up
+            # frame adds the slots declared `portrait` (general and, only
+            # while uncovered, exposed fragments); head and neck adds nothing.
             from app.core.character_ops import _resolve_face_prompt
             from app.models.character_template import get_template
             _tid = _render_profile.get("template") or ""
@@ -708,6 +740,12 @@ def render_character_image(character_name: str, *, output_stem: Path,
                 _render_profile, character_name,
                 get_template(_tid) if _tid else None,
                 apply_modifiers=apply_state_modifiers) or appearance
+            if framing == "upper_body":
+                from app.core.body_slots import appearance_suffix
+                _torso = appearance_suffix(character_name, profile=_render_profile,
+                                           portrait_only=True, neutral_state=neutral_state)
+                if _torso:
+                    appearance = f"{appearance}, {_torso}" if appearance else _torso
 
     # Prompt prefix: only passed for an explicit preview (wardrobe); it stays
     # empty for automatic expression regens.

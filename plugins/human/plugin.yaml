@@ -22,11 +22,12 @@ silhouette:
     feet: [50, 92]
 
 # Full human clothing topology (display order) — replaces the core default.
+# portrait: true = shown in a waist-up expression image (its outfit part).
 piece_slots:
-  - {id: head, label: Head}
-  - {id: neck, label: Neck}
-  - {id: outer, label: "Coat & jacket"}
-  - {id: top, label: Top}
+  - {id: head, label: Head, portrait: true}
+  - {id: neck, label: Neck, portrait: true}
+  - {id: outer, label: "Coat & jacket", portrait: true}
+  - {id: top, label: Top, portrait: true}
   - {id: underwear_top, label: "Underwear top"}
   - {id: bottom, label: Bottom}
   - {id: underwear_bottom, label: "Underwear bottom"}
