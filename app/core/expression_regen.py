@@ -104,6 +104,15 @@ def _style_fingerprint():
                     for fam in ("natural", "keywords")})
 
 
+def render_contract(pose_prompt: str, expression_prompt: str) -> str:
+    """THE render contract of an expression image: the set's fixed pose, the
+    member's facial prompt and the expression use-case style. The snapshot,
+    the cache check and the cleanup all compare against this one value."""
+    return _digest({"version": 2, "pose_prompt": pose_prompt,
+                    "expression_prompt": expression_prompt,
+                    "style": _style_fingerprint()})
+
+
 @dataclass(frozen=True)
 class ExpressionSnapshot:
     character: str
@@ -161,8 +170,7 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
         if expression not in spec.members:
             continue
         prompt = cat.entries[expression]["prompt"]
-        contract = _digest({"version": 2, "pose_prompt": spec.pose_prompt, "expression_prompt": prompt,
-                            "style": _style_fingerprint()})
+        contract = render_contract(spec.pose_prompt, prompt)
         identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
         return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
             f"{_safe_name(character)}_{identity[:24]}", spec.pose_prompt, prompt,
@@ -180,8 +188,7 @@ def _metadata_matches(meta, request, *, exact=True):
     key = meta.get("expression_key")
     if spec is None or key not in spec.members or (exact and key != request.expression_key):
         return False
-    expected = _digest({"version": 2, "pose_prompt": spec.pose_prompt, "expression_prompt": cat.entries[key]["prompt"],
-                        "style": _style_fingerprint()})
+    expected = render_contract(spec.pose_prompt, cat.entries[key]["prompt"])
     return meta.get("contract") == expected and (not exact or meta.get("identity") == request.stem)
 
 

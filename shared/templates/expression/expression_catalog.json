@@ -217,7 +217,7 @@
     "humanoid": {
       "label": "Humanoid",
       "default": "neutral",
-      "pose_prompt": "standing naturally upright, arms resting at the sides, full body visible",
+      "pose_prompt": "standing naturally upright, shoulders relaxed, arms resting at the sides",
       "members": [
         "neutral",
         "positive",
@@ -233,7 +233,7 @@
     "animal": {
       "label": "Animal",
       "default": "animal_neutral",
-      "pose_prompt": "standing naturally in a relaxed neutral stance appropriate to the animal's anatomy, full body visible",
+      "pose_prompt": "standing naturally in a relaxed neutral stance appropriate to the animal's anatomy",
       "members": [
         "animal_neutral",
         "animal_attentive",
