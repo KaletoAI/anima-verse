@@ -95,11 +95,13 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   }, [busy, enc, loadProfile, t, toast])
 
   // Explicit expressions follow a frozen attempt even if the outfit changes.
+  // The expression image is the set's default expression in the CURRENT
+  // outfit — an override with empty pieces would render the body undressed.
   const generate = useCallback(async () => {
     if (busy) return
     await expression.start(kind === 'outfit'
       ? { force: true }
-      : { override: true, pieces: {}, items: [], force: true })
+      : { default_expression: true, force: true })
   }, [busy, expression, kind])
 
   // Profile image: comes from the ImageGenDialog (backend/LoRAs selectable)
