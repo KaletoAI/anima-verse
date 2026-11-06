@@ -3,14 +3,14 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { transparentPortraitUrl } from '@anima/player-ui';
 import type { PropActionMotion, PropActionDeparture } from '@anima/player-ui/propActions';
 import type { SyncCounters } from '../game/perfstats';
-import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
+import type { LocomotionOverride, MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { pairBlend, BLEND_S, type PairPose } from '../game/pairBlend';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { adoptFinale, stepFinale, type FinalePlay } from '../game/finaleClip';
 import { handBackYaw, entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
+  movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, overrideMoveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
   type MovementType, type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
@@ -177,6 +177,14 @@ interface Npc {
   /** the payload says this figure is on a JOURNEY (`char.travel`) — true for a
    *  fogged traveller as well, which is the one that has no `route` (§ A12) */
   travelling: boolean;
+  /** The journey's GAIT as the server decided it (`travel.gait`, § A11):
+   *  'run' plays the RUN pose's clip on the journey, 'walk' the WALK pose's.
+   *  'walk' whenever the figure is not on a journey. */
+  gait: 'walk' | 'run';
+  /** Move clips the character's active states replace (`char.locomotion`),
+   *  null for none — applied on top of the ground's choice
+   *  (`walk.overrideMoveClip`). */
+  locomotion: LocomotionOverride | null;
   /** DEAD RECKONING of a traveller without a route (§ A12, decision
    *  `77dbdb61`): the last POLLED point, the real second it was seen at, the
    *  poll stamp it belonged to, and the rate measured against the point
@@ -666,6 +674,15 @@ export class NpcManager {
     npc.root.position.y = easeNpcY(npc.root.position.y, goalY, dt);
   }
 
+  /** The move clip of a figure: the ground's choice (`moveClip`) with the
+   *  states' override on top (`overrideMoveClip`) — only where this figure's
+   *  own clip set holds the override kind. */
+  private moveClipFor(npc: Npc, movement: MovementType, running: boolean): string {
+    const base = moveClip(movement, running);
+    const figure = npc.figure;
+    return figure ? overrideMoveClip(base, npc.locomotion, (kind) => figure.hasClip(kind)) : base;
+  }
+
   /** Ask the figure for its clip — and when that opens a bridge the figure
    *  LIFTS (Task C5, `Figure.beginBridgeLift`), put the root onto its goal
    *  height at once and hand the difference over. `rootYBefore` is the root's
@@ -894,6 +911,12 @@ export class NpcManager {
       // decides below; the action ending (no pair, no place) ends it.
       ({ play: npc.finale, seen: npc.finaleSeen } = adoptFinale(npc.finale, npc.finaleSeen,
         st.char.finale, !!(st.char.interaction || st.char.place)));
+      // The two server words about HOW a figure moves (§ A11): the journey's
+      // gait and the states' move-clip override. Taken for every row, the
+      // player's own included — its free walk uses the override as well.
+      npc.gait = st.char.travel?.gait === 'run' ? 'run' : 'walk';
+      npc.locomotion = st.char.locomotion && (st.char.locomotion.walk || st.char.locomotion.run)
+        ? { ...st.char.locomotion } : null;
       // Player-driven figure (E3-T3): WHERE it stands belongs to the frame
       // hook in main.ts — pos/via/route/scale/face/lean/hidden are all
       // placement decisions of the server view and would fight the input at
@@ -1207,7 +1230,7 @@ export class NpcManager {
       labelBadges: badgeEl, badgeKey: badges.key,
       labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
-      travelling: false, reckon: null, interaction: null, finale: null, finaleSeen: '', entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
+      travelling: false, gait: 'walk', locomotion: null, reckon: null, interaction: null, finale: null, finaleSeen: '', entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       surfaceGroup: st.surfaceGroup,
       travelLine: null, travelKey: '',
@@ -1922,7 +1945,11 @@ export class NpcManager {
         // root out from under the body (Task C4). 0 holds it, the ramp of a
         // bridge that walks off scales the catch-up; the route runs on and
         // the catch-up takes the distance up once the bridge lets go.
-        const clip = travelling ? moveClip(gm.movement, false)
+        // THE GAIT IS THE SERVER'S (`travel.gait`, § A11): a journey baked
+        // well above the walking pace runs, everything else walks — the
+        // ground still decides first (`moveClip`: swimming, crawling), and a
+        // state's override replaces only the walk/run clip itself.
+        const clip = travelling ? this.moveClipFor(npc, gm.movement, npc.gait === 'run')
           : (groundIdle || poseClip('standing'));
         const paceLimit = !npc.figure ? 1
           : npc.figure.bridging ? npc.figure.paceLimit : npc.figure.paceLimitFor(clip);
@@ -1941,8 +1968,8 @@ export class NpcManager {
         }
         this.easeRootY(npc, goalPos.y, dt);
         if (npc.figure) {
-          // no 'run' on journeys: the pace comes from the server — walk while
-          // the journey is moving, idle on freeze. WHAT walking looks like is
+          // The gait on journeys is the server's (`travel.gait`) — move
+          // while the journey is moving, idle on freeze. WHAT moving looks like is
           // the ground's to say (`moveClip`, finding 3): a traveller crossing
           // painted water swims through it — and a FROZEN journey in that
           // water treads it (`idleClip`), instead of standing on the lake.
@@ -2036,7 +2063,8 @@ export class NpcManager {
       // about — read at the point it steps from.
       const paceLimit = !npc.figure ? 1
         : moving && !npc.figure.bridging
-          ? npc.figure.paceLimitFor(moveClip(stepGround.gm.movement, running))
+          ? npc.figure.paceLimitFor(this.moveClipFor(npc, stepGround.gm.movement,
+            reckoning ? npc.gait === 'run' : running))
           : npc.figure.paceLimit;
       if (moving && paceLimit > 0) {
         // ONE pace for every figure, the player's included: `WALK_SPEED` is
@@ -2176,7 +2204,10 @@ export class NpcManager {
           else npc.finale = null;
         }
         this.playLifting(npc,
-          moving ? moveClip(standGm.movement, !reckoning && dist > RUN_DISTANCE)
+          // A reckoned traveller (fogged, no route) never takes the run
+          // boost of the step, but its LEGS follow the server's gait.
+          moving ? this.moveClipFor(npc, standGm.movement,
+            reckoning ? npc.gait === 'run' : dist > RUN_DISTANCE)
             : finaleClip ?? standingClip, moving || !!standIdle, standSink, rootYBefore, goalY,
           moving || standIdle ? 'ground' : npc.surfaceGroup);
         npc.figure.update(dt, { frozen });

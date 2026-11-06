@@ -222,7 +222,8 @@ check_true("journey created", isinstance(journey, dict), f"{journey}")
 if isinstance(journey, dict):
     check("journey keys", sorted(journey),
           sorted(["target", "target_point", "waypoints", "started_at_s",
-                  "speed_m_s", "entry_edge", "journey_id"]))
+                  "speed_m_s", "gait", "entry_edge", "journey_id"]))
+    check("gait (no travel_speed rule: 1× walks)", journey.get("gait"), "walk")
     check_true("journey_id is a non-empty string",
                isinstance(journey["journey_id"], str) and bool(journey["journey_id"]))
     check("target is empty (a free point has no location id)",

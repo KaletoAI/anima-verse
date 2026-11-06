@@ -412,7 +412,9 @@ check_true("journey created", isinstance(journey, dict), f"{journey}")
 if isinstance(journey, dict):
     check("journey keys", sorted(journey),
           sorted(["target", "waypoints", "started_at_s", "speed_m_s",
-                  "entry_edge", "journey_id"]))
+                  "gait", "entry_edge", "journey_id"]))
+    # The world pace without a travel_speed rule: 1× < 1.5× → it walks.
+    check("gait", journey.get("gait"), "walk")
     check_true("start sets stored journey_id", bool(re.fullmatch(r"[0-9a-f]{32}",
                get_character_profile("demo_npc")["journey"].get("journey_id", ""))))
     check("target", journey["target"], MARKET)

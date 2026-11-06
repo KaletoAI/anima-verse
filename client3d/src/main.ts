@@ -1,4 +1,4 @@
-import { liftStops } from './game/npcWalk';
+import { avatarPaceFactor, liftStops } from './game/npcWalk';
 import { waterRegionAt, type WaterHit } from './scene/propWaterMath';
 import { openable as sceneOpenable, buildingTier, interiorTier, doorMarkTransform,
   boundaryMarkTransform, basementHole, neighbourOccludes } from './scene/sceneView';
@@ -4695,9 +4695,18 @@ async function startApp(username: string, role: string) {
     // under that threshold, so the figure froze in an idle clip instead of
     // swimming slowly. The clamp against the goal distance comes last, so the
     // figure still stops ON its click target instead of overshooting it.
+    //
+    // …and the AVATAR'S OWN SPEED on top: the `travel_speed` rule factor its
+    // worldmap row carries (`travel_speed_factor`, e.g. ×2.5 in a transformed
+    // shape). It scales the walk and the run boost alike, and the LEAD with
+    // it — the step is capped at the lead, so an unscaled lead would hold a
+    // fast figure back to the plain pace. `POST /play/pos` judges the reports
+    // with the very same number.
+    const speed = avatarPaceFactor(
+      lastMap?.characters.find((c) => c.name === avatarName)?.travel_speed_factor);
     const pace = terrainPace(terrainGround.typeAt(pos.x, pos.z).speed_factor,
-                             groundScopeAt(pos.x, pos.z));
-    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
+                             groundScopeAt(pos.x, pos.z)) * speed;
+    const lead = Math.min(Math.max(WALK_SPEED * speed * dt, MIN_LEAD), reach);
     let { x, z } = { x: pos.x + dir.x * lead, z: pos.z + dir.z * lead };
     // OUTDOORS the world itself stops the figure: impassable terrain — out in
     // the WILDERNESS only, a footprint replaces the ground under it

@@ -255,7 +255,7 @@ SPEED = 1.0
 # Exactly the fields § A11 lists — no more, no less.
 FIELDS = {"target_id", "waypoints", "progress_m", "total_m", "eta_game",
           "eta_hhmm", "eta_label", "starts_in_s", "speed_m_s_real",
-          "pace_m_s_real", "paces_m_s_real", "journey_id", "floor_y"}
+          "pace_m_s_real", "paces_m_s_real", "journey_id", "floor_y", "gait"}
 # Route details withheld from foreign travellers; the departure countdown stays.
 THIN_NUMBERS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
                 "speed_m_s_real", "pace_m_s_real", "paces_m_s_real", "floor_y")
@@ -471,6 +471,8 @@ def main() -> int:
     for f in V1_FIELDS:
         check(f"no v1 cell field {f!r}", f in tr, False)
     check("target_id", tr.get("target_id"), B)
+    # A seeded journey without a stored gait (an older one) walks.
+    check("gait", tr.get("gait"), "walk")
     check("waypoints (x/z only, no t_cum)", tr.get("waypoints"),
           [[0.0, 0.0], [30.0, 0.0], [30.0, 40.0]])
     check("progress_m = 30 + 40 × 0.125", tr.get("progress_m"), 35.0)
@@ -563,6 +565,8 @@ def main() -> int:
     check("… and the eight fields with them",
           [f for f in THIN_NUMBERS if near.get(f) is not None], [])
     check("… the opaque target_id stays", near.get("target_id"), B)
+    # The gait is not thinned: it is what the figure's legs visibly do.
+    check("… and so does the gait", near.get("gait"), "walk")
     check("… and every key is there, only null", sorted(near), sorted(FIELDS))
     own = char(fog, "demo_avatar").get("travel") or {}
     check("the avatar keeps its own route", own.get("waypoints"),

@@ -811,6 +811,25 @@ _SEQ_MAX = 2**31 - 1
 #: single report claiming an hour of walking would buy an unbounded jump.
 _POS_CLIENT_ELAPSED_CAP_S = 30.0
 
+
+def pos_step_allowance(name: str, elapsed: float) -> float:
+    """How far (metres) ``name`` may have walked in ``elapsed`` REAL seconds.
+
+    The LARGEST of the floor, the travel-speed term and the walking term —
+    both speed terms times the character's ``travel_speed`` rule factor
+    (``travel_engine.travel_pace_factor``), the very number the worldmap hands
+    the client as ``travel_speed_factor`` and the client multiplies its
+    avatar's pace by: a hero who runs 2.5× faster must not have every report
+    refused as a jump. The floor stays unscaled — it is about no clock at all.
+    """
+    from app.core.travel_engine import get_travel_speed_m_s, travel_pace_factor
+    pace = travel_pace_factor(name)
+    return max(_POS_STEP_FLOOR_M,
+               # metres per REAL second — movement does not scale with the
+               # game clock's factor
+               _POS_STEP_FACTOR * get_travel_speed_m_s() * pace * elapsed,
+               _POS_STEP_FACTOR * _POS_WALK_SPEED_M_S * pace * elapsed)
+
 #: Namespace of the AVATAR-STATE lock (``app/core/keyed_lock``): everything
 #: that writes where one avatar is standing shares it — the position report
 #: AND the room change, because both derive the avatar's whereabouts, and a
@@ -1153,7 +1172,6 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # takeover, an admin move) there is no baseline and the point is taken as
     # given — the terrain and the transition gate still judge it.
     if here is not None and last_at is not None:
-        from app.core.travel_engine import get_travel_speed_m_s
         # WHOSE CLOCK. The client's, whenever it stamped both reports: what
         # the allowance is about is the time the figure spent WALKING, and a
         # blocked event loop compresses the gap between two handler runs to
@@ -1165,11 +1183,7 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                               (t_ms - client_base[2]) / 1000.0))
         else:
             elapsed = max(0.0, now - last_at)
-        allowance = max(_POS_STEP_FLOOR_M,
-                        # metres per REAL second — movement does not
-                        # scale with the game clock's factor
-                        _POS_STEP_FACTOR * get_travel_speed_m_s() * elapsed,
-                        _POS_STEP_FACTOR * _POS_WALK_SPEED_M_S * elapsed)
+        allowance = pos_step_allowance(avatar, elapsed)
         if math.hypot(x - here["x"], z - here["z"]) > allowance:
             # The clock is NAMED in the line: reading "in 0.40s" without
             # knowing whose 0.40 s that was is what made this refusal so hard

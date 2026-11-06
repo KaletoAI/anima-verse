@@ -830,6 +830,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.name_badges import badges_for as _badges_for
     from app.models.character import get_character_language as _char_lang
     _badge_lang = (_char_lang(avatar) if avatar else "") or "de"
+    # The states that replace a move clip, read ONCE per payload — in the
+    # common world none does, and then no character evaluates anything.
+    from app.core.prompt_filters import collect_locomotion, locomotion_states
+    from app.core.travel_engine import travel_pace_factor
+    _loco_states = locomotion_states()
     characters = []
     for name in list_available_characters():
         pos = _avatar_snap["pos"] if name == avatar and _avatar_snap else _pos.get(name)
@@ -965,6 +970,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     "pace_m_s_real": (round(_pace, 4)
                                       if not _thin and not _pending
                                       and _rate > 0 and _pace else None),
+                    # The GAIT the server decided at the journey's start
+                    # (`travel_engine.journey_gait`): "run" when its nominal
+                    # pace is ≥ 1.5 × the world's walking pace. Not thinned:
+                    # it names no route and no goal, only what the figure's
+                    # legs visibly do — and a fogged traveller needs it as
+                    # much as any other. An older journey without one walks.
+                    "gait": "run" if _j.get("gait") == "run" else "walk",
                 }
         except Exception as e:
             travel = None
@@ -1066,6 +1078,23 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 name, profile=_prof, lang=_badge_lang)) else {}),
             "model_rev": _model_rev,
             "motion": motion_payload(name, profile=_prof),
+            # The `travel_speed` rule factor the AVATAR moves with
+            # (`travel_engine.travel_pace_factor`, a party leader's is its
+            # slowest member's): the client multiplies its own figure's
+            # walking/running pace by it, and `POST /play/pos` judges the
+            # avatar's reports with the very same number. On the avatar's
+            # row ONLY, null on every other: a server journey already carries
+            # its pace, and someone else's speed is not the avatar's to know
+            # (the fog decision of § A12). This payload is built fresh on
+            # every poll (no ETag), so a condition change reaches the client
+            # with the next poll.
+            "travel_speed_factor": (round(travel_pace_factor(name, profile=_prof), 4)
+                                    if name == avatar else None),
+            # The move clips the character's active STATES replace
+            # (`prompt_filters.collect_locomotion`): `{walk?, run?}` clip
+            # kinds, absent when no state overrides anything.
+            **({"locomotion": _loco} if _loco_states and (_loco := collect_locomotion(
+                name, loc_id, _prof, definitions=_loco_states)) else {}),
         })
 
     events_by_location = {}

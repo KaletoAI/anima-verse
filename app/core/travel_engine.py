@@ -20,6 +20,9 @@ POLYLINE with baked times:
         "started_at_s": 31536000.25,         # MOTION-clock seconds
         "speed_m_s": 1.4,                    # metres per REAL second, the
                                              # world setting at journey start
+                                             # × the travel_speed factor
+        "gait": "walk",                      # "walk" | "run" (journey_gait),
+                                             # baked at the start like speed
         "entry_edge": 2,                     # BOUNDARY EDGE INDEX of the
                                              # target's opening the route
                                              # aims at (None = boundary-rim
@@ -83,6 +86,13 @@ Point = Tuple[float, float]
 DEFAULT_SPEED_M_S = 1.4
 _MIN_SPEED_M_S = 0.1
 _MAX_SPEED_M_S = 20.0
+
+# THE GAIT IS THE SERVER'S WORD (§ A11 ``gait``). A journey whose nominal pace
+# is at least this many times the world's walking pace RUNS; anything slower
+# walks. 1.5 sits between a brisk walk (a tired or hurried character stays
+# near 1×) and a pace a walking clip can no longer carry without sliding —
+# a 2.5× transformation runs, a 1.2× good mood still walks.
+RUN_GAIT_RATIO = 1.5
 
 # How often the TravelTicker settles journeys, in REAL seconds. It doubles as
 # the arrival tolerance's unit (``_at_goal``): one tick's worth of walking.
@@ -212,6 +222,44 @@ def get_travel_speed_m_s() -> float:
     if not math.isfinite(value) or value <= 0:
         return _reject_speed(raw)
     return min(max(value, _MIN_SPEED_M_S), _MAX_SPEED_M_S)
+
+
+def journey_gait(speed_m_s: float, walk_m_s: float) -> str:
+    """``"run"`` when ``speed_m_s`` is at least :data:`RUN_GAIT_RATIO` × the
+    walking pace ``walk_m_s``, else ``"walk"`` — pure. A walking pace that is
+    not positive (nothing to compare against) never runs."""
+    try:
+        speed, walk = float(speed_m_s), float(walk_m_s)
+    except (TypeError, ValueError):
+        return "walk"
+    if not (math.isfinite(speed) and math.isfinite(walk)) or walk <= 0:
+        return "walk"
+    return "run" if speed >= RUN_GAIT_RATIO * walk else "walk"
+
+
+def travel_pace_factor(name: str, *, profile: Optional[Dict[str, Any]] = None) -> float:
+    """The ``travel_speed`` rule factor ``name`` moves with — the ONE number a
+    journey start, the worldmap payload (``travel_speed_factor``) and the
+    avatar's position check (``play.pos_step_allowance``) agree on.
+
+    A party moves at its slowest member: a LEADER's factor is the minimum over
+    itself and its followers (the quantity's registered meaning). Each
+    member's own profile goes into ``modifiers.factor`` so the cache sees a
+    condition change at once (``modifiers._CACHE_TTL_S``).
+    """
+    from app.core.modifiers import factor
+    from app.core.party_engine import party_followers
+    from app.models.character import get_character_profile
+    if not name:
+        return 1.0
+    names = [name, *party_followers(name)]
+    pace = None
+    for member in names:
+        prof = profile if (member == name and profile is not None) else (
+            get_character_profile(member) or {})
+        value = factor(member, "travel_speed", profile=prof)
+        pace = value if pace is None else min(pace, value)
+    return 1.0 if pace is None else pace
 
 
 _speed_warned = False
@@ -628,12 +676,7 @@ def _bake_route(start: Point, goal: Point,
     """
     from app.core.nav_grid import build_nav_context, route, segment_costs
 
-    from app.core.modifiers import factor
-    from app.core.party_engine import party_followers
-    pace = 1.0
-    if character_name:
-        pace = min(factor(name, "travel_speed")
-                   for name in [character_name, *party_followers(character_name)])
+    pace = travel_pace_factor(character_name) if character_name else 1.0
     speed = min(_MAX_SPEED_M_S, max(_MIN_SPEED_M_S, get_travel_speed_m_s() * pace))
     ctx = build_nav_context()               # ONE context for the whole start
     legs: List[List[Point]] = []
@@ -868,6 +911,7 @@ def start_journey(character_name: str, target_id: str,
     exit_clip, exit_s = departure_bridge(character_name)
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_s": _departure_start(exit_s), "speed_m_s": speed,
+               "gait": journey_gait(speed, get_travel_speed_m_s()),
                "entry_edge": entry_edge}
     # Preserve the caller's party claim in the same write as the journey.
     journey["journey_id"] = journey_id or uuid.uuid4().hex
@@ -986,6 +1030,7 @@ def start_journey_to_point(character_name: str, x: float,
     journey = {"target": "", "target_point": {"x": gx, "z": gz},
                "waypoints": waypoints,
                "started_at_s": _departure_start(exit_s), "speed_m_s": speed,
+               "gait": journey_gait(speed, get_travel_speed_m_s()),
                "entry_edge": None}
     journey["journey_id"] = uuid.uuid4().hex
     if exit_clip:
@@ -1085,7 +1130,7 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
     journey = dict(target="", target_point=dict(plan["access"]), approach_target=chosen_target,
                    approach_role=role, entry_anchor=plan["entry_anchor"], entry_mode=plan["entry_mode"],
                    waypoints=_with_seat_leg(timed, plan.get("departure_seat")),
-                   started_at_s=starts, speed_m_s=speed,
+                   started_at_s=starts, speed_m_s=speed, gait="walk",
                    journey_id=journey_id or uuid.uuid4().hex,
                    execution_kind=execution_kind, execution_ref=execution_ref,
                    floor_y=plan["access"]["y"], departure_seat=plan.get("departure_seat"),

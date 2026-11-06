@@ -243,6 +243,18 @@ die Charakter-Ansicht zeigt ihn neben dem gespeicherten. Weil ein Zustand den We
 Zug zu Zug ändern kann, gehört zu so einem Feld `"prompt_volatile": true`. Ein anders
 gebautes Feld mit dem Schlüssel wird mit einer Warnung ignoriert.
 
+**Locomotion override (`locomotion: {walk?, run?}`).** A state may replace the
+clip a moving figure plays: Game-Admin → States → "Walk animation override" /
+"Run animation override" pick a clip KIND of the shared clip library
+(`animation_clips.clip_kinds`, offered by `GET /admin/prompt-filters/data` as
+`clip_kinds`); empty = no override. Stored in the state's `meta.locomotion`
+(validated by `prompt_filters.validate_locomotion`: only the two slots, only
+existing kinds). The worldmap delivers the resolved result per character as
+`locomotion` (`prompt_filters.collect_locomotion`: enabled + triggered states,
+per slot the first by ascending id wins) — see `docs/schnittstellen-3d.md`,
+character row. The ground keeps precedence: swimming/crawling are never replaced,
+and a figure whose clip set lacks the kind plays its normal clip.
+
 ### Body-Slots (Spezies-Pakete)
 
 Der Body-Slot-Core (`app/core/body_slots.py`) führt die Deklarationen aus — kein

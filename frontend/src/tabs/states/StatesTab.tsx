@@ -16,6 +16,8 @@ import { useDiscardGuard, useDraft } from '../../lib/useDraft'
 const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill', 'length', 'girth'] as const
 type PoseField = typeof POSE_FIELDS[number]
 type BonePose = Record<string, Partial<Record<PoseField, number>>>
+/** The two move-clip slots a state may override (server `LOCOMOTION_SLOTS`). */
+type Locomotion = { walk?: string; run?: string }
 interface MotionGroup { id: string; controls?: string[] | null; defaults: { rest_max_deg: number } }
 
 interface PromptFilter {
@@ -29,6 +31,8 @@ interface PromptFilter {
   stat_boosts?: Record<string, number>
   /** character fields this state sets while active (template `state_override`) */
   field_overrides?: Record<string, string>
+  /** move clips this state replaces while active — clip kinds, absent = none */
+  locomotion?: Locomotion
   bone_pose?: BonePose
   enabled?: boolean
   source?: string
@@ -44,6 +48,8 @@ interface FiltersData {
   stat_keys: string[]
   /** the character fields a state may override, with their options */
   override_fields?: OverrideField[]
+  /** the clip kinds of the shared library — choices of the locomotion overrides */
+  clip_kinds?: string[]
   condition_hint?: string
 }
 
@@ -72,6 +78,7 @@ const EMPTY_DRAFT: DraftState = {
   bone_pose: {},
   stat_boosts: {},
   field_overrides: {},
+  locomotion: {},
   enabled: true,
   originalId: '',
   source: '',
@@ -91,6 +98,7 @@ function asDraft(f: PromptFilter): DraftState {
     bone_pose: structuredClone(f.bone_pose || {}),
     stat_boosts: { ...(f.stat_boosts || {}) },
     field_overrides: { ...(f.field_overrides || {}) },
+    locomotion: { ...(f.locomotion || {}) },
     enabled: f.enabled !== false,
     originalId: f.id,
     source: f.source || '',
@@ -214,6 +222,7 @@ function StatesPane() {
         bone_pose: bonePose,
         stat_boosts: draft.stat_boosts,
         field_overrides: draft.field_overrides,
+        locomotion: draft.locomotion,
         enabled: draft.enabled,
       })
       toast(t('Saved'))
@@ -395,6 +404,7 @@ function StatesPane() {
               blockKeys={data.block_keys || []}
               statKeys={data.stat_keys || []}
               overrideFields={data.override_fields || []}
+              clipKinds={data.clip_kinds || []}
               onUpdate={updateDraft}
               onToggleBlock={toggleBlock}
             />
@@ -413,11 +423,12 @@ interface DraftFormProps {
   blockKeys: string[]
   statKeys: string[]
   overrideFields: OverrideField[]
+  clipKinds: string[]
   onUpdate: <K extends keyof DraftState>(key: K, value: DraftState[K]) => void
   onToggleBlock: (block: string) => void
 }
 
-function DraftForm({ draft, blockKeys, statKeys, overrideFields, onUpdate, onToggleBlock }: DraftFormProps) {
+function DraftForm({ draft, blockKeys, statKeys, overrideFields, clipKinds, onUpdate, onToggleBlock }: DraftFormProps) {
   const { t, lang } = useI18n()
   const fieldLabel = (f: { label: string; label_de?: string }) =>
     (lang === 'de' && f.label_de) || f.label
@@ -596,6 +607,31 @@ function DraftForm({ draft, blockKeys, statKeys, overrideFields, onUpdate, onTog
             }}>{t('Add')}</button>
         ) : null}
       </Field>
+
+      <div className="ga-form-row">
+        {(['walk', 'run'] as const).map(slot => {
+          const value = draft.locomotion[slot] || ''
+          return (
+            <Field key={slot}
+              label={slot === 'walk' ? t('Walk animation override') : t('Run animation override')}
+              hint={slot === 'walk'
+                ? t('Clip a moving figure plays instead of walking while this state is active. Swimming and crawling stay with the ground; a figure without this clip walks normally.')
+                : t('Clip a moving figure plays instead of running while this state is active.')}>
+              <select className="ga-input" value={value}
+                onChange={e => {
+                  const next = { ...draft.locomotion }
+                  if (e.target.value) next[slot] = e.target.value
+                  else delete next[slot]
+                  onUpdate('locomotion', next)
+                }}>
+                <option value="">{t('— none —')}</option>
+                {value && !clipKinds.includes(value) ? <option value={value}>{value}</option> : null}
+                {clipKinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+              </select>
+            </Field>
+          )
+        })}
+      </div>
 
       <Field label={t('Drop blocks')} hint={t('Click to toggle which prompt blocks are removed when this filter matches.')}>
         <div className="ga-block-picker">

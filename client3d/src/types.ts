@@ -232,6 +232,13 @@ export interface MapTravel {
    *  then (`activity_animation` carries the clip it plays for that). `null`
    *  once the journey is under way, which is the ordinary case. */
   starts_in_s?: number | null;
+  /** The GAIT the server decided at the journey's start (§ A11,
+   *  `travel_engine.journey_gait`): "run" when the journey's nominal pace is
+   *  ≥ 1.5 × the world's walking pace. The figure plays the RUN pose's clip
+   *  family then, the WALK pose's otherwise — the ground still decides first
+   *  (swimming, crawling). Not thinned under the fog. Absent from an older
+   *  server = walk. */
+  gait?: 'walk' | 'run';
 }
 
 /** Visibility-filtered remaining motion, never another character's full journey. */
@@ -320,6 +327,22 @@ export interface MapCharacter {
    *  contribute them on the server (`name_badges`), `title` is already in the
    *  avatar's language. Absent = none. */
   badges?: NameBadge[];
+  /** The `travel_speed` rule factor the AVATAR moves with (§ A11 character
+   *  row): the client walks AND runs its own figure at that multiple of
+   *  `WALK_SPEED`, and `POST /play/pos` judges the reports with the same
+   *  number. Only on the avatar's row; null on every other. */
+  travel_speed_factor?: number | null;
+  /** Move clips the character's active STATES replace (`{walk?, run?}`, clip
+   *  kinds) — played instead of the WALK/RUN pose's clip while the figure
+   *  moves on foot; the ground's swim/crawl keep precedence, and a figure
+   *  without the kind plays its normal clip. Absent = no override. */
+  locomotion?: LocomotionOverride;
+}
+
+/** The move clips a state replaces (worldmap character row, `locomotion`). */
+export interface LocomotionOverride {
+  walk?: string;
+  run?: string;
 }
 
 /** One icon behind a character's name — name tag and chat address chip. */

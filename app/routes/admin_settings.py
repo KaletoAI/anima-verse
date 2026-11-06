@@ -236,7 +236,17 @@ def _validate_field_overrides(raw: Any) -> Dict[str, str]:
 
 _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
                            "prompt_modifier", "image_modifier", "bone_pose", "stat_boosts",
-                           "field_overrides")
+                           "field_overrides", "locomotion")
+
+
+def _clip_kinds_or_empty() -> List[str]:
+    """The shared clip library's kinds; an unreadable library offers none."""
+    try:
+        from app.core.animation_clips import clip_kinds
+        return clip_kinds()
+    except Exception as e:
+        logger.debug("clip kinds unavailable: %s", e)
+        return []
 
 
 @router.get("/prompt-filters/data")
@@ -312,6 +322,9 @@ def prompt_filters_data(user=Depends(require_admin)):
         # Character fields a state may override (template ``state_override``),
         # with their options — the "Field overrides" editor offers exactly these.
         "override_fields": state_override_fields(),
+        # The clip kinds the shared library holds right now — the choices of
+        # the "Walk/Run animation override" selects (``locomotion``).
+        "clip_kinds": _clip_kinds_or_empty(),
         "block_keys": _prompt_filter_block_keys(),
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "
@@ -577,7 +590,8 @@ async def prompt_filters_save(request: Request, user=Depends(require_admin)):
     """Upsert a filter in the world prompt_filters table.
 
     Body: {id, condition, label, drop_blocks: [...], prompt_modifier,
-           icon, image_modifier, bone_pose, enabled}.
+           icon, image_modifier, bone_pose, stat_boosts, field_overrides,
+           locomotion: {walk?, run?} (clip kinds, empty = none), enabled}.
     An id also present in shared/prompt_filters/filters.json creates an
     override; otherwise this creates a new world-only filter.
     """
@@ -614,6 +628,11 @@ def _prompt_filters_save_sync(user, body: Any):
     ):
         raise HTTPException(status_code=400, detail="stat_boosts must map known stats to integers from -200 to 200")
     field_overrides = _validate_field_overrides(body.get("field_overrides", {}))
+    from app.core.prompt_filters import validate_locomotion
+    try:
+        locomotion = validate_locomotion(body.get("locomotion", {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     enabled = bool(body.get("enabled", True))
 
     if not fid:
@@ -631,6 +650,7 @@ def _prompt_filters_save_sync(user, body: Any):
         meta = _json.loads(row[0] or "{}") if row else {}
         meta["stat_boosts"] = stat_boosts
         meta["field_overrides"] = field_overrides
+        meta["locomotion"] = locomotion
         conn.execute("""
             INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                         prompt_modifier, enabled, meta,
@@ -778,7 +798,8 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                     (clean.get("prompt_modifier") or "").strip(),
                     1 if clean.get("enabled", True) else 0,
                     _json.dumps({"stat_boosts": clean.get("stat_boosts") or {},
-                                 "field_overrides": clean.get("field_overrides") or {}},
+                                 "field_overrides": clean.get("field_overrides") or {},
+                                 "locomotion": clean.get("locomotion") or {}},
                                 ensure_ascii=False),
                     (clean.get("icon") or "").strip(),
                     (clean.get("image_modifier") or "").strip(),

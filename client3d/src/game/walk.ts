@@ -263,6 +263,23 @@ export function moveClip(movement: MovementType, running: boolean,
 }
 
 /**
+ * A STATE'S LOCOMOTION OVERRIDE on top of `moveClip` — PURE. `clip` is what
+ * `moveClip` chose; only the WALK and the RUN pose's clips are replaceable
+ * (`{walk?, run?}` from the worldmap row), so a swim or crawl clip — the
+ * GROUND's word — passes through untouched. `has` says whether the figure's
+ * own clip set holds a kind: without it the normal clip plays.
+ */
+export function overrideMoveClip(clip: string,
+                                 locomotion: Readonly<{ walk?: string; run?: string }> | null | undefined,
+                                 has: (kind: string) => boolean,
+                                 poses: Readonly<PoseClips> = movementPoses): string {
+  if (!locomotion) return clip;
+  const want = clip === poseClip('walking', poses) ? locomotion.walk
+    : clip === poseClip('running', poses) ? locomotion.run : undefined;
+  return want && has(want) ? want : clip;
+}
+
+/**
  * TRANSITIONS — the clip that has to play BETWEEN two clips.
  *
  * Without one, a figure that stops sitting is walking in the very next frame:

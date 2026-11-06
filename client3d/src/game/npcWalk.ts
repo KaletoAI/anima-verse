@@ -5,6 +5,14 @@ export interface WalkPoint { x: number; y: number; z: number }
 /** Shared with player steering: metres per real second. */
 export const WALK_SPEED = 3.4;
 export const RUN_DISTANCE = 6;
+
+/** The avatar's `travel_speed_factor` from its worldmap row as a usable
+ *  multiplier of `WALK_SPEED` — a positive finite number, else 1 (an older
+ *  server, a foreign row, garbage). The server clamps rule factors to
+ *  [0.1, 5] and judges the position reports with the same number. */
+export function avatarPaceFactor(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1;
+}
 /** Door and route stations are generous; stair rides supply their tight radius. */
 export const WAYPOINT_ARRIVE_M = 1.5;
 

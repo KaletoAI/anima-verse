@@ -1075,18 +1075,21 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
 `interaction` (§ A8a), `finale` (§ A8c), `place` (§ A8a), `avatar_url`,
-**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`, `badges` (nur wenn vorhanden).
+**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`, `badges` (nur wenn vorhanden),
+`travel_speed_factor`, `locomotion` (nur wenn vorhanden).
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
 | `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
+| `travel_speed_factor` | `float \| null` | The `travel_speed` rule factor the **avatar** moves with (`travel_engine.travel_pace_factor`: the product of every matching `modify` rule, clamped 0.1–5; a party LEADER gets the minimum over itself and its followers, the quantity's "a party uses its slowest member"). The client multiplies its avatar's own walking AND running pace by it (`WALK_SPEED × factor`, the run boost on top), and `POST /play/pos` judges the avatar's reports with the very same number (§ A15 Nr. 5). **Only on the avatar row**; `null` on every other row — a server journey already carries its pace (§ A11), and someone else's speed is fog knowledge (§ A12). Always present. The worldmap is built fresh on every poll (no ETag), and `modifiers.factor` keys its cache on the character's active condition names, so gaining or losing a condition reaches the client with the next poll |
+| `locomotion` | `{walk?: str, run?: str}` (optional) | Move clips the character's active **states** replace (`prompt_filters.collect_locomotion`; edited in Game-Admin → States as "Walk/Run animation override"). Each value is a clip KIND of the shared library. A state applies when it is enabled and triggered (its id as an active condition, or its condition expression); per slot the first such state by ascending id that fills it wins, so two states may contribute one slot each. **Absent** when no state overrides anything. The client plays the override instead of the WALK/RUN pose's clip whenever the figure moves on foot — server journeys (`travel.gait`) and the avatar alike — and falls back to the normal clip when the figure's set has no clip of that kind. The **ground keeps precedence**: swimming and crawling are what the terrain says (`walk.moveClip`), an override never replaces them |
 | `badges` | `[{icon: str, title: str}]` (optional) | Icons behind the name tag, e.g. the intimacy privacy level. Packages contribute them on the server (capability `character.name_badges`); `title` is already in the avatar's language and is the tooltip. The client draws the icons after the name in their own element and leaves the name line (`tagName`) and the anchor height unchanged. **Absent** when there are none. |
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
 | `pos_origin` | `{session: str, seq: int} \| null` | Origin of the accepted position report, only on the avatar row; null for every other writer and every other character. Always present. |
 | `yaw` | `float \| null` | The avatar's own facing in radians, as its last position report gave it (§ A15, view vector `(sin yaw, 0, cos yaw)` in world x/z, normalised to [−π, π]). Only on the avatar row; null on every other row and whenever none is stored — every server writer that puts the character somewhere (travel, furniture, pool, admin move) clears it. A client applies it when it first places a free-standing avatar. Always present. |
-| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `floor_y`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`, `paces_m_s_real`, `journey_id`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `floor_y`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`, `paces_m_s_real`, `journey_id`, `gait`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **`pos` gilt auch IN einem Raum** (2026-09-13, T4). Der Server hat den Punkt
   gestellt: frei von Wänden, Möbeln, Türzonen und Mitbewohnern. Ein Client
@@ -3495,6 +3498,7 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg])` aus denselben gebackenen Zeitmarken (echte Sekunden) (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0). **Gefoggt `null`** wie `progress_m` |
 | `paces_m_s_real` | `(float \| null)[] \| null` | One entry per segment: baked length / baked REAL-time span (motion clock, independent of the game-speed factor), rounded to 4 decimals. A zero-time or zero-length segment has a `null` entry and is traversed without time. The whole field is `null` when frozen, before departure (`starts_in_s` set), or under foreign fog. After arrival the list remains filled. |
 | `journey_id` | `str \| null` | Present only for the avatar, including in `show_all`; always `null` for foreign rows. Both journey starters persist UUID4 hex (32 characters); a supplied party claim is preserved. Pre-update journeys without an ID have `null`. |
+| `gait` | `"walk" \| "run"` | The gait the SERVER decided when the journey started (`travel_engine.journey_gait`, stored on the journey as `gait` and baked like `speed_m_s`): **`"run"` when the journey's nominal `speed_m_s` ≥ `RUN_GAIT_RATIO` = 1.5 × the world's walking pace `game.travel_speed_m_s`**, else `"walk"` — a 2.5× `travel_speed` rule runs, a tired 0.7× walks. A furniture approach always walks; a journey stored without the field walks. The client plays the RUN pose's clip family on a `"run"` journey and the WALK pose's otherwise — the ground still decides first (swimming in water, crawling), and a state's `locomotion` override (character row) replaces the walk/run clip. **Not thinned**: it names no route and no goal, only what the figure's legs visibly do, and a fogged traveller animates by it as well. Always present. |
 
 **Required root field `sync`**
 
@@ -3636,7 +3640,7 @@ treat a transmitted zero-length segment as timeless.
   `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`,
   `paces_m_s_real`. `journey_id` ist für Fremde ebenfalls immer `null`. Die Schlüssel
   bleiben stehen, damit
-  „nicht mitgeteilt" von „leer" unterscheidbar ist. Es bleiben `starts_in_s` (Abfahrts-Countdown ohne Routenwissen) und
+  „nicht mitgeteilt" von „leer" unterscheidbar ist. Es bleiben `starts_in_s` (Abfahrts-Countdown ohne Routenwissen), `gait` (what the legs visibly do, no route) und
   **`target_id`**, eine opake Id, die der Fog nie verborgen hat (wie
   `movement_target_id`, dessen NAMEN die Figurenliste sehr wohl
   zurückhält). Eine fremde Figur wird dann an ihrem `pos` gezeichnet, ohne
@@ -4412,9 +4416,14 @@ Verzierung:
 
 ```
 allowance = max( 5 m,
-                 3 × travel_speed_m_s × elapsed,
-                 3 × 3,4 m/s × elapsed )
+                 3 × travel_speed_m_s × f × elapsed,
+                 3 × 3,4 m/s × f × elapsed )
 ```
+
+`f` is the avatar's `travel_speed` rule factor (`travel_engine.travel_pace_factor`) —
+the very `travel_speed_factor` its worldmap row hands the client, which walks the
+avatar at `3,4 m/s × f` (`play.pos_step_allowance`). A 2.5× hero's honest reports
+are therefore judged against 2.5× the distance; the 5 m floor stays unscaled.
 
 Boden, **Reisetempo-Term** und **Lauf-Term**, alle in ECHTEN Sekunden. Bis
 2026-11-05 trug der mittlere Term den Zeitfaktor der Spieluhr; seit Bewegung

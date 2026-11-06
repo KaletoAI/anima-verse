@@ -8,11 +8,13 @@ import time
 _quantities: dict[str, dict[str, str]] = {}
 
 # factor() is asked per character on hot paths (every travel tick asks the
-# discovery range of every character). A result lives this long (technical
-# cache, system time); every rule change clears it, so only a stat change
-# takes up to this long to show.
+# discovery range of every character, every worldmap poll the travel speed).
+# A result lives this long (technical cache, system time); every rule change
+# clears it, and a caller that hands in the PROFILE keys the entry on the
+# character's active condition names as well — so gaining or losing a
+# condition shows at once, and only a stat change takes up to this long.
 _CACHE_TTL_S = 30.0
-_cache: dict[tuple[str, str], tuple[float, float]] = {}
+_cache: dict[tuple, tuple[float, float]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -47,6 +49,13 @@ def modify_rules() -> list[dict]:
     return [rule for rule in load_rules() if rule.get('type') == 'modify']
 
 
+def _condition_key(profile: dict) -> tuple:
+    """The active condition names of a profile, normalised and sorted."""
+    return tuple(sorted({(entry.get('name') or '').strip().lower()
+                         for entry in (profile.get('active_conditions') or [])
+                         if isinstance(entry, dict)}))
+
+
 def factor(name: str, qid: str, *, profile: dict | None = None,
            rules: list[dict] | None = None) -> float:
     """Multiply matching rules, reading the merged rules exactly once.
@@ -54,9 +63,11 @@ def factor(name: str, qid: str, *, profile: dict | None = None,
     Conditions use the authoritative activity evaluator and current location
     and room. A comparison on a value the character does not have is not met
     (a modifier never fires on a missing stat). The optional profile matches
-    consumer APIs; ``rules`` lets a caller reuse one ``modify_rules()`` load.
+    consumer APIs and puts the character's active condition names into the
+    cache key (see ``_CACHE_TTL_S``); ``rules`` lets a caller reuse one
+    ``modify_rules()`` load.
     """
-    key = (name, qid)
+    key = (name, qid) if profile is None else (name, qid, _condition_key(profile))
     now = time.monotonic()
     with _cache_lock:
         hit = _cache.get(key)
@@ -79,8 +90,8 @@ def factor(name: str, qid: str, *, profile: dict | None = None,
         condition = rule.get('condition') or ''
         if condition:
             if context is None:
-                context = (get_character_current_location(name) or '',
-                           get_character_current_room(name) or '')
+                context = (get_character_current_location(name, profile=profile) or '',
+                           get_character_current_room(name, profile=profile) or '')
             with missing_stats_fail():
                 passed = evaluate_condition(condition, name, *context)[0]
             if not passed:

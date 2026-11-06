@@ -88,6 +88,7 @@ def _load_world(*, strict: bool = False) -> List[Dict[str, Any]]:
                 "meta": meta,
                 "stat_boosts": meta.get("stat_boosts", {}),
                 "field_overrides": meta.get("field_overrides", {}),
+                "locomotion": meta.get("locomotion", {}),
                 "icon": r[7] or "",
                 "image_modifier": r[8] or "",
                 "bone_pose": bone_pose if isinstance(bone_pose, dict) else {},
@@ -147,6 +148,7 @@ def load_filters(*, strict: bool = False) -> List[Dict[str, Any]]:
                 if fid:
                     entry.setdefault("stat_boosts", {})
                     entry.setdefault("field_overrides", {})
+                    entry.setdefault("locomotion", {})
                     by_id[fid] = entry
             _snapshot = list(by_id.values())
             _snapshot_key = key
@@ -499,3 +501,69 @@ def collect_bone_poses(character_name, location_id="", profile=None):
     out = [{"id": state["id"], "bone_pose": state.get("bone_pose") or {}}
            for state in _triggered_filters(character_name, location_id, profile)]
     return sorted(out, key=lambda state: state["id"])
+
+
+# The move clips a state may replace (§ A11 ``locomotion``): the WALK and the
+# RUN pose of a moving figure. Swimming and crawling are the GROUND's word and
+# stay out of reach — a hovering figure that crosses a lake still swims.
+LOCOMOTION_SLOTS = ("walk", "run")
+
+
+def validate_locomotion(value):
+    """``{walk?, run?}`` → the same object with empty slots dropped.
+
+    Each value is a clip KIND of the shared clip library
+    (``animation_clips.clip_kinds``) — never a list in the code; an empty
+    string means "no override" and is dropped. Raises ``ValueError`` for a
+    non-object, an unknown slot, a non-string or a kind the library lacks."""
+    if not isinstance(value, dict):
+        raise ValueError("locomotion must be an object {walk, run}")
+    out = {}
+    kinds = None
+    for slot, kind in value.items():
+        if slot not in LOCOMOTION_SLOTS:
+            raise ValueError(f"locomotion: {slot!r} is no slot (walk, run)")
+        if not isinstance(kind, str):
+            raise ValueError(f"locomotion.{slot} must be a clip kind")
+        kind = kind.strip().lower()
+        if not kind:
+            continue
+        if kinds is None:
+            from app.core.animation_clips import clip_kinds
+            kinds = set(clip_kinds())
+        if kind not in kinds:
+            raise ValueError(f"locomotion.{slot}: {kind!r} is no clip kind of the library")
+        out[slot] = kind
+    return out
+
+
+def locomotion_states():
+    """The ENABLED state definitions that override a move clip — load once
+    per payload and hand to :func:`collect_locomotion` as ``definitions``."""
+    return [state for state in load_filters()
+            if state.get("enabled", True) and isinstance(state.get("locomotion"), dict)
+            and any(state["locomotion"].get(slot) for slot in LOCOMOTION_SLOTS)]
+
+
+def collect_locomotion(character_name, location_id="", profile=None, *, definitions=None):
+    """``{walk?, run?}`` — the move clips the character's ACTIVE states replace.
+
+    A state applies exactly when it is triggered (``_triggered_filters``: its id
+    as an active condition, or its condition expression) and enabled. Order is
+    deterministic: per SLOT, the first triggered state by ascending id that
+    fills it wins, so two states may each contribute one slot. ``{}`` when no
+    state overrides anything — the caller then sends no ``locomotion`` at all.
+    """
+    definitions = locomotion_states() if definitions is None else definitions
+    if not definitions:
+        return {}
+    out = {}
+    states = sorted(_triggered_filters(character_name, location_id, profile,
+                                       _definitions=definitions),
+                    key=lambda state: (state.get("id") or ""))
+    for state in states:
+        for slot in LOCOMOTION_SLOTS:
+            kind = ((state.get("locomotion") or {}).get(slot) or "").strip().lower()
+            if kind and slot not in out:
+                out[slot] = kind
+    return out
