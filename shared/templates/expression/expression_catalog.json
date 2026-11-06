@@ -206,10 +206,20 @@
       ]
     },
     "mischievous": {
-      "prompt": "zu füllen",
+      "prompt": "sly lopsided grin with one corner of the mouth raised, narrowed glinting eyes, one eyebrow slightly lifted",
       "label": "Mischievous",
       "synonyms": [
-        "schelmisch"
+        "schelmisch",
+        "sly",
+        "cheeky",
+        "impish",
+        "teasing",
+        "naughty",
+        "verschmitzt",
+        "frech",
+        "spitzbübisch",
+        "neckisch",
+        "schalkhaft"
       ]
     }
   },

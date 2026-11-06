@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPut } from '../../lib/api'
+import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
 type Store = 'shared' | 'world'
@@ -36,6 +36,8 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
   const edited = useRef(false)
   const previousSelection = useRef(selected)
   const update = (patch: Partial<ExpressionSet>) => {
@@ -98,6 +100,20 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
       setCreating(false)
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
+  const runImport = async () => {
+    if (!draft || busy || !importText.trim()) return
+    setBusy(true)
+    try {
+      const r = await apiPost<{ created: number; skipped: string[] }>(
+        `/poses/expression-sets/${encodeURIComponent(draft.id)}/import`, { text: importText })
+      toast(`${t('Imported')}: ${r.created}` + (r.skipped.length ? ` · ${t('skipped (already there)')}: ${r.skipped.join(', ')}` : ''))
+      setImportText('')
+      setImportOpen(false)
+      setError('')
+      await load()
+      await onSaved()
+    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
   const remove = async () => {
     if (!draft || busy) return
     setBusy(true)
@@ -151,10 +167,17 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, gridColumn: '1 / -1' }}>
         <button type="button" className="ga-btn ga-btn-primary" disabled={busy || !changed} onClick={() => void save()}>{t('Save set')}</button>
         <button type="button" className="ga-btn" disabled={busy} onClick={() => { edited.current = false; setDraft(sets[selected] || null); setCreating(false); setError('') }}>{t('Discard')}</button>
+        {!creating && <button type="button" className="ga-btn" disabled={busy || !!changed} onClick={() => setImportOpen(v => !v)}>{t('Import expressions')}</button>}
         {!creating && <button type="button" className="ga-btn ga-btn-danger" disabled={busy || (draft.store === 'shared' && ['humanoid', 'animal'].includes(draft.id))} onClick={() => setConfirmRemove(true)}>
           {draft.store === 'world' ? t('Remove World definition') : t('Delete set')}
         </button>}
       </div>
+      {importOpen && !creating && <div style={{ gridColumn: '1 / -1' }}>
+        <p className="ga-field-hint">{t('One expression per line: Label | prompt. A leading number column (0 | Label | prompt) is ignored. Existing expressions are skipped.')}</p>
+        <textarea className="ga-input" rows={8} value={importText} disabled={busy} onChange={e => setImportText(e.target.value)}
+          placeholder={'0 | Frustrated | make the woman frustrated'} />
+        <button type="button" className="ga-btn ga-btn-primary" disabled={busy || !importText.trim()} onClick={() => void runImport()}>{t('Import')}</button>
+      </div>}
       {confirmRemove && <div style={{ gridColumn: '1 / -1' }}>
         <p>{t('Remove this set definition and its exclusive members? A Shared definition, if present, becomes visible again. Characters using a custom set prevent its deletion.')}</p>
         <button type="button" className="ga-btn ga-btn-danger" disabled={busy} onClick={() => void remove()}>{t('Confirm')}</button>

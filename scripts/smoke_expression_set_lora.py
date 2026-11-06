@@ -23,6 +23,13 @@ Expected values, derived by hand from that spec:
     prompt carries no former set pose ("standing naturally upright").
   E switching humanoid -> emote deletes the cached expression files (2 -> 0);
     switching "" (Automatic, resolves to humanoid) -> "humanoid" keeps them.
+  G import into "emote" from pasted lines: "0 | Frustrated | make the woman
+    frustrated", "38 | Lip Bite | make the woman bite her lip", "74 | LipBite |
+    make the woman lip-bite", "Neutral | make the woman neutral" -> created 3
+    (emote_frustrated, emote_lip_bite, emote_lipbite); "Neutral" skipped
+    (emote_neutral exists); synonyms "frustrated", "lip bite", "lipbite";
+    a second identical import creates 0 and skips all 4; a malformed line
+    ("just text") rejects the whole import and changes nothing.
   F the character options report, per set, whether the expression backend
     has the LoRA: emote True when the library associates it with backend
     "Qwen", False when not; humanoid (no LoRA) None.
@@ -133,6 +140,26 @@ apply_profile_update("demo", {"fields": {"expression_set": "humanoid"}})
 check(len(list(folder.iterdir())) == 2, "Automatic -> its own set keeps the images")
 apply_profile_update("demo", {"fields": {"expression_set": "emote"}})
 check(len([p for p in folder.iterdir() if p.is_file()]) == 0, "humanoid -> emote drops the images")
+
+print("G import")
+LINES = ("0 | Frustrated | make the woman frustrated\n38 | Lip Bite | make the woman bite her lip\n"
+         "74 | LipBite | make the woman lip-bite\nNeutral | make the woman neutral\n")
+r = es.import_entries("emote", LINES)
+cat = es.catalog_snapshot()
+check(r["created"] == 3 and r["skipped"] == ["Neutral"], f"3 created, Neutral skipped ({r})")
+check({"emote_frustrated", "emote_lip_bite", "emote_lipbite"} <= set(cat.sets["emote"].members), "keys are set_label-slug")
+check(cat.entries["emote_lip_bite"]["prompt"] == "make the woman bite her lip", "prompt taken verbatim")
+check([cat.entries[k]["synonyms"] for k in ("emote_frustrated", "emote_lip_bite", "emote_lipbite")]
+      == [("frustrated",), ("lip bite",), ("lipbite",)], "label is the synonym")
+again = es.import_entries("emote", LINES)
+check(again["created"] == 0 and len(again["skipped"]) == 4, "a repeated import creates nothing")
+before = es.catalog_snapshot().revision
+try:
+    es.import_entries("emote", "1 | Happy | make the woman happy\njust text")
+    check(False, "a malformed line must reject the import")
+except es.ExpressionSetError:
+    check(es.catalog_snapshot().revision == before and "emote_happy" not in es.catalog_snapshot().entries,
+          "a malformed line rejects the whole import")
 
 print("F LoRA fit on the character's expression backend")
 from app.routes import characters as char_routes  # noqa: E402

@@ -264,6 +264,71 @@ def delete_set(set_id: str, *, store: str) -> None:
     _edit(change)
 
 
+def parse_import_lines(text: str):
+    """``Label | prompt`` per line; a leading number column (``12 | Label |
+    prompt``, the layout LoRA pages publish their trigger tables in) is
+    ignored. Returns ``(rows, errors)`` with rows ``(label, prompt)``."""
+    rows, errors = [], []
+    for n, line in enumerate(str(text or "").splitlines(), 1):
+        parts = [p.strip() for p in line.split("|")]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if len(parts) == 3 and parts[0].isdigit():
+            parts = parts[1:]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            errors.append(f"line {n}: expected 'Label | prompt'")
+            continue
+        rows.append((parts[0], parts[1]))
+    return rows, errors
+
+
+def _slug(label: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+def import_entries(set_id: str, text: str) -> dict:
+    """Bulk-create expressions in one set from pasted ``Label | prompt``
+    lines, in ONE catalog transaction (all or nothing). Keys are
+    ``<set>_<label slug>``; the label becomes the synonym unless another
+    member of the set already answers to it. Keys that already exist are
+    skipped and reported. The entries go into the set's own store."""
+    rows, errors = parse_import_lines(text)
+    if errors:
+        raise ExpressionSetError("; ".join(errors[:5]))
+    if not rows:
+        raise ExpressionSetError("Nothing to import")
+    sid = _key(set_id)
+    def change(shared, world, conn):
+        effective = _snapshot(shared, world)
+        spec = effective.sets.get(sid)
+        if spec is None:
+            raise ExpressionSetError("Unknown expression set", 404)
+        layer = world if spec.store == "world" else shared
+        groups = _membership_groups(shared, world, sid, spec.store, spec)
+        taken = {alias for key in spec.members
+                 for alias in (key, *effective.entries[key]["synonyms"])}
+        created, skipped = [], []
+        for label, prompt in rows:
+            slug = _slug(label)
+            key = _key(f"{sid}_{slug}") if slug else ""
+            if not key or key in effective.entries or key in layer["entries"]:
+                skipped.append(label)
+                continue
+            synonyms = []
+            for alias in dict.fromkeys((label.lower(), label.lower().replace("-", " "))):
+                if alias not in taken:
+                    synonyms.append(alias)
+                    taken.add(alias)
+            taken.add(key)
+            layer["entries"][key] = {"label": label, "prompt": prompt, "synonyms": synonyms}
+            for group in groups:
+                group["members"].append(key)
+            created.append(key)
+        return {"created": len(created), "skipped": skipped}
+    return _edit(change)
+
+
 def edit_entry(action: str, key: str, body: Mapping, *, set_id: str):
     key = _key(key)
     def change(shared, world, conn):

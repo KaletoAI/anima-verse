@@ -70,6 +70,20 @@ async def put_expression_set(set_id: str, request: Request,
     return {"status": "success", "set_id": set_id}
 
 
+@router.post("/expression-sets/{set_id}/import")
+async def import_expression_set_entries(set_id: str, request: Request,
+                                        _: Dict[str, Any] = Depends(require_admin)):
+    """Bulk-create expressions from pasted ``Label | prompt`` lines."""
+    import asyncio
+    from app.core.expression_sets import import_entries
+    body = await request.json()
+    try:
+        result = await asyncio.to_thread(import_entries, set_id, str((body or {}).get("text") or ""))
+    except CatalogEditError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    return {"status": "success", "set_id": set_id, **result}
+
+
 @router.delete("/expression-sets/{set_id}")
 def remove_expression_set(set_id: str, store: str = "world",
                           _: Dict[str, Any] = Depends(require_admin)):
