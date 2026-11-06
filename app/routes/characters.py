@@ -724,7 +724,11 @@ def _set_decency_exempt_route_sync(character_name: str,
 
 # --- Outfit-bound expression images ---
 
-def _expression_request(character_name, mood="", pieces="", items="", override=False):
+def _expression_request(character_name, mood="", pieces="", items="", override=False,
+                        default_expression=False):
+    """``default_expression``: the set's default expression in the CURRENT
+    outfit — no mood lookup, no outfit override (an override with empty
+    pieces renders the character undressed)."""
     from app.core.expression_regen import expression_snapshot
     from app.core.pose_catalog_edit import CatalogEditError
     explicit = bool(override or pieces or items)
@@ -736,7 +740,7 @@ def _expression_request(character_name, mood="", pieces="", items="", override=F
     eqi = list(items) if isinstance(items, (list, tuple)) else [i.strip() for i in items.split(",") if i.strip()]
     if any(not isinstance(k, str) or not isinstance(v, str) for k, v in eqp.items()) or any(not isinstance(i, str) for i in eqi):
         raise HTTPException(400, "Expression outfit ids must be strings")
-    if not explicit and not mood:
+    if not explicit and not mood and not default_expression:
         mood = get_character_current_feeling(character_name) or ""
     try:
         return expression_snapshot(character_name, str(mood), equipped_pieces=eqp if explicit else None,
@@ -783,7 +787,8 @@ async def expression_generation(character_name: str, request: Request):
     if not isinstance(body, dict):
         raise HTTPException(400, "Expression generation expects an object")
     snap = await asyncio.to_thread(_expression_request, character_name, body.get("mood", ""),
-                                   body.get("pieces", ""), body.get("items", ""), bool(body.get("override")))
+                                   body.get("pieces", ""), body.get("items", ""), bool(body.get("override")),
+                                   bool(body.get("default_expression")))
     attempt = await asyncio.to_thread(start_expression_attempt, snap, force=bool(body.get("force")),
                                      ignore_feature_gate=True)
     status = 202 if attempt.state in ("pending", "running") else 200 if attempt.state == "ready" else 409

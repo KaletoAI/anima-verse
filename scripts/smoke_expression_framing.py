@@ -41,6 +41,10 @@ Expected, derived by hand from the spec:
     counts as covered ("broad torso under clothing", no torso_lora). Same bra under a
     shirt (top) that declares covers=[underwear_top]: "a lace bra" out,
     "a plain shirt" in.
+  H the "Generate default expression" request (`default_expression`) keeps
+    the CURRENT outfit (equipped_pieces None -> read from the profile) and
+    an empty mood (the set's default), even when a current feeling is set;
+    the old override body with empty pieces would have passed {} (undressed).
   E render_contract(p, e, "upper_body", prof) != render_contract(p, e, "head", prof);
     and the contract changes when a package stops declaring underwear_top
     `portrait` (the composed prompt would change, so must the hash).
@@ -194,6 +198,18 @@ save_character_profile("demo npc", {**npc, "outfit_worn": False})
 d, d_loras = render("demo npc", {}, "head", image_use_case="expression_head")
 check("red dress" not in d["prompt"] and "torso" not in d["prompt"], "no clothing or body text undressed")
 check("torso_lora" not in d_loras, "no body-slot LoRA in a head frame")
+
+print("H default-expression request")
+from app.routes import characters as char_routes  # noqa: E402
+seen = []
+with patch("app.core.expression_regen.expression_snapshot",
+           lambda name, mood, **kw: seen.append((mood, kw)) or None), \
+        patch.object(char_routes, "get_character_current_feeling", lambda _n: "furious"):
+    char_routes._expression_request("demo", default_expression=True)
+    char_routes._expression_request("demo", "", {}, [], True)
+check(seen[0] == ("", {"equipped_pieces": None, "equipped_items": None}),
+      f"default expression: current outfit, default mood (got {seen[0]})")
+check(seen[1][1]["equipped_pieces"] == {}, "an override with empty pieces is an empty outfit")
 
 print("E/F contract and full render")
 prof = get_character_profile("demo")

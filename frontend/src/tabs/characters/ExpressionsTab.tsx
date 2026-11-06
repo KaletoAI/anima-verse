@@ -122,7 +122,7 @@ export function ExpressionsTab({ character }: { character: string }) {
           </span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <button type="button" className="ga-btn ga-btn-sm" disabled={generation.busy}
-              onClick={() => void generation.start({ override: true, pieces: {}, items: [], force: true })}>
+              onClick={() => void generation.start({ default_expression: true, force: true })}>
               {generation.busy ? t('Rendering…') : t('Generate default expression')}
             </button>
             {generation.error && <span role="alert" style={{ color: 'var(--error)', fontSize: '0.85em' }}>{generation.error}</span>}
