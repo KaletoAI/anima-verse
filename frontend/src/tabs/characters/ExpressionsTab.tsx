@@ -15,6 +15,7 @@ import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { ExpressionCleanupPreview } from './ExpressionCleanupPreview'
+import { useExpressionAttempt } from '@anima/player-ui'
 
 interface Expression {
   file: string
@@ -56,6 +57,9 @@ export function ExpressionsTab({ character }: { character: string }) {
   const [confirmClear, setConfirmClear] = useState(false)
   const [promptOf, setPromptOf] = useState<Expression | null>(null)
   const [busy, setBusy] = useState(false)
+  // Same render path as the default-expression field on the Appearance tab:
+  // the one default variant, forced, for every character and temporary NPC.
+  const generation = useExpressionAttempt(character)
 
   const copyPrompt = async (text: string) => {
     try {
@@ -106,7 +110,7 @@ export function ExpressionsTab({ character }: { character: string }) {
   return (
     <>
       <div className="ga-form" style={{ padding: 0 }}>
-        {/* Header: Clear expression cache */}
+        {/* Header: generate the default expression, clear the expression cache */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           gap: 10, marginBottom: 12, flexWrap: 'wrap',
@@ -116,6 +120,12 @@ export function ExpressionsTab({ character }: { character: string }) {
             {' · '}{files.filter(e => e.status === 'current').length} {t('Current')}
             {' · '}{files.filter(e => e.status !== 'current').length} {t('Historical or unverified')}
           </span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={generation.busy}
+              onClick={() => void generation.start({ override: true, pieces: {}, items: [], force: true })}>
+              {generation.busy ? t('Rendering…') : t('Generate default expression')}
+            </button>
+            {generation.error && <span role="alert" style={{ color: 'var(--error)', fontSize: '0.85em' }}>{generation.error}</span>}
           {confirmClear ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span style={{ fontSize: '0.82em' }}>{t('Clear ALL cached expressions?')}</span>
@@ -130,6 +140,7 @@ export function ExpressionsTab({ character }: { character: string }) {
               {t('Clear expression cache')}
             </button>
           )}
+          </div>
         </div>
         <ExpressionCleanupPreview character={character} onChanged={load} />
 

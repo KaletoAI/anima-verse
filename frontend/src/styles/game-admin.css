@@ -746,30 +746,14 @@ a.ga-btn {
   .ga-detail-cols-3 { grid-template-columns: 1fr; }
 }
 
-/* Template-Auswahl-Leiste über der Sub-Tab-Navigation. */
-.ga-template-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 8px 0;
+/* Template select in the detail toolbar, left of the character name
+   (the title slot is small and muted; the select keeps the normal size). */
+.ga-detail-toolbar-title .ga-template-inline {
+  font-size: 13px;
+  color: var(--text, #e6edf3);
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
-.ga-template-bar-label {
-  font-size: 12px;
-  color: var(--text-muted, #8b949e);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-.ga-template-diff {
-  flex: 1 1 100%;
-  margin-top: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border, #30363d);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  font-size: 12px;
-}
-.ga-template-diff-title { font-weight: 600; margin-bottom: 6px; }
 .ga-template-diff-head { margin-top: 6px; color: var(--text-muted, #8b949e); }
 .ga-template-diff-add { color: #3fb950; }
 .ga-template-diff-rem { color: #e05656; text-decoration: line-through; opacity: 0.85; }

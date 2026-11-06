@@ -28,6 +28,15 @@
       ]
     },
     {
+      "id": "garderobe",
+      "label": "Wardrobe",
+      "label_de": "Garderobe",
+      "columns": [
+        16,
+        17
+      ]
+    },
+    {
       "id": "soul",
       "label": "Soul",
       "label_de": "Soul",

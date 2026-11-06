@@ -1,6 +1,6 @@
 /**
- * TemplateSelector — pick and switch the character template (as in the old
- * UI), above the identity block. Switching goes through
+ * TemplateSelector — pick and switch the character template; a compact select
+ * in the detail toolbar, right-aligned next to the character name. Switching goes through
  * POST /characters/{name}/switch-template:
  *   mode=diff  → shows the fields gained/lost (confirmed in-app, never with a
  *                browser dialog)
@@ -8,6 +8,7 @@
  * Afterwards `onSwitched()` → reload the editor.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -90,24 +91,24 @@ export function TemplateSelector({
 
   const fieldLabel = (f: DiffField) => f.label || f.key
 
+  const current = templates.find((tp) => tp.name === templateId)?.label || templateId
+
   if (locked) {
     return (
-      <div className="ga-template-bar">
-        <label className="ga-template-bar-label">{t('Template')}</label>
-        <span className="ga-input" style={{ width: 'auto', minWidth: 200, opacity: 0.7 }}
-              title={t('Temporary NPCs keep their template — convert is not supported.')}>
-          {templates.find((tp) => tp.name === templateId)?.label || templateId}
-        </span>
-      </div>
+      <span className="ga-input ga-template-inline" style={{ width: 'auto', minWidth: 160, opacity: 0.7 }}
+            title={t('Temporary NPCs keep their template — convert is not supported.')}>
+        {current}
+      </span>
     )
   }
 
   return (
-    <div className="ga-template-bar">
-      <label className="ga-template-bar-label">{t('Template')}</label>
+    <>
       <select
-        className="ga-input"
-        style={{ width: 'auto', minWidth: 200 }}
+        className="ga-input ga-template-inline"
+        style={{ width: 'auto', minWidth: 160 }}
+        aria-label={t('Template')}
+        title={t('Template')}
         value={templateId}
         disabled={busy}
         onChange={(e) => onSelect(e.target.value)}
@@ -122,48 +123,52 @@ export function TemplateSelector({
         ))}
       </select>
 
-      {pending ? (
-        <div className="ga-template-diff">
-          <div className="ga-template-diff-title">
-            {t('Switch template')}: {pending.old_template} → {pending.new_template}
-          </div>
-          {pending.added.length > 0 ? (
-            <div>
-              <div className="ga-template-diff-head">{t('New fields (filled with default):')}</div>
-              {pending.added.map((f) => (
-                <div key={f.key} className="ga-template-diff-add">
-                  + {fieldLabel(f)}
-                  {f.default !== null && f.default !== undefined && f.default !== '' ? ` = ${String(f.default)}` : ''}
-                </div>
-              ))}
+      {/* The select sits in the toolbar next to the name, where nothing may
+          grow: the field diff of a switch is a modal on document.body. */}
+      {pending ? createPortal(
+        <div className="ga-modal-backdrop" role="presentation">
+          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Switch template')}
+               style={{ maxWidth: 560 }}>
+            <div className="ga-modal-header">
+              <h3>{t('Switch template')}: {pending.old_template} → {pending.new_template}</h3>
             </div>
-          ) : null}
-          {pending.removed.length > 0 ? (
-            <div>
-              <div className="ga-template-diff-head">{t('Removed fields (values are lost!):')}</div>
-              {pending.removed.map((f) => (
-                <div key={f.key} className="ga-template-diff-rem">
-                  − {fieldLabel(f)}
-                  {f.current_value ? ` (${String(f.current_value).slice(0, 50)})` : ''}
+            <div className="ga-modal-body" style={{ fontSize: 13 }}>
+              {pending.added.length > 0 ? (
+                <div>
+                  <div className="ga-template-diff-head">{t('New fields (filled with default):')}</div>
+                  {pending.added.map((f) => (
+                    <div key={f.key} className="ga-template-diff-add">
+                      + {fieldLabel(f)}
+                      {f.default !== null && f.default !== undefined && f.default !== '' ? ` = ${String(f.default)}` : ''}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : null}
+              {pending.removed.length > 0 ? (
+                <div>
+                  <div className="ga-template-diff-head">{t('Removed fields (values are lost!):')}</div>
+                  {pending.removed.map((f) => (
+                    <div key={f.key} className="ga-template-diff-rem">
+                      − {fieldLabel(f)}
+                      {f.current_value ? ` (${String(f.current_value).slice(0, 50)})` : ''}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          ) : null}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-primary"
-              disabled={busy}
-              onClick={() => apply(pending.new_template)}
-            >
-              {t('Switch')}
-            </button>
-            <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => setPending(null)}>
-              {t('Cancel')}
-            </button>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" disabled={busy} onClick={() => setPending(null)}>
+                {t('Cancel')}
+              </button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={busy}
+                onClick={() => apply(pending.new_template)}>
+                {t('Switch')}
+              </button>
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
-    </div>
+    </>
   )
 }

@@ -322,16 +322,6 @@
       ]
     },
     {
-      "id": "default_expression",
-      "label": "Default expression",
-      "label_de": "Standard-Ausdruck",
-      "column": 4,
-      "row": 1,
-      "special": "default_expression",
-      "fields": [],
-      "grow": true
-    },
-    {
       "id": "appearance",
       "label": "Appearance",
       "label_de": "Aussehen",
@@ -360,8 +350,8 @@
       "id": "npc_outfit",
       "label": "Outfit (prompt text)",
       "label_de": "Outfit (Prompt-Text)",
-      "column": 5,
-      "row": 1,
+      "column": 16,
+      "row": 0,
       "fields": [
         {
           "key": "outfit_description",
@@ -402,6 +392,16 @@
           "hint_de": "Binärer Bekleidungs-Zustand — auf Nein steht in allen Prompts \"no clothes\" (oder der Text eines installierten Körper-Pakets, plus die unbedeckten Körper-Slots) statt der Outfit-Beschreibung."
         }
       ]
+    },
+    {
+      "id": "outfit_image",
+      "label": "Outfit image",
+      "label_de": "Outfit-Bild",
+      "column": 17,
+      "row": 0,
+      "special": "pose_ref",
+      "fields": [],
+      "grow": true
     },
     {
       "id": "face",

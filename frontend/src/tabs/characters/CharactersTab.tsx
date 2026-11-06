@@ -20,7 +20,6 @@ import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from '@anima/player-ui'
 import { TemplateTab, useExpressionSets } from '@anima/player-ui'
 import { BodyEditor } from '@anima/player-ui'
-import { DefaultExpressionField } from './DefaultExpressionField'
 import { StatsPanel } from './StatsPanel'
 import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
@@ -136,7 +135,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'default_expression', 'model_refs', 'model3d_gen',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
 ])
 
@@ -709,8 +708,9 @@ export function CharactersTab() {
   // `visible_when.feature` names a disabled feature is dropped here, ONCE,
   // before tabs and forms ever see it; a tab left without sections vanishes.
   // A temporary NPC is a different KIND of character sheet, not a stripped
-  // one — its template selector is locked, and its ONE default expression
-  // lives on the Appearance tab (`default_expression` slot), not in a grid.
+  // one — its template selector is locked, and its wardrobe is the template
+  // tab `garderobe` (outfit text + dressed switch + full-body outfit image)
+  // in place of the paper-doll Wardrobe it structurally lacks.
   const isTempNpc = ((template?.features || {}) as Record<string, boolean>).temporary_npc === true
 
   const visibleSections = useMemo(() => {
@@ -757,15 +757,22 @@ export function CharactersTab() {
       const f = specialGate[id]
       return !f || features[f] !== false
     }
-    const afterAussehen = [
+    // A template without the paper-doll wardrobe brings its own field tab
+    // `garderobe`; it sits exactly where the Wardrobe tab would, so both
+    // sheets keep one tab order.
+    const wardrobeField = fieldTabs.find((ft) => ft.tab.id === 'garderobe')
+    const afterAussehen: Array<{ id: string; label: string; translated?: boolean }> = [
       { id: 'image', label: 'Image' },
-      { id: 'wardrobe', label: 'Wardrobe' },
+      ...(wardrobeField
+        ? [{ id: wardrobeField.id, label: wardrobeField.label, translated: true }]
+        : [{ id: 'wardrobe', label: 'Wardrobe' }]),
       { id: 'secrets', label: 'Secrets' },
-    ].filter((s) => gateOk(s.id))
+    ].filter((s) => s.id === wardrobeField?.id || gateOk(s.id))
     const placed = new Set(['image', 'wardrobe', 'secrets'])
     const out: Array<{ id: string; label: string; translated?: boolean }> = []
     let inserted = false
     for (const ft of fieldTabs) {
+      if (ft === wardrobeField) continue
       out.push({ id: ft.id, label: ft.label })
       if (ft.tab.id === 'aussehen') {
         out.push(...afterAussehen)
@@ -894,7 +901,18 @@ export function CharactersTab() {
         ) : (
           <>
             <DetailToolbar
-              title={selected}
+              title={
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <TemplateSelector
+                    character={selected}
+                    templateId={templateId}
+                    onSwitched={() => reloadCurrent(selected)}
+                    locked={isTempNpc}
+                  />
+                  <span aria-hidden="true" style={{ opacity: 0.4 }}>|</span>
+                  <span>{selected}</span>
+                </span>
+              }
               // THE DRAFT. Save exists only while there IS one — a permanently
               // greyed-out button teaches nothing about when it would do
               // something — and its number is the only place the size of the
@@ -1040,12 +1058,6 @@ export function CharactersTab() {
                 </>
               }
             />
-            <TemplateSelector
-              character={selected}
-              templateId={templateId}
-              onSwitched={() => reloadCurrent(selected)}
-              locked={isTempNpc}
-            />
             <nav className="ga-subtabs">
               {subTabs.map((tab) => (
                 <button
@@ -1083,7 +1095,11 @@ export function CharactersTab() {
                           discardSignal={discardSignal}
                         />
                       ),
-                      default_expression: <DefaultExpressionField character={selected} />,
+                      // Full-body default-pose render of the worn outfit; its
+                      // cache key follows the outfit text and the dressed
+                      // switch, so a save shows the matching picture.
+                      pose_ref: <FieldModelRefs character={selected} kinds={['pose']}
+                        refreshKey={String(savedSignal)} />,
                       stats: (
                         <StatsPanel
                           character={selected}

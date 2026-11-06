@@ -22,6 +22,12 @@ import { TemplateField, tmplText, type TmplFieldDef, type DynamicData } from './
 import type { TmplSection } from './TemplateSectionForm'
 import { FieldImage } from './FieldImage'
 
+/** Field types whose input is short (a number, a pick, a calendar day): they
+ *  sit side by side in a section's grid wherever the column is wide enough,
+ *  so a sheet of short fields stays within one screen. Text and prompts
+ *  always take the whole row. */
+const SHORT_TYPES = new Set(['number', 'select', 'character_select', 'season_day'])
+
 const FORCE_READONLY = new Set(['character_name'])
 
 interface TmplTabDef {
@@ -378,6 +384,8 @@ export function TemplateTab({
     const label = (tmplText(f, 'label', lang) || f.key) + (f.required ? ' *' : '')
     const hint = tmplText(f, 'hint', lang)
     const isPrompt = f.type === 'text' && f.multiline
+    // Short inputs share a row in the section grid; text and prompts span it.
+    const short = !isPrompt && SHORT_TYPES.has(String(f.type || ''))
     const imagePreview = typeof f.image_preview === 'string' ? f.image_preview : ''
     const input = isPrompt ? (
       <PromptField
@@ -418,7 +426,7 @@ export function TemplateTab({
     // Side by side (avatar panel): prompt + chips + preview left, image right.
     if (imageBeside && isPrompt && imagePreview) {
       return (
-        <div key={fkey} className="tpl-prompt-beside">
+        <div key={fkey} className="tpl-prompt-beside tpl-field--wide">
           <div className="tpl-prompt-beside-text">
             <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
               {input}
@@ -431,7 +439,7 @@ export function TemplateTab({
       )
     }
     return (
-      <div key={fkey}>
+      <div key={fkey} className={short ? 'tpl-field--short' : 'tpl-field--wide'}>
         <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
           {input}
           {overrideNote}
@@ -459,7 +467,8 @@ export function TemplateTab({
               <div key={s.id}
                 className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
                 <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-                {s.special ? specialSlots?.[String(s.special)] : editableFields(s).map(renderField)}
+                {s.special ? specialSlots?.[String(s.special)]
+                  : <div className="tpl-section-fields">{editableFields(s).map(renderField)}</div>}
               </div>
             ))}
           </div>

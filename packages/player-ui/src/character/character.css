@@ -138,6 +138,21 @@
   margin-bottom: 8px;
 }
 
+/* Fields of one section: short inputs fill the row side by side (as many as
+   fit at 140px each), text and prompt fields span it. A narrow column holds
+   one track, so its fields stack exactly as before. */
+.tpl-section-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  column-gap: 12px;
+}
+.tpl-section-fields > .tpl-field--wide {
+  grid-column: 1 / -1;
+}
+.tpl-section-fields > .tpl-field--short {
+  min-width: 0;
+}
+
 /* A section that declares `grow` in its template takes the height its column
    has left over, and hands it to its single slot child. */
 .tpl-tab-section--grow {
