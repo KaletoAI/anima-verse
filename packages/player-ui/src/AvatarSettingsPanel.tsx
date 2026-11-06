@@ -34,7 +34,7 @@ interface TmplSectionRaw extends TmplSection {
 
 // The social numbers stay admin-only (even where they sit in an allowed column).
 const HIDE_KEYS = ['popularity', 'trustworthiness', 'social_dialog_probability', 'roles', 'romantic_interests']
-const AUSSEHEN_COLS = [1, 6] // identity + face (+ profile picture)
+const AUSSEHEN_COLS = [1, 6, 18] // identity + face (+ profile picture) + expression set
 const KOERPER_COLS = [4, 5] // body editor (species slots) + appearance prompt
 const PREF_COLS = [2, 10] // traits (→ dressing preference only) + TTS
 

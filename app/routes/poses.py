@@ -49,7 +49,12 @@ _TASK_ID_PATTERN = r"^task_[0-9a-f]+$"
 @router.get("/expression-sets")
 def list_expression_sets(_: Dict[str, Any] = Depends(require_admin)):
     from app.core.expression_sets import sets_payload
-    return {"sets": sets_payload()}
+    from app.core.lora_library import entries
+    # Every library LoRA with the backends that have it: a set is not bound
+    # to a backend, the character's routing decides where it renders.
+    loras = sorted(({"name": e.get("lora", ""), "backends": list(e.get("backends") or [])}
+                    for e in entries() if e.get("lora")), key=lambda o: o["name"].lower())
+    return {"sets": sets_payload(), "lora_options": loras}
 
 
 @router.put("/expression-sets/{set_id}")

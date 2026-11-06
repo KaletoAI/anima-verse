@@ -48,7 +48,7 @@ Expected, derived by hand from the spec:
   I an expression render (any framing) is matted with BiRefNet portrait
     (postprocess portrait_matte=True); a full render keeps u2net
     (portrait_matte=False); the matte model is part of the render contract.
-  E render_contract(p, e, "upper_body", prof) != render_contract(p, e, "head", prof);
+  E render_contract([], e, "upper_body", prof) != render_contract([], e, "head", prof);
     and the contract changes when a package stops declaring underwear_top
     `portrait` (the composed prompt would change, so must the hash).
   F a full render (no framing) still carries BODY.
@@ -240,19 +240,19 @@ check(len(mattes) == 2 and mattes[0].get("portrait_matte") is True,
       f"expression render uses the BiRefNet portrait matte (got {mattes[:1]})")
 check(len(mattes) == 2 and not mattes[1].get("portrait_matte"), "a full render keeps the default matte")
 with patch.object(er, "_matte_model", lambda: "u2net"):
-    other = er.render_contract("p", "e", "upper_body", get_character_profile("demo"))
-check(other != er.render_contract("p", "e", "upper_body", get_character_profile("demo")),
+    other = er.render_contract([], "e", "upper_body", get_character_profile("demo"))
+check(other != er.render_contract([], "e", "upper_body", get_character_profile("demo")),
       "the matte model is part of the render contract")
 
 print("E/F contract and full render")
 prof = get_character_profile("demo")
-base = er.render_contract("p", "e", "upper_body", prof)
-check(base != er.render_contract("p", "e", "head", prof), "framing is part of the render contract")
+base = er.render_contract([], "e", "upper_body", prof)
+check(base != er.render_contract([], "e", "head", prof), "framing is part of the render contract")
 with patch("app.core.body_slots.portrait_piece_slots", lambda _p: ("head", "neck", "outer", "top")):
-    check(er.render_contract("p", "e", "upper_body", prof) != base,
+    check(er.render_contract([], "e", "upper_body", prof) != base,
           "the package's portrait clothing slots are part of the render contract")
 with patch.object(body_slots, "slots_for_character", _slots):
-    check(er.render_contract("p", "e", "upper_body", prof) != base,
+    check(er.render_contract([], "e", "upper_body", prof) != base,
           "the portrait body slots are part of the render contract")
 f, _ = render("demo", {"top": coat["id"]}, "")
 check(BODY in f["prompt"], "a full-body render keeps the body appearance")

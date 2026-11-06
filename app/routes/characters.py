@@ -772,8 +772,34 @@ def expression_options(character_name: str, request: Request):
         set_for_character(character_name, profile=profile, catalog=cat)
     except ExpressionSetError as exc:
         error = str(exc)
-    return {"options": [{"value": sid, "label": spec.label} for sid, spec in cat.sets.items()],
+    backend, on_backend = _expression_lora_fit(character_name, cat.sets.values())
+    return {"options": [{"value": sid, "label": spec.label, "lora": spec.lora,
+                         "lora_strength": spec.lora_strength,
+                         "lora_on_backend": on_backend.get(sid)}
+                        for sid, spec in cat.sets.items()],
+            "lora_backend": backend,
             "automatic_set": automatic, "selected_set": selected, "error": error}
+
+
+def _expression_lora_fit(character_name, sets):
+    """The backend this character's expression images route to, and per set
+    whether the LoRA library associates the set's LoRA with it (None = the
+    set has no LoRA or no backend resolves). A preflight that never moves
+    the routing rotation."""
+    from app.core.expression_regen import set_loras
+    try:
+        from app.imagegen.routing import resolve_image_route
+        backend = resolve_image_route("expression", character=character_name, has_ref=True,
+                                      advance_rotation=False).backend
+    except Exception as exc:  # no route, media switched off, empty pool
+        logger.debug("Expression route preflight for %s failed: %s", character_name, exc)
+        return "", {}
+    from app.core.lora_library import unassociated_loras
+    fit = {}
+    for spec in sets:
+        loras = set_loras(spec)
+        fit[spec.id] = (not unassociated_loras(backend, loras)) if loras else None
+    return getattr(backend, "name", "") or "", fit
 
 
 @router.post("/{character_name}/expression-generation")

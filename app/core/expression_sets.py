@@ -28,7 +28,8 @@ class ExpressionSet:
     id: str
     label: str
     default: str
-    pose_prompt: str
+    lora: str              # one LoRA for every render of this set ("" = none)
+    lora_strength: float
     members: tuple[str, ...]
     store: str
 
@@ -50,6 +51,13 @@ def _documents():
     return shared, world
 
 
+def _strength(value) -> float:
+    try:
+        return round(float(value), 2) if value not in (None, "") else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def _snapshot(shared, world) -> ExpressionCatalog:
     entries = {}
     groups = {}
@@ -64,7 +72,7 @@ def _snapshot(shared, world) -> ExpressionCatalog:
         for key, group in doc["groups"].items():
             groups[key] = ExpressionSet(
                 key, str(group.get("label") or key), str(group.get("default") or ""),
-                str(group.get("pose_prompt") or "").strip(),
+                str(group.get("lora") or "").strip(), _strength(group.get("lora_strength")),
                 tuple(group.get("members") or ()), store)
     raw = json.dumps([shared, world], sort_keys=True, ensure_ascii=False)
     return ExpressionCatalog(hashlib.sha256(raw.encode()).hexdigest(),
@@ -85,8 +93,8 @@ def validate_expression_catalog(catalog: ExpressionCatalog, *, legacy_shared_key
     problems = []
     owners = {}
     for sid, spec in catalog.sets.items():
-        if not spec.members or not spec.pose_prompt:
-            problems.append(f"Expression set '{sid}' needs members and a fixed pose")
+        if not spec.members:
+            problems.append(f"Expression set '{sid}' needs members")
         if spec.default not in spec.members:
             problems.append(f"Expression set '{sid}' default is not a member")
         aliases = {}
@@ -196,7 +204,7 @@ def _membership_groups(shared, world, set_id, store, spec):
         return groups
     group = world["groups"].setdefault(set_id, {
         "label": spec.label, "default": spec.default,
-        "pose_prompt": spec.pose_prompt, "members": list(spec.members)})
+        "lora": spec.lora, "lora_strength": spec.lora_strength, "members": list(spec.members)})
     return [group]
 
 
@@ -216,7 +224,8 @@ def replace_set(set_id: str, document: Mapping, *, store: str) -> None:
                 members.append(key)
         doc["groups"][sid] = {"label": str(document.get("label") or sid),
                               "default": str(document.get("default") or ""),
-                              "pose_prompt": str(document.get("pose_prompt") or "").strip(),
+                              "lora": str(document.get("lora") or "").strip(),
+                              "lora_strength": _strength(document.get("lora_strength")),
                               "members": members}
         if store == "shared":
             for key in members:

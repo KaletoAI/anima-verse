@@ -8,10 +8,12 @@ interface ExpressionSet {
   id: string
   label: string
   default: string
-  pose_prompt: string
+  lora: string
+  lora_strength: number
   members: string[]
   store: Store
 }
+interface LoraOption { name: string; backends: string[] }
 interface Props {
   selected: string
   reloadKey: string
@@ -26,6 +28,7 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
   const { t } = useI18n()
   const { toast } = useToast()
   const [sets, setSets] = useState<Record<string, ExpressionSet>>({})
+  const [loraOptions, setLoraOptions] = useState<LoraOption[]>([])
   const [draft, setDraft] = useState<ExpressionSet | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -41,8 +44,9 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
   }
   const load = useCallback(async () => {
     try {
-      const result = await apiGet<{ sets: Record<string, ExpressionSet> }>('/poses/expression-sets')
+      const result = await apiGet<{ sets: Record<string, ExpressionSet>; lora_options: LoraOption[] }>('/poses/expression-sets')
       setSets(result.sets)
+      setLoraOptions(result.lora_options || [])
       setError('')
       return result.sets
     } catch (e) { setError((e as Error).message) }
@@ -68,14 +72,14 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
     setCreating(true)
     setExpanded(true)
     setInitialPrompt('')
-    setDraft({ id: '', label: '', default: '', pose_prompt: '', members: [], store: 'world' })
+    setDraft({ id: '', label: '', default: '', lora: '', lora_strength: 1, members: [], store: 'world' })
   }
   const save = async () => {
     if (!draft || busy) return
     const id = draft.id.trim()
     const initialKey = `${id}_neutral`
-    if (!id || !draft.label.trim() || !draft.pose_prompt.trim() || (creating && !initialPrompt.trim())) {
-      setError(t('A set needs an id, label, fixed pose and an initial expression.'))
+    if (!id || !draft.label.trim() || (creating && !initialPrompt.trim())) {
+      setError(t('A set needs an id, label and an initial expression.'))
       return
     }
     setBusy(true)
@@ -115,7 +119,8 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
       <button type="button" className="ga-btn ga-btn-sm" onClick={() => setExpanded(v => !v)}>{t('Edit set')}</button>
       <button type="button" className="ga-btn ga-btn-sm" disabled={!!changed || busy} onClick={begin}>{t('New set')}</button>
     </div>
-    <p className="ga-field-hint">{t('One image per outfit and expression. Activity poses and temporary states do not create extra images.')}</p>
+    <p className="ga-field-hint">{t('One image per outfit and expression. Activity poses and temporary states do not create extra images.')}
+      {' '}{t('A set LoRA is added to every image of the set; write its trigger words into the expression prompts.')}</p>
     {error && <p role="alert" style={{ color: 'var(--error)' }}>{error}</p>}
     {leaveTo !== null && <div className="ga-form">
       <span>{t('Discard unsaved set changes?')}</span>
@@ -125,7 +130,13 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
     {expanded && draft && <div className="ga-form" style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 8, maxHeight: 'min(40vh, 340px)', overflowY: 'auto' }}>
       <label>{t('Set id')}<input className="ga-input" value={draft.id} disabled={!creating || busy} onChange={e => update({ id: e.target.value })} /></label>
       <label>{t('Label')}<input className="ga-input" value={draft.label} disabled={busy} onChange={e => update({ label: e.target.value })} /></label>
-      <label>{t('Fixed image pose')}<textarea className="ga-input" rows={3} value={draft.pose_prompt} disabled={busy} onChange={e => update({ pose_prompt: e.target.value })} /></label>
+      <label>{t('LoRA')}<select className="ga-input" value={draft.lora} disabled={busy} onChange={e => update({ lora: e.target.value })}>
+        <option value="">{t('None')}</option>
+        {draft.lora && !loraOptions.some(o => o.name === draft.lora) && <option value={draft.lora}>{draft.lora} ({t('missing')})</option>}
+        {loraOptions.map(o => <option key={o.name} value={o.name}>{o.name}{o.backends.length ? ` — ${o.backends.join(', ')}` : ''}</option>)}
+      </select></label>
+      <label>{t('LoRA strength')}<input className="ga-input" type="number" step={0.05} min={0} max={2} value={draft.lora_strength} disabled={busy || !draft.lora}
+        onChange={e => update({ lora_strength: Number(e.target.value) })} /></label>
       <label>{t('Store')}<select className="ga-input" value={draft.store} disabled={busy} onChange={e => update({ store: e.target.value as Store })}>
         <option value="world">{t('World')}</option><option value="shared">{t('Shared')}</option>
       </select></label>

@@ -1552,10 +1552,30 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
         # The admin form must not answer "saved" for a value that is gone
         # after the next reload.
         raise HTTPException(status_code=500, detail="profile not stored")
+    if "expression_set" in fields:
+        _drop_expressions_on_set_switch(character_name, profile, before.get("expression_set"))
     from app.core import sync_topics
     sync_topics.profile_patched(character_name, before, {k: profile.get(k) for k in fields})
     return {"status": "success", "character": character_name,
             "updated_fields": list(fields.keys())}
+
+
+def _drop_expressions_on_set_switch(character_name: str, profile: Dict[str, Any],
+                                    previous: Any) -> None:
+    """Switching the EFFECTIVE expression set drops the expression cache: the
+    old set's images are never shown again. "Automatic" and the set it
+    resolves to are the same set, so that switch keeps the images."""
+    from app.core.expression_sets import set_for_character, ExpressionSetError
+    from app.core.expression_regen import clear_expression_cache
+    try:
+        old = set_for_character(character_name, profile={**profile, "expression_set": previous or ""}).id
+    except ExpressionSetError:
+        old = ""   # the previous set no longer exists: its images are stale anyway
+    new = set_for_character(character_name, profile=profile).id
+    if old != new:
+        removed = clear_expression_cache(character_name)
+        logger.info("Expression set of %s: %s -> %s, %d cached file(s) dropped",
+                    character_name, old or "?", new, removed)
 
 
 def apply_config_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:

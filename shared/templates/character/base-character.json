@@ -104,6 +104,15 @@
         14,
         15
       ]
+    },
+    {
+      "id": "expressions",
+      "label": "Expressions",
+      "label_de": "Ausdrücke",
+      "columns": [
+        18
+      ],
+      "special": "expressions"
     }
   ],
   "sections": [
@@ -111,8 +120,8 @@
       "id": "expression_cfg",
       "label": "Expression images",
       "label_de": "Ausdrucksbilder",
-      "column": 6,
-      "row": 10,
+      "column": 18,
+      "row": 0,
       "fields": [
         {
           "key": "expression_set",

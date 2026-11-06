@@ -47,7 +47,8 @@ def migrate_catalog_metadata():
                                if e.get("_default") and k in (*humanoid.members, *extra)]
             if extra or legacy_defaults:
                 group = {"label": humanoid.label, "default": legacy_defaults[0] if len(legacy_defaults) == 1 else humanoid.default,
-                         "pose_prompt": humanoid.pose_prompt, "members": [*humanoid.members, *extra]}
+                         "lora": humanoid.lora, "lora_strength": humanoid.lora_strength,
+                         "members": [*humanoid.members, *extra]}
                 world["groups"]["humanoid"] = group
             problems = validate_expression_catalog(_snapshot(shared, world))
             if problems:

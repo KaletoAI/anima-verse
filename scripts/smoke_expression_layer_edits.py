@@ -101,7 +101,7 @@ def delete():
 
 def promote():
     animal = es.catalog_snapshot().sets['animal']
-    document = {'label':'World animal','default':animal.default,'pose_prompt':animal.pose_prompt,
+    document = {'label':'World animal','default':animal.default,'lora':animal.lora,
                 'members':list(animal.members)}
     es.replace_set('animal', document, store='world')
     es.edit_entry('update', 'animal_neutral', {'prompt':'a world-specific neutral animal face','store':'world'}, set_id='animal')
@@ -110,7 +110,7 @@ def promote():
     assert snapshot.sets['animal'].store == 'shared' and snapshot.sets['animal'].label == 'Published animal'
     assert snapshot.entries['animal_neutral']['_store'] == 'world'
     assert snapshot.entries['animal_neutral']['prompt'] == 'a world-specific neutral animal face'
-    custom = {'label':'Demo','default':'demo_neutral','pose_prompt':'standing neutrally',
+    custom = {'label':'Demo','default':'demo_neutral',
               'members':['demo_neutral'], 'entries':{'demo_neutral':{'prompt':'a neutral expression'}}}
     es.replace_set('demo', custom, store='world')
     es.replace_set('demo', {k:v for k,v in custom.items() if k != 'entries'}, store='shared')
@@ -136,7 +136,7 @@ def commit():
     assert es.catalog_snapshot().entries['positive']['_store'] == 'world'
 
 def set_delete():
-    es.replace_set('demo', {'label':'Demo','default':'demo_neutral','pose_prompt':'standing neutrally',
+    es.replace_set('demo', {'label':'Demo','default':'demo_neutral',
         'members':['demo_neutral'], 'entries':{'demo_neutral':{'prompt':'a neutral face'}}}, store='shared')
     es.edit_entry('update', 'demo_neutral', {'prompt':'world neutral face','store':'world'}, set_id='demo')
     es.edit_entry('create', 'demo_extra', {'prompt':'a curious face','store':'world'}, set_id='demo')
@@ -152,7 +152,7 @@ def set_delete():
     assert second_world('demo_neutral', False) == marker
 
 def world_only():
-    es.replace_set('demo', {'label':'Demo','default':'demo_neutral','pose_prompt':'standing neutrally',
+    es.replace_set('demo', {'label':'Demo','default':'demo_neutral',
         'members':['demo_neutral'], 'entries':{'demo_neutral':{'prompt':'a neutral face'}}}, store='world')
     before = es.catalog_snapshot().revision
     try:

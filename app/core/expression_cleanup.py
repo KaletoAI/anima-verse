@@ -120,7 +120,7 @@ def _scan(name):
             if sid != spec.id or key not in spec.members:
                 row.update(action="remove", reason="Not in the selected expression set")
                 continue
-            contract = er.render_contract(spec.pose_prompt, cat.entries[key]["prompt"],
+            contract = er.render_contract(er.set_loras(spec), cat.entries[key]["prompt"],
                                           er.expression_framing(profile), profile)
             if contract_proof != contract or meta["neutral_state"] is not True:
                 row.update(action="remove", reason="Obsolete expression render contract")

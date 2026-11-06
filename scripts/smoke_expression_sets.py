@@ -46,7 +46,7 @@ from app.core import decision
 if '--resolver' not in sys.argv:
     response = list_entries(axis='expression', _={})
     assert len(response['groups']['animal']['members']) == 4
-    assert len(response['groups']['humanoid']['members']) == 8
+    assert len(response['groups']['humanoid']['members']) >= 8  # the shipped catalog grows
     old = sqlite3.connect(':memory:')
     old.execute("CREATE TABLE pose_candidates(axis TEXT,raw_text TEXT,nearest_key TEXT,distance REAL,count INTEGER,status TEXT,first_seen TEXT,last_seen TEXT,PRIMARY KEY(axis,raw_text))")
     old.execute("INSERT INTO pose_candidates VALUES('expression','unknown','neutral',0.9,7,'dismissed','first','last')")
@@ -78,7 +78,7 @@ if '--resolver' not in sys.argv:
         raise AssertionError('Effective default deletion must fail')
     except es.ExpressionSetError:
         assert es.catalog_snapshot().revision == before
-    es.replace_set('demo', {'label':'Demo','default':'demo_neutral','pose_prompt':'standing naturally','members':['demo_neutral'],
+    es.replace_set('demo', {'label':'Demo','default':'demo_neutral','members':['demo_neutral'],
         'entries':{'demo_neutral':{'prompt':'neutral expression','synonyms':['neutral']}}}, store='world')
     assert pc.resolve_to_catalog('neutral','expression',set_id='demo')[0] == 'demo_neutral'
     es.delete_set('demo',store='world')

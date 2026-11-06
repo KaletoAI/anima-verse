@@ -155,15 +155,21 @@ def _matte_model() -> str:
     return PORTRAIT_REMBG_MODEL
 
 
-def render_contract(pose_prompt: str, expression_prompt: str, framing: str, profile) -> str:
-    """THE render contract of an expression image: the set's fixed pose, the
+def set_loras(spec) -> list:
+    """The LoRA of an expression set as a render LoRA list ([] without one)."""
+    name = str(getattr(spec, "lora", "") or "").strip()
+    return [{"name": name, "strength": spec.lora_strength}] if name else []
+
+
+def render_contract(loras: list, expression_prompt: str, framing: str, profile) -> str:
+    """THE render contract of an expression image: the set's LoRA, the
     member's facial prompt, the framing (and so the prompt composition, see
     ``render_character_image(framing=...)``) with the slots the species
     packages let into that frame, its use-case style, the image size and
     the background matte.
     The snapshot, the cache check and the cleanup all compare against this
     one value, so changing any of them renders the images anew."""
-    return _digest({"version": 2, "pose_prompt": pose_prompt,
+    return _digest({"version": 2, "loras": list(loras),
                     "expression_prompt": expression_prompt,
                     "framing": framing,
                     "basis": _framing_basis(profile, framing),
@@ -180,7 +186,7 @@ class ExpressionSnapshot:
     outfit_raw: str
     contract: str
     stem: str
-    pose_prompt: str
+    loras: tuple
     expression_prompt: str
     pieces: tuple
     items: tuple
@@ -231,10 +237,11 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
             continue
         prompt = cat.entries[expression]["prompt"]
         framing = expression_framing(profile)
-        contract = render_contract(spec.pose_prompt, prompt, framing, profile)
+        loras = set_loras(spec)
+        contract = render_contract(loras, prompt, framing, profile)
         identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
         return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
-            f"{_safe_name(character)}_{identity[:24]}", spec.pose_prompt, prompt,
+            f"{_safe_name(character)}_{identity[:24]}", _freeze(loras), prompt,
             tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch,
             framing)
 
@@ -250,7 +257,7 @@ def _metadata_matches(meta, request, *, exact=True):
     key = meta.get("expression_key")
     if spec is None or key not in spec.members or (exact and key != request.expression_key):
         return False
-    expected = render_contract(spec.pose_prompt, cat.entries[key]["prompt"], request.framing,
+    expected = render_contract(set_loras(spec), cat.entries[key]["prompt"], request.framing,
                                _thaw(request.profile))
     return meta.get("contract") == expected and (not exact or meta.get("identity") == request.stem)
 
@@ -425,7 +432,8 @@ def _execute(request, aid, force=False):
                     override_width=_w, override_height=_h, framing=request.framing,
                     image_use_case=EXPRESSION_USE_CASES[request.framing],
                     equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
-                    pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
+                    pose_prompt="", expression_prompt=request.expression_prompt,
+                    expression_set_loras=_thaw(request.loras),
                     appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
                 if rendered is None:
                     raise RuntimeError("Expression render failed")
@@ -435,7 +443,7 @@ def _execute(request, aid, force=False):
                 version = content_version(rendered)
                 metadata.update(schema=2, expression_set=request.set_id, expression_key=request.expression_key,
                     outfit_raw=request.outfit_raw, contract=request.contract, identity=request.stem,
-                    pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
+                    expression_loras=_thaw(request.loras), expression_prompt=request.expression_prompt,
                     neutral_state=True, mood=request.mood,
                     content_version=version, image_sha256=hashlib.sha256(rendered.read_bytes()).hexdigest())
                 meta_stage = stage / "publication.json"
@@ -664,7 +672,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            mesh_input_profile: Optional[Dict[str, Any]] = None,
                            backend: str = "", dialog_loras: Optional[list] = None,
                            negative_prompt: str = "",
-                           framing: str = "") -> Optional[Path]:
+                           framing: str = "",
+                           expression_set_loras: Optional[list] = None) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -895,7 +904,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
     # uncovered) slots from render_outfit. Character override first, dedup by name.
     _merged_loras = list(loras_override or [])
     _have = {str(l.get("name")) for l in _merged_loras if isinstance(l, dict)}
-    for _sl in (_rendered.get("loras") or []):
+    # Then the expression set's LoRA (an expression image only). Stored
+    # configuration: the backend gate drops it with a warning where the
+    # library does not associate it, like every other stored LoRA.
+    for _sl in [*(_rendered.get("loras") or []), *(expression_set_loras or [])]:
         if str(_sl.get("name")) not in _have:
             _merged_loras.append(_sl)
             _have.add(str(_sl.get("name")))

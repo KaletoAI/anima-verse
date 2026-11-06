@@ -151,7 +151,7 @@ with patch.object(er,'render_character_image',render):
     catalog_preview = preview_cleanup('demo')
     animal_set = catalog_snapshot().sets['animal']
     sets.replace_set('animal', {'label':'Demo animal','default':animal_set.default,
-        'pose_prompt':animal_set.pose_prompt,'members':list(animal_set.members)}, store='world')
+        'lora':animal_set.lora,'members':list(animal_set.members)}, store='world')
     unchanged_files = fingerprint(folder)
     try:
         apply_cleanup('demo', catalog_preview['revision'])
@@ -236,7 +236,7 @@ with patch.object(er,'render_character_image',render):
     # A set deletion must observe a selection committed by a concurrent import.
     from app.core import character_io as cio
     sets.replace_set('demo_set', {
-        'label': 'Demo set', 'default': 'demo_neutral', 'pose_prompt': 'standing neutrally',
+        'label': 'Demo set', 'default': 'demo_neutral',
         'members': ['demo_neutral'],
         'entries': {'demo_neutral': {'label': 'Neutral', 'prompt': 'a neutral expression', 'synonyms': ['neutral']}},
     }, store='world')
