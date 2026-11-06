@@ -36,9 +36,19 @@ interface Expression {
   provider: string
   service: string
   prompt: string
+  // Every LoRA the render sent (set LoRA, slot LoRAs, character LoRAs),
+  // straight from the image sidecar.
+  loras?: { name: string; strength?: number }[]
   created_at: string
   use_count: number
   last_used_at: number
+}
+
+function loraLabel(e: Expression): string {
+  return (e.loras || [])
+    .filter((l) => l && l.name)
+    .map((l) => (l.strength != null ? `${l.name} (${l.strength})` : l.name))
+    .join(', ')
 }
 
 interface ExpressionsResp {
@@ -211,6 +221,11 @@ export function ExpressionsTab({ character }: { character: string }) {
                         {[e.model, e.seed != null ? `#${e.seed}` : ''].filter(Boolean).join(' · ')}
                       </div>
                     )}
+                    {loraLabel(e) && (
+                      <div style={{ fontSize: '0.7em', opacity: 0.7 }} title={loraLabel(e)}>
+                        🎛 {loraLabel(e)}
+                      </div>
+                    )}
                     {e.created_at && <div style={{ fontSize: '0.68em', opacity: 0.45 }}>{fmtDate(e.created_at)}</div>}
                     {/* Final prompt: view + copy */}
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
@@ -250,6 +265,9 @@ export function ExpressionsTab({ character }: { character: string }) {
                   {promptOf.expression_set ? ` · ${promptOf.expression_set}` : ''}
                 </strong>
                 <button type="button" className="ga-btn ga-btn-sm" onClick={() => setPromptOf(null)}>{t('Close')}</button>
+              </div>
+              <div style={{ fontSize: '0.8em', opacity: 0.8 }}>
+                {t('LoRAs')}: {loraLabel(promptOf) || '—'}
               </div>
               <textarea readOnly value={promptOf.prompt} onFocus={(ev) => ev.currentTarget.select()}
                 style={{
