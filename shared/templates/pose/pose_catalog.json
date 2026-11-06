@@ -1379,6 +1379,19 @@
       "animation": "catch-breath",
       "group": "stand",
       "label_de": "Durchatmen"
+    },
+    "hovering": {
+      "prompt": "hovering weightlessly in mid-air above the ground, legs hanging loose with pointed toes, arms floating slightly away from the body",
+      "synonyms": [
+        "schweben",
+        "in der luft schweben",
+        "levitieren",
+        "hovering",
+        "levitating",
+        "floating in the air"
+      ],
+      "animation": "hover",
+      "group": "stand"
     }
   }
 }

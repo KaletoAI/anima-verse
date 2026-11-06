@@ -1,0 +1,37 @@
+{
+ "kind": "hover",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 91,
+ "duration_s": 3.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 17.82,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -2.61,
+  "rig_floor_min_cm": -2.61,
+  "root_motion": {
+   "mode": "strip",
+   "turn_deg": 0.0,
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [],
+   "max_drift_cm": 0.0
+  },
+  "lift_cm": 30.0
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/hover.py",
+  "spec_sha": "735c6a6ca2767fdacef6d706ed3e2ff31e7f275d3331b14b5d40108a1e016443"
+ }
+}
