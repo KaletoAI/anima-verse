@@ -269,8 +269,14 @@ stops acting autonomously).
   slots in the order Agent > Room > others > Items for face consistency, and outfit decency/compliance.
 - **Reusable expression images:** one current image per character, visible outfit and member of its
   selected expression set. *Game-Admin → Poses → Expressions* edits set members, aliases, default
-  expression and fixed image pose. Automatic selection uses **Humanoid (8)** or **Animal (4)** from
-  the character's body-form template; character and avatar settings can select a set explicitly.
+  expression and an optional set LoRA, and imports members from pasted `label | prompt` lines.
+  Automatic selection uses **Humanoid (8)** or **Animal (4)** from the character's body-form
+  template; the character's *Expressions* tab can select a set explicitly and shows whether the
+  expression backend has the set LoRA. Per outfit, the set's default expression is the **base
+  image** (full character prompt, profile image as reference, never the set LoRA); every other
+  expression is edited from that base image (`expression_edit` instruction + the member's prompt,
+  set LoRA), rendered on demand — a missing base renders first. A new base drops the expressions
+  edited from the old one; the Expressions tab shows one row per outfit with the base first.
   Activity poses, free mood wording and temporary state modifiers do not create extra variants.
   Completed images are reused; an explicit regeneration keeps the last good image until it succeeds.
   Serving falls back only within the same set, outfit and current prompt contract, including when

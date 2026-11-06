@@ -3990,6 +3990,9 @@
     "{body} is a linked character of {leader} — the transformation is set up in {leader}'s Transformation tab.": "{body} ist ein verknüpfter Charakter von {leader} — die Verwandlung wird im Reiter „Verwandlung“ von {leader} eingerichtet.",
     "Configured in the {tab} tab.": "Wird im Reiter „{tab}“ eingerichtet.",
     "Link an existing character": "Vorhandenen Charakter verknüpfen",
-    "It becomes a linked character of this one and goes dormant.": "Er wird ein verknüpfter Charakter dieses Charakters und ruht ab sofort."
+    "It becomes a linked character of this one and goes dormant.": "Er wird ein verknüpfter Charakter dieses Charakters und ruht ab sofort.",
+    "Base": "Basis",
+    "No base expression": "Kein Basis-Ausdruck",
+    "The base expression of this outfit: rendered without the set LoRA, the reference of every other expression": "Der Basis-Ausdruck dieses Outfits: ohne Set-LoRA erzeugt, Referenz für alle anderen Ausdrücke"
   }
 }

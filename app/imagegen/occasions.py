@@ -78,7 +78,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "expression": _image(
         "Expression & outfit variant",
         "Mood/activity variants, wardrobe preview, NPC default variant",
-        ["expression", "expression_head", "outfit"], _CHAR, **_PEOPLE),
+        ["expression", "expression_head", "expression_edit", "outfit"], _CHAR, **_PEOPLE),
     "tpose": _image(
         "T-pose main reference", "Standard pose reference, main mesh input",
         ["tpose", "tpose_animal", "outfit"],

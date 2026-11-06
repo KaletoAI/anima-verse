@@ -120,8 +120,7 @@ def _scan(name):
             if sid != spec.id or key not in spec.members:
                 row.update(action="remove", reason="Not in the selected expression set")
                 continue
-            contract = er.render_contract(er.set_loras(spec), cat.entries[key]["prompt"],
-                                          er.expression_framing(profile), profile)
+            contract = er.member_contract(cat, spec, key, er.expression_framing(profile), profile)
             if contract_proof != contract or meta["neutral_state"] is not True:
                 row.update(action="remove", reason="Obsolete expression render contract")
                 continue
@@ -248,6 +247,9 @@ def inventory(character):
             "expression_set": meta.get("expression_set", ""), "expression_key": meta.get("expression_key", ""),
             "expression_label": cat.entries.get(meta.get("expression_key"), {}).get("label", meta.get("expression_key", "")),
             "outfit_raw": meta.get("outfit_raw", ""), "contract": meta.get("contract", ""),
+            # The outfit's base image (the set's default member) leads its row.
+            "is_base": bool(meta.get("expression_set") in cat.sets
+                            and cat.sets[meta.get("expression_set")].default == meta.get("expression_key")),
             "status": "current" if row["action"] == "keep" else "unverified" if row["action"] == "review" else "historical",
             "reason": row["reason"], "version": content_version(file),
             "equipped_pieces": {slot: item_name(iid) for slot, iid in (meta.get("equipped_pieces") or {}).items()},

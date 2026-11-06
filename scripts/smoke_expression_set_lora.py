@@ -12,15 +12,20 @@ have a fixed image pose.
 Expected values, derived by hand from that spec:
   A the shipped catalog file has no "pose_prompt" in any group; the shipped
     sets humanoid/animal have lora "" (strength 1.0).
-  B replace_set('emote', lora "emote_v2.safetensors", strength 0.8, one
-    member "emote_neutral" prompt "make the woman neutral") -> the set reads
-    back lora "emote_v2.safetensors", lora_strength 0.8.
-  C a character on set "emote": its snapshot carries loras
-    [{"name": "emote_v2.safetensors", "strength": 0.8}] and the prompt
-    "make the woman neutral"; its render contract differs from the same
-    contract with loras [] (a LoRA change re-renders).
-  D the render payload's LoRAs contain emote_v2.safetensors at 0.8, and the
-    prompt carries no former set pose ("standing naturally upright").
+  B replace_set('emote', lora "emote_v2.safetensors", strength 0.8, members
+    "emote_neutral" (default, "make the woman neutral") and "emote_happy"
+    ("make the woman happy")) -> the set reads back lora
+    "emote_v2.safetensors", lora_strength 0.8.
+  C (2026-11-07: the default member is the outfit's BASE image, rendered
+    without the set LoRA; every other member is derived from it WITH the
+    LoRA) a character on set "emote": the default snapshot carries loras []
+    and the prompt "make the woman neutral"; the "emote_happy" snapshot
+    carries loras [{"name": "emote_v2.safetensors", "strength": 0.8}] and
+    its render contract differs from the same contract with loras [] (a
+    LoRA change re-renders).
+  D the derived render payload's LoRAs are exactly [emote_v2.safetensors at
+    0.8], and its prompt carries no former set pose ("standing naturally
+    upright").
   E switching humanoid -> emote deletes the cached expression files (2 -> 0);
     switching "" (Automatic, resolves to humanoid) -> "humanoid" keeps them.
   G import into "emote" from pasted lines: "0 | Frustrated | make the woman
@@ -81,19 +86,25 @@ check(all(cat.sets[s].lora == "" and cat.sets[s].lora_strength == 1.0 for s in (
       "shipped sets have no LoRA")
 
 print("B a set with a LoRA")
-es.replace_set("emote", {"label": "Emote", "default": "emote_neutral", "members": ["emote_neutral"],
+es.replace_set("emote", {"label": "Emote", "default": "emote_neutral",
+                         "members": ["emote_neutral", "emote_happy"],
                          "lora": "emote_v2.safetensors", "lora_strength": 0.8,
                          "entries": {"emote_neutral": {"prompt": "make the woman neutral",
-                                                       "synonyms": ["neutral"]}}}, store="world")
+                                                       "synonyms": ["neutral"]},
+                                     "emote_happy": {"prompt": "make the woman happy",
+                                                     "synonyms": ["emote happy"]}}}, store="world")
 spec = es.catalog_snapshot().sets["emote"]
 check((spec.lora, spec.lora_strength) == ("emote_v2.safetensors", 0.8), f"set reads back its LoRA ({spec.lora}, {spec.lora_strength})")
 
 print("C snapshot and contract")
 assert save_character_profile("demo", {"template": "human-roleplay", "face_appearance": "oval face",
                                        "expression_set": "emote"}, create_new=True)
-snap = er.expression_snapshot("demo", "")
-check(er._thaw(snap.loras) == [{"name": "emote_v2.safetensors", "strength": 0.8}], f"snapshot carries the set LoRA ({er._thaw(snap.loras)})")
-check(snap.expression_prompt == "make the woman neutral", "snapshot carries the member prompt")
+base = er.expression_snapshot("demo", "")
+check(base.is_base and er._thaw(base.loras) == [] and base.expression_prompt == "make the woman neutral",
+      f"the default member is the base image without LoRA ({er._thaw(base.loras)})")
+snap = er.expression_snapshot("demo", "emote_happy")
+check(er._thaw(snap.loras) == [{"name": "emote_v2.safetensors", "strength": 0.8}], f"a derived snapshot carries the set LoRA ({er._thaw(snap.loras)})")
+check(snap.expression_prompt == "make the woman happy", "snapshot carries the member prompt")
 profile = get_character_profile("demo")
 check(snap.contract != er.render_contract([], snap.expression_prompt, snap.framing, profile),
       "the set LoRA is part of the render contract")
@@ -116,11 +127,12 @@ cap = _Capture()
 with patch("app.imagegen.service.get_image_service", lambda: cap):
     er.render_character_image("demo", output_stem=STORAGE / "x", equipped_pieces={}, equipped_items=[],
                               pose_prompt="", expression_prompt=snap.expression_prompt, framing=snap.framing,
+                              bare_prompt=snap.expression_prompt, image_use_case=er.EXPRESSION_EDIT_USE_CASE,
                               expression_set_loras=er._thaw(snap.loras),
                               apply_state_modifiers=False, neutral_state=True)
 payload = cap.payloads[-1]
 print("  prompt:", payload["prompt"], " loras:", payload.get("loras"))
-check({"name": "emote_v2.safetensors", "strength": 0.8} in (payload.get("loras") or []), "the set LoRA reaches the render")
+check(payload.get("loras") == [{"name": "emote_v2.safetensors", "strength": 0.8}], "exactly the set LoRA reaches the derived render")
 check("standing naturally upright" not in payload["prompt"], "no fixed set pose in the prompt")
 
 print("E a set switch drops the cache")
@@ -155,10 +167,10 @@ again = es.import_entries("emote", LINES)
 check(again["created"] == 0 and len(again["skipped"]) == 4, "a repeated import creates nothing")
 before = es.catalog_snapshot().revision
 try:
-    es.import_entries("emote", "1 | Happy | make the woman happy\njust text")
+    es.import_entries("emote", "1 | Joyful | make the woman joyful\njust text")
     check(False, "a malformed line must reject the import")
 except es.ExpressionSetError:
-    check(es.catalog_snapshot().revision == before and "emote_happy" not in es.catalog_snapshot().entries,
+    check(es.catalog_snapshot().revision == before and "emote_joyful" not in es.catalog_snapshot().entries,
           "a malformed line rejects the whole import")
 
 print("F LoRA fit on the character's expression backend")

@@ -39,6 +39,9 @@ interface Expression {
   // Every LoRA the render sent (set LoRA, slot LoRAs, character LoRAs),
   // straight from the image sidecar.
   loras?: { name: string; strength?: number }[]
+  // The set's default member: the outfit's base image every other
+  // expression of the outfit is edited from.
+  is_base?: boolean
   created_at: string
   use_count: number
   last_used_at: number
@@ -49,6 +52,23 @@ function loraLabel(e: Expression): string {
     .filter((l) => l && l.name)
     .map((l) => (l.strength != null ? `${l.name} (${l.strength})` : l.name))
     .join(', ')
+}
+
+// One row per outfit (set + outfit identity): the base expression first, the
+// rest newest first; rows keep the order of their newest image (the server
+// sorts newest first).
+function groupByOutfit(files: Expression[]): { key: string; items: Expression[] }[] {
+  const groups = new Map<string, Expression[]>()
+  for (const e of files) {
+    const key = `${e.expression_set}\u0000${e.outfit_raw}`
+    const list = groups.get(key)
+    if (list) list.push(e)
+    else groups.set(key, [e])
+  }
+  return [...groups.entries()].map(([key, items]) => ({
+    key,
+    items: [...items.filter((e) => e.is_base), ...items.filter((e) => !e.is_base)],
+  }))
 }
 
 interface ExpressionsResp {
@@ -157,8 +177,17 @@ export function ExpressionsTab({ character }: { character: string }) {
         {files.length === 0 ? (
           <div className="ga-placeholder">{t('No cached expressions yet')}</div>
         ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {groupByOutfit(files).map((g) => (
+              <div key={g.key}>
+                {/* One row per outfit: its base expression first, then the expressions edited from it */}
+                <div style={{ fontSize: '0.82em', marginBottom: 6, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                  <strong title={g.items[0].outfit_raw}>{piecesText(g.items[0].equipped_pieces) || t('No equipped pieces')}</strong>
+                  <span style={{ opacity: 0.6 }}>{g.items[0].expression_set || t('Legacy')} · {g.items.length} {g.items.length === 1 ? t('expression') : t('expressions')}</span>
+                  {!g.items[0].is_base && <span style={{ opacity: 0.6 }}>· {t('No base expression')}</span>}
+                </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
-            {files.map((e) => {
+            {g.items.map((e) => {
               const confirming = confirmDel === e.file
               const pieces = piecesText(e.equipped_pieces)
               const tip = [
@@ -206,11 +235,14 @@ export function ExpressionsTab({ character }: { character: string }) {
                   <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <div style={{ fontSize: '0.82em', fontWeight: 600 }} title={e.mood}>
                       {e.expression_label || e.expression_key || t('Unverified')}
+                      {e.is_base && <span style={{ marginLeft: 6, fontSize: '0.85em', fontWeight: 400, opacity: 0.75 }}
+                        title={t('The base expression of this outfit: rendered without the set LoRA, the reference of every other expression')}>
+                        ★ {t('Base')}
+                      </span>}
                     </div>
                     <div style={{ fontSize: '0.78em', opacity: 0.85 }}>
                       {e.expression_set || t('Legacy')} · {e.status === 'current' ? t('Current') : e.status === 'historical' ? t('Historical') : t('Unverified')}
                     </div>
-                    <div style={{ fontSize: '0.72em', opacity: 0.6 }} title={e.outfit_raw}>{pieces || e.outfit_raw || t('No equipped pieces')}</div>
                     {e.service && (
                       <div style={{ fontSize: '0.7em', opacity: 0.55 }} title={e.service}>
                         ⚙ {e.service}
@@ -242,6 +274,9 @@ export function ExpressionsTab({ character }: { character: string }) {
                 </div>
               )
             })}
+          </div>
+              </div>
+            ))}
           </div>
         )}
 

@@ -174,6 +174,11 @@ with patch.object(er,'render_character_image',render):
     assert preview.status_code == 200, preview.text
     assert client.post('/characters/demo/expression-cleanup',json={'revision':'stale'}).status_code == 409
     assert er.delete_expression('demo',human_file.name)
+    # "happy" is derived since 2026-11-07: rendering it also rendered the
+    # humanoid BASE image of the outfit, which a fallback rightly serves.
+    for side in er._get_expressions_dir('demo').glob('*.json'):
+        if json.loads(side.read_text()).get('expression_set') == 'humanoid':
+            assert er.delete_expression('demo', side.with_suffix(human_file.suffix).name)
     assert client.get('/characters/demo/outfit-expression?mood=happy&fallback=default').status_code == 404, 'Historical animal image leaked into humanoid fallback'
 print('PASS real HTTP auth, set-local fallback, ETag, disabled generation and frozen same-byte Force attempts')
 client.close()

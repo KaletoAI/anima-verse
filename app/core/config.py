@@ -654,6 +654,21 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the character's face emphasizing the facial expression.",
         },
     },
+    # A derived expression image: the outfit's base expression image is the
+    # only reference and this style is the edit instruction; the member's
+    # facial prompt follows it (expression_regen._render_derived).
+    "expression_edit": {
+        "keywords": {
+            "prompt_style": "Keep the image exactly as it is: the same person, same clothing, same pose, same framing and background. Only change their facial expression:",
+            "prompt_negative": _NEG_EXPRESSION,
+            "prompt_instruction": "",
+        },
+        "natural": {
+            "prompt_style": "Keep the image exactly as it is: the same person, same clothing, same pose, same framing and background. Only change their facial expression:",
+            "prompt_negative": _NEG_EXPRESSION,
+            "prompt_instruction": "",
+        },
+    },
     "instagram": {
         "keywords": {
             "prompt_style": "candid smartphone photo, natural light, lifestyle, vibrant, high detail",

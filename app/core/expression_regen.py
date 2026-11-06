@@ -161,21 +161,46 @@ def set_loras(spec) -> list:
     return [{"name": name, "strength": spec.lora_strength}] if name else []
 
 
-def render_contract(loras: list, expression_prompt: str, framing: str, profile) -> str:
+def render_contract(loras: list, expression_prompt: str, framing: str, profile,
+                    base: str = "") -> str:
     """THE render contract of an expression image: the set's LoRA, the
     member's facial prompt, the framing (and so the prompt composition, see
     ``render_character_image(framing=...)``) with the slots the species
     packages let into that frame, its use-case style, the image size and
-    the background matte.
+    the background matte. ``base`` is the contract of the outfit's base
+    image a derived expression is edited from (with the edit style).
     The snapshot, the cache check and the cleanup all compare against this
     one value, so changing any of them renders the images anew."""
-    return _digest({"version": 2, "loras": list(loras),
+    return _digest({"version": 3, "loras": list(loras),
                     "expression_prompt": expression_prompt,
                     "framing": framing,
                     "basis": _framing_basis(profile, framing),
                     "style": _style_fingerprint(EXPRESSION_USE_CASES[framing]),
                     "size": list(expression_image_size()),
-                    "matte": _matte_model()})
+                    "matte": _matte_model(),
+                    **({"base": base, "edit_style": _style_fingerprint(EXPRESSION_EDIT_USE_CASE)}
+                       if base else {})})
+
+
+# The use case whose style is the edit instruction of a derived expression:
+# "keep the image, change only the facial expression".
+EXPRESSION_EDIT_USE_CASE = "expression_edit"
+
+
+def member_contract(cat, spec, key: str, framing: str, profile) -> str:
+    """The render contract of set member ``key`` (2026-11-07 user decision).
+
+    The set's default expression is the outfit's BASE image: the full
+    character prompt, the profile image as reference, never the set LoRA —
+    a face-trained LoRA pulls the frame onto the face. Every other member is
+    DERIVED from that base image: the base is its only reference, the prompt
+    is the edit instruction plus the member's prompt, and the set LoRA
+    applies. A derived contract carries the base contract, so a base change
+    re-renders its expressions."""
+    base = render_contract([], cat.entries[spec.default]["prompt"], framing, profile)
+    if key == spec.default:
+        return base
+    return render_contract(set_loras(spec), cat.entries[key]["prompt"], framing, profile, base=base)
 
 
 @dataclass(frozen=True)
@@ -194,6 +219,9 @@ class ExpressionSnapshot:
     mood: str
     epoch: int
     framing: str = "upper_body"
+    # The set's default member: the outfit's base image (no set LoRA, no
+    # base reference). False = a derived expression edited from the base.
+    is_base: bool = True
 
 
 def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None, equipped_items=None):
@@ -235,15 +263,32 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
                 continue
         if expression not in spec.members:
             continue
-        prompt = cat.entries[expression]["prompt"]
-        framing = expression_framing(profile)
-        loras = set_loras(spec)
-        contract = render_contract(loras, prompt, framing, profile)
-        identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
-        return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
-            f"{_safe_name(character)}_{identity[:24]}", _freeze(loras), prompt,
-            tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch,
-            framing)
+        return _member_snapshot(character, cat, spec, expression, outfit, pieces, items,
+                                profile, mood, epoch)
+
+
+def _member_snapshot(character, cat, spec, key, outfit, pieces, items, profile, mood, epoch):
+    prompt = cat.entries[key]["prompt"]
+    framing = expression_framing(profile)
+    is_base = key == spec.default
+    loras = [] if is_base else set_loras(spec)
+    contract = member_contract(cat, spec, key, framing, profile)
+    identity = _digest({"version": 2, "set_id": spec.id, "expression_key": key, "outfit_raw": outfit, "contract": contract})
+    return ExpressionSnapshot(character, spec.id, key, outfit, contract,
+        f"{_safe_name(character)}_{identity[:24]}", _freeze(loras), prompt,
+        tuple(sorted(dict(pieces).items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch,
+        framing, is_base)
+
+
+def base_snapshot(request):
+    """The base-image request of a derived expression: the set's default
+    member for the same outfit, profile and epoch."""
+    from app.core.expression_sets import catalog_snapshot
+    cat = catalog_snapshot()
+    spec = cat.sets[request.set_id]
+    return _member_snapshot(request.character, cat, spec, spec.default, request.outfit_raw,
+                            dict(request.pieces), list(request.items), _thaw(request.profile),
+                            "", request.epoch)
 
 
 def _metadata_matches(meta, request, *, exact=True):
@@ -257,8 +302,7 @@ def _metadata_matches(meta, request, *, exact=True):
     key = meta.get("expression_key")
     if spec is None or key not in spec.members or (exact and key != request.expression_key):
         return False
-    expected = render_contract(set_loras(spec), cat.entries[key]["prompt"], request.framing,
-                               _thaw(request.profile))
+    expected = member_contract(cat, spec, key, request.framing, _thaw(request.profile))
     return meta.get("contract") == expected and (not exact or meta.get("identity") == request.stem)
 
 
@@ -402,6 +446,80 @@ def _allowed(request, ignore_feature_gate):
     return is_feature_enabled(request.character, "expression_variants_enabled")
 
 
+def _edit_reference_supported(character) -> bool:
+    """Whether the backend this character's expressions route to takes a
+    reference image — the base-image edit needs one slot. A backend without
+    (pure txt2img) renders the expression from scratch instead. An
+    unresolvable route answers True: the render itself then fails loudly."""
+    try:
+        from app.imagegen.routing import resolve_image_route
+        backend = resolve_image_route("expression", character=character, has_ref=True,
+                                      advance_rotation=False).backend
+    except Exception:
+        return True
+    try:
+        return int(getattr(backend, "ref_slot_count", 1) or 0) >= 1
+    except (TypeError, ValueError):
+        return True
+
+
+def _render_derived(request, stage: Path, base_image: Path):
+    """Edits the outfit's base image into this member's expression: the base
+    is the ONLY reference (flattened onto white — the matted base is
+    transparent), the prompt is the edit instruction of the
+    ``expression_edit`` use case plus the member's prompt, and only the set
+    LoRA applies. Clothing, framing and pose come from the base image."""
+    from PIL import Image
+    from app.core.model_refs import get_model_refs_dir
+    # The service takes a reference override only from model_refs; a private
+    # workspace there keeps the flattened copy out of every listing.
+    with tempfile.TemporaryDirectory(prefix=".expression-base_",
+                                     dir=get_model_refs_dir(request.character)) as workspace:
+        flat = Path(workspace) / "base.png"
+        with Image.open(base_image) as image:
+            rgba = image.convert("RGBA")
+            canvas = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            canvas.alpha_composite(rgba)
+            canvas.convert("RGB").save(flat, "PNG")
+        _w, _h = expression_image_size()
+        return render_character_image(request.character, output_stem=stage / request.stem,
+            override_width=_w, override_height=_h, framing=request.framing,
+            image_use_case=EXPRESSION_EDIT_USE_CASE,
+            equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
+            pose_prompt="", expression_prompt=request.expression_prompt,
+            bare_prompt=request.expression_prompt, reference_image=flat,
+            expression_set_loras=_thaw(request.loras),
+            appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
+
+
+def _drop_stale_derived(folder: Path, base_request, base_sha: str) -> int:
+    """A newly published base image replaces the reference of every
+    expression edited from an older one (same set, same outfit): those are
+    removed and render again on demand. Caller holds the publication lock."""
+    removed = 0
+    for sidecar in folder.glob("*.json"):
+        if sidecar.is_symlink():
+            continue
+        try:
+            meta = json.loads(sidecar.read_text())
+        except (OSError, ValueError):
+            continue
+        if (not isinstance(meta, dict) or meta.get("expression_set") != base_request.set_id
+                or meta.get("outfit_raw") != base_request.outfit_raw
+                or not meta.get("base_sha256") or meta.get("base_sha256") == base_sha):
+            continue
+        for ext in _IMAGE_EXTS:
+            image = sidecar.with_suffix(ext)
+            if image.is_file() and not image.is_symlink():
+                image.unlink()
+        sidecar.unlink()
+        removed += 1
+    if removed:
+        logger.info("Expression base of %s changed: %d derived expression(s) dropped",
+                    base_request.character, removed)
+    return removed
+
+
 def _execute(request, aid, force=False):
     from app.core.http_files import content_version
     with render_lock(request.character):
@@ -423,18 +541,34 @@ def _execute(request, aid, force=False):
         if not folder.parent.is_dir() or folder.is_symlink():
             _finish(aid, "invalidated", error="Character storage is unavailable")
             return None
+        # A derived expression needs its outfit's base image first — rendered
+        # here, on demand, when it is missing (never ahead for every outfit).
+        base_image = None
+        if not request.is_base:
+            base = base_snapshot(request)
+            base_image = get_cached_expression(base)
+            if base_image is None:
+                base_attempt, _ = _register(base)
+                base_image = _execute(base, base_attempt.attempt_id)
+            if base_image is None:
+                _finish(aid, "failed", error="The outfit's base expression could not be rendered")
+                return None
         folder.mkdir(exist_ok=True)
         try:
             with tempfile.TemporaryDirectory(prefix=".expression-", dir=folder) as stage:
                 stage = Path(stage)
-                _w, _h = expression_image_size()
-                rendered = render_character_image(request.character, output_stem=stage / request.stem,
-                    override_width=_w, override_height=_h, framing=request.framing,
-                    image_use_case=EXPRESSION_USE_CASES[request.framing],
-                    equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
-                    pose_prompt="", expression_prompt=request.expression_prompt,
-                    expression_set_loras=_thaw(request.loras),
-                    appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
+                edit = base_image is not None and _edit_reference_supported(request.character)
+                if edit:
+                    rendered = _render_derived(request, stage, base_image)
+                else:
+                    _w, _h = expression_image_size()
+                    rendered = render_character_image(request.character, output_stem=stage / request.stem,
+                        override_width=_w, override_height=_h, framing=request.framing,
+                        image_use_case=EXPRESSION_USE_CASES[request.framing],
+                        equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
+                        pose_prompt="", expression_prompt=request.expression_prompt,
+                        expression_set_loras=_thaw(request.loras),
+                        appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
                 if rendered is None:
                     raise RuntimeError("Expression render failed")
                 metadata = json.loads(rendered.with_suffix(".json").read_text())
@@ -444,8 +578,13 @@ def _execute(request, aid, force=False):
                 metadata.update(schema=2, expression_set=request.set_id, expression_key=request.expression_key,
                     outfit_raw=request.outfit_raw, contract=request.contract, identity=request.stem,
                     expression_loras=_thaw(request.loras), expression_prompt=request.expression_prompt,
-                    neutral_state=True, mood=request.mood,
+                    neutral_state=True, mood=request.mood, expression_base=request.is_base,
                     content_version=version, image_sha256=hashlib.sha256(rendered.read_bytes()).hexdigest())
+                if base_image is not None:
+                    # Which base this expression was edited from ("full" = the
+                    # backend had no reference slot, rendered from scratch).
+                    metadata.update(base_file=base_image.name, expression_mode="edit" if edit else "full",
+                                    base_sha256=hashlib.sha256(base_image.read_bytes()).hexdigest())
                 meta_stage = stage / "publication.json"
                 meta_stage.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
                 with keyed_lock("character_profile", request.character):
@@ -476,6 +615,8 @@ def _execute(request, aid, force=False):
                                 else:
                                     sidecar.unlink(missing_ok=True)
                                 raise
+                            if request.is_base:
+                                _drop_stale_derived(folder, request, metadata["image_sha256"])
                 _finish(aid, "ready", version=version)
                 return target
         except Exception as exc:
@@ -922,6 +1063,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
             payload["loras_explicit"] = True
     elif _merged_loras and bare_prompt is None:
         payload["loras"] = _merged_loras
+    elif bare_prompt is not None and expression_set_loras:
+        # A derived expression edits the base image: only the set LoRA —
+        # the character and slot LoRAs already shaped the base.
+        payload["loras"] = list(expression_set_loras)
     payload["image_use_case"] = image_use_case
     # Fabric only exists in the picture when something is actually worn —
     # pieces or the free-text wardrobe, both of which land in outfit_desc.
