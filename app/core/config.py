@@ -104,6 +104,11 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
               "plastic skin, smooth flawless skin, overexposed, glossy, fantasy, "
               "studio lighting, posed, cartoon, drawing, sketch, watermark, "
               "signature, text, logo, deformed, blurry, low quality")
+# Expression images are framed from the waist up. An outfit text that names
+# skirt and shoes pulls the whole figure into the frame (Luisa Weber,
+# 2026-11-06), so the lower body is excluded explicitly as well.
+_NEG_EXPRESSION = (_NEG_PHOTO + ", full body shot, full length, legs, knees, "
+                   "feet, shoes, high heels")
 
 # Negatives of the mesh-input renders — ONE text per use case, shared by both
 # style families (deliberately NOT _NEG_PHOTO: "posed"/"studio lighting" would
@@ -625,13 +630,13 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     "expression": {
         "keywords": {
-            "prompt_style": "RAW photo, upper body portrait, head and shoulders to waist, natural light, skin texture, detailed face, expressive, high detail",
-            "prompt_negative": _NEG_PHOTO,
+            "prompt_style": "RAW photo, medium shot, upper body portrait framed from the waist up, frame ends at the waist, legs out of frame, natural light, skin texture, detailed face, expressive, high detail",
+            "prompt_negative": _NEG_EXPRESSION,
             "prompt_instruction": "Write comma-separated tags emphasizing the character's facial expression and pose. Framing is upper body, head and shoulders to waist.",
         },
         "natural": {
-            "prompt_style": "a candid upper body portrait, head and shoulders to waist, emphasizing the character's facial expression and pose, natural light, high detail",
-            "prompt_negative": _NEG_PHOTO,
+            "prompt_style": "a candid medium-shot portrait framed from the waist up, the frame ends at the waist so legs and shoes are out of frame, emphasizing the character's facial expression, natural light, high detail",
+            "prompt_negative": _NEG_EXPRESSION,
             "prompt_instruction": "Describe the character emphasizing facial expression and pose.",
         },
     },
