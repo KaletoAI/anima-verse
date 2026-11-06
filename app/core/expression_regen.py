@@ -136,15 +136,30 @@ def expression_image_size() -> tuple:
     return _px("expression_image_width"), _px("expression_image_height")
 
 
-def render_contract(pose_prompt: str, expression_prompt: str, framing: str) -> str:
+def _framing_basis(profile, framing: str) -> dict:
+    """What the species packages let into the frame: the clothing slots and
+    body slots (with their prompt texts) declared ``portrait``/``face``. A
+    package changing that declaration changes the composed prompt, so it
+    belongs into the render contract."""
+    from app.core.body_slots import slots_for_character, portrait_piece_slots
+    profile = dict(profile or {})
+    slots = [s for s in slots_for_character("", profile=profile)
+             if s.face or (framing == "upper_body" and s.portrait)]
+    return {"pieces": list(portrait_piece_slots(profile)) if framing == "upper_body" else [],
+            "slots": sorted([s.id, s.covered_by, s.prompt] for s in slots)}
+
+
+def render_contract(pose_prompt: str, expression_prompt: str, framing: str, profile) -> str:
     """THE render contract of an expression image: the set's fixed pose, the
     member's facial prompt, the framing (and so the prompt composition, see
-    ``render_character_image(framing=...)``), its use-case style and the
-    image size. The snapshot, the cache check and the cleanup all compare
-    against this one value, so changing any of them renders the images anew."""
+    ``render_character_image(framing=...)``) with the slots the species
+    packages let into that frame, its use-case style and the image size.
+    The snapshot, the cache check and the cleanup all compare against this
+    one value, so changing any of them renders the images anew."""
     return _digest({"version": 2, "pose_prompt": pose_prompt,
                     "expression_prompt": expression_prompt,
                     "framing": framing,
+                    "basis": _framing_basis(profile, framing),
                     "style": _style_fingerprint(EXPRESSION_USE_CASES[framing]),
                     "size": list(expression_image_size())})
 
@@ -208,7 +223,7 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
             continue
         prompt = cat.entries[expression]["prompt"]
         framing = expression_framing(profile)
-        contract = render_contract(spec.pose_prompt, prompt, framing)
+        contract = render_contract(spec.pose_prompt, prompt, framing, profile)
         identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
         return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
             f"{_safe_name(character)}_{identity[:24]}", spec.pose_prompt, prompt,
@@ -227,7 +242,8 @@ def _metadata_matches(meta, request, *, exact=True):
     key = meta.get("expression_key")
     if spec is None or key not in spec.members or (exact and key != request.expression_key):
         return False
-    expected = render_contract(spec.pose_prompt, cat.entries[key]["prompt"], request.framing)
+    expected = render_contract(spec.pose_prompt, cat.entries[key]["prompt"], request.framing,
+                               _thaw(request.profile))
     return meta.get("contract") == expected and (not exact or meta.get("identity") == request.stem)
 
 

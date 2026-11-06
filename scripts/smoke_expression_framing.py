@@ -41,7 +41,9 @@ Expected, derived by hand from the spec:
     counts as covered ("broad torso under clothing", no torso_lora). Same bra under a
     shirt (top) that declares covers=[underwear_top]: "a lace bra" out,
     "a plain shirt" in.
-  E render_contract(p, e, "upper_body") != render_contract(p, e, "head").
+  E render_contract(p, e, "upper_body", prof) != render_contract(p, e, "head", prof);
+    and the contract changes when a package stops declaring underwear_top
+    `portrait` (the composed prompt would change, so must the hash).
   F a full render (no framing) still carries BODY.
 
 Usage: ./.venv/bin/python scripts/smoke_expression_framing.py
@@ -194,8 +196,15 @@ check("red dress" not in d["prompt"] and "torso" not in d["prompt"], "no clothin
 check("torso_lora" not in d_loras, "no body-slot LoRA in a head frame")
 
 print("E/F contract and full render")
-check(er.render_contract("p", "e", "upper_body") != er.render_contract("p", "e", "head"),
-      "framing is part of the render contract")
+prof = get_character_profile("demo")
+base = er.render_contract("p", "e", "upper_body", prof)
+check(base != er.render_contract("p", "e", "head", prof), "framing is part of the render contract")
+with patch("app.core.body_slots.portrait_piece_slots", lambda _p: ("head", "neck", "outer", "top")):
+    check(er.render_contract("p", "e", "upper_body", prof) != base,
+          "the package's portrait clothing slots are part of the render contract")
+with patch.object(body_slots, "slots_for_character", _slots):
+    check(er.render_contract("p", "e", "upper_body", prof) != base,
+          "the portrait body slots are part of the render contract")
 f, _ = render("demo", {"top": coat["id"]}, "")
 check(BODY in f["prompt"], "a full-body render keeps the body appearance")
 

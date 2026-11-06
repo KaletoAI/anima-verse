@@ -121,7 +121,7 @@ def _scan(name):
                 row.update(action="remove", reason="Not in the selected expression set")
                 continue
             contract = er.render_contract(spec.pose_prompt, cat.entries[key]["prompt"],
-                                          er.expression_framing(profile))
+                                          er.expression_framing(profile), profile)
             if contract_proof != contract or meta["neutral_state"] is not True:
                 row.update(action="remove", reason="Obsolete expression render contract")
                 continue
