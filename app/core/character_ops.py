@@ -64,14 +64,18 @@ def seed_default_skills(character_name: str) -> None:
 
 # === Pure helpers ===
 
-def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
+def _resolve_face_prompt(profile: dict, character_name: str, tmpl, *,
+                         apply_modifiers: bool = True) -> str:
     """Profile-image prompt = face prompt (face_appearance), tokens resolved
     (target_key 'character_appearance' — this resolves both appearance fields).
     Falls back to the body appearance when face_appearance is empty.
 
     Face-relevant body-slot fragments (``face: true`` in the species
     manifest — hair/eyes/skin) are appended: after the body-slot migration
-    those attributes live in slots, not in the text anymore."""
+    those attributes live in slots, not in the text anymore.
+
+    ``apply_modifiers=False`` leaves out the active states' image modifiers —
+    for renders made in the neutral state (expression images)."""
     from app.models.character import get_character_appearance
     from app.models.character_template import resolve_profile_tokens
     face = ((profile or {}).get("face_appearance") or "").strip()
@@ -88,11 +92,12 @@ def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
         suffix = ""
     if suffix:
         face = f"{face}, {suffix}" if face else suffix
-    try:
-        from app.core.prompt_filters import apply_image_modifiers
-        face = apply_image_modifiers(character_name, face)
-    except Exception:
-        pass
+    if apply_modifiers:
+        try:
+            from app.core.prompt_filters import apply_image_modifiers
+            face = apply_image_modifiers(character_name, face)
+        except Exception:
+            pass
     return face.strip()
 
 

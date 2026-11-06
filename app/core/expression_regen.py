@@ -120,13 +120,15 @@ def expression_image_size() -> tuple:
 
 def render_contract(pose_prompt: str, expression_prompt: str) -> str:
     """THE render contract of an expression image: the set's fixed pose, the
-    member's facial prompt, the expression use-case style and the image size.
+    member's facial prompt, the expression use-case style, the image size and
+    the character basis (the face prompt, see ``face_basis``).
     The snapshot, the cache check and the cleanup all compare against this
     one value, so changing any of them renders the images anew."""
     return _digest({"version": 2, "pose_prompt": pose_prompt,
                     "expression_prompt": expression_prompt,
                     "style": _style_fingerprint(),
-                    "size": list(expression_image_size())})
+                    "size": list(expression_image_size()),
+                    "appearance": "face"})
 
 
 @dataclass(frozen=True)
@@ -375,7 +377,7 @@ def _execute(request, aid, force=False):
                 stage = Path(stage)
                 _w, _h = expression_image_size()
                 rendered = render_character_image(request.character, output_stem=stage / request.stem,
-                    override_width=_w, override_height=_h,
+                    override_width=_w, override_height=_h, face_basis=True,
                     equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
                     pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
                     appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
@@ -615,7 +617,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            bare_prompt: Optional[str] = None,
                            mesh_input_profile: Optional[Dict[str, Any]] = None,
                            backend: str = "", dialog_loras: Optional[list] = None,
-                           negative_prompt: str = "") -> Optional[Path]:
+                           negative_prompt: str = "",
+                           face_basis: bool = False) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -692,6 +695,19 @@ def render_character_image(character_name: str, *, output_stem: Path,
         persons = _expr_builder.detect_persons("", character_names=[character_name])
         appearance = persons[0].appearance if persons else get_character_appearance(character_name)
         actor_label = persons[0].actor_label if persons else character_name
+        if face_basis:
+            # Expression images are framed from the waist up: the full body
+            # description (build, legs, every body slot) pulled the model
+            # into a full-length picture. The face prompt — the profile
+            # image's basis, with the face slots (hair, eyes, skin) — is the
+            # character part; outfit, pose and expression follow as usual.
+            from app.core.character_ops import _resolve_face_prompt
+            from app.models.character_template import get_template
+            _tid = _render_profile.get("template") or ""
+            appearance = _resolve_face_prompt(
+                _render_profile, character_name,
+                get_template(_tid) if _tid else None,
+                apply_modifiers=apply_state_modifiers) or appearance
 
     # Prompt prefix: only passed for an explicit preview (wardrobe); it stays
     # empty for automatic expression regens.
