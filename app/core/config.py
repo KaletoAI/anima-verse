@@ -625,12 +625,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     "expression": {
         "keywords": {
-            "prompt_style": "RAW photo, natural light, skin texture, detailed face, expressive, high detail",
+            "prompt_style": "RAW photo, upper body portrait, head and shoulders to waist, natural light, skin texture, detailed face, expressive, high detail",
             "prompt_negative": _NEG_PHOTO,
-            "prompt_instruction": "Write comma-separated tags emphasizing the character's facial expression and pose.",
+            "prompt_instruction": "Write comma-separated tags emphasizing the character's facial expression and pose. Framing is upper body, head and shoulders to waist.",
         },
         "natural": {
-            "prompt_style": "a candid photo emphasizing the character's facial expression and pose, natural light, high detail",
+            "prompt_style": "a candid upper body portrait, head and shoulders to waist, emphasizing the character's facial expression and pose, natural light, high detail",
             "prompt_negative": _NEG_PHOTO,
             "prompt_instruction": "Describe the character emphasizing facial expression and pose.",
         },
