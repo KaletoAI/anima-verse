@@ -710,6 +710,8 @@ SECTIONS = {
                     "model_ref_debounce_seconds",
                     "outfit_image_width",
                     "outfit_image_height",
+                    "expression_image_width",
+                    "expression_image_height",
                     "location_image_width",
                     "location_image_height",
                     "u2net_home",
@@ -851,6 +853,34 @@ SECTIONS = {
                 "min": 64,
                 "max": 4096,
                 "description": "See Outfit width for the recommended bucket combinations at the same ratio.",
+            },
+
+            # --- Expression image size ---
+            # Its own size: an expression image is framed from the waist up,
+            # and the tall outfit portrait made the model fill the frame with
+            # the whole figure regardless of the prompt.
+            "expression_image_width": {
+                "half": True,
+                "type": "int",
+                "label": "Expression width (px)",
+                "default": 1024,
+                "min": 64,
+                "max": 4096,
+                "description": (
+                    "Size of the expression images (upper body, from the waist up). Separate from "
+                    "the outfit size on purpose: a tall full-body format makes the model show the "
+                    "whole figure. Square or nearly square works best, e.g. 1024x1024 or 896x1024. "
+                    "A change re-renders the expression images on their next use."
+                ),
+            },
+            "expression_image_height": {
+                "half": True,
+                "type": "int",
+                "label": "Expression height (px)",
+                "default": 1024,
+                "min": 64,
+                "max": 4096,
+                "description": "See Expression width.",
             },
 
             # --- Location background size ---

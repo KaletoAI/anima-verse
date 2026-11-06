@@ -104,13 +104,29 @@ def _style_fingerprint():
                     for fam in ("natural", "keywords")})
 
 
+def expression_image_size() -> tuple:
+    """Width and height of an expression render — its own instance setting
+    (``image_generation.expression_image_width/height``), not the outfit
+    size: the waist-up framing needs a near-square frame."""
+    from app.core import config as _cfg_mod
+    from app.core.config_schema import field_default
+    def _px(key):
+        try:
+            return int(_cfg_mod.get(f"image_generation.{key}", 0) or 0) or int(field_default("image_generation", key))
+        except (TypeError, ValueError):
+            return int(field_default("image_generation", key))
+    return _px("expression_image_width"), _px("expression_image_height")
+
+
 def render_contract(pose_prompt: str, expression_prompt: str) -> str:
     """THE render contract of an expression image: the set's fixed pose, the
-    member's facial prompt and the expression use-case style. The snapshot,
-    the cache check and the cleanup all compare against this one value."""
+    member's facial prompt, the expression use-case style and the image size.
+    The snapshot, the cache check and the cleanup all compare against this
+    one value, so changing any of them renders the images anew."""
     return _digest({"version": 2, "pose_prompt": pose_prompt,
                     "expression_prompt": expression_prompt,
-                    "style": _style_fingerprint()})
+                    "style": _style_fingerprint(),
+                    "size": list(expression_image_size())})
 
 
 @dataclass(frozen=True)
@@ -357,7 +373,9 @@ def _execute(request, aid, force=False):
         try:
             with tempfile.TemporaryDirectory(prefix=".expression-", dir=folder) as stage:
                 stage = Path(stage)
+                _w, _h = expression_image_size()
                 rendered = render_character_image(request.character, output_stem=stage / request.stem,
+                    override_width=_w, override_height=_h,
                     equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
                     pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
                     appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
@@ -744,9 +762,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
         logger.debug("Reading the outfit imagegen override failed: %s", _err)
 
     # Resolution from admin config (image_generation.outfit_image_width/height)
-    # — expression variants use the same resolution as wardrobe outfit images.
-    # An explicit override wins (the T-pose needs a wider frame than the
-    # portrait format). The env bridge always sets both; the fallback is the
+    # for the full-body renders (default pose, outfit previews). An explicit
+    # override wins: the T-pose needs a wider frame, and expression images
+    # pass their own near-square size (expression_image_size). The env bridge always sets both; the fallback is the
     # schema default, the same value the bridge uses for an absent field.
     outfit_w = override_width or int(os.environ.get(
         "OUTFIT_IMAGE_WIDTH", field_default("image_generation", "outfit_image_width")) or 0) or None
