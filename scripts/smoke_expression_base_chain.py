@@ -39,7 +39,11 @@ woman happy", member "emote_sad" "make the woman sad", LoRA
   F a backend without reference slot -> request "emote_happy" renders 1
     image (base cached) with use case "expression", no bare prompt, set
     LoRAs [emote 0.8], no reference image; sidecar expression_mode "full".
-  G the inventory marks the base row is_base True, the derived False.
+  G the inventory marks the base row is_base True, the derived False, and
+    both freshly rendered images are "current": the cleanup compares
+    against the SAME profile the snapshot used (get_character_profile — the
+    raw DB row lacks merged fields such as gender, which decide body slots
+    in the frame; 2026-11-07 every fresh image read as obsolete).
 
 Usage: ./.venv/bin/python scripts/smoke_expression_base_chain.py
 """
@@ -158,6 +162,10 @@ with patch.object(er, "render_character_image", render), \
     rows = {r["expression_key"]: r for r in er.list_expressions("demo")}
     check(rows.get("emote_neutral", {}).get("is_base") is True
           and rows.get("emote_happy", {}).get("is_base") is False, "the base row is marked")
+    check([rows.get(k, {}).get("status") for k in ("emote_neutral", "emote_happy")] == ["current", "current"],
+          f"fresh images are current ({[(k, r.get('status'), r.get('reason')) for k, r in rows.items()]})")
+    from app.core import expression_cleanup as ec
+    check(ec._profile("demo") == get_character_profile("demo"), "the cleanup reads the snapshot's profile")
 
     print("E a new base drops the expressions edited from the old one")
     count = lambda: len([p for p in folder.iterdir() if p.suffix == ".png"])  # noqa: E731

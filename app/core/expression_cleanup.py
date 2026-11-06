@@ -20,13 +20,17 @@ class CleanupError(ValueError):
 
 
 def _profile(name):
+    """The SAME profile the expression snapshot builds its render contract
+    from (``get_character_profile``). The raw DB row lacks merged fields such
+    as ``gender``, which decide body slots in the frame — compared against
+    it, every current image read as an obsolete render contract. The exact
+    DB row decides whether the character exists (the profile reader answers
+    defaults for any name)."""
     from app.core.db import get_connection
-    row = get_connection().execute("SELECT template,profile_json FROM characters WHERE name=?", (name,)).fetchone()
-    if row is None:
+    from app.models.character import get_character_profile
+    if get_connection().execute("SELECT 1 FROM characters WHERE name=?", (name,)).fetchone() is None:
         raise CleanupError("Character not found", 404)
-    profile = json.loads(row[1] or "{}")
-    profile["template"] = row[0]
-    return profile
+    return dict(get_character_profile(name) or {})
 
 
 def _safe(folder, filename):
