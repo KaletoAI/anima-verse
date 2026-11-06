@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import json
 import math
+import threading
 import uuid
 
 from app.core.log import get_logger
@@ -3468,6 +3469,22 @@ def _get_rembg_session(model: str = "u2net"):
 # same matte since 2026-11-06 (u2net cut hair and shoulders poorly).
 PORTRAIT_REMBG_MODEL = "birefnet-portrait"
 
+# ONE matte at a time per process. A BiRefNet run peaked at ~9.5 GB RSS
+# (measured 2026-11-07, 768 px); two expression renders finishing seconds
+# apart ran two mattes at once and the server was OOM-killed without a
+# traceback. A matte takes seconds against a render of 10-60 s, so the
+# wait is small. Every rembg call in the server goes through run_rembg.
+_REMBG_RUN_LOCK = threading.Lock()
+
+
+def run_rembg(data: bytes, model: str = "u2net", **kwargs) -> bytes:
+    """rembg ``remove`` on the cached session of ``model``, one call at a
+    time per process (see _REMBG_RUN_LOCK)."""
+    from rembg import remove
+    session = _get_rembg_session(model)
+    with _REMBG_RUN_LOCK:
+        return remove(data, session=session, **kwargs)
+
 
 # rembg/u2net leaves near-transparent background specks; ignore alpha <= 16 (~6%).
 OUTFIT_TRIM_ALPHA_THRESHOLD = 16
@@ -3499,20 +3516,19 @@ def postprocess_outfit_image(image_path: Path, mesh_input: bool = False,
         Path to the processed image (possibly renamed to .png).
     """
     try:
-        from rembg import remove
         from PIL import Image
 
         img_data = image_path.read_bytes()
         png_path = image_path.with_suffix(".png")
         if mesh_input or portrait_matte:
             import io as _io
-            mask = remove(img_data, session=_get_rembg_session(PORTRAIT_REMBG_MODEL), only_mask=True)
+            mask = run_rembg(img_data, PORTRAIT_REMBG_MODEL, only_mask=True)
             with Image.open(_io.BytesIO(img_data)) as _src:
                 cut = _src.convert("RGB")
             cut.putalpha(Image.open(_io.BytesIO(mask)).convert("L").resize(cut.size))
             cut.save(png_path)
         else:
-            result_data = remove(img_data, session=_get_rembg_session())
+            result_data = run_rembg(img_data)
             # Save as PNG
             png_path.write_bytes(result_data)
 

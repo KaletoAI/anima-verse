@@ -80,11 +80,9 @@ def _process_chroma_key(image_bytes: bytes) -> Tuple[bytes, Dict[str, Any]]:
 
     # 2. rembg for the outer background — isolate the frame contour
     try:
-        from app.models.character import _get_rembg_session
-        from rembg import remove
-        session = _get_rembg_session()
+        from app.models.character import run_rembg
         # rembg expects bytes
-        rembg_out = remove(image_bytes, session=session)
+        rembg_out = run_rembg(image_bytes)
         rembg_img = Image.open(io.BytesIO(rembg_out)).convert("RGBA")
         arr = np.array(rembg_img)
         logger.info("rembg applied (background removed)")

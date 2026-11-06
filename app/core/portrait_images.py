@@ -80,12 +80,9 @@ def _cutout(source_bytes: bytes):
         return image
 
     try:
-        from app.models.character import _get_rembg_session
+        from app.models.character import run_rembg
 
-        session = _get_rembg_session()
-        from rembg import remove
-
-        result_bytes = remove(source_bytes, session=session)
+        result_bytes = run_rembg(source_bytes)
         with Image.open(io.BytesIO(result_bytes)) as result:
             if result.size != image.size:
                 raise PortraitProcessingError("Portrait cutout changed the source dimensions")
