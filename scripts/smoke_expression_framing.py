@@ -9,7 +9,9 @@ Spec (2026-11-06, Game-Admin session, user directive):
   other body attribute (build, legs, hips, ...) stays out. A portrait slot's
   `covered` fragment applies while dressed; its `exposed` fragment only while
   every covering clothing slot is empty. Clothing comes only from the
-  species' clothing slots declared `portrait` (human: head, neck, outer, top).
+  species' clothing slots declared `portrait` (human: head, neck, outer, top,
+  underwear_top). Underwear follows the usual rule: hidden when another piece
+  `covers` it, shown otherwise.
   LoRAs follow the same rule: only exposed `face`/`portrait` slots.
 * Templates declaring `features.expression_head_only` (temporary NPCs) —
   head and neck: face prompt, no clothing text at all (dressed or not),
@@ -17,7 +19,8 @@ Spec (2026-11-06, Game-Admin session, user directive):
 * The framing is part of the render contract, so switching it re-renders.
 
 Fixture (synthetic slots added beside the real `human` package so the smoke
-needs no private pack): `torso` portrait=true covered_by=[top], prompt
+needs no private pack): `torso` portrait=true covered_by=[top, underwear_top]
+(as the anatomy pack's breast slot), prompt
 covered "{size} torso under clothing" / exposed "bare {size} torso", stored
 size "broad", LoRA "torso_lora"; `hips` (not portrait) covered_by=[bottom],
 exposed "bare hips", LoRA "hips_lora". Human slots: hair long/red ->
@@ -34,6 +37,10 @@ Expected, derived by hand from the spec:
   C a temporary NPC wearing "a red dress": framing "head", use case
     expression_head, FACE2 in, "red dress" out.
   D the same NPC undressed: no clothing text, no torso_lora (not face).
+  G bra (underwear_top) "a lace bra" alone: in the prompt, and the torso
+    counts as covered ("broad torso under clothing", no torso_lora). Same bra under a
+    shirt (top) that declares covers=[underwear_top]: "a lace bra" out,
+    "a plain shirt" in.
   E render_contract(p, e, "upper_body") != render_contract(p, e, "head").
   F a full render (no framing) still carries BODY.
 
@@ -74,7 +81,7 @@ FACE = "oval face, freckles, green eyes"
 FACE2 = "round face, dimples"
 BODY = "long legs, broad hips"
 _LORA = {"type": "lora_select"}
-TORSO = BodySlotSpec(id="torso", package_id="smoke", covered_by=["top"], portrait=True,
+TORSO = BodySlotSpec(id="torso", package_id="smoke", covered_by=["top", "underwear_top"], portrait=True,
                      attributes={"size": {"type": "select"}, "lora": _LORA},
                      prompt={"covered": "{size} torso under clothing", "exposed": "bare {size} torso"})
 HIPS = BodySlotSpec(id="hips", package_id="smoke", covered_by=["bottom"],
@@ -97,6 +104,10 @@ assert save_character_profile("demo npc", {
     "body_slots": SLOT_VALUES}, create_new=True)
 coat = add_item("Demo coat", category="outfit_piece", prompt_fragment="a linen coat",
                 outfit_piece={"slots": ["top"]})
+bra = add_item("Demo bra", category="outfit_piece", prompt_fragment="a lace bra",
+               outfit_piece={"slots": ["underwear_top"]})
+shirt = add_item("Demo shirt", category="outfit_piece", prompt_fragment="a plain shirt",
+                 outfit_piece={"slots": ["top"], "covers": ["underwear_top"]})
 boots = add_item("Demo boots", category="outfit_piece", prompt_fragment="leather boots",
                  outfit_piece={"slots": ["feet"]})
 
@@ -159,6 +170,15 @@ b, b_loras = render("demo", {"feet": boots["id"]}, "upper_body")
 check("bare broad torso" in b["prompt"], "exposed fragment is in once the covering slots are empty")
 check("torso_lora" in b_loras, "exposed portrait slot brings its LoRA")
 check("hips_lora" not in b_loras and "bare hips" not in b["prompt"], "non-portrait slot stays out exposed")
+
+print("G underwear follows the covering rule")
+g, g_loras = render("demo", {"underwear_top": bra["id"]}, "upper_body")
+check("a lace bra" in g["prompt"], "uncovered underwear top is shown")
+check("broad torso under clothing" in g["prompt"] and "torso_lora" not in g_loras,
+      "the bra covers the torso slot")
+g2, _ = render("demo", {"underwear_top": bra["id"], "top": shirt["id"]}, "upper_body")
+check("a lace bra" not in g2["prompt"] and "a plain shirt" in g2["prompt"],
+      "underwear top covered by the shirt is hidden")
 
 print("C/D temporary NPC, head and neck")
 npc = get_character_profile("demo npc")

@@ -28,7 +28,7 @@ piece_slots:
   - {id: neck, label: Neck, portrait: true}
   - {id: outer, label: "Coat & jacket", portrait: true}
   - {id: top, label: Top, portrait: true}
-  - {id: underwear_top, label: "Underwear top"}
+  - {id: underwear_top, label: "Underwear top", portrait: true}
   - {id: bottom, label: Bottom}
   - {id: underwear_bottom, label: "Underwear bottom"}
   - {id: legs, label: Legs}
