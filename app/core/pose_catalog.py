@@ -8,6 +8,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -39,12 +40,29 @@ _FILES = {
 _FALLBACK_DEFAULT = {"pose": "standing", "expression": "neutral"}
 
 _lock = threading.Lock()
+#: axis -> merged catalog. A filled entry is never mutated, only replaced or
+#: dropped, so a reader may take it WITHOUT the lock (one dict lookup is
+#: atomic under the GIL).
 _cache: Dict[str, Dict[str, dict]] = {}
-_groups_cache: Dict[str, dict] = {}
+#: The place types (pose axis), or ``None`` while not loaded — swapped as a
+#: whole, never filled in place, for the same lock-free read.
+_groups_cache: Optional[Dict[str, dict]] = None
 #: (st_mtime_ns, st_size) of each axis' shared file when its cache was
 #: filled — an edit from OUTSIDE the server (the animation studio's publish,
-#: a hand edit) is noticed on the next read instead of after a restart.
+#: a hand edit) is noticed within :data:`FILE_CHECK_INTERVAL_S` instead of
+#: after a restart.
 _stamps: Dict[str, Optional[tuple]] = {}
+#: Hot readers (``pose_label`` per character and place, many per request,
+#: many threads) must neither stat the file nor queue on ``_lock`` each time:
+#: the file is checked at most once per this many monotonic seconds per axis.
+#: Writers inside the server call :func:`reload_catalogs`, which is seen at
+#: once; only an edit from OUTSIDE the process waits up to this long.
+FILE_CHECK_INTERVAL_S = 2.0
+#: axis -> monotonic time of the last file check; cleared by a reload.
+_checked_at: Dict[str, float] = {}
+#: The clock of the file check; a smoke check replaces it to step past the
+#: interval without sleeping.
+_clock = time.monotonic
 #: Bumped whenever a cache is dropped (file change or reload). The alias
 #: embedding warm-up runs outside ``_lock``; it only parks its vectors when
 #: the generation it started on is still current, so a map embedded from the
@@ -93,21 +111,31 @@ def _file_stamp(axis: str) -> Optional[tuple]:
     return (st.st_mtime_ns, st.st_size)
 
 
+def _check_due(axis: str) -> bool:
+    """Whether the next read of ``axis`` has to look at the file again —
+    read without the lock; a stale answer only costs one extra check."""
+    last = _checked_at.get(axis)
+    return last is None or _clock() - last >= FILE_CHECK_INTERVAL_S
+
+
 def _drop_if_changed(axis: str) -> None:
-    """Call with ``_lock`` held. One ``os.stat`` per read — microseconds.
+    """Call with ``_lock`` held. One ``os.stat`` — microseconds.
 
     Drops the merged catalog of the axis, every alias-embedding map of it
     (``_embed_cache`` is keyed ``(axis, model id)``) and, for ``pose``, the
-    place types that live in the same file."""
-    global _generation
+    place types that live in the same file. Records the check time, so the
+    lock-free fast path of the readers skips the next
+    :data:`FILE_CHECK_INTERVAL_S` seconds."""
+    global _generation, _groups_cache
     stamp = _file_stamp(axis)
+    _checked_at[axis] = _clock()
     previous = _stamps.get(axis, "unset")
     if previous != stamp:
         _cache.pop(axis, None)
         for key in [k for k in _embed_cache if k[0] == axis]:
             del _embed_cache[key]
         if axis == "pose":
-            _groups_cache.clear()
+            _groups_cache = None
         _stamps[axis] = stamp
         # Only a REAL change invalidates a warm-up in flight. The first read
         # after start or after reload_catalogs() (no stamp yet) just records
@@ -115,6 +143,15 @@ def _drop_if_changed(axis: str) -> None:
         # here too would keep the warm-up right after it from caching.
         if previous != "unset":
             _generation += 1
+            _invalidate_derived()
+
+
+def _invalidate_derived() -> None:
+    """Drop what OTHER modules hold derived from the catalog: package
+    furniture actions are built from pose entries (``prop_action_sources``).
+    Takes only that module's own lock, so it is safe under ``_lock``."""
+    from app.core import prop_action_sources
+    prop_action_sources.invalidate()
 
 
 @contextmanager
@@ -602,15 +639,26 @@ def _load_groups(*, world: Optional[Dict[str, dict]] = None) -> Dict[str, dict]:
 
 
 def get_groups() -> Dict[str, dict]:
-    """All place types, keyed by group id."""
+    """All place types, keyed by group id — a copy of the cached map (the
+    entries themselves are shared and must not be mutated)."""
+    global _groups_cache
+    groups = _groups_cache
+    if groups is not None and not _check_due("pose"):
+        return dict(groups)
     with _lock:
         _drop_if_changed("pose")
-        if not _groups_cache:
-            _groups_cache.update(_load_groups())
+        if _groups_cache is None:
+            _groups_cache = _load_groups()
         return dict(_groups_cache)
 
 
 def get_catalog(axis: str) -> Dict[str, dict]:
+    """The merged catalog of ``axis`` — the CACHED dict itself, read-only for
+    every caller. Lock-free while it is loaded and the file check is not due
+    (:data:`FILE_CHECK_INTERVAL_S`)."""
+    catalog = _cache.get(axis)
+    if catalog is not None and not _check_due(axis):
+        return catalog
     with _lock:
         _drop_if_changed(axis)
         if axis not in _cache:
@@ -627,13 +675,18 @@ def activity_catalog(axis: str = "pose", *,
 
 
 def reload_catalogs() -> None:
-    global _generation
+    """Drop every catalog cache — what each writer of either layer calls
+    (via ``pose_catalog_edit.after_write`` / ``reload_presets``); the next
+    read loads afresh, no file-check interval applies."""
+    global _generation, _groups_cache
     with _lock:
         _cache.clear()
-        _groups_cache.clear()
+        _groups_cache = None
         _embed_cache.clear()
         _stamps.clear()
+        _checked_at.clear()
         _generation += 1
+        _invalidate_derived()
 
 
 def get_default_key(axis: str, *, set_id: str = "") -> str:

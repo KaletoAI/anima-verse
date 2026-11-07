@@ -6,11 +6,15 @@ Usage: ./.venv/bin/python scripts/smoke_catalog_file_reload.py
 Temp world; the catalog is a private COPY injected through
 pose_catalog.catalog_path (the one funnel loader and router share). The real
 shared/templates/pose/pose_catalog.json is never written (checked byte for
-byte at the end). By hand:
+byte at the end). The catalog checks its file at most every
+FILE_CHECK_INTERVAL_S (2.0 s) per axis; the module clock is replaced by T,
+which steps by that interval before each read that must see an edit from
+outside (the throttle itself: smoke_prop_action_pose_cache.py). By hand:
 [1] get_catalog("pose") holds the shipped keys; `smoke-extern` is absent;
     get_groups() is read (so the groups cache is FILLED before [3]).
 [2] the file is rewritten from OUTSIDE (plain write, no reload call) with an
-    added entry `smoke-extern` -> the very next get_catalog has it, and the
+    added entry `smoke-extern` -> the first get_catalog once the check is due
+    (T + 2.0) has it, and the
     alias embedding cache holds no entry of the pose axis any more (its keys
     are (axis, model id) tuples; a seeded ("pose", "smoke-model") entry must
     be gone, a seeded ("expression", "smoke-model") entry must survive — the
@@ -24,7 +28,8 @@ byte at the end). By hand:
 [6] an alias-embedding warm-up that started on the OLD catalog does not park
     its vectors after the file changed under it: the embed function edits the
     file on its first call and reads the catalog (-> drop). The returned map
-    lacks `smoke-late`, and nothing is cached for ("pose", <fn key>); the next
+    lacks `smoke-late` (the embed function steps T by 2.0 before that
+    read), and nothing is cached for ("pose", <fn key>); the next
     call embeds again and its map carries `smoke-late`.
 """
 import fcntl
@@ -48,7 +53,17 @@ FAIL = []
 REAL = pc.catalog_path("pose")
 REAL_BYTES = REAL.read_bytes()
 orig = pc.catalog_path
+orig_clock = pc._clock
+T = [1000.0]
+
+
+def step():
+    """Make the next read's file check due."""
+    T[0] += pc.FILE_CHECK_INTERVAL_S
+
+
 try:
+    pc._clock = lambda: T[0]
     init_schema()
     cat = Path(_tmp) / "pose_catalog.json"
     cat.write_bytes(REAL_BYTES)
@@ -66,15 +81,17 @@ try:
     doc["entries"]["smoke-extern"] = {"prompt": "p", "synonyms": [], "animation": "idle",
                                       "group": "stand", "participants": 1}
     cat.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    step()
     if "smoke-extern" not in pc.get_catalog("pose"):
         FAIL.append("[2] external edit not seen")
     if any(k[0] == "pose" for k in pc._embed_cache):
         FAIL.append(f"[2] pose embed cache not dropped: {list(pc._embed_cache)}")
-    pc.get_catalog("expression")
+    pc.get_catalog("expression")          # due as well: stats, finds no change
     if ("expression", "smoke-model") not in pc._embed_cache:
         FAIL.append("[2] expression embed cache dropped although its file is unchanged")
     doc["groups"]["seat"]["label"] = "Seat X"
     cat.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    step()
     if pc.get_groups()["seat"]["label"] != "Seat X":
         FAIL.append("[3] group edit not seen")
     with pc.catalog_file_lock("pose"):
@@ -105,6 +122,7 @@ try:
                                             "participants": 1}
             cat.write_text(json.dumps(doc, ensure_ascii=False, indent=2),
                            encoding="utf-8")
+            step()
             pc.get_catalog("pose")          # a reader notices the edit -> drop
         return [1.0, 0.0]
 
@@ -125,6 +143,7 @@ except Exception as e:                                                # noqa: BL
     FAIL.append(f"crashed: {e!r}")
 finally:
     pc.catalog_path = orig
+    pc._clock = orig_clock
     if REAL.read_bytes() != REAL_BYTES:
         FAIL.append("REAL catalog modified")
     shutil.rmtree(_tmp, ignore_errors=True)

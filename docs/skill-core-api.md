@@ -838,8 +838,9 @@ das Paket, ist die Aktion weg (plan-pack-prop-actions.md).
 
 | Funktion | Semantik |
 |---|---|
-| `register_source(owner, fn)` | Quelle des Pakets `owner` anmelden/ersetzen. `fn` liefert eine Liste von Definitionen, läuft bei jedem Laufzeit-Lesen und muss billig sein (geladene Config, keine Datei, keine DB). Wirkt nur, solange das Paket geladen ist |
+| `register_source(owner, fn)` | Quelle des Pakets `owner` anmelden/ersetzen. `fn` liefert eine Liste von Definitionen; das validierte Ergebnis wird bis zu `HOLD_TTL_S` (5 s) gehalten, `fn` läuft trotzdem auf einem Request-Pfad und muss billig sein (geladene Config, keine Datei, keine DB). Wirkt nur, solange das Paket geladen ist |
 | `unregister_source(owner)` | Quelle abmelden |
+| `invalidate()` | Gehaltene Paket-Aktionen verwerfen; das nächste Lesen fragt alle Quellen neu. Config laden/speichern, ein Pose-Katalog-Reload und (Ab-)Melden einer Quelle oder eines Pakets rufen es bereits; ein Paket, dessen Quelle noch etwas anderes liest, ruft es nach dessen Änderung — sonst gilt die Änderung spätestens nach `HOLD_TTL_S` |
 | `pack_action_id(owner, key) -> str` | Die stabile ID einer Paket-Aktion (`pack-` + UUIDv5): gleiche Eingabe, gleiche ID über Neustarts. Das Präfix ist für Paket-Aktionen reserviert |
 | `pack_actions() -> List[dict]` | Alle gültigen Definitionen aller geladenen Quellen als `{owner, action, match}` (Kopien) |
 | `signature() -> str` | Ändert sich mit jeder Änderung der Paket-Aktionen; leer ohne welche |

@@ -2115,8 +2115,9 @@ def _invalidate_config_derived_caches() -> None:
     The world calendar (`game_calendar`/`game_seasons`) is cached in
     `app.core.game_time` and the game-clock anchors in `app.core.timeutils`;
     both must follow an admin save immediately, or the header keeps showing
-    seasons the config no longer has. Imported lazily — those modules import
-    config themselves.
+    seasons the config no longer has. The held package furniture actions
+    (`app.core.prop_action_sources`) are derived from package settings and
+    are dropped too. Imported lazily — those modules import config themselves.
     """
     try:
         from app.core.game_time import invalidate_calendar_cache
@@ -2125,6 +2126,11 @@ def _invalidate_config_derived_caches() -> None:
         timeutils.invalidate_game_clock_cache()
     except Exception as e:   # never let a cache reset break load/save
         logger.debug("cache invalidation after config change failed: %s", e)
+    try:
+        from app.core import prop_action_sources
+        prop_action_sources.invalidate()
+    except Exception as e:   # never let a cache reset break load/save
+        logger.debug("prop action invalidation after config change failed: %s", e)
 
 
 def _collect_restart_values(cfg: dict) -> dict:

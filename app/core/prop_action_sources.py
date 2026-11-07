@@ -12,12 +12,25 @@ plus an optional ``match`` = ``{"categories": [...], "tags": [...]}`` against
 the prop's ``category``/``tags`` (empty = every prop with a matching place).
 Its ``id`` comes from :func:`pack_action_id`: the reserved ``pack-`` prefix lets
 a prop exclude it (``exclude_actions``) even while the package is off.
+
+Every prop read asks for the package actions (``props.get_prop`` ->
+``effective_document``), so the validated set is HELD for :data:`HOLD_TTL_S`
+seconds instead of re-running every source per read — the same pattern as
+``scene_recipe.prop_lib_token``. The held set is keyed by :func:`invalidate`'s
+counter and the package registry's generation, so these changes are seen at
+once: (un)registering a source, loading/unloading a package, a config load or
+save (``config._invalidate_config_derived_caches``) and a pose catalog reload
+or detected file change (``pose_catalog``) — the inputs the shipped sources
+read. Anything ELSE a source reads is seen at the latest ``HOLD_TTL_S``
+seconds after it changed: that is the staleness bound of :func:`pack_actions`
+and :func:`signature`.
 """
 import hashlib
 import json
 import threading
+import time
 from copy import deepcopy
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.log import get_logger
@@ -27,12 +40,26 @@ logger = get_logger("prop_action_sources")
 #: The id prefix only package actions carry; an author action may not use it.
 PACK_PREFIX = "pack-"
 
+#: How long a validated set of package actions is served without asking the
+#: sources again (monotonic seconds) — the staleness bound for a source input
+#: that changes without calling :func:`invalidate`.
+HOLD_TTL_S = 5.0
+
 _lock = threading.Lock()
 _sources: Dict[str, Callable[[], List[dict]]] = {}
 # raw-definitions hash -> (validated actions, signature); one entry is enough,
 # the sources answer the same until a setting changes.
 _validated: Tuple[str, List[dict], str] = ("", [], "")
 _warned: set = set()
+#: Bumped by :func:`invalidate` (and every source (un)registration).
+_generation = 0
+#: (key, deadline, validated actions, signature) — swapped as a whole, so the
+#: lock-free read in :func:`_current` sees one consistent tuple. ``key`` =
+#: (:data:`_generation`, package registry generation) captured BEFORE the
+#: sources ran.
+_held: Tuple[Optional[tuple], float, List[dict], str] = (None, 0.0, [], "")
+#: The clock of the hold; a smoke check replaces it to step past the TTL.
+_clock = time.monotonic
 
 
 def pack_action_id(owner: str, key: str) -> str:
@@ -41,17 +68,33 @@ def pack_action_id(owner: str, key: str) -> str:
     return PACK_PREFIX + str(uuid5(NAMESPACE_URL, f"anima:pack-action:{owner}:{key}"))
 
 
+def invalidate() -> None:
+    """Drop the held package actions: the next read runs every source again.
+
+    Called by whoever changes what a source reads — a config load/save, a
+    pose catalog reload — and by (un)registration. Takes only this module's
+    own lock and calls nothing, so it is safe under any other lock."""
+    global _generation
+    with _lock:
+        _generation += 1
+
+
 def register_source(owner: str, fn: Callable[[], List[dict]]) -> None:
     """Register (or replace) the action source of package ``owner``. ``fn``
-    returns the package's definitions; it runs on every runtime read, so it
+    returns the package's definitions. Its result is held for up to
+    :data:`HOLD_TTL_S` seconds, but it still runs on a request path, so it
     must be cheap (read the loaded config, never a file or the DB)."""
+    global _generation
     with _lock:
         _sources[owner] = fn
+        _generation += 1
 
 
 def unregister_source(owner: str) -> None:
+    global _generation
     with _lock:
         _sources.pop(owner, None)
+        _generation += 1
 
 
 def _active_owners() -> List[str]:
@@ -116,6 +159,25 @@ def _validate(rows: List[Tuple[str, dict]]) -> List[dict]:
 
 
 def _current() -> Tuple[List[dict], str]:
+    """The validated package actions and their signature — the held set while
+    its key is current and its deadline not passed, else freshly computed."""
+    global _held
+    from app.plugins import registry
+    key = (_generation, registry.generation())
+    held = _held
+    if held[0] == key and _clock() < held[1]:
+        return held[2], held[3]
+    deadline = _clock() + HOLD_TTL_S
+    validated, sig = _compute()
+    with _lock:
+        # Publish only under the key captured BEFORE the sources ran: an
+        # invalidation in between must not be covered by the older result.
+        if key == (_generation, registry.generation()):
+            _held = (key, deadline, validated, sig)
+    return validated, sig
+
+
+def _compute() -> Tuple[List[dict], str]:
     global _validated
     rows = _raw()
     raw_hash = hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
