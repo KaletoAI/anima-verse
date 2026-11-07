@@ -271,7 +271,7 @@ export function Hud({ avatar, username, role }: {
   /** Measure only non-modal surfaces. Portalled overlays own the full window
    *  through overlayOpen, never through a full-screen hit rectangle. */
   useEffect(() => {
-    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-drop, .hud-panel, .hud-intents, .hud-mode, .hud-party, '
+    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-drop, .hud-panel, .hud-self, .hud-intents, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
       // The notice banner's root is zero-height by design: measure its rows,
       // or a native/iframe host passes the click on × through to the scene.
@@ -1173,7 +1173,7 @@ export function Hud({ avatar, username, role }: {
           </>}
           <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
           {/* The menu at the very right edge, beside "Log out" (user ruling). */}
-          <button className={'hud-menu-btn' + (menuOpen ? ' on' : '')} onClick={() => toggle('menu')}
+          <button className={'hud-menu-toggle' + (menuOpen ? ' on' : '')} onClick={() => toggle('menu')}
             aria-pressed={menuOpen} title={t('Menu')} aria-label={t('Menu')}>
             <Icon name="settings" size={18} />
           </button>
@@ -1181,23 +1181,21 @@ export function Hud({ avatar, username, role }: {
       </div>
       {/* The avatar's own values, always on screen: top-left under the world
           name, the dropdown row starts beside it (user ruling — it replaced
-          the Self panel). "Take control" lives in its head, as it did in the
-          panel's; only outside the embodied mode, where the mode chip is the
-          way out. */}
+          the Self panel). No panel frame: it is part of the view, laid over
+          the scene with a light translucent backing (hud.css `.hud-self`).
+          "Take control" sits beside the name; only outside the embodied mode,
+          where the mode chip is the way out. */}
       {!spectating && avatarName && (
-        <section className="hud-panel hud-self" aria-label={t('Self')}>
-          <header className="hud-panel-head">
-            <Icon name="self" size={14} />
-            <span className="hud-panel-title">{avatarName}</span>
+        <section className="hud-self" aria-label={t('Self')}>
+          <div className="hud-self-head">
+            <span className="hud-self-name">{avatarName}</span>
             {game.mode !== 'embodied' && (
               <button className="player-chip" onClick={() => gameActions.takeControl?.()}>
                 {t('Take control')}
               </button>
             )}
-          </header>
-          <div className="hud-panel-body">
-            <ErrorBoundary inline label="Self"><SelfPanel layout="strip" /></ErrorBoundary>
           </div>
+          <ErrorBoundary inline label="Self"><SelfPanel layout="strip" /></ErrorBoundary>
         </section>
       )}
       {!spectating && <div className="hud-notices"><NoticeBanner onOpenGallery={() => showDrop('gallery')} /></div>}
