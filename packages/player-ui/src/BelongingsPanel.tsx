@@ -381,6 +381,19 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
             </button>
           ))}
         </div>
+        {/* The saved outfits, one click each — they used to be a select at the
+            very bottom under the item list, where nobody found them. */}
+        {data.outfit_sets.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            <span style={{ opacity: 0.6, fontSize: '0.78em' }}>{t('Outfits')}:</span>
+            {data.outfit_sets.map((o) => (
+              <button key={o.id} disabled={busy} style={chip(false)} title={t('Wear this outfit')}
+                onClick={() => act('/play/self/outfit', { outfit_id: o.id })}>
+                👗 {o.name}
+              </button>
+            ))}
+          </div>
+        )}
         {cat === 'outfit' && slotOptions.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             <button onClick={() => setSlotFilter('')} style={chip(!slotFilter, true)}>{t('All slots')}</button>
@@ -483,13 +496,6 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
               ))}
             </div>
           </div>
-        )}
-        {data.outfit_sets.length > 0 && (
-          <select className="ga-input" value="" disabled={busy} style={{ width: '100%' }}
-            onChange={(e) => e.target.value && act('/play/self/outfit', { outfit_id: e.target.value })}>
-            <option value="">{t('Wear a saved outfit…')}</option>
-            {data.outfit_sets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
         )}
       </div>
 
