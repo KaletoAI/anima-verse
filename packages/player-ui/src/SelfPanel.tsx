@@ -46,7 +46,13 @@ interface SelfData {
   follow?: { pose_key: string; pose_label: string } | null
 }
 
-export function SelfPanel() {
+/**
+ * `layout`: `panel` (default) fills a panel of its own — the portrait takes
+ * the height, the bars lie over its bottom. `strip` is the 3D HUD's permanent
+ * Self box (top-left, always on screen): a small portrait BESIDE the bars,
+ * mood and activity below, no prop actions (the chat window carries those).
+ */
+export function SelfPanel({ layout = 'panel' }: { layout?: 'panel' | 'strip' } = {}) {
   const { t, lang } = useI18n()
   const enlarge = useEnlarge()
   const { data, refresh } = usePoll<SelfData>(
@@ -164,6 +170,116 @@ export function SelfPanel() {
     : `/characters/${encodeURIComponent(data.avatar)}/outfit-expression?fallback=default&v=${encodeURIComponent(data.expression_version || '')}`
   const bars = Object.entries(data.status_effects || {})
 
+  /** One status bar: label · track · value, a button opening its history. */
+  const renderBar = (key: string, val: number) => {
+    const m = data.bar_meta?.[key] || {}
+    const boost = data.stat_boosts?.[key]
+    const value = boost?.value ?? Number(val)
+    const pct = Math.max(0, Math.min(100, Number(val) || 0))
+    const full = (lang === 'de' ? m.name_de || m.name : m.name) || key
+    // Track with a clearly visible end (border) so the fill level can
+    // be judged without the number — matters most in compact mode.
+    const track = (
+      <div style={{
+        position: 'relative', flex: 1, height: compact ? 7 : 5, borderRadius: 3,
+        background: 'rgba(255,255,255,0.18)',
+        border: '1px solid rgba(255,255,255,0.45)',
+        overflow: 'hidden', boxSizing: 'border-box',
+      }}>
+        <StatFill base={pct} boost={boost} color={m.color || 'var(--accent,#6aa9ff)'} />
+      </div>
+    )
+    return (
+      <button type="button" key={key} title={statTitle(t, full, pct, boost)}
+        aria-label={full} aria-haspopup="dialog" aria-expanded={history?.avatar === data.avatar && history.stat === key}
+        onClick={event => setHistory({ avatar: data.avatar, stat: key, anchor: event.currentTarget })}
+        style={{ display: 'flex', alignItems: 'center', gap: 4, border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', minWidth: 0 }}>
+        {!compact && (
+          <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
+            {m.label || key.slice(0, 3)}
+          </span>
+        )}
+        {track}
+        {!compact && (
+          <span style={{ minWidth: 20, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{value}</span>
+        )}
+      </button>
+    )
+  }
+
+  const conditionChips = data.conditions.length > 0 && data.conditions.map((c, i) => (
+    <span key={i} title={conditionTitle(t, c)} style={{ padding: '1px 7px', borderRadius: 10, fontSize: '0.7em',
+      background: 'rgba(40,30,10,0.7)', border: '1px solid rgba(255,170,90,0.5)' }}>
+      {c.icon ? `${c.icon} ` : ''}{c.label || c.name}
+    </span>
+  ))
+
+  const historyPopover = history && history.avatar === data.avatar && (
+    <StatHistoryPopover stat={history.stat}
+      name={(lang === 'de' ? data.bar_meta[history.stat]?.name_de || data.bar_meta[history.stat]?.name : data.bar_meta[history.stat]?.name) || history.stat}
+      rows={data.stat_changes || []} anchor={history.anchor} onClose={closeHistory} />
+  )
+
+  const moodField = (
+    <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Mood')}</span>
+      <input value={moodDraft} disabled={busy}
+        onFocus={() => setMoodFocused(true)}
+        onBlur={() => { setMoodFocused(false); setMood() }}
+        onChange={(e) => setMoodDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        placeholder={t('How do you feel?')}
+        className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
+    </label>
+  )
+
+  // Current activity — editable (free text; the chat and the agent loop set
+  // it too). Setting it wakes a sleeping avatar.
+  const activityField = (
+    <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Activity')}</span>
+      <input value={activityDraft} disabled={busy}
+        onFocus={() => setActivityFocused(true)}
+        onBlur={() => { setActivityFocused(false); setActivity() }}
+        onChange={(e) => setActivityDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        placeholder={t('What are you doing?')}
+        className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
+      {activityNote && (
+        <span style={{ color: '#d6b06a', fontSize: '0.76em' }}>{activityNote}</span>
+      )}
+    </label>
+  )
+
+  const followChip = data.follow && (
+    <button type="button" className="player-chip" disabled={busy} style={{ alignSelf: 'flex-start' }}
+      title={t('End the current pose and go into its follow pose')}
+      onClick={() => { void finishActivity() }}>
+      {t('End → {pose}').replace('{pose}', data.follow.pose_label || data.follow.pose_key)}
+    </button>
+  )
+
+  if (layout === 'strip') {
+    return (
+      <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.88em' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <img src={portraitUrl} alt={data.avatar}
+            onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
+            {...enlarge({ src: portraitUrl, alt: data.avatar },
+              { width: 64, height: 84, flex: '0 0 auto', objectFit: 'cover', objectPosition: 'top', borderRadius: 6, display: 'block' })} />
+          <div style={{ flex: 1, minWidth: 0, display: 'grid', gridTemplateColumns: '1fr', gap: 3 }}>
+            {bars.map(([key, val]) => renderBar(key, val))}
+          </div>
+        </div>
+        {conditionChips && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{conditionChips}</div>}
+        {historyPopover}
+        {moodField}
+        {activityField}
+        {followChip}
+      </div>
+    )
+  }
+
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9em', height: '100%', minHeight: 0 }}>
       {/* Portrait (scales with the window) with the bar overlay along its bottom */}
@@ -174,14 +290,9 @@ export function SelfPanel() {
             { maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', display: 'block' })} />
 
         {/* Conditions across the top of the image */}
-        {data.conditions.length > 0 && (
+        {conditionChips && (
           <div style={{ position: 'absolute', top: 6, left: 6, right: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {data.conditions.map((c, i) => (
-              <span key={i} title={conditionTitle(t, c)} style={{ padding: '1px 7px', borderRadius: 10, fontSize: '0.7em',
-                background: 'rgba(40,30,10,0.7)', border: '1px solid rgba(255,170,90,0.5)' }}>
-                {c.icon ? `${c.icon} ` : ''}{c.label || c.name}
-              </span>
-            ))}
+            {conditionChips}
           </div>
         )}
 
@@ -193,87 +304,18 @@ export function SelfPanel() {
             background: 'linear-gradient(transparent, rgba(0,0,0,0.7) 38%)',
             display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 10px',
           }}>
-            {bars.map(([key, val]) => {
-              const m = data.bar_meta?.[key] || {}
-              const boost = data.stat_boosts?.[key]
-              const value = boost?.value ?? Number(val)
-              const pct = Math.max(0, Math.min(100, Number(val) || 0))
-              const full = (lang === 'de' ? m.name_de || m.name : m.name) || key
-              // Track with a clearly visible end (border) so the fill level can
-              // be judged without the number — matters most in compact mode.
-              const track = (
-                <div style={{
-                  position: 'relative', flex: 1, height: compact ? 7 : 5, borderRadius: 3,
-                  background: 'rgba(255,255,255,0.18)',
-                  border: '1px solid rgba(255,255,255,0.45)',
-                  overflow: 'hidden', boxSizing: 'border-box',
-                }}>
-                  <StatFill base={pct} boost={boost} color={m.color || 'var(--accent,#6aa9ff)'} />
-                </div>
-              )
-              return (
-                <button type="button" key={key} title={statTitle(t, full, pct, boost)}
-                  aria-label={full} aria-haspopup="dialog" aria-expanded={history?.avatar === data.avatar && history.stat === key}
-                  onClick={event => setHistory({ avatar: data.avatar, stat: key, anchor: event.currentTarget })}
-                  style={{ display: 'flex', alignItems: 'center', gap: 4, border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', minWidth: 0 }}>
-                  {!compact && (
-                    <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
-                      {m.label || key.slice(0, 3)}
-                    </span>
-                  )}
-                  {track}
-                  {!compact && (
-                    <span style={{ minWidth: 20, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{value}</span>
-                  )}
-                </button>
-              )
-            })}
+            {bars.map(([key, val]) => renderBar(key, val))}
           </div>
         )}
       </div>
 
-      {history && history.avatar === data.avatar && (
-        <StatHistoryPopover stat={history.stat}
-          name={(lang === 'de' ? data.bar_meta[history.stat]?.name_de || data.bar_meta[history.stat]?.name : data.bar_meta[history.stat]?.name) || history.stat}
-          rows={data.stat_changes || []} anchor={history.anchor} onClose={closeHistory} />
-      )}
+      {historyPopover}
 
       <PropActionsPanel />
 
-      {/* Mood */}
-      <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-        <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Mood')}</span>
-        <input value={moodDraft} disabled={busy}
-          onFocus={() => setMoodFocused(true)}
-          onBlur={() => { setMoodFocused(false); setMood() }}
-          onChange={(e) => setMoodDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-          placeholder={t('How do you feel?')}
-          className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
-      </label>
-
-      {/* Current activity — editable (free text; the chat and the agent loop
-          set it too). Setting it wakes a sleeping avatar. */}
-      <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-        <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Activity')}</span>
-        <input value={activityDraft} disabled={busy}
-          onFocus={() => setActivityFocused(true)}
-          onBlur={() => { setActivityFocused(false); setActivity() }}
-          onChange={(e) => setActivityDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-          placeholder={t('What are you doing?')}
-          className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
-        {activityNote && (
-          <span style={{ color: '#d6b06a', fontSize: '0.76em' }}>{activityNote}</span>
-        )}
-      </label>
-      {data.follow && (
-        <button type="button" className="player-chip" disabled={busy} style={{ alignSelf: 'flex-start' }}
-          title={t('End the current pose and go into its follow pose')}
-          onClick={() => { void finishActivity() }}>
-          {t('End → {pose}').replace('{pose}', data.follow.pose_label || data.follow.pose_key)}
-        </button>
-      )}
+      {moodField}
+      {activityField}
+      {followChip}
     </div>
   )
 }

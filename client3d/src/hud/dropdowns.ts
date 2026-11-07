@@ -26,11 +26,12 @@ export function toggleDrop<T>(list: readonly T[], id: T, max = MAX_DROPS): T[] {
 
 /** Storage key of the widths the player dragged, per panel id. */
 export const DROP_WIDTHS_KEY = 'av3d.dropWidths.v1';
-/** Narrower than this and MindPanel folds its navigation to bare icons; wider
- *  and one dropdown is most of a laptop screen. A stored value outside the
- *  range is dropped rather than honoured. */
+/** Narrower than this and MindPanel folds its navigation to bare icons. The
+ *  upper end is twice the old 720px (user ruling); the stylesheet's
+ *  `max-width` still keeps a panel inside the window. A stored value outside
+ *  the range is dropped rather than honoured. */
 export const DROP_MIN = 280;
-export const DROP_MAX = 720;
+export const DROP_MAX = 1440;
 
 /** The stored widths, keeping only well-formed entries — one bad value in
  *  `localStorage` must never make a panel unusable. */

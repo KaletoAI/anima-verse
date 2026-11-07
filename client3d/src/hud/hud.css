@@ -633,6 +633,36 @@
   pointer-events: none;
 }
 #hud .hud-drop.hud-drop-wide { width: 480px; }
+/* With the Self strip on the left edge the row starts beside it. */
+#hud:has(.hud-self) .hud-drops {
+  left: 272px;
+  max-width: calc(100vw - 284px);
+}
+#hud:has(.hud-self) .hud-drop { max-width: calc(100vw - 284px); }
+
+/* ---- Self strip: the avatar's own values, always on screen ----
+   Top-left under the world name (user ruling, it replaced the Self panel);
+   250px, the dropdown row starts at 272px. Capped in height so it never
+   reaches the chat's usual top edge; its body scrolls when stats pile up. */
+#hud .hud-self {
+  position: absolute;
+  top: 48px;
+  left: 12px;
+  width: 250px;
+  max-height: calc(100vh - 140px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+#hud .hud-self .hud-panel-head .player-chip { margin-left: auto; }
+#hud .hud-self .hud-panel-body { padding: 8px; }
+
+/* ---- The game menu: under its own button at the right end of the bar ----
+   Drawn over the top-right corner (minimap, plans) while open — it is opened
+   on purpose. */
+#hud .hud-drop.hud-menu-drop {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+}
 #hud .hud-drop.hud-drop-tall { height: min(720px, calc(100vh - 140px)); }
 #hud .hud-drop > .hud-panel {
   flex: 1 1 auto;
@@ -642,7 +672,7 @@
 
 /* ---- A dropdown's width is the player's (acceptance finding) ----
    320/480 are two guesses at a screen. The handle on the RIGHT edge drags the
-   column between 280 and 720px, per panel, kept in `localStorage`. The strip
+   column between 280 and 1440px, per panel, kept in `localStorage`. The strip
    is 12px wide and lies almost entirely OUTSIDE the panel (3px in): it must
    be grabbable without stealing clicks from the panel, and to the right there
    is only the scene or the gap before the next dropdown. It shows nothing
@@ -1184,6 +1214,8 @@
    READ-ONLY, so no pointer exception above: a click on the numbers still
    reaches the scene and turns the camera. Tabular figures so a rising
    draw-call count does not make the block jitter. */
+/* With the Self strip on the left edge the readout moves beside it. */
+#hud:has(.hud-self) .hud-perf { left: 272px; }
 #hud .hud-perf {
   position: absolute;
   top: 52px;
@@ -1217,10 +1249,11 @@
   white-space: nowrap;
 }
 
-/* ---- Top-right corner: the plans box above the minimap ----
-   ONE column under the top bar's status part ("Log out"), so the minimap
-   never has to know how tall the plans box is right now (it folds, and it is
-   absent while there are no plans). Both read-only for the scene except where
+/* ---- Top-right corner: the minimap, the plans box below it ----
+   ONE column under the top bar's status part ("Log out"), so the plans box
+   never has to know whether the minimap stands above it (embodied mode and
+   the menu switch decide that). The plans sit BELOW the map (user ruling:
+   above it they were covered). Both read-only for the scene except where
    they take the pointer themselves (the plans box, the minimap canvas).
 
    When the location info panel is open it owns the corner (fixed at top 56 /
@@ -1415,6 +1448,22 @@
   font-size: 12px;
 }
 .hud-logout:hover { background: rgba(242, 205, 110, 0.15); }
+/* The menu button, the last thing in the bar — the same 30px stud as the
+   panel buttons. */
+.hud-menu-btn {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  border: 1px solid rgba(242, 205, 110, 0.5);
+  background: transparent;
+  color: #f2d98c;
+  cursor: pointer;
+}
+.hud-menu-btn:hover,
+.hud-menu-btn.on { background: rgba(242, 205, 110, 0.18); }
 
 
 /* ---------- Info-Panel ---------- */

@@ -43,7 +43,7 @@ import { GameMenu } from './GameMenu';
 import { InfoPanel } from './InfoPanel';
 import { IntentsBox } from './IntentsBox';
 import {
-  DROP_MAX, DROP_MIN, DROP_WIDTHS_KEY, closeDrop, openDrop, readDropWidths, toggleDrop,
+  DROP_MAX, DROP_MIN, DROP_WIDTHS_KEY, openDrop, readDropWidths, toggleDrop,
 } from './dropdowns';
 import { SceneTile } from './SceneTile';
 import { TILE_COLLAPSE_BELOW_PX } from './sceneTile';
@@ -81,7 +81,7 @@ import './hud.css';
 // overrides the plain rules of hud.css, so it must come last.
 import './theme-fantasy.css';
 
-type PanelId = 'chat' | 'self' | 'others' | 'menu'
+type PanelId = 'chat' | 'others' | 'menu'
   | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests' | 'gallery'
   | 'instagram' | 'avatar';
 
@@ -91,7 +91,6 @@ type PanelId = 'chat' | 'self' | 'others' | 'menu'
 const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: string }> = [
   { id: 'chat', icon: 'chat', title: 'Chat' },
   { id: 'avatar', icon: 'avatar', title: 'Avatar' },
-  { id: 'self', icon: 'self', title: 'Self' },
   { id: 'others', icon: 'others', title: 'Others' },
   { id: 'belongings', icon: 'backpack', title: 'Inventory' },
   { id: 'mind', icon: 'brain', title: 'Mind' },
@@ -104,12 +103,12 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
   { id: 'news', icon: 'news', title: 'News' },
   { id: 'quests', icon: 'scroll', title: 'Quests' },
   { id: 'tasks', icon: 'tasks', title: 'Tasks' },
-  // The package's gear (`settings`) — no icon of our own was added for this.
-  { id: 'menu', icon: 'settings', title: 'Menu' },
 ];
 
-/** What a spectator may open: the panels that need no avatar. */
-const SPECTATOR_PANELS = new Set<PanelId>(['menu', 'news', 'tasks']);
+/** What a spectator may open: the panels that need no avatar. The menu is
+ *  not in the button row at all — it has its own button at the far right of
+ *  the bar, next to "Log out", and drops down there (user ruling). */
+const SPECTATOR_PANELS = new Set<PanelId>(['news', 'tasks']);
 
 /** The panels that are a full reading surface rather than a status strip.
  *  As a dropdown they take a FIXED height (hud.css `.hud-drop-tall`) instead
@@ -171,6 +170,9 @@ export function Hud({ avatar, username, role }: {
   const [chatShown, setChatShown] = useState(true);
   /** The open dropdowns, oldest first — see dropdowns.ts for the cap. */
   const [drops, setDrops] = useState<PanelId[]>([]);
+  /** The game menu: its own button at the right end of the bar, its own
+   *  dropdown under it (not part of `drops`). */
+  const [menuOpen, setMenuOpen] = useState(false);
   const isOpen = (id: PanelId) => (id === 'chat' ? chatShown : drops.includes(id));
   const [tabsEl, setTabsEl] = useState<HTMLElement | null>(null);
   const dropsOpen = drops.length > 0;
@@ -213,6 +215,12 @@ export function Hud({ avatar, username, role }: {
       setChatShown((c) => !c);
       return;
     }
+    // The menu hangs under its own button at the right edge and does not
+    // count against the dropdown row's cap.
+    if (id === 'menu') {
+      setMenuOpen((m) => !m);
+      return;
+    }
     // A fourth dropdown closes the oldest one — see dropdowns.ts.
     setDrops((d) => toggleDrop(d, id));
   }, []);
@@ -226,13 +234,12 @@ export function Hud({ avatar, username, role }: {
   // chat. A separate UI snapshot tells the scene which HUD owns a key.
   //
   // Publish menu ownership separately from the command that closes it.
-  const menuOpen = drops.includes('menu');
   useEffect(() => {
     setHudUiState({ menuOpen });
   }, [menuOpen]);
   useEffect(() => {
     uiActions.toggleMenu = () => toggle('menu');
-    uiActions.closeMenu = () => { setDrops((d) => closeDrop(d, 'menu')); };
+    uiActions.closeMenu = () => { setMenuOpen(false); };
     return () => { uiActions.toggleMenu = undefined; uiActions.closeMenu = undefined; };
   }, [toggle]);
 
@@ -1037,16 +1044,6 @@ export function Hud({ avatar, username, role }: {
           ))}
         </span>
       )}
-      {/* Taking control lives in the panel CHROME, not in the shared SelfPanel
-          (/play has no 3D view to fly). Only while one is not embodied — in the
-          mode the chip above is the way out. It is the only way back in when the
-          avatar sits in a closed room: it is not drawn there, so there is no
-          figure to click a plaque out of. */}
-      {id === 'self' && game.mode !== 'embodied' && (
-        <button className="player-chip" onClick={() => gameActions.takeControl?.()}>
-          {t('Take control')}
-        </button>
-      )}
       <button className="hud-panel-close" onClick={() => toggle(id)}
         title={t('Close')} aria-label={t('Close')}>
         <Icon name="close" size={14} />
@@ -1067,9 +1064,47 @@ export function Hud({ avatar, username, role }: {
   // A window too narrow for all of them shows the NEWEST that fit (240px
   // minimum + 10px gap each); the older ones stay open and come back when the
   // window grows — closing them would be a decision the window size made.
-  const dropsThatFit = Math.max(1, Math.floor((winW - 14) / 250));
+  // The Self strip (hud.css `.hud-self`, 250px + gap) takes the left edge.
+  const selfShown = !spectating && !!avatarName;
+  const dropsThatFit = Math.max(1, Math.floor((winW - 14 - (selfShown ? 262 : 0)) / 250));
   const shownDrops = drops.filter((id) => !spectating || SPECTATOR_PANELS.has(id))
     .slice(-dropsThatFit);
+
+  /** The game menu, under its own button at the right end of the bar. */
+  // Esc and M are handled HERE as well, not only in main.ts: the global
+  // key path ignores anything typed into a form control, and a volume
+  // slider is one — so after touching a slider the keys would be
+  // swallowed. The panel holds no text field, so both keys are
+  // unambiguous inside it. And ONLY for those: the global chain listens
+  // in the CAPTURE phase and has therefore already answered every other
+  // press by the time this runs — with the storey choice FIRST, which is
+  // why closing the menu here as well made one Esc close two things
+  // (E4-T4 minor). The guard is the same predicate main.ts uses, so
+  // there is exactly one rule about what "typed into a control" means.
+  const menuPanel = (
+    <section className="hud-panel hud-menu-panel"
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' && e.key.toLowerCase() !== 'm') return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (!isTypingTarget(e.nativeEvent)) return;
+        e.stopPropagation();
+        setMenuOpen(false);
+      }}>
+      {panelHead('menu', 'settings', t('Menu'))}
+      <div className="hud-panel-body">
+        <ErrorBoundary inline label="Menu">
+          <GameMenu prefs={prefs} onChange={setPrefs}
+            perfOn={perfOn} onPerfChange={setPerfOn}
+            minimapOn={minimapOn} onMinimapChange={setMinimapOn}
+            chatAlpha={chatAlpha} onChatAlphaChange={setChatAlpha}
+            scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
+            graphicsPrefs={graphicsPrefs} onGraphicsChange={setGraphicsPrefs}
+            isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
+            onBackToTitle={() => gameActions.backToTitle?.()} />
+        </ErrorBoundary>
+      </div>
+    </section>
+  );
 
   /** One dropdown's panel. The content panels (stage 6) are shared from
    *  @anima/player-ui — they poll themselves and take no scene data, so there
@@ -1084,42 +1119,6 @@ export function Hud({ avatar, username, role }: {
       </section>
     );
     switch (id) {
-      case 'menu':
-        // Esc and M are handled HERE as well, not only in main.ts: the global
-        // key path ignores anything typed into a form control, and a volume
-        // slider is one — so after touching a slider the keys would be
-        // swallowed. The panel holds no text field, so both keys are
-        // unambiguous inside it. And ONLY for those: the global chain listens
-        // in the CAPTURE phase and has therefore already answered every other
-        // press by the time this runs — with the storey choice FIRST, which is
-        // why closing the menu here as well made one Esc close two things
-        // (E4-T4 minor). The guard is the same predicate main.ts uses, so
-        // there is exactly one rule about what "typed into a control" means.
-        return (
-          <section className="hud-panel hud-menu-panel"
-            onKeyDown={(e) => {
-              if (e.key !== 'Escape' && e.key.toLowerCase() !== 'm') return;
-              if (e.ctrlKey || e.metaKey || e.altKey) return;
-              if (!isTypingTarget(e.nativeEvent)) return;
-              e.stopPropagation();
-              setDrops((d) => closeDrop(d, 'menu'));
-            }}>
-            {panelHead('menu', 'settings', t('Menu'))}
-            <div className="hud-panel-body">
-              <ErrorBoundary inline label="Menu">
-                <GameMenu prefs={prefs} onChange={setPrefs}
-                  perfOn={perfOn} onPerfChange={setPerfOn}
-                  minimapOn={minimapOn} onMinimapChange={setMinimapOn}
-                  chatAlpha={chatAlpha} onChatAlphaChange={setChatAlpha}
-                  scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
-                  graphicsPrefs={graphicsPrefs} onGraphicsChange={setGraphicsPrefs}
-                  isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
-                  onBackToTitle={() => gameActions.backToTitle?.()} />
-              </ErrorBoundary>
-            </div>
-          </section>
-        );
-      case 'self': return simple('self', avatarName || t('Self'), 'Self', <SelfPanel />);
       case 'others': return simple('others', t('Others'), 'Others', <OthersPanel />);
       case 'belongings': return simple('backpack', t('Inventory'), 'Inventory', <BelongingsPanel />);
       case 'mind': return simple('brain', t('Mind'), 'Mind', <MindPanel character={avatarName} />);
@@ -1168,13 +1167,39 @@ export function Hud({ avatar, username, role }: {
           <span className="hud-user">{avatar ? `${username} · ${t('Avatar')}: ${avatar}` : username}</span>
           {spectating && <>
             <span title={t('Take control to chat, act or take photos.')}>{t('Spectating')}</span>
-            <button className="player-chip" onClick={() => showDrop('menu')}>
+            <button className="player-chip" onClick={() => setMenuOpen(true)}>
               {t('Take control')}
             </button>
           </>}
           <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
+          {/* The menu at the very right edge, beside "Log out" (user ruling). */}
+          <button className={'hud-menu-btn' + (menuOpen ? ' on' : '')} onClick={() => toggle('menu')}
+            aria-pressed={menuOpen} title={t('Menu')} aria-label={t('Menu')}>
+            <Icon name="settings" size={18} />
+          </button>
         </div>
       </div>
+      {/* The avatar's own values, always on screen: top-left under the world
+          name, the dropdown row starts beside it (user ruling — it replaced
+          the Self panel). "Take control" lives in its head, as it did in the
+          panel's; only outside the embodied mode, where the mode chip is the
+          way out. */}
+      {!spectating && avatarName && (
+        <section className="hud-panel hud-self" aria-label={t('Self')}>
+          <header className="hud-panel-head">
+            <Icon name="self" size={14} />
+            <span className="hud-panel-title">{avatarName}</span>
+            {game.mode !== 'embodied' && (
+              <button className="player-chip" onClick={() => gameActions.takeControl?.()}>
+                {t('Take control')}
+              </button>
+            )}
+          </header>
+          <div className="hud-panel-body">
+            <ErrorBoundary inline label="Self"><SelfPanel layout="strip" /></ErrorBoundary>
+          </div>
+        </section>
+      )}
       {!spectating && <div className="hud-notices"><NoticeBanner onOpenGallery={() => showDrop('gallery')} /></div>}
       {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
@@ -1187,15 +1212,15 @@ export function Hud({ avatar, username, role }: {
       {perfOn && <PerfOverlay />}
 
       {/* The top-right corner, ONE column so nothing in it has to guess the
-          height of what stands above it: the avatar's open plans first (they
-          fold, and they vanish while there are none), the minimap below.
+          height of what stands above it: the minimap first, the avatar's open
+          plans below it (user ruling; they fold, and vanish while empty).
           Minimap (stage 5, task 3): as far as one can see, north up. Only in
           the embodied mode — in the overview one IS looking at the map, and a
           second small copy of it would say nothing. The switch in the game
           menu is the other half of the condition. */}
       <div className="hud-corner">
-        {!spectating && <IntentsBox avatar={avatarName} />}
         {game.mode === 'embodied' && minimapOn && <Minimap onPick={setTravelPick} />}
+        {!spectating && <IntentsBox avatar={avatarName} />}
       </div>
 
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
@@ -1328,6 +1353,10 @@ export function Hud({ avatar, username, role }: {
             </div>
           ))}
         </div>
+      )}
+
+      {menuOpen && (
+        <div className="hud-drop hud-menu-drop">{menuPanel}</div>
       )}
 
       {/* Bottom centre, ONE stack (E3-T5): the talk prompt sits directly above

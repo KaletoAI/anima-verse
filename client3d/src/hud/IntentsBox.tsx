@@ -1,6 +1,6 @@
 /**
  * The avatar's open plans — a small permanent box at the top right, under the
- * top bar's "Log out", above the minimap (`.hud-corner` stacks the two).
+ * top bar's "Log out", below the minimap (`.hud-corner` stacks the two).
  *
  * `GET /play/intents` decides everything that needs the server: which plans
  * count (owned, or the avatar is a participant), the time label in the world
