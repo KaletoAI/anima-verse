@@ -166,8 +166,20 @@ def logout(request: Request, response: Response) -> Dict[str, Any]:
 
 @router.get("/status")
 def auth_status(user = Depends(get_current_user_optional)) -> Dict[str, Any]:
-    """Status without a 401 — the frontend asks whether a login is needed."""
-    return {"authenticated": user is not None, "user": user}
+    """Status without a 401 — the frontend asks whether a login is needed.
+
+    ``world`` is the active world's name (the storage dir basename, the same
+    value as the admin-only ``GET /admin/world-name``) for the 3D client's top
+    bar. Only for a signed-in caller: the route is on the anonymous allowlist.
+    """
+    out: Dict[str, Any] = {"authenticated": user is not None, "user": user}
+    if user is not None:
+        from app.core.paths import get_storage_dir
+        try:
+            out["world"] = get_storage_dir().name
+        except Exception:
+            out["world"] = ""
+    return out
 
 
 @router.post("/password")

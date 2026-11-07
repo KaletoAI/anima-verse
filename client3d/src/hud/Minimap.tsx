@@ -15,7 +15,7 @@
  * PRESENTATIONAL, and cheap by construction. It owns no state and asks the
  * scene nothing: `main.ts` publishes a finished slice on the minimap store of
  * `bus.ts` (its own listener set, like the performance readout — these updates
- * must not re-render the chat and the rail), and it publishes only when the
+ * must not re-render the chat and the panel buttons), and it publishes only when the
  * picture actually changes. So one notification means one redraw, and standing
  * still costs neither.
  *

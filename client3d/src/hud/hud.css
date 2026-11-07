@@ -5,8 +5,9 @@
 
    Pointer rule: the root is a full-screen overlay that must NEVER block
    camera dragging on the canvas below — pointer-events: none on the root,
-   auto only on the surfaces that are actually operated (rail, panels, the
-   character plaque, the mode chip, the unfolded elevator). Everything that is
+   auto only on the surfaces that are actually operated (the top bar with its
+   panel buttons, panels, the plans box, the character plaque, the mode chip,
+   the unfolded elevator). Everything that is
    merely read — the bottom-centre stack around the plaque, the talk prompt and
    the elevator prompt inside it — keeps the pointer at none, so a click there
    still reaches the scene. */
@@ -20,8 +21,8 @@
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 14px;
 }
-#hud .hud-rail,
 #hud .hud-panel,
+#hud .hud-intents,
 #hud .hud-plaque,
 #hud .hud-mode,
 #hud .hud-elevator {
@@ -57,29 +58,43 @@
   pointer-events: auto;
 }
 
-/* ---- Right-edge rail: the three panel toggles ---- */
-#hud .hud-rail {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* ---- Panel buttons: one row in the top bar, behind the world name ----
+   30px studs, so the bar keeps its old height (~41px) and nothing hanging
+   below it (badge 46px, perf/minimap 52px, info panel 56px) has to move.
+   The row may scroll sideways on a narrow window rather than push the
+   status part off the bar; hence the unread badge sits INSIDE the button's
+   box (see below) — an overflowing row clips anything outside it. */
+#hud .hud-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 22px;
+  margin: 0 12px;
+  background: rgba(242, 205, 110, 0.35);
 }
-#hud .hud-rail button {
-  width: 40px;
-  height: 40px;
+#hud .hud-tabs {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#hud .hud-tabs::-webkit-scrollbar { display: none; }
+#hud .hud-tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
+  border-radius: 7px;
   border: 1px solid var(--border, #30363d);
   background: var(--bg-container, #161b22);
   color: inherit;
   cursor: pointer;
 }
-#hud .hud-rail button:hover { border-color: var(--accent, #6aa9ff); }
-#hud .hud-rail button.on {
+#hud .hud-tabs button:hover { border-color: var(--accent, #6aa9ff); }
+#hud .hud-tabs button.on {
   border-color: var(--accent, #6aa9ff);
   background: color-mix(in srgb, var(--accent, #6aa9ff) 24%, var(--bg-container, #161b22));
 }
@@ -201,7 +216,7 @@
    TOP edge and the RIGHT edge — the two directions a panel anchored
    bottom-left can grow in — and the corner between them for both at once.
 
-   Everything about them follows the dock handle above: absolutely positioned
+   Everything about them follows the dropdown width handle: absolutely positioned
    so they eat no share of the flex column, `pointer-events: auto` and
    `touch-action: none` (the drag is pointer-captured; without it a touch drag
    scrolls instead), invisible until the pointer is on them, and then a short
@@ -214,7 +229,7 @@
    character plaque on a narrow window. The floor lives in `clampChatSize`,
    where the drag is.
 
-   They lie INSIDE the panel (the dock handle lies outside its column): this
+   They lie INSIDE the panel (the dropdown handle lies outside its panel): this
    one clips its children (`.hud-panel { overflow: hidden }`) so the composer's
    square corners stay inside the rounded frame, and anything outside would
    simply be cut away. Hence 9px strips over the head's own padding, an 18px
@@ -582,79 +597,68 @@
 }
 #hud .hud-plaque-close:hover { opacity: 1; }
 
-/* Self/Others: right dock column next to the rail, below the top
-   bar. The column itself stays drag-through; only the panels catch. */
-#hud .hud-dock {
+/* ---- Dropdowns: the open panels hang below the top bar ----
+   One row, left to right in opening order (at most three, dropdowns.ts),
+   starting under the panel buttons. The row is drag-through; only the panels
+   and their handles catch. Each column is 320px (480 for the wide panels, or
+   the width the player dragged — an inline style) and SHRINKS when three do
+   not fit the window, down to 240px; `max-width` keeps a single dragged one
+   inside it.
+
+   Height: short panels (Self, Others, Menu) size to their content up to the
+   cap and scroll in their body; the content panels (`.hud-drop-tall`) take a
+   FIXED height, because their lists scroll inside and a dropdown that grew
+   with every poll would jump under the pointer. The cap leaves the bottom
+   strip free, where the chat composer and the plaque sit. A dropdown is
+   opened on purpose, so it is drawn over the chat window, not under it. */
+#hud .hud-drops {
   position: absolute;
-  top: 52px;
-  --dock-right: 62px; /* 10px rail offset + 40px rail + 12px gap */
-  right: var(--dock-right);
-  bottom: 12px;
-  width: 320px;
-  max-width: calc(100vw - var(--dock-right) - 22px);
+  top: 48px;
+  left: 12px;
+  max-width: calc(100vw - 24px);
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
   gap: 10px;
   pointer-events: none;
 }
-
-/* The dock steps aside while the location info panel is mounted.
-   The panel sits at right:12 / width:300, so it owns 12..312px from
-   the right edge; the dock at right:62 covers 62..382 and can swallow the
-   panel's zoom button. :has() follows the panel's presence within the HUD.
-
-   The shift is CLAMPED, because moving the dock right out of the info panel's
-   way pushes it into the chat panel on the left (left:12 / width up to 840, so
-   it ends at 852px at most) — and there the dock would swallow the send
-   button, which is the worse trade. Dock left edge = 100vw - right - 320;
-   keeping it >= 864px (12px clear of the widest chat) caps `right` at
-   100vw - 1184px. The cap uses the chat's WIDEST case on purpose: its width
-   itself depends on the viewport, and a cap that is too generous would put the
-   dock back on the composer. Resulting behaviour:
-     >= 1508px  full shift to 324px, info panel completely clear
-     1246..1508 partial shift, info panel's zoom button mostly clickable
-     <  1246px  no shift at all — identical to the layout before this rule,
-                so a narrow window is never made worse than it already was.
-   This is layout, not ornament: it stays here and not in theme-fantasy.css,
-   so dropping or swapping the theme cannot bring the click-block back. */
-#hud:has(.info-panel) .hud-dock {
-  --dock-right: clamp(62px, 100vw - 1184px, 324px);
+#hud .hud-drop {
+  position: relative;
+  flex: 0 1 auto;
+  width: 320px;
+  min-width: 240px;
+  max-width: calc(100vw - 24px);
+  max-height: min(720px, calc(100vh - 140px));
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
 }
-/* Inventory and Mind get half again (user finding, stage 6 part 1): the
-   inventory is a table of item rows, and MindPanel folds its navigation
-   column down to bare icons below 340px — in a 320px dock it never showed a
-   label. `max-width` keeps the same guard against a narrow window. */
-#hud .hud-dock.hud-dock-wide {
-  width: 480px;
+#hud .hud-drop.hud-drop-wide { width: 480px; }
+#hud .hud-drop.hud-drop-tall { height: min(720px, calc(100vh - 140px)); }
+#hud .hud-drop > .hud-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 
-/* ---- The dock width is the user's (acceptance finding) ----
-   320/480 are two guesses at a screen, and neither is right on all of them.
-   The handle on the LEFT edge drags the column between 280 and 720px and the
-   value is kept in `localStorage`; Hud.tsx writes it as an INLINE width, so a
-   dragged width beats `.hud-dock-wide` above — that class is only left to
-   decide as long as nobody has said anything. The `max-width` on .hud-dock
-   still applies to both, so no width reaches past the window.
-
-   The strip is 14px wide and lies almost entirely OUTSIDE the dock (3px in):
-   it must be grabbable without stealing clicks from the panels behind it, and
-   an absolutely positioned child paints over its static siblings — every pixel
-   it reaches inward is a pixel of panel one cannot hit. To the left there is
-   only the scene. It shows nothing until the pointer is on it and then draws
-   the short grip line below. `touch-action: none` because the drag is
-   pointer-captured — without it a touch drag scrolls instead.
-   `pointer-events: auto` because the dock column itself is drag-through. */
-#hud .hud-dock-grip {
+/* ---- A dropdown's width is the player's (acceptance finding) ----
+   320/480 are two guesses at a screen. The handle on the RIGHT edge drags the
+   column between 280 and 720px, per panel, kept in `localStorage`. The strip
+   is 12px wide and lies almost entirely OUTSIDE the panel (3px in): it must
+   be grabbable without stealing clicks from the panel, and to the right there
+   is only the scene or the gap before the next dropdown. It shows nothing
+   until the pointer is on it. `touch-action: none` because the drag is
+   pointer-captured — without it a touch drag scrolls instead. */
+#hud .hud-drop-grip {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -11px;
-  width: 14px;
+  right: -9px;
+  width: 12px;
   cursor: ew-resize;
   pointer-events: auto;
   touch-action: none;
 }
-#hud .hud-dock-grip::before {
+#hud .hud-drop-grip::before {
   content: '';
   position: absolute;
   top: 50%;
@@ -667,13 +671,9 @@
   opacity: 0;
   transition: opacity 0.12s ease;
 }
-#hud .hud-dock-grip:hover::before,
-#hud .hud-dock-grip:active::before {
+#hud .hud-drop-grip:hover::before,
+#hud .hud-drop-grip:active::before {
   opacity: 0.85;
-}
-#hud .hud-dock .hud-panel {
-  flex: 1 1 0;
-  min-height: 120px;
 }
 
 /* ---- Plain functional styles for package classes panels.css does not
@@ -872,18 +872,14 @@
 }
 .ga-img-nomatch { color: var(--danger, #f85149); font-size: 0.85em; }
 
-/* ---- Game menu: the fourth rail panel (E4-T4) ----
-   A dock panel like Self/Others, so it inherits the panel chrome and needs
-   only its own inner layout. It sizes itself to its content instead of taking
-   the dock's equal share: the menu is a short, finished list, and stretching
-   it to half the screen next to a full Self panel would look like something
-   was missing. It may SHRINK, though (flex-shrink 1, not 0): with more
-   settings than the viewport is tall, a non-shrinking panel grows out of the
-   dock past the bottom edge and the body's `overflow: auto` never gets a
-   height to scroll in — the lower settings were simply unreachable (Firefox
-   report 2026-08-18). Shrinking hands the overflow to the panel body, which
-   already scrolls. `max-height: 100%` is the belt to that braces. */
-#hud .hud-dock .hud-panel.hud-menu-panel {
+/* ---- Game menu: a dropdown like the others (E4-T4) ----
+   It inherits the panel chrome and needs only its own inner layout. It sizes
+   itself to its content, but may SHRINK (flex-shrink 1): with more settings
+   than the viewport is tall, a non-shrinking panel grows past the dropdown's
+   cap and the body's `overflow: auto` never gets a height to scroll in — the
+   lower settings were simply unreachable (Firefox report 2026-08-18).
+   Shrinking hands the overflow to the panel body, which already scrolls. */
+#hud .hud-drop .hud-panel.hud-menu-panel {
   flex: 0 1 auto;
   min-height: 0;
   max-height: 100%;
@@ -1181,8 +1177,9 @@
 
 /* ---- Performance readout (stage 5, plan-3d-lod-und-betreten.md) ----
    Top-left under the top bar (z 10, ~40px): the mode chip is centred,
-   the info panel sits right, the chat docks bottom-left — this corner is the
-   only one nothing else claims.
+   the plans box and the info panel sit right, the chat docks bottom-left.
+   Open dropdowns hang over it — a debug readout yields to a panel one asked
+   for.
 
    READ-ONLY, so no pointer exception above: a click on the numbers still
    reaches the scene and turns the camera. Tabular figures so a rising
@@ -1220,20 +1217,125 @@
   white-space: nowrap;
 }
 
-/* ---- Minimap (stage 5, task 3) ----
-   Top-right, mirroring the performance readout in the opposite corner. It is
-   READ-ONLY — no pointer exception above, so a click on the map still reaches
-   the scene and turns the camera.
+/* ---- Top-right corner: the plans box above the minimap ----
+   ONE column under the top bar's status part ("Log out"), so the minimap
+   never has to know how tall the plans box is right now (it folds, and it is
+   absent while there are no plans). Both read-only for the scene except where
+   they take the pointer themselves (the plans box, the minimap canvas).
 
-   The dock starts below it while it is up: both want the top-right corner, and
-   the minimap is the smaller of the two. 52 top + 1 border + 6 padding + 160
-   canvas + 6 + 1 = 226, plus the dock's own 12px gap = 238. The :has() rule
-   keeps that coupling in CSS, the same way the info-panel shift above does —
-   no JS wiring between the two components. */
-#hud .hud-minimap {
+   When the location info panel is open it owns the corner (fixed at top 56 /
+   right 12, 300px wide including its border, `box-sizing: border-box`), so
+   the column steps left past it: 12 + 300 + 12 = 324px. */
+#hud .hud-corner {
   position: absolute;
-  top: 52px;
-  right: 62px; /* the dock's --dock-right: 10px rail offset + 40px rail + 12px */
+  top: 48px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+#hud:has(.info-panel) .hud-corner {
+  right: 324px;
+}
+
+/* ---- The avatar's open plans (IntentsBox.tsx) ----
+   A slim, foldable list. Its height is capped so a long list scrolls inside
+   instead of pushing the minimap off the screen. */
+#hud .hud-intents {
+  width: 260px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  background: var(--bg-container, #161b22);
+  font-size: 12px;
+  overflow: hidden;
+}
+#hud .hud-intents-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+#hud .hud-intents-title { flex: 1 1 auto; }
+#hud .hud-intents-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 22%, transparent);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+#hud .hud-intents-fold { opacity: 0.7; }
+#hud .hud-intents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--border, #30363d);
+}
+#hud .hud-intent-row {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 9px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#hud .hud-intent-row:disabled { cursor: default; }
+#hud .hud-intent-row:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 12%, transparent);
+}
+#hud .hud-intent-when {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #6aa9ff);
+}
+#hud .hud-intent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+#hud .hud-intent-owner {
+  flex: 0 0 auto;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+#hud .hud-intent-desc {
+  margin: 0;
+  padding: 2px 9px 6px 18px;
+  line-height: 1.4;
+  opacity: 0.8;
+  white-space: pre-wrap;
+}
+
+/* ---- Minimap (stage 5, task 3) ----
+   In the corner column above, below the plans box. It is READ-ONLY — no
+   pointer exception, so a click beside the canvas still reaches the scene. */
+#hud .hud-minimap {
   padding: 6px;
   border: 1px solid var(--border, #30363d);
   border-radius: 8px;
@@ -1244,32 +1346,11 @@
   display: block;
   border-radius: 4px;
 }
-#hud:has(.hud-minimap) .hud-dock {
-  top: 238px;
-}
-/* …and the minimap GIVES WAY to the open info panel (acceptance finding B6).
-   Both live in the top-right corner — the panel fixed at top 56 / right 12,
-   300px wide INCLUDING its padding and border (`* { box-sizing: border-box }`,
-   style.css line 1), so its left edge sits 312px from the right; the map runs
-   from 62 to 236. And the map is the one drawn OVER: #hud is z 20, the panel
-   z 10. That single overlap produced BOTH findings — the selection panel
-   covered, and a map that "shows nothing", the nothing being its own dark
-   backdrop lying on the panel.
-
-   Hidden, not shifted. A sideways dodge in the dock's `clamp()` shape only
-   frees the corner on a wide enough window (the dock's own cap does not move
-   at all below 1246px) and would leave both symptoms standing on everything
-   narrower — while the panel is the surface one clicks and the minimap is a
-   reading aid one can have back by closing it. The dock's rule above stays as
-   it is: it is a shift because a dock that vanished would take the chat with
-   it. */
+/* …and the minimap GIVES WAY to the open info panel (acceptance finding B6):
+   the panel is the surface one clicks, the minimap a reading aid one has back
+   by closing it. The plans box moves left instead (see .hud-corner). */
 #hud:has(.info-panel) .hud-minimap {
   display: none;
-}
-/* …and with the map gone the dock takes its place back: the 238px above are
-   the room the minimap needs, and it is not there to need it. */
-#hud:has(.hud-minimap):has(.info-panel) .hud-dock {
-  top: 52px;
 }
 
 /* These surfaces used the scene page's reset before the migration. Keep
@@ -1286,22 +1367,37 @@
   left: 0;
   right: 0;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 8px 14px;
+  padding: 5px 14px;
   background: linear-gradient(rgba(16, 19, 24, 0.92), rgba(16, 19, 24, 0.75));
   border-bottom: 1px solid rgba(242, 205, 110, 0.35);
   color: #e8e2d5;
   z-index: 10;
 }
 .hud-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 28vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: Georgia, serif;
   font-variant: small-caps;
   font-size: 17px;
   letter-spacing: 0.08em;
   color: #f2d98c;
 }
-.hud-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.hud-right {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  padding-left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.hud-user { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hud-status {
   width: 9px; height: 9px; border-radius: 50%; display: inline-block;
   background: #666;
@@ -1488,15 +1584,18 @@
   top: 130px;
   left: 50%;
   transform: translateX(-50%);
-  width: min(560px, 70vw);
+  /* Clear of the top-right plans box (260px + 12px margin) on both sides,
+     with a floor so a narrow window still gets a readable banner. */
+  width: min(560px, max(280px, calc(100vw - 600px)));
 }
 
-/* Match the 2D launcher's unread badge without importing its layout rules. */
-#hud .hud-rail button { position: relative; }
+/* Match the 2D launcher's unread badge without importing its layout rules.
+   Inside the button's box (top/right 0, overlapping the corner): the button
+   row scrolls sideways, and an overflowing row clips what lies outside. */
 #hud .hud-unread-badge {
   position: absolute;
-  top: -5px;
-  right: -5px;
+  top: -1px;
+  right: -1px;
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
@@ -1513,13 +1612,13 @@
   pointer-events: none;
 }
 
-/* Scene tile: goal 1 keeps the permanent image beside the right rail, clear
-   of the centre. Dock/info panels or widths below 1200px collapse it to the
-   last button inside the rail via a portal. The icon inherits rail layout and
-   button styling, keeping it clear of the dock and other rail buttons. */
+/* Scene tile: the permanent image bottom right, clear of the centre. Open
+   dropdowns, the info panel or widths below 1200px collapse it to the last
+   button of the top bar's panel row via a portal; the icon inherits that
+   row's button styling. */
 #hud .hud-scene-tile {
   position: absolute;
-  right: var(--dock-right, 62px);
+  right: 12px;
   bottom: 12px;
   pointer-events: auto;
   border: 1px solid var(--border, #30363d);

@@ -142,43 +142,44 @@ export function StatsPanel({
 
   return (
     <>
-      <Field label={t('Stat')}>
-        <select
-          className="ga-input"
-          value={sel}
-          onChange={(e) => setSel(e.target.value)}
-        >
-          {keys.map((k) => (
-            <option key={k} value={k}>
-              {label(k)}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <Field label={t('Value')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <input
-          className="ga-input"
-          type="number"
-          style={{ width: 100 }}
-          value={local}
-          disabled={!sel}
-          onChange={(e) => setLocal(e.target.value)}
-          onBlur={() => commit(local)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              commit(local)
-            }
-          }}
-        />
-        {boosts[sel] && <span className="ga-hint">
-          {t('effective {value} ({boost})')
-            .replace('{value}', String(Math.max(0, Number(local || 0) + boosts[sel].boost)))
-            .replace('{boost}', boosts[sel].boost >= 0 ? `+${boosts[sel].boost}` : String(boosts[sel].boost))}
-        </span>}
-        </div>
-      </Field>
+      {/* Stat picker and its value share one row: select 2/3, value 1/3. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12, alignItems: 'start' }}>
+        <Field label={t('Stat')}>
+          <select
+            className="ga-input"
+            value={sel}
+            onChange={(e) => setSel(e.target.value)}
+          >
+            {keys.map((k) => (
+              <option key={k} value={k}>
+                {label(k)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t('Value')}>
+          <input
+            className="ga-input"
+            type="number"
+            style={{ width: '100%' }}
+            value={local}
+            disabled={!sel}
+            onChange={(e) => setLocal(e.target.value)}
+            onBlur={() => commit(local)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commit(local)
+              }
+            }}
+          />
+        </Field>
+      </div>
+      {boosts[sel] && <div className="ga-hint">
+        {t('effective {value} ({boost})')
+          .replace('{value}', String(Math.max(0, Number(local || 0) + boosts[sel].boost)))
+          .replace('{boost}', boosts[sel].boost >= 0 ? `+${boosts[sel].boost}` : String(boosts[sel].boost))}
+      </div>}
       <StatHistory character={character} revision={`${savedSignal}:${discardSignal}:${historyRevision}`} label={label} />
     </>
   )

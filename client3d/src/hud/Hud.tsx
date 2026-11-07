@@ -2,16 +2,18 @@
  * HUD v1 of the 3D client (plan-3d-game stage 2, tasks 5 + 6). hud.css carries
  * the structure, theme-fantasy.css the look (variables redefined under #hud).
  *
- * Layout: a right-edge rail of toggle buttons, the chat as a docked panel
- * bottom-left, everything else as a right-side dock column. The root never
- * catches the pointer — only rail and panels do (hud.css), so camera dragging
- * on the canvas keeps working everywhere else.
+ * Layout: the top bar carries the world name and, behind a separator, one row
+ * of panel buttons; every panel except the chat opens as a DROPDOWN hanging
+ * below the bar, side by side left to right in opening order, at most
+ * `MAX_DROPS` at once (dropdowns.ts). The chat is a docked panel bottom-left,
+ * the avatar's plans and the minimap share the top-right corner. The root
+ * never catches the pointer — only the bar and the panels do (hud.css), so
+ * camera dragging on the canvas keeps working everywhere else.
  *
  * Stage 6 added the remaining /play panels (inventory, mind, phone, news,
- * tasks) to that rail. They are the identical components out of
+ * tasks) to the button row. They are the identical components out of
  * `@anima/player-ui` and poll themselves, so the frame is all this file adds;
- * `requires` on a rail entry hides the button when the bound skill package is
- * gone.
+ * `requires` on a button entry hides it when the bound skill package is gone.
  *
  * This container owns the ONE `/play/scene` poll: ScenePanel receives data +
  * refresh as props and never polls itself. The `photoDialog` slot is filled
@@ -39,6 +41,10 @@ import { CharacterPlaque } from './CharacterPlaque';
 import { ChatPortraits } from './ChatPortraits';
 import { GameMenu } from './GameMenu';
 import { InfoPanel } from './InfoPanel';
+import { IntentsBox } from './IntentsBox';
+import {
+  DROP_MAX, DROP_MIN, DROP_WIDTHS_KEY, closeDrop, openDrop, readDropWidths, toggleDrop,
+} from './dropdowns';
 import { SceneTile } from './SceneTile';
 import { TILE_COLLAPSE_BELOW_PX } from './sceneTile';
 import { PlaceMenu } from './PlaceMenu';
@@ -46,7 +52,7 @@ import { TravelBar } from './TravelBar';
 import type { TravelPick } from '../game/travelPick';
 import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
-import { ttsSpeak, ttsStatus } from '../api';
+import { authStatus, ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions, elevatorSoleOption } from '../game/elevator';
 import { nearestOffer } from '../game/offers';
 import { loadGraphicsPrefs, loadPrefs, loadScatterPrefs, saveGraphicsPrefs,
@@ -102,53 +108,32 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
   { id: 'menu', icon: 'settings', title: 'Menu' },
 ];
 
+/** What a spectator may open: the panels that need no avatar. */
+const SPECTATOR_PANELS = new Set<PanelId>(['menu', 'news', 'tasks']);
+
 /** The panels that are a full reading surface rather than a status strip.
- *  At most ONE of them is open: the dock is one column of fixed height, and
- *  their 120px minimums plus self/others/menu do not fit on any screen — they
- *  would silently spill past the bottom edge. Opening one therefore closes
- *  all the others; self/others/menu keep stacking freely as before. */
+ *  As a dropdown they take a FIXED height (hud.css `.hud-drop-tall`) instead
+ *  of their content's: their lists scroll inside, and a dropdown that grew and
+ *  shrank with every poll would jump under the pointer. Self/Others/Menu are
+ *  short and size to their content. */
 const CONTENT_PANELS = new Set<PanelId>([
   'belongings', 'mind', 'phone', 'news', 'tasks', 'quests', 'gallery',
   'instagram', 'avatar']);
 
-/** Panels that need more than the dock's 320px (user finding, acceptance of
+/** Panels that need more than the default 320px (user finding, acceptance of
  *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
  *  a navigation column NEXT to its content and folds that column down to bare
- *  icons below 340px — in a 320px dock it was never anything else. Widening
- *  the dock to 480 (half again) is what makes both readable; only one content
- *  panel is ever open, so the column can follow the one that is. The quest
- *  book joins them: a beat row is a timestamp column NEXT to its text, and in
- *  320px the text side is down to a couple of words per line. The gallery is
- *  the fourth: its thumbnail grid fills 72px columns, so a 320px dock is three
- *  pictures per row and 480px is five — the same wall, half again as much of
- *  it visible at once. Instagram is the fifth for the plainest reason of all:
- *  a post is a full-width picture, so the dock width IS the picture width. */
+ *  icons below 340px. The quest book joins them: a beat row is a timestamp
+ *  column NEXT to its text. The gallery fills 72px thumbnail columns, so 320px
+ *  is three pictures per row and 480px is five. Instagram for the plainest
+ *  reason of all: a post is a full-width picture, so the panel width IS the
+ *  picture width. A width the player dragged wins over this (dropdowns.ts). */
 const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests', 'gallery',
   'instagram', 'avatar']);
 
-/** Storage key of the dock width the user dragged for themselves. Absent =
- *  the widths above decide, which is what every fresh browser starts with. */
-const DOCK_WIDTH_KEY = 'av3d.dockWidth';
-/** Narrower than this and MindPanel folds its navigation to bare icons again
- *  (the very finding WIDE_PANELS exists for), wider and the dock is most of a
- *  laptop screen with the world reduced to a strip. Both ends are also what a
- *  stored value is checked against: a hand-edited or stale number outside them
- *  is dropped rather than honoured. */
-const DOCK_MIN = 280;
-const DOCK_MAX = 720;
-
-/** The stored dock width, or null for "let the panels decide". Anything that
- *  is not a number inside the range counts as absent — the column must never
- *  come up unusable because of one bad entry in `localStorage`. */
-function readDockWidth(): number | null {
-  const raw = Number(localStorage.getItem(DOCK_WIDTH_KEY));
-  if (!Number.isFinite(raw) || raw < DOCK_MIN || raw > DOCK_MAX) return null;
-  return Math.round(raw);
-}
-
 /** Quiet time after which an unpinned chat panel withdraws. Long enough to
  *  read the line that brought it up and start typing, short enough that a
- *  silent room clears the view without anyone reaching for the rail. Roughly
+ *  silent room clears the view without anyone reaching for its button. Roughly
  *  four poll intervals (5 s), so a late answer still counts as "the
  *  conversation goes on" and not as a fresh interruption. */
 const CHAT_IDLE_MS = 20000;
@@ -182,27 +167,38 @@ export function Hud({ avatar, username, role }: {
   }), []);
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const boot = useSyncExternalStore(subscribeBoot, getBoot).state;
-  const [open, setOpen] = useState<Record<PanelId, boolean>>({
-    chat: true, self: false, others: false, menu: false,
-    belongings: false, mind: false, phone: false, news: false, tasks: false,
-    quests: false, gallery: false, instagram: false, avatar: false,
-  });
-  const [railEl, setRailEl] = useState<HTMLElement | null>(null);
-  const dockOpen = Object.entries(open).some(([id, value]) => id !== 'chat' && value);
-  const [narrow, setNarrow] = useState(() => window.innerWidth < TILE_COLLAPSE_BELOW_PX);
+  /** The chat panel (bottom-left, auto mode below) is not a dropdown. */
+  const [chatShown, setChatShown] = useState(true);
+  /** The open dropdowns, oldest first — see dropdowns.ts for the cap. */
+  const [drops, setDrops] = useState<PanelId[]>([]);
+  const isOpen = (id: PanelId) => (id === 'chat' ? chatShown : drops.includes(id));
+  const [tabsEl, setTabsEl] = useState<HTMLElement | null>(null);
+  const dropsOpen = drops.length > 0;
+  /** The world's name for the top bar. `/auth/status` carries it for a
+   *  signed-in caller; asked once per mount, the product name stands in until
+   *  (and unless) it arrives. */
+  const [worldName, setWorldName] = useState('');
   useEffect(() => {
-    const resize = () => setNarrow(window.innerWidth < TILE_COLLAPSE_BELOW_PX);
+    let alive = true;
+    authStatus().then((s) => { if (alive) setWorldName((s.world || '').trim()); })
+      .catch(() => { /* the product name stays */ });
+    return () => { alive = false; };
+  }, []);
+  const [winW, setWinW] = useState(() => window.innerWidth);
+  const narrow = winW < TILE_COLLAPSE_BELOW_PX;
+  useEffect(() => {
+    const resize = () => setWinW(window.innerWidth);
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
   }, []);
-  const unread = useOpenTopics(open.instagram);
-  /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
-  const chatOpen = useRef(open.chat);
-  chatOpen.current = open.chat;
+  const unread = useOpenTopics(drops.includes('instagram'));
+  /** `chatShown` for callbacks that must not re-subscribe on every toggle. */
+  const chatOpen = useRef(chatShown);
+  chatOpen.current = chatShown;
   /**
-   * The chat panel knows two modes, and the rail switches between them:
+   * The chat panel knows two modes, and its button switches between them:
    * unpinned (the auto mode — shows itself on a new line, withdraws when
-   * idle) and pinned open (stays until it is closed again). ONE rail click
+   * idle) and pinned open (stays until it is closed again). ONE click
    * decides it: opening by hand pins, closing unpins — the auto state is
    * simply discarded, there is no three-click cycle to learn. Closing keeps
    * the auto SHOW alive on purpose: "away for now" is not "never again", and
@@ -212,31 +208,31 @@ export function Hud({ avatar, username, role }: {
   /** the rendered chat section — for the focus check of the idle timeout */
   const chatRef = useRef<HTMLElement | null>(null);
   const toggle = useCallback((id: PanelId) => {
-    if (id === 'chat') setChatPinned(!chatOpen.current);
-    setOpen((o) => {
-      const next = { ...o, [id]: !o[id] };
-      // Opening a content panel closes its siblings — see CONTENT_PANELS.
-      if (!o[id] && CONTENT_PANELS.has(id)) {
-        for (const other of CONTENT_PANELS) if (other !== id) next[other] = false;
-      }
-      return next;
-    });
+    if (id === 'chat') {
+      setChatPinned(!chatOpen.current);
+      setChatShown((c) => !c);
+      return;
+    }
+    // A fourth dropdown closes the oldest one — see dropdowns.ts.
+    setDrops((d) => toggleDrop(d, id));
   }, []);
+  const showDrop = useCallback((id: PanelId) => setDrops((d) => openDrop(d, id)), []);
 
   // --- Game menu (E4-T4) ---------------------------------------------------
   //
-  // The menu is a rail panel like the others, so its OPEN state lives here
+  // The menu is a dropdown like the others, so its OPEN state lives here
   // with theirs — one place, one shape. The vanilla side (M, Esc) reaches it
   // through `uiActions`, the same direction the F key already uses for the
   // chat. A separate UI snapshot tells the scene which HUD owns a key.
   //
   // Publish menu ownership separately from the command that closes it.
+  const menuOpen = drops.includes('menu');
   useEffect(() => {
-    setHudUiState({ menuOpen: open.menu });
-  }, [open.menu]);
+    setHudUiState({ menuOpen });
+  }, [menuOpen]);
   useEffect(() => {
     uiActions.toggleMenu = () => toggle('menu');
-    uiActions.closeMenu = () => { setOpen((o) => ({ ...o, menu: false })); };
+    uiActions.closeMenu = () => { setDrops((d) => closeDrop(d, 'menu')); };
     return () => { uiActions.toggleMenu = undefined; uiActions.closeMenu = undefined; };
   }, [toggle]);
 
@@ -268,7 +264,7 @@ export function Hud({ avatar, username, role }: {
   /** Measure only non-modal surfaces. Portalled overlays own the full window
    *  through overlayOpen, never through a full-screen hit rectangle. */
   useEffect(() => {
-    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
+    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-drop, .hud-panel, .hud-intents, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
       // The notice banner's root is zero-height by design: measure its rows,
       // or a native/iframe host passes the click on × through to the scene.
@@ -433,40 +429,40 @@ export function Hud({ avatar, username, role }: {
   }, []);
 
   /**
-   * The width of the dock column — the user's, once they have said so.
+   * The width of each dropdown — the player's, once they have said so.
    *
-   * A LOCAL view setting like the readout and the minimap above, but it is
-   * dragged rather than switched, so it is written at the END of a gesture and
-   * not on every state change: a drag produces a value per frame, and an
-   * effect on the state would put a hundred writes into `localStorage` for one
-   * pull of the handle. `widthRef` carries the last value alongside the state
-   * for exactly that — the pointer-up handler needs the number, not a render.
+   * A LOCAL view setting like the readout and the minimap above, but dragged
+   * rather than switched, so it is written at the END of a gesture and not on
+   * every state change: a drag produces a value per frame. `dragRef` carries
+   * the running value for the pointer-up handler, which needs the number, not
+   * a render.
    *
-   * `null` means "nothing stored": the panel-driven widths of WIDE_PANELS
-   * apply, which is what a fresh browser and a double-clicked reset both give.
-   * A stored width WINS over them, because it is an inline style and the wide
-   * class is a class — the person who dragged has said what they want, and a
-   * panel must not take it back on opening. `max-width` in the stylesheet
-   * still caps it against a narrow window, so no width can push the column
-   * off-screen.
+   * Per PANEL id: the inventory wants a different width than the menu, and a
+   * single shared width would make every panel follow the last one dragged.
+   * An id without an entry follows WIDE_PANELS. A stored width WINS over that,
+   * because it is an inline style and the wide class is a class; `max-width`
+   * in the stylesheet still caps it against a narrow window.
    */
-  const [dockWidth, setDockWidth] = useState<number | null>(readDockWidth);
-  const widthRef = useRef<number | null>(dockWidth);
-  const dockRef = useRef<HTMLDivElement | null>(null);
-  /** The running drag: where it started, how wide the dock was then, and
-   *  whether it has actually moved yet. Null while nothing is being dragged.
-   *  `moved` is what keeps a plain click on the handle from storing the
-   *  current width — a click is not an adjustment, and the double-click reset
-   *  is made of two of them. */
-  const dragRef = useRef<{ x: number; w: number; moved: boolean } | null>(null);
+  const [dropWidths, setDropWidths] = useState<Record<string, number>>(
+    () => readDropWidths(localStorage.getItem(DROP_WIDTHS_KEY)));
+  const dropWidthsRef = useRef(dropWidths);
+  dropWidthsRef.current = dropWidths;
+  /** The running drag: which panel, where it started, how wide the panel was
+   *  then, the last width, and whether it has moved at all — a plain click on
+   *  the handle is not an adjustment, and the double-click reset is made of
+   *  two of them. Null while nothing is being dragged. */
+  const dragRef = useRef<
+    { id: PanelId; x: number; w: number; last: number; moved: boolean } | null>(null);
 
   const onGripDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    const id = e.currentTarget.dataset.panel as PanelId | undefined;
+    if (!id) return;
     // The MEASURED width, not the stored one: with nothing stored the drag has
-    // to continue from whatever the panels are currently giving (320 or 480),
-    // or the first pixel of movement would jump the column.
-    const w = dockRef.current?.getBoundingClientRect().width ?? DOCK_MIN;
-    dragRef.current = { x: e.clientX, w, moved: false };
+    // to continue from whatever the stylesheet is giving (320 or 480), or the
+    // first pixel of movement would jump the panel.
+    const w = e.currentTarget.parentElement?.getBoundingClientRect().width ?? DROP_MIN;
+    dragRef.current = { id, x: e.clientX, w, last: w, moved: false };
     e.currentTarget.setPointerCapture(e.pointerId);
     e.preventDefault();
   }, []);
@@ -474,13 +470,12 @@ export function Hud({ avatar, username, role }: {
   const onGripMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
-    // The dock is anchored on the RIGHT, so dragging the handle left widens
-    // it — the delta is inverted on purpose.
-    const next = Math.round(Math.min(DOCK_MAX, Math.max(DOCK_MIN,
-      drag.w + (drag.x - e.clientX))));
+    // The handle sits on the RIGHT edge and the panel grows to the right.
+    const next = Math.round(Math.min(DROP_MAX, Math.max(DROP_MIN,
+      drag.w + (e.clientX - drag.x))));
     drag.moved = true;
-    widthRef.current = next;
-    setDockWidth(next);
+    drag.last = next;
+    setDropWidths((all) => (all[drag.id] === next ? all : { ...all, [drag.id]: next }));
   }, []);
 
   const onGripUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -489,28 +484,32 @@ export function Hud({ avatar, username, role }: {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
-    if (!drag?.moved || widthRef.current == null) return;
-    localStorage.setItem(DOCK_WIDTH_KEY, String(widthRef.current));
+    if (!drag?.moved) return;
+    localStorage.setItem(DROP_WIDTHS_KEY, JSON.stringify(
+      { ...dropWidthsRef.current, [drag.id]: drag.last }));
   }, []);
 
-  /** Double-click on the handle = forget the width. Not "back to 320": with
-   *  the entry gone the dock follows the open panel again, which is the
-   *  behaviour someone who never touched the handle has. */
-  const onGripReset = useCallback(() => {
+  /** Double-click on the handle = forget this panel's width. Not "back to
+   *  320": with the entry gone the panel follows WIDE_PANELS again, which is
+   *  the behaviour someone who never touched the handle has. */
+  const onGripReset = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const id = e.currentTarget.dataset.panel;
     dragRef.current = null;
-    widthRef.current = null;
-    setDockWidth(null);
-    localStorage.removeItem(DOCK_WIDTH_KEY);
+    if (!id) return;
+    const next = { ...dropWidthsRef.current };
+    delete next[id];
+    setDropWidths(next);
+    localStorage.setItem(DROP_WIDTHS_KEY, JSON.stringify(next));
   }, []);
 
   /**
    * --- The chat window's own size (plan-hud-chat-portraits.md 2a) ----------
    *
-   * The chat is the ONE HUD surface outside the dock, so it carries handles of
-   * its own: the top edge, the right edge and the corner between them — the
-   * two directions a panel anchored bottom-left can grow in.
+   * The chat is the ONE panel that is not a dropdown, so it carries handles
+   * of its own: the top edge, the right edge and the corner between them —
+   * the two directions a panel anchored bottom-left can grow in.
    *
-   * The GESTURE is the dock handle's, down to the details that make it usable:
+   * The GESTURE is the dropdown handle's, down to the details that make it usable:
    * pointer capture (at any real speed the cursor leaves a 9px strip at once),
    * the start size MEASURED rather than read from the store (with nothing
    * stored the drag has to continue from whatever the stylesheet is giving, or
@@ -520,10 +519,8 @@ export function Hud({ avatar, username, role }: {
    * entry gone the stylesheet decides again, which is what somebody who never
    * touched a handle has.
    *
-   * What is NOT taken from the dock is the inverted delta: the dock hangs on
-   * the RIGHT edge and widens when dragged left. This panel hangs bottom-left
-   * and grows up and to the right, so the top edge is -Δy and the right edge
-   * +Δx, neither of them reversed.
+   * The panel hangs bottom-left and grows up and to the right, so the top
+   * edge is -Δy and the right edge +Δx.
    *
    * The dragged size is an INLINE style and therefore beats the stylesheet's
    * `width`/`height`. It also lifts the stylesheet's DEFAULT width cap: that
@@ -769,7 +766,7 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     uiActions.openScreenshotPhoto = shot => {
       setScreenshotPhoto(shot);
-      setOpen(current => ({ ...current, chat: true }));
+      setChatShown(true);
       setChatHail(count => count + 1);
     };
     return () => { uiActions.openScreenshotPhoto = undefined; };
@@ -777,7 +774,7 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     uiActions.openChat = () => {
       if (chatOpen.current) setChatHail((n) => n + 1);
-      else setOpen((o) => ({ ...o, chat: true }));
+      else setChatShown(true);
     };
     return () => { uiActions.openChat = undefined; };
   }, []);
@@ -863,7 +860,7 @@ export function Hud({ avatar, username, role }: {
     if (roomChanged(prev, cur)) voice.current?.clear();
     const fresh = newSceneLines(prev, cur);
     if (!fresh.length) return;
-    if (!chatOpen.current) setOpen((o) => ({ ...o, chat: true }));
+    if (!chatOpen.current) setChatShown(true);
     // Same one-shot pulse the talk key uses: an appearing panel announces
     // itself once instead of just materialising in the corner.
     setChatHail((n) => n + 1);
@@ -890,11 +887,11 @@ export function Hud({ avatar, username, role }: {
   // Auto HIDE: after CHAT_IDLE_MS in which nothing happened — and only while
   // nothing points at the chat. Every dependency of this effect restarts the
   // window, which is precisely what "idle" means here: `chatHail` counts every
-  // new line and every talk key, `open.chat` the panel coming up, and
+  // new line and every talk key, `chatShown` the panel coming up, and
   // talkTarget/elevatorOpen are standing offers that must not be answered by a
   // vanishing panel. A pinned panel is not this effect's business at all.
   useEffect(() => {
-    if (!open.chat || chatPinned || screenshotPhoto) return;
+    if (!chatShown || chatPinned || screenshotPhoto) return;
     if (game.talkTarget || game.elevatorOpen) return;
     let timer = 0;
     function expire() {
@@ -906,11 +903,11 @@ export function Hud({ avatar, username, role }: {
         timer = window.setTimeout(expire, CHAT_BUSY_RECHECK_MS);
         return;
       }
-      setOpen((o) => ({ ...o, chat: false }));
+      setChatShown(false);
     }
     timer = window.setTimeout(expire, CHAT_IDLE_MS);
     return () => window.clearTimeout(timer);
-  }, [open.chat, chatPinned, chatHail, game.talkTarget, game.elevatorOpen, screenshotPhoto]);
+  }, [chatShown, chatPinned, chatHail, game.talkTarget, game.elevatorOpen, screenshotPhoto]);
 
   // --- Which row the picture column follows (2c, decision E4) --------------
   //
@@ -947,7 +944,7 @@ export function Hud({ avatar, username, role }: {
       ? prev : { stuck, centeredId }));
   }, []);
   useEffect(() => {
-    if (!open.chat) return;
+    if (!chatShown) return;
     const el = chatRef.current?.querySelector<HTMLElement>('.player-scene-scroll');
     if (!el) return;
     measureChat();
@@ -958,7 +955,7 @@ export function Hud({ avatar, username, role }: {
       el.removeEventListener('scroll', measureChat);
       ro.disconnect();
     };
-  }, [open.chat, measureChat]);
+  }, [chatShown, measureChat]);
   // A new line moves every row, and so does a dragged size. Measuring again
   // here is safe AFTER the transcript has been redrawn and scrolled: a child's
   // effects run before its parent's, so ScenePanel's auto-scroll has already
@@ -978,7 +975,7 @@ export function Hud({ avatar, username, role }: {
   // window slides it upwards while leaving it exactly as big as it was.
   useEffect(() => {
     const el = chatRef.current;
-    if (!open.chat || !el) {
+    if (!chatShown || !el) {
       gameActions.setChatBox?.(null);
       return;
     }
@@ -995,7 +992,7 @@ export function Hud({ avatar, username, role }: {
       window.removeEventListener('resize', report);
       gameActions.setChatBox?.(null);
     };
-  }, [open.chat]);
+  }, [chatShown]);
 
   // WHOSE faces the column shows. The pointer half comes from the panel:
   // `ScenePanel` forwards `onRowHover` to every row, so this only stores what
@@ -1005,7 +1002,7 @@ export function Hud({ avatar, username, role }: {
   // A closing window never sends the leaving pointer (React fires no
   // `mouseleave` on unmount), so the last hovered row would outlive it and
   // still govern the column on the next opening.
-  useEffect(() => { if (!open.chat) setHoveredRowId(null); }, [open.chat]);
+  useEffect(() => { if (!chatShown) setHoveredRowId(null); }, [chatShown]);
   const chatFocus = chatFocusId({
     hoveredId: hoveredRowId,
     centeredId: chatScroll.centeredId,
@@ -1067,10 +1064,103 @@ export function Hud({ avatar, username, role }: {
   // so the player always sees what F does.
   const offer = nearestOffer(game);
 
+  // A window too narrow for all of them shows the NEWEST that fit (240px
+  // minimum + 10px gap each); the older ones stay open and come back when the
+  // window grows — closing them would be a decision the window size made.
+  const dropsThatFit = Math.max(1, Math.floor((winW - 14) / 250));
+  const shownDrops = drops.filter((id) => !spectating || SPECTATOR_PANELS.has(id))
+    .slice(-dropsThatFit);
+
+  /** One dropdown's panel. The content panels (stage 6) are shared from
+   *  @anima/player-ui — they poll themselves and take no scene data, so there
+   *  is nothing to wire beyond the frame. */
+  const dropPanel = (id: PanelId) => {
+    const simple = (icon: IconName, title: string, label: string, body: React.ReactNode) => (
+      <section className="hud-panel">
+        {panelHead(id, icon, title)}
+        <div className="hud-panel-body">
+          <ErrorBoundary inline label={label}>{body}</ErrorBoundary>
+        </div>
+      </section>
+    );
+    switch (id) {
+      case 'menu':
+        // Esc and M are handled HERE as well, not only in main.ts: the global
+        // key path ignores anything typed into a form control, and a volume
+        // slider is one — so after touching a slider the keys would be
+        // swallowed. The panel holds no text field, so both keys are
+        // unambiguous inside it. And ONLY for those: the global chain listens
+        // in the CAPTURE phase and has therefore already answered every other
+        // press by the time this runs — with the storey choice FIRST, which is
+        // why closing the menu here as well made one Esc close two things
+        // (E4-T4 minor). The guard is the same predicate main.ts uses, so
+        // there is exactly one rule about what "typed into a control" means.
+        return (
+          <section className="hud-panel hud-menu-panel"
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape' && e.key.toLowerCase() !== 'm') return;
+              if (e.ctrlKey || e.metaKey || e.altKey) return;
+              if (!isTypingTarget(e.nativeEvent)) return;
+              e.stopPropagation();
+              setDrops((d) => closeDrop(d, 'menu'));
+            }}>
+            {panelHead('menu', 'settings', t('Menu'))}
+            <div className="hud-panel-body">
+              <ErrorBoundary inline label="Menu">
+                <GameMenu prefs={prefs} onChange={setPrefs}
+                  perfOn={perfOn} onPerfChange={setPerfOn}
+                  minimapOn={minimapOn} onMinimapChange={setMinimapOn}
+                  chatAlpha={chatAlpha} onChatAlphaChange={setChatAlpha}
+                  scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
+                  graphicsPrefs={graphicsPrefs} onGraphicsChange={setGraphicsPrefs}
+                  isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
+                  onBackToTitle={() => gameActions.backToTitle?.()} />
+              </ErrorBoundary>
+            </div>
+          </section>
+        );
+      case 'self': return simple('self', avatarName || t('Self'), 'Self', <SelfPanel />);
+      case 'others': return simple('others', t('Others'), 'Others', <OthersPanel />);
+      case 'belongings': return simple('backpack', t('Inventory'), 'Inventory', <BelongingsPanel />);
+      case 'mind': return simple('brain', t('Mind'), 'Mind', <MindPanel character={avatarName} />);
+      case 'gallery': return simple('gallery', t('Gallery'), 'Gallery',
+        <GalleryPanel regenDialog={(ctl) => <PlayerRegenDialog ctl={ctl} />} />);
+      case 'avatar': return simple('avatar', t('Avatar'), 'Avatar',
+        <AvatarSettingsPanel avatar={avatarName} />);
+      case 'instagram': return simple('instagram', t('Instagram'), 'Instagram',
+        <InstagramPanel
+          imageGenDialog={(ctl) => <PlayerRegenDialog ctl={ctl} />}
+          animateDialog={(ctl) => <PlayerAnimateDialog ctl={ctl} />} />);
+      case 'phone': return simple('phone', t('Phone'), 'Phone', <PhonePanel />);
+      case 'news': return simple('news', t('News'), 'News', <NewsPanel />);
+      case 'quests': return simple('scroll', t('Quests'), 'Quests', <QuestsPanel />);
+      case 'tasks': return simple('tasks', t('Tasks'), 'Tasks', <TaskPanel />);
+      default: return null;
+    }
+  };
+
   return (
     <CharacterFormHostContext.Provider value={characterFormHost}>
       <div className="hud-top">
-        <div className="hud-title">⚜ Anima Verse — {t('World map')}</div>
+        <div className="hud-title" title={worldName || 'Anima Verse'}>⚜ {worldName || 'Anima Verse'}</div>
+        <span className="hud-sep" aria-hidden="true" />
+        {/* The panel buttons, one row in the bar. Spectating keeps only the
+            panels that need no avatar; `requires` hides a button whose skill
+            package is gone. The collapsed scene tile portals its button in
+            here as the last one (SceneTile). */}
+        <nav ref={setTabsEl} className="hud-tabs" aria-label={t('Panels')}>
+          {PANELS.filter((p) => (!spectating || SPECTATOR_PANELS.has(p.id))
+            && (!p.requires || hasCapability(p.requires))).map((p) => (
+            <button key={p.id} className={isOpen(p.id) ? 'on' : ''}
+              onClick={() => toggle(p.id)} aria-pressed={isOpen(p.id)}
+              title={t(p.title)} aria-label={t(p.title)}>
+              <Icon name={p.icon} size={18} />
+              {(p.id === 'phone' || p.id === 'instagram') && unread[p.id] > 0 && (
+                <span className="hud-unread-badge">{unread[p.id]}</span>
+              )}
+            </button>
+          ))}
+        </nav>
         <div className="hud-right">
           <span className={`hud-status ${game.connection === 'ok' ? 'ok' : 'err'}`}
             aria-label={t('Connection')} title={game.connection === 'ok' ? t('Connected') : t('Backend unreachable')} />
@@ -1078,14 +1168,14 @@ export function Hud({ avatar, username, role }: {
           <span className="hud-user">{avatar ? `${username} · ${t('Avatar')}: ${avatar}` : username}</span>
           {spectating && <>
             <span title={t('Take control to chat, act or take photos.')}>{t('Spectating')}</span>
-            <button className="player-chip" onClick={() => setOpen(o => ({ ...o, menu: true }))}>
+            <button className="player-chip" onClick={() => showDrop('menu')}>
               {t('Take control')}
             </button>
           </>}
           <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
         </div>
       </div>
-      {!spectating && <div className="hud-notices"><NoticeBanner onOpenGallery={() => setOpen(o => ({ ...o, gallery: true }))} /></div>}
+      {!spectating && <div className="hud-notices"><NoticeBanner onOpenGallery={() => showDrop('gallery')} /></div>}
       {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
         <span className="ovb-name">{game.openView}</span>
@@ -1096,11 +1186,17 @@ export function Hud({ avatar, username, role }: {
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}
 
-      {/* Minimap (stage 5, task 3): as far as one can see, north up, top right.
-          Only in the embodied mode — in the overview one IS looking at the
-          map, and a second small copy of it would say nothing. The switch in
-          the game menu is the other half of the condition. */}
-      {game.mode === 'embodied' && minimapOn && <Minimap onPick={setTravelPick} />}
+      {/* The top-right corner, ONE column so nothing in it has to guess the
+          height of what stands above it: the avatar's open plans first (they
+          fold, and they vanish while there are none), the minimap below.
+          Minimap (stage 5, task 3): as far as one can see, north up. Only in
+          the embodied mode — in the overview one IS looking at the map, and a
+          second small copy of it would say nothing. The switch in the game
+          menu is the other half of the condition. */}
+      <div className="hud-corner">
+        {!spectating && <IntentsBox avatar={avatarName} />}
+        {game.mode === 'embodied' && minimapOn && <Minimap onPick={setTravelPick} />}
+      </div>
 
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
           chrome — one chip below the top bar that also leaves again.
@@ -1125,23 +1221,9 @@ export function Hud({ avatar, username, role }: {
         </div>
       )}
 
-      {!spectating && <SceneTile scene={data ?? null} collapsed={dockOpen || !!game.info || narrow} railEl={railEl} />}
+      {!spectating && <SceneTile scene={data ?? null} collapsed={dropsOpen || !!game.info || narrow} tabsEl={tabsEl} />}
 
-      <nav ref={setRailEl} className="hud-rail">
-        {PANELS.filter((p) => (!spectating || p.id === 'menu' || p.id === 'news' || p.id === 'tasks')
-          && (!p.requires || hasCapability(p.requires))).map((p) => (
-          <button key={p.id} className={open[p.id] ? 'on' : ''}
-            onClick={() => toggle(p.id)} aria-pressed={open[p.id]}
-            title={t(p.title)} aria-label={t(p.title)}>
-            <Icon name={p.icon} size={20} />
-            {(p.id === 'phone' || p.id === 'instagram') && unread[p.id] > 0 && (
-              <span className="hud-unread-badge">{unread[p.id]}</span>
-            )}
-          </button>
-        ))}
-      </nav>
-
-      {!spectating && open.chat && (
+      {!spectating && chatShown && (
         <section ref={chatRef}
           className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}
           style={{
@@ -1168,7 +1250,7 @@ export function Hud({ avatar, username, role }: {
           {/* Three handles (2a): top edge, right edge, and the corner between
               them. Absolutely positioned OUT of the flex column, or each would
               eat a share of the height the head and the transcript divide
-              between them — the same reason the dock handle gives. */}
+              between them — a flex child would eat a share of the height. */}
           <div className="hud-chat-grip hud-chat-grip-top" data-edge="top"
             role="separator" aria-orientation="horizontal"
             title={t('Drag to resize · double-click to reset')}
@@ -1220,158 +1302,31 @@ export function Hud({ avatar, username, role }: {
         </section>
       )}
 
-      {dockOpen && (
-        <div ref={dockRef}
-          className={'hud-dock'
-            + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}
-          style={dockWidth != null ? { width: dockWidth } : undefined}>
-          {/* The width handle sits ON the dock's left edge and is taken out of
-              the column's flex flow by `position: absolute` — a flex child
-              would eat a share of the height the panels divide between them.
-              Pointer events (not mouse) with capture, so the drag survives the
-              cursor leaving the 14px strip, which at speed it always does. */}
-          <div className="hud-dock-grip" role="separator" aria-orientation="vertical"
-            title={t('Drag to resize · double-click to reset')}
-            aria-label={t('Drag to resize · double-click to reset')}
-            onPointerDown={onGripDown} onPointerMove={onGripMove}
-            onPointerUp={onGripUp} onPointerCancel={onGripUp}
-            onDoubleClick={onGripReset} />
-          {/* Esc and M are handled HERE as well, not only in main.ts: the
-              global key path ignores anything typed into a form control, and a
-              volume slider is one — so after touching a slider the keys would
-              be swallowed. The panel holds no text field, so both keys are
-              unambiguous inside it.
-              And ONLY for those: the global chain listens in the CAPTURE phase
-              and has therefore already answered every other press by the time
-              this runs — with the storey choice FIRST, which is why closing the
-              menu here as well made one Esc close two things (E4-T4 minor). The
-              guard is the same predicate main.ts uses, so there is exactly one
-              rule about what "typed into a control" means. */}
-          {open.menu && (
-            <section className="hud-panel hud-menu-panel"
-              onKeyDown={(e) => {
-                if (e.key !== 'Escape' && e.key.toLowerCase() !== 'm') return;
-                if (e.ctrlKey || e.metaKey || e.altKey) return;
-                if (!isTypingTarget(e.nativeEvent)) return;
-                e.stopPropagation();
-                setOpen((o) => ({ ...o, menu: false }));
-              }}>
-              {panelHead('menu', 'settings', t('Menu'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Menu">
-                  <GameMenu prefs={prefs} onChange={setPrefs}
-                    perfOn={perfOn} onPerfChange={setPerfOn}
-                    minimapOn={minimapOn} onMinimapChange={setMinimapOn}
-                    chatAlpha={chatAlpha} onChatAlphaChange={setChatAlpha}
-                    scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
-                    graphicsPrefs={graphicsPrefs} onGraphicsChange={setGraphicsPrefs}
-                    isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
-                    onBackToTitle={() => gameActions.backToTitle?.()} />
-                </ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.self && (
-            <section className="hud-panel">
-              {panelHead('self', 'self', avatarName || t('Self'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Self"><SelfPanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.others && (
-            <section className="hud-panel">
-              {panelHead('others', 'others', t('Others'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Others"><OthersPanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {/* The content panels (stage 6), shared from @anima/player-ui —
-              they poll themselves and take no scene data, so there
-              is nothing to wire beyond the frame. Only one of them is ever
-              mounted at a time (CONTENT_PANELS), which also keeps their polls
-              from all running at once. */}
-          {!spectating && open.belongings && (
-            <section className="hud-panel">
-              {panelHead('belongings', 'backpack', t('Inventory'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Inventory"><BelongingsPanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.mind && (
-            <section className="hud-panel">
-              {panelHead('mind', 'brain', t('Mind'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Mind"><MindPanel character={avatarName} /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.gallery && (
-            <section className="hud-panel">
-              {panelHead('gallery', 'gallery', t('Gallery'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Gallery">
-                  <GalleryPanel regenDialog={(ctl) => <PlayerRegenDialog ctl={ctl} />} />
-                </ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.avatar && (
-            <section className="hud-panel">
-              {panelHead('avatar', 'avatar', t('Avatar'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Avatar">
-                  <AvatarSettingsPanel avatar={avatarName} />
-                </ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.instagram && (
-            <section className="hud-panel">
-              {panelHead('instagram', 'instagram', t('Instagram'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Instagram">
-                  <InstagramPanel
-                    imageGenDialog={(ctl) => <PlayerRegenDialog ctl={ctl} />}
-                    animateDialog={(ctl) => <PlayerAnimateDialog ctl={ctl} />} />
-                </ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.phone && (
-            <section className="hud-panel">
-              {panelHead('phone', 'phone', t('Phone'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Phone"><PhonePanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {open.news && (
-            <section className="hud-panel">
-              {panelHead('news', 'news', t('News'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="News"><NewsPanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {!spectating && open.quests && (
-            <section className="hud-panel">
-              {panelHead('quests', 'scroll', t('Quests'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Quests"><QuestsPanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
-          {open.tasks && (
-            <section className="hud-panel">
-              {panelHead('tasks', 'tasks', t('Tasks'))}
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Tasks"><TaskPanel /></ErrorBoundary>
-              </div>
-            </section>
-          )}
+      {/* The dropdowns: one column each, hanging below the top bar, side by
+          side in opening order. The row itself stays drag-through; only the
+          panels and their width handles catch. */}
+      {shownDrops.length > 0 && (
+        <div className="hud-drops">
+          {shownDrops.map((id) => (
+            <div key={id}
+              className={'hud-drop'
+                + (WIDE_PANELS.has(id) ? ' hud-drop-wide' : '')
+                + (CONTENT_PANELS.has(id) ? ' hud-drop-tall' : '')}
+              style={dropWidths[id] != null ? { width: dropWidths[id] } : undefined}>
+              {dropPanel(id)}
+              {/* The width handle on the panel's RIGHT edge, out of the flex
+                  flow. Pointer events (not mouse) with capture, so the drag
+                  survives the cursor leaving the strip, which at speed it
+                  always does. */}
+              <div className="hud-drop-grip" data-panel={id}
+                role="separator" aria-orientation="vertical"
+                title={t('Drag to resize · double-click to reset')}
+                aria-label={t('Drag to resize · double-click to reset')}
+                onPointerDown={onGripDown} onPointerMove={onGripMove}
+                onPointerUp={onGripUp} onPointerCancel={onGripUp}
+                onDoubleClick={onGripReset} />
+            </div>
+          ))}
         </div>
       )}
 

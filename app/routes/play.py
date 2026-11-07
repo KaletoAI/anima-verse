@@ -1978,6 +1978,27 @@ def play_party_leave(user=Depends(get_current_user)):
 # action, answer one it was offered, take back its own, and step out of a
 # running pair. Everything an NPC does through the InteractWith verb.
 
+@router.get("/play/intents")
+def play_intents(user=Depends(get_current_user)):
+    """The open plans of the REQUESTING player's avatar for the 3D HUD box.
+
+    Only the avatar the session controls — never another character, and no
+    character name in the path to pick one. A spectator (no avatar) gets an
+    empty list, the same shape ``/play/scene`` answers with. Labels are built
+    server-side in the avatar's language (the server owns the calendar); see
+    :func:`app.models.intents.player_plans` for the match, the hidden
+    descriptions of foreign plans and the order.
+    """
+    from app.models.account import get_active_character
+    from app.models.character import get_character_language
+    from app.models.intents import player_plans
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return {"avatar": "", "intents": []}
+    lang = get_character_language(avatar) or "de"
+    return {"avatar": avatar, "intents": player_plans(avatar, lang)}
+
+
 @router.get("/play/interact/options")
 def play_interact_options(user=Depends(get_current_user)):
     """The two-person actions this world can actually play — the catalog

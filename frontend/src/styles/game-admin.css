@@ -2563,6 +2563,11 @@ a.ga-btn {
 
 .tagesablauf-preview { background: rgba(47, 129, 247, 0.35); }
 
+/* Expressions tab — the template's expression-set field sits in the header
+   row beside the action buttons, so it drops its own frame there. */
+.ga-expr-settings > .tpl-tab-cols { padding: 0; border: 0; background: transparent; }
+.ga-expr-settings .tpl-tab-section .ga-field { margin-bottom: 0; }
+
 /* Image override tab — render-match chips. */
 .ga-img-matches { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 28px; }
 .ga-img-match-chip {

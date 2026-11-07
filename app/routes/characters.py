@@ -953,6 +953,7 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         # Backend glob in front of the character mesh chain; empty = world chain.
         "mesh_workflow": override.get("mesh_workflow", "") or "",
         **_mesh_match_context(character_name),
+        "match_chains": _image_match_chains(),
         "model": override.get("model", "") or "",
         "loras": override.get("loras", []) or [],
         # LoRAs used INSTEAD of "loras" for the T-pose reference renders;
@@ -982,6 +983,29 @@ def _mesh_match_context(character_name: str) -> Dict[str, Any]:
     return {"mesh_occasion": occasion,
             "mesh_world_chain": [str(x) for x in chain] if isinstance(chain, list) else [],
             "mesh_backends": names}
+
+
+def _image_match_chains() -> Dict[str, List[Dict[str, Any]]]:
+    """What runs behind each per-character IMAGE match when it stays empty:
+    ``{match field: [{occasion, label, chain}]}`` — every image occasion that
+    takes the field as position 0, with its world chain (positions 1..n, the
+    character's own glob left out). An empty ``chain`` means the cheapest
+    backend of the right kind. Mesh matches are covered by
+    ``_mesh_match_context``."""
+    from app.imagegen.occasions import OCCASIONS
+    from app.imagegen.routing import chain_for
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for oid, occ in OCCASIONS.items():
+        field = occ.get("char_spec_field") or ""
+        if not field or occ.get("media") != "image":
+            continue
+        try:
+            chain = [spec for spec, _source, _pos in chain_for(oid)]
+        except Exception:
+            continue
+        out.setdefault(field, []).append(
+            {"occasion": oid, "label": occ.get("label") or oid, "chain": chain})
+    return out
 
 
 @router.put("/{character_name}/outfit-imagegen")

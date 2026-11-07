@@ -1,9 +1,9 @@
 /**
  * The in-game menu of the 3D client (plan-3d-game stage 4, task 4).
  *
- * It is the fourth rail panel, not a modal: the world keeps running behind it
+ * It is a dropdown panel of the top bar, not a modal: the world keeps running behind it
  * — this is a living world, and a menu that stops it would be lying. So it
- * uses the same dock, chrome and pointer rules as Self/Others and can stay
+ * uses the same dropdown, chrome and pointer rules as Self/Others and can stay
  * open while one walks around.
  *
  * WHAT IS IN HERE AND WHAT IS NOT. Everything on this screen is a LOCAL

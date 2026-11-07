@@ -26,7 +26,8 @@ import { Field } from '@anima/player-ui'
  * Layout: images on the left, T-pose and 3D on the right (one column when
  * narrow).
  * Backed by /characters/{name}/outfit-imagegen (GET/PUT — the GET also names
- * the mesh occasion, its world chain and the img2mesh backends) plus the
+ * the mesh occasion, its world chain and the img2mesh backends, and per image
+ * match the occasion chains that run when it stays empty) plus the
  * image backend list (/world/imagegen-options) and available LoRAs
  * (/outfit-lora-options).
  *
@@ -82,6 +83,16 @@ interface StoredOverride {
   mesh_world_chain?: string[]
   /** Every enabled img2mesh backend name (match preview). */
   mesh_backends?: string[]
+  /** Per image match field: the occasions it is position 0 of, each with its
+   *  world chain (the character's own glob left out) — what runs when the
+   *  field stays empty. An empty chain = cheapest backend of the right kind. */
+  match_chains?: Record<string, MatchChain[]>
+}
+
+interface MatchChain {
+  occasion: string
+  label: string
+  chain: string[]
 }
 
 function fromServer(ovr: StoredOverride): Override {
@@ -144,6 +155,7 @@ export function ImageOverrides({
   const [meshBackends, setMeshBackends] = useState<string[]>([])
   const [meshOccasion, setMeshOccasion] = useState('')
   const [meshWorldChain, setMeshWorldChain] = useState<string[]>([])
+  const [matchChains, setMatchChains] = useState<Record<string, MatchChain[]>>({})
   const [loras, setLoras] = useState<Lora[]>([])
   const [tposeLoras, setTposeLoras] = useState<Lora[]>([])
   const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
@@ -210,6 +222,7 @@ export function ImageOverrides({
         setMeshBackends(ovr.mesh_backends || [])
         setMeshOccasion(ovr.mesh_occasion || '')
         setMeshWorldChain(ovr.mesh_world_chain || [])
+        setMatchChains(ovr.match_chains || {})
         // Unsaved edits survive a trip to another sub-tab and back.
         show(withDraft(stored, draftRef.current))
         // Inpaint targets (category=inpaint) are only for Map-Fit/Match-Edges,
@@ -258,6 +271,7 @@ export function ImageOverrides({
         const stored = fromServer(ovr)
         storedRef.current = stored
         setMeshWorldChain(ovr.mesh_world_chain || [])
+        setMatchChains(ovr.match_chains || {})
         show(stored)
       } catch { /* keep what is on screen */ }
     })()
@@ -452,6 +466,19 @@ export function ImageOverrides({
     </div>
   )
 
+  /** The "empty" note of an image match: its base text plus the world chain
+   *  that runs instead, per occasion when the field covers several with
+   *  different chains. Without server data the plain text stays. */
+  const chainText = (chain: string[]) =>
+    chain.length ? chain.join(' → ') : t('cheapest backend of this kind')
+  const emptyWithChain = (base: string, field: string) => {
+    const rows = matchChains[field] || []
+    if (!rows.length) return base
+    const distinct = new Set(rows.map((r) => r.chain.join('\u0000')))
+    if (distinct.size === 1) return base + ' (' + chainText(rows[0].chain) + ')'
+    return base + ' — ' + rows.map((r) => r.label + ': ' + chainText(r.chain)).join(' · ')
+  }
+
   const meshEmpty = meshWorldChain.length
     ? t('Empty: world chain') + ' (' + meshWorldChain.join(' → ') + ')'
     : t('Empty: world chain')
@@ -462,8 +489,8 @@ export function ImageOverrides({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           <div className="ga-fieldset">
             <div className="ga-fieldset-title">{t('Images')}</div>
-            {renderMatch({ label: t('Backend match (glob)'), value: pattern, set: setPattern, key: 'pattern', matches: matching, placeholder: 'Flux*', empty: t('Empty: occasion chain') })}
-            {renderMatch({ label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: t('Empty: portrait chain') })}
+            {renderMatch({ label: t('Backend match (glob)'), value: pattern, set: setPattern, key: 'pattern', matches: matching, placeholder: 'Flux*', empty: emptyWithChain(t('Empty: occasion chain'), 'workflow') })}
+            {renderMatch({ label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: emptyWithChain(t('Empty: portrait chain'), 'profile_workflow') })}
           </div>
           {renderLoras({ title: t('LoRA override'), list: loras, edit: editLoras, empty: t('No LoRAs forced for this character.'), options: availableLoras, addValue: addName, setAddValue: setAddName })}
         </div>
@@ -471,8 +498,8 @@ export function ImageOverrides({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           <div className="ga-fieldset">
             <div className="ga-fieldset-title">{t('T-pose & 3D')}</div>
-            {renderMatch({ label: t('T-pose backend match (glob)'), value: tposePattern, set: setTposePattern, key: 'tposePattern', matches: tposeMatching, placeholder: 'TPose*', empty: t('Empty: render match, then T-pose chain') })}
-            {renderMatch({ label: t('T-pose views backend match (glob)'), value: tposeViewPattern, set: setTposeViewPattern, key: 'tposeViewPattern', matches: tposeViewMatching, placeholder: 'Flux*', empty: t('Empty: T-pose views chain') })}
+            {renderMatch({ label: t('T-pose backend match (glob)'), value: tposePattern, set: setTposePattern, key: 'tposePattern', matches: tposeMatching, placeholder: 'TPose*', empty: emptyWithChain(t('Empty: render match, then T-pose chain'), 'tpose_workflow') })}
+            {renderMatch({ label: t('T-pose views backend match (glob)'), value: tposeViewPattern, set: setTposeViewPattern, key: 'tposeViewPattern', matches: tposeViewMatching, placeholder: 'Flux*', empty: emptyWithChain(t('Empty: T-pose views chain'), 'tpose_view_workflow') })}
             {renderMatch({
               label: meshOccasion === 'mesh_creature' ? t('Mesh backend match, creature (glob)') : t('Mesh backend match, humanoid (glob)'),
               value: meshPattern, set: setMeshPattern, key: 'meshPattern', matches: meshMatching, placeholder: 'Trellis*', empty: meshEmpty,

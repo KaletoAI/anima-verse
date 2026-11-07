@@ -198,8 +198,8 @@
   color: var(--hud-gold);
 }
 
-/* ---- Rail: brass studs pressed into the edge of the screen ------------- */
-#hud .hud-rail button {
+/* ---- Panel buttons: brass studs pressed into the top bar --------------- */
+#hud .hud-tabs button {
   background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);
   border-color: rgba(242, 205, 110, 0.32);
   border-radius: 9px;
@@ -207,11 +207,11 @@
   box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.16), inset 0 -2px 6px rgba(0, 0, 0, 0.5), 0 2px 7px rgba(0, 0, 0, 0.5);
   transition: color 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
-#hud .hud-rail button:hover {
+#hud .hud-tabs button:hover {
   border-color: rgba(242, 205, 110, 0.62);
   color: var(--hud-gold);
 }
-#hud .hud-rail button.on {
+#hud .hud-tabs button.on {
   background: radial-gradient(circle at 34% 26%, #4a3d28 0%, #2e2618 62%, #1d1710 100%);
   border-color: rgba(242, 205, 110, 0.75);
   color: var(--hud-gold);
@@ -271,7 +271,7 @@
   filter: saturate(0.45);
 }
 /* The photo dialog's subject chips — the round selectors next to Generate.
-   Same brass as the rail chips, so the dialog reads as one surface. */
+   Same brass as the panel buttons, so the dialog reads as one surface. */
 #hud ~ .ga-modal-backdrop .player-photo-chip {
   background: linear-gradient(180deg, rgba(242, 205, 110, 0.06), rgba(0, 0, 0, 0.2));
   border-color: rgba(242, 205, 110, 0.28);
@@ -596,3 +596,16 @@
   background: rgba(26, 20, 10, 0.88);
   border-color: rgba(242, 205, 110, 0.38);
 }
+
+/* The plans box above it wears the same frame, so the corner reads as one. */
+#hud .hud-intents {
+  background: rgba(26, 20, 10, 0.88);
+  border-color: rgba(242, 205, 110, 0.38);
+}
+#hud .hud-intents-head,
+#hud .hud-intents-title {
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--hud-gold);
+}
+#hud .hud-intents-list { border-top-color: rgba(242, 205, 110, 0.22); }
+#hud .hud-intent-when { color: var(--hud-gold); }

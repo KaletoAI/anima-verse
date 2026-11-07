@@ -1444,7 +1444,17 @@ def post_process_response(
         from app.models.character_template import feature_disabled as _off
         if not _off(character_name, "intents_enabled"):
             from app.models.intents import parse_and_apply_intent_markers
-            _ni = parse_and_apply_intent_markers(character_name, full_response)
+            # A plan made in a chat turn with the player's avatar concerns the
+            # avatar: it joins as participant so the avatar's plan box shows it.
+            _told_to = ""
+            _partner = (user_display_name or "").strip()
+            if ((extraction_context or {}).get("source") == "user_chat" and _partner
+                    and _partner != character_name):
+                from app.models.account import is_player_controlled
+                if is_player_controlled(_partner):
+                    _told_to = _partner
+            _ni = parse_and_apply_intent_markers(character_name, full_response,
+                                                 told_to=_told_to)
             if _ni:
                 result["intent_markers"] = len(_ni)
                 _announce_player_tasks(character_name, _ni, extraction_context)

@@ -1154,10 +1154,12 @@ export function CharactersTab() {
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
             ) : subTab === 'expressions' ? (
-              <>
-                {/* The template's own fields of this tab (the expression set
-                    picker) sit above the image list, saved like any field tab. */}
-                {(() => {
+              // The template's own fields of this tab (the expression set
+              // picker) lead the image list's header row, beside its action
+              // buttons; saved like any field tab.
+              <ExpressionsTab
+                character={selected}
+                settings={(() => {
                   const tb = (template?.tabs || []).find((g) => g.special === 'expressions')
                   return tb && visibleSections.some((s) => sectionIsRenderable(s)
                     && (tb.columns || []).includes(s.column || 1)) ? (
@@ -1172,8 +1174,7 @@ export function CharactersTab() {
                     />
                   ) : null
                 })()}
-                <ExpressionsTab character={selected} />
-              </>
+              />
             ) : subTab === 'skills' ? (
               <SkillsTab
                 character={selected}

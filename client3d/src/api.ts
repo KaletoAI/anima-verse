@@ -51,8 +51,29 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function authStatus(): Promise<{ authenticated: boolean; user?: AuthUser }> {
+/** `world` = the active world's name (storage dir basename); the server
+ *  sends it to a signed-in caller only, so it is absent on the login path. */
+export async function authStatus(): Promise<{ authenticated: boolean; user?: AuthUser; world?: string }> {
   return json(await fetch('/auth/status'));
+}
+
+/** One open plan of the player's avatar (`GET /play/intents`). `when` and the
+ *  order come from the server, which owns the game calendar; `description` is
+ *  empty for a plan someone else owns (a surprise must stay one). */
+export interface PlayIntent {
+  id: string;
+  title: string;
+  owner: string;
+  own: boolean;
+  source: string;
+  priority: number;
+  when: string;
+  sort_key: number | null;
+  description: string;
+}
+
+export async function getPlayIntents(): Promise<{ avatar: string; intents: PlayIntent[] }> {
+  return json(await fetch('/play/intents'));
 }
 
 export async function login(username: string, password: string, remember: boolean): Promise<AuthUser> {

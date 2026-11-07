@@ -4,16 +4,15 @@
  * (flex-wrap, depending on the window width). Source: GET /play/others.
  */
 import { isMember, othersIn, type InteractionMembers } from './interactionMembers'
-import { invitePair } from './pairInteractions'
+import { hasPairActions, pairActionChips, usePairOptions, usePairPropose } from './pairActions'
 import { StatFill } from './StatBoost'
 import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
-import { ApiError, apiGet, apiPost } from './api'
+import { apiGet } from './api'
 import { usePoll } from './usePolling'
 import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
-import { HoverHint } from './HoverHint'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
 import { PropActionsPanel } from './PropActionsPanel'
@@ -46,7 +45,6 @@ interface CharState {
   interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string } | null
 }
 interface Others { avatar: string; characters: CharState[] }
-interface PairPose { key: string; kind: string; label: string }
 
 /** "reading, on the armchair" — activity and place, either alone when the
  *  other is missing, "" when both are. A running pair replaces the activity:
@@ -143,36 +141,11 @@ export function OthersPanel() {
   const { data, refresh } = usePoll<Others>(
     'play-others', () => apiGet<Others>('/play/others'), SYNC_ENDPOINTS.others)
   useEffect(() => onPropActionChanged(() => { void refresh() }), [refresh])
-  // The world's two-person actions — fetched once; the clip library does not
-  // change while a scene is being played.
-  const [pairPoses, setPairPoses] = useState<PairPose[]>([])
-  // Why the avatar may not propose any of them (a block rule or a cost on
-  // the pair verb) — fetched with the list, "" = free to ask.
-  const [pairBlocked, setPairBlocked] = useState('')
+  // The world's two-person actions — the same picker the chat window shows
+  // (pairActions.tsx), so the two lists cannot drift apart.
+  const pairOptions = usePairOptions()
   const [note, setNote] = useState('')
-  useEffect(() => {
-    let cancelled = false
-    apiGet<{ poses: PairPose[]; blocked?: string }>('/play/interact/options')
-      .then((d) => { if (!cancelled) { setPairPoses(d.poses || []); setPairBlocked(d.blocked || '') } })
-      .catch(() => { if (!cancelled) setPairPoses([]) })
-    return () => { cancelled = true }
-  }, [])
-
-  const propose = useCallback(async (name: string, pose: string) => {
-    setNote('')
-    try { await invitePair(name, pose) }
-    catch (e) {
-      // 409 carries the engine's own reason ("Kira is in another room") —
-      // that sentence is the whole point, so it is shown, not swallowed.
-      setNote(e instanceof ApiError ? String(e.detail || '') : String(e))
-    }
-    refresh()
-  }, [refresh])
-
-  const stop = useCallback(async () => {
-    try { await apiPost('/play/interact/end', {}) } catch { /* ignore */ }
-    refresh()
-  }, [refresh])
+  const pairActions = usePairPropose(refresh, setNote)
 
   if (!data) return <EmptyState small title={t('Loading…')} />
   if (!data.characters.length) {
@@ -214,23 +187,13 @@ export function OthersPanel() {
             </div>
           )}
           <StatBars c={c} />
-          <PropActionsPanel partner={c.name} leading={isMember(c.interaction?.members, data.avatar) || pairPoses.length > 0 ? <>
-            {isMember(c.interaction?.members, data.avatar) && (
-              <button type="button" onClick={stop} className="player-chip">{t('Stop')}</button>
-            )}
-            {pairPoses.map((pose) => {
-              const busy = !!c.interaction && !isMember(c.interaction.members, data.avatar)
-              const off = busy || !!pairBlocked
-              return <HoverHint key={pose.key} text={busy ? t('Busy with someone else') : (pairBlocked || undefined)}>
-                <button type="button" className="player-chip" disabled={off}
-                  aria-disabled={off ? true : undefined}
-                  style={{ pointerEvents: off ? 'none' : undefined }}
-                  onClick={() => propose(c.name, pose.key)}>
-                  {pose.label || pose.key}
-                </button>
-              </HoverHint>
-            })}
-          </> : undefined} />
+          {(() => {
+            const target = { name: c.name, busy: !!c.interaction && !isMember(c.interaction.members, data.avatar) }
+            const stoppable = isMember(c.interaction?.members, data.avatar)
+            return <PropActionsPanel partner={c.name} leading={hasPairActions(pairOptions, [target], stoppable)
+              ? <>{pairActionChips({ target, options: pairOptions, stoppable, actions: pairActions, t })}</>
+              : undefined} />
+          })()}
         </div>
       ))}
       {note && (

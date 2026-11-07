@@ -34,7 +34,6 @@
     "Clear cache": "Cache leeren",
     "Models, animations and terrain this computer keeps between starts. Clearing takes effect at the next start; the readout shows zero immediately.": "Modelle, Animationen und Gelände, die dieser Computer zwischen Starts speichert. Das Leeren wirkt beim nächsten Start; die Anzeige zeigt sofort null.",
     "Memory partially wiped: {n} reset errors": "Gedächtnis teilweise gelöscht: {n} Reset-Fehler",
-    "World map": "Weltkarte",
     "Connection": "Verbindung",
     "Backend unreachable": "Backend nicht erreichbar",
     "Avatar": "Avatar",
@@ -427,6 +426,7 @@
     "Portrait backend match (glob)": "Porträt-Backend-Match (Glob)",
     "Empty: occasion chain": "Leer: Anlass-Kette",
     "Empty: portrait chain": "Leer: Porträt-Kette",
+    "cheapest backend of this kind": "günstigstes Backend dieser Art",
     "Empty: render match, then T-pose chain": "Leer: Render-Match, dann T-Pose-Kette",
     "Empty: use the normal LoRAs": "Leer: normale LoRAs verwenden",
     "Use current portrait as reference": "Aktuelles Porträt als Referenz verwenden",
@@ -3504,6 +3504,7 @@
     "At least": "Mindestens",
     "With actions": "Mit Aktionen",
     "With": "Mit",
+    "Together with {name}": "Gemeinsam mit {name}",
     "Missing model": "Modell fehlt",
     "Must be present": "Muss vorhanden sein",
     "After successful drinking": "Nach erfolgreichem Trinken",
@@ -3993,6 +3994,14 @@
     "It becomes a linked character of this one and goes dormant.": "Er wird ein verknüpfter Charakter dieses Charakters und ruht ab sofort.",
     "Base": "Basis",
     "No base expression": "Kein Basis-Ausdruck",
-    "The base expression of this outfit: rendered without the set LoRA, the reference of every other expression": "Der Basis-Ausdruck dieses Outfits: ohne Set-LoRA erzeugt, Referenz für alle anderen Ausdrücke"
+    "The base expression of this outfit: rendered without the set LoRA, the reference of every other expression": "Der Basis-Ausdruck dieses Outfits: ohne Set-LoRA erzeugt, Referenz für alle anderen Ausdrücke",
+    "Panels": "Fenster",
+    "Plans": "Pläne",
+    "Show plans": "Pläne zeigen",
+    "Hide plans": "Pläne ausblenden",
+    "Now": "Jetzt",
+    "Tomorrow": "Morgen",
+    "At {place}": "Bei {place}",
+    "Daily": "Täglich"
   }
 }

@@ -37,9 +37,11 @@ export function ActivityHomeTab({
   return homeLoading ? (
     <div className="ga-loading">{t('Loading…')}</div>
   ) : (
-    <div className="ga-form">
+    // Two columns: home 1/3, daily rhythm 2/3; wraps to one column when narrow.
+    <div className="ga-form" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 16 }}>
+      <div style={{ flex: '1 1 0', minWidth: 240 }}>
       <FieldSet title={t('Home / sleep location')}>
-      <div className="ga-form-row">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <Field
           label={t('Home location')}
           hint={t('Where the character lives and returns to sleep. “Off-map” takes them off the grid while sleeping.')}
@@ -89,7 +91,9 @@ export function ActivityHomeTab({
         </Field>
       </div>
       </FieldSet>
+      </div>
 
+      <div style={{ flex: '2 1 0', minWidth: 480 }}>
       <FieldSet title={t('Daily rhythm')}>
       <DailyScheduleGrid
         character={selected}
@@ -102,6 +106,7 @@ export function ActivityHomeTab({
         initialSlots={schedule.slots}
       />
       </FieldSet>
+      </div>
     </div>
   )
 }

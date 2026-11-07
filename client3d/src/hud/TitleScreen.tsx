@@ -58,10 +58,9 @@ export interface TitleScreenProps {
 }
 
 /**
- * The world has no name the client could ask for: neither `/auth/status` nor
- * the worldmap payload carries one (the world is chosen by the server's
- * `--world` flag and never leaves it), so the product name stands here. If a
- * world name is ever exposed, this is the one place it goes.
+ * The product name, not the world's: `/auth/status` names the world only to a
+ * signed-in caller (the HUD's top bar shows it), and this screen is also the
+ * login form, shown before anyone is signed in.
  */
 const GAME_TITLE = 'Anima Verse';
 

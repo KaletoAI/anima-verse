@@ -53,7 +53,7 @@ export const CHAT_MAX_H = 2000;
 
 /**
  * How much of the window the panel leaves standing — the same margins the
- * stylesheet keeps (`hud.css`, `.hud-chat`): the rail and the panel's own
+ * stylesheet keeps (`hud.css`, `.hud-chat`): a right-hand margin and the panel's own
  * offset on the width, the header band on the height.
  *
  * The width is the one that matters here. Its DEFAULT cap in the stylesheet is

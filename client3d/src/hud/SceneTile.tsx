@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiPost, Icon, useI18n, type SceneData } from '@anima/player-ui';
 import { backgroundUrl, exprUrl, renderedSig, renderOutcome, sceneKey, tileFigures, tileHidden, type RenderAnswer } from './sceneTile';
 
-export function SceneTile({ scene, collapsed, railEl }: { scene: SceneData | null; collapsed: boolean; railEl: HTMLElement | null }) {
+export function SceneTile({ scene, collapsed, tabsEl }: { scene: SceneData | null; collapsed: boolean; tabsEl: HTMLElement | null }) {
   const { t } = useI18n();
   const [failedFor, setFailedFor] = useState('');
   const [pair, setPair] = useState<{ key: string; sig: string } | null>(null);
@@ -75,7 +75,7 @@ export function SceneTile({ scene, collapsed, railEl }: { scene: SceneData | nul
       {scene.room_name && scene.location_name !== scene.room_name ? ` · ${scene.location_name}` : ''}</div>
   </>;
   return <>
-    {collapsed ? railEl && createPortal(<button className="hud-scene-icon" title={t('Scene')} onClick={() => setBig(true)}><Icon name="gallery" size={20} /></button>, railEl)
+    {collapsed ? tabsEl && createPortal(<button className="hud-scene-icon" title={t('Scene')} onClick={() => setBig(true)}><Icon name="gallery" size={18} /></button>, tabsEl)
       : <div className="hud-scene-tile">
         <button className="hud-scene-image-area" aria-label={t('Scene')} onClick={() => setBig(true)}>{content}</button>
         {controls}{message && <div className="hud-scene-status" role="status">{message}</div>}

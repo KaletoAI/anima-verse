@@ -133,6 +133,8 @@
           "label": "Dialogue style",
           "label_de": "Sprechweise",
           "type": "text",
+          "multiline": true,
+          "rows": 3,
           "in_prompt": true,
           "prompt_label": "How you speak",
           "prompt_self_only": true,

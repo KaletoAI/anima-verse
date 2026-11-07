@@ -241,7 +241,7 @@ export function subscribeGameState(fn: () => void): () => void {
 //
 // A SECOND store next to the game state, with its own listener set, because
 // this one ticks several times a second: publishing it through `setGameState`
-// would re-render the chat, the plaque and the rail along with it — the
+// would re-render the chat, the plaque and the panel buttons along with it — the
 // display would cost more than what it measures.
 //
 // The switch travels the other way (React -> vanilla) in HudUiState.
@@ -266,8 +266,8 @@ export function subscribePerfStats(fn: () => void): () => void {
 //
 // A THIRD store, for the same reason the perf readout got the second one: this
 // slice is republished up to four times a second while one walks, and pushing
-// it through `setGameState` would re-render the chat, the plaque and the whole
-// rail with every step. Here it re-renders one canvas and nothing else.
+// it through `setGameState` would re-render the chat, the plaque and the
+// panel buttons with every step. Here it re-renders one canvas and nothing else.
 //
 // `main.ts` is the only writer and it publishes only on a real CHANGE (the
 // avatar's metre position, the quantised yaw, the painted ground or the world

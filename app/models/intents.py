@@ -816,7 +816,8 @@ def complete_intent_as(character_name: str, intent_id: str) -> bool:
 
 
 def parse_and_apply_intent_markers(character_name: str,
-                                   text: str) -> List[Dict[str, Any]]:
+                                   text: str, *,
+                                   told_to: str = "") -> List[Dict[str, Any]]:
     """Applies the character markers of an LLM answer.
 
       ``[INTENT: <title> | <description> | when=… | prio=N | by=player]``
@@ -834,10 +835,20 @@ def parse_and_apply_intent_markers(character_name: str,
     active one already covers (``find_duplicate``) is not created, nor one
     whose title is the id of an existing intent.
 
+    ``told_to`` names the player's avatar this reply was spoken to: a plan
+    made in conversation with the avatar concerns the avatar, so it joins as a
+    participant (role "told by …") and the player's plan box lists it — the
+    description stays hidden there (``player_plans``). The caller passes it
+    only for a player-controlled partner, never for an NPC: a participant sees
+    the plan in its own assignments prompt.
+
     Returns the intents CREATED by this text (in marker order) — the caller
     uses them for the player feedback line.
     """
     created: List[Dict[str, Any]] = []
+    told_to = (told_to or "").strip()
+    extra = ({told_to: {"role": f"told by {character_name}", "progress": []}}
+             if told_to and told_to != character_name else None)
     for m in _MARK_DONE.finditer(text or ""):
         iid = m.group(1)
         complete_intent_as(character_name, iid)
@@ -876,7 +887,8 @@ def parse_and_apply_intent_markers(character_name: str,
                 desc = p
         trig = _when_to_trigger(when)
         it = create_own_intent(character_name, title, description=desc,
-                               trigger=trig, priority=prio, source=source)
+                               trigger=trig, priority=prio, source=source,
+                               extra_participants=extra)
         if it:
             created.append(it)
     return created
@@ -953,3 +965,84 @@ def fire_location_intents(character_name: str, location_id: str) -> int:
     except Exception as e:  # noqa: BLE001
         logger.debug("fire_location_intents failed: %s", e)
     return n
+
+
+# ====================================================================
+# Player view: the avatar's open plans for the 3D HUD (GET /play/intents).
+# ====================================================================
+
+def _plan_when(trigger: Dict[str, Any], now: GameTime, lang: str) -> tuple:
+    """``(label, sort_key)`` of one trigger for the player's plan list.
+
+    ``sort_key`` is GAME seconds for a timed plan and ``None`` for one that
+    waits for no clock (standing, at a place). A ``now`` plan is due already,
+    so it sorts before every timed one (``-1``). The label is computed here
+    (the server owns the calendar), in the configured clock format.
+    """
+    from app.core.game_time import display_time_format, format_time_of_day
+    from app.core.i18n import t
+    kind = trigger.get("kind", "standing")
+    daily = trigger.get("repeat") == "daily"
+    if kind == "now":
+        return t("Now", lang), -1
+    if kind == "at_time" and trigger.get("run_date"):
+        try:
+            run = GameTime.parse(trigger["run_date"])
+        except ValueError:
+            return "", None
+        clock = format_time_of_day(run.hour, run.minute, display_time_format())
+        if daily or run.day_index == now.day_index:
+            label = clock
+        elif run.day_index == now.day_index + 1:
+            label = f"{t('Tomorrow', lang)} {clock}"
+        else:
+            label = run.display_label(lang)
+        return label, run.total_seconds
+    if kind == "at_location":
+        try:
+            from app.models.world import get_location_name
+            place = get_location_name(trigger.get("location_id", "")) or ""
+        except Exception:
+            place = ""
+        if place:
+            return t("At {place}", lang).replace("{place}", place), None
+    return (t("Daily", lang) if daily else ""), None
+
+
+def player_plans(avatar: str, lang: str = "en") -> List[Dict[str, Any]]:
+    """The OPEN plans the avatar owns or takes part in, ready to display.
+
+    ``list_intents(owner=…)`` pre-filters with a LIKE on the participants
+    JSON, which is case-insensitive and also hits a matching role or progress
+    note — so the match is decided again here, exactly: the avatar is the
+    owner or a KEY of ``participants`` (:func:`_takes_part`).
+
+    ``description`` is only handed out for the avatar's OWN plans: someone
+    else's plan that merely includes the avatar may be a surprise.
+    Order: timed plans first by game time, then the untimed ones; within each,
+    by priority (1 = most urgent), then title.
+    """
+    if not avatar:
+        return []
+    now = game_time()
+    out: List[Dict[str, Any]] = []
+    for it in list_intents(owner=avatar, status="active"):
+        if not _takes_part(it, avatar):
+            continue
+        own = it.get("owner") == avatar
+        label, key = _plan_when(it.get("trigger") or {}, now, lang)
+        out.append({
+            "id": it.get("id", ""),
+            "title": it.get("title", ""),
+            "owner": it.get("owner", ""),
+            "own": own,
+            "source": it.get("source", ""),
+            "priority": int(it.get("priority") or 3),
+            "when": label,
+            "sort_key": key,
+            "description": (it.get("description") or "") if own else "",
+        })
+    out.sort(key=lambda p: (p["sort_key"] is None,
+                            p["sort_key"] if p["sort_key"] is not None else 0,
+                            p["priority"], p["title"].lower()))
+    return out

@@ -31,6 +31,8 @@ import { useQueue } from './useQueue'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
 import { PropActionsPanel } from './PropActionsPanel'
+import { PairActions } from './PairActionsPanel'
+import { hasPairActions, usePairOptions } from './pairActions'
 import { onPropActionChanged } from './propActions'
 
 export type { SceneLine }
@@ -302,6 +304,9 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   photoDialog, screenshotPhoto, onScreenshotPhotoHandled, highlightedId, onRowHover, transcriptAside }: ScenePanelProps) {
   const { t } = useI18n()
   useEffect(() => onPropActionChanged(() => { void refreshScene() }), [refreshScene])
+  // The two-person actions (hug, dance, …) for everyone the avatar can
+  // address — the same picker the Others cards show (pairActions.tsx).
+  const pairOptions = usePairOptions(avatar)
   // Different avatar than the cached draft (incl. the '' of a fresh host
   // mount) → drop the cache BEFORE the initializers below read it.
   if (draft.avatar !== avatar) resetDraft(avatar)
@@ -539,6 +544,10 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     setAnswering('')
   }, [answering, data?.interaction_invites, refreshScene, toast])
 
+  // A refused proposal ("Kira is in another room") is the engine's own
+  // sentence; an accepted one shows up as the pending banner below.
+  const pairNote = useCallback((message: string) => { if (message) toast(message, 'error') }, [toast])
+
   /** Take back the avatar's own open proposal. */
   const handleInteractCancel = useCallback(async (inviteId: string) => {
     try { await apiPost('/play/interact/cancel', { invite_id: inviteId }) }
@@ -561,6 +570,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     id: p.id, ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,
   }))
   const present = data?.present || []
+  const pairTargets = present.map((name) => ({ name }))
   // Scene indicator: ONLY replies ("X is responding …"), no background
   // thoughts. The task panel shows all LLM calls (thoughts too) independently.
   const { agentActivity } = useQueue(2000)
@@ -621,7 +631,10 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
           )
           : transcript}
 
-        {data?.avatar ? <PropActionsPanel /> : null}
+        {data?.avatar ? <PropActionsPanel leading={hasPairActions(pairOptions, pairTargets)
+          ? <PairActions targets={pairTargets} options={pairOptions}
+            onChanged={refreshScene} onNote={pairNote} />
+          : undefined} /> : null}
 
         {(data?.follow_suggestions?.length ?? 0) > 0 && (
           <div style={{

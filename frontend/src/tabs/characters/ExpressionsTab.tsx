@@ -1,20 +1,24 @@
 /**
  * ExpressionsTab — every cached expression variant of a character in the
  * Game-Admin, with its generation parameters. Per image: delete (inline
- * confirmation) · enlarge in the lightbox. On top: "Clear expression cache".
+ * confirmation) · enlarge in the lightbox. On top, in one row: the
+ * template's own settings of this tab (the expression set picker, handed in as
+ * `settings`), "Generate default expression", "Clear expression cache" and
+ * "Preview expression cleanup".
  *
  * Source:  GET    /characters/{name}/expressions
  * Image:   GET    /characters/{name}/expressions/{file}
  * Delete:  DELETE /characters/{name}/expressions/{file}
  * Cache:   POST   /characters/{name}/clear-expression-cache
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
-import { ExpressionCleanupPreview } from './ExpressionCleanupPreview'
+import { ExpressionCleanupButton, ExpressionCleanupPreview } from './ExpressionCleanupPreview'
+import { useExpressionCleanup } from './useExpressionCleanup'
 import { useExpressionAttempt } from '@anima/player-ui'
 
 interface Expression {
@@ -76,7 +80,12 @@ interface ExpressionsResp {
   expressions: Expression[]
 }
 
-export function ExpressionsTab({ character }: { character: string }) {
+export function ExpressionsTab({ character, settings }: {
+  character: string
+  /** The template's fields of this tab (rendered by the caller's TemplateTab);
+   *  they lead the header row, the action buttons follow. */
+  settings?: ReactNode
+}) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
   useClockSettings()
@@ -106,6 +115,7 @@ export function ExpressionsTab({ character }: { character: string }) {
     catch { setItems([]) }
   }, [character])
   useEffect(() => { load(); setConfirmDel(null); setConfirmClear(false) }, [load])
+  const cleanup = useExpressionCleanup(character, load)
 
   const imgUrl = (f: string) => `/characters/${encodeURIComponent(character)}/expressions/${encodeURIComponent(f)}`
 
@@ -140,39 +150,40 @@ export function ExpressionsTab({ character }: { character: string }) {
   return (
     <>
       <div className="ga-form" style={{ padding: 0 }}>
-        {/* Header: generate the default expression, clear the expression cache */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 10, marginBottom: 12, flexWrap: 'wrap',
+        {/* Header row: the template settings (expression set), then the actions */}
+        <div className="ga-expr-header" style={{
+          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap',
         }}>
-          <span style={{ fontSize: '0.85em', opacity: 0.7 }}>
-            {files.length} {files.length === 1 ? t('expression') : t('expressions')}
-            {' · '}{files.filter(e => e.status === 'current').length} {t('Current')}
-            {' · '}{files.filter(e => e.status !== 'current').length} {t('Historical or unverified')}
-          </span>
+          {settings ? <div className="ga-expr-settings" style={{ flex: '0 1 440px', minWidth: 0 }}>{settings}</div> : null}
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <button type="button" className="ga-btn ga-btn-sm" disabled={generation.busy}
               onClick={() => void generation.start({ default_expression: true, force: true })}>
               {generation.busy ? t('Rendering…') : t('Generate default expression')}
             </button>
-            {generation.error && <span role="alert" style={{ color: 'var(--error)', fontSize: '0.85em' }}>{generation.error}</span>}
-          {confirmClear ? (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: '0.82em' }}>{t('Clear ALL cached expressions?')}</span>
-              <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={busy} onClick={clearCache}>
-                {busy ? t('Clearing…') : t('Clear')}
+            {confirmClear ? (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span style={{ fontSize: '0.82em' }}>{t('Clear ALL cached expressions?')}</span>
+                <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={busy} onClick={clearCache}>
+                  {busy ? t('Clearing…') : t('Clear')}
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm" onClick={() => setConfirmClear(false)}>{t('Cancel')}</button>
+              </div>
+            ) : (
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                disabled={!files.length && items !== null} onClick={() => setConfirmClear(true)}>
+                {t('Clear expression cache')}
               </button>
-              <button type="button" className="ga-btn ga-btn-sm" onClick={() => setConfirmClear(false)}>{t('Cancel')}</button>
-            </div>
-          ) : (
-            <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-              disabled={!files.length && items !== null} onClick={() => setConfirmClear(true)}>
-              {t('Clear expression cache')}
-            </button>
-          )}
+            )}
+            <ExpressionCleanupButton cleanup={cleanup} />
           </div>
         </div>
-        <ExpressionCleanupPreview character={character} onChanged={load} />
+        {generation.error && <div role="alert" style={{ color: 'var(--error)', fontSize: '0.85em', marginBottom: 8 }}>{generation.error}</div>}
+        <div style={{ fontSize: '0.85em', opacity: 0.7, marginBottom: 8 }}>
+          {files.length} {files.length === 1 ? t('expression') : t('expressions')}
+          {' · '}{files.filter(e => e.status === 'current').length} {t('Current')}
+          {' · '}{files.filter(e => e.status !== 'current').length} {t('Historical or unverified')}
+        </div>
+        <ExpressionCleanupPreview cleanup={cleanup} />
 
         {files.length === 0 ? (
           <div className="ga-placeholder">{t('No cached expressions yet')}</div>

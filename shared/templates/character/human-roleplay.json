@@ -127,6 +127,8 @@
           "label": "Dialogue style",
           "label_de": "Sprechweise",
           "type": "text",
+          "multiline": true,
+          "rows": 3,
           "in_prompt": true,
           "prompt_label": "How you speak",
           "prompt_self_only": true,
@@ -274,8 +276,6 @@
           "type": "text",
           "multiline": true,
           "in_prompt": false,
-          "hint": "Used as the prompt for profile-image generation. Describe head only: face shape, distinct features, hair color/length/style, eye color, skin tone, expression baseline. Body / outfit irrelevant here.",
-          "hint_de": "Wird als Prompt fuer die Profilbild-Generierung verwendet. Nur Kopf beschreiben: Gesichtsform, markante Zuege, Haar (Farbe/Laenge/Stil), Augenfarbe, Hauttyp, Standard-Mimik. Koerper / Outfit irrelevant.",
           "image_preview": "profile",
           "llm_generable": true,
           "rows": 6
