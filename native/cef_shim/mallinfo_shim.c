@@ -6,7 +6,7 @@
  * Godot's own heap counts and the client died after long sessions. tools/patch_cef_mallinfo.py renames libcef's
  * import to `mallinf_` (gdCEF is loaded with RTLD_DEEPBIND, so a plain LD_PRELOAD of `mallinfo` is never consulted);
  * this answers with glibc's 64-bit mallinfo2() figures clamped so that no sum of two fields can overflow.
- * Preloaded by run.sh / AppRun for the client and, inherited, for CEF's helper processes.
+ * libcef.so NEEDS this library (build.sh: patchelf --add-needed), so the client and every CEF helper process load it.
  */
 #include <limits.h>
 #include <malloc.h>

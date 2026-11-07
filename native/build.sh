@@ -83,12 +83,17 @@ if [ -f "$cef/gdcef.gdextension" ]; then
     || { echo "gdCEF artifacts incomplete in $out" >&2; exit 1; }
   # CEF's MemoryInfra dump sums glibc mallinfo() in 32 bits and traps (SIGILL) once the Godot process — which hosts
   # CEF's browser process — passes 2 GiB of heap. The export gets a PRIVATE copy of libcef.so whose `mallinfo` import
-  # is renamed to `mallinf_`, answered by libanima_mallinfo.so (cef_shim/), which run.sh / AppRun preload. A plain
-  # LD_PRELOAD of `mallinfo` cannot work: gdCEF is loaded with RTLD_DEEPBIND and binds libc's symbol first.
+  # is renamed to `mallinf_`, answered by libanima_mallinfo.so (cef_shim/). The copy also NEEDS that shim (found
+  # through libcef's own RUNPATH $ORIGIN), so the binary starts directly — no launcher, no LD_PRELOAD — and every
+  # CEF subprocess that loads libcef.so gets it too. A plain LD_PRELOAD of `mallinfo` cannot work: gdCEF is loaded
+  # with RTLD_DEEPBIND and binds libc's symbol first.
   # Upstream: https://github.com/Lecrapouille/gdcef/issues/108 — drop the patch once gdCEF/CEF fixes it.
   echo "== libcef.so: private copy with the mallinfo import redirected"
+  command -v patchelf >/dev/null 2>&1 || { echo "patchelf not found on PATH (apt install patchelf)" >&2; exit 1; }
   cp --remove-destination "$(readlink -f "$cef/linux/libcef.so")" "$out/libcef.so.tmp"
   python3 "$here/tools/patch_cef_mallinfo.py" "$out/libcef.so.tmp"
+  readelf -d "$out/libcef.so.tmp" | grep -q 'Shared library: \[libanima_mallinfo.so\]' \
+    || patchelf --add-needed libanima_mallinfo.so "$out/libcef.so.tmp"
   mv -f "$out/libcef.so.tmp" "$out/libcef.so"
   "${CC:-gcc}" -O2 -shared -fPIC -Wl,--version-script="$here/cef_shim/mallinfo_shim.map" \
     -o "$out/libanima_mallinfo.so" "$here/cef_shim/mallinfo_shim.c"
@@ -110,8 +115,6 @@ here="$(cd "$(dirname "$0")" && pwd)"
 if [ "$#" -eq 1 ] && [ "$1" = --version ]; then cat "$here/version.txt"; exit 0; fi
 chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" 2>/dev/null
 mkdir -p "$here/logs"
-# The patched libcef.so imports mallinf_ from this shim (see native/build.sh); CEF's helpers inherit it.
-if [ -f "$here/libanima_mallinfo.so" ]; then export LD_PRELOAD="$here/libanima_mallinfo.so${LD_PRELOAD:+:$LD_PRELOAD}"; fi
 exec "$here/anima-native.x86_64" --log-file "$here/logs/native-$(date +%Y%m%d-%H%M%S).log" -- "$@"
 RUN
 chmod +x "$out/run.sh"

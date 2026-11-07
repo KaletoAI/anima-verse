@@ -170,9 +170,10 @@ next to them: `libgdcef.so`, `libcef.so` (1.4 GB), `gdCefRenderProcess`,
 `libvk_swiftshader.so`, `libvulkan.so.1`, `vk_swiftshader_icd.json`, `locales/`
 (hard links into the artifact folder where possible, copies otherwise).
 The export's `libcef.so` is a private copy whose `mallinfo` import is renamed to `mallinf_`
-(`tools/patch_cef_mallinfo.py`), answered by `libanima_mallinfo.so` (`cef_shim/`), which `run.sh` and the AppImage's
-`AppRun` preload: CEF's in-process memory dump adds glibc's `mallinfo()` fields in 32 bits and traps (SIGILL) once the
-client's heap passes 2 GiB. Start the export through `run.sh` / the AppImage — without the preload gdCEF does not load.
+(`tools/patch_cef_mallinfo.py`), answered by `libanima_mallinfo.so` (`cef_shim/`), which the copy lists as a
+`DT_NEEDED` dependency (`patchelf --add-needed`, resolved through libcef's `RUNPATH $ORIGIN`): CEF's in-process memory
+dump adds glibc's `mallinfo()` fields in 32 bits and traps (SIGILL) once the client's heap passes 2 GiB. The binary
+starts directly; `run.sh` only adds the executable-bit repair and the log file. Building needs `patchelf` on PATH.
 Keep everything in one folder: gdCEF looks for its subprocess and resources
 next to `libgdcef.so`.
 
