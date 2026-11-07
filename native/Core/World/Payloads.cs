@@ -234,6 +234,11 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
     /// text; <c>placeableOf</c> takes them from the detail record). Empty on a world-map row.
     /// </summary>
     public IReadOnlyDictionary<string, string> Rooms { get; init; } = new Dictionary<string, string>();
+    /// <summary>
+    /// The location's GROUND room (§ A13) — id AND name of the room flagged <c>is_ground</c> in <c>rooms[]</c>
+    /// (tiles.ts <c>groundRooms</c>); empty when the row names none. Never the reserved id: that stays the server's.
+    /// </summary>
+    public IReadOnlySet<string> GroundRooms { get; init; } = new HashSet<string>();
 
     public static List<LocationInfo> ParseList(JsonElement root)
         => Json.Arr(root, "locations")
@@ -255,6 +260,23 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
         return names;
     }
 
+    /// <summary><c>rooms[]</c> → the id and (non-empty) name of every room with <c>is_ground: true</c>.</summary>
+    private static HashSet<string> GroundRoomsOf(JsonElement l)
+    {
+        var ground = new HashSet<string>();
+        foreach (var r in Json.Arr(l, "rooms"))
+        {
+            if (r.ValueKind != JsonValueKind.Object || !r.TryGetProperty("is_ground", out var g)
+                || g.ValueKind != JsonValueKind.True) continue;
+            var id = Json.Str(r, "id");
+            if (id.Length == 0) continue;
+            ground.Add(id);
+            var name = Json.Str(r, "name");
+            if (name.Length > 0) ground.Add(name);
+        }
+        return ground;
+    }
+
     public static LocationInfo Parse(JsonElement l)
     {
         l.TryGetProperty("map3d", out var m3);
@@ -272,6 +294,7 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
             AreaModel = area,
             Terrain = Json.Str(l, "terrain"),
             Rooms = RoomNames(l),
+            GroundRooms = GroundRoomsOf(l),
         };
     }
 }

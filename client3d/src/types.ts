@@ -35,6 +35,9 @@ export interface Room {
    *  footprint and are always visible */
   indoor?: string;
   layout?: RoomLayout;
+  /** The location's GROUND room (§ A13) — derived by the server, never
+   *  stored; how a client recognises it without the reserved id. */
+  is_ground?: boolean;
 }
 
 /** AV3D-1: optional 3D metadata of a location. */

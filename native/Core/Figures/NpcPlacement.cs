@@ -38,6 +38,8 @@ public sealed class PlacementTile
     public IReadOnlyDictionary<string, IReadOnlyList<Vec3>> RoomLieSpots { get; init; } = new Dictionary<string, IReadOnlyList<Vec3>>();
     /// <summary>The storey corridors' room ids (<c>tile.corridors[].roomId</c>).</summary>
     public IReadOnlyList<string> Corridors { get; init; } = Array.Empty<string>();
+    /// <summary>The location's ground room, id AND name (<c>is_ground</c> of the room list; <c>tile.groundRooms</c>).</summary>
+    public IReadOnlySet<string> GroundRooms { get; init; } = new HashSet<string>();
 }
 
 /// <summary>The lookups the ladder needs from around it (npcPlacement.ts <c>PlacementContext</c>).</summary>
@@ -57,7 +59,7 @@ public sealed class PlacementContext
     public Func<string, double, double, double?> RoomStandY { get; init; } = (_, _, _) => null;
     /// <summary>The session owner deduplicates rejected pos diagnostics.</summary>
     public Action<string, string, P2>? StalePos { get; init; }
-    /// <summary>The ground a huddle figure stands on at a WORLD point (<c>tiles.tileGroundY</c>).</summary>
+    /// <summary>The ground a huddle or ground figure stands on at a WORLD point (<c>tiles.tileGroundY</c>).</summary>
     public Func<double, double, double> GroundY { get; init; } = (_, _) => 0;
     /// <summary>The centre of a known location, null when unknown.</summary>
     public Func<string, Vec3?> TargetCentre { get; init; } = _ => null;
@@ -100,6 +102,8 @@ public sealed class RoomPositionDiagnostics(Action<string> log)
 /// shared/test-vectors/npc_placement.json. Rows sorted by <see cref="LocaleCompare"/> (a stable sort, like
 /// <c>Array.sort</c>); per character: in a revealed room seat &gt; sit/lie pool &gt; corridor stand &gt; server
 /// <c>pos</c> inside its room hull (0.3 m tolerance) at the room's standing height &gt; room centre;
+/// otherwise, on the location's GROUND (<see cref="PlacementTile.GroundRooms"/>) with a <c>pos</c>, exactly that point on
+/// the tile ground (the ground has no hull and no centre — the server's point is the only place to draw it);
 /// otherwise the huddle on the tile ground. Facing towards the
 /// movement target's place; hidden on another storey or in a closed interior; transition from the last placement.
 /// </summary>
@@ -193,6 +197,13 @@ public static class NpcPlacement
                         else ctx.StalePos?.Invoke(c.Name, inRoom, at);
                     }
                 }
+            }
+            else if (hasRoom && tile.GroundRooms.Contains(room!) && c.Pos is { } gp
+                     && double.IsFinite(gp.X) && double.IsFinite(gp.Z))
+            {
+                // On the GROUND the server's point is the whole answer: no hull to test it against, no centre.
+                branch = "ground";
+                pos = new Vec3(gp.X, ctx.GroundY(gp.X, gp.Z), gp.Z);
             }
             else
             {

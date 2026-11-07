@@ -270,6 +270,7 @@ public class NpcPlacementVectorTests
             RoomSitSpots = Map(Key(t, "roomSitSpots"), l => (IReadOnlyList<Vec3>)((JsonArray)l!).Select(XYZ).ToList()),
             RoomLieSpots = Map(Key(t, "roomLieSpots"), l => (IReadOnlyList<Vec3>)((JsonArray)l!).Select(XYZ).ToList()),
             Corridors = ((JsonArray)Key(t, "corridors")!).Select(Str).ToList(),
+            GroundRooms = Key(t, "groundRooms") is JsonArray g ? g.Select(Str).ToHashSet() : new HashSet<string>(),
         };
     }
 

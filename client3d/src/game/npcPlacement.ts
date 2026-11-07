@@ -31,6 +31,13 @@
  *      pos      the server's own `pos` inside the room hull (0.3 m tolerance), at its standing height there
  *               (`roomStandY`), else at the centre's height;
  *      centre   no valid room point: the room's existing centre.
+ *  - Otherwise, when its room is the location's GROUND (`is_ground` of the
+ *    `/world/locations?view=3d` room list, `tile.groundRooms`) and the row
+ *    carries a `pos`: GROUND — exactly that point, at `groundY` there. The
+ *    ground has no hull and no centre (it IS the plot, § A13a), so the
+ *    server's point is the only place such a figure can be drawn; a made-up
+ *    spot would put it next to somebody the server measures 25 m away, and
+ *    what the player sees would no longer be who the character can talk to.
  *  - Otherwise the HUDDLE: `huddleOffset` in the tile frame, at
  *    `groundY` of the turned point.
  *  - FACING towards the movement target's place centre (y = 0) when the
@@ -90,6 +97,10 @@ export interface PlacementTile<M extends PlacementMarker = PlacementMarker> {
   roomSitSpots: ReadonlyMap<string, readonly PlacementPoint[]>;
   roomLieSpots: ReadonlyMap<string, readonly PlacementPoint[]>;
   corridors: readonly { roomId: string }[];
+  /** The location's ground room — id AND name, like the room maps — as the
+   *  `is_ground` flag of the location's room list names it. Never the
+   *  reserved id: that constant stays the server's (§ A13). */
+  groundRooms: ReadonlySet<string>;
 }
 
 /** The lookups the ladder needs from around it. */
@@ -108,13 +119,13 @@ export interface PlacementContext<M extends PlacementMarker> {
   roomStandY: (room: string, lx: number, lz: number) => number | null;
   /** Called only when the pos rung rejects a point; the session owner deduplicates diagnostics. */
   stalePos?: (name: string, room: string, point: { x: number; z: number }) => void;
-  /** The ground a huddle figure stands on at a world point (`tiles.tileGroundY`). */
+  /** The ground a huddle or ground figure stands on at a world point (`tiles.tileGroundY`). */
   groundY: (x: number, z: number) => number;
   /** The centre of a known location (`places.get(id)?.center`). */
   targetCentre: (id: string) => PlacementPoint | undefined;
 }
 
-export type PlacementBranch = 'seat' | 'pool' | 'corridor' | 'pos' | 'centre' | 'huddle';
+export type PlacementBranch = 'seat' | 'pool' | 'corridor' | 'pos' | 'centre' | 'ground' | 'huddle';
 
 export interface LocatedFigure<R extends PlacementRow> {
   row: R;
@@ -273,6 +284,12 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
           } else ctx.stalePos?.(c.name, inRoom, c.pos);
         }
       }
+    } else if (room && tile.groundRooms.has(room) && c.pos
+               && Number.isFinite(c.pos.x) && Number.isFinite(c.pos.z)) {
+      // On the GROUND the server's point is the whole answer: no hull to test
+      // it against, no centre to fall back on.
+      branch = 'ground';
+      pos = { x: c.pos.x, y: ctx.groundY(c.pos.x, c.pos.z), z: c.pos.z };
     } else {
       branch = 'huddle';
       const slot = huddleOffset(tile.isBuilding, tile.width, i, chars.length);

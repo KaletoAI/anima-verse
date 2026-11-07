@@ -160,6 +160,23 @@
        {"name": "B", "branch": "huddle", "pos": {"x": 102.25166604983954, "y": 3.0485166604983954, "z": 51.3},
         "face": null, "lean": null, "inRoom": null, "interiorShown": false, "hidden": false, "transition": "snap"},
        {"name": "C", "branch": "huddle", "pos": {"x": 97.74833395016046, "y": 3.0034833395016046, "z": 51.3},
-        "face": null, "lean": null, "inRoom": null, "interiorShown": false, "hidden": false, "transition": "snap"}]}
+        "face": null, "lean": null, "inRoom": null, "interiorShown": false, "hidden": false, "transition": "snap"}]},
+
+    {"label": "[6] the ground: its figures stand on their own pos, the rest in the huddle", "fn": "placeAtLocationValue",
+     "args": [
+       [{"name": "Dov", "pos": {"x": 101, "z": 49}}, {"name": "Cem"},
+        {"name": "Bea", "pos": {"x": 95.5, "z": 52.25}}, {"name": "Ada", "pos": {"x": 108, "z": 41}}],
+       {"Ada": "yard", "Bea": "Market square", "Cem": "yard", "Dov": "attic"},
+       {"$fixture": "HOUSE", "$with": {"groundRooms": ["yard", "Market square"]}},
+       {"$fixture": "CTX", "$with": {"near": false, "shown": {"Cem": {"room": null, "interiorShown": false}}}}],
+     "expect": [
+       {"name": "Ada", "branch": "ground", "pos": {"x": 108, "y": 2.9, "z": 41}, "face": null, "lean": null,
+        "inRoom": null, "interiorShown": false, "hidden": false, "transition": "snap"},
+       {"name": "Bea", "branch": "ground", "pos": {"x": 95.5, "y": 3, "z": 52.25}, "face": null, "lean": null,
+        "inRoom": null, "interiorShown": false, "hidden": false, "transition": "snap"},
+       {"name": "Cem", "branch": "huddle", "pos": {"x": 103.6, "y": 3.013, "z": 48.85}, "face": null, "lean": null,
+        "inRoom": null, "interiorShown": false, "hidden": false, "transition": "stay"},
+       {"name": "Dov", "branch": "huddle", "pos": {"x": 103.6, "y": 2.967, "z": 46.55}, "face": null, "lean": null,
+        "inRoom": null, "interiorShown": false, "hidden": false, "transition": "snap"}]}
   ]
 }

@@ -1002,7 +1002,9 @@ gebautes Payload hält.
 **`GET /world/locations?view=3d` — Ortsdetails nach Bedarf:** Die Antwort
 `{locations: [...]}` enthält pro Ort genau `id`, `name`, `description`,
 `rooms`, `entry_room`, `terrain`, `surface_kind` und `map3d`; jeder Raum
-enthält genau `id`, `name` und `layout`. Fehlende optionale Felder stehen als
+enthält genau `id`, `name`, `layout` und das abgeleitete `is_ground` (true nur
+für die Grundfläche des Orts, § A13 — nie gespeichert; daran erkennen Clients
+sie statt an der reservierten Id). Fehlende optionale Felder stehen als
 `null` im Payload. Position und abgeleitete Geometrie liefert die Weltkarte.
 Galeriezähler (`image_count`) und Bedingungen gehören nicht zu dieser Ansicht.
 `agent_name` zusammen mit `view=3d` ergibt **400**; die Vollansicht ohne
@@ -4011,6 +4013,16 @@ kann ihn nicht löschen, nur benennen.
   steht auf der Grundfläche, nicht „nirgends". Die Raum-Heuristik hat damit
   ein gültiges Ziel statt eines Lochs (client3d, `groundRoomId` aus dem
   Payload) — vorher behielt sie den Raum der VORIGEN Location.
+- **Gezeichnet wird eine Figur auf der Grundfläche an ihrem eigenen `pos`**
+  (seit 2026-11-07), auf der Bodenhöhe dort. Die Grundfläche hat keinen Umriss
+  und keinen Mittelpunkt (§ A13a) — der Server-Punkt ist die einzige Stelle,
+  an der sie stehen kann. Erkannt wird sie am `is_ground` der Raumliste von
+  `/world/locations?view=3d`. Nur ohne `pos` bleibt der Ersatzplatz vor dem
+  Gebäude bzw. der Ring auf dem offenen Platz. Vorher stand JEDE Figur der
+  Grundfläche dort, und der Client zeigte zwei Figuren nebeneinander, die der
+  Server 25 m auseinander führte: Was man sah, war nicht mehr, wen man
+  ansprechen kann. Leiter und Vektoren: `client3d/src/game/npcPlacement.ts`,
+  `native/Core/Figures/NpcPlacement.cs`, `shared/test-vectors/npc_placement.json` [6].
 
 ### A13a. Die Grundfläche trägt einen REDUZIERTEN Grundriss
 

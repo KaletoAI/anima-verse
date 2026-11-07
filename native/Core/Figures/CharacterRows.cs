@@ -289,7 +289,7 @@ public sealed record LocationPlacement(PlacementTile Tile, bool Near, Func<doubl
 ///   2. <c>placementOf(hasTile, pos)</c> (vector-checked): <b>free</b> = the point on the terrain (a snap when it was
 ///      drawn in a room), <b>offmap</b> = not drawn;
 ///   3. <b>tile</b>: per location, the room ladder <see cref="NpcPlacement.PlaceAtLocation"/> (seat, pool, corridor,
-///      server pos, centre; else the huddle on the tile ground), with facing, lean, hidden and snap from it.
+///      server pos, centre; the ground's own pos; else the huddle on the tile ground), with facing, lean, hidden and snap from it.
 ///
 /// <paramref name="shown"/> is the session's <c>shownPlacement</c> map: a traveller or free figure is reset to
 /// {null, false}, a tile figure rewritten whenever its transition is not "stay". Pure, so tests derive it by hand.

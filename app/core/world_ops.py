@@ -240,8 +240,13 @@ def build_locations_payload_3d() -> Dict[str, Any]:
     projected = []
     for loc in locations:
         row = {field: loc.get(field) for field in VIEW_3D_FIELDS}
+        # ``is_ground`` is DERIVED, never stored: it is how a client recognises
+        # the location's ground (§ A13) — the reserved id stays the server's.
+        # The figure placement draws a character standing there at its own
+        # ``pos``, because the ground has no hull a client could place it on.
         row["rooms"] = [
-            {field: room.get(field) for field in VIEW_3D_ROOM_FIELDS}
+            {**{field: room.get(field) for field in VIEW_3D_ROOM_FIELDS},
+             "is_ground": room.get("id") == GROUND_ROOM_ID}
             for room in loc.get("rooms", [])
         ]
         projected.append(row)

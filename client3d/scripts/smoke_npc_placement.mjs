@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Smoke check for WHERE THE FIGURES OF ONE LOCATION ARE DRAWN — the pure room
- * ladder `placeAtLocation` and the huddle `huddleOffset`
+ * ladder `placeAtLocation` (incl. the ground's own point) and the huddle
+ * `huddleOffset`
  * (`client3d/src/game/npcPlacement.ts`, extracted from
  * `main.computeNpcPlacements` for the native client, plan Task 29).
  *
@@ -21,7 +22,8 @@
  *             alwaysVisibleRooms: [ids], roomCenters: {room: point},
  *             roomLevels: {room: n}, roomMarkers: {room: {placeId: {slots:
  *             [points], rotation?, tilt?, roll?}}}, roomSitSpots /
- *             roomLieSpots: {room: [points]}, corridors: [room ids]}
+ *             roomLieSpots: {room: [points]}, corridors: [room ids],
+ *             groundRooms: [room ids AND names flagged is_ground]}
  *     ctx     {locId, near, shown: {name: {room, interiorShown}},
  *             roomStand: {room: [a, b, c]} = the standing height
  *             a·lx + b·lz + c at a TILE-LOCAL point (a room not listed
@@ -155,6 +157,24 @@
  *                  -> world (97.74833395016046, ·, 51.3),
  *                     ground 0.9774833395016046 + 1.026 + 1 = 3.0034833395016046
  *   (2.6·sin(2π/3) = 2.6·0.8660254037844386.) All snap, none hidden.
+ *
+ * ============================================================================
+ * [6] THE GROUND (the house, fade 0, NOT the near ring)
+ * ============================================================================
+ * `groundRooms` = {"yard", "Market square"} — the ground room by id AND by
+ * name, as the location's room list flags it `is_ground`. The ground has no
+ * centre, so nobody is drawn IN it; a row WITH a pos stands on that point.
+ * Sorted Ada, Bea, Cem, Dov; count 4, huddle x by index as in [2].
+ *   Ada  yard, pos (108, 41) -> GROUND (108, ·, 41), ground
+ *        0.01·108 + 0.02·41 + 1 = 1.08 + 0.82 + 1 = 2.9. Not hidden (no
+ *        centre: no closed interior), no previous placement -> snap.
+ *   Bea  "Market square" (the ground by NAME), pos (95.5, 52.25) -> GROUND
+ *        (95.5, ·, 52.25), ground 0.955 + 1.045 + 1 = 3. Snap.
+ *   Cem  yard WITHOUT a pos -> HUDDLE i 2: (103.6, ·, 48.85), ground 3.013
+ *        (as in [2]). prev {null, false} = next -> stay.
+ *   Dov  attic (no centre, NOT the ground), pos (101, 49) -> still HUDDLE i 3:
+ *        (103.6, ·, 46.55), ground 2.967 — a pos alone does not make the
+ *        ground, only the room list's flag does. Snap.
  */
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
@@ -194,6 +214,7 @@ function tileOf(t) {
     roomMarkers: markers,
     roomSitSpots: mapOf(t.roomSitSpots), roomLieSpots: mapOf(t.roomLieSpots),
     corridors: (t.corridors ?? []).map((roomId) => ({ roomId })),
+    groundRooms: new Set(t.groundRooms ?? []),
   };
 }
 

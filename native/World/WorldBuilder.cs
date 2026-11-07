@@ -156,6 +156,8 @@ public sealed class LocationSlot
     public ScenePayload? Scene { get; init; }
     /// <summary>The location's rooms as <c>/world/locations?view=3d</c> lists them (<c>tile.loc.rooms</c>): id → name.</summary>
     public IReadOnlyDictionary<string, string> DetailRooms { get; init; } = new Dictionary<string, string>();
+    /// <summary>The location's ground room (id and name, <c>is_ground</c> of the same list) — tiles.ts <c>groundRooms</c>.</summary>
+    public IReadOnlySet<string> GroundRooms { get; init; } = new HashSet<string>();
 
     /// <summary>
     /// What a room change of a figure walks through (main.ts' <c>route</c> branch, <see cref="Figures.NpcRoute"/>): the
@@ -196,6 +198,7 @@ public sealed class LocationSlot
         RoomFloors = Stands.RoomFloors.ToDictionary(e => e.Key, e => e.Value),
         RoomMarkers = Places.Markers, RoomSitSpots = Stands.SitSpots, RoomLieSpots = Stands.LieSpots,
         Corridors = Figures.FigureStands.CorridorIds(Places),
+        GroundRooms = GroundRooms,
     };
 }
 
@@ -805,6 +808,7 @@ public sealed partial class WorldBuilder
                                       .Where(r => r.Rect is not null).Select(r => new KeyValuePair<string, RoomRect>(r.Key, r.Rect!.Value)).ToList(),
                 Corridors = scene.Corridors.ToList(),
                 DetailRooms = DetailRooms(loc.Id),
+                GroundRooms = DetailGroundRooms(loc.Id),
                 RoomAmbience = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Ambience),
                 // mountShell's places part (markers, lift stops, flights, vertical targets, corridor stands) in the frame
                 // the group stands in now; the re-datum carries it (Redatum → PlaceInventory.Relift).
@@ -842,6 +846,13 @@ public sealed partial class WorldBuilder
     {
         foreach (var d in Details) if (d.Id == id) return d.Rooms;
         return new Dictionary<string, string>();
+    }
+
+    /// <summary>The ground room of a location: its <c>/world/locations?view=3d</c> row's <c>is_ground</c> room (empty when unknown).</summary>
+    private IReadOnlySet<string> DetailGroundRooms(string id)
+    {
+        foreach (var d in Details) if (d.Id == id) return d.GroundRooms;
+        return new HashSet<string>();
     }
 
     /// <summary>

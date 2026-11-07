@@ -20,6 +20,7 @@ const tile = {
   roomLevels: new Map([['r-hall', 0], ['r-bed', 0]]),
   roomFloors: new Map(Object.entries(fixture.hulls).map(([id, hull]) => [id, { hull }])),
   roomMarkers: new Map(), roomSitSpots: new Map(), roomLieSpots: new Map(), corridors: [],
+  groundRooms: new Set(),
 };
 const roomStandY = (_room, lx, lz) => (64 + lz) / 32 + (128 - lx) / 64 + .01;
 const ctx = { locId: 'loc-inn', near: true, roomOf: () => fixture.room, shownOf: () => undefined,

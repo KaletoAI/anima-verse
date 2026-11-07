@@ -617,6 +617,9 @@ export interface Tile {
   /** Permanently visible rooms (layout.always_visible; figures stand there
    *  in the overview as well). */
   alwaysVisibleRooms: Set<string>;
+  /** The ground room of `loc` (id and name), from the room list's `is_ground`
+   *  — the figure placement draws a character there at its own `pos`. */
+  groundRooms: Set<string>;
   /** Elevator stops per storey (world coordinates), AV3D-12. */
   elevatorStops?: Map<number, THREE.Vector3>;
   /** Staircases of this scene, one entry per COMPLETE foot/head pair of the
@@ -885,6 +888,8 @@ export function buildTile(place: PlaceRecord): Tile {
     roomFloors: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
+    groundRooms: new Set((loc.rooms ?? []).filter((r) => r.is_ground)
+      .flatMap((r) => (r.name ? [r.id, r.name] : [r.id]))),
     outlineWalls: [], levelSlabs: new Map(), levelOutlines: new Map(),
     corridors: [],
     levelWallMats: new Map(),

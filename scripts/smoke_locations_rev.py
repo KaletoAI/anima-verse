@@ -2,7 +2,8 @@
 """Verify the exact 3D locations view and its conditional revision contract.
 
 One seeded location has one room: the view must project exactly eight location
-fields and three room fields, including null for absent optional values.
+fields and three room fields plus the derived ``is_ground`` (true for exactly
+the ground room the server adds), including null for absent optional values.
 A matching validator builds zero payloads. World writes, boot replacement and
 recognised library kinds change the revision; unsupported files do not.
 The full seed preserves its stored id, name, rooms order; the loader appends
@@ -42,6 +43,10 @@ async def main():
         library.mkdir()
         app = FastAPI()
         app.include_router(router)
+        # The route reads the session user (the full view asks for the role);
+        # the smoke has no session, so it answers as an admin.
+        from app.core.auth_dependency import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: {"id": 1, "role": "admin"}
         # Exercise the actual worldmap composer through a disposable HTTP adapter.
         @app.get("/play/worldmap")
         def worldmap():
@@ -65,7 +70,9 @@ async def main():
             expected = {"id", "name", "description", "rooms", "entry_room",
                         "terrain", "surface_kind", "map3d"}
             assert set(loc) == expected == set(world_ops.VIEW_3D_FIELDS)
-            assert set(loc["rooms"][0]) == {"id", "name", "layout"} == set(world_ops.VIEW_3D_ROOM_FIELDS)
+            assert set(loc["rooms"][0]) == {"id", "name", "layout", "is_ground"} \
+                == set(world_ops.VIEW_3D_ROOM_FIELDS) | {"is_ground"}
+            assert loc["rooms"][0]["is_ground"] is False
             assert loc["map3d"] is None and loc["rooms"][0]["layout"] is None
             with (
                 patch.object(world_ops, "build_locations_payload_3d", side_effect=AssertionError("304 built payload")),
@@ -121,6 +128,15 @@ async def main():
                 with patch.object(surface_textures.time, "monotonic", return_value=clock + 30):
                     assert world_ops.locations_rev() == blend_rev, "in-place blend removal must change revision after TTL"
                     assert kinds.call_count == 2
+            # ``is_ground`` names exactly the server's ground room — the one
+            # room whose id is the reserved constant, whatever it is called.
+            world.upsert_location({"id": "yard", "name": "Yard", "rooms": [
+                {"id": "hall", "name": "Hall"},
+                {"id": world.GROUND_ROOM_ID, "name": "Market square"}]}, sync_world=True)
+            yard = next(l for l in world_ops.build_locations_payload_3d()["locations"]
+                        if l["id"] == "yard")
+            assert [(r["id"], r["is_ground"]) for r in yard["rooms"]] == [
+                ("hall", False), (world.GROUND_ROOM_ID, True)], yard["rooms"]
     await client.aclose()
     polling.cancel()
     print("PASS: locations revision, exact projection and conditional requests")
