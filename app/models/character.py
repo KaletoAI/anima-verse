@@ -3455,8 +3455,15 @@ def _get_rembg_session(model: str = "u2net"):
         import os
         os.environ.setdefault("OMP_NUM_THREADS",
             os.environ.get("REMBG_OMP_NUM_THREADS", "4"))
+        import onnxruntime as ort
         from rembg import new_session
-        _REMBG_SESSIONS[model] = new_session(model)
+        # No CPU memory arena: the arena keeps the peak of the largest run
+        # forever — BiRefNet held ~11 GB of an idle server (measured
+        # 2026-11-07). Without it the run's buffers go back after the matte.
+        # rembg still fills the thread counts from OMP_NUM_THREADS.
+        opts = ort.SessionOptions()
+        opts.enable_cpu_mem_arena = False
+        _REMBG_SESSIONS[model] = new_session(model, sess_opts=opts)
         logger.info("rembg session initialised (%s, OMP_NUM_THREADS=%s)",
                     model, os.environ.get("OMP_NUM_THREADS"))
     return _REMBG_SESSIONS[model]
@@ -3483,7 +3490,20 @@ def run_rembg(data: bytes, model: str = "u2net", **kwargs) -> bytes:
     from rembg import remove
     session = _get_rembg_session(model)
     with _REMBG_RUN_LOCK:
-        return remove(data, session=session, **kwargs)
+        try:
+            return remove(data, session=session, **kwargs)
+        finally:
+            _malloc_trim()
+
+
+def _malloc_trim() -> None:
+    """Hand freed heap pages back to the OS after a matte: glibc keeps the
+    freed buffers of a multi-GB run in its arenas otherwise. No-op off glibc."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:   # noqa: BLE001 — not glibc / not Linux
+        pass
 
 
 # rembg/u2net leaves near-transparent background specks; ignore alpha <= 16 (~6%).
