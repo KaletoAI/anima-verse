@@ -59,8 +59,8 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import (Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set,
-                    Tuple)
+from typing import (Any, Dict, FrozenSet, Iterable, Iterator, List, Optional,
+                    Sequence, Set, Tuple)
 
 from app.core.log import get_logger
 from app.core.model_store import DEFAULT_TIER, variant_urls
@@ -4118,7 +4118,14 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     season = season_token()
     try:
         from app.models.terrain import terrain_sig
-        terrain = terrain_sig()
+        from app.core.props import not_recording
+        # NOT part of the prop read set (scene_etag): the props terrain_sig
+        # reads (scatter enrichment, world-prop boxes) reach this payload only
+        # through the value it returns, and that value is itself a
+        # fingerprint input. Recorded, they would appear only when its cache
+        # happened to be cold.
+        with not_recording():
+            terrain = terrain_sig()
     except Exception:              # noqa: BLE001 — no world, no painted water
         terrain = ""
     payload = {
@@ -5002,8 +5009,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 # hashes the room recipes and the baked lattices of the finished specs), so
 # the composed payload is cached per location under a fingerprint of its
 # INPUTS. A poll that finds the fingerprint unchanged hands out the same
-# payload — and the route answers ``304 Not Modified`` from its signature,
-# so nothing is serialized either.
+# payload — and the route answers ``304 Not Modified`` from it (the ETag is
+# :func:`scene_etag`), so nothing is serialized either.
 #
 # The draft preview (``POST /play/scene-preview``) is deliberately NOT cached:
 # it composes an unsaved draft, so it has no stored inputs to fingerprint.
@@ -5075,9 +5082,81 @@ def _dir_stat_sig(directory: Path, depth: int = 0) -> str:
     return "|".join(parts)
 
 
+def _fp_safe(fn) -> str:
+    """One fingerprint contributor as text. A contributor that RAISES yields a
+    unique token instead of a constant, so the fingerprint misses rather than
+    freezing on a value it could not read — a cache key may not fail a
+    request."""
+    import uuid
+    try:
+        return str(fn())
+    except Exception:   # noqa: BLE001
+        return "?" + uuid.uuid4().hex
+
+
+def _fingerprint_parts(location: Dict[str, Any], location_id: str) -> List[str]:
+    """Every input of :func:`scene_fingerprint` EXCEPT the props — the part
+    the library-wide and the per-location variants share."""
+    import json
+
+    def _terrain() -> str:
+        from app.models.terrain import terrain_sig
+        return terrain_sig()
+
+    def _relief() -> str:
+        from app.core.heightfield import current_sig
+        return current_sig()
+
+    def _surface_library() -> str:
+        from app.core.surface_textures import library_kinds
+        return ",".join(sorted(library_kinds()))
+
+    def _place_types() -> str:
+        from app.core.pose_catalog import get_groups
+        return json.dumps(get_groups(), sort_keys=True, default=str)
+
+    def _pack_actions() -> str:
+        from app.core.prop_action_sources import signature
+        return signature()
+
+    def _models() -> str:
+        from app.core.location_model3d import _model_dir, _owner_id
+        owner = _owner_id(location_id) if location_id else ""
+        return _dir_stat_sig(_model_dir(owner)) if owner else ""
+
+    def _storage() -> str:
+        # The world this answer belongs to: two worlds may hold a location of
+        # the same id, and their scenes are not the same scene.
+        from app.core.paths import get_storage_dir
+        return str(get_storage_dir())
+
+    from app.core.door_models import generation as door_generation
+
+    return [
+        str(SCENE_RECIPE_VERSION),
+        json.dumps(season_token()),
+        _fp_safe(_storage),
+        _fp_safe(lambda: json.dumps(location, sort_keys=True, default=str)),
+        _fp_safe(_terrain),
+        _fp_safe(_relief),
+        _fp_safe(_surface_library),
+        _fp_safe(_place_types),
+        _fp_safe(_pack_actions),
+        _fp_safe(_models),
+        _fp_safe(door_generation),
+    ]
+
+
+def _hash_parts(parts: List[str], props_part: str) -> str:
+    import hashlib
+    return hashlib.md5("\u0000".join([*parts, props_part]).encode()).hexdigest()
+
+
 def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
-    """Hash over every INPUT :func:`compose_scene` reads for ONE location —
-    the cache key of :func:`scene_for_location`.
+    """Hash over every INPUT :func:`compose_scene` reads for ONE location,
+    with the props taken as the WHOLE library — the cache key of the
+    server-side consumers that compose on their own (``places._compose``,
+    ``room_stand.room_geometry``) and the fallback of :func:`scene_etag`.
 
     It is deliberately a SUPERSET: an input that is only sometimes read (a
     prop the location does not place, a terrain area nowhere near it) still
@@ -5114,10 +5193,11 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         ``pose_catalog.get_groups()`` — the place types ``_markers``
         classifies against; an unknown group drops its marker.
     ``props``
-        one stat per file in ``<storage>/props/<id>/`` — sidecars, meshes,
-        their tier files and their baked lattices all live flat in that one
-        directory per prop. This is the only input with no signature of its
-        own, and the one the finding named.
+        :func:`prop_lib_token` — one stat per file in ``<storage>/props/<id>/``
+        of EVERY prop: sidecars, meshes, their tier files and their baked
+        lattices all live flat in that one directory per prop. Props have no
+        signature of their own. :func:`scene_etag` narrows this to the props
+        the location's last compose really read.
     ``pack actions``
         ``prop_action_sources.signature()`` — package actions bind to markers
         without a sidecar write (plan-pack-prop-actions.md).
@@ -5133,67 +5213,141 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
     A contributor that RAISES yields a unique token instead of a constant, so
     the fingerprint misses rather than freezing on a value it could not read.
     """
-    import hashlib
-    import json
-    import uuid
+    return _hash_parts(_fingerprint_parts(location, location_id),
+                       "lib:" + _fp_safe(prop_lib_token))
 
-    def _safe(fn) -> str:
+
+# ── The props a scene really read (2026-11-07) ──────────────────────────
+#
+# MEASURED. The library-wide prop token made the scene poll's ETag move for
+# every location whenever ANY prop directory was written: generating five new
+# props (source image + sidecar, placed nowhere) during a 6-minute window sent
+# 93 full answers to one browser for 18 locations whose payloads had not
+# changed, each a full recompose. ``scripts/smoke_scene_fingerprint_churn.py``
+# measures it on a seeded world.
+#
+# WHAT REPLACES IT. While :func:`scene_and_etag` composes, ``props`` records
+# the id of every prop whose directory the composer resolves
+# (``props.recording_reads`` — every per-prop file lives in that directory,
+# and :func:`props._prop_dir` is the one door to it). The ETag then hashes
+# those directories only, plus the read set itself.
+#
+# WHY THAT IS EXACT, NOT HOPEFUL. The composer is deterministic: with the same
+# non-prop inputs and the same content in the props it reads, it reads the same
+# props again and yields the same payload. An ETag that matches therefore says
+# "same non-prop inputs, same read set, same stats of every prop in it" — the
+# payload it was issued for is the payload a compose would produce now. A read
+# set that is out of date (the location was edited since) cannot produce a
+# false match: the location record is part of the hash, and any compose under
+# the new record replaces the read set. A library LISTING during a compose
+# records ``props.ALL_PROPS`` and falls back to the library-wide token.
+#
+# THE KEY IS CAPTURED BEFORE THE READS. A miss stats the whole library BEFORE
+# it composes and builds the stored key from that snapshot, restricted to what
+# the compose read — a prop written while the compose runs leaves the stored
+# key on its OLD stats, so the next poll recomposes instead of keeping a
+# payload that mixes the two.
+#
+# CACHES ON THE COMPOSE PATH (traced 2026-11-07: every app function a warm
+# compose of the demo world calls). A cache that answers a hit WITHOUT
+# resolving the prop's directory would hide a read. Per cache:
+#   * ``model_water._load_cache``, ``model_surface._load_cache``,
+#     ``glb_delivery._hashes`` — keyed by a file PATH plus its stat; the path
+#     comes from ``props.model_path``/``surface_for``/``model_version``, i.e.
+#     through ``_prop_dir`` on every call, hit or miss (or from the location's
+#     model dir, a fingerprint input of its own).
+#   * ``ModelGallery._sel`` — per instance; ``props.model_gallery`` builds a
+#     new one per call, through ``_prop_dir``.
+#   * ``props._bbox_failed`` — a retry guard keyed by (prop, model mtime);
+#     reaching the mtime resolves the directory.
+#   * ``models.terrain._sig_cache`` (and ``world_props._payload_cache`` behind
+#     ``prop_boxes``) — the ONE cache that hides prop reads on a hit. Its
+#     value ``terrain_sig()`` is a fingerprint input, its key holds
+#     ``prop_lib_token()`` (any prop write moves it), and the payload sees
+#     those props only through that value — so ``_signature`` reads it under
+#     ``props.not_recording`` and the read set does not depend on whether the
+#     cache was warm.
+#   * ``prop_action_sources._validated`` (fingerprint input ``pack
+#     actions``), ``terrain_types`` / ``surface_textures`` / ``pose_catalog``
+#     caches — no prop data.
+# ``scripts/smoke_scene_fingerprint_churn.py`` [5]/[6] measures cold == warm
+# for every location and the end-to-end cases.
+#
+# ONLY THE SCENE PATH records. ``places`` and ``room_stand`` compose on their
+# own and keep :func:`scene_fingerprint`: a read set they did not record would
+# not cover a prop their own compose reads first.
+
+_scene_reads_lock = threading.Lock()
+_scene_reads: Dict[Tuple[str, str], FrozenSet[str]] = {}
+
+
+def _reads_key(location_id: str) -> Tuple[str, str]:
+    from app.core.paths import get_storage_dir
+    return (str(get_storage_dir()), location_id)
+
+
+def _remembered_reads(location_id: str) -> Optional[FrozenSet[str]]:
+    try:
+        key = _reads_key(location_id)
+    except Exception:   # noqa: BLE001 — no world, nothing remembered
+        return None
+    with _scene_reads_lock:
+        return _scene_reads.get(key)
+
+
+def _prop_dir_sig(prop_id: str) -> str:
+    """The stat signature of ONE prop directory — exactly the entry the
+    library walk of :func:`prop_lib_token` gives it (its own files, no
+    subdirectories); ``""`` for a prop that has no directory."""
+    from app.core.props import _props_dir
+    return _dir_stat_sig(_props_dir() / prop_id)
+
+
+def _library_prop_sigs() -> Dict[str, str]:
+    """:func:`_prop_dir_sig` of every directory in the library, read in one
+    walk — the snapshot a miss takes before it composes."""
+    from app.core.props import _props_dir
+    out: Dict[str, str] = {}
+    try:
+        entries = list(os.scandir(_props_dir()))
+    except OSError:
+        return out
+    for entry in entries:
         try:
-            return str(fn())
-        except Exception:   # noqa: BLE001 — a cache key may not fail a request
-            return "?" + uuid.uuid4().hex
+            if entry.is_dir():
+                out[entry.name] = _dir_stat_sig(Path(entry.path))
+        except OSError:
+            continue
+    return out
 
-    def _terrain() -> str:
-        from app.models.terrain import terrain_sig
-        return terrain_sig()
 
-    def _relief() -> str:
-        from app.core.heightfield import current_sig
-        return current_sig()
+def _reads_part(reads: FrozenSet[str], sigs: Dict[str, str],
+                lib_token: str) -> str:
+    """The props contribution of a read set: the read ids with their
+    directory stats, or the library token when the library itself was
+    listed."""
+    import json
+    from app.core.props import ALL_PROPS
+    if ALL_PROPS in reads:
+        return "lib:" + lib_token
+    return "set:" + json.dumps([[pid, sigs.get(pid, "")] for pid in sorted(reads)])
 
-    def _surface_library() -> str:
-        from app.core.surface_textures import library_kinds
-        return ",".join(sorted(library_kinds()))
 
-    def _place_types() -> str:
-        from app.core.pose_catalog import get_groups
-        return json.dumps(get_groups(), sort_keys=True, default=str)
-
-    def _props() -> str:
-        return prop_lib_token()
-
-    def _pack_actions() -> str:
-        from app.core.prop_action_sources import signature
-        return signature()
-
-    def _models() -> str:
-        from app.core.location_model3d import _model_dir, _owner_id
-        owner = _owner_id(location_id) if location_id else ""
-        return _dir_stat_sig(_model_dir(owner)) if owner else ""
-
-    def _storage() -> str:
-        # The world this answer belongs to: two worlds may hold a location of
-        # the same id, and their scenes are not the same scene.
-        from app.core.paths import get_storage_dir
-        return str(get_storage_dir())
-
-    from app.core.door_models import generation as door_generation
-
-    parts = [
-        str(SCENE_RECIPE_VERSION),
-        json.dumps(season_token()),
-        _safe(_storage),
-        _safe(lambda: json.dumps(location, sort_keys=True, default=str)),
-        _safe(_terrain),
-        _safe(_relief),
-        _safe(_surface_library),
-        _safe(_place_types),
-        _safe(_props),
-        _safe(_pack_actions),
-        _safe(_models),
-        _safe(door_generation),
-    ]
-    return hashlib.md5("\u0000".join(parts).encode()).hexdigest()
+def scene_etag(location: Dict[str, Any], location_id: str) -> str:
+    """The ETag of ``GET /play/locations/{id}/scene`` — :func:`scene_fingerprint`
+    with the props narrowed to the ones this location's last compose read
+    (see the block above). Before the first compose of a location in this
+    process it IS :func:`scene_fingerprint`, which can only cause one
+    needless recompose, never a stale answer."""
+    reads = _remembered_reads(location_id) if location_id else None
+    if reads is None:
+        return scene_fingerprint(location, location_id)
+    from app.core.props import ALL_PROPS
+    if ALL_PROPS in reads:
+        return scene_fingerprint(location, location_id)
+    props_part = _fp_safe(lambda: _reads_part(
+        reads, {pid: _prop_dir_sig(pid) for pid in reads}, ""))
+    return _hash_parts(_fingerprint_parts(location, location_id), props_part)
 
 
 def invalidate_scene_cache(location_id: str = "") -> None:
@@ -5201,43 +5355,25 @@ def invalidate_scene_cache(location_id: str = "") -> None:
 
     Nothing in the server needs to call this — the fingerprint notices every
     input by itself — but a test that rewrites storage under the same
-    nanosecond wants a clean slate.
+    nanosecond wants a clean slate. The remembered read sets go with it.
     """
     with _scene_cache_lock:
         if location_id:
             _scene_cache.pop(location_id, None)
         else:
             _scene_cache.clear()
+    with _scene_reads_lock:
+        if location_id:
+            for key in [k for k in _scene_reads if k[1] == location_id]:
+                del _scene_reads[key]
+        else:
+            _scene_reads.clear()
 
 
-def scene_for_location(location: Dict[str, Any], location_id: str,
-                       fingerprint: str = "") -> Optional[Dict[str, Any]]:
-    """The composed scene of ONE STORED location, out of the cache whenever no
-    input moved — ``None`` when there is nothing to compose.
-
-    ``None`` is the route's 404 (the legacy auto-grid case): no room with a
-    layout, no building outline and no building model. It is decided on the
-    very inputs the fingerprint covers, so a cache hit is a hit on that
-    decision too.
-
-    ``fingerprint`` is :func:`scene_fingerprint` when the caller has already
-    computed it — the route does, because it answers ``304`` from it before it
-    ever asks for a payload.
-
-    The payload is SHARED, not copied: every caller serializes it and none of
-    them writes to it. A caller that wants to change the scene has to compose
-    its own (:func:`compose_scene` is unchanged and uncached).
-    """
-    # A location without an id is not a STORED location: nothing about it can
-    # be fingerprinted, and one cache slot under "" would answer for every
-    # such caller. It composes and is handed out, never cached.
-    if location_id:
-        fingerprint = fingerprint or scene_fingerprint(location, location_id)
-        with _scene_cache_lock:
-            hit = _scene_cache.get(location_id)
-            if hit and hit[0] == fingerprint:
-                _scene_cache.move_to_end(location_id)
-                return hit[1]
+def _compose_stored(location: Dict[str, Any],
+                    location_id: str) -> Optional[Dict[str, Any]]:
+    """The composition of a STORED location, ``None`` when there is nothing to
+    compose (no room with a layout, no building outline, no building model)."""
     from app.core.surface_textures import library_kinds
     plan_width_m, building_meta, room_metas = scene_inputs(location,
                                                            location_id)
@@ -5247,14 +5383,73 @@ def scene_for_location(location: Dict[str, Any], location_id: str,
     if not has_layout and len(map3d.get("outline") or []) < 3 \
             and not building_meta:
         return None
-    payload = compose_scene(location, plan_width_m=plan_width_m,
-                            building_meta=building_meta,
-                            room_metas=room_metas,
-                            surface_kinds=library_kinds())
-    if location_id:
+    return compose_scene(location, plan_width_m=plan_width_m,
+                         building_meta=building_meta,
+                         room_metas=room_metas,
+                         surface_kinds=library_kinds())
+
+
+def scene_and_etag(location: Dict[str, Any], location_id: str, etag: str = "",
+                   ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The composed scene of ONE STORED location plus the ETag it is valid
+    under — out of the cache whenever no input moved; ``(None, etag)`` when
+    there is nothing to compose.
+
+    ``None`` is the route's 404 (the legacy auto-grid case): no room with a
+    layout, no building outline and no building model. It is decided on the
+    very inputs the fingerprint covers, so a cache hit is a hit on that
+    decision too.
+
+    ``etag`` is :func:`scene_etag` when the caller has already computed it —
+    the route does, because it answers ``304`` from it before it ever asks for
+    a payload. After a compose the returned ETag is the key the payload was
+    stored under, which can differ from the one passed in: the first compose
+    of a location learns its read set.
+
+    The payload is SHARED, not copied: every caller serializes it and none of
+    them writes to it. A caller that wants to change the scene has to compose
+    its own (:func:`compose_scene` is unchanged and uncached).
+    """
+    # A location without an id is not a STORED location: nothing about it can
+    # be fingerprinted, and one cache slot under "" would answer for every
+    # such caller. It composes and is handed out, never cached.
+    if not location_id:
+        return _compose_stored(location, location_id), etag
+    etag = etag or scene_etag(location, location_id)
+    with _scene_cache_lock:
+        hit = _scene_cache.get(location_id)
+        if hit and hit[0] == etag:
+            _scene_cache.move_to_end(location_id)
+            return hit[1], etag
+    # The whole key BEFORE the first read of a compose input.
+    parts = _fingerprint_parts(location, location_id)
+    lib_token = _fp_safe(prop_lib_token)
+    sigs = _library_prop_sigs()
+    from app.core.props import recording_reads
+    with recording_reads() as seen:
+        payload = _compose_stored(location, location_id)
+    reads = frozenset(seen)
+    key = _hash_parts(parts, _reads_part(reads, sigs, lib_token))
+    try:
+        reads_key = _reads_key(location_id)
+    except Exception:   # noqa: BLE001 — no world: nothing to remember
+        reads_key = None
+    if reads_key is not None:
+        with _scene_reads_lock:
+            _scene_reads[reads_key] = reads
+    if payload is not None:
         with _scene_cache_lock:
-            _scene_cache[location_id] = (fingerprint, payload)
+            _scene_cache[location_id] = (key, payload)
             _scene_cache.move_to_end(location_id)
             while len(_scene_cache) > SCENE_CACHE_MAX:
                 _scene_cache.popitem(last=False)
-    return payload
+    return payload, key
+
+
+def scene_for_location(location: Dict[str, Any], location_id: str,
+                       fingerprint: str = "") -> Optional[Dict[str, Any]]:
+    """:func:`scene_and_etag` without the ETag — the composed scene of ONE
+    STORED location, out of the cache whenever no input moved, ``None`` when
+    there is nothing to compose. ``fingerprint`` is a :func:`scene_etag` the
+    caller already holds."""
+    return scene_and_etag(location, location_id, fingerprint)[0]

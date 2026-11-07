@@ -18,6 +18,8 @@ Two additions, neither of which changes the payload:
     the place-type catalog, the season, the code version, plus one ``stat``
     per file in the props and the location's model directory).
   * the route sends ``ETag: "<fingerprint>"`` + ``Cache-Control: no-cache``
+    (``scene_recipe.scene_etag``: the props narrowed to the ones the
+    location's compose read, see ``scripts/smoke_scene_fingerprint_churn.py``)
     and answers ``304`` to a matching ``If-None-Match`` — the fingerprint, not
     the payload's ``signature``, because it is known BEFORE anything is
     composed and because it is the stricter of the two (see [2b]).
@@ -323,7 +325,9 @@ def main() -> int:
 
     print("\n[3] the route: ETag and 304")
     res200 = play_routes.play_location_scene(WAREHOUSE, Req())
-    etag = ('"' + scene_recipe.scene_fingerprint(
+    # The ETag is ``scene_etag``: the fingerprint with the props narrowed to
+    # the ones this location's compose read (here: the crate).
+    etag = ('"' + scene_recipe.scene_etag(
         get_location_by_id(WAREHOUSE), WAREHOUSE) + '"')
     check("200 carries the input fingerprint as ETag",
           res200.headers.get("etag"), etag)
@@ -346,7 +350,7 @@ def main() -> int:
           200)
     check("…and the new ETag is the new fingerprint",
           moved.headers.get("etag"),
-          '"' + scene_recipe.scene_fingerprint(
+          '"' + scene_recipe.scene_etag(
               get_location_by_id(WAREHOUSE), WAREHOUSE) + '"')
     check("…carrying the scene with three crates",
           len([m for m in json.loads(moved.body)["models"]

@@ -183,6 +183,8 @@ The one-time move of the five fields out of the prop record lives in
 ``app/core/prop_field_migration.py`` (boot, guarded by ``world_kv``).
 """
 
+import contextlib
+import contextvars
 import copy
 import hashlib
 import json
@@ -659,12 +661,82 @@ def safe_prop_id(prop_id: str) -> str:
     return prop_id if _PROP_ID_RE.match(prop_id) else ""
 
 
+# ── Read recording (the scene poll's prop read set) ─────────────────────
+#
+# ``GET /play/locations/{id}/scene`` answers 304 from a fingerprint of the
+# composer's inputs. The props used to enter it as ONE stat over the whole
+# library, so creating a prop nobody places — or regenerating the source
+# image of one — moved the ETag of every location at once and every polling
+# client recomposed and downloaded every scene it had loaded. The composer
+# reads a handful of props per location; ``scene_recipe`` records WHICH while
+# it composes and fingerprints exactly those directories.
+#
+# The one door every per-prop read goes through is :func:`_prop_dir` (the
+# sidecar, the model gallery, the source files, the tier files and their
+# lattices all live in that directory), so the recording sits there. A read
+# of the LIBRARY as a whole (:func:`_all_prop_ids`) records
+# :data:`ALL_PROPS`, which sends the fingerprint back to the library-wide
+# token — a superset is never wrong, only slower.
+
+#: Recorded when the library listing itself was read.
+ALL_PROPS = "*"
+
+_read_log: "contextvars.ContextVar[Optional[Set[str]]]" = contextvars.ContextVar(
+    "props_read_log", default=None)
+
+
+@contextlib.contextmanager
+def recording_reads():
+    """Collect the id of every prop whose directory is resolved inside the
+    block (``ALL_PROPS`` for a library listing) into the yielded set.
+
+    Context-local: a request thread records its own reads only. A nested
+    block hands its ids on to the enclosing one, so the outer set stays a
+    superset of everything read within it."""
+    seen: Set[str] = set()
+    token = _read_log.set(seen)
+    try:
+        yield seen
+    finally:
+        _read_log.reset(token)
+        outer = _read_log.get()
+        if outer is not None:
+            outer.update(seen)
+
+
+@contextlib.contextmanager
+def not_recording():
+    """Suspend an enclosing :func:`recording_reads` block.
+
+    For a computation whose RESULT is itself an input of the fingerprint and
+    which caches that result behind a key that moves with the props it reads
+    (``models.terrain.terrain_sig``): its reads are covered by its value, and
+    noting them would make the read set depend on whether its cache happened
+    to be warm."""
+    token = _read_log.set(None)
+    try:
+        yield
+    finally:
+        _read_log.reset(token)
+
+
+def _note_read(pid: str) -> None:
+    log = _read_log.get()
+    if log is not None:
+        log.add(pid)
+
+
 def _prop_dir(prop_id: str, *, create: bool = False) -> Optional[Path]:
     """``props/<prop_id>`` — created only on write paths (a read must not
-    conjure a ghost directory). None for an invalid id."""
+    conjure a ghost directory). None for an invalid id.
+
+    Every resolution is noted for an active :func:`recording_reads` block —
+    an id without a directory too: the fingerprint has to move when it
+    appears."""
     pid = safe_prop_id(prop_id)
     if not pid:
         return None
+    _note_read(pid)
     d = _props_dir() / pid
     if create:
         d.mkdir(parents=True, exist_ok=True)
@@ -5885,6 +5957,7 @@ def _redistribute_dims(meta: Dict[str, Any], rotation: Any = None) -> None:
 # ── Listing ─────────────────────────────────────────────────────────────
 
 def _all_prop_ids() -> List[str]:
+    _note_read(ALL_PROPS)
     d = _props_dir()
     if not d.is_dir():
         return []

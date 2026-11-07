@@ -1819,7 +1819,7 @@ def play_location_scene(location_id: str, request: Request):
     Poll ``signature`` for changes.
 
     THE POLL IS CHEAP NOW (§ B1a, review finding IMG-10). The ``ETag`` is the
-    INPUT fingerprint (``scene_recipe.scene_fingerprint``), not the payload's
+    INPUT fingerprint (``scene_recipe.scene_etag``), not the payload's
     ``signature``: it is known before anything is composed, so a client that
     sends it back as ``If-None-Match`` is answered ``304 Not Modified``
     without a composition and without a body. It is also the stricter of the
@@ -1827,6 +1827,9 @@ def play_location_scene(location_id: str, request: Request):
     a payload change that ``signature`` happens not to cover. Behind it the
     composed payload is held per location under the same fingerprint, so a
     first-time fetch of an unchanged location does not recompose either.
+    The props enter it as the ones this location's composer really read, not
+    as the whole library: a prop created or re-imaged elsewhere leaves this
+    tag alone. A 200 carries the tag its payload was stored under.
     ``Cache-Control: no-cache`` — always revalidate, never serve a scene from
     the browser cache without asking.
 
@@ -1843,7 +1846,7 @@ def play_location_scene(location_id: str, request: Request):
     rendering the location procedurally as before."""
     from fastapi.responses import JSONResponse, Response
     from app.models.world import get_location_by_id
-    from app.core.scene_recipe import scene_fingerprint, scene_for_location
+    from app.core.scene_recipe import scene_and_etag, scene_etag
     from app.core.http_files import etag_matches
     loc = get_location_by_id(location_id)
     if not loc:
@@ -1851,14 +1854,16 @@ def play_location_scene(location_id: str, request: Request):
     # The same spelling as the file routes (``http_files.etag_file_response``):
     # a quoted tag, ``no-cache`` on both answers, and a plain comparison —
     # nothing here issues a weak tag, so nothing has to parse one.
-    etag = f'"{scene_fingerprint(loc, location_id)}"'
-    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    fingerprint = scene_etag(loc, location_id)
+    etag = f'"{fingerprint}"'
     if etag_matches(request.headers.get("if-none-match"), etag):
-        return Response(status_code=304, headers=headers)
-    payload = scene_for_location(loc, location_id, etag.strip('"'))
+        return Response(status_code=304, headers={"ETag": etag,
+                                                  "Cache-Control": "no-cache"})
+    payload, fingerprint = scene_and_etag(loc, location_id, fingerprint)
     if payload is None:
         raise HTTPException(status_code=404, detail="No scene")
-    return JSONResponse(payload, headers=headers)
+    return JSONResponse(payload, headers={"ETag": f'"{fingerprint}"',
+                                          "Cache-Control": "no-cache"})
 
 
 @router.post("/play/scene-preview")

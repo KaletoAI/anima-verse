@@ -6555,10 +6555,31 @@ Zwei Dinge, additiv, am Payload ändert sich **nichts**:
    den Location-Datensatz selbst (map3d, alle Raum-Layouts, `terrain`,
    `default_door_prop_id`), `terrain_sig`, die Relief-Signatur, die
    Oberflächen-Bibliothek, den Platztypen-Katalog sowie je einen `stat` über
-   **jede Datei** in `<storage>/props/<id>/` und in
-   `<storage>/locations/<owner>/model3d/` (Sidecars, Meshes, Tier-Dateien,
-   gebackene Gitter). Er ist absichtlich eine **Obermenge**: eine
-   überflüssige Neukomposition ist billig, eine veraltete Szene nicht.
+   **jede Datei** in `<storage>/locations/<owner>/model3d/` und in
+   `<storage>/props/<id>/` (Sidecars, Meshes, Tier-Dateien, gebackene
+   Gitter) — bei den Props aber nur der Props, die die letzte Komposition
+   DIESER Location wirklich gelesen hat (`scene_recipe.scene_etag`, seit
+   2026-11-07). Während `scene_and_etag` komponiert, notiert
+   `props.recording_reads` jede Prop-ID, deren Verzeichnis aufgelöst wird
+   (`props._prop_dir` ist die eine Tür zu den Prop-Dateien); der ETag hasht
+   genau diese Verzeichnisse plus die Lese-Menge selbst. Vorher war es ein
+   `stat` über die **ganze** Bibliothek: fünf neu generierte, nirgends
+   platzierte Props bewegten im Live-Betrieb den ETag aller 18 geladenen
+   Locations — 93 volle Antworten samt Neukomposition in sechs Minuten für
+   unveränderte Payloads. Exakt ist das, weil der Komponist deterministisch
+   ist: gleiche übrige Eingaben + gleicher Inhalt der gelesenen Props ⇒
+   dieselben Props werden gelesen, dasselbe Payload entsteht. Den Schlüssel
+   eines Misses nimmt der Server **vor** der Komposition (`stat` der ganzen
+   Bibliothek, danach auf die Lese-Menge beschränkt) — ein Prop, das während
+   der Komposition geschrieben wird, erzwingt beim nächsten Poll eine neue.
+   Liest eine Komposition die Bibliotheks-LISTE (`props.ALL_PROPS`), fällt
+   der ETag auf den bibliotheksweiten Fingerabdruck zurück. Ein `200` trägt
+   den ETag, unter dem sein Payload abgelegt wurde. `places` und
+   `room_stand` komponieren selbst und behalten
+   `scene_recipe.scene_fingerprint` (bibliotheksweit) als Schlüssel.
+   Nachgewiesen in `scripts/smoke_scene_fingerprint_churn.py`. Der
+   Fingerabdruck ist absichtlich eine **Obermenge**: eine überflüssige
+   Neukomposition ist billig, eine veraltete Szene nicht.
 
 **Die Signatur ist eine Obermenge — das Gesetz.** `signature` deckt **jeden
 Eingang ab, den das Payload liest**: eine Mutation, die das Payload verändert,
