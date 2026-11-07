@@ -2385,6 +2385,17 @@ async def create_character_core(request) -> Dict[str, Any]:
         logger.warning("create_character: known_locations init failed: %s", _e)
 
     seed_default_skills(character_name)
+    # A template that names its own skill set (``default_skills``) makes it the
+    # WHOLE repertoire — the same closed-list rule temporary NPCs follow.
+    try:
+        from app.core.npc_ops import activate_default_skills
+        from app.models.character_template import get_template
+        _tmpl = get_template(template_name) or {}
+        if _tmpl.get("default_skills"):
+            activate_default_skills(character_name, template_name, tmpl=_tmpl)
+    except Exception as _e:
+        logger.warning("create_character: template skills for %s failed: %s",
+                       character_name, _e)
 
     # Auto-assign the new character to the creator's allowed_characters list
     # so they can immediately see and use it without a separate admin step.

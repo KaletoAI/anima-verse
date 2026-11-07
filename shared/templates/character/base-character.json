@@ -548,6 +548,7 @@
             }
           ],
           "store": "config",
+          "default": "rp_first",
           "hint": "Single: Chat-LLM handles RP + tool decisions. RP-First: Chat-LLM writes clean RP, then Tool-LLM decides on tools. LLM-Wahl erfolgt zentral via LLM Routing.",
           "hint_de": "Single: Chat-LLM macht RP + Tool-Entscheidungen. RP-First: Chat-LLM schreibt sauberes RP, dann entscheidet Tool-LLM ueber Tools. LLM-Wahl erfolgt zentral ueber LLM Routing."
         }
@@ -609,7 +610,8 @@
               "label_de": "Nein"
             }
           ],
-          "store": "config"
+          "store": "config",
+          "default": "true"
         },
         {
           "key": "photographer_mode",

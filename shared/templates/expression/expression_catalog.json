@@ -19,7 +19,8 @@
         "expectant",
         "wachsam",
         "aufmerksam",
-        "hilfsbereit"
+        "hilfsbereit",
+        "leer"
       ]
     },
     "positive": {
@@ -85,7 +86,8 @@
         "wütend",
         "sauer",
         "aergerlich",
-        "ärgerlich"
+        "ärgerlich",
+        "genervt"
       ]
     },
     "nervous": {
@@ -104,7 +106,8 @@
         "cautious",
         "overwhelmed",
         "besorgt",
-        "unsicher"
+        "unsicher",
+        "gespann"
       ]
     },
     "tired": {
@@ -152,7 +155,8 @@
         "confused",
         "ueberrascht",
         "erstaunt",
-        "verdutzt"
+        "verdutzt",
+        "neugier"
       ]
     },
     "animal_neutral": {

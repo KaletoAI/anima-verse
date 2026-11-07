@@ -122,5 +122,26 @@
    "accel": 0
   }
  ],
- "transitions": []
+ "transitions": [],
+ "alt_clips": [
+  {
+   "kind": "greeting-hug",
+   "role": "a",
+   "set": "",
+   "name": "greeting-hug__a~wave",
+   "filename": "greeting-hug__a~wave.fbx",
+   "url": "/assets/animation-clips/greeting-hug__a~wave.fbx?v=pairsalt112",
+   "loop": true,
+   "alt": "wave"
+  }
+ ],
+ "pairs": {
+  "greeting-hug": {
+   "alts": {
+    "a": [
+     "wave"
+    ]
+   }
+  }
+ }
 }

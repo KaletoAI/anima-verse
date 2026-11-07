@@ -255,7 +255,8 @@ def name_is_taken(name: str) -> bool:
 # Apply
 # ---------------------------------------------------------------------------
 
-def activate_default_skills(name: str, template: str = "") -> List[str]:
+def activate_default_skills(name: str, template: str = "",
+                            tmpl: Optional[Dict[str, Any]] = None) -> List[str]:
     """Make the template's ``default_skills`` the NPC's WHOLE repertoire.
 
     The set is TEMPLATE DATA, never a list in the core — which is what keeps
@@ -288,7 +289,10 @@ def activate_default_skills(name: str, template: str = "") -> List[str]:
     from app.models.character import save_character_skill_config
     from app.models.character_template import get_template
 
-    tmpl = get_template(npc_template_name(template)) or {}
+    # ``tmpl`` given = an already resolved template (a full character's own,
+    # see ``character_ops.create_character_core``); otherwise the NPC rule.
+    if tmpl is None:
+        tmpl = get_template(npc_template_name(template)) or {}
     wanted = [str(s).strip() for s in (tmpl.get("default_skills") or [])
               if str(s).strip()]
     if not wanted:

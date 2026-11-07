@@ -1208,6 +1208,10 @@ def _get_character_defaults() -> Dict[str, Any]:
         # Agent-Loop scheduling weight: 1=Low, 2=Medium, 3=High. High agents
         # get picked 3x as often as Low. See app/core/agent_loop.py.
         "importance": 1,
+        # Chat-LLM writes the RP, the Tool-LLM decides on tools afterwards;
+        # mood is tracked from the first turn (template feature permitting).
+        "chat_mode": "rp_first",
+        "mood_tracking": True,
     }
 
 
