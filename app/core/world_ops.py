@@ -760,11 +760,15 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # Display language for the ready-made time labels below — the avatar's,
     # like every other localized string this endpoint hands out. Without an
     # avatar (admin overview) the base language is what is left.
-    _lang = (get_character_language(avatar) if avatar else "") or "en"
-    from app.core.perception import addressable_for
+    # The avatar's profile is read ONCE here and handed to every avatar-only
+    # reader below (language, badge language, own location) instead of each
+    # of them loading it again.
     from app.models.character import get_character_profile
-    _local_visible = set(addressable_for(avatar)) if avatar else set()
     _observer_profile = get_character_profile(avatar) if avatar else {}
+    _lang = (get_character_language(avatar, profile=_observer_profile)
+             if avatar else "") or "en"
+    from app.core.perception import addressable_for
+    _local_visible = set(addressable_for(avatar)) if avatar else set()
 
     # How far the avatar sees OUT IN THE OPEN (E6, § A12). Deliberately the
     # SAME number that discovers a place by coming close to it
@@ -808,7 +812,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     _avatar_loc = ""
     if fogged and avatar:
         _seen = seen_cells(avatar, _avatar_pos)
-        _avatar_loc = get_character_current_location(avatar) or ""
+        _avatar_loc = get_character_current_location(
+            avatar, profile=_observer_profile) or ""
 
     def _under_veil(loc_id: str, p: Optional[Dict[str, float]]) -> bool:
         """Is this character's ground still unexplored — and is it therefore
@@ -829,7 +834,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # language — the same badges the chat's address chips show.
     from app.core.name_badges import badges_for as _badges_for
     from app.models.character import get_character_language as _char_lang
-    _badge_lang = (_char_lang(avatar) if avatar else "") or "de"
+    _badge_lang = (_char_lang(avatar, profile=_observer_profile)
+                   if avatar else "") or "de"
     # The states that replace a move clip, read ONCE per payload — in the
     # common world none does, and then no character evaluates anything.
     from app.core.prompt_filters import collect_locomotion, locomotion_states
@@ -1119,7 +1125,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     payload = {
         "locations_rev": locations_rev(),
         "avatar": avatar,
-        "current_location_id": (get_character_current_location(avatar) if avatar else ""),
+        "current_location_id": (get_character_current_location(
+            avatar, profile=_observer_profile) if avatar else ""),
         "locations": locations,
         "characters": characters,
         "events_by_location": events_by_location,

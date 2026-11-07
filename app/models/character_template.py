@@ -19,7 +19,7 @@ import os
 from collections import OrderedDict
 from threading import RLock
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -32,12 +32,12 @@ from app.core.paths import get_templates_dir
 def list_templates(template_type: Optional[str] = None) -> List[Dict[str, str]]:
     """List all character templates.
 
-    Liest ausschliesslich aus shared/templates/character/ — Preset-Dateien fuer
-    Expression/Pose liegen in eigenen Unterordnern und werden nicht mehr
-    faelschlich als Character-Templates angeboten.
+    Reads only shared/templates/character/ — the expression/pose preset files
+    live in their own subfolders and are no longer offered as character
+    templates by mistake.
 
-    template_type: nur noch akzeptiert fuer Abwaertskompatibilitaet;
-    alles im character/-Ordner ist bereits type="character".
+    template_type: still accepted but ignored; everything in the character/
+    folder already is type="character".
     """
     templates = []
     for path in sorted(get_templates_dir().glob("*.json")):
@@ -140,15 +140,23 @@ def _merge_templates(base: Dict[str, Any], extension: Dict[str, Any]) -> Dict[st
 # asyncio main loop on hot-path calls like ThoughtLoop._get_eligible_characters.
 _template_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 _template_cache_lock = __import__("threading").RLock()
+#: Bumped by every ``clear_template_cache``. A cache DERIVED from a template
+#: (``soul_source_fields``) captures it before reading the template and
+#: publishes only when it is unchanged — a clear that lands mid-read must not
+#: be followed by the stale derivation being stored.
+_template_generation = 0
 
 
 def clear_template_cache() -> None:
     """Invalidate the template cache — called after save_template() and
     after plugin (re)discovery."""
-    global _override_fields_cache
+    global _override_fields_cache, _template_generation
     with _template_cache_lock:
+        _template_generation += 1
         _template_cache.clear()
         _field_keys_cache.clear()
+        _soul_fields_cache.clear()
+        _features_cache.clear()
         _override_fields_cache = None
 
 
@@ -257,11 +265,11 @@ def get_template(name: str = "default") -> Optional[Dict[str, Any]]:
 
 
 def is_roleplay_character(character_name: str) -> bool:
-    """True wenn der Character ein RP-Character ist (vs. Chatbot).
+    """True when the character is a roleplay character (vs. a chatbot).
 
-    Kriterium: profile["roleplay_instructions"] ist gesetzt. Dieses Feld
-    existiert nur in human-roleplay* Templates und enthaelt die "Important
-    rules" (Stay in character, Du bist eine reale Person...).
+    Criterion: profile["roleplay_instructions"] is set. That field exists only
+    in the human-roleplay* templates and holds the "Important rules" (stay in
+    character, you are a real person, ...).
     """
     try:
         from app.models.character import get_character_profile
@@ -305,10 +313,9 @@ def is_feature_enabled(character_name: str, feature: str, *, profile=None, confi
         # 2) Template default
         profile = profile if profile is not None else (get_character_profile(character_name) or {})
         tmpl_name = profile.get("template", "human-default")
-        tmpl = get_template(tmpl_name)
-        if not tmpl:
+        features = template_features(tmpl_name)
+        if features is None:
             return True
-        features = tmpl.get("features", {}) or {}
         return bool(features.get(feature, True))
     except Exception:
         return True
@@ -329,10 +336,10 @@ def template_feature(character_name: str, feature: str,
     try:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
-        tmpl = get_template(profile.get("template") or "human-default")
-        if not tmpl:
+        features = template_features(profile.get("template") or "human-default")
+        if features is None:
             return default
-        return bool((tmpl.get("features") or {}).get(feature, default))
+        return bool(features.get(feature, default))
     except Exception:
         return default
 
@@ -436,6 +443,79 @@ def template_field_keys(name: str) -> frozenset:
     with _template_cache_lock:
         _field_keys_cache[name] = keys
     return keys
+
+
+#: template name -> its ``(key, source_file)`` pairs (``soul_source_fields``)
+_soul_fields_cache: Dict[str, Tuple[Tuple[str, str], ...]] = {}
+
+
+def soul_source_fields(name: str) -> Tuple[Tuple[str, str], ...]:
+    """The ``(profile key, source_file)`` pairs of one template, in template
+    order — what ``_inject_soul_md_values`` reads on EVERY profile load.
+
+    ``get_template`` hands out a deep copy of the whole template (sections,
+    options, labels), which made it the hottest frame of the worldmap poll
+    only for this walk over ``sections[].fields[]``. The walk is the same as
+    there (``source_file`` truthy, ``key`` truthy, first-to-last), its result
+    an immutable tuple, cached with the template cache: ``clear_template_cache``
+    (save_template, the plugin loader) drops it. An unknown template is ``()``;
+    a template that failed to load is not cached, so it is retried like
+    ``get_template`` retries it.
+    """
+    with _template_cache_lock:
+        hit = _soul_fields_cache.get(name)
+        gen = _template_generation
+    if hit is not None:
+        return hit
+    tmpl = get_template(name)
+    if not tmpl:
+        return ()
+    pairs = []
+    for section in tmpl.get("sections", []):
+        for field in section.get("fields", []):
+            source_file = field.get("source_file")
+            if not source_file:
+                continue
+            key = field.get("key", "")
+            if not key:
+                continue
+            pairs.append((key, source_file))
+    fields = tuple(pairs)
+    with _template_cache_lock:
+        # Publish only under the generation captured BEFORE the read, and only
+        # for a name the template cache holds (a load error is not cached).
+        if _template_generation == gen and name in _template_cache:
+            _soul_fields_cache[name] = fields
+    return fields
+
+
+#: template name -> its ``features`` value (``template_features``)
+_features_cache: Dict[str, Any] = {}
+
+
+def template_features(name: str) -> Optional[Any]:
+    """A template's ``features`` value (``tmpl.get("features") or {}``) as a
+    fresh copy, or None when ``get_template`` returns nothing for ``name``.
+
+    For the per-character feature checks on the worldmap poll
+    (``is_feature_enabled``, the species/extension-rig template selectors):
+    they read ONLY ``features``, and ``get_template`` deep-copies the whole
+    template for it. Cached with the template cache like
+    ``soul_source_fields`` (same generation rule, load errors not cached).
+    """
+    with _template_cache_lock:
+        hit = _features_cache.get(name, _features_cache)
+        gen = _template_generation
+    if hit is not _features_cache:
+        return copy.deepcopy(hit)
+    tmpl = get_template(name)
+    if not tmpl:
+        return None
+    features = tmpl.get("features") or {}
+    with _template_cache_lock:
+        if _template_generation == gen and name in _template_cache:
+            _features_cache[name] = features
+    return copy.deepcopy(features)
 
 
 _warned_override_fields: set = set()

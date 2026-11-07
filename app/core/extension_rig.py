@@ -27,9 +27,12 @@ def rig_groups_for(character_name, profile=None, mesh_variant=None):
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     from app.plugins.registry import packages
-    from app.models.character_template import fragment_applies, get_template
+    from app.models.character_template import fragment_applies, template_features
     template_name = (profile.get("template") or "").strip()
-    template = (get_template(template_name) or {}) if template_name else {}
+    # The selectors below read only the template's ``features`` — no deep
+    # copy of the whole template per character and poll.
+    template = ({"features": template_features(template_name) or {}}
+                if template_name else {})
     active_slots = {id(slot) for slot in slots_for_character(character_name, profile=profile)}
     groups = []
     for slot in (slot for package in packages() for slot in package.body_slots):

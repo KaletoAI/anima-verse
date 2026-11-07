@@ -66,10 +66,11 @@ def _species_packages_for(profile: Dict[str, Any]) -> List[Any]:
         return []
     try:
         from app.plugins.registry import packages
-        from app.models.character_template import get_template
+        from app.models.character_template import template_features
     except Exception:
         return []
-    tmpl = get_template(tmpl_name) or {}
+    # ``_template_matches`` reads only the template's ``features``.
+    tmpl = {"features": template_features(tmpl_name) or {}}
     out = []
     for pkg in packages():
         if not (pkg.body_slots or pkg.piece_slots or pkg.silhouette

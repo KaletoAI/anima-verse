@@ -485,35 +485,32 @@ def _inject_soul_md_values(character_name: str, profile: Dict[str, Any], *,
         if not template_id:
             return
         from app.core.linked_characters import soul_owner
-        from app.models.character_template import get_template, load_source_file
-        tmpl = get_template(template_id)
-        if not tmpl:
-            return
-        for section in tmpl.get("sections", []):
-            for field in section.get("fields", []):
-                source_file = field.get("source_file")
-                if not source_file:
-                    continue
-                key = field.get("key", "")
-                if not key:
-                    continue
-                # ONE reader for everybody: load_source_file is what the
-                # prompt builder uses, and it drops empty `## Section`
-                # headings. A scaffold file is therefore empty here too —
-                # otherwise consumers would receive bare headings as if they
-                # were a personality.
-                # A linked character's SHARED sections are its leader's file.
-                profile[key] = load_source_file(
-                    soul_owner(character_name, source_file), source_file)
+        from app.models.character_template import load_source_file, soul_source_fields
+        # The template's (key, source_file) pairs, cached with the template —
+        # never a deep copy of the whole template on every profile load.
+        for key, source_file in soul_source_fields(template_id):
+            # ONE reader for everybody: load_source_file is what the
+            # prompt builder uses, and it drops empty `## Section`
+            # headings. A scaffold file is therefore empty here too —
+            # otherwise consumers would receive bare headings as if they
+            # were a personality.
+            # A linked character's SHARED sections are its leader's file.
+            profile[key] = load_source_file(
+                soul_owner(character_name, source_file), source_file)
     except Exception as e:
         if strict:
             raise
-        logger.debug("_inject_soul_md_values fuer %s: %s", character_name, e)
+        logger.debug("_inject_soul_md_values for %s: %s", character_name, e)
 
 
-def get_character_language(character_name: str) -> str:
-    """Return the character language code (e.g. 'de', 'en'); default: 'de'."""
-    profile = get_character_profile(character_name)
+def get_character_language(character_name: str, *,
+                           profile: Optional[Dict[str, Any]] = None) -> str:
+    """Return the character language code (e.g. 'de', 'en'); default: 'de'.
+
+    ``profile``: an already-loaded profile to read from (see
+    ``get_character_current_location``)."""
+    if profile is None:
+        profile = get_character_profile(character_name)
     return profile.get("language", "") or "de"
 
 

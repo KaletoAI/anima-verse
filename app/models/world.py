@@ -63,11 +63,19 @@ def _migrate_room_image_prompts(data: Dict[str, Any]) -> bool:
 #
 # The key is the DB path, so switching world/storage (``paths.init``) cannot
 # serve the previous world's locations.
+#
+# ONE LOCATION, ONE PARSE. Beside the texts the cache keeps two indexes of the
+# same generation: ``by_id`` (``get_location_by_id``) and ``lookup``
+# (``resolve_location`` / ``_location_id_of``: exact id, exact name, the
+# substring list), so a single-location lookup parses only the location it
+# returns — the worldmap poll used to parse the whole world per gallery or
+# model lookup.
 _world_cache_lock = threading.Lock()
 BOOT_EPOCH: str = uuid.uuid4().hex
 _world_generation = 0
 _world_cache: Dict[str, Any] = {"key": None, "gen": None,
-                                "texts": None, "by_id": None, "strict": False}
+                                "texts": None, "by_id": None, "lookup": None,
+                                "strict": False}
 
 
 def world_generation() -> int:
@@ -84,6 +92,7 @@ def _bump_world_generation() -> None:
         _world_cache["gen"] = None
         _world_cache["texts"] = None
         _world_cache["by_id"] = None
+        _world_cache["lookup"] = None
         _world_cache["strict"] = False
 
 
@@ -108,10 +117,56 @@ def _cached_texts(*, strict: bool = False) -> Optional[List[str]]:
     return None
 
 
+def _build_lookup(locations: List[Any], texts: List[str]) -> Optional[tuple]:
+    """The index ``resolve_location`` answers from without parsing the world.
+
+    ``(ids, names, subs)``, built from the very objects the texts were dumped
+    from and mirroring the three passes of ``resolve_location`` exactly:
+
+    * ``ids``   — exact ``id`` -> (id, text), FIRST location per id, string
+                  ids only (the pass compares ``location.get("id") ==
+                  identifier``, and an identifier is a string);
+    * ``names`` — exact ``name`` -> (id, text), first location per name,
+                  string names only;
+    * ``subs``  — ``(lowered name, id, text)`` in world order for the
+                  substring pass, empty names left out as the pass skips
+                  them; ``None`` when some location carries a name that is
+                  not a string — the pass would raise on ``.lower()`` there,
+                  and only the full scan reproduces exactly where.
+
+    ``None`` overall when an entry is not a dict: then every lookup takes the
+    full scan, which behaves as it always did.
+    """
+    ids: Dict[str, tuple] = {}
+    names: Dict[str, tuple] = {}
+    subs: Optional[List[tuple]] = []
+    for loc, text in zip(locations, texts):
+        if not isinstance(loc, dict):
+            return None
+        lid = loc.get("id")
+        entry = (lid, text)
+        if isinstance(lid, str) and lid not in ids:
+            ids[lid] = entry
+        name = loc.get("name", "")
+        if not isinstance(name, str):
+            subs = None
+            continue
+        if "name" in loc and name not in names:
+            names[name] = entry
+        if subs is not None and name:
+            subs.append((name.lower(), lid, text))
+    return (ids, names, tuple(subs) if subs is not None else None)
+
+
 def _fill_world_cache(locations: List[Dict[str, Any]], gen_at_read: int, *,
-                      strict: bool = False) -> None:
-    """Store the parse — unless a write landed while we were reading it."""
-    key = _world_cache_key()
+                      strict: bool = False, key: Optional[str] = None) -> None:
+    """Store the parse — unless a write landed while we were reading it.
+
+    ``key`` and ``gen_at_read`` are the cache key captured BEFORE the read:
+    the parse is published only under them, never under a newer generation.
+    """
+    if key is None:
+        key = _world_cache_key()
     try:
         texts = [json.dumps(loc, ensure_ascii=False) for loc in locations]
     except (TypeError, ValueError):
@@ -121,10 +176,12 @@ def _fill_world_cache(locations: List[Dict[str, Any]], gen_at_read: int, *,
         lid = loc.get("id") if isinstance(loc, dict) else None
         if lid and lid not in by_id:
             by_id[str(lid)] = text
+    lookup = _build_lookup(locations, texts)
     with _world_cache_lock:
         if _world_generation != gen_at_read:
             return
-        _world_cache.update(key=key, gen=gen_at_read, texts=texts, by_id=by_id, strict=strict)
+        _world_cache.update(key=key, gen=gen_at_read, texts=texts, by_id=by_id,
+                            lookup=lookup, strict=strict)
 
 
 def _load_world_data(*, strict: bool = False) -> Dict[str, Any]:
@@ -141,12 +198,62 @@ def _load_world_data(*, strict: bool = False) -> Dict[str, Any]:
             if strict:
                 raise
             pass   # fall through to a fresh read
-    gen_at_read = _world_generation
+    # The WHOLE cache key (DB path + generation) is captured before the read.
+    key = _world_cache_key()
+    with _world_cache_lock:
+        gen_at_read = _world_generation
     data = _read_world_data_uncached(strict=strict)
     locations = data.get("locations", [])
     if isinstance(locations, list):
-        _fill_world_cache(locations, gen_at_read, strict=strict)
+        _fill_world_cache(locations, gen_at_read, strict=strict, key=key)
     return data
+
+
+def _cached_lookup() -> Optional[tuple]:
+    """The warm lookup index of the active world, or None (cold after one
+    warm-up attempt, or a world the index cannot mirror)."""
+    def _snapshot():
+        key = _world_cache_key()
+        with _world_cache_lock:
+            if (_world_cache["texts"] is not None
+                    and _world_cache["key"] == key
+                    and _world_cache["gen"] == _world_generation):
+                return True, _world_cache["lookup"]
+        return False, None
+
+    warm, lookup = _snapshot()
+    if not warm:
+        _load_world_data()
+        warm, lookup = _snapshot()
+    return lookup if warm else None
+
+
+#: ``_resolve_location_entry`` cannot answer — only the full scan can.
+_SLOW = object()
+
+
+def _resolve_location_entry(identifier: str):
+    """``(id, text)`` of the location ``resolve_location`` returns, None for
+    no match, or ``_SLOW`` when only the full scan can tell."""
+    if not isinstance(identifier, str):
+        return _SLOW
+    lookup = _cached_lookup()
+    if lookup is None:
+        return _SLOW
+    ids, names, subs = lookup
+    hit = ids.get(identifier)
+    if hit is not None:
+        return hit
+    hit = names.get(identifier)
+    if hit is not None:
+        return hit
+    if subs is None:
+        return _SLOW
+    id_lower = identifier.lower()
+    for loc_name, lid, text in subs:
+        if loc_name in id_lower or id_lower in loc_name:
+            return (lid, text)
+    return None
 
 
 def _read_world_data_uncached(*, strict: bool = False) -> Dict[str, Any]:
@@ -1078,19 +1185,33 @@ def list_locations(*, strict: bool = False) -> List[Dict[str, Any]]:
 
 
 def resolve_location(identifier: str) -> Optional[Dict[str, Any]]:
-    """Find a location by ID, exact name, then bidirectional substring match."""
+    """Find a location by ID, exact name, then bidirectional substring match.
+
+    Answered from the read cache's lookup index when it is warm: the match is
+    found on the index and only THAT location is parsed (a fresh dict the
+    caller owns). The scan below is the reference the index mirrors, and the
+    path for whatever the index cannot answer.
+    """
     if not identifier:
         return None
+    hit = _resolve_location_entry(identifier)
+    if hit is None:
+        return None
+    if hit is not _SLOW:
+        try:
+            return json.loads(hit[1])
+        except (TypeError, ValueError):
+            pass   # fall through to the full scan
     locations = list_locations()
-    # 1) Exakte ID
+    # 1) Exact id
     for location in locations:
         if location.get("id") == identifier:
             return location
-    # 2) Exakter Name
+    # 2) Exact name
     for location in locations:
         if location.get("name") == identifier:
             return location
-    # 3) Teilstring: "Studentenwohnheim - Gemeinschaftsraum" matched "Studentenwohnheim"
+    # 3) Substring: "Dormitory - Common room" matches "Dormitory"
     id_lower = identifier.lower()
     for location in locations:
         loc_name = location.get("name", "").lower()
@@ -1281,6 +1402,11 @@ def get_location_by_id(location_id: str, *, strict: bool = False) -> Optional[Di
             if strict:
                 raise
             pass
+    elif by_id is not None and isinstance(location_id, str):
+        # A warm index that does not know a string id is the answer: every
+        # string id of the world is in it, so the scan below could find
+        # nothing either (a stale id used to parse the whole world here).
+        return None
     for location in list_locations(strict=strict):
         if location.get("id") == location_id:
             return location
@@ -2010,7 +2136,7 @@ def get_location_name(location_id: str) -> str:
     # An unresolved hexadecimal ID refers to a deleted location.
     if re.match(r'^[0-9a-f]{8}$', location_id):
         return ""
-    # Temporaerer Ortsname (z.B. "Café") — direkt zurueckgeben
+    # A temporary place name (e.g. "Café") — returned as it is
     return location_id
 
 
@@ -3032,6 +3158,13 @@ def _location_id_of(location_identifier: str) -> str:
     to hold; this is the one place that turns it into the id their file paths
     are keyed by.
     """
+    if location_identifier:
+        hit = _resolve_location_entry(location_identifier)
+        if hit is None:
+            return ""
+        if hit is not _SLOW:
+            # The id straight off the index — no location is parsed at all.
+            return hit[0] or ""
     loc = resolve_location(location_identifier)
     return (loc or {}).get("id", "") or ""
 
