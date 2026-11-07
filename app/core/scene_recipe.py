@@ -5017,8 +5017,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 
 #: How many locations keep their composed scene. A payload with baked walking
 #: surfaces is a few hundred kilobytes, so this is memory, not a free lunch —
-#: and a client sweeps only the locations it has loaded.
-SCENE_CACHE_MAX = 8
+#: and a client sweeps only the locations it has loaded. It has to hold every
+#: location ONE client keeps loaded, or each page load recomposes the rest:
+#: with 8 slots a browser holding 18 locations recomposed at least 10 per
+#: load (measured 2026-11-07). 32 slots stay in the tens of megabytes even
+#: at the large end of the payload size (demo world: 2-65 KB JSON each).
+SCENE_CACHE_MAX = 32
 
 _scene_cache_lock = threading.Lock()
 _scene_cache: "OrderedDict[str, Tuple[str, Dict[str, Any]]]" = OrderedDict()
