@@ -383,3 +383,26 @@
   border: 1px solid var(--border, #30363d); border-radius: 6px; background: var(--bg, #0d1117);
   color: var(--text, #e6edf3); font-size: 12px; line-height: 1.35; pointer-events: none;
   box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+
+/* ActionsTree (ActionsTree.tsx): what the avatar can start, as levels that
+   open and close like a file tree. A blocked entry stays, dimmed; its reason
+   is the hover text. */
+.player-actions-tree { display: flex; flex-direction: column; gap: 2px; font-size: 0.85em; }
+.player-actions-tree-note { padding: 2px 4px; color: #ff9b9b; }
+.player-actions-tree-node > .player-hover-hint { display: flex; }
+.player-actions-tree-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 4px;
+  border: none; border-radius: 5px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.player-actions-tree-toggle:hover { background: rgba(255,255,255,0.06); }
+.player-actions-tree-node.root > .player-actions-tree-toggle { font-weight: 600; }
+.player-actions-tree-caret { flex: 0 0 auto; width: 1em; opacity: 0.7; }
+.player-actions-tree-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-actions-tree-count { flex: 0 0 auto; font-size: 0.85em; opacity: 0.55; }
+.player-actions-tree-children { display: flex; flex-direction: column; gap: 3px; margin-left: 9px;
+  padding: 2px 0 4px 8px; border-left: 1px solid var(--border, #30363d); }
+.player-actions-tree-leaf { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.player-actions-tree-name { min-width: 0; }
+.player-actions-tree-piece { opacity: 0.6; }
+.player-actions-tree-node.off > .player-actions-tree-toggle,
+.player-actions-tree-node.off > .player-hover-hint > .player-actions-tree-toggle,
+.player-actions-tree-leaf.off > .player-hover-hint > .player-actions-tree-name { opacity: 0.5; }
+.player-actions-tree-empty { padding: 2px 4px; font-style: italic; opacity: 0.55; }

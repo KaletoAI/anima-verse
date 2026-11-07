@@ -328,6 +328,22 @@ G6-G9 the character LoRA list resolves the backend EXACTLY like the routed
    (generate_from_input with the payload keys the variant render sends:
    agent_name, occasion, profile_only, skip_gallery) whose
    generate_on_backend is replaced by a recorder of the backend name.
+GV1-GV4 the animate dialog's options (occasion "video"). Pool: "Img"
+   (image, LoRA-capable), "VidL" (video, cost 2, LoRA-capable), "VidN"
+   (video, cost 1, no LoRAs); rules video ["VidL","VidN"]; get_lora_options
+   patched to answer [{"name": "<backend>-lora"}].
+GV1 build_imagegen_options("video") lists exactly ["VidL","VidN"] (the
+   video backends in pool order, never "Img"), resolved "VidL" via "chain".
+GV2 VidL has has_loras True + lora_options [{"name": "VidL-lora"}]; VidN
+   carries neither key (the backend takes no LoRAs).
+GV3 build_imagegen_options("location") lists ["Img"] only, with has_loras
+   True + [{"name": "Img-lora"}] (the image path is the same LoRA rule).
+GV4 the capability per backend class: LocalAI, OpenAIDiffusion,
+   OpenAIVideo, CivitAIVideo (engine "wan") support LoRAs; Together,
+   LocalAIVideo, TogetherVideo, CivitAIVideo engine "minimax-h3" do not —
+   read off the backend code (lora_inputs consumers), not off this file.
+   Fails on commit 1d3d453d: GV1 lists ["Img"] (video backends were skipped
+   for every occasion).
    Pool 2: "Rule" (cost 1, img2img), "Own-txt" (cost 0, txt2img), "Own-ref"
    (cost 5, img2img). Character "Vela": outfit_imagegen {"workflow":
    "Own*"}; rules expression ["Rule"], tpose ["Rule"].
@@ -1559,6 +1575,56 @@ def _track_row(task_id):
         conn.close()
 
 
+def part_g_video():
+    print("G) animate dialog options (occasion video)")
+    from app.core import world_ops
+    import app.core.config as cfg_mod
+    img = FakeBackend("Img", 0, "natural")
+    img.SUPPORTS_LORAS = True
+    vid_l = FakeMedia("VidL", 2, "video")
+    vid_l.SUPPORTS_LORAS = True
+    vid_n = FakeMedia("VidN", 1, "video")
+    install_pool(img, vid_l, vid_n)
+    set_routing({"video": ["VidL", "VidN"]})
+    _real = cfg_mod.get_lora_options
+    cfg_mod.get_lora_options = lambda name, lora_filter="": [{"name": f"{name}-lora"}]
+    try:
+        d = world_ops.build_imagegen_options("video")
+        rows = {o["name"]: o for o in d.get("options", [])}
+        check("GV1 video lists the video backends",
+              ([o["name"] for o in d.get("options", [])], d.get("resolved"), d.get("via")),
+              (["VidL", "VidN"], "VidL", "chain"))
+        check("GV2 LoRAs only where the backend takes them",
+              (rows.get("VidL", {}).get("has_loras"), rows.get("VidL", {}).get("lora_options"),
+               "has_loras" in rows.get("VidN", {}), "lora_options" in rows.get("VidN", {})),
+              (True, [{"name": "VidL-lora"}], False, False))
+        d = world_ops.build_imagegen_options("location")
+        check("GV3 image occasion unchanged",
+              ([o["name"] for o in d.get("options", [])],
+               [(o.get("has_loras"), o.get("lora_options")) for o in d.get("options", [])]),
+              (["Img"], [(True, [{"name": "Img-lora"}])]))
+    finally:
+        cfg_mod.get_lora_options = _real
+    from app.imagegen.backends.civitai_video import CivitAIVideoBackend
+    from app.imagegen.backends.localai import LocalAIBackend
+    from app.imagegen.backends.localai_video import LocalAIVideoBackend
+    from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend
+    from app.imagegen.backends.openai_video import OpenAIVideoBackend
+    from app.imagegen.backends.together import TogetherBackend
+    from app.imagegen.backends.together_video import TogetherVideoBackend
+
+    def civitai(engine):
+        b = object.__new__(CivitAIVideoBackend)
+        b.video_engine = engine
+        return b.supports_loras
+    check("GV4 LoRA capability per backend class",
+          [object.__new__(c).supports_loras for c in (
+              LocalAIBackend, OpenAIDiffusionBackend, OpenAIVideoBackend,
+              TogetherBackend, LocalAIVideoBackend, TogetherVideoBackend)]
+          + [civitai("wan"), civitai("minimax-h3-comfy"), civitai("minimax-h3")],
+          [True, True, True, False, False, False, True, True, False])
+
+
 def part_h():
     print("H) explicit pick checked before 'started'")
     from fastapi import HTTPException
@@ -1813,6 +1879,7 @@ if __name__ == "__main__":
     part_f_video()
     part_f_mesh()
     part_g()
+    part_g_video()
     part_h()
     print()
     if FAILS:

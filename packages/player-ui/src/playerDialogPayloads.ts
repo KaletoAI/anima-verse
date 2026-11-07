@@ -24,11 +24,24 @@ export function regenPayload(f: {
   }
 }
 
-export function animatePayload(f: { prompt: string; seconds: string }): InstagramAnimateSubmit | null {
+export function animatePayload(f: {
+  prompt: string; seconds: string
+  /** Explicit video backend; empty/absent = Auto (the "video" routing chain). */
+  backend?: string
+  loras?: Array<{ name: string; strength: number }>
+}): InstagramAnimateSubmit | null {
   const prompt = f.prompt.trim()
   if (!prompt) return null
   const seconds = parseInt(f.seconds, 10)
-  return { prompt, ...(Number.isFinite(seconds) && seconds > 0 ? { seconds } : {}) }
+  return {
+    prompt,
+    // The animate route names the explicit pick `service`. Like the image
+    // dialogs, Auto sends none but keeps LoRAs picked from the auto-resolved
+    // backend's list.
+    ...(f.backend ? { service: f.backend } : {}),
+    ...(f.loras?.length ? { loras: f.loras } : {}),
+    ...(Number.isFinite(seconds) && seconds > 0 ? { seconds } : {}),
+  }
 }
 
 export function profileImagePayload(f: {

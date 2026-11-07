@@ -675,6 +675,17 @@ def _drive_image_pose_check(agent: str, avatar: str) -> PreviewResult:
                     "with an over-allocated limb budget."}
 
 
+def _drive_video_prompt_improver(agent: str, avatar: str) -> PreviewResult:
+    from app.skills.image_regenerate import enhance_prompt
+    task, sys, user = _capture_render(
+        lambda: enhance_prompt(
+            f"{agent} turns towards the window and smiles; the camera slowly pushes in",
+            "make the movement slower, add hair moving in the wind",
+            agent_config={"name": agent}, media="video"))
+    return {"ok": True, "output": _format(task, sys, user),
+            "note": "Production: image_regenerate.enhance_prompt(media=\"video\") with sample prompts."}
+
+
 def _drive_image_prompt_enhance(agent: str, avatar: str) -> PreviewResult:
     # ``_llm_enhance`` is gone; ``maybe_enhance_via_llm`` is the enhancer that
     # renders this template today (review 2026-09-20, KOORD-1).
@@ -851,6 +862,7 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/story_arc_resolve.md": _drive_story_arc_resolve,
     "tasks/image_prompt_scene.md": _drive_image_prompt_scene,
     "tasks/image_prompt_improver.md": _drive_image_prompt_improver,
+    "tasks/video_prompt_improver.md": _drive_video_prompt_improver,
     "tasks/image_prompt_enhance.md": _drive_image_prompt_enhance,
     "tasks/image_pose_check.md": _drive_image_pose_check,
     "tasks/image_analysis.md": _drive_image_analysis,

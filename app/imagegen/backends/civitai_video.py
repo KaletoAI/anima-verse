@@ -88,6 +88,12 @@ class CivitAIVideoBackend(ImageBackend):
     MEDIA_TYPE = "video"
     # One first-frame image (the rendered still).
     DEFAULT_REF_SLOT_COUNT = 1
+    # LoRAs as CivitAI AIRs (``_loras``) — except on the managed minimax-h3.
+    SUPPORTS_LORAS = True
+
+    @property
+    def supports_loras(self) -> bool:
+        return self.video_engine != "minimax-h3"
 
     def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
                  api_key: str = "", model: str = ""):

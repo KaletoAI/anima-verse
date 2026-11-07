@@ -1,4 +1,5 @@
-/** Shared options loading and backend-scoped LoRA state for player dialogs. */
+/** Shared options loading and backend-scoped LoRA state for player dialogs.
+ * The "video" occasion lists the video backends (the animate dialog). */
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from './api'
 import type { PoseCheckOption } from './PromptImprover'
@@ -29,7 +30,7 @@ export interface BackendOptions {
   pose_check?: PoseCheckOption
 }
 
-export function useImageBackendPicker(occasion: 'photo' | 'scene_view' | 'regenerate', avatar?: string,
+export function useImageBackendPicker(occasion: 'photo' | 'scene_view' | 'regenerate' | 'video', avatar?: string,
   backendOptions?: BackendOptions) {
   const [backend, setBackend] = useState('')
   const [backends, setBackends] = useState<BackendOptions | null>(backendOptions ?? null)

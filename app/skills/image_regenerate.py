@@ -26,13 +26,19 @@ def enhance_prompt(
     original_prompt: str,
     improvement_request: str,
     agent_config: Optional[dict] = None,
-    allow_general: bool = False) -> str:
+    allow_general: bool = False,
+    media: str = "image") -> str:
     """Improve an image prompt from user feedback via the LLM.
 
     ``allow_general`` lets an EMPTY request through: the LLM then tidies the
     prompt for the image model without changing what it shows (the dialogs'
     "Improve prompt" button without a change wish). Without it an empty
     request returns the prompt unchanged — the regenerate path relies on that.
+
+    ``media="video"`` rewrites an image-to-video motion prompt instead
+    (template ``video_prompt_improver``: keeps subject motion, camera
+    movement and pacing, which the image template would strip). Both run
+    on the ``image_prompt`` LLM task.
 
     Returns:
         The improved prompt, or original_prompt on an error / empty request.
@@ -47,7 +53,7 @@ def enhance_prompt(
     character_name = (agent_config or {}).get("name", "")
 
     system_prompt, human_msg = render_task(
-        "image_prompt_improver",
+        "video_prompt_improver" if media == "video" else "image_prompt_improver",
         original_prompt=original_prompt,
         improvement_request=improvement_request)
 
@@ -59,12 +65,12 @@ def enhance_prompt(
             agent_name=character_name)
         improved = response.content.strip()
         if improved:
-            logger.info(f"Verbesserter Prompt: {improved[:120]}...")
+            logger.info(f"Improved prompt: {improved[:120]}...")
             return improved
-        logger.warning("LLM gab leere Antwort, verwende Original-Prompt")
+        logger.warning("LLM returned an empty answer, keeping the original prompt")
         return original_prompt
     except Exception as e:
-        logger.error(f"LLM Fehler: {e}")
+        logger.error(f"LLM error: {e}")
         return original_prompt
 
 

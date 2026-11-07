@@ -11,6 +11,10 @@
  * before the render. Running it here switches the automatic check off; the
  * prompt is already checked.
  *
+ * `media="video"` (the animate dialog) rewrites an image-to-video motion
+ * prompt instead: the server keeps motion, camera and pacing (template
+ * video_prompt_improver) and no pose controls are offered.
+ *
  * Results replace the dialog's prompt field, so they stay visible and
  * editable before anything is generated. Same server route as the Game-Admin
  * dialog: POST /world/imagegen-enhance-prompt
@@ -55,7 +59,7 @@ export function usePoseCheckOption(occasion: string): PoseCheckOption | null {
   return option
 }
 
-export function PromptImprover({ prompt, onPrompt, disabled = false, onBusyChange, pose }: {
+export function PromptImprover({ prompt, onPrompt, disabled = false, onBusyChange, pose, media = 'image' }: {
   prompt: string
   onPrompt: (prompt: string) => void
   disabled?: boolean
@@ -63,6 +67,8 @@ export function PromptImprover({ prompt, onPrompt, disabled = false, onBusyChang
   onBusyChange?: (busy: boolean) => void
   /** Pose-check state from `usePoseCheck`; omitted = no pose controls. */
   pose?: ReturnType<typeof usePoseCheck>
+  /** What the prompt drives: an image render (default) or an image-to-video clip. */
+  media?: 'image' | 'video'
 }) {
   const { t } = useI18n()
   const [wish, setWish] = useState('')
@@ -77,7 +83,8 @@ export function PromptImprover({ prompt, onPrompt, disabled = false, onBusyChang
     setBusy(true); onBusyChange?.(true); setError('')
     try {
       const res = await apiPost<{ prompt?: string }>('/world/imagegen-enhance-prompt',
-        mode === 'pose' ? { prompt: base, mode: 'pose' } : { prompt: base, improvement_request: wish.trim() })
+        mode === 'pose' ? { prompt: base, mode: 'pose' }
+          : { prompt: base, improvement_request: wish.trim(), ...(media === 'video' ? { mode: 'video' } : {}) })
       if (!alive.current) return
       if (res?.prompt) {
         onPrompt(res.prompt)
@@ -103,7 +110,9 @@ export function PromptImprover({ prompt, onPrompt, disabled = false, onBusyChang
       <button type="button" className="ga-btn" disabled={off || !prompt.trim()}
         title={wish.trim()
           ? t('Rewrite the prompt with this change via LLM')
-          : t('Optimise the prompt for the image model via LLM (content stays the same)')}
+          : media === 'video'
+            ? t('Optimise the prompt for the video model via LLM (content stays the same)')
+            : t('Optimise the prompt for the image model via LLM (content stays the same)')}
         onClick={() => { void run('improve') }}>
         {busy ? '…' : `✨ ${t('Improve prompt')}`}
       </button>

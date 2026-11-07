@@ -3504,7 +3504,6 @@
     "At least": "Mindestens",
     "With actions": "Mit Aktionen",
     "With": "Mit",
-    "Together with {name}": "Gemeinsam mit {name}",
     "Missing model": "Modell fehlt",
     "Must be present": "Muss vorhanden sein",
     "After successful drinking": "Nach erfolgreichem Trinken",
@@ -4003,6 +4002,18 @@
     "Tomorrow": "Morgen",
     "At {place}": "Bei {place}",
     "Daily": "Täglich",
-    "Wear this outfit": "Dieses Outfit anziehen"
+    "Wear this outfit": "Dieses Outfit anziehen",
+    "Optimise the prompt for the video model via LLM (content stays the same)": "Prompt per LLM für das Videomodell optimieren (Inhalt bleibt gleich)",
+    "Independent actions": "Unabhängige Aktionen",
+    "All furniture": "Alle Möbel",
+    "All potential partners": "Alle möglichen Partner",
+    "No poses available.": "Keine Posen verfügbar.",
+    "No furniture actions here.": "Hier gibt es keine Möbelaktionen.",
+    "There is no free place for that here.": "Dafür ist hier kein Platz frei.",
+    "Show actions": "Aktionen zeigen",
+    "Hide actions": "Aktionen ausblenden",
+    "Generate video": "Video erzeugen",
+    "Video generation started": "Videoerzeugung gestartet",
+    "Video ready": "Video fertig"
   }
 }

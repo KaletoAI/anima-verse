@@ -6,13 +6,15 @@ with ``MEDIA_TYPE == "video"``), so it
 runs through the same BackendPool / matching / fallback / per-backend queue as
 image generation. This module keeps the small "animate this still" seam its
 callers use (``video_generation_skill``, ``instagram``, ``character_ops``) and
-delegates to ``ImageService.generate_video()`` + the pool's video-backend list.
+delegates to ``ImageService.generate_video()``. The dialogs' list of video
+backends (with their LoRAs) is the "video" occasion of
+``world_ops.build_imagegen_options``.
 
 The former standalone ``AnimateService`` / ``TogetherAnimateService`` classes
 and the ``TOGETHER_ANIMATE_*`` config were retired — see
 ``development_instructions/plan-video-generation.md``.
 """
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from app.core.log import get_logger
 from app.imagegen.base import HubJobLost, MediaGenerationDisabled
@@ -23,31 +25,6 @@ logger = get_logger("animate")
 def _image_service():
     from app.imagegen.service import get_image_service
     return get_image_service()
-
-
-def get_animate_services() -> List[Dict[str, Any]]:
-    """Configured video backends as ``{id, label, enabled}`` for the frontend.
-
-    ``id`` is the backend name (used as the animate service / backend glob);
-    ``enabled`` reflects the globally-enabled + currently-available state.
-    """
-    try:
-        from app.core.config import get_lora_options
-        svc = _image_service()
-        return [
-            {"id": b.name, "label": b.name,
-             "enabled": bool(getattr(b, "instance_enabled", False) and b.available),
-             # LoRAs of the video alias from the LoRA library ([{name,
-             # missing}], backend-scoped) — the animate dialog offers them
-             # as optional slots.
-             "loras": get_lora_options(
-                 b.name, lora_filter=getattr(b, "lora_filter", "") or "")}
-            for b in svc.backends
-            if getattr(b, "MEDIA_TYPE", "image") == "video"
-        ]
-    except Exception as e:
-        logger.debug("get_animate_services: %s", e)
-        return []
 
 
 def animate_image(source_image_path: str, prompt: str, output_path: str,

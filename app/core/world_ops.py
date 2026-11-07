@@ -2994,6 +2994,35 @@ def build_gallery_payload(location_name: str) -> Dict[str, Any]:
     }
 
 
+def _add_lora_options(opt: Dict[str, Any], backend: Any) -> None:
+    """``has_loras`` + this backend's LoRA-library entries ([{name, missing}],
+    backend-scoped) on an options row — only for a backend that consumes
+    LoRAs at all (``supports_loras``)."""
+    if not getattr(backend, "supports_loras", False):
+        return
+    from app.core.config import get_lora_options
+    opt["has_loras"] = True
+    opt["lora_options"] = get_lora_options(
+        backend.name, lora_filter=getattr(backend, "lora_filter", "") or "")
+
+
+def _video_backend_option(backend: Any) -> Dict[str, Any]:
+    """One options row of a VIDEO backend (the animate dialog's picker): the
+    image-only fields (styles, family, negative prompt, target model) do not
+    apply to an image-to-video render."""
+    opt: Dict[str, Any] = {
+        "type": "backend",
+        "name": backend.name,
+        "label": backend.name if backend.available else f"{backend.name} (offline?)",
+        "available": backend.available,
+        "media": "video",
+        "category": getattr(backend, "category", "") or "",
+        "ref_slot_count": int(getattr(backend, "ref_slot_count", 0) or 0),
+    }
+    _add_lora_options(opt, backend)
+    return opt
+
+
 def build_imagegen_options(occasion: str = "", character: str = "", *,
                            use_source_as_reference: bool = False,
                            has_reference: Optional[bool] = None) -> Dict[str, Any]:
@@ -3012,6 +3041,11 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
     The caller decides whether the requesting user may see that character's
     routing. An unknown occasion raises ``UnknownOccasionError`` (the route
     answers 400).
+
+    The ``video`` occasion (media "video", the animate dialog) lists the
+    VIDEO backends instead of the image generators, ``resolved`` being what
+    its "video" chain picks; ``has_loras``/``lora_options`` appear on every
+    row whose backend consumes LoRAs (``supports_loras``).
     """
     from app.core.prompt_adapters import get_target_model
 
@@ -3021,9 +3055,14 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
     # dialogs disable their Generate button on it instead of letting the user
     # compose a prompt that the server will only refuse (409).
     media_on = media_generation_enabled()
+    # The occasion's media kind decides WHICH backends are listed: a video
+    # occasion (the animate dialog) lists the video backends, every other
+    # occasion the ordinary image generators.
+    occasion_media = "image"
     if occasion:
         from app.imagegen.occasions import get_occasion
-        get_occasion(occasion)          # UnknownOccasionError before anything else
+        # UnknownOccasionError before anything else
+        occasion_media = get_occasion(occasion).get("media") or "image"
     imagegen = get_image_service()
     if not imagegen.enabled:
         result: Dict[str, Any] = {"options": [], "media_generation_enabled": media_on}
@@ -3044,8 +3083,12 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
     for b in imagegen.backends:
         if not b.instance_enabled:
             continue
-        # IMAGE options only — video backends have their own selection
-        # surface (animate dialog) and must not appear as image targets.
+        if occasion_media == "video":
+            if getattr(b, "MEDIA_TYPE", "image") == "video":
+                options.append(_video_backend_option(b))
+            continue
+        # IMAGE options only — video backends appear only for the video
+        # occasion and must not appear as image targets.
         if not is_generator_backend(b):
             continue
         opt = {
@@ -3098,12 +3141,8 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
         # only THIS backend's LoRAs are offered, as [{name, missing}] — manual
         # entries whose LoRA vanished stay offered, marked missing. Transfer:
         # localai as <lora:> prompt tag, openai_diffusion as
-        # lora_NN/strength_NN params.
-        if b.api_type in ("localai", "openai_diffusion"):
-            opt["has_loras"] = True
-            from app.core.config import get_lora_options
-            opt["lora_options"] = get_lora_options(
-                b.name, lora_filter=getattr(b, "lora_filter", "") or "")
+        # lora_NN/strength_NN params (the backend's ``supports_loras``).
+        _add_lora_options(opt, b)
         options.append(opt)
     result = {"options": options, "media_generation_enabled": media_on}
     # What the occasion's chain resolves to right now (image routing) — the

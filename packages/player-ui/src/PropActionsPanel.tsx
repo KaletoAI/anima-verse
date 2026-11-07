@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { apiPost } from './api'
+import { pieceText } from './actionsTreeModel'
 import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
@@ -7,11 +8,9 @@ import { usePropActions } from './usePropActions'
 import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction, setPropActionAlt,
   type PropActionChoice, type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
-interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
-interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
+export interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
+export interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
 
-const pieceText = (offer: PropActionOffer) =>
-  `${offer.prop_label}${offer.distance_m == null ? '' : ` · ${offer.distance_m.toFixed(1)} m`}`
 
 /** One group per action (and partner); its pieces usable first, then nearest first. */
 function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] {
@@ -56,8 +55,9 @@ function groupActions(offers: PropActionOffer[], partner?: string): OfferGroup[]
 /** The open group action: pick the others (exactly participants − 1 of the
  *  offer's `candidates`), then ask them on one piece. Each piece's button
  *  waits for Core's preflight of that exact choice — its reason is the
- *  hover text; everyone picked must agree before it starts. */
-function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
+ *  hover text; everyone picked must agree before it starts. Also the chat's
+ *  action tree (ActionsTree.tsx) opens it for a group action. */
+export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
   group: OfferGroup
   busy: boolean
   nameProps: boolean
@@ -322,7 +322,9 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
   </div>
 }
 
-/** Mounted unchanged in web frontend, browser HUD iframe and native HUD iframe. */
+/** Mounted unchanged in web frontend, browser HUD iframe and native HUD iframe.
+ *  The chat window mounts it with `showOffers={false}` — only the running
+ *  rows; what can be started is the action tree's (ActionsTree.tsx). */
 export function PropActionsPanel({ partner, showOffers = true, showState = true, leading }: {
   partner?: string
   showOffers?: boolean
@@ -343,7 +345,7 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true,
   }
   const ownRuns = (runs: PropActionExecution[]) => partner
     ? runs.filter(run => run.actor === partner || run.members.includes(partner)) : runs
-  const hasOffers = data?.offers.some(offer => !partner || (offer.required_partner && offer.available_targets.some(choice => choice.partner === partner)))
+  const hasOffers = showOffers && data?.offers.some(offer => !partner || (offer.required_partner && offer.available_targets.some(choice => choice.partner === partner)))
   const groups = data && showState ? [
     ['incoming', ownRuns(data.state.incoming)], ['outgoing', ownRuns(data.state.outgoing)],
     ['current', ownRuns(data.state.current)],

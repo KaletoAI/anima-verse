@@ -13,6 +13,12 @@ assert.deepEqual(animatePayload({ prompt: 'wave', seconds: '4' }), { prompt: 'wa
 assert.deepEqual(animatePayload({ prompt: 'wave', seconds: '4.9' }), { prompt: 'wave', seconds: 4 });
 assert.equal(animatePayload({ prompt: '', seconds: '4' }), null);
 assert.equal(animatePayload({ prompt: '  ', seconds: '4' }), null);
+// Explicit video backend travels as `service`; Auto (empty) sends none but keeps picked LoRAs.
+const lora = [{ name: 'motion-a', strength: 0.8 }];
+assert.deepEqual(animatePayload({ prompt: 'wave', seconds: '', backend: 'Wan', loras: lora }), { prompt: 'wave', service: 'Wan', loras: lora });
+assert.deepEqual(animatePayload({ prompt: 'wave', seconds: '3', backend: '', loras: lora }), { prompt: 'wave', loras: lora, seconds: 3 });
+assert.deepEqual(animatePayload({ prompt: 'wave', seconds: '', backend: '', loras: [] }), { prompt: 'wave' });
+assert.equal(animatePayload({ prompt: ' ', seconds: '', backend: 'Wan', loras: lora }), null);
 assert.deepEqual(profileImagePayload({ prompt: ' p ', useSource: false, negative: '' }), { prompt: 'p', use_source_as_reference: false });
 assert.deepEqual(profileImagePayload({ prompt: 'p', useSource: true, negative: ' x ' }), { prompt: 'p', use_source_as_reference: true, negative_prompt: 'x' });
 assert.equal(profileImagePayload({ prompt: '  ', useSource: true, negative: '' }), null);

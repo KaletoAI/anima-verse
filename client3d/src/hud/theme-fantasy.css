@@ -609,3 +609,11 @@
 }
 #hud .hud-intents-list { border-top-color: rgba(242, 205, 110, 0.22); }
 #hud .hud-intent-when { color: var(--hud-gold); }
+
+/* The handle of the action drawer beside the chat: a tab of the same vellum
+ * and brass edge as the panels, so it reads as part of the chat frame. */
+#hud .hud-chat-actions-handle {
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.38);
+  color: var(--hud-gold);
+}

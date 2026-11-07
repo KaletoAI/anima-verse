@@ -43,6 +43,8 @@ class OpenAIVideoBackend(ImageBackend):
 
     MEDIA_TYPE = "video"
     DEFAULT_REF_SLOT_COUNT = 1
+    # The gateway resolves the payload's flat ``loras`` list (``_lora_list``).
+    SUPPORTS_LORAS = True
 
     def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
                  api_key: str = "", model: str = ""):

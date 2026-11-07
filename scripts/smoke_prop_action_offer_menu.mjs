@@ -39,6 +39,11 @@ import { runInNewContext } from 'node:vm';
 const require = createRequire(new URL('../frontend/package.json', import.meta.url));
 const ts = require('typescript');
 const jsx = (type, props) => ({ type, props });
+// PropActionsPanel's one pure dependency, loaded for real (no React, no fetch).
+const pieceModel = { exports: {} };
+runInNewContext(ts.transpileModule(await readFile(new URL('../packages/player-ui/src/actionsTreeModel.ts', import.meta.url), 'utf8'),
+  { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText,
+  { module: pieceModel, exports: pieceModel.exports, require: () => ({}) });
 const source = await readFile(new URL('../packages/player-ui/src/PropActionsPanel.tsx', import.meta.url), 'utf8');
 const module = { exports: {} };
 const HoverHint = function HoverHint() {};
@@ -64,6 +69,7 @@ runInNewContext(ts.transpileModule(source, { compilerOptions: {
   react: { useState, useEffect },
   'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
   './api': {}, './HoverHint': { HoverHint }, './I18nProvider': { useI18n: () => ({ t: text => text }) },
+  './actionsTreeModel': pieceModel.exports,
   './propActionReasons': { propActionReason: reason => `reason:${reason}` },
   './usePropActions': {}, './propActions': { checkPropAction },
 })[id] ?? (() => { throw new Error(`Unexpected import ${id}`) })() });

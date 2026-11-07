@@ -3393,3 +3393,162 @@ def build_stat_history(character_name: str, limit: int = 50, *,
             entry['event_id'] = metadata['event_id']
         result.append(entry)
     return {'rows': result}
+
+
+# ---------------------------------------------------------------------------
+# Gallery image -> video (Game-Admin gallery "Generate video")
+# ---------------------------------------------------------------------------
+
+_STILL_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def gallery_still_path(character_name: str, image_name: str):
+    """The resolved path of one still in a character's gallery — a plain file
+    name (no directory part, no hidden file), an image suffix, inside the
+    character's images directory, and present. 400 for a name that is not
+    one, 404 when the file is missing."""
+    from pathlib import Path
+    from app.models.character import get_character_images_dir, get_user_characters_dir
+    name = (image_name or "").strip()
+    if (not name or name != Path(name).name or name.startswith(".")
+            or "\\" in name or Path(name).suffix.lower() not in _STILL_SUFFIXES):
+        raise HTTPException(status_code=400, detail=f"Invalid image name: {image_name}")
+    try:
+        images_dir = get_character_images_dir(character_name).resolve()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    root = get_user_characters_dir().resolve()
+    path = (images_dir / name).resolve()
+    if root not in images_dir.parents or path.parent != images_dir:
+        raise HTTPException(status_code=400, detail=f"Invalid image name: {image_name}")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_name}")
+    return path
+
+
+def _parse_dialog_loras(raw: Any) -> List[Dict[str, Any]]:
+    """The dialog's LoRA slots as [{name, strength}] — empty/"None" slots
+    dropped, a strength that is no number becomes 1.0."""
+    loras: List[Dict[str, Any]] = []
+    for entry in (raw or []) if isinstance(raw, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or name == "None":
+            continue
+        try:
+            strength = float(entry.get("strength", 1.0))
+        except (TypeError, ValueError):
+            strength = 1.0
+        loras.append({"name": name, "strength": strength})
+    return loras
+
+
+def start_gallery_animation(character_name: str, image_name: str,
+                            data: Dict[str, Any]) -> Dict[str, Any]:
+    """Animate one still of a character's gallery into a video — the
+    Game-Admin gallery's "Generate video".
+
+    Body: ``prompt`` (motion prompt, required), optional ``service`` (an
+    explicit video backend: exactly that one, no fallback; absent = the
+    "video" chain of the image routing), ``loras`` ([{name, strength}]) and
+    ``seconds``. Everything that can be refused is refused HERE, before a
+    track or a thread exists: the world's media switch
+    (``MediaGenerationDisabled`` -> 409), the image name (400/404), an empty
+    prompt (422), an unavailable explicit backend (503) and a LoRA the
+    library does not associate with it (400).
+
+    The render is the ``video_character`` hub operation of the video skill,
+    so the MP4 lands exactly where the skill puts it: ``{stem}.mp4`` next to
+    the still (the gallery's ``image_videos``), with ``animate_*`` meta on
+    the image. Returns ``{status, image, video, track_id}``.
+    """
+    from app.imagegen.base import MediaGenerationDisabled, media_generation_enabled
+    from app.core.explicit_backend import require_explicit_backend
+    if not media_generation_enabled():
+        raise MediaGenerationDisabled("Media generation is disabled for this world")
+    image_path = gallery_still_path(character_name, image_name)
+    prompt = str(data.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="No prompt given")
+    # A JSON null service means "Auto" (routed), like an absent one.
+    service = str(data.get("service") or "").strip()
+    try:
+        seconds = int(data.get("seconds") or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    loras = _parse_dialog_loras(data.get("loras"))
+    if service:
+        from app.core.lora_library import LoraNotAllowedError, assert_loras_allowed
+        picked = require_explicit_backend(service, media="video")
+        try:
+            assert_loras_allowed(picked, loras)
+        except LoraNotAllowedError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    from app.core.task_queue import get_task_queue
+    tq = get_task_queue()
+    track_id = tq.track_start("image_animate", "Animate gallery image",
+                              agent_name=character_name, provider=service,
+                              start_running=False)
+    video_filename = f"{image_path.stem}.mp4"
+    inputs = {
+        "source": str(image_path), "prompt": prompt, "service": service,
+        "loras": loras, "seconds": seconds or None, "character": character_name,
+        "image_filename": image_path.name, "video_filename": video_filename,
+        "fail_message": (f"Animation failed on '{service}' (no automatic fallback)"
+                         if service else
+                         "Animation failed — no backend of the video chain rendered"),
+    }
+
+    def _run() -> None:
+        tq.track_activate(track_id)
+        try:
+            # EXACTLY ONE queue entry, made by generate_video on the video
+            # backend's own channel — this thread only waits for it (a submit
+            # from here would nest inside a GPU worker and deadlock).
+            from app.skills.animate import run_video_op
+            result = run_video_op(
+                "video_character", f"video:character:{character_name}:{video_filename}",
+                inputs, label="Animate gallery image", track_id=track_id)
+            tq.track_finish(track_id, error="" if result.get("ok")
+                            else str(result.get("error") or "Animation failed"))
+        except Exception as e:
+            logger.error("Gallery animation of %s/%s failed: %s",
+                         character_name, image_path.name, e)
+            tq.track_finish(track_id, error=str(e))
+
+    import threading
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "image": image_path.name, "video": video_filename,
+            "track_id": track_id}
+
+
+def suggest_gallery_animate_prompt(character_name: str, image_name: str,
+                                   data: Dict[str, Any]) -> str:
+    """A motion prompt for one gallery still (the animate dialog's
+    "Suggest"): the image analysis stored on the image — produced by the
+    vision LLM and stored when missing — through the ``animation_prompt``
+    template. ``system_prompt`` in the body replaces the template's system
+    part. Raises ``ValueError`` when no image analysis can be had."""
+    from app.models.character import add_character_image_metadata, get_single_image_meta
+    image_path = gallery_still_path(character_name, image_name)
+    analysis = str((get_single_image_meta(character_name, image_path.name) or {})
+                   .get("image_analysis") or "").strip()
+    if not analysis:
+        from app.imagegen.service import get_image_service
+        analysis = (get_image_service()._generate_image_analysis(
+            str(image_path), character_name) or "").strip()
+        if analysis:
+            add_character_image_metadata(character_name, image_path.name,
+                                         {"image_analysis": analysis})
+    if not analysis:
+        raise ValueError("No image analysis available")
+    from app.core.llm_router import llm_call
+    from app.core.prompt_templates import render_task
+    default_system, user_prompt = render_task("animation_prompt", image_analysis=analysis)
+    response = llm_call(
+        task="instagram_caption",
+        system_prompt=str(data.get("system_prompt") or "").strip() or default_system,
+        user_prompt=user_prompt, agent_name=character_name)
+    return (response.content or "").strip().strip('"').strip("'")

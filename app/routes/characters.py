@@ -173,13 +173,6 @@ def list_chatbots() -> Dict[str, Any]:
     return character_ops.build_chatbots_list()
 
 
-@router.get("/animate/services")
-def list_animate_services() -> List[Dict[str, Any]]:
-    """Return available animation services for the frontend."""
-    from app.skills.animate import get_animate_services
-    return get_animate_services()
-
-
 @router.post("/create")
 async def create_character(request: Request) -> Dict[str, Any]:
     """Create a character with an empty profile and the assigned template."""
@@ -2707,6 +2700,37 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
               use_room, use_source_as_reference, _tq, pose_check),
         daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
+
+
+@router.post("/{character_name}/images/{image_name}/animate")
+async def animate_character_image(character_name: str, image_name: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Animates a gallery still into a video (Game-Admin gallery, admin only).
+
+    Body: { prompt, service?, loras?, seconds? } — see
+    ``character_ops.start_gallery_animation``; the video lands next to the
+    still as ``{stem}.mp4``. Answers ``{status, image, video, track_id}``."""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(character_ops.start_gallery_animation,
+                                   character_name, image_name, data or {})
+
+
+@router.post("/{character_name}/images/{image_name}/suggest-animate-prompt")
+async def suggest_character_animate_prompt(character_name: str, image_name: str,
+                                           request: Request,
+                                           _: Dict[str, Any] = Depends(require_admin)
+                                           ) -> Dict[str, Any]:
+    """Suggests a motion prompt for a gallery still from its image analysis
+    (the animate dialog's "Suggest", admin only). Body: { system_prompt? }."""
+    import asyncio
+    data = await request.json()
+    try:
+        prompt = await asyncio.to_thread(character_ops.suggest_gallery_animate_prompt,
+                                         character_name, image_name, data or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"prompt": prompt}
 
 
 # ---------------------------------------------------------------------------

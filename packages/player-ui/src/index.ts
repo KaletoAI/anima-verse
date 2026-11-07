@@ -1,6 +1,7 @@
 export * from './api';
 export * from './propActions';
 export * from './PropActionsPanel';
+export * from './ActionsTree';
 export * from './HoverHint';
 export * from './clockFormat';
 export * from './clockSettings';

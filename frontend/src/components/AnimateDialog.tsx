@@ -2,13 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { ModelPicker, type PickerOption } from './ModelPicker'
-import { apiGet } from '../lib/api'
+import { apiGet, apiPost } from '../lib/api'
 import { useEnlarge } from './ZoomButton'
 
 /**
  * AnimateDialog — image→video dialog (separate from ImageGenDialog, since the
  * options differ fundamentally): an animation Service selector and a prompt
- * with an LLM "suggest" button (+ optional system-prompt / LLM override).
+ * with an LLM "suggest" button (+ optional system-prompt / LLM override) and
+ * the "Improvement request" row of the image dialogs (POST
+ * /world/imagegen-enhance-prompt with mode "video": the LLM keeps motion,
+ * camera and pacing).
+ *
+ * Services and their LoRAs come from ONE source, the video occasion of
+ * GET /world/imagegen-options: the video backends, what "Auto (routing)"
+ * resolves to, and per backend `has_loras` + its LoRA-library entries — the
+ * LoRA slots show only for a backend that takes LoRAs.
  *
  * The caller wires it to a concrete subject (Instagram post or gallery image):
  *  - `onSuggest({system_prompt, llm_override})` → returns a suggested prompt
@@ -32,13 +40,23 @@ export interface AnimateSubmit {
   seconds?: number
 }
 
+/** One video-backend row of GET /world/imagegen-options?occasion=video. */
 interface AnimateService {
-  id: string
-  label: string
-  enabled?: boolean
+  name: string
+  /** Server label — "(offline?)" appended for an unreachable backend. */
+  label?: string
+  available?: boolean
+  /** The backend takes LoRAs at all; only then are `lora_options` offered. */
+  has_loras?: boolean
   /** This video alias' LoRAs from the LoRA library (backend-scoped; entries
    *  flagged missing stay offered, rendered as "name (missing)"). */
-  loras?: Array<{ name: string; missing?: boolean }>
+  lora_options?: Array<{ name: string; missing?: boolean }>
+}
+
+interface VideoOptions {
+  options?: AnimateService[]
+  resolved?: string | null
+  media_generation_enabled?: boolean
 }
 
 interface Props {
@@ -65,6 +83,7 @@ export function AnimateDialog({
   const [serviceId, setServiceId] = useState(AUTO)
   // Video backend the "video" chain resolves to right now ('' = none).
   const [routedName, setRoutedName] = useState('')
+  const [mediaOff, setMediaOff] = useState(false)
   const isAuto = serviceId === AUTO
   // Under "Auto" the LoRA offer follows the backend the chain resolves to.
   const effectiveService = isAuto ? routedName : serviceId
@@ -81,6 +100,8 @@ export function AnimateDialog({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [improvement, setImprovement] = useState('')
+  const [enhancing, setEnhancing] = useState(false)
   // Three optional LoRA slots (gateway maximum) — offered when the selected
   // video backend discovered LoRAs via its lora_url.
   const [loraSlots, setLoraSlots] = useState<Array<{ name: string; strength: string }>>(
@@ -93,28 +114,32 @@ export function AnimateDialog({
 
   useEffect(() => { if (open) setPrompt(defaultPrompt) }, [open, defaultPrompt])
 
+  // LoRAs of the picked (or auto-resolved) backend — none when it takes none.
+  const svcLoras = useMemo(() => {
+    const svc = services?.find((s) => s.name === effectiveService)
+    return svc?.has_loras ? svc.lora_options || [] : []
+  }, [services, effectiveService])
+
   // A service switch resets picks the new service does not offer.
   useEffect(() => {
-    const offered = new Set(
-      (services?.find((s) => s.id === effectiveService)?.loras || []).map((l) => l.name))
+    const offered = new Set(svcLoras.map((l) => l.name))
     setLoraSlots((prev) => {
       if (prev.every((s) => !s.name || offered.has(s.name))) return prev
       return prev.map((s) => (!s.name || offered.has(s.name) ? s : { name: '', strength: '1.0' }))
     })
-  }, [services, effectiveService])
+  }, [svcLoras])
 
   // Load services and the LLM list once.
   useEffect(() => {
     if (!open || services !== null) return
-    apiGet<AnimateService[]>('/characters/animate/services')
-      .then((list) => {
-        setServices(Array.isArray(list) ? list : [])
+    apiGet<VideoOptions>('/world/imagegen-options?occasion=video')
+      .then((d) => {
+        setServices(Array.isArray(d?.options) ? d.options : [])
+        setRoutedName(d?.resolved || '')
+        setMediaOff(d?.media_generation_enabled === false)
         setServiceId(AUTO)
       })
-      .catch(() => setServices([]))
-    apiGet<{ resolved?: string | null }>('/world/imagegen-options?occasion=video')
-      .then((d) => setRoutedName(d.resolved || ''))
-      .catch(() => setRoutedName(''))
+      .catch(() => { setServices([]); setRoutedName('') })
     apiGet<{ providers?: Record<string, { models?: { name: string }[] }> }>('/characters/available-models')
       .then((d) => {
         const out: string[] = []
@@ -145,6 +170,28 @@ export function AnimateDialog({
       setSuggesting(false)
     }
   }, [onSuggest, systemPrompt, llmOverride])
+
+  // "Improve": the LLM rewrites the motion prompt — from the change request,
+  // or (empty request) just optimised for the video model — into the prompt
+  // field (visible/editable before animating), like the image dialogs.
+  const applyImprovement = useCallback(async () => {
+    const base = prompt.trim()
+    if (!base || enhancing) return
+    setEnhancing(true)
+    try {
+      const res = await apiPost<{ prompt?: string }>('/world/imagegen-enhance-prompt', {
+        prompt: base, improvement_request: improvement.trim(), mode: 'video',
+      })
+      if (res?.prompt) {
+        setPrompt(res.prompt)
+        setImprovement('')
+      }
+    } catch {
+      /* Fail silently — the user can still adjust the prompt by hand. */
+    } finally {
+      setEnhancing(false)
+    }
+  }, [prompt, improvement, enhancing])
 
   const handleSubmit = useCallback(async () => {
     if (!effectiveService) return
@@ -188,14 +235,16 @@ export function AnimateDialog({
                     : t('Auto (routing) — no backend available')}
                 </option>
                 {services.map((s) => (
-                  <option key={s.id} value={s.id} disabled={s.enabled === false}>
-                    {s.label}{s.enabled === false ? ` (${t('disabled')})` : ''}
-                  </option>
+                  <option key={s.name} value={s.name}>{s.label || s.name}</option>
                 ))}
               </select>
+              {mediaOff ? (
+                <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
+                  {t('Media generation is disabled for this world (Admin → Settings → Media Generation)')}
+                </div>
+              ) : null}
 
               {(() => {
-                const svcLoras = services.find((s) => s.id === effectiveService)?.loras || []
                 if (!svcLoras.length) return null
                 return (
                   <>
@@ -238,10 +287,23 @@ export function AnimateDialog({
                     { maxHeight: 170, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 })} />
               ) : null}
               <label className="ga-imagegen-label">{t('Animation prompt')}</label>
-              <textarea className="ga-textarea" rows={5} value={prompt} disabled={submitting}
+              <textarea className="ga-textarea" rows={5} value={prompt} disabled={submitting || enhancing}
                 onChange={(e) => setPrompt(e.target.value)} />
+              <label className="ga-imagegen-label">{t('Improvement request')}</label>
+              <textarea className="ga-textarea" rows={2}
+                placeholder={t('What to change (optional)')}
+                value={improvement} disabled={submitting || enhancing}
+                onChange={(e) => setImprovement(e.target.value)} />
               <div className="ga-form-row" style={{ gap: 8 }}>
-                <button type="button" className="ga-btn ga-btn-sm" disabled={suggesting || submitting} onClick={doSuggest}>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  disabled={submitting || enhancing || suggesting || !prompt.trim()}
+                  onClick={() => { void applyImprovement() }}
+                  title={improvement.trim()
+                    ? t('Rewrite the prompt with this change via LLM')
+                    : t('Optimise the prompt for the video model via LLM (content stays the same)')}>
+                  {enhancing ? '…' : `✨ ${t('Improve prompt')}`}
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm" disabled={suggesting || submitting || enhancing} onClick={doSuggest}>
                   {suggesting ? t('Suggesting…') : '✨ ' + t('Suggest prompt')}
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm" onClick={() => setShowAdvanced((v) => !v)}>
@@ -270,7 +332,7 @@ export function AnimateDialog({
         </div>
         <div className="ga-modal-footer">
           <button className="ga-btn" onClick={onClose} disabled={submitting}>{t('Cancel')}</button>
-          <button className="ga-btn ga-btn-primary" onClick={handleSubmit} disabled={submitting || !effectiveService || !prompt.trim()}>
+          <button className="ga-btn ga-btn-primary" onClick={handleSubmit} disabled={submitting || enhancing || mediaOff || !effectiveService || !prompt.trim()}>
             {submitting ? '…' : '🎬 ' + t('Animate')}
           </button>
         </div>

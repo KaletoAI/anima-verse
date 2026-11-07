@@ -69,7 +69,7 @@ def get_locations_route(request: Request,
 
 @router.post("/locations")
 async def create_location_route(request: Request) -> Dict[str, Any]:
-    """Erstellt oder aktualisiert einen Ort."""
+    """Creates or updates a location."""
     data = await request.json()
     return await asyncio.to_thread(_create_location_route_sync, data)
 
@@ -109,7 +109,7 @@ def seed_boundaries_route() -> Dict[str, Any]:
 
 @router.put("/locations/{location_id}")
 async def update_location_route(location_id: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert einen Ort (Umbenennung per ID)."""
+    """Updates a location (rename by ID)."""
     data = await request.json()
     return await asyncio.to_thread(_update_location_route_sync,
                                    location_id, data)
@@ -142,9 +142,9 @@ def get_freeze_status() -> Dict[str, Any]:
 async def freeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Friert die Welt ein: AgentLoop, hourly Ticks und Scheduler-Jobs
-    pausieren. TaskQueue (Bildgenerierung) + LLM-Tools bleiben
-    aktiv. Persistent (ueberlebt Neustart)."""
+    """Freezes the world: AgentLoop, hourly ticks and scheduler jobs
+    pause. TaskQueue (image generation) + LLM tools stay
+    active. Persistent (survives a restart)."""
     from app.models.world import set_world_frozen
     set_world_frozen(True)
     logger.info("World freeze AKTIVIERT (autonome Simulation angehalten)")
@@ -155,7 +155,7 @@ async def freeze_world(
 async def unfreeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Taut die Welt wieder auf — autonome Simulation laeuft weiter."""
+    """Unfreezes the world — the autonomous simulation continues."""
     from app.models.world import set_world_frozen
     set_world_frozen(False)
     logger.info("World freeze DEAKTIVIERT (autonome Simulation laeuft)")
@@ -259,7 +259,7 @@ def _post_game_time_sync(lang: str, _: Dict[str, Any],
 
 @router.get("/sleep-status")
 def get_sleep_status() -> Dict[str, Any]:
-    """Aktueller World-Sleep-Status (alle NPCs schlafen?)."""
+    """Current world sleep status (are all NPCs asleep?)."""
     from app.models.world import is_world_sleeping
     return {"sleeping": is_world_sleeping()}
 
@@ -268,9 +268,9 @@ def get_sleep_status() -> Dict[str, Any]:
 async def sleep_world_route(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Schlafmodus AN: alle NPCs schlafen sofort ein — keine NPC-LLM-Chat-Calls
-    mehr. Ticks, Memory-Konsolidierung, Scheduler, TaskQueue und die Game-Uhr
-    laufen weiter (anders als Freeze)."""
+    """Sleep mode ON: all NPCs fall asleep at once — no more NPC LLM chat
+    calls. Ticks, memory consolidation, scheduler, TaskQueue and the game
+    clock keep running (unlike freeze)."""
     return world_ops.sleep_world()
 
 
@@ -278,8 +278,8 @@ async def sleep_world_route(
 async def wake_world_route(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Schlafmodus AUS: vom Schlafmodus eingeschlaefte NPCs wachen auf;
-    natuerlich Schlafende schlafen weiter."""
+    """Sleep mode OFF: NPCs put to sleep by sleep mode wake up; naturally
+    sleeping ones keep sleeping."""
     return world_ops.wake_world()
 
 
@@ -869,7 +869,7 @@ def delete_location_route(
     location_name: str,
     character_name: str = Query("", alias="agent_name")
 ) -> Dict[str, Any]:
-    """Loescht einen Ort (per ID oder Name)."""
+    """Deletes a location (by ID or name)."""
     if delete_location(location_name):
         return {"status": "success", "deleted": location_name}
     raise HTTPException(status_code=404, detail="Ort nicht gefunden")
@@ -3042,12 +3042,12 @@ async def import_location_route(
 
 @router.get("/conditions/list")
 def list_conditions() -> Dict[str, Any]:
-    """Liste aller Filter-IDs aus prompt_filters (shared + world overlay).
+    """List of all filter IDs from prompt_filters (shared + world overlay).
 
-    Die Filter-`id` ist gleichzeitig der kanonische Condition-Name:
-    sobald sie als Tag im Profil (active_conditions) steht, triggert der
-    zugehoerige Filter implizit. Eine zusaetzliche `condition`-Expression
-    am Filter (z.B. ``stamina<10``) wirkt als zweiter Auto-Trigger.
+    The filter `id` is also the canonical condition name: as soon as it
+    stands as a tag in the profile (active_conditions), the matching filter
+    triggers implicitly. An additional `condition` expression on the filter
+    (e.g. ``stamina<10``) acts as a second auto-trigger.
 
     Returns: {"conditions": [{"name": "drunk", "label": "...", "icon": "🍺"}, ...]}
     """
@@ -3129,7 +3129,7 @@ async def generate_location_background(location_name: str, request: Request) -> 
 
 @router.delete("/locations/{location_name}/background")
 async def delete_location_background(request: Request, location_name: str) -> Dict[str, Any]:
-    """Loescht die Hintergrundbild-Referenz eines Ortes (per ID oder Name)."""
+    """Deletes a location's background image reference (by ID or name)."""
     data = await request.json()
     return await asyncio.to_thread(_delete_location_background_sync,
                                    location_name, data)
@@ -3153,7 +3153,7 @@ def _delete_location_background_sync(location_name: str,
 @router.get("/locations/{location_name}/gallery")
 def get_location_gallery(
     location_name: str) -> Dict[str, Any]:
-    """Listet alle Galerie-Bilder eines Ortes auf (mit Hintergrund-Status)."""
+    """Lists all gallery images of a location (with background status)."""
     return world_ops.build_gallery_payload(location_name)
 
 
@@ -3161,7 +3161,7 @@ def get_location_gallery(
 def get_gallery_image(
     location_name: str,
     image_name: str):
-    """Liefert ein einzelnes Galerie-Bild."""
+    """Returns a single gallery image."""
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
     gallery_dir = get_gallery_dir(location_name)
@@ -3212,7 +3212,8 @@ def get_imagegen_options(occasion: str = "", character: str = "",
 
 @router.post("/imagegen-enhance-prompt")
 async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
-    """Rewrite an image prompt via the LLM — generic (no character binding).
+    """Rewrite an image or video prompt via the LLM — generic (no character
+    binding).
 
     Body: { prompt, improvement_request?, mode? }
     Returns: { prompt: "<rewritten prompt>" }
@@ -3220,9 +3221,11 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     ``mode: "pose"`` runs the LLM pose check (app/imagegen/pose_check.py) —
     the dialogs' "Check pose" button. Otherwise, with an improvement request
     the prompt is changed accordingly; without one it is only optimised for
-    the image model (same content). Same enhance_prompt function as the
-    character/Instagram regenerate, so the dialogs' "Improve prompt" button
-    uses one mechanism everywhere.
+    the image model (same content). ``mode: "video"`` does the same for an
+    image-to-video motion prompt (the animate dialog) — it keeps motion,
+    camera and pacing, which the image rewrite would strip. Same
+    enhance_prompt function as the character/Instagram regenerate, so the
+    dialogs' "Improve prompt" button uses one mechanism everywhere.
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
@@ -3233,8 +3236,9 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
         from app.imagegen.pose_check import check_pose
         return {"prompt": await asyncio.to_thread(check_pose, prompt)}
     from app.skills.image_regenerate import enhance_prompt
+    media = "video" if body.get("mode") == "video" else "image"
     enhanced = await asyncio.to_thread(
-        enhance_prompt, prompt, improvement_request, None, True)
+        enhance_prompt, prompt, improvement_request, None, True, media)
     return {"prompt": enhanced}
 
 
@@ -3417,7 +3421,7 @@ async def generate_gallery_image(location_name: str, request: Request) -> Dict[s
 def delete_gallery_image(
     location_name: str,
     image_name: str) -> Dict[str, Any]:
-    """Loescht ein Galerie-Bild (per ID oder Name)."""
+    """Deletes a gallery image (by ID or name)."""
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
     return world_ops.delete_gallery_image(location_name, image_name)
@@ -3426,7 +3430,7 @@ def delete_gallery_image(
 @router.post("/locations/{location_name}/gallery/{image_name}/move")
 async def move_gallery_image_route(
     location_name: str, image_name: str, request: Request) -> Dict[str, Any]:
-    """Verschiebt ein Galerie-Bild in eine andere Location (Datei + Prompt/Typ/Meta)."""
+    """Moves a gallery image to another location (file + prompt/type/meta)."""
     body = await request.json()
     return await asyncio.to_thread(_move_gallery_image_route_sync,
                                    location_name, image_name, body)
@@ -3457,7 +3461,7 @@ async def set_gallery_image_room_route(
     location_name: str,
     image_name: str,
     request: Request) -> Dict[str, Any]:
-    """Setzt den Raum eines Galerie-Bildes."""
+    """Sets the room of a gallery image."""
     body = await request.json()
     return await asyncio.to_thread(_set_gallery_image_room_route_sync,
                                    location_name, image_name, body)
@@ -3479,7 +3483,7 @@ async def set_gallery_image_type_route(
     location_name: str,
     image_name: str,
     request: Request) -> Dict[str, Any]:
-    """Setzt den Typ eines Galerie-Bildes (day/night/map oder leer)."""
+    """Sets the type of a gallery image (day/night/map or empty)."""
     body = await request.json()
     return await asyncio.to_thread(_set_gallery_image_type_route_sync,
                                    location_name, image_name, body)
@@ -3533,10 +3537,10 @@ async def generate_time_variant(
 async def set_prompt_changed_flag(
     location_id: str,
     request: Request) -> Dict[str, Any]:
-    """Setzt oder entfernt das prompt_changed Flag fuer eine Location oder einen Raum.
+    """Sets or clears the prompt_changed flag of a location or a room.
 
     Body: {"user_id": "...", "room_id": "..." (optional), "value": true/false}
-    Ohne room_id wird das Flag auf Location-Ebene gesetzt/entfernt.
+    Without room_id the flag is set/cleared on the location level.
     """
     body = await request.json()
     return await asyncio.to_thread(_set_prompt_changed_flag_sync,
@@ -3563,11 +3567,11 @@ def _set_prompt_changed_flag_sync(location_id: str,
 
 @router.get("/messaging-frame")
 def get_messaging_frame() -> Dict[str, Any]:
-    """Liefert Frame-Status + bbox-Metadaten fuer Frontend-Composite.
+    """Returns the frame status + bbox metadata for the frontend composite.
 
     Returns:
         {has_frame, path, bbox, frame_size, prompt, backend, generated_at}
-        oder {has_frame: False} wenn noch nicht generiert.
+        or {has_frame: False} when not generated yet.
     """
     from app.core.messaging_frame import has_frame, load_frame_meta
     if not has_frame():
@@ -3582,7 +3586,7 @@ def get_messaging_frame() -> Dict[str, Any]:
 
 @router.get("/messaging-frame.png")
 def get_messaging_frame_image() -> FileResponse:
-    """Liefert das prozessierte Frame-Bild (PNG mit transparenter Anzeigeflaeche)."""
+    """Returns the processed frame image (PNG with a transparent display area)."""
     from app.core.messaging_frame import get_frame_path, has_frame
     if not has_frame():
         raise HTTPException(status_code=404, detail="Frame nicht generiert")
@@ -3591,12 +3595,12 @@ def get_messaging_frame_image() -> FileResponse:
 
 @router.post("/messaging-frame/generate")
 async def post_messaging_frame_generate(request: Request) -> Dict[str, Any]:
-    """Generiert das Messaging-Frame neu via image_skill.
+    """Regenerates the messaging frame via image_skill.
 
     Body: {"prompt": "...", "backend": "Together-Fast" (optional)}
 
-    Pipeline: image_skill.generate -> rembg (aussen) -> Chroma-Key (gruen) -> bbox.
-    Laeuft synchron im Worker-Thread (kann 30-90s dauern je nach Backend).
+    Pipeline: image_skill.generate -> rembg (outside) -> chroma key (green) -> bbox.
+    Runs synchronously in the worker thread (may take 30-90 s depending on the backend).
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
@@ -3612,7 +3616,7 @@ async def post_messaging_frame_generate(request: Request) -> Dict[str, Any]:
 
 @router.delete("/messaging-frame")
 def delete_messaging_frame() -> Dict[str, Any]:
-    """Loescht das aktuelle Frame (Frontend faellt auf CSS-Default zurueck)."""
+    """Deletes the current frame (the frontend falls back to the CSS default)."""
     from app.core.messaging_frame import get_frame_path, get_frame_meta_path
     for p in (get_frame_path(), get_frame_meta_path()):
         try:

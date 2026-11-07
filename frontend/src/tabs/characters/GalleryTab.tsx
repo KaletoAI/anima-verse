@@ -1,14 +1,16 @@
 /**
  * GalleryTab — a character's image gallery in the Game-Admin.
  * Thumbnail grid · select profile image · delete with inline confirmation ·
- * regenerate (ImageGenDialog, incl. the LLM "Improve prompt") · view enlarged
- * in the lightbox.
+ * regenerate (ImageGenDialog, incl. the LLM "Improve prompt") · generate a
+ * video from a still (AnimateDialog) · view enlarged in the lightbox.
  *
  * Source: GET /characters/{name}/images · delete: DELETE …/images/{file}
  * · select portrait: POST …/profile-image/{file} · regenerate:
  * POST …/images/{file}/detect-characters, then …/images/{file}/regenerate
  * (the same routes as the player gallery; the render runs in the background,
- * so the tab polls until the image changed).
+ * so the tab polls until the image changed) · generate video:
+ * POST …/images/{file}/animate (+ …/suggest-animate-prompt), the MP4 lands
+ * next to the still as {stem}.mp4 — the tab polls until it appears.
  * The lightbox is the shared singleton; its ONE host is mounted in main.tsx.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -18,6 +20,7 @@ import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
 import { GalleryAccess } from './GalleryAccess'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { AnimateDialog, type AnimateSubmit } from '../../components/AnimateDialog'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 
 /** Grid tile: `minmax(120px, 1fr)`. The lightbox keeps the ORIGINAL. */
@@ -28,9 +31,15 @@ interface ImagesResp {
   images: string[]
   profile_image: string | null
   urls: string[]
+  /** Image file name -> its companion video ({stem}.mp4). */
   image_videos: Record<string, string>
   image_prompts?: Record<string, string>
-  image_metadata?: Record<string, { created_at?: string }>
+  image_metadata?: Record<string, {
+    created_at?: string
+    /** Motion prompt + stamp of the image's last animation. */
+    animate_prompt?: string
+    animate_created_at?: string
+  }>
 }
 
 /** The open regenerate dialog: which file + who the server saw in it. */
@@ -39,6 +48,9 @@ interface RegenTarget { file: string; detected: string[]; available: string[] }
 /** How long the tab waits for a background regenerate to land. */
 const REGEN_POLL_MS = 4000
 const REGEN_POLL_MAX = 45  // × 4 s = 3 min
+/** A video renders for minutes (often on a remote hub). */
+const VIDEO_POLL_MS = 8000
+const VIDEO_POLL_MAX = 113  // × 8 s ≈ 15 min
 
 export function GalleryTab({ character }: { character: string }) {
   const { t } = useI18n()
@@ -47,6 +59,8 @@ export function GalleryTab({ character }: { character: string }) {
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [regen, setRegen] = useState<RegenTarget | null>(null)
+  // The still the animate dialog is open for.
+  const [animate, setAnimate] = useState<string | null>(null)
   // A replaced image keeps its file name — `rev` busts the browser cache of
   // the tiles and the lightbox once a regenerate landed.
   const [rev, setRev] = useState(0)
@@ -63,15 +77,15 @@ export function GalleryTab({ character }: { character: string }) {
     if (pollTimer.current !== null) window.clearTimeout(pollTimer.current)
     pollTimer.current = null
   }
-  useEffect(() => { load(); setConfirmDel(null); setRegen(null); stopPoll() }, [load])
+  useEffect(() => { load(); setConfirmDel(null); setRegen(null); setAnimate(null); stopPoll() }, [load])
   useEffect(() => stopPoll, [])
 
   const imgUrl = (f: string) => `/characters/${encodeURIComponent(character)}/images/${encodeURIComponent(f)}`
   const withRev = (url: string) => (rev ? `${url}${url.includes('?') ? '&' : '?'}r=${rev}` : url)
+  // `image_videos` is keyed by the image's FULL file name.
   const videoOf = (f: string): string => {
-    const stem = f.replace(/\.[^.]+$/, '')
-    const v = data?.image_videos?.[stem]
-    return v ? `/characters/${encodeURIComponent(character)}/images/${encodeURIComponent(v)}` : ''
+    const v = data?.image_videos?.[f]
+    return v ? withRev(`/characters/${encodeURIComponent(character)}/images/${encodeURIComponent(v)}`) : ''
   }
   const openOne = (f: string) => {
     const v = videoOf(f)
@@ -91,11 +105,10 @@ export function GalleryTab({ character }: { character: string }) {
     setRegen({ file: f, detected, available })
   }
 
-  // Poll until the file list or the regenerated file's stamp changed.
-  const waitForRegen = (f: string, before: ImagesResp | null) => {
+  // Poll until `stamp` of the gallery answer changed (then refresh the tiles).
+  const waitForChange = (before: ImagesResp | null, stamp: (d: ImagesResp | null) => string,
+    intervalMs: number, maxRounds: number, onDone?: () => void) => {
     stopPoll()
-    const stamp = (d: ImagesResp | null) =>
-      `${d?.images.length ?? 0}|${d?.image_metadata?.[f]?.created_at ?? ''}`
     const was = stamp(before)
     let round = 0
     const tick = async () => {
@@ -103,11 +116,44 @@ export function GalleryTab({ character }: { character: string }) {
       round += 1
       try {
         const d = await fetchImages()
-        if (stamp(d) !== was) { setData(d); setRev((r) => r + 1); return }
+        if (stamp(d) !== was) { setData(d); setRev((r) => r + 1); onDone?.(); return }
       } catch { /* try again */ }
-      if (round < REGEN_POLL_MAX) pollTimer.current = window.setTimeout(() => { void tick() }, REGEN_POLL_MS)
+      if (round < maxRounds) pollTimer.current = window.setTimeout(() => { void tick() }, intervalMs)
     }
-    pollTimer.current = window.setTimeout(() => { void tick() }, REGEN_POLL_MS)
+    pollTimer.current = window.setTimeout(() => { void tick() }, intervalMs)
+  }
+  // Regenerate: the file list or the regenerated file's stamp changed.
+  const waitForRegen = (f: string, before: ImagesResp | null) =>
+    waitForChange(before,
+      (d) => `${d?.images.length ?? 0}|${d?.image_metadata?.[f]?.created_at ?? ''}`,
+      REGEN_POLL_MS, REGEN_POLL_MAX)
+  // Animate: the still's companion video appeared or was replaced.
+  const waitForVideo = (f: string, before: ImagesResp | null) =>
+    waitForChange(before,
+      (d) => `${d?.image_videos?.[f] ?? ''}|${d?.image_metadata?.[f]?.animate_created_at ?? ''}`,
+      VIDEO_POLL_MS, VIDEO_POLL_MAX, () => toast(t('Video ready')))
+
+  const suggestAnimate = async (f: string, opts: { system_prompt: string }) => {
+    try {
+      const res = await apiPost<{ prompt?: string }>(`${imgUrl(f)}/suggest-animate-prompt`,
+        { system_prompt: opts.system_prompt })
+      return res?.prompt || ''
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      return ''
+    }
+  }
+
+  const submitAnimate = async (payload: AnimateSubmit) => {
+    const f = animate
+    if (!f) return
+    try {
+      await apiPost(`${imgUrl(f)}/animate`, payload)
+      toast(t('Video generation started'))
+      waitForVideo(f, data)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
   }
 
   const submitRegen = async (payload: ImageGenSubmit) => {
@@ -215,6 +261,18 @@ export function GalleryTab({ character }: { character: string }) {
                         color: '#fff', cursor: 'pointer', lineHeight: 1, fontSize: '0.9em',
                       }}>↻</button>
                   )}
+                  {!confirming && (
+                    <button type="button" title={hasVideo ? t('Re-animate') : t('Generate video')}
+                      aria-label={hasVideo ? t('Re-animate') : t('Generate video')}
+                      disabled={busy} onClick={() => setAnimate(f)}
+                      style={{
+                        position: 'absolute', bottom: 4,
+                        left: !hasVideo && data?.image_prompts?.[f] ? 34 : 4,
+                        width: 26, height: 26, borderRadius: 6,
+                        border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,22,28,0.7)',
+                        color: '#fff', cursor: 'pointer', lineHeight: 1, fontSize: '0.9em',
+                      }}>🎬</button>
+                  )}
                   {hasVideo && (
                     <span style={{
                       position: 'absolute', bottom: 4, right: 4, fontSize: '0.8em',
@@ -269,6 +327,17 @@ export function GalleryTab({ character }: { character: string }) {
           occasionCharacter={character}
           onSubmit={submitRegen}
           onClose={() => setRegen(null)}
+        />
+      )}
+      {animate && (
+        <AnimateDialog
+          open
+          title={`${videoOf(animate) ? t('Re-animate') : t('Generate video')} — ${character}`}
+          sourceImageUrl={withRev(imgUrl(animate))}
+          defaultPrompt={data?.image_metadata?.[animate]?.animate_prompt || ''}
+          onSuggest={(opts) => suggestAnimate(animate, opts)}
+          onSubmit={submitAnimate}
+          onClose={() => setAnimate(null)}
         />
       )}
     </>

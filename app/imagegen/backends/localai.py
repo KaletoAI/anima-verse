@@ -39,6 +39,9 @@ class LocalAIBackend(TogetherBackend):
     # Reference-image conditioning: agent + room + others/items (see
     # _collect_ref_images). OpenAIDiffusionBackend inherits this budget.
     DEFAULT_REF_SLOT_COUNT = 4
+    # LoRAs travel as <lora:> prompt tags (OpenAIDiffusionBackend: as
+    # lora_NN/strength_NN params) — both inherit this.
+    SUPPORTS_LORAS = True
 
     def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
                  api_key: str = "", model: str = ""):

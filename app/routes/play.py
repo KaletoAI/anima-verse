@@ -4121,12 +4121,18 @@ async def play_set_activity(request: Request, user=Depends(get_current_user)):
 def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     """The blocking body of ``play_set_activity`` — runs in the threadpool.
 
-    Three shapes: ``{"activity": "<text>"}`` sets the pose (the setter seats
+    Four shapes: ``{"activity": "<text>"}`` sets the pose (the setter seats
     the avatar on SOME free place of the group), ``{"activity": ""}`` clears
     pose and place (with ``"finish": true`` — the HUD's "end" — it goes into
     the pose's follow pose instead, when there is one), ``{"place_id", "pose"}`` insists on the clicked place —
     400 unknown pose / pose not of the place's group, 404 no such place in
-    the avatar's room, 409 place taken. Answer ``{"ok", "activity", "place"}``.
+    the avatar's room, 409 place taken. ``{"pose_key": "<catalog key>"}`` is
+    a CLICKED catalog pose (the chat's action tree, ``GET /play/solo-poses``):
+    400 unknown key, 409 ``pair_pose`` for a pose of more than one person,
+    409 ``no_free_place`` when the setter wrote nothing for lack of a place;
+    otherwise the same setter the free text goes through. Validated before
+    anything is touched, so a refusal does not wake the avatar either.
+    Answer ``{"ok", "activity", "place"}``.
     """
     from app.core import places
     from app.core.pose_catalog import (PairPoseWithoutPartner, get_catalog,
@@ -4138,6 +4144,13 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     place_id = str(body.get("place_id") or "").strip()
     pose = str(body.get("pose") or "").strip().lower()
     activity = str(body.get("activity") or "").strip()
+    pose_key = str(body.get("pose_key") or "").strip().lower()
+    if pose_key and not place_id:
+        from app.core.pose_catalog import activity_catalog, pose_participants
+        if pose_key not in activity_catalog():
+            raise HTTPException(status_code=400, detail="unknown pose")
+        if pose_participants(pose_key) != 1:
+            raise HTTPException(status_code=409, detail="pair_pose")
     if place_id:
         loc, room = places.where(avatar)
         target = next((p for p in places.room_places(loc, room) if p["id"] == place_id), None)
@@ -4177,6 +4190,16 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         except PairPoseWithoutPartner:
             raise HTTPException(status_code=409, detail="pair_pose")
         activity = pose
+    elif pose_key:
+        # The key goes through the free-text setter: an exact key is its own
+        # alias there, so the clicked pose and the typed one end up identical.
+        try:
+            written = set_pose_intent(avatar, pose_key)
+        except PairPoseWithoutPartner:
+            raise HTTPException(status_code=409, detail="pair_pose")
+        if not written:
+            raise HTTPException(status_code=409, detail="no_free_place")
+        activity = pose_key
     elif activity:
         # A two-person pose is not something the avatar puts on alone — it is
         # asked for (POST /play/interact) and started when the other agrees.
@@ -4231,6 +4254,32 @@ def _finish_into_follow(avatar: str) -> bool:
         return bool(set_pose_intent(avatar, follow))
     except places.PlaceUnavailable:
         return False
+
+
+@router.get("/play/solo-poses")
+def play_solo_poses(user=Depends(get_current_user)):
+    """The poses the avatar can strike alone and anywhere — the
+    "Independent actions" of the chat's action tree. Clicking one posts
+    ``{"pose_key"}`` to ``/play/self/activity``. See :func:`solo_poses_payload`."""
+    return solo_poses_payload()
+
+
+def solo_poses_payload() -> Dict[str, Any]:
+    """``{"avatar", "poses": [{key, label}]}``: every catalog pose that needs
+    no place (``pose_catalog.poses_without_place``) and takes exactly one
+    person, labelled in the avatar's language, sorted by label (then key).
+    A spectator (no active character) gets ``{"avatar": "", "poses": []}``."""
+    from app.core.pose_catalog import pose_label, pose_participants, poses_without_place
+    from app.models.account import get_active_character
+    from app.models.character import get_character_language
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return {"avatar": "", "poses": []}
+    lang = get_character_language(avatar) or "de"
+    poses = [{"key": key, "label": pose_label(key, lang)}
+             for key in poses_without_place() if pose_participants(key) == 1]
+    poses.sort(key=lambda p: (p["label"].casefold(), p["key"]))
+    return {"avatar": avatar, "poses": poses}
 
 
 @router.get("/play/places")

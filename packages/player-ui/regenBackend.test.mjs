@@ -13,6 +13,11 @@ const options = { resolved: 'A', pose_check: { supported: true, default: true },
   { name: 'A', has_loras: true, lora_options: [{ name: 'style-a' }, { name: 'shared' }] },
   { name: 'B', has_loras: true, lora_options: [{ name: 'style-b' }, { name: 'shared' }] },
 ] };
+// The animate dialog's "video" occasion: VidL takes LoRAs, VidN none.
+const videoOptions = { resolved: 'VidL', options: [
+  { name: 'VidL', has_loras: true, lora_options: [{ name: 'motion-l' }] },
+  { name: 'VidN' },
+] };
 const image = { name: 'photo.png', url: '/photo.png', info: { prompt: 'Source prompt' } };
 const galleries = { avatar: 'Ann', galleries: [{ character: 'Ann', is_self: true }] };
 const gallery = { avatar: 'Ann', character: 'Ann', images: [image] };
@@ -31,9 +36,11 @@ function load(path) {
     if (id === './I18nProvider') return { useI18n: () => ({ t }) };
     if (id === './Toast') return { useToast: () => ({ toast }) };
     if (id === './api') return { ApiError: Error, apiGet: async url => {
-      requests.push({ url }); return url.startsWith('/world/imagegen-options') ? options : {};
+      requests.push({ url });
+      return url.startsWith('/world/imagegen-options') ? (url.includes('occasion=video') ? videoOptions : options) : {};
     }, apiPost: async (url, body) => {
       requests.push({ url, body });
+      if (url === '/world/imagegen-enhance-prompt') return { prompt: 'Improved motion' };
       return url.endsWith('/detect-characters') ? { detected: ['Ann'], available: [{ name: 'Ann' }] } : {};
     } };
     if (id === './usePolling') return { usePoll: key => ({ data: key === 'play-galleries' ? galleries
@@ -45,7 +52,7 @@ function load(path) {
     if (id === './propActions') return { onPropActionChanged: () => () => {} };
     if (['./SceneView', './ScenesRecap', './GiftPicker', './ChatGalleryPicker', './PropActionsPanel'].includes(id)) return new Proxy({}, { get: () => () => null });
     if (id === './thumbs') return { thumbWidth: n => n, thumbUrl: url => url, transparentPortraitUrl: url => url };
-    if (!['./PlayerRegenDialog', './ImageBackendPicker', './useImageBackendPicker', './PromptImprover', './playerDialogPayloads'].includes(id)) {
+    if (!['./PlayerRegenDialog', './PlayerAnimateDialog', './ImageBackendPicker', './useImageBackendPicker', './PromptImprover', './playerDialogPayloads'].includes(id)) {
       return new Proxy({}, { get: () => () => null });
     }
     const base = resolve(dirname(path), id);
@@ -140,4 +147,43 @@ for (const surface of ['gallery', 'instagram']) {
   tree = draw(); await tree.props.onSubmit();
   assert.deepEqual(requests.at(-1).body.loras, [{ name: 'style-b', strength: 0.65 }]);
 }
+{
+  // Animate dialog: the same picker on the "video" occasion + the improver in video mode.
+  const { PlayerAnimateDialog } = load(resolve('packages/player-ui/src/PlayerAnimateDialog.tsx'));
+  const { PromptImprover } = load(resolve('packages/player-ui/src/PromptImprover.tsx'));
+  const submitted = [];
+  const ctl = { prompt: 'She waves', sourceImageUrl: '', hasVideo: false, onSuggest: async () => 'x',
+    onSubmit: payload => { submitted.push(payload); }, onClose() {} };
+  const dialog = instance(PlayerAnimateDialog);
+  const draw = () => dialog({ ctl });
+  let tree = draw(); await flush(); tree = draw(); tree = draw();
+  assert.equal(requests.filter(r => r.url === '/world/imagegen-options?occasion=video').length, 1);
+  const improverNode = find(tree, n => n.type === PromptImprover);
+  assert.equal(improverNode?.props.media, 'video');
+  const improver = instance(PromptImprover);
+  let imp = improver(improverNode.props);
+  find(imp, n => n.type === 'input').props.onChange({ target: { value: 'slower' } });
+  imp = improver(improverNode.props);
+  btn(imp, 'Rewrite the prompt with this change via LLM').props.onClick(); await flush();
+  assert.deepEqual(requests.at(-1), { url: '/world/imagegen-enhance-prompt',
+    body: { prompt: 'She waves', improvement_request: 'slower', mode: 'video' } });
+  tree = draw();
+  let picker = renderPicker(tree);
+  let selects = all(picker, n => n.type === 'select');
+  assert.equal(selects.length, 5, 'Auto resolves to VidL: backend plus four LoRA slots');
+  assert.match(find(selects[0], n => n.type === 'option' && n.props.value === '').props.children, /Auto \(routing\) → VidL/);
+  selects[0].props.onChange({ target: { value: 'VidN' } }); tree = draw(); tree = draw();
+  selects = all(renderPicker(tree), n => n.type === 'select');
+  assert.equal(selects.length, 1, 'a backend without LoRAs hides the slots');
+  selects[0].props.onChange({ target: { value: 'VidL' } }); tree = draw(); tree = draw();
+  selects = all(renderPicker(tree), n => n.type === 'select');
+  selects[1].props.onChange({ target: { value: 'motion-l' } }); tree = draw();
+  await tree.props.onSubmit();
+  assert.deepEqual(submitted.at(-1), { prompt: 'Improved motion', service: 'VidL', loras: [{ name: 'motion-l', strength: 1 }] });
+  selects[0].props.onChange({ target: { value: '' } }); tree = draw(); tree = draw();
+  await tree.props.onSubmit();
+  assert.deepEqual(submitted.at(-1), { prompt: 'Improved motion', loras: [{ name: 'motion-l', strength: 1 }] },
+    'Auto sends no service but keeps the auto-scoped LoRA pick');
+}
+console.log('animate dialog: PASS (video picker, LoRA slots per backend, improver in video mode, service/loras payload)');
 console.log('regenerate backend: PASS (shared picker, four scoped slots, Auto, explicit payloads through gallery + Instagram)');

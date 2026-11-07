@@ -6,10 +6,10 @@
  * answers, so nothing starts without consent.
  *
  * The ONE picker for every place that offers them — the Others card renders
- * `pairActionChips` inline, the chat window mounts `PairActions`
- * (PairActionsPanel.tsx), which is built from the same pieces — so the two
- * lists cannot drift apart again. The chips are made for the `leading` slot
- * of `PropActionsPanel`, beside the furniture actions.
+ * `pairActionChips` inline, the chat's action tree (ActionsTree.tsx) renders
+ * the same chips under each person — so the two lists cannot drift apart
+ * again. The chips are made for the `leading` slot of `PropActionsPanel`,
+ * beside the furniture actions.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ApiError, apiGet, apiPost } from './api'
@@ -25,7 +25,7 @@ export interface PairOptions { poses: PairPose[]; blocked: string }
 export interface PairTarget { name: string; busy?: boolean }
 
 const EMPTY: PairOptions = { poses: [], blocked: '' }
-// The last answer seeds a fresh mount (no empty flash when the chat panel
+// The last answer seeds a fresh mount (no empty flash when the action tree
 // reopens); one request in flight is shared by every mounted panel.
 let last: PairOptions = EMPTY
 let inflight: Promise<PairOptions> | null = null

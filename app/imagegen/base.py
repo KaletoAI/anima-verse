@@ -287,6 +287,12 @@ class ImageBackend(ABC):
     REQUIRES_URL = True
     MEDIA_TYPE = "image"
 
+    # Whether this backend type consumes LoRAs (``lora_inputs``) at all. The
+    # render dialogs offer LoRA slots only for such backends (the options
+    # payload's ``has_loras``); read it through ``supports_loras``, which a
+    # backend may narrow per instance (e.g. by engine).
+    SUPPORTS_LORAS = False
+
     def __init__(self, name: str, api_url: str, cost: float, api_type: str, env_prefix: str):
         self.name = name
         self.api_url = api_url.rstrip("/")
@@ -463,6 +469,11 @@ class ImageBackend(ABC):
         self._log_unreachable(reason)
         self._was_available = False
         self.available = False
+
+    @property
+    def supports_loras(self) -> bool:
+        """See ``SUPPORTS_LORAS``."""
+        return bool(self.SUPPORTS_LORAS)
 
     @property
     def available(self) -> bool:

@@ -30,7 +30,7 @@ import { setPairFacing } from '@anima/player-ui/pairInteractions';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
-  ScenePanel, SelfPanel, OthersPanel, PartyStrip,
+  ScenePanel, ActionsTree, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
@@ -139,6 +139,8 @@ const CHAT_IDLE_MS = 20000;
 /** Storage key of the performance readout — separate from the audio prefs on
  *  purpose, see the block that reads it. */
 const PERF_KEY = 'av3d.perf.v1';
+/** Storage key of the action drawer beside the chat: "1" = open. */
+const CHAT_ACTIONS_KEY = 'av3d.chat.actions';
 /** The idle timeout ran out while the panel was still in use (focus inside it,
  *  or one of its picker modals open) — look again after this. */
 const CHAT_BUSY_RECHECK_MS = 5000;
@@ -273,6 +275,9 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     const selector = '.hud-scene-tile, .hud-scene-icon, .hud-drop, .hud-panel, .hud-self, .hud-intents, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
+      // The action drawer's handle: its panel is a `.hud-panel` already, and
+      // the drawer's own box is drag-through (it is as tall as the chat).
+      + '.hud-chat-actions-handle, '
       // The notice banner's root is zero-height by design: measure its rows,
       // or a native/iframe host passes the click on × through to the scene.
       + '.hud-top, .info-panel, .open-view-badge, .hud-notices .player-notice';
@@ -595,6 +600,50 @@ export function Hud({ avatar, username, role }: {
   }, []);
 
   /**
+   * --- The action drawer on the chat's right edge -------------------------
+   *
+   * What the avatar can START (poses, furniture, pair actions) left the
+   * transcript for a drawer beside it (`ActionsTree`); the running rows
+   * (Accept / Stop / meters) stay in the chat. Open or closed is a LOCAL view
+   * setting like the portrait count, so it survives a reload.
+   *
+   * The chat clips its children (`.hud-panel { overflow: hidden }`), so the
+   * drawer cannot be a child hanging out of it: it is a SIBLING that follows
+   * the chat's measured box. The observer catches every size the panel takes
+   * (the drag included) and fires once on its own when it starts; the window
+   * listener catches the moves that keep the size (the panel hangs on the
+   * bottom edge). OFFSETS, not the bounding rect: the arrival animation's
+   * transform must not shift the drawer. Its handle lies OUTSIDE the chat,
+   * so the chat's right-edge grip (inside it) keeps working.
+   */
+  const [actionsOpen, setActionsOpen] = useState(
+    () => localStorage.getItem(CHAT_ACTIONS_KEY) === '1');
+  useEffect(() => {
+    localStorage.setItem(CHAT_ACTIONS_KEY, actionsOpen ? '1' : '0');
+  }, [actionsOpen]);
+  const toggleActions = useCallback(() => setActionsOpen((o) => !o), []);
+  /** the rendered drawer — for the idle timeout's "still in use" check */
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [chatBox, setChatBox] = useState<
+    { x: number; y: number; w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = chatRef.current;
+    if (!chatShown || spectating || !el) return;
+    const measure = () => setChatBox((prev) => {
+      const next = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+      return prev && prev.x === next.x && prev.y === next.y && prev.w === next.w
+        && prev.h === next.h ? prev : next;
+    });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [chatShown, spectating]);
+
+  /**
    * How solid the chat window is drawn over the world (2d) and how many
    * portraits stand next to the transcript (2e). Two LOCAL view settings like
    * the minimap and the performance readout, each with its own key and its own
@@ -905,7 +954,11 @@ export function Hud({ avatar, username, role }: {
       // Still in use? Typing in the composer, or one of its picker modals open
       // (they portal to document.body, and unmounting the panel would tear the
       // open picker down with it). Wait and look again.
+      // The action drawer beside it counts as the chat: hovering it or a
+      // focused chip in it means the panel is in use.
       if (chatRef.current?.contains(document.activeElement)
+          || actionsRef.current?.contains(document.activeElement)
+          || actionsRef.current?.matches(':hover')
           || document.querySelector('.ga-modal-backdrop')) {
         timer = window.setTimeout(expire, CHAT_BUSY_RECHECK_MS);
         return;
@@ -1323,6 +1376,44 @@ export function Hud({ avatar, username, role }: {
                 <ChatPortraits names={portraitNames} versions={speakerVersions} />} />
           </ErrorBoundary>
         </section>
+      )}
+
+      {/* The action drawer, glued to the chat's right edge (see the block
+          around `chatBox`). Only with an avatar of one's own: a spectator
+          starts nothing. */}
+      {!spectating && chatShown && !!data?.avatar && chatBox && (
+        <div ref={actionsRef} className={`hud-chat-actions${actionsOpen ? ' open' : ''}`}
+          style={{
+            left: chatBox.x + chatBox.w,
+            top: chatBox.y,
+            height: chatBox.h,
+            '--hud-actions-left': `${chatBox.x + chatBox.w}px`,
+          } as React.CSSProperties}>
+          <button type="button" className="hud-chat-actions-handle"
+            aria-expanded={actionsOpen}
+            title={actionsOpen ? t('Hide actions') : t('Show actions')}
+            aria-label={actionsOpen ? t('Hide actions') : t('Show actions')}
+            onClick={toggleActions}>
+            {actionsOpen ? '◂' : '▸'}
+          </button>
+          {actionsOpen && (
+            <section className="hud-panel hud-chat-actions-panel" aria-label={t('Actions')}>
+              <header className="hud-panel-head">
+                <span className="hud-panel-title">{t('Actions')}</span>
+                <button className="hud-panel-close" onClick={toggleActions}
+                  title={t('Close')} aria-label={t('Close')}>
+                  <Icon name="close" size={14} />
+                </button>
+              </header>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Actions">
+                  <ActionsTree avatar={data.avatar} present={data.present || []}
+                    interaction={data.interaction} onChanged={refreshScene} />
+                </ErrorBoundary>
+              </div>
+            </section>
+          )}
+        </div>
       )}
 
       {/* The dropdowns: one column each, hanging below the top bar, side by
