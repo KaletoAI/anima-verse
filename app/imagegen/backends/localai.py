@@ -83,8 +83,9 @@ class LocalAIBackend(TogetherBackend):
                         pat = self.lora_filter.lower()
                         names = [n for n in names if fnmatch.fnmatch(n.lower(), pat)]
                     self.available_loras = names
+                    self._discovery_done("loras")
                     logger.info(
-                        f"{self.name}: {len(self.available_loras)} LoRA(s) vom Endpoint geladen"
+                        f"{self.name}: {len(self.available_loras)} LoRA(s) loaded from the endpoint"
                         + (f" (Filter '{self.lora_filter}')" if self.lora_filter else ""))
             else:
                 logger.warning(f"{self.name}: LoRA-Abfrage HTTP {resp.status_code}")
@@ -120,8 +121,9 @@ class LocalAIBackend(TogetherBackend):
                     pass
                 self._mark_available(f"OpenAI-Diffusion, Modell: {self.model}")
                 self.available = True
-                # Pull the LoRAs along too (if an endpoint is configured).
-                if self.lora_url:
+                # Pull the LoRAs along too (if an endpoint is configured) —
+                # at most every DISCOVERY_HOLD_S (base.py).
+                if self.lora_url and self._discovery_due("loras"):
                     self.fetch_loras()
                 return True
             self._log_unreachable(f"HTTP {resp.status_code}")

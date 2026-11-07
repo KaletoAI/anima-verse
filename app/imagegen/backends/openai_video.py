@@ -88,9 +88,11 @@ class OpenAIVideoBackend(ImageBackend):
                 return False
             if resp.status_code == 200:
                 self._mark_available(f"Gateway video, Alias: {self.model}")
-                if self.lora_url:
+                # LoRAs and schema at most every DISCOVERY_HOLD_S (base.py).
+                if self.lora_url and self._discovery_due("loras"):
                     self.fetch_loras()
-                self._fetch_alias_schema()
+                if self._discovery_due("schema"):
+                    self._fetch_alias_schema()
                 return True
             self._mark_unavailable(f"HTTP {resp.status_code}")
             return False
@@ -136,6 +138,7 @@ class OpenAIVideoBackend(ImageBackend):
                 self._fps = 0.0
             if sc.get("seconds_supported") is not None:
                 self._seconds_supported = bool(sc.get("seconds_supported"))
+            self._discovery_done("schema")
             logger.info("%s: Alias-Schema geladen (slot=%s, fps=%s, seconds=%s)",
                         self.name, self._image_slot or "image",
                         self._fps or "?", self._seconds_supported)
@@ -162,7 +165,8 @@ class OpenAIVideoBackend(ImageBackend):
                         pat = self.lora_filter.lower()
                         names = [n for n in names if fnmatch.fnmatch(n.lower(), pat)]
                     self.available_loras = names
-                    logger.info("%s: %d LoRA(s) vom Endpoint geladen%s", self.name,
+                    self._discovery_done("loras")
+                    logger.info("%s: %d LoRA(s) loaded from the endpoint%s", self.name,
                                 len(names),
                                 f" (Filter '{self.lora_filter}')" if self.lora_filter else "")
             else:

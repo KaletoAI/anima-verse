@@ -321,7 +321,10 @@ class OpenAIMeshBackend(ImageBackend):
             logger.debug("%s: not reachable: %s", self.name, e)
             self._mark_unavailable()
             return False
-        self._fetch_alias_schema()
+        # The alias schema at most every DISCOVERY_HOLD_S (base.py); a held
+        # read keeps its slots and the face schema as last published.
+        if self._discovery_due("schema"):
+            self._fetch_alias_schema()
         if self.category == "face_retexture" and not self._face_schema[0]:
             self._mark_unavailable()
             return False
@@ -385,6 +388,7 @@ class OpenAIMeshBackend(ImageBackend):
                 if file_slot:
                     self._file_slot = file_slot
                 self._alias_param_names = names
+            self._discovery_done("schema")
             logger.info("%s: Alias-Schema gelesen (image_slots=%s, file_slot=%s, "
                         "params=%s)", self.name,
                         slots or ["input_image"],

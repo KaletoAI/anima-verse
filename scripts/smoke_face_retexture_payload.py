@@ -41,6 +41,9 @@ def main():
             assert not backend.check_availability()
         with patch('app.imagegen.backends.openai_mesh.requests.get', side_effect=[response(), response(data=schema)]):
             assert backend.check_availability()
+        # The availability check holds a good schema for DISCOVERY_HOLD_S;
+        # drop the hold so the next check reads the changed schema.
+        backend._forget_discovery()
         with patch('app.imagegen.backends.openai_mesh.requests.get', side_effect=[response(), response(data={'params': schema['params']})]):
             assert not backend.check_availability(), 'schema without upload slots must disable projection'
         with patch('app.imagegen.backends.openai_mesh.requests.get', side_effect=[response(), response(data=schema)]):
@@ -60,6 +63,7 @@ def main():
                 assert release.wait(5)
                 return response(data=schema)
             return response()
+        backend._forget_discovery()   # this check must really read the schema
         with patch('app.imagegen.backends.openai_mesh.requests.get', side_effect=pending_schema), patch('app.imagegen.backends.openai_mesh.submit_job', side_effect=submit), patch('app.imagegen.backends.openai_mesh.poll_job', return_value=[b'result']):
             worker = threading.Thread(target=backend.check_availability)
             worker.start()

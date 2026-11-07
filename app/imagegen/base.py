@@ -396,12 +396,44 @@ class ImageBackend(ABC):
         msg = f"{self.name} nicht erreichbar: {self.api_url}"
         if reason:
             msg += f" ({reason})"
+        # Whatever comes back may be a restarted endpoint with other LoRAs or
+        # another alias schema: discover afresh on the next successful check.
+        self._forget_discovery()
         now = time.time()
         if now - self._last_unreachable_warn_ts >= self._UNREACHABLE_THROTTLE_SEC:
             logger.warning(msg)
             self._last_unreachable_warn_ts = now
         else:
             logger.debug(msg)
+
+    # ── Discovery hold (LoRA list, alias schema) ─────────────────────────
+    #
+    # The channel-health poll runs check_availability every 30 s per backend,
+    # and the gateway backends re-read their LoRA list and alias schema on
+    # every check — ~20-50 extra HTTP calls a minute across all backends
+    # (measured 2026-11-07). Both change only when the endpoint is
+    # reconfigured, so the poll reuses a successful read for
+    # DISCOVERY_HOLD_S. An explicit fetch_loras() (the LoRA library sync)
+    # still reads at once; an unreachable endpoint drops the hold.
+
+    #: How long a successful LoRA-list / alias-schema read is reused by the
+    #: availability check (seconds).
+    DISCOVERY_HOLD_S = 300.0
+
+    def _discovery_due(self, what: str) -> bool:
+        """Whether the availability check should read ``what`` again."""
+        last = (getattr(self, "_discovery_at", None) or {}).get(what)
+        return last is None or time.monotonic() - last >= self.DISCOVERY_HOLD_S
+
+    def _discovery_done(self, what: str) -> None:
+        """Record a SUCCESSFUL read of ``what`` (a failed one retries on the
+        next check)."""
+        if getattr(self, "_discovery_at", None) is None:
+            self._discovery_at = {}
+        self._discovery_at[what] = time.monotonic()
+
+    def _forget_discovery(self) -> None:
+        self._discovery_at = {}
 
     def _mark_available(self, info: str = "") -> None:
         """Marks the backend as available; logs INFO on recovery."""
