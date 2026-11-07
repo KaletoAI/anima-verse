@@ -32,10 +32,14 @@ def characters_in_room(location_id: str, room_id: str, exclude: str = "", *,
     value means "no data", not "everywhere".
 
     Strict membership propagates storage failures and reuses held profiles.
+    The default path reads every place in ONE query
+    (``list_character_places``) instead of loading a full profile per
+    character — the same answer, and the worldmap payload asks this on every
+    poll.
     """
     from app.models.character import (
-        list_available_characters, get_character_profile,
-        get_character_current_location,
+        list_available_characters, list_character_places,
+        get_character_profile, get_character_current_location,
         get_character_current_room)
     from app.models.world import get_location, get_location_by_id, get_room_by_id
 
@@ -65,23 +69,25 @@ def characters_in_room(location_id: str, room_id: str, exclude: str = "", *,
                     target_id = room_id
                     target_name = room_id
 
-    out: List[str] = []
-    names = list_available_characters(strict=True) if strict else list_available_characters()
-    for c in names:
-        if c == exclude:
-            continue
-        if strict:
+    def _strict_places():
+        for c in list_available_characters(strict=True):
+            if c == exclude:
+                continue
             profile = (profiles or {}).get(c)
             if profile is None:
                 profile = get_character_profile(c, strict=True)
             char_location = get_character_current_location(c, profile=profile)
-        else:
-            char_location = get_character_current_location(c)
-        if char_location != location_id:
+            if char_location != location_id:
+                continue
+            yield c, char_location, get_character_current_room(c, profile=profile)
+
+    places = (_strict_places() if strict else
+              ((c, loc_, room_) for c, (loc_, room_) in list_character_places().items()))
+    out: List[str] = []
+    for c, char_location, char_room in places:
+        if c == exclude or char_location != location_id:
             continue
-        char_room = (get_character_current_room(c, profile=profile) if strict
-                     else get_character_current_room(c)) or ""
-        char_room = char_room.strip()
+        char_room = (char_room or "").strip()
         if room_id and char_room not in (target_id, target_name):
             continue
         out.append(c)
@@ -108,7 +114,7 @@ def _is_in_cooldown(reactor: str, avatar: str) -> bool:
             if target_tag in tags:
                 return True
     except Exception as e:
-        logger.debug("Cooldown-Check fuer %s/%s fehlgeschlagen: %s", reactor, avatar, e)
+        logger.debug("Cooldown check for %s/%s failed: %s", reactor, avatar, e)
     return False
 
 
@@ -190,7 +196,7 @@ def _record_greeting(reactor: str, avatar: str, room_label: str) -> None:
             f"Hat {avatar} in {room_label} bemerkt und kurz begruesst.",
             tags=["room_greeting", f"room_greeting:{avatar}"])
     except Exception as e:
-        logger.debug("Greeting-Memory fuer %s fehlgeschlagen: %s", reactor, e)
+        logger.debug("Greeting memory for %s failed: %s", reactor, e)
 
 
 def on_avatar_room_entry(avatar_name: str,

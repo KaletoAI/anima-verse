@@ -3737,6 +3737,56 @@ def list_available_characters(include_pooled: bool = False, *, include_dormant: 
                  or (include_dormant and r[1] == DORMANT_STATUS))]
 
 
+def list_character_places() -> Dict[str, Tuple[str, str]]:
+    """Where the whole roster stands — ``{name: (location_id, room)}``, ONE query.
+
+    The bulk twin of asking :func:`get_character_current_location` and
+    :func:`get_character_current_room` for every name of
+    :func:`list_available_characters` (``room_entry.characters_in_room``
+    asks exactly that on every room roster, and the worldmap payload asks it
+    on every 3-second poll). Those two readers load the FULL profile — JSON
+    parse, config overlay, linked-character overlay, soul files — only to read
+    two values that live in ``character_state`` anyway.
+
+    Same answer, value for value (``scripts/smoke_room_occupancy_bulk.py``):
+
+    * roster: the default filter of ``list_available_characters`` — real
+      names only, no pooled and no dormant row, ordered by name;
+    * values: ``get_character_profile`` overwrites the profile's own
+      ``current_location``/``current_room`` with the ``character_state`` row,
+      or with ``""`` when there is no row — so ``profile_json`` never decides
+      them, and neither do the config, linked-character or soul overlays;
+    * a ``profile_json`` that does not parse to an object makes
+      ``get_character_profile`` fall back to its empty default profile, which
+      has no place at all — the CASE below answers ``""`` for that row too.
+      JSON5 parsing (flag 2) is the superset that, like Python's ``json``,
+      accepts ``NaN``/``Infinity``, which ``json.dumps`` writes.
+
+    The room is returned raw, exactly as the reader returns it (no strip).
+    A traveller's place is whatever the travel ticker stored as its nearest
+    cell — the readers compute nothing from the journey, and neither does this.
+    A DB error is logged at ERROR and answers "nobody", like the roster.
+    """
+    profile_ok = ("CASE WHEN COALESCE(c.profile_json, '') = '' THEN 1 "
+                  "WHEN json_valid(c.profile_json, 2) "
+                  "THEN json_type(c.profile_json) = 'object' ELSE 0 END")
+    try:
+        rows = get_connection().execute(
+            "SELECT c.name, COALESCE(c.status, ''), "
+            f"       CASE WHEN {profile_ok} THEN COALESCE(s.current_location, '') ELSE '' END, "
+            f"       CASE WHEN {profile_ok} THEN COALESCE(s.current_room, '') ELSE '' END "
+            "FROM characters c "
+            "LEFT JOIN character_state s ON s.character_name = c.name "
+            "ORDER BY c.name ASC"
+        ).fetchall()
+    except Exception as e:
+        logger.error("list_character_places DB error: %s", e, exc_info=True)
+        return {}
+    return {name: (location or "", room or "")
+            for name, status, location, room in rows
+            if _is_real_character(name) and not is_out_of_world(status)}
+
+
 def list_active_journeys() -> List[Dict[str, Any]]:
     """Who is on the road right now — ONE query for the whole cast.
 
@@ -4795,9 +4845,9 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
 
 # === State-flag setters (step 6, May 2026) =============================
 # Plan: development_instructions/plan-outfit-system-rethink.md §1.4
-# Drei orthogonale Flags ersetzen Activity-Effekte:
-#   is_sleeping  → Compliance skip + AgentLoop-Skip + off-map
-#   is_wet       → swim-Exemption bei swim_allowed Raum
+# Three orthogonal flags replace activity effects:
+#   is_sleeping  → compliance skip + AgentLoop skip + off-map
+#   is_wet       → swim exemption in a swim_allowed room
 #   is_intimate  → decency override to nude_ok
 
 def _set_sleep_flag(profile: dict, value: bool) -> bool:

@@ -77,7 +77,14 @@ def main():
             return reader in get_secret("O", secrets[i-1])["known_by"]
         def memories(reader):
             return get_connection().execute("SELECT content, meta FROM memories WHERE character_name=?", (reader,)).fetchall()
-        with patch("app.core.item_reading.add_memory", side_effect=checked_memory), patch("app.models.character.get_character_current_location", return_value=loc), patch("app.models.character.get_character_current_room", return_value=room), patch("app.models.character.get_character_language", return_value="en"):
+        # Everybody stands at the desk: the per-character readers and the
+        # bulk reader behind the room roster (``characters_in_room``) agree.
+        with patch("app.core.item_reading.add_memory", side_effect=checked_memory), \
+                patch("app.models.character.get_character_current_location", return_value=loc), \
+                patch("app.models.character.get_character_current_room", return_value=room), \
+                patch("app.models.character.list_character_places",
+                      side_effect=lambda: {n: (loc, room) for n in ("A", "G", "O", "R")}), \
+                patch("app.models.character.get_character_language", return_value="en"):
             out = read_page("A", iid, 0, opening=True)
             assert out["total"] == 4 and out["page"]["heading"] == "Page 1"
             assert known(1, "A") and len(memories("A")) == 1

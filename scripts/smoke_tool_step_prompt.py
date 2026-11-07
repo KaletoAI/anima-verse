@@ -159,12 +159,19 @@ def main():
             locations = dict.fromkeys(names + ['Ada Example', 'Avatar Example', 'Elsewhere Example'], 'home')
             rooms = dict.fromkeys(locations, 'kitchen')
             rooms['Elsewhere Example'] = 'cellar'
+            roster = names + ['Ada Example', 'Avatar Example', 'Elsewhere Example']
+            # The room roster (``characters_in_room``) reads every place at
+            # once through ``list_character_places``; it answers from the same
+            # two tables as the per-character readers, in roster order.
             with patch('app.models.character.get_character_current_location',
                        side_effect=lambda name: locations.get(name, '')), \
                  patch('app.models.character.get_character_current_room',
                        side_effect=lambda name: rooms.get(name, '')), \
                  patch('app.models.character.list_available_characters',
-                       return_value=names + ['Ada Example', 'Avatar Example', 'Elsewhere Example']), \
+                       return_value=roster), \
+                 patch('app.models.character.list_character_places',
+                       side_effect=lambda: {n: (locations.get(n, ''), rooms.get(n, ''))
+                                            for n in roster}), \
                  patch('app.models.world.get_location', return_value={
                      'id': 'home', 'rooms': [
                          {'id': 'kitchen', 'name': 'Kitchen'},

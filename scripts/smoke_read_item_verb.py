@@ -77,7 +77,16 @@ def main():
         def read(token):
             return skill.execute(json.dumps({"agent_name": "R", "input": json.dumps({"item": token})}))
         error = "There is nothing like that to read here."
-        with patch("app.models.character.get_character_current_location", return_value=loc), patch("app.models.character.get_character_current_room", side_effect=lambda name: positions[name]), patch("app.models.character.get_character_language", return_value="en"), patch("app.core.perception.record_utterance") as narrator:
+        # Who stands where: the per-character readers AND the bulk reader
+        # behind the room roster (``characters_in_room``) answer from the same
+        # ``positions`` table, so a test move below moves the character for both.
+        with patch("app.models.character.get_character_current_location", return_value=loc), \
+                patch("app.models.character.get_character_current_room",
+                      side_effect=lambda name, profile=None: positions[name]), \
+                patch("app.models.character.list_character_places",
+                      side_effect=lambda: {n: (loc, positions[n]) for n in sorted(positions)}), \
+                patch("app.models.character.get_character_language", return_value="en"), \
+                patch("app.core.perception.record_utterance") as narrator:
             assert skill.visible_for("R") and calls == []
             out = read("Notebook")
             assert out.startswith("You read in Notebook:\n[Page 4]\n")
