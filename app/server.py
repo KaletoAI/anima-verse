@@ -358,6 +358,22 @@ async def lifespan(app: FastAPI):
     except Exception as _ppe:
         logger.warning("placeless pose cleanup failed: %s", _ppe)
 
+    # A character with no location, room, point or journey stands nowhere —
+    # off the map with nothing that brings it back (a fresh start used to
+    # leave it so). Put it where it belongs: slot, home, schedule hour, free
+    # bed (``belonging``). In the background: the bed search composes scenes.
+    def _place_unplaced():
+        try:
+            from app.core.belonging import place_unplaced_characters
+            _pu = place_unplaced_characters()
+            if _pu:
+                logger.info("Characters standing nowhere placed: %s",
+                            ", ".join(f"{n} ({how})" for n, how in _pu.items()))
+        except Exception as _pue:
+            logger.warning("placing characters that stand nowhere failed: %s", _pue)
+    import threading as _threading
+    _threading.Thread(target=_place_unplaced, name="place-unplaced", daemon=True).start()
+
     # Picture areas, the door-leaf box and the orientation fix belong to the
     # MODEL FILE now (spec-bild-props-v2.md E1, ruling V0, 2026-08-28): every
     # variant is its own generation with its own axes. The legacy prop-level

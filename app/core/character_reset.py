@@ -18,8 +18,8 @@ Two callers, two scopes, one implementation and one declarative store list:
     directions, obligations, schedules, party/group/story membership, the
     explored map, notifications, reading history, the room record of the
     character's conversations (speech acts spoken by or addressed to them and
-    the scenes they took part in) — and the mechanical state, which falls back
-    to the profile's own values.
+    the scenes they took part in) — and the mechanical state, after which the
+    character is put where it belongs (``belonging.place_where_they_belong``).
 
 Doctrine (why a store is on a list or not)
 ------------------------------------------
@@ -439,18 +439,25 @@ def _reset_retrospect_soul_files(character_name: str, errors: list) -> int:
 
 
 def _reset_mechanical_state(character_name: str) -> str:
-    """Drop the character_state row. The profile's own values (start location,
-    equipped outfit) take over on the next read, which is exactly what
-    "resets to the imported profile's values" means."""
+    """Drop the character_state row, then put the character where it belongs.
+
+    The row holds the place too, and the profile carries none of its own any
+    more, so dropping it leaves the character standing nowhere — off the map
+    with nothing that ever brings it back (2026-11-05: five NPCs vanished this
+    way). ``belonging.place_where_they_belong`` puts it back at once: its slot,
+    its home, its schedule hour or a free bed. Answers ``"reset"``, or
+    ``"reset, placed: <how>"``."""
     try:
         from app.core.db import transaction
         with transaction() as conn:
             conn.execute("DELETE FROM character_state WHERE character_name=?",
                          (character_name,))
-        return "reset"
     except Exception as e:
         logger.error("reset [%s]: character_state failed: %s", character_name, e)
         raise
+    from app.core.belonging import place_where_they_belong
+    how = place_where_they_belong(character_name)
+    return f"reset, placed: {how}" if how else "reset"
 
 
 # ---------------------------------------------------------------------------

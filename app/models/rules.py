@@ -968,13 +968,18 @@ def _get_target_danger_level(location_id: str, room_id: str = "") -> int:
 
 
 def _find_nearest_sleep(character_name: str) -> Tuple[str, str]:
-    """Fallback sleep spot when no home_location is set: sleep where you are.
-
-    The old activity-library lookup (a room tagged with a "sleeping"
-    activity) is gone — activities are free text now — so there is nothing
-    to search for. The character stays at its current location/room.
+    """Sleep spot when no home_location is set: a free bed in the world
+    (``belonging.find_free_bed`` — a bed room of a known location nobody
+    else is in or walking to). Without one the character sleeps where it is.
     Returns: (location_id, room_id) or ("", "").
     """
+    try:
+        from app.core.belonging import find_free_bed
+        bed = find_free_bed(character_name)
+        if bed:
+            return bed
+    except Exception as e:
+        logger.warning("bed search for %s failed: %s", character_name, e)
     try:
         from app.models.character import (
             get_character_current_location, get_character_current_room)

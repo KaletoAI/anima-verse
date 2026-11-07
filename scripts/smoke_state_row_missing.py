@@ -7,10 +7,11 @@ Usage:
 Runs against a temp world (no server, no real world DB).
 
 Derivation: ``character_reset._reset_mechanical_state`` DELETES the
-character_state row on purpose — "the profile's own values take over on the
-next read". A missing row is therefore legitimate absence (default state, no
-metre point), never a read error; strict mode only exists to tell a reader
-FAILURE apart from a false/absent value.
+character_state row on purpose (and then places the character again through
+``belonging.place_where_they_belong``, which may find nowhere to put it). A
+missing row is therefore legitimate absence (default state, no metre point),
+never a read error; strict mode only exists to tell a reader FAILURE apart
+from a false/absent value.
 
 Fixture: demo-a and demo-b (template human-roleplay), demo-b's
 character_state row deleted.

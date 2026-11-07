@@ -4518,9 +4518,19 @@ def enter_offmap_sleep(character_name: str) -> bool:
     is no longer on the map (it lands in the "no location" tray) and the
     pathfinder has nothing left to route.
 
+    Out in the open (a metre point, no location) there is no place to come
+    back to, so the return goes to the home, else to a free bed
+    (``belonging.find_free_bed``) — an empty marker would leave the character
+    off the map for good, because waking needs a location.
+
     Returns True when something changed.
     """
     from app.core.keyed_lock import keyed_lock
+    # Picked BEFORE the lock: the bed search composes scenes and reads other
+    # characters, the span below is a leaf.
+    fallback = ("", "")
+    if not (get_character_current_location(character_name) or "").strip():
+        fallback = _offmap_fallback_return(character_name)
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob. Leaf span — nothing inside it takes
     # another lock; the position write and the state event follow outside.
@@ -4531,6 +4541,8 @@ def enter_offmap_sleep(character_name: str) -> bool:
         if not current_loc and not current_room and get_character_pos(character_name) is None:
             # Already off-map (or never assigned) — nothing to store.
             return False
+        if not current_loc:
+            current_loc, current_room = fallback
         profile["_offmap_return_location"] = current_loc
         profile["_offmap_return_room"] = current_room
         profile["current_location"] = ""
@@ -4557,6 +4569,25 @@ def enter_offmap_sleep(character_name: str) -> bool:
         "Offmap sleep: %s -> gone from the map (return: %s/%s)",
         character_name, current_loc or "-", current_room or "-")
     return True
+
+
+def _offmap_fallback_return(character_name: str) -> Tuple[str, str]:
+    """Where a character leaving the map from the open comes back: its home
+    (with its home room, else the arrival room), else a free bed."""
+    try:
+        from app.models.world import get_arrival_room_id, get_location
+        cfg = get_character_config(character_name) or {}
+        home = (cfg.get("home_location") or "").strip()
+        loc = get_location(home) if home and home != OFFMAP_SLEEP_SENTINEL else None
+        if loc:
+            return loc["id"], ((cfg.get("home_room") or "").strip()
+                               or get_arrival_room_id(loc))
+        from app.core.belonging import find_free_bed
+        return find_free_bed(character_name) or ("", "")
+    except Exception as e:
+        get_logger("character").warning(
+            "Offmap return for %s could not be picked: %s", character_name, e)
+        return "", ""
 
 
 def wake_from_offmap(character_name: str) -> bool:
