@@ -2565,8 +2565,12 @@ a.ga-btn {
 
 /* Expressions tab — the template's expression-set field sits in the header
    row beside the action buttons, so it drops its own frame there. */
-.ga-expr-settings > .tpl-tab-cols { padding: 0; border: 0; background: transparent; }
+.ga-expr-settings > .tpl-tab-cols { padding: 0; border: 0; background: transparent; gap: 0; }
+.ga-expr-settings .tpl-tab-col { gap: 0; }
 .ga-expr-settings .tpl-tab-section .ga-field { margin-bottom: 0; }
+/* The field's own label says it all; the section title above it would only
+   add a line between the header and the images. */
+.ga-expr-settings .tpl-tab-section > .ga-fieldset-title { display: none; }
 
 /* Image override tab — render-match chips. */
 .ga-img-matches { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 28px; }

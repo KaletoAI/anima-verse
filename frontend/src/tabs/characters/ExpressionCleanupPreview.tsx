@@ -4,6 +4,7 @@ import type { CleanupFile, ExpressionCleanup } from './useExpressionCleanup'
 export function ExpressionCleanupButton({ cleanup }: { cleanup: ExpressionCleanup }) {
   const { t } = useI18n()
   return <button type="button" className="ga-btn ga-btn-sm" disabled={cleanup.busy}
+    title={t('Preview does not change files. Unverified files and valid images of other outfits are retained.')}
     onClick={() => void cleanup.load()}>{t('Preview expression cleanup')}</button>
 }
 
@@ -11,8 +12,11 @@ export function ExpressionCleanupPreview({ cleanup }: { cleanup: ExpressionClean
   const { t } = useI18n()
   const { base, preview, setPreview, armed, setArmed, busy, error, result, apply } = cleanup
   const labels: Record<CleanupFile['action'], string> = { keep: t('Keep'), adopt: t('Adopt'), remove: t('Remove'), review: t('Manual review') }
+  // Nothing to show until a preview, an error or a result exists — an empty
+  // section with its hint used to stand between the header and the images.
+  if (!preview && !error && !result) return null
   return <section className="ga-section" style={{ marginBottom: 12 }}>
-    <p className="ga-field-hint">{t('Preview does not change files. Unverified files and valid images of other outfits are retained.')}</p>
+    {preview && <p className="ga-field-hint">{t('Preview does not change files. Unverified files and valid images of other outfits are retained.')}</p>}
     {error && <p role="alert" style={{ color: 'var(--error)' }}>{error}</p>}
     {result && <p role="status">{result}</p>}
     {preview && <>

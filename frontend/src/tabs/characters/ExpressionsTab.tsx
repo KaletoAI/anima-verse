@@ -152,7 +152,7 @@ export function ExpressionsTab({ character, settings }: {
       <div className="ga-form" style={{ padding: 0 }}>
         {/* Header row: the template settings (expression set), then the actions */}
         <div className="ga-expr-header" style={{
-          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'flex-end', gap: 10, marginBottom: 10, flexWrap: 'wrap',
         }}>
           {settings ? <div className="ga-expr-settings" style={{ flex: '0 1 440px', minWidth: 0 }}>{settings}</div> : null}
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -176,13 +176,14 @@ export function ExpressionsTab({ character, settings }: {
             )}
             <ExpressionCleanupButton cleanup={cleanup} />
           </div>
+          {/* The counts close the same row instead of taking one of their own. */}
+          <span style={{ fontSize: '0.85em', opacity: 0.7, marginLeft: 'auto', paddingBottom: 4 }}>
+            {files.length} {files.length === 1 ? t('expression') : t('expressions')}
+            {' · '}{files.filter(e => e.status === 'current').length} {t('Current')}
+            {' · '}{files.filter(e => e.status !== 'current').length} {t('Historical or unverified')}
+          </span>
         </div>
         {generation.error && <div role="alert" style={{ color: 'var(--error)', fontSize: '0.85em', marginBottom: 8 }}>{generation.error}</div>}
-        <div style={{ fontSize: '0.85em', opacity: 0.7, marginBottom: 8 }}>
-          {files.length} {files.length === 1 ? t('expression') : t('expressions')}
-          {' · '}{files.filter(e => e.status === 'current').length} {t('Current')}
-          {' · '}{files.filter(e => e.status !== 'current').length} {t('Historical or unverified')}
-        </div>
         <ExpressionCleanupPreview cleanup={cleanup} />
 
         {files.length === 0 ? (
