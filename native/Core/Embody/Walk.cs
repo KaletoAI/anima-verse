@@ -22,6 +22,11 @@ public static class Walk
         return len < 1e-6 ? null : new P2(x / len, z / len);
     }
 
+    /// <summary>walk.ts <c>sprintHeld</c>: the player asks the avatar to RUN — Shift held WHILE the keys walk it
+    /// (<paramref name="dir"/> = <see cref="WalkDir"/> of the same keys). Shift alone and a click order walk; the ground
+    /// still decides (<c>CanRun</c> inside <see cref="AnimaNative.Figures.NpcWalk.Step"/>).</summary>
+    public static bool SprintHeld(IReadOnlySet<string> keys, P2? dir) => dir is not null && keys.Contains("shift");
+
     /// <summary>Try the full target, larger axis (X wins ties), smaller axis, then the origin.</summary>
     public static P2 SlideBlocked(P2 from, P2 to, Func<double, double, bool> blocked)
     {

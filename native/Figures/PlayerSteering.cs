@@ -135,6 +135,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             Correction=null;
         }
         var keyDir=Walk.WalkDir(keys,yaw);
+        // SHIFT RUNS — only while the keys walk the figure; a click order walks (walk.ts sprintHeld).
+        bool sprint=Walk.SprintHeld(keys,keyDir);
         P2? dir=keyDir;
         if (dir is not null) CancelRoute();
         double reach=double.PositiveInfinity;
@@ -176,7 +178,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         var here=world.FootprintAt(pos.X,pos.Z);
         var raw=world.FigureGroundMove(pos.X,pos.Z);
         double pace=WalkGround.TerrainPace(raw.Speed,raw.Scope);
-        double lead=Math.Min(Math.Max(NpcWalk.WalkSpeed*dt,MinLead),reach);
+        // The run boost widens the lead with the step: the step is capped at the lead.
+        double lead=Math.Min(Math.Max(NpcWalk.WalkSpeed*(sprint ? NpcWalk.RunFactor : 1)*dt,MinLead),reach);
         var target=new P2(pos.X+direction.X*lead,pos.Z+direction.Z*lead);
         target=Walk.SlideBlocked(from,target,(x,z)=>Blocked(here,x,z,from));
         if (world.PlayerWalls(here,RoomId) is { } walls)
@@ -187,6 +190,6 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             if (StalledFrames>=ClickMove.StallFrames) CancelRoute();
         }
         if (world.HoldPlayerApproach(target.X,target.Z)) { target=from; ToastLoading(); }
-        figures.SetPlayerTarget(f.CharacterName,new((float)target.X,(float)world.PlayerFloorY(here,RoomId,target.X,target.Z),(float)target.Z),pace);
+        figures.SetPlayerTarget(f.CharacterName,new((float)target.X,(float)world.PlayerFloorY(here,RoomId,target.X,target.Z),(float)target.Z),pace,sprint);
     }
 }

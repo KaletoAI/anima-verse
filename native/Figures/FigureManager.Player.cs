@@ -55,17 +55,19 @@ public partial class FigureManager
     private static void TakeOver(Figure f)
     {
         f.Route = null; f.Reckon = null; f.Travelling = false; f.DropTravelLine();
-        f.Waypoints.Clear(); f.Ride = null; f.Target = f.Position; f.Settle = null; f.Pace = 1;
+        f.Waypoints.Clear(); f.Ride = null; f.Target = f.Position; f.Settle = null; f.Pace = 1; f.Sprint = false;
         f.Face = null; f.SetHidden(false);
     }
 
-    /// <summary>Task 49: pace scales the step, never the fixed lead; invalid pace restores walking speed.</summary>
-    public void SetPlayerTarget(string name, Vector3 goal, double pace = 1)
+    /// <summary>Task 49: pace scales the step, never the fixed lead; invalid pace restores walking speed.
+    /// <paramref name="sprint"/> = the run key is held (Shift + a walking key); every other caller walks.</summary>
+    public void SetPlayerTarget(string name, Vector3 goal, double pace = 1, bool sprint = false)
     {
         if (!_figures.TryGetValue(name, out var f)) return;
         if (name == AvatarName && new Vector2(goal.X - f.Position.X, goal.Z - f.Position.Z).Length() > .02) _pairPreview = null;
         f.Target = goal;
         f.Pace = double.IsFinite(pace) && pace > 0 ? pace : 1;
+        f.Sprint = sprint;
     }
 
     /// <summary>Task 51 / E7-T6: avatar climbs through the same ramp and swept landing tick as NPCs.</summary>
@@ -76,7 +78,7 @@ public partial class FigureManager
     public void SnapPlayerTo(string name, Vector3 point)
     {
         if (!_figures.TryGetValue(name, out var f)) return;
-        f.SnapTo(point); f.Route = null; f.Reckon = null; f.Settle = null; f.Pace = 1;
+        f.SnapTo(point); f.Route = null; f.Reckon = null; f.Settle = null; f.Pace = 1; f.Sprint = false;
         f.DropTravelLine();
     }
 

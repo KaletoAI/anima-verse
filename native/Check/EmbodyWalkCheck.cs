@@ -69,6 +69,22 @@ public static class EmbodyWalkCheck
                 Near("W1 " + key + " X", fig.Position.X, -3+x*3.4*dt/Math.Sqrt(2));
                 Near("W1 " + key + " Z", fig.Position.Z, 1+z*3.4*dt/Math.Sqrt(2));
             }
+            // Shift runs (walk.ts sprintHeld): W + Shift at pi/4 steps 3.4 * 1.8 * dt along (-sqrt(.5), -sqrt(.5));
+            // Shift alone does not move the figure; releasing Shift walks at 3.4 * dt again.
+            var wShift = new HashSet<string> { "w", "shift" };
+            At(-3,1);
+            Frame(wShift, Math.PI/4);
+            Near("W1 Shift+W runs X", fig.Position.X, -3-3.4*1.8*dt/Math.Sqrt(2));
+            Near("W1 Shift+W runs Z", fig.Position.Z, 1-3.4*1.8*dt/Math.Sqrt(2));
+            Is("W1 Shift+W marks the figure sprinting", fig.Sprint);
+            At(-3,1);
+            Frame(new HashSet<string> { "shift" }, Math.PI/4);
+            Near("W1 Shift alone stands X", fig.Position.X, -3);
+            Near("W1 Shift alone stands Z", fig.Position.Z, 1);
+            At(-3,1);
+            Frame(wShift, Math.PI/4); Frame(w, Math.PI/4);
+            Near("W1 Shift released walks X", fig.Position.X, -3-3.4*(1.8+1)*dt/Math.Sqrt(2));
+            Is("W1 Shift released clears sprint", !fig.Sprint);
             At(5.7f,1); steering.RoomId = "r-b";
             for (int i=0; i<60; i++) { Frame(d, Math.PI/4); Is("W2 east clearance frame " + i, fig.Position.X <= 5.75001); }
             Is("W2 slides north after 1s", fig.Position.Z < -.5);

@@ -276,8 +276,8 @@ public partial class OverviewCamera : Camera3D
 
     /// <summary>
     /// The DOM <c>key</c> name (lower-cased) the camera reads, for the keys it reads: letters by the
-    /// layout's key label (as <c>e.key</c> is), the arrows, and + / − by the typed character (any key
-    /// that types them, numpad included). Other keys are not tracked.
+    /// layout's key label (as <c>e.key</c> is), the arrows, Shift (the avatar's run key), and + / − by the
+    /// typed character (any key that types them, numpad included). Other keys are not tracked.
     /// </summary>
     public static string? KeyName(InputEventKey k)
     {
@@ -295,6 +295,7 @@ public partial class OverviewCamera : Camera3D
             Key.Down => "arrowdown",
             Key.Left => "arrowleft",
             Key.Right => "arrowright",
+            Key.Shift => "shift",
             _ => null,
         };
     }

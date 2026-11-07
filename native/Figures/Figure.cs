@@ -113,6 +113,9 @@ public partial class Figure : Node3D
     public Scene.StairRide? Ride { get; set; }
     /// <summary>The ground pace of the next step (<c>npc.pace</c>): 1 for every figure the server drives.</summary>
     public double Pace { get; set; } = 1;
+    /// <summary>The player holds the run key (<c>npc.sprint</c>): the player-driven figure only, handed in with the goal
+    /// like <see cref="Pace"/> and reset with it. Running still needs ground that allows it.</summary>
+    public bool Sprint { get; set; }
     /// <summary>The payload says the character is under way (<c>npc.travelling</c>): it walks without the run boost.</summary>
     public bool Travelling { get; set; }
     /// <summary>Task 42: server route; null for ordinary placement or a traveller whose route is withheld.</summary>

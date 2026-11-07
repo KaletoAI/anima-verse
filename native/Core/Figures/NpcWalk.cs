@@ -57,14 +57,16 @@ public static class NpcWalk
     }
 
     /// <summary>
-    /// <c>npcStep(goal, movement, reckoning, dt, pace, paceLimit, reckonedStep)</c>: run only beyond
-    /// <see cref="RunDistance"/> on a ground that lets one run and never by reckoning; the step is the capped nominal
-    /// one (or the measured one) times the pace limit — the cap comes BEFORE the limit.
+    /// <c>npcStep(goal, movement, reckoning, dt, pace, paceLimit, reckonedStep, sprint)</c>: run beyond
+    /// <see cref="RunDistance"/> — or while the player holds the run key (<paramref name="sprint"/>,
+    /// <see cref="AnimaNative.Embody.Walk.SprintHeld"/>; the avatar's goal is only a lead ahead) — on a ground that lets
+    /// one run and never by reckoning; the step is the capped nominal one (or the measured one) times the pace limit —
+    /// the cap comes BEFORE the limit.
     /// </summary>
     public static (bool Running, double Step) Step(NpcGoalPlan goal, string movement, bool reckoning, double dt, double pace,
-                                                   double paceLimit, double? reckonedStep = null)
+                                                   double paceLimit, double? reckonedStep = null, bool sprint = false)
     {
-        bool running = !reckoning && goal.Dist > RunDistance && FigureClips.CanRun(movement);
+        bool running = !reckoning && (goal.Dist > RunDistance || sprint) && FigureClips.CanRun(movement);
         double step = !goal.Moving || paceLimit <= 0 ? 0
             : (reckonedStep ?? Math.Min(goal.DistToGoal, WalkSpeed * dt * pace * (running ? RunFactor : 1))) * paceLimit;
         return (running, step);

@@ -474,6 +474,7 @@ public partial class FigureManager : Node3D
         }
         fig.Target = goal;
         fig.Pace = 1;
+        fig.Sprint = false;
         fig.Face = plan.Face is { } f ? new Vector3((float)f.X, (float)f.Y, (float)f.Z) : null;
         fig.Lean = plan.Lean;
         fig.ApplyRotation();
@@ -757,8 +758,11 @@ public partial class FigureManager : Node3D
         double rootYBefore = pos.Y;
         bool reckoning = fig.Travelling && !IsPlayerDriven(fig.CharacterName);
         var stepGround = WordAt(pos.X, pos.Z);
-        var (running, _) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, 1);
-        if (IsPlayerDriven(fig.CharacterName)) running = false;
+        // The player-driven figure runs ONLY on the run key (Shift): its goal is a lead ahead, and a click order's
+        // stations (+10 m) must not make it run by distance.
+        bool player = IsPlayerDriven(fig.CharacterName);
+        var (running, _) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, 1, null, player && fig.Sprint);
+        if (player && !fig.Sprint) running = false;
         // A BRIDGE CLIP HOLDS THE FIGURE at the step: asked for the clip this frame WILL ask for (paceLimitFor), because
         // the clip is played after the step — on the frame a bridge starts, paceLimit would still say "nothing holds you".
         double paceLimit = fig.Player is null ? 1
@@ -771,7 +775,7 @@ public partial class FigureManager : Node3D
             double? reckonedStep = reckoning && fig.Reckon?.RateMS is { } rate
                 ? TravelPath.DeadReckonStep(rate, WalkGround.TerrainPace(rawPace.Speed, rawPace.Scope), dt, plan.DistToGoal)
                 : null;
-            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning || IsPlayerDriven(fig.CharacterName), dt, fig.Pace, paceLimit, reckonedStep);
+            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning || (player && !fig.Sprint), dt, fig.Pace, paceLimit, reckonedStep, player && fig.Sprint);
             double len = plan.DistToGoal;
             double dx = plan.Delta.X / len, dz = plan.Delta.Z / len;
             pos = new Vec3(pos.X + dx * step, pos.Y, pos.Z + dz * step);
@@ -818,7 +822,7 @@ public partial class FigureManager : Node3D
             if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, viewDriven ? null : neighbour, viewYaw) is { } dir && !fig.HoldsFacing)
                 fig.FaceTowards(new Vector3((float)dir.X, (float)dir.Y, (float)dir.Z));
         }
-        bool run = !reckoning && !IsPlayerDriven(fig.CharacterName) && plan.Dist > NpcWalk.RunDistance;
+        bool run = !reckoning && (player ? fig.Sprint : plan.Dist > NpcWalk.RunDistance);
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
         (string Clip, double T, bool Start)? finale = null;
         if (fig.Finale is { Role: null })
