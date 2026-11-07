@@ -5,6 +5,9 @@ export interface WalkPoint { x: number; y: number; z: number }
 /** Shared with player steering: metres per real second. */
 export const WALK_SPEED = 3.4;
 export const RUN_DISTANCE = 6;
+/** The run boost on the walking step — NPCs beyond `RUN_DISTANCE` and the
+ *  avatar while Shift is held run at `WALK_SPEED * RUN_FACTOR`. */
+export const RUN_FACTOR = 1.8;
 
 /** The avatar's `travel_speed_factor` from its worldmap row as a usable
  *  multiplier of `WALK_SPEED` — a positive finite number, else 1 (an older
@@ -34,14 +37,17 @@ export function npcGoal(pos: WalkPoint, target: WalkPoint, waypoints: readonly W
     moving: distToGoal > MOVE_EPS_M };
 }
 
-/** Pace limits scale the already capped step, including a measured traveller step. */
+/** Pace limits scale the already capped step, including a measured traveller step.
+ *  `sprint` is the player's run key (`walk.sprintHeld`): it runs regardless of
+ *  the distance to the goal — the avatar's goal is only a lead ahead — but
+ *  still only on ground that lets one run and never by reckoning. */
 export function npcStep(goal: ReturnType<typeof npcGoal>, movement: MovementType,
                         reckoning: boolean, dt: number, pace: number, paceLimit: number,
-                        reckonedStep: number | null = null) {
-  const running = !reckoning && goal.dist > RUN_DISTANCE && canRun(movement);
+                        reckonedStep: number | null = null, sprint = false) {
+  const running = !reckoning && (goal.dist > RUN_DISTANCE || sprint) && canRun(movement);
   const step = !goal.moving || paceLimit <= 0 ? 0
     : (reckonedStep ?? Math.min(goal.distToGoal,
-        WALK_SPEED * dt * pace * (running ? 1.8 : 1))) * paceLimit;
+        WALK_SPEED * dt * pace * (running ? RUN_FACTOR : 1))) * paceLimit;
   return { running, step };
 }
 

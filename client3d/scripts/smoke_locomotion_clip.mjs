@@ -22,6 +22,19 @@
  *     The avatar's step then is 3.4 × dt × terrain × factor: at dt = 0.1 on
  *     plain ground and factor 2.5 that is 3.4 × 0.1 × 2.5 = 0.85 m.
  *
+ * [4] Shift runs the avatar. sprintHeld(keys, dir): true only when 'shift' is
+ *     held AND the keys gave a direction — {shift, w} with dir (0,-1) → true;
+ *     {w} → false; {shift} with dir null (Shift alone, or a click order) →
+ *     false. npcStep(..., sprint): the avatar's goal is only a lead ahead, so a
+ *     goal 1 m away (dist 1 < RUN_DISTANCE 6) walks without the key and runs
+ *     with it. At dt = 0.1, pace 1: walk 3.4 × 0.1 = 0.34 m, run
+ *     3.4 × 0.1 × 1.8 = 0.612 m (below the 1 m goal, so the cap does not bite).
+ *     With the 2.5× avatar factor: 3.4 × 0.1 × 2.5 × 1.8 = 1.53 m, capped at
+ *     the 1 m goal → 1. The ground still decides: on 'swim' and 'walk' ground
+ *     the key changes nothing (running false, step 0.34). Reckoning (a fogged
+ *     traveller) never runs, key or not: 0.34. And `sprint` defaults to false,
+ *     so every other caller keeps the old step: 0.34.
+ *
  * Usage: node client3d/scripts/smoke_locomotion_clip.mjs
  */
 import assert from 'node:assert/strict';
@@ -32,13 +45,13 @@ const src = (rel) => fileURLToPath(new URL(`../src/${rel}`, import.meta.url));
 const out = await build({
   stdin: {
     contents: `export * from ${JSON.stringify(src('game/walk.ts'))};
-export { avatarPaceFactor, npcStep, npcGoal, WALK_SPEED } from ${JSON.stringify(src('game/npcWalk.ts'))};`,
+export { avatarPaceFactor, npcStep, npcGoal, WALK_SPEED, RUN_FACTOR } from ${JSON.stringify(src('game/npcWalk.ts'))};`,
     resolveDir: fileURLToPath(new URL('.', import.meta.url)), loader: 'ts',
   },
   bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
 });
 const mod = await import(`data:text/javascript,${encodeURIComponent(out.outputFiles[0].text)}`);
-const { moveClip, overrideMoveClip, avatarPaceFactor, npcStep, npcGoal } = mod;
+const { moveClip, overrideMoveClip, avatarPaceFactor, npcStep, npcGoal, sprintHeld, RUN_FACTOR } = mod;
 
 let n = 0;
 const eq = (label, actual, expected) => { assert.deepEqual(actual, expected, label); n++; };
@@ -70,5 +83,27 @@ for (const raw of [null, undefined, 0, -1, NaN, Infinity, '2']) {
 const plan = npcGoal({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, []);
 const { step } = npcStep(plan, 'walk_run', false, 0.1, 1 * avatarPaceFactor(2.5), 1);
 eq('[3] the avatar step at 2.5×', Math.round(step * 1e6) / 1e6, 0.85);
+
+// [4]
+const r6 = (v) => Math.round(v * 1e6) / 1e6;
+eq('[4] RUN_FACTOR', RUN_FACTOR, 1.8);
+eq('[4] shift + direction', sprintHeld(new Set(['shift', 'w']), { x: 0, z: -1 }), true);
+eq('[4] direction without shift', sprintHeld(new Set(['w']), { x: 0, z: -1 }), false);
+eq('[4] shift alone', sprintHeld(new Set(['shift']), null), false);
+const near = npcGoal({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, []);
+const at = (movement, reckoning, pace, sprint) => {
+  const r = npcStep(near, movement, reckoning, 0.1, pace, 1, null, sprint);
+  return [r.running, r6(r.step)];
+};
+eq('[4] no key walks', at('walk_run', false, 1, false), [false, 0.34]);
+eq('[4] key runs inside RUN_DISTANCE', at('walk_run', false, 1, true), [true, 0.612]);
+eq('[4] key × 2.5 capped at the goal', at('walk_run', false, 2.5, true), [true, 1]);
+eq('[4] swim ground ignores the key', at('swim', false, 1, true), [false, 0.34]);
+eq('[4] walk-only ground ignores the key', at('walk', false, 1, true), [false, 0.34]);
+eq('[4] reckoning ignores the key', at('walk_run', true, 1, true), [false, 0.34]);
+{
+  const r = npcStep(near, 'walk_run', false, 0.1, 1, 1);
+  eq('[4] default sprint is off', [r.running, r6(r.step)], [false, 0.34]);
+}
 
 console.log(`smoke_locomotion_clip: ${n} ok`);

@@ -1,4 +1,4 @@
-import { avatarPaceFactor, liftStops } from './game/npcWalk';
+import { avatarPaceFactor, liftStops, RUN_FACTOR } from './game/npcWalk';
 import { waterRegionAt, type WaterHit } from './scene/propWaterMath';
 import { openable as sceneOpenable, buildingTier, interiorTier, doorMarkTransform,
   boundaryMarkTransform, basementHole, neighbourOccludes } from './scene/sceneView';
@@ -42,7 +42,7 @@ import { infoPanelData } from './game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
   gateStandY, propWaterCarry, groundScope, groundStoreyFloors, poseClip, slideBlocked,
-  slopeBlocks, terrainBlocks, terrainPace, walkDir, type GroundScope,
+  slopeBlocks, sprintHeld, terrainBlocks, terrainPace, walkDir, type GroundScope,
 } from './game/walk';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
@@ -3180,7 +3180,8 @@ async function startApp(username: string, role: string) {
    *
    *     3.4 m/s × 0.33 s = 1.12 m
    *
-   * and usually less. At the old 1.2 m every refusal was inside its own
+   * and usually less (running with Shift: × 1.8 = 2.02 m — the disc only gets
+   * further from the skip). At the old 1.2 m every refusal was inside its own
    * skip radius and no disc was ever remembered while walking — the memory
    * was inert exactly where it is needed. 0.8 m sits below that step (and far
    * below the ~2 m of a delayed or dropped report), so discs exist again,
@@ -4534,6 +4535,9 @@ async function startApp(username: string, role: string) {
     // in `tick()`'s catch-up) existed only because a room drew its figures
     // small — with k = 1 there is nothing left to compensate.
     const keyDir = walkDir(engine.keysDown(), engine.yaw);
+    // SHIFT RUNS — only while the keys walk the figure; a click order walks.
+    // `npcStep` still asks the ground (`canRun`): in water the key does nothing.
+    const sprint = sprintHeld(engine.keysDown(), keyDir);
     // The keys always win: touching WASD is the player taking over from the
     // click order, not fighting it.
     if (keyDir) cancelRoute();
@@ -4706,7 +4710,10 @@ async function startApp(username: string, role: string) {
       lastMap?.characters.find((c) => c.name === avatarName)?.travel_speed_factor);
     const pace = terrainPace(terrainGround.typeAt(pos.x, pos.z).speed_factor,
                              groundScopeAt(pos.x, pos.z)) * speed;
-    const lead = Math.min(Math.max(WALK_SPEED * speed * dt, MIN_LEAD), reach);
+    // The run boost widens the lead with the step: the step is capped at the
+    // lead, so an unscaled lead would hold a running figure to the walk.
+    const lead = Math.min(Math.max(WALK_SPEED * speed * (sprint ? RUN_FACTOR : 1) * dt,
+                                   MIN_LEAD), reach);
     let { x, z } = { x: pos.x + dir.x * lead, z: pos.z + dir.z * lead };
     // OUTDOORS the world itself stops the figure: impassable terrain — out in
     // the WILDERNESS only, a footprint replaces the ground under it
@@ -4735,7 +4742,7 @@ async function startApp(username: string, role: string) {
       toastQuiet('Loading this place…');
     }
     walkGoal.set(x, roomFloorY(here, x, z) ?? groundY(x, z), z);
-    npcs.setPlayerTarget(avatarName, walkGoal, pace);
+    npcs.setPlayerTarget(avatarName, walkGoal, pace, sprint);
     // The report is about where the figure IS, not where it is being sent:
     // `setPlayerTarget` only moves the goal, `tick()` walks the figure there.
     // Reporting the goal would put the server up to one lead ahead of the

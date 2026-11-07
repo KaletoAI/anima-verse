@@ -3444,6 +3444,7 @@ of a ground target and uses a near pitch of 8°.
 | --- | --- | --- |
 | Left / middle / right drag | Orbit / tilt (0.005 rad and 0.25° per px) | Same orbit / tilt |
 | WASD / arrows | Move the camera target relative to view yaw | Walk the avatar relative to view yaw |
+| Shift + WASD / arrows | — | Run (`WALK_SPEED × RUN_FACTOR` = 3.4 × 1.8 m/s) where the ground allows running; Shift alone and click orders walk |
 | Q / E | Turn by ±45° | Turn by ±45° |
 | Wheel / + / − | Zoom; wheel-in pulls towards the cursor (`dist *= exp(ΔY * 0.0012)`) | Zoom around the avatar |
 | Left release within 4 px | Pick figure → prop/place action → stair/lift → location info → clear selection | Same pick chain; ground clicks never walk |

@@ -54,6 +54,18 @@ export function walkDir(keys: ReadonlySet<string>, yaw: number
 }
 
 /**
+ * Does the player ask the avatar to RUN? Shift held WHILE the keys walk it —
+ * `dir` is what `walkDir` made of the same key set. Shift alone moves nothing,
+ * and a click order (no key direction) always walks. Whether the figure really
+ * runs is still the ground's call (`canRun`, inside `npcStep`): in water the
+ * key asks for nothing.
+ */
+export function sprintHeld(keys: ReadonlySet<string>,
+                           dir: { x: number; z: number } | null): boolean {
+  return dir !== null && keys.has('shift');
+}
+
+/**
  * Hold a step out of blocked ground, sliding ALONG the boundary instead of
  * stopping dead.
  *

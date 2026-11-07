@@ -779,7 +779,8 @@ _POS_REPORT_INTERVAL_S = 0.25
 _POS_STEP_FLOOR_M = 5.0
 #: How many times the world's travel speed a free walker may make. Generous on
 #: purpose: this is an ANTI-TELEPORT bound, not a precision anticheat — the
-#: client's own walk is 3.4 m/s and every honest report stays far below.
+#: client's own walk is 3.4 m/s (6.12 m/s running with Shift, ``RUN_FACTOR``
+#: 1.8 in ``client3d/src/game/npcWalk.ts``) and every honest report stays below.
 _POS_STEP_FACTOR = 3.0
 #: The client's own walking pace in REAL metres per second — a mirror of
 #: ``WALK_SPEED`` in ``client3d/src/scene/npcs.ts``, kept here for one reason:

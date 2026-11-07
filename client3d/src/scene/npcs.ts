@@ -159,6 +159,10 @@ interface Npc {
    *  (swim finding 2026-08-13). Server-driven journeys bring their own rate
    *  and never look at this. */
   pace: number;
+  /** The player holds the run key (`walk.sprintHeld`) — the player-driven
+   *  figure only, handed in with the goal like `pace` and reset with it.
+   *  Running still needs ground that allows it (`canRun`). */
+  sprint: boolean;
   /** fixed facing while standing (marker) — else look at the neighbours */
   face: THREE.Vector3 | null;
   /** The waypoints left on the way to the goal (routing around buildings) */
@@ -552,6 +556,7 @@ export class NpcManager {
     npc.target.copy(npc.root.position);
     npc.settle = null;       // the player's goal is the player's, never a kept spot
     npc.pace = 1;            // the walking hook reads the ground on its first frame
+    npc.sprint = false;      // …and the keys on it
     // The placement fields update() stops writing keep their last value, and
     // two of them are wrong for a steered figure:
     // `face` was the traveller's destination — the avatar would walk while
@@ -582,13 +587,14 @@ export class NpcManager {
    *  instead would push it under `MOVE_EPS_M` on slow ground and the figure
    *  would stand still with an idle clip instead of swimming slowly (finding
    *  2026-08-13). */
-  setPlayerTarget(name: string, pos: THREE.Vector3, pace = 1) {
+  setPlayerTarget(name: string, pos: THREE.Vector3, pace = 1, sprint = false) {
     const shown = this.npcs.get(name)?.root.position;
     if (shown && Math.hypot(pos.x - shown.x, pos.z - shown.z) > 0.02) this.pairPreviews.delete(name);
     const npc = this.npcs.get(name);
     if (!npc) return;
     npc.target.copy(pos);
     npc.pace = Number.isFinite(pace) && pace > 0 ? pace : 1;
+    npc.sprint = sprint;
   }
 
   /** The GUIDED CLIMB of one figure (plan-treppen-v2 task 3), `null` ends it.
@@ -618,6 +624,7 @@ export class NpcManager {
     // figure stood on a moment ago says nothing about it. The next walking
     // frame supplies the real one.
     npc.pace = 1;
+    npc.sprint = false;
   }
 
   /** The standing pose of the player-driven figure (plan-posen-plaetze.md
@@ -1095,6 +1102,7 @@ export class NpcManager {
       // does for a figure again once it is server-driven: while the player
       // steers, the branch above `continue`s long before this line.
       npc.pace = 1;
+      npc.sprint = false;
       npc.face = st.face ?? null;
       npc.surfaceGroup = st.surfaceGroup;
       npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
@@ -1229,7 +1237,7 @@ export class NpcManager {
       labelName: nameEl, labelActivity: actEl,
       labelBadges: badgeEl, badgeKey: badges.key,
       labelBubble: bubbleEl, bubbleUntil: 0,
-      target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
+      target: st.pos.clone(), settle: null, pace: 1, sprint: false, face: st.face ?? null, waypoints: [], route: null,
       travelling: false, gait: 'walk', locomotion: null, reckon: null, interaction: null, finale: null, finaleSeen: '', entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       surfaceGroup: st.surfaceGroup,
@@ -2044,7 +2052,8 @@ export class NpcManager {
       // old walk stands, minus the boost.
       const reckoning = npc.travelling && npc.name !== this.playerDriven;
       const stepGround = this.groundWordAt(npc.root.position.x, npc.root.position.z);
-      const { running } = npcStep(plan, stepGround.gm.movement, reckoning, dt, npc.pace, 1);
+      const { running } = npcStep(plan, stepGround.gm.movement, reckoning, dt, npc.pace, 1,
+        null, npc.sprint);
       const reckonRate = reckoning ? npc.reckon?.rateMS ?? null : null;
       // A BRIDGE CLIP HOLDS THE FIGURE, and it holds it HERE — at the step,
       // the one place every figure's movement goes through. The gate used to
@@ -2084,7 +2093,7 @@ export class NpcManager {
                                 dt, distToGoal);
         }
         const { step } = npcStep(plan, stepGround.gm.movement, reckoning,
-          dt, npc.pace, paceLimit, reckonedStep);
+          dt, npc.pace, paceLimit, reckonedStep, npc.sprint);
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
@@ -2207,7 +2216,7 @@ export class NpcManager {
           // A reckoned traveller (fogged, no route) never takes the run
           // boost of the step, but its LEGS follow the server's gait.
           moving ? this.moveClipFor(npc, standGm.movement,
-            reckoning ? npc.gait === 'run' : dist > RUN_DISTANCE)
+            reckoning ? npc.gait === 'run' : dist > RUN_DISTANCE || npc.sprint)
             : finaleClip ?? standingClip, moving || !!standIdle, standSink, rootYBefore, goalY,
           moving || standIdle ? 'ground' : npc.surfaceGroup);
         npc.figure.update(dt, { frozen });
