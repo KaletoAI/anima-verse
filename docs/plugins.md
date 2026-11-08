@@ -1005,6 +1005,11 @@ entscheiden: `presence: "policy"` fragt den Provider-Haken `participation.check`
 (Referenz: `docs/skill-core-api.md`). Ohne registrierten Provider ist die Aktion
 erlaubt. Derselbe Haken prüft freie Paar-Posen bei Einladung, Antwort und Start.
 
+Wer schon zusammen eine Aktion auf einem Möbel spielt, wird für eine andere Aktion
+auf demselben Möbel nicht erneut gefragt; ein Paket kann das mit dem Provider-Haken
+`prop_action.consent_carries(old_definition, new_definition) -> bool` verhindern
+(z. B. der Schritt in eine intime Aktion; Referenz: `docs/skill-core-api.md`).
+
 ## Skill-Klasse
 
 ```python

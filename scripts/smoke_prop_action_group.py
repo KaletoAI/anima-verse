@@ -86,6 +86,21 @@ c slot 2. Hand-derived from ``prop_action_engine`` / ``interaction_engine``:
       candidates are enough -> enabled, candidates [B, C], participants 5,
       and the preflight [B, C] is enabled; C asleep -> candidates [B],
       "partners_missing".
+  [15] The consent CARRIES (2026-11-08, ``_consent_carries``): the trio
+      active (A asked, B and C said yes); a copy "trio-again" of the action
+      on the same piece. A asks [B, C] for it: "active" at once (switched in
+      place), the trio run "completed" / "ended", consents {B: yes, C: yes},
+      ``consent_carried``; no "{inviter} suggests …" line, no
+      ``prop_action.invited``. With a package veto (``prop_action.
+      consent_carries`` answers False) the next switch asks:
+      "awaiting_consent"; a provider that raises counts as a veto too.
+  [16] One member stays out: four people A, B, C, D active on the five
+      (roles a..d, invitation order); A asks [B, C] for "five-again" on the
+      piece: "active" at once, the four-run "completed", D keeps no
+      interaction, the new run has 3 persons + 3 slots = 6 claims.
+  [17] Someone new joins: A, B, C active on the trio, D standing by; A asks
+      [B, D] for "trio-again": D was not in the run -> "awaiting_consent"
+      for everyone, consents {B: pending, D: pending}; the trio runs on.
   [9] Migration: a table with the old ``partner`` column, one open pair
       invitation (A -> B, plans/access keyed actor/partner) and one solo
       row: members [B] / [], plans and access re-keyed to A / B, consents
@@ -353,6 +368,103 @@ class Smaller(unittest.TestCase):
         F.C.save_character_profile(c, profile)
         offer = next(o for o in P.offers(a) if o["action_id"] == target["action_id"])
         self.assertEqual((offer["candidates"], offer["enabled"], offer["reason"]), ([b], False, "partners_missing"))
+
+
+class Carries(unittest.TestCase):
+    def tearDown(self):
+        for run in R.live_runs():
+            A.cancel(run["actor"], run["execution_id"])
+        F.assert_no_external_work()
+
+    def again(self, target, action_id):
+        """A copy of the piece's group action as ``action_id``; returns the
+        target for the copy (the revision moves with the sidecar) and keeps
+        ``target``'s revision current."""
+        from copy import deepcopy
+        loc = F.W.get_location(target["location_id"])
+        hall = next(r for r in loc["rooms"] if r["id"] == target["room_id"])
+        pid = next(p for p in hall["layout"]["props"] if p["id"] == target["placement_id"])["prop_id"]
+        doc = F.props.read_sidecar(pid)
+        copy = deepcopy(doc["actions"][0])
+        copy.update(id=action_id, name=action_id)
+        doc["actions"].append(copy)
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        return dict(target, action_id=action_id)
+
+    def active(self, target, people):
+        a, *members = people
+        eid = S.request(a, target, members=members)["execution_id"]
+        for who in members:
+            A.respond(who, eid, True)
+        S.tick(30)
+        tick(2)
+        tick(2)
+        self.assertEqual(R.get(eid)["status"], "active", R.get(eid))
+        return eid
+
+    def test_15_the_group_is_not_asked_again(self):
+        lines, invited = [], []
+        hooks.register("prop_action.invited", lambda **kw: invited.append(kw), tag="smoke.carry")
+        self.addCleanup(hooks._hooks.pop, ("prop_action.invited", "smoke.carry"), None)
+        real_narrate = A._narrate
+
+        def narrate(run, key, **kw):
+            lines.append(key)
+            return real_narrate(run, key, **kw)
+
+        (a, b, c), target = authored_trio()
+        again = self.again(target, "trio-again")
+        r1 = self.active(target, (a, b, c))
+        invited.clear()
+
+        print("[15] another action for the same three: no second question")
+        with patch.object(A, "_narrate", narrate):
+            result = S.request(a, again, members=[b, c])
+        self.assertEqual(result["status"], "active", result)
+        r2 = result["execution_id"]
+        self.assertEqual((R.get(r1)["status"], R.get(r1)["reason"]), ("completed", "ended"))
+        data = R.get(r2)["data"]
+        self.assertEqual((data["consents"], data.get("consent_carried")), ({b: "yes", c: "yes"}, True))
+        self.assertEqual({F.C.get_character_profile(who)["interaction"]["execution_ref"] for who in (a, b, c)}, {r2})
+        self.assertFalse([k for k in lines if "suggests" in k], lines)
+        self.assertEqual(invited, [])
+
+        print("[15] a package veto asks again; a raising provider counts as one")
+        hooks.register_provider(A.CONSENT_CARRIES, lambda old, new: False, owner="smoke.veto", multiple=True)
+        self.addCleanup(hooks.unregister_owned_providers, "smoke.veto")
+        asked = S.request(a, target, members=[b, c])
+        self.assertEqual(asked["status"], "awaiting_consent", asked)
+        A.cancel(a, asked["execution_id"])
+        hooks.unregister_owned_providers("smoke.veto")
+
+        def boom(old, new):
+            raise RuntimeError("smoke")
+        hooks.register_provider(A.CONSENT_CARRIES, boom, owner="smoke.veto", multiple=True)
+        asked = S.request(a, target, members=[b, c])
+        self.assertEqual(asked["status"], "awaiting_consent", asked)
+        self.assertEqual(R.get(r2)["status"], "active")
+
+    def test_16_one_member_stays_out(self):
+        (a, b, c, d), target = authored_trio(roles=5, people=4, kind="run-five")
+        again = self.again(target, "five-again")
+        r1 = self.active(target, (a, b, c, d))
+        print("[16] three of the four go on: no second question")
+        result = S.request(a, again, members=[b, c])
+        self.assertEqual(result["status"], "active", result)
+        self.assertEqual(R.get(r1)["status"], "completed")
+        self.assertFalse(F.C.get_character_profile(d).get("interaction"))
+        self.assertEqual(len(R.claims(result["execution_id"])), 6)
+
+    def test_17_someone_new_is_asked(self):
+        (a, b, c, d), target = authored_trio(people=4)
+        again = self.again(target, "trio-again")
+        r1 = self.active(target, (a, b, c))
+        print("[17] a newcomer: the question goes to everyone")
+        result = S.request(a, again, members=[b, d])
+        self.assertEqual(result["status"], "awaiting_consent", result)
+        self.assertEqual(R.get(result["execution_id"])["data"]["consents"], {b: "pending", d: "pending"})
+        self.assertEqual(R.get(r1)["status"], "active")
 
 
 def test_9_migration():

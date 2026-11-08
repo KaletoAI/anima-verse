@@ -651,7 +651,10 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     first — or "react", a pair only (``CONSENTS``). Naming the run one
     already takes part in again — the partner's tool repeating the action it
     just agreed to — answers that run, marked ``already``, instead of
-    refusing it as a busy participant.
+    refusing it as a busy participant. An "ask" for another action on the
+    piece the same people already use together, with their consent, asks
+    nobody again (_consent_carries): it switches in place at once, its
+    ``consents`` all "yes" and ``consent_carried`` set.
 
     Adapters must not infer creation from a successful status: a replay has the
     same result. The second nonce lookup under BEGIN IMMEDIATE also handles a
@@ -698,6 +701,13 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     replaces = _replaced_runs(actor, invitees, target, action_id)
     if not replaces:
         return _admit(run, fingerprint)
+    if asks and _consent_carries(run, replaces):
+        # They agreed to being here together already: another action on the
+        # same piece asks nobody again and switches in place below.
+        asks = False
+        run["status"] = "approaching"
+        run["data"].pop("consent_wait_s", None)
+        run["data"].update(consents={m: "yes" for m in invitees}, consented=True, consent_carried=True)
     if asks:
         # An invitation ends nothing yet: what they are doing goes on until
         # the last invitee agrees (respond), and on after a "no".
@@ -757,6 +767,9 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
         reacts = _reacts(run)
         if reacts:
             run["data"].update(consented=True, reaction=_reaction_request(members[0]))
+        # Who starts at once: alone, without asking (react), or with a
+        # consent carried over from the run it replaces (_consent_carries).
+        starts = not members or bool(run["data"].get("consented"))
         with _claim_transaction(run) as conn:
             previous = store.by_request(actor, request_id, conn=conn)
             if previous:
@@ -766,10 +779,10 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
             if reason:
                 return _refused(reason), False
             store.insert(conn, run)
-            if not members or reacts:
+            if starts:
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
         marks.append(("claim", time.perf_counter()))
-        if not members or reacts:
+        if starts:
             _launch(run, direct)
         marks.append(("start", time.perf_counter()))
     _notify(run)
@@ -777,7 +790,7 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
         _narrate(run, "{actor} approaches {partner}: {pose}.")
         if run["data"]["reaction"]["state"] == "pending":
             _ask_reaction(run)
-    elif members:
+    elif members and not starts:
         _narrate(run, "{inviter} suggests {pose} to {invitee}.", inviter=actor, invitee=_join(members))
         # A decision/model or respond-lane request must never run inside an
         # execution/profile/place lock or an SQLite transaction. One question
@@ -1694,6 +1707,52 @@ def _switches_in_place(run, replaces):
         held = store.held(store.person_key(name))
         old = store.get(held) if held in replaces else None
         if not old or old["status"] != "active" or old["target"] != run["target"]:
+            return False
+    return True
+
+
+#: Packages that may keep a consent from carrying over to another action
+#: (``hooks.register_provider(..., multiple=True)``), called as
+#: ``fn(old_definition, new_definition) -> bool`` with copies of the two
+#: action definitions; every provider must answer True. A provider that
+#: raises counts as False: asking again is the safe side.
+CONSENT_CARRIES = "prop_action.consent_carries"
+
+
+def _consent_carries(run, replaces) -> bool:
+    """Whether ``run``'s invitees agreed to what they do with the actor
+    already, so another action on the same piece asks nobody again:
+
+    * the actor and every invitee hold ONE active run, which the request
+      ends (``replaces``) — so the new people are among its people; one of
+      them may stay out, but anybody new is asked, and with him everyone
+      (one invitation, one rule for all its answers);
+    * on this very piece, everyone in place (_switches_in_place);
+    * every invitee agreed to that run — requested it, or said "yes" to its
+      invitation (a carried consent counts as that "yes" again); the partner
+      of a "react" run never agreed;
+    * no package refuses (``CONSENT_CARRIES``)."""
+    invitees = run["members"]
+    if not invitees:
+        return False
+    held = {store.held(store.person_key(name)) for name in store.people(run)}
+    ref = held.pop() if len(held) == 1 else None
+    old = store.get(ref) if ref and ref in replaces else None
+    if not old or old["status"] != "active" or old["target"] != run["target"]:
+        return False
+    if not set(store.people(run)) <= set(store.people(old)) or not _switches_in_place(run, replaces):
+        return False
+    consents = old["data"].get("consents") or {}
+    if any(name != old["actor"] and (_reacts(old) or consents.get(name) != "yes") for name in invitees):
+        return False
+    from copy import deepcopy
+    from app.core.hooks import get_providers
+    for fn in get_providers(CONSENT_CARRIES):
+        try:
+            if fn(deepcopy(old["definition"]), deepcopy(run["definition"])) is not True:
+                return False
+        except Exception as e:
+            logger.warning("consent provider %s failed: %s", getattr(fn, "__qualname__", fn), e)
             return False
     return True
 

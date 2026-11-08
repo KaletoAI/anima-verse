@@ -22,9 +22,10 @@ more through the entry). Added on the same piece: the pair actions
 
   [1] A and P active in "rest" (R1, 4 claims). check(A, share-again, P) is
       enabled — the seats are their own (fails on a1c5af11: no_free_slot).
-  [2] A asks P for "share-again": R2 "awaiting_consent", R1 still "active"
-      with its 4 claims and both interactions. The same question again
-      answers R2, ``already`` True.
+  [2] A package vetoes the carried consent (``prop_action.consent_carries``
+      answers False), so the question is put: A asks P for "share-again":
+      R2 "awaiting_consent", R1 still "active" with its 4 claims and both
+      interactions. The same question again answers R2, ``already`` True.
   [3] P says no: R2 "cancelled" / "consent_declined", R1 untouched.
   [4] A asks again, P says yes: R1 "completed" / "ended"; the new run is
       "active" at once — no journey on either profile, both interactions
@@ -40,10 +41,29 @@ more through the entry). Added on the same piece: the pair actions
       enabled (fails on a1c5af11: participant_claimed); A's react request
       ends P's run ("completed") and starts the pair "approaching" — P is
       the only one already on the piece, so the two walk as usual.
+
+The consent CARRIES (2026-11-08, ``prop_action_engine._consent_carries``:
+"the group need not agree again at every change of animation"); no veto
+provider registered:
+
+  [8] R1 active as in [1] (P said yes). A asks P for "share-again": the
+      answer is "active" at once — not "awaiting_consent" — R1 "completed" /
+      "ended", consents {P: yes}, ``consent_carried`` True, both
+      interactions carry R2, the 4 claims are R2's, no journey on either
+      profile; no "{inviter} suggests …" line and no ``prop_action.invited``.
+  [9] P (R2's invitee) asks A, R2's actor, for "share-third": A requested
+      R2 himself -> carries as well, "active" at once, R2 "completed".
+  [10] A starts "rest" with consent "react" (R4, active in place, reaction
+      pending): P never agreed to R4, so A's "ask" for "share-again" is put
+      to P -> "awaiting_consent", R4 still "active".
+  [11] Another piece: R1' active on "device" again; a second placement
+      "device2" of the same prop in the hall. A asks P for "rest" on
+      device2: the people are the same, the piece is not -> "awaiting_consent".
 """
 import sys
 import unittest
 from copy import deepcopy
+from unittest.mock import patch
 
 import smoke_prop_action_runs as S
 from smoke_prop_action_runs import A, F, R, tick
@@ -104,7 +124,9 @@ class Switch(unittest.TestCase):
         print("[1] the piece is not locked for the two")
         self.assertEqual(self.check(name, "share-again", partner), dict(enabled=True, reason=""))
 
-        print("[2] an invitation ends nothing yet")
+        print("[2] a vetoed consent asks: an invitation ends nothing yet")
+        hooks.register_provider(A.CONSENT_CARRIES, lambda old, new: False, owner="smoke.veto", multiple=True)
+        self.addCleanup(hooks.unregister_owned_providers, "smoke.veto")
         r2 = self.ask(name, "share-again", partner)
         self.assertEqual(r2["status"], "awaiting_consent", r2)
         self.assertEqual((R.get(r1)["status"], len(R.claims(r1))), ("active", 4))
@@ -159,6 +181,62 @@ class Switch(unittest.TestCase):
         result = self.ask(name, "rest", partner, consent="react")
         self.assertEqual(result["status"], "approaching", result)
         self.assertEqual(R.get(solo)["status"], "completed")
+
+    def test_8_to_11_consent_carries(self):
+        name, partner = self.piece()
+        lines, invited = [], []
+        hooks.register("prop_action.invited", lambda **kw: invited.append(kw), tag="smoke.carry")
+        self.addCleanup(hooks._hooks.pop, ("prop_action.invited", "smoke.carry"), None)
+        real_narrate = A._narrate
+
+        def narrate(run, key, **kw):
+            lines.append(key)
+            return real_narrate(run, key, **kw)
+
+        r1 = self.active_pair(name, partner)
+        invited.clear()
+
+        print("[8] the same two on the same piece: no second question")
+        with patch.object(A, "_narrate", narrate):
+            r2 = self.ask(name, "share-again", partner)
+        self.assertEqual(r2["status"], "active", r2)
+        r2 = r2["execution_id"]
+        self.assertEqual((R.get(r1)["status"], R.get(r1)["reason"]), ("completed", "ended"))
+        data = R.get(r2)["data"]
+        self.assertEqual((data["consents"], data.get("consent_carried")), ({partner: "yes"}, True))
+        for who in (name, partner):
+            self.assertIsNone(F.C.get_character_profile(who).get("journey"), who)
+            self.assertEqual(self.interaction_ref(who), r2, who)
+        self.assertEqual([c["execution_id"] for c in R.claims()], [r2] * 4)
+        self.assertFalse([k for k in lines if "suggests" in k], lines)
+        self.assertEqual(invited, [])
+
+        print("[9] the invitee of the run asks its actor: carries too")
+        r3 = self.ask(partner, "share-third", name)
+        self.assertEqual(r3["status"], "active", r3)
+        self.assertEqual(R.get(r2)["status"], "completed")
+
+        print("[10] a react run was never agreed: the next one asks")
+        r4 = self.ask(name, "rest", partner, consent="react")
+        self.assertEqual(r4["status"], "active", r4)
+        r5 = self.ask(name, "share-again", partner)
+        self.assertEqual(r5["status"], "awaiting_consent", r5)
+        self.assertEqual(R.get(r4["execution_id"])["status"], "active")
+        A.cancel(name, r5["execution_id"])
+        A.cancel(name, r4["execution_id"])
+
+        print("[11] another piece asks")
+        r6 = self.active_pair(name, partner)
+        loc = F.W.get_location(self.target["location_id"])
+        hall = next(r for r in loc["rooms"] if r["id"] == "hall")
+        device = next(p for p in hall["layout"]["props"] if p["id"] == "device")
+        hall["layout"]["props"].append(dict(device, id="device2", at=[4, 2]))
+        F.W.upsert_location(loc, sync_world=True)
+        F.places.invalidate()
+        other = dict(self.target, placement_id="device2")
+        r7 = A.request(name, other, "rest", self.revision, [partner])
+        self.assertEqual(r7["status"], "awaiting_consent", r7)
+        self.assertEqual(R.get(r6)["status"], "active")
 
 
 if __name__ == "__main__":
