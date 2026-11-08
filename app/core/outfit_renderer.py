@@ -78,6 +78,53 @@ def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
     return bool(worn)
 
 
+def set_outfit_worn(character_name: str, worn: bool) -> bool:
+    """Set the binary dressed state of a FREE-TEXT wardrobe (``outfit_worn``).
+
+    The one public writer of that switch for code that is not the character
+    editor. It stores what the editor stores — the template select's option
+    value, the STRING "true"/"false" — and follows the editor's save path:
+    read AND write under ``keyed_lock("character_profile", name)``, the save
+    through ``save_character_profile`` (whose choke point re-queues a
+    temporary NPC's outfit-keyed assets: portrait, T-pose, mesh signature,
+    default expression), then ``sync_topics.profile_patched`` and one
+    ``apply_outfit_compliance`` round (it only reports for a free-text
+    wardrobe, it never re-dresses).
+
+    Returns True when the stored state is ``worn`` afterwards — written now,
+    or already so (then nothing is written or signalled). False when there
+    is no profile, the character has a piece-based wardrobe (never touched:
+    it dresses through its equipped pieces) or the save failed.
+    """
+    if not character_name:
+        return False
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    wanted = bool(worn)
+    value = "true" if wanted else "false"
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        if not profile or not is_free_text_wardrobe(profile):
+            return False
+        if is_outfit_worn(profile) == wanted:
+            return True
+        before = {"outfit_worn": profile.get("outfit_worn")}
+        profile["outfit_worn"] = value
+        if not save_character_profile(character_name, profile):
+            logger.warning("set_outfit_worn(%s, %s): profile not stored",
+                           character_name, wanted)
+            return False
+    from app.core import sync_topics
+    sync_topics.profile_patched(character_name, before, {"outfit_worn": value})
+    try:
+        from app.core.outfit_compliance import apply_outfit_compliance
+        apply_outfit_compliance(character_name)
+    except Exception as e:  # noqa: BLE001 — the state is stored; a report may fail
+        logger.debug("compliance after set_outfit_worn(%s) failed: %s",
+                     character_name, e)
+    return True
+
+
 def free_text_outfit(profile: Optional[Dict[str, Any]]) -> str:
     """What a free-text wardrobe WEARS right now, as ``render_outfit`` says it.
 
