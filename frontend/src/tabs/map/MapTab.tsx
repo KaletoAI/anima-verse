@@ -41,6 +41,7 @@ import { propSpriteTargetH, worldPropModelUrl } from './propSpriteMath'
 import type { PropSpriteBudget } from './TerrainLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
+import { ZoomButton } from '../../components/ZoomButton'
 import {
   readAlong, readAreaLabel, readNpcSlots, readRelief, readScatter, readWater,
   readWaterProfile, stripScatterEnrichment,
@@ -413,6 +414,32 @@ const CONTOURS_KEY = 'ga.map.contours'
 /** Read the remembered switch. Storage can throw (private mode, a browser with
  *  site data switched off) and can hold anything at all, so every path ends at
  *  the default rather than at a broken map. */
+/** The source picture of the variant a world prop REALLY shows — the image
+ *  its mesh was made from, so the chip says which object (and which version
+ *  of it) is being turned without opening the props tab. The variant is the
+ *  server's: a pinned `variant` wraps like `wrapVariant`, an unpinned one is
+ *  `variant_auto`, and the URL takes the STORE index behind that position
+ *  (`variant_indices`), which is what `/assets/props/{id}/source?variant=`
+ *  reads. No picture (uploaded without one, or a 404) = nothing is drawn. */
+function WorldPropSourceImage({ wp }: { wp: WorldProp }) {
+  const count = wp.variant_count || 0
+  const pos = wp.variant == null ? (wp.variant_auto || 0)
+    : wrapVariant(wp.variant, count || 1)
+  const store = wp.variant_indices?.[pos]
+  const src = `/assets/props/${encodeURIComponent(wp.prop_id)}/source`
+    + (store != null ? `?variant=${store}` : '')
+  // Keyed by URL, not a plain flag: a failed picture of one prop must not
+  // hide the picture of the next prop selected.
+  const [failed, setFailed] = useState('')
+  if (failed === src) return null
+  return (
+    <div className="ga-map-chip-row ga-map-chip-image">
+      <img src={src} alt="" onError={() => setFailed(src)} />
+      <ZoomButton item={{ src, alt: wp.name || wp.prop_id }} />
+    </div>
+  )
+}
+
 function loadContours(): boolean {
   try {
     const raw = window.localStorage.getItem(CONTOURS_KEY)
@@ -3161,7 +3188,7 @@ export function MapTab() {
                 <div className="ga-map-chip-row ga-map-chip-warn">
                   {t('The prop behind this placement is gone — it renders nothing and can only be removed.')}
                 </div>
-              ) : null}
+              ) : <WorldPropSourceImage wp={selectedWp} />}
               <div className="ga-map-chip-row">
                 <span className="ga-map-chip-pos">
                   x {fmtPos(selectedWp.x)} · z {fmtPos(selectedWp.z)}
