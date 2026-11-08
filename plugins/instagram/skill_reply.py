@@ -27,6 +27,14 @@ class InstagramReplySkill(PluginSkill):
         ensure_registered()
         self.ctx.logger.info("InstagramReply skill initialized")
 
+    decision_menu_heading = 'takes these comments — copy the object after = exactly and add your "text"'
+
+    def decision_menu(self, character_name: str) -> list:
+        """The unanswered comments under the character's own posts with the
+        exact post_id and commenter — the rp_first tool LLM invented both."""
+        from plugins.instagram.pending_block import reply_menu
+        return reply_menu(character_name)
+
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return "InstagramReply Skill is disabled."

@@ -35,6 +35,14 @@ class InstagramCommentSkill(PluginSkill):
         from plugins.instagram.pending_block import build_pending_block
         return build_pending_block(character_name)
 
+    decision_menu_heading = 'takes these posts — copy the object after = exactly and add your "text"'
+
+    def decision_menu(self, character_name: str) -> list:
+        """The pending foreign posts with their exact post_id — the rp_first
+        tool LLM sees the prose, not the thought block, and invented ids."""
+        from plugins.instagram.pending_block import comment_menu
+        return comment_menu(character_name)
+
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return "InstagramComment Skill is disabled."
