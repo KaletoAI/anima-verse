@@ -8,7 +8,11 @@ Runs against a THROWAWAY world + instance with a copy of the repo's ``human``
 package — no real world, no image backend, no server process, no GPU. The
 expected values below are derived by hand from the brief and the code rules:
 
-Fixtures: ``Demo`` (template human-default, profile image Demo_1.png),
+Fixtures: ``Demo`` (template human-default, profile image Demo_1.png,
+``outfit_imagegen`` {loras: [char-lora 0.8], tpose_loras: [pose-lora 0.6]},
+body slot ``marking.look`` = "slot-lora-x" — a ``lora_select`` attribute of
+the fixture package ``fixture_lora`` (apply_to human-default, always
+exposed: no covering), so the normal outfit path WOULD add it),
 ``DemoBare`` (human-default, NO profile image), ``DemoFail`` (human-default,
 profile image; its front render fails), ``DemoFox`` (template animal-default,
 feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
@@ -41,7 +45,8 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [2] Refusals: an unknown view, DemoFox (animal) and DemoBare (no profile
     image) raise ValueError without a render. DemoFail: front returns None ->
     result {"front": None}, no view render (they need the front), status
-    front.failed True; a view of DemoFail then raises ValueError (no front).
+    front.failed True and back/left/right failed with error "front render
+    failed"; a view of DemoFail then raises ValueError (no front).
 [3] base_info(Demo): pipeline False, signature bsig, images = 4 URLs
     "/characters/Demo/base-body/images/<view>?v=<mtime_ns>", model None.
     set_pipeline(Demo, True) -> True, stored model_pipeline "base_body",
@@ -59,6 +64,14 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
       postprocess called with mesh_input=True for both (BiRefNet matte path);
       the sidecar tpose_<bsig>.json records base_signature bsig, the bare
       prompt, mesh_variant (a mesh-input key) and equipped_pieces {}.
+      LoRAs: the fixture is live (exposed_slot_loras(Demo) names
+      slot-lora-x), yet every base payload carries exactly
+      [{"name": "pose-lora", "strength": 0.6}] — tpose_loras replaces loras
+      on the mesh-input occasions, as on today's tpose render; no slot LoRA;
+      no "loras_explicit" (stored LoRAs go through the library gate's
+      filter, not its hard assert). A bare_prompt render WITHOUT
+      character_loras (occasion tpose, like the face view) carries no
+      "loras" key — unchanged behaviour for other callers.
 [5] Service: resolve_negative_prompt({"negative_prompt_extra": X}, UC) is
     "UC, X"; with an explicit negative N it is "N, X"; without extra it is UC.
     _parse_input keeps "negative_prompt_extra" (the whitelist). For the real
@@ -104,6 +117,17 @@ def tiny_png(path: Path) -> None:
 
 CALLS = []
 
+FIXTURE = {
+    "name": "fixture_lora",
+    "apply_to": ["human-default"],
+    "body_slots": [{
+        "id": "marking",
+        "attributes": {"look": {"type": "lora_select"}},
+        "prompt": {"always": "a marking"},
+    }],
+}
+POSE_LORA = {"name": "pose-lora", "strength": 0.6}
+
 
 def recorder(character_name, *, output_stem, **kw):
     from app.core import base_body
@@ -134,13 +158,15 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_lora"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
         db.init_schema()
         plugins = root / "plugins"
         shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
+        (plugins / "fixture_lora").mkdir(parents=True)
+        (plugins / "fixture_lora" / "plugin.yaml").write_text(json.dumps(FIXTURE))
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
@@ -159,6 +185,10 @@ def main() -> int:
                 tiny_png(get_character_images_dir(name) / f"{name}_1.png")
                 stored = get_character_profile(name)
                 stored["profile_image"] = f"{name}_1.png"
+                if name == "Demo":
+                    stored["outfit_imagegen"] = {"loras": [{"name": "char-lora", "strength": 0.8}],
+                                                 "tpose_loras": [POSE_LORA]}
+                    stored.setdefault("body_slots", {})["marking"] = {"look": "slot-lora-x"}
                 check(f"profile image {name}", save_character_profile(name, stored), True)
 
         real_render = expression_regen.render_character_image
@@ -220,7 +250,11 @@ def main() -> int:
             out = base_body.generate_base_images("DemoFail")
             check("failed front result", out, {"front": None})
             check("failed front: no view render", len(CALLS), 1)
-            check("failed front status", base_body.base_info("DemoFail")["status"]["front"]["failed"], True)
+            fail_status = base_body.base_info("DemoFail")["status"]
+            check("failed front status", fail_status["front"]["failed"], True)
+            check("views marked failed", {v: (fail_status[v]["failed"], fail_status[v]["error"])
+                                          for v in ("back", "left", "right")},
+                  {v: (True, "front render failed") for v in ("back", "left", "right")})
             try:
                 base_body.generate_base_images("DemoFail", view="back")
                 check("view without front", "no error", "ValueError")
@@ -276,6 +310,13 @@ def main() -> int:
         character_mod.postprocess_outfit_image = fake_postprocess
         try:
             out = base_body.generate_base_images("Demo", force=True)
+            payload_count = len(payloads)
+            expression_regen.render_character_image(
+                "Demo", output_stem=refs / "probe_plain", equipped_pieces={}, equipped_items=[],
+                pose_prompt="", expression_prompt="", bare_prompt="probe", image_use_case="tpose",
+                occasion="tpose", apply_state_modifiers=False)
+            plain = payloads[payload_count]
+            del payloads[payload_count:], mattes[payload_count:]
         finally:
             service_mod.get_image_service, character_mod.postprocess_outfit_image = real_service, real_post
         check("4 payloads", len(payloads), 4)
@@ -296,6 +337,11 @@ def main() -> int:
         check("sidecar mesh_variant key", "mesh_variant" in meta, True)
         check("sidecar equipped", meta.get("equipped_pieces"), {})
         check("real path result", sorted(out), sorted(views))
+        from app.core.body_slots import exposed_slot_loras
+        check("slot LoRA fixture live", [l["name"] for l in exposed_slot_loras("Demo")], ["slot-lora-x"])
+        check("base payload LoRAs", [p.get("loras") for p in payloads], [[POSE_LORA]] * 4)
+        check("no explicit LoRA flag", any("loras_explicit" in p for p in payloads), False)
+        check("plain bare_prompt carries no LoRAs", "loras" in plain, False)
 
         print("[5] service negative merge")
         from app.imagegen.service import ImageService, resolve_negative_prompt

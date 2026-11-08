@@ -327,7 +327,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     mesh_input_profile=mesh_profile,
                     back_view=v == "back",
                     reference_image=reference,
-                    sidecar_extra={"base_signature": bsig})
+                    sidecar_extra={"base_signature": bsig},
+                    # The character's identity/pose LoRAs as on its tpose
+                    # render (tpose_loras, else loras); no slot LoRAs.
+                    character_loras=True)
                 error = None if path else "render failed"
             except Exception as e:  # noqa: BLE001 — one view never kills the run
                 path, error = None, str(e) or type(e).__name__
@@ -343,6 +346,9 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
             front = render("front", None)
             if front is None:
                 logger.warning("Base body %s (%s): front failed, views skipped", character_name, bsig)
+                for v in todo:
+                    if v != "front":
+                        _record(character_name, v, "front render failed")
                 return results
         views = [v for v in todo if v != "front"]
         if views and front is None:

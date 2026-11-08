@@ -824,7 +824,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            framing: str = "",
                            expression_set_loras: Optional[list] = None,
                            extra_negative: str = "",
-                           sidecar_extra: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+                           sidecar_extra: Optional[Dict[str, Any]] = None,
+                           character_loras: bool = False) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -833,6 +834,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``negative_prompt`` REPLACES the use case's negative; ``extra_negative``
     is appended to it instead (``service.resolve_negative_prompt``).
     ``sidecar_extra`` adds keys to the sidecar JSON of the render.
+    ``character_loras`` lets a ``bare_prompt`` render carry the character's
+    own LoRAs (``outfit_imagegen.loras``, replaced by ``tpose_loras`` on the
+    mesh-input occasions, mesh-part filtered) — never slot LoRAs.
     """
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
@@ -1079,6 +1083,15 @@ def render_character_image(character_name: str, *, output_stem: Path,
             payload["loras_explicit"] = True
     elif _merged_loras and bare_prompt is None:
         payload["loras"] = _merged_loras
+    elif bare_prompt is not None and character_loras:
+        # The base body: the character's look (identity/pose LoRAs) as on
+        # its tpose render, but no slot LoRA — nothing outfit/anatomy-bound.
+        _char_loras = list(loras_override or [])
+        if _mesh_input:
+            from app.core.body_slots import filter_mesh_input_loras
+            _char_loras = filter_mesh_input_loras(_char_loras, _render_profile)
+        if _char_loras:
+            payload["loras"] = _char_loras
     elif bare_prompt is not None and expression_set_loras:
         # A derived expression edits the base image: only the set LoRA —
         # the character and slot LoRAs already shaped the base.
