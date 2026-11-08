@@ -2,7 +2,7 @@
  * NoticeBanner — the persistent notice banner of the player HUD (B tier 1).
  * Source: GET /play/notices (critical events on the spot, a movement block,
  * unread notifications). Renders nothing when nothing is pending. Party
- * membership is NOT shown here: the HUD's PartyStrip is its one place.
+ * membership is NOT shown here: the HUD's party badge (top bar) is its one place.
  * A notification is marked read with a click (POST /notifications/{id}/read);
  * "Mark all as read" clears them in one go (POST /notifications/read-all).
  * Every visible row carries `player-notice`: a host that routes input by

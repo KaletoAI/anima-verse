@@ -29,7 +29,7 @@ Exports (`packages/player-ui/src/index.ts`):
 
 - **Panels** — `ScenePanel` (chat), `SelfPanel`, `OthersPanel`, `BelongingsPanel` (inventory),
   `MindPanel` (+ `MindThoughtsSection`), `PhonePanel`, `NewsPanel`, `QuestsPanel`, `TaskPanel`,
-  `GalleryPanel`, `InstagramPanel`, `PartyStrip`, `SceneView`, `ScenesRecap`.
+  `GalleryPanel`, `InstagramPanel`, `SceneView`, `ScenesRecap`.
 - **Dialogs and pickers** — `ChatGalleryPicker`, `GiftPicker`, `PlayerPhotoDialog`, `Lightbox`,
   `ZoomButton`, `EmptyState`, `ErrorBoundary`, `Toast`.
 - **Plumbing** — `api` (`apiGet`/`apiPost`/`apiDelete`, also available as the `./api` subpath),

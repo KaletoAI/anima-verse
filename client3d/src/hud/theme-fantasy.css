@@ -218,6 +218,94 @@
   box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.24), 0 0 12px rgba(242, 205, 110, 0.22), 0 2px 7px rgba(0, 0, 0, 0.5);
 }
 
+/* ---- Party badge: a brass-rimmed pill of coin faces --------------------
+ * The same struck stud as the panel buttons, stretched into a pill; the
+ * faces are coins set into it with a gold rim, cut out of each other by a
+ * ring of the bar's ink. The leader's rim is the brightest, an open
+ * invitation's rim a dashed, faded one. */
+#hud .hud-party-badge {
+  background: radial-gradient(120% 140% at 30% 20%, #3b3225 0%, #262017 62%, #191410 100%);
+  border-color: rgba(242, 205, 110, 0.32);
+  color: #c8bda2;
+  box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.16), inset 0 -2px 6px rgba(0, 0, 0, 0.5), 0 2px 7px rgba(0, 0, 0, 0.5);
+  transition: color 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+#hud .hud-party-badge:hover {
+  border-color: rgba(242, 205, 110, 0.62);
+  color: var(--hud-gold);
+}
+#hud .hud-party-badge.on {
+  background: radial-gradient(120% 140% at 30% 20%, #4a3d28 0%, #2e2618 62%, #1d1710 100%);
+  border-color: rgba(242, 205, 110, 0.75);
+  color: var(--hud-gold);
+  box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.24), 0 0 12px rgba(242, 205, 110, 0.22), 0 2px 7px rgba(0, 0, 0, 0.5);
+}
+#hud .hud-party-count {
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+}
+#hud .hud-face-disc {
+  border-color: rgba(242, 205, 110, 0.55);
+  background: radial-gradient(circle at 50% 28%, #4a3d28 0%, #241d14 72%);
+  box-shadow: 0 0 0 1.5px #1a150f, inset 0 0 4px rgba(0, 0, 0, 0.6);
+}
+#hud .hud-face.is-leader .hud-face-disc {
+  border-color: var(--hud-gold);
+  box-shadow: 0 0 0 1.5px #1a150f, 0 0 7px rgba(242, 205, 110, 0.45), inset 0 0 4px rgba(0, 0, 0, 0.6);
+}
+#hud .hud-face.is-pending .hud-face-disc {
+  border-color: rgba(242, 205, 110, 0.45);
+}
+#hud .hud-face-crown,
+#hud .hud-party-tag-crown {
+  fill: var(--hud-gold);
+}
+#hud .hud-face-wait {
+  background: #1a150f;
+  border-color: rgba(242, 205, 110, 0.5);
+  color: var(--hud-gold);
+}
+#hud .hud-face-more .hud-face-disc {
+  background: radial-gradient(circle at 34% 26%, #3b3225 0%, #191410 100%);
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+}
+/* The dropdown: vellum like every panel, the rows set apart by the gold
+ * hairline the headers use, names in the bar's small caps. */
+#hud .hud-party-row + .hud-party-row {
+  border-top: 1px solid transparent;
+  border-image: var(--hud-rule) 1;
+}
+#hud .hud-party-name {
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-weight: 400;
+  font-size: 14px;
+  color: #e8dcc0;
+}
+#hud .hud-party-note { color: var(--hud-muted); opacity: 1; }
+#hud .hud-party-tag {
+  border-color: rgba(242, 205, 110, 0.3);
+  color: #c8bda2;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+}
+#hud .hud-party-tag.is-lead {
+  border-color: rgba(242, 205, 110, 0.7);
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.2), rgba(242, 205, 110, 0.06));
+  color: var(--hud-gold);
+}
+#hud .hud-party-foot {
+  border-top: 1px solid transparent;
+  border-image: var(--hud-rule) 1;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.24));
+}
+#hud .hud-party-leave:hover {
+  border-color: rgba(196, 80, 63, 0.75);
+  color: #e89a8c;
+}
+
 /* ---- Composer: the rule above it repeats the header ornament ----------- */
 #hud .player-composer {
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.24), rgba(0, 0, 0, 0.34));

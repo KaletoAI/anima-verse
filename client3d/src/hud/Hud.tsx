@@ -30,7 +30,7 @@ import { setPairFacing } from '@anima/player-ui/pairInteractions';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
-  ScenePanel, ActionsTree, SelfPanel, OthersPanel, PartyStrip,
+  ScenePanel, ActionsTree, SelfPanel, OthersPanel,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
@@ -42,6 +42,7 @@ import { ChatPortraits } from './ChatPortraits';
 import { GameMenu } from './GameMenu';
 import { InfoPanel } from './InfoPanel';
 import { IntentsBox } from './IntentsBox';
+import { PartyBadge } from './PartyBadge';
 import {
   DROP_MAX, DROP_MIN, DROP_WIDTHS_KEY, openDrop, readDropWidths, toggleDrop,
 } from './dropdowns';
@@ -176,6 +177,10 @@ export function Hud({ avatar, username, role }: {
   /** The game menu: its own button at the right end of the bar, its own
    *  dropdown under it (not part of `drops`). */
   const [menuOpen, setMenuOpen] = useState(false);
+  /** The party dropdown under the party badge in the bar (PartyBadge). */
+  const [partyOpen, setPartyOpen] = useState(false);
+  const partyOpenRef = useRef(partyOpen);
+  partyOpenRef.current = partyOpen;
   const isOpen = (id: PanelId) => (id === 'chat' ? chatShown : drops.includes(id));
   const [tabsEl, setTabsEl] = useState<HTMLElement | null>(null);
   const dropsOpen = drops.length > 0;
@@ -237,12 +242,18 @@ export function Hud({ avatar, username, role }: {
   // chat. A separate UI snapshot tells the scene which HUD owns a key.
   //
   // Publish menu ownership separately from the command that closes it.
+  // The party dropdown hangs from the bar as well and closes on Esc the same
+  // way, so the bus flag means "a bar dropdown is open": one Esc closes the
+  // party dropdown first, the next one the game menu.
   useEffect(() => {
-    setHudUiState({ menuOpen });
-  }, [menuOpen]);
+    setHudUiState({ menuOpen: menuOpen || partyOpen });
+  }, [menuOpen, partyOpen]);
   useEffect(() => {
     uiActions.toggleMenu = () => toggle('menu');
-    uiActions.closeMenu = () => { setMenuOpen(false); };
+    uiActions.closeMenu = () => {
+      if (partyOpenRef.current) setPartyOpen(false);
+      else setMenuOpen(false);
+    };
     return () => { uiActions.toggleMenu = undefined; uiActions.closeMenu = undefined; };
   }, [toggle]);
 
@@ -274,7 +285,7 @@ export function Hud({ avatar, username, role }: {
   /** Measure only non-modal surfaces. Portalled overlays own the full window
    *  through overlayOpen, never through a full-screen hit rectangle. */
   useEffect(() => {
-    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-drop, .hud-panel, .hud-self, .hud-intents, .hud-mode, .hud-party, '
+    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-drop, .hud-panel, .hud-self, .hud-intents, .hud-mode, .hud-party-drop, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
       // The action drawer's handle: its panel is a `.hud-panel` already, and
       // the drawer's own box is drag-through (it is as tall as the chat).
@@ -704,15 +715,22 @@ export function Hud({ avatar, username, role }: {
     finally { setMoving(false); }
   }, [moving, refreshScene]);
 
-  // Leaving the party (stage 6): PartyStrip is presentational, so the post
-  // and the refresh sit here. No optimistic UI — the strip goes away when the
-  // next scene payload says the party is gone. Invitations stay in ScenePanel;
-  // answering the same invite from two surfaces would resolve it twice.
+  // Leaving the party and taking back an own invitation: PartyBadge is
+  // presentational, so the posts and the refresh sit here. No optimistic UI —
+  // the badge changes when the next scene payload says so. Invitations put TO
+  // the avatar stay in ScenePanel; answering the same invite from two
+  // surfaces would resolve it twice.
   const leaveParty = useCallback(async () => {
     try {
       await apiPost('/play/party/leave', {});
       await refreshScene();
     } catch { /* stale invite/party — the next poll corrects the view */ }
+  }, [refreshScene]);
+  const takeBackPartyInvite = useCallback(async (inviteId: string) => {
+    try {
+      await apiPost('/play/party/cancel', { invite_id: inviteId });
+    } catch { /* answered in the meantime — the refresh shows the outcome */ }
+    await refreshScene();
   }, [refreshScene]);
 
   // The header names who stands IN the room (`present_detail`, the figures),
@@ -720,6 +738,22 @@ export function Hud({ avatar, username, role }: {
   // addressable but is not "here".
   const inRoom = (data?.present_detail || []).map((p) => p.name);
   const avatarName = data?.avatar || avatar;
+
+  // The party badge in the bar: there while the avatar is in a party or
+  // waits for an answer to its own invitation, never while spectating. A
+  // dropdown whose badge has gone closes with it, so no invisible dropdown
+  // keeps the Esc key.
+  const partyShown = !spectating
+    && (!!data?.party || (data?.party_invites_sent?.length ?? 0) > 0);
+  useEffect(() => { if (!partyShown) setPartyOpen(false); }, [partyShown]);
+  // The faces' cache-busters: the history's speakers, the present and the
+  // avatar each carry theirs in the same payload.
+  const faceVersions = useMemo(() => {
+    const v: Record<string, string> = { ...(data?.speaker_expr_versions ?? {}) };
+    for (const p of data?.present_detail ?? []) if (p.expr_version) v[p.name] = p.expr_version;
+    if (data?.avatar && data.avatar_expr_version) v[data.avatar] = data.avatar_expr_version;
+    return v;
+  }, [data?.speaker_expr_versions, data?.present_detail, data?.avatar, data?.avatar_expr_version]);
 
   // Party follower (E3-T3): `party.role === 'follower'` locks movement. The
   // vanilla side reads it off the bus and stops steering; the server refuses
@@ -1219,6 +1253,15 @@ export function Hud({ avatar, username, role }: {
             </button>
           ))}
         </nav>
+        {/* The party, right behind the panel buttons: faces in a pill, the
+            details in a dropdown under it (PartyBadge). Fed from THIS
+            container's scene poll — no second request. */}
+        {partyShown && (
+          <PartyBadge party={data?.party} sent={data?.party_invites_sent}
+            avatar={avatarName} versions={faceVersions}
+            open={partyOpen} onOpenChange={setPartyOpen}
+            onLeave={leaveParty} onTakeBack={takeBackPartyInvite} />
+        )}
         <div className="hud-right">
           <span className={`hud-status ${game.connection === 'ok' ? 'ok' : 'err'}`}
             aria-label={t('Connection')} title={game.connection === 'ok' ? t('Connected') : t('Backend unreachable')} />
@@ -1291,15 +1334,6 @@ export function Hud({ avatar, username, role }: {
           <button className="player-chip" onClick={() => gameActions.exitEmbodied?.()}>
             {t('Leave (Esc)')}
           </button>
-        </div>
-      )}
-
-      {/* Party strip (stage 6): who travels with the avatar, top centre and
-          below the mode chip. Fed from THIS container's scene poll — no second
-          request — and only present while there is a party at all. */}
-      {data?.party && (
-        <div className="hud-party">
-          <PartyStrip party={data.party} onLeave={leaveParty} />
         </div>
       )}
 

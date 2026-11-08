@@ -507,7 +507,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   }, [uploadImage])
 
   // Party (travel together): answer an invitation in the chat window. Leaving
-  // sits in the NoticeBanner (persistent party strip).
+  // sits in the host's party surface (the 3D HUD's party badge in the top bar).
   const handlePartyRespond = useCallback(async (inviteId: string, accept: boolean) => {
     try {
       const res = await apiPost<{ status?: string; inviter?: string }>(

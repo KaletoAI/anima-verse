@@ -4035,6 +4035,8 @@
     "Ask {name} to come along with you": "{name} bitten, mit dir zu kommen",
     "{name} joins your party.": "{name} schließt sich deiner Gruppe an.",
     "{name} turns down your invitation.": "{name} lehnt deine Einladung ab.",
-    "Waiting for {name}…": "Warte auf {name} …"
+    "Waiting for {name}…": "Warte auf {name} …",
+    "Leader": "Leitung",
+    "Waiting for an answer…": "Wartet auf Antwort …"
   }
 }

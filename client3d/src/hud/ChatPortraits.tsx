@@ -19,7 +19,8 @@
  * whatever box it is given without ever pushing the column open.
  *
  * NOTHING HERE EVER DRAWS EMPTY. A slot without a name and a render that fails
- * to load both fall back to the SILHOUETTE below. The column therefore keeps
+ * to load both fall back to the SILHOUETTE (`faces.tsx`, shared with the
+ * party badge). The column therefore keeps
  * its width whatever the transcript does, and the chat beside it never jumps
  * wider.
  *
@@ -33,25 +34,7 @@ import { useState } from 'react';
 import { useI18n } from '@anima/player-ui';
 
 import { portraitSlots } from './chatPanel';
-
-/**
- * The stand-in for a face: head and shoulders, no features, filled with the
- * text colour at low opacity so it reads as "no picture here" rather than as a
- * broken one — and so it works in a light theme as well as a dark one. Inline
- * on purpose: a column that exists to stop layout jumping must not wait for a
- * network round trip to have something to draw.
- */
-function Silhouette({ title }: { title: string }) {
-  return (
-    <svg className="hud-chat-portrait-blank" viewBox="0 0 64 96"
-      role="img" aria-label={title}
-      preserveAspectRatio="xMidYMax meet" focusable="false">
-      <title>{title}</title>
-      <circle cx="32" cy="30" r="15" fill="currentColor" />
-      <path d="M4 96c0-17 12.5-28 28-28s28 11 28 28z" fill="currentColor" />
-    </svg>
-  );
-}
+import { Silhouette, faceUrl } from './faces';
 
 export function ChatPortraits({ names, versions }: {
   /** in the order they spoke, YOUNGEST LAST — i.e. next to the chat column */
@@ -69,14 +52,14 @@ export function ChatPortraits({ names, versions }: {
     <div className="hud-chat-portraits" aria-hidden="true">
       {portraitSlots(names, versions).map((slot, i) => {
         const key = `${slot.name}|${slot.version}`;
-        const url = `/characters/${encodeURIComponent(slot.name)}/outfit-expression`
-          + `?fallback=default${slot.version ? `&v=${encodeURIComponent(slot.version)}` : ''}`;
+        const url = faceUrl(slot.name, slot.version);
         return (
           <div key={slot.name || `blank-${i}`} className="hud-chat-portrait">
             {slot.name && !failed[key]
               ? <img src={url} alt={slot.name}
                   onError={() => setFailed((f) => ({ ...f, [key]: true }))} />
-              : <Silhouette title={slot.narrator ? narratorTitle : blankTitle} />}
+              : <Silhouette className="hud-chat-portrait-blank"
+                  title={slot.narrator ? narratorTitle : blankTitle} />}
           </div>
         );
       })}
