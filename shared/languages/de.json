@@ -4018,6 +4018,21 @@
     "Hide actions": "Aktionen ausblenden",
     "Generate video": "Video erzeugen",
     "Video generation started": "Videoerzeugung gestartet",
-    "Video ready": "Video fertig"
+    "Video ready": "Video fertig",
+    "Party invitations are not available.": "Gruppeneinladungen sind nicht verfügbar.",
+    "Choose someone to invite.": "Wähle jemanden zum Einladen aus.",
+    "You are travelling in someone else's party and cannot invite anyone.": "Du reist in der Gruppe eines anderen mit und kannst niemanden einladen.",
+    "You are travelling in {name}'s party and cannot invite anyone.": "Du reist in der Gruppe von {name} mit und kannst niemanden einladen.",
+    "{name} is already in your party.": "{name} ist schon in deiner Gruppe.",
+    "{name} is not here with you.": "{name} ist nicht hier bei dir.",
+    "{name} has already invited you — answer that invitation first.": "{name} hat dich schon eingeladen — beantworte zuerst diese Einladung.",
+    "{name} is already in a party.": "{name} ist schon in einer Gruppe.",
+    "{name} cannot be invited to a party.": "{name} kann nicht in eine Gruppe eingeladen werden.",
+    "The invitation could not be saved.": "Die Einladung konnte nicht gespeichert werden.",
+    "Invite to party": "In die Gruppe einladen",
+    "Ask {name} to come along with you": "{name} bitten, mit dir zu kommen",
+    "{name} joins your party.": "{name} schließt sich deiner Gruppe an.",
+    "{name} turns down your invitation.": "{name} lehnt deine Einladung ab.",
+    "Waiting for {name}…": "Warte auf {name} …"
   }
 }

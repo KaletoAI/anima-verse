@@ -1982,6 +1982,54 @@ def play_party_leave(user=Depends(get_current_user)):
     return {"ok": res.get("status") == "ok", **res}
 
 
+@router.post("/play/party/invite")
+async def play_party_invite(request: Request, user=Depends(get_current_user)):
+    """The avatar invites a present character into its party."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_party_invite_sync, body)
+
+
+def _play_party_invite_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``play_party_invite`` — runs in the threadpool.
+
+    The invitation rules are the party package's (provider
+    ``play.party_invite``, docs/skill-core-api.md): the same ones its
+    InviteToParty verb applies. The skill gate (block rules, costs) is the
+    skill behind the player action ``party_invite``, like ``/play/interact``.
+    Answers ``{"ok", "status", "invite_id"}`` — status "pending" while the
+    invitee decides (an NPC is asked at once, a player sees the question),
+    "accepted"/"declined" when it was settled immediately. 404 without the
+    package, 409 with a readable reason for every refusal.
+    """
+    from app.core.dependencies import get_skill_manager
+    from app.core.hooks import get_provider
+    from app.core.i18n import t
+    from app.core.skill_gate import blocked_reason, charge
+    from app.models.character import get_character_language
+    avatar = _require_avatar()
+    target = str(body.get("target") or "").strip() if isinstance(body, dict) else ""
+    if not target:
+        raise HTTPException(status_code=400, detail="target required")
+    lang = get_character_language(avatar) or "de"
+    invite = get_provider("play.party_invite")
+    skill = next((s for s in get_skill_manager().skills
+                  if getattr(s, "PLAYER_ACTION", "") == "party_invite"), None)
+    if invite is None or skill is None:
+        raise HTTPException(status_code=404,
+                            detail=t("Party invitations are not available.", lang))
+    gated = blocked_reason(avatar, skill.SKILL_ID)
+    if gated:
+        raise HTTPException(status_code=409, detail=gated)
+    res = invite(avatar, target) or {}
+    if res.get("status") == "refused" or not res.get("invite_id"):
+        message = res.get("message") or "The invitation could not be saved."
+        raise HTTPException(status_code=409,
+                            detail=t(message, lang).replace("{name}", target))
+    charge(avatar, skill.SKILL_ID)
+    return {"ok": True, "status": res["status"], "invite_id": res["invite_id"]}
+
+
 # ── pair interactions (app/core/interaction_engine.py) ──────────────────
 # The avatar's half of the invite/answer shape: it can propose a shared
 # action, answer one it was offered, take back its own, and step out of a

@@ -36,6 +36,15 @@
 //     table with both: single [], group [Feast, Circle] (the piece's order,
 //     both usable -> by label: Circle, Feast); of the sofa: single = its three
 //     actions, group [].
+// [7] "Invite to party" (2026-11-08), partyInviteVerdict + the person count.
+//     state = skill invite_to_party, capabilities [invite_to_party], party
+//     {leader Ann, members [Kira]}: Ben -> usable (reason ''), Kira -> '{name}
+//     is already in your party.' with name Kira. No skill ('' = no party
+//     package) -> null; capabilities without the skill -> null; follower of
+//     Zoe (capabilities empty, Core hides the verb) -> the follower sentence
+//     with name Zoe; a block {invite_to_party: 'Not now.'} -> 'Not now.'.
+//     Rendered with the leader state, every person node counts one more:
+//     Ben 2, Kira 2, Mira 1 (the leaf stays even where it is greyed).
 // [5] The chat mount `PropActionsPanel showOffers={false}`: offers alone
 //     render nothing (they were a section with chips before); with a running
 //     row it shows the row and its Stop, but no offer chip ("With Kira").
@@ -65,7 +74,7 @@ function moduleUrl(file) {
   return url;
 }
 const src = name => moduleUrl(new URL(`./src/${name}`, import.meta.url));
-const { offerKind, pieceNodes, partnerNodes, pieceGroups, groupFit, groupPickRange, GROUP_MIN_OTHERS } =
+const { offerKind, pieceNodes, partnerNodes, pieceGroups, groupFit, groupPickRange, GROUP_MIN_OTHERS, partyInviteVerdict } =
   await import(src('actionsTreeModel.ts'));
 const { I18nProvider } = await import(src('I18nProvider.tsx'));
 const { ActionsTree } = await import(src('ActionsTree.tsx'));
@@ -144,6 +153,24 @@ assert.deepEqual(Object.entries(pieceGroups(table)).map(([k, v]) => [k, v.map(o 
 assert.deepEqual(pieceGroups(pieces[2]).single.map(o => o.label), ['Cuddle', 'Sit', 'Rest']);
 assert.deepEqual(pieceGroups(pieces[2]).group, []);
 console.log('PASS group size and the per-piece group node');
+
+// [7]
+const leaderState = { skill: 'invite_to_party', capabilities: ['invite_to_party'],
+  party: { role: 'leader', leader: 'Ann', members: ['Kira'] } };
+assert.deepEqual(partyInviteVerdict('Ben', leaderState), { reason: '', name: 'Ben' });
+assert.deepEqual(partyInviteVerdict('Kira', leaderState), { reason: '{name} is already in your party.', name: 'Kira' });
+assert.equal(partyInviteVerdict('Ben', { ...leaderState, skill: '' }), null);
+assert.equal(partyInviteVerdict('Ben', null), null);
+assert.equal(partyInviteVerdict('Ben', { ...leaderState, capabilities: [] }), null);
+assert.deepEqual(partyInviteVerdict('Ben', { skill: 'invite_to_party', capabilities: [],
+  party: { role: 'follower', leader: 'Zoe', members: ['Ann'] } }),
+  { reason: "You are travelling in {name}'s party and cannot invite anyone.", name: 'Zoe' });
+assert.deepEqual(partyInviteVerdict('Ben', { ...leaderState, blocks: { invite_to_party: 'Not now.' } }),
+  { reason: 'Not now.', name: 'Ben' });
+const invitable = textNodes(render(ActionsTree, { avatar: 'Ann', present, interaction: null,
+  partyInvite: leaderState, onChanged() {} }));
+assert.ok(invitable.endsWith('All potential partners3▸Ben2▸Kira2▸Mira1'), invitable);
+console.log('PASS invite to party verdicts and counts');
 
 // [5]
 assert.equal(render(PropActionsPanel, { showOffers: false }), '', 'offers alone: nothing in the chat');

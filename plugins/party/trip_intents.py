@@ -470,15 +470,33 @@ def invite_projection(invitation: Dict) -> Dict:
             "after_arrival_label": followup.get("pose_key", "")}
 
 
+def _answer_turn(invitation: Dict) -> bool:
+    """Whether the invitee answers in an ANSWER turn (``bump_respond``, a
+    visible reply plus its tool step) rather than a thought turn: every
+    destination-bound trip, and a standing invitation from a player-controlled
+    inviter to a temporary NPC — a temporary NPC thinks no thoughts, so a
+    thought bump would never reach it. A standing invitation between two NPCs
+    stays a thought: an NPC proposes a trip to a temporary NPC instead."""
+    if invitation.get("intent_id"):
+        return True
+    from app.models.account import is_player_controlled
+    from app.models.character import is_temporary_npc
+    return (is_temporary_npc(invitation["invitee"])
+            and not is_player_controlled(invitation["invitee"])
+            and is_player_controlled(invitation["inviter"]))
+
+
 def request_consent(invite_id: str) -> bool:
-    """Request a real chat/tool answer, including temporary NPCs, never thoughts."""
+    """Request a real chat/tool answer, including temporary NPCs, never
+    thoughts for them (``_answer_turn``)."""
     invitation = P.get_invite(invite_id)
     if not invitation or invitation["status"] != "pending":
         return False
     if not P.invite_is_fresh(invitation):
         return False
     from app.models.character import is_temporary_npc
-    if not invitation.get("intent_id") and is_temporary_npc(invitation["invitee"]):
+    answer_turn = _answer_turn(invitation)
+    if not answer_turn and is_temporary_npc(invitation["invitee"]):
         from app.models.account import is_player_controlled
         if not is_player_controlled(invitation["invitee"]):
             return False
@@ -521,7 +539,7 @@ def request_consent(invite_id: str) -> bool:
         except Exception as e:
             logger.warning("party_join decision failed for %s: %s", invitation["invitee"], e)
     from app.core.agent_loop import get_agent_loop
-    if not invitation.get("intent_id"):
+    if not answer_turn:
         return get_agent_loop().bump(invitation["invitee"], hint=content)
     requested = get_agent_loop().bump_respond(invitation["invitee"], speaker=invitation["inviter"],
                                              content=content, hint=content, on_demand=True,

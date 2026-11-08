@@ -118,3 +118,34 @@ export function partnerNodes(offers: PropActionOffer[], present: string[], avata
   }
   return [...nodes.values()].sort((a, b) => byLabel(a.name, b.name))
 }
+
+/** What the drawer knows about the avatar's party invitations — straight
+ *  from the scene payload: the skill behind the player action
+ *  `party_invite` (`capability_actions`; '' = no party package), the
+ *  avatar's capabilities and their transient blocks, and its party. */
+export interface PartyInviteState {
+  skill: string
+  capabilities?: string[]
+  blocks?: Record<string, string>
+  party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
+}
+
+/** The "Invite to party" leaf for one person: `null` = no leaf (no party
+ *  package, or the avatar has no invite verb); otherwise `reason` '' = usable,
+ *  else an English sentence to translate, `{name}` standing for `name`. A
+ *  rule block or cost shortfall is Core's text and comes as it is. */
+export function partyInviteVerdict(person: string, state?: PartyInviteState | null):
+  { reason: string; name: string } | null {
+  if (!state?.skill) return null
+  const party = state.party
+  // A follower's invite verb is hidden by Core (visible_for), so the
+  // follower test comes before the capability test: the leaf stays and says why.
+  if (party?.role === 'follower') {
+    return { reason: "You are travelling in {name}'s party and cannot invite anyone.", name: party.leader }
+  }
+  if (state.capabilities && !state.capabilities.includes(state.skill)) return null
+  if (party?.members.includes(person)) return { reason: '{name} is already in your party.', name: person }
+  const blocked = state.blocks?.[state.skill]
+  if (blocked) return { reason: blocked, name: person }
+  return { reason: '', name: person }
+}

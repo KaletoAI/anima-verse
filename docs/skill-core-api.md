@@ -1211,6 +1211,7 @@ Capabilities, die der Core heute abfragt:
 | `intent_action_types`, `intent_action_validate`, `intent_action_change_validate`, `intent_action_managed`, `intent_completion_allowed` | Intent API, progress and completion | No executable action descriptors; ordinary intents remain available |
 | `npc_action_available`, `npc_action_context`, `npc_action_execute` | NPC background selection, prompt and typed action | Ordinary NPC behavior |
 | `party_invite_respond`, `party_invite_projection` | Party resolver and player invitation payload | Ordinary membership/question behavior |
+| `play.party_invite` | `routes/play.py` `POST /play/party/invite {target}` (the player's "Invite to party"), off the event loop, after the skill gate of the skill whose `PLAYER_ACTION` is `"party_invite"`. Called with the avatar and the target name (positional), it answers a dict with `status` (`"refused"`, else the invitation's status right after its answer was requested: `"pending"`, or `"accepted"`/`"declined"` when settled at once), `invite_id`, `reason`, and for a refusal `message` — English UI text the route translates through the i18n layer, `{name}` standing for the target. The route charges the skill's cost only for a recorded invitation | The route answers 404 "Party invitations are not available." |
 | `journey_execution_context`, `journey_arrival_validate` | Owned travel tick and exact arrival | Ordinary journey behavior |
 
 ## Skill-Hooks (Deklarationen an der Klasse / im Manifest) ✅
@@ -1231,11 +1232,12 @@ alle Tool-Namen mit einem gesetzten Flag) — im Manifest setzbar:
 `SINGLETON`, `SUPPRESS_IN_PERSON`, `CASCADE_BRAKE`, `SEARCH_INTENT`,
 `DELIVERS_SPEECH`, `USER_NOTIFICATION`, `REMOTE_COMM`, `PROGRESS_TYPE`
 (`skill_manager.progress_type_for_tool(tool_name)`).
-`PLAYER_ACTION` (class attribute, e.g. `"travel"`, `"scene_photo"`, `"interact"`) names the
+`PLAYER_ACTION` (class attribute, e.g. `"travel"`, `"scene_photo"`, `"interact"`,
+`"party_invite"`; a multi-verb class may answer it per verb as a property) names the
 /play action a skill stands behind, so the player route is gated and charged
 by that skill without the core naming it (`"interact"`: `/play/interact` and a
 yes on `/play/interact/respond`; `/play/interact/options` carries the block
-reason as `blocked`).
+reason as `blocked`; `"party_invite"`: `/play/party/invite`).
 
 Nur als **Klassenattribut** (sie ändern den Ausführungszeitpunkt, nicht bloß Metadaten):
 `ALWAYS_LOAD`, `DEFERRED` (Tool läuft erst nach der Chat-Antwort),

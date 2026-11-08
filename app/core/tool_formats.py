@@ -394,11 +394,15 @@ def _is_placeholder_input(tool_input: str) -> bool:
 
 
 def _bare_json_spans(text: str, known_tools: Dict):
-    """``ToolName {json}`` or ``ToolName: {json}`` at the start of a line, for
-    an offered tool name, with a JSON object that parses: yields
-    ``(start, end, name, input)``; anything else is no call."""
+    """``ToolName {json}``, ``ToolName: {json}`` or ``ToolName for: {json}``
+    (also ``für:``/``fuer:`` — the taught ``Use ToolName for:`` without its
+    verb) at the start of a line, for an offered tool name, with a JSON object
+    that parses: yields ``(start, end, name, input)``; anything else is no
+    call."""
     names = "|".join(re.escape(name) for name in known_tools)
-    for match in re.finditer(rf"^[ \t]*(?:[-*][ \t]*)?({names}):?[ \t]*(?=\{{)", text, re.MULTILINE):
+    for match in re.finditer(rf"^[ \t]*(?:[-*][ \t]*)?({names})"
+                             rf"(?:[ \t]+(?i:f(?:ü|ue)r|for):|:)?[ \t]*(?=\{{)",
+                             text, re.MULTILINE):
         try:
             value, end = json.JSONDecoder().raw_decode(text, match.end())
         except ValueError:
@@ -481,8 +485,10 @@ def find_tool_calls(format_name: str, text: str,
     # {json}" and the furniture contract "PropAction {json}", and a model
     # copies those shapes instead of the taught syntax (2026-11-01: 58 of 266
     # tool decisions; 2026-11-03: an NPC's consent "InteractWith {...}" three
-    # times — every call dropped). The JSON object is mandatory, so prose
-    # ("Act: she smiles") never matches.
+    # times — every call dropped; 2026-11-08: a temporary NPC's
+    # "JoinParty for: {...}" — the taught "Use X for:" without its verb).
+    # The JSON object is mandatory, so prose ("Act: she smiles",
+    # "JoinParty for: she agrees") never matches.
     if not raw_matches and known_tools:
         raw_matches = _bare_json_calls(text, known_tools)
 

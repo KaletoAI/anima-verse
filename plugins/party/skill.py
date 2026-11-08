@@ -4,6 +4,9 @@ enter/leave): PartySkill with verb='invite'|'join'|'leave'.
   invite_to_party (verb='invite'): the character invites someone present.
     - Target = avatar -> pending invite (question in the chat window, UI decides).
     - Target = ordinary NPC -> an agent turn obtains consent.
+    - The player's avatar invites through ``/play/party/invite`` (provider
+      ``play.party_invite`` = ``player_invite``, gated by ``PLAYER_ACTION``);
+      a temporary NPC it invites answers in an answer turn.
       A destination-bound trip requests a direct chat/tool answer, including
       temporary NPCs, without enabling thoughts or matching prose keywords.
       With the decision point ``party_join`` active, a confident decision settles
@@ -72,6 +75,98 @@ def _resolve_target(data: Dict[str, Any]) -> str:
     return text.split()[0] if text else ""
 
 
+def standing_invite(inviter: str, target: str) -> Dict[str, Any]:
+    """Record a standing (destination-less) invitation and ask the invitee.
+
+    The common tail of the InviteToParty verb and the player's
+    ``/play/party/invite`` (``player_invite``); each caller runs its own
+    presence/role checks first. Answers ``{"status", "reason", "invite_id",
+    "player_target"}``: status "refused" with reason ``in_party``,
+    ``temporary_npc`` or ``not_saved``; otherwise the invitation's own status
+    right after its answer was requested — "pending" as a rule,
+    "accepted"/"declined" when the decision point settled it at once.
+
+    The invitation is recorded for EVERY target, avatar or NPC: it is what the
+    verb's role-inversion brake reads when the invitee answers with an
+    invitation of its own. A player-controlled invitee answers through the
+    pending-invite question of its UI; every other invitee is asked by
+    ``trip_intents.request_consent``. A temporary NPC thinks no thoughts, so
+    a standing invitation reaches it only through an answer turn — which
+    ``request_consent`` uses when the INVITER is player-controlled. Between
+    two NPCs the temporary one still needs a destination-bound trip.
+    """
+    from app.core import party_engine as P
+    from app.models.account import is_player_controlled
+    from app.models.character import is_temporary_npc
+    refused = {"status": "refused", "invite_id": "", "player_target": False}
+    if P.get_party_of(target) is not None:
+        return {**refused, "reason": "in_party"}
+    player_target = is_player_controlled(target)
+    if (not player_target and is_temporary_npc(target)
+            and not is_player_controlled(inviter)):
+        return {**refused, "reason": "temporary_npc"}
+    invite_id = P.create_pending_invite(inviter, target)
+    if not invite_id:
+        return {**refused, "reason": "not_saved"}
+    if not player_target:
+        from plugins.party.trip_intents import request_consent
+        request_consent(invite_id)
+    status = (P.get_invite(invite_id) or {}).get("status") or "pending"
+    return {"status": status, "reason": "", "invite_id": invite_id,
+            "player_target": player_target}
+
+
+#: The player's refusals as UI text (English; the route translates it, and
+#: ``{name}`` stands for the person the player wanted to invite).
+_PLAYER_REFUSALS = {
+    "no_target": "Choose someone to invite.",
+    "follower": "You are travelling in someone else's party and cannot invite anyone.",
+    "with_you": "{name} is already in your party.",
+    "not_present": "{name} is not here with you.",
+    "invited_you": "{name} has already invited you — answer that invitation first.",
+    "in_party": "{name} is already in a party.",
+    "temporary_npc": "{name} cannot be invited to a party.",
+    "not_saved": "The invitation could not be saved.",
+}
+
+
+def player_invite(inviter: str, target: str) -> Dict[str, Any]:
+    """The player's avatar invites a present character into its party —
+    provider ``play.party_invite`` for ``POST /play/party/invite``
+    (docs/skill-core-api.md). The same rules as the InviteToParty verb: a
+    follower invites nobody, the target stands at the avatar's location and
+    is in no party. One difference on purpose: the verb turns an invitation
+    the target already put to the avatar into a JOIN (a tool LLM answers a
+    question with a counter-invitation); the player clicked "invite", so the
+    open question is named instead of making the avatar a follower.
+
+    Answers ``standing_invite``'s dict; a refusal additionally carries
+    ``message`` (``_PLAYER_REFUSALS``, ``{name}`` = the target). The route
+    owns the skill gate (block rules, costs) through ``PLAYER_ACTION``."""
+    from app.core import party_engine as P
+    from app.models.character import list_available_characters
+    target = (target or "").strip()
+
+    def refuse(reason: str) -> Dict[str, Any]:
+        return {"status": "refused", "reason": reason, "invite_id": "",
+                "player_target": False, "message": _PLAYER_REFUSALS[reason]}
+
+    if not target or target == inviter:
+        return refuse("no_target")
+    if P.is_party_follower(inviter):
+        return refuse("follower")
+    if target in P.party_followers(inviter):
+        return refuse("with_you")
+    if target not in list_available_characters() or not P.same_location(inviter, target):
+        return refuse("not_present")
+    if P.find_pending_invite(target, inviter) is not None:
+        return refuse("invited_you")
+    result = standing_invite(inviter, target)
+    if result["status"] == "refused":
+        return {**result, "message": _PLAYER_REFUSALS[result["reason"]]}
+    return result
+
+
 class PartySkill(PluginSkill):
     """Party verbs in one class. Subclass-free: a verb parameter picks the
     operation; SKILL_ID derives from it."""
@@ -82,6 +177,13 @@ class PartySkill(PluginSkill):
         self.SKILL_ID = _VERB_TO_ID[verb]
         # name/description/action_hint come from templates/llm/skills/<id>.md
         self._defaults = {"enabled": True}
+
+    @property
+    def PLAYER_ACTION(self) -> str:  # noqa: N802 — the skill-manager attribute name
+        """The invite verb stands behind ``/play/party/invite``: the route is
+        gated and charged by it, and the player UI finds it through
+        ``capability_actions["party_invite"]``."""
+        return "party_invite" if self._verb == "invite" else ""
 
     @property
     def decision_menu_heading(self) -> str:
@@ -120,8 +222,10 @@ class PartySkill(PluginSkill):
         if self._verb == "leave":
             return get_party_of(character_name) is not None
         if self._verb == "join":
+            # An open question needs its answer verb: a standing invitation
+            # (the player's included) or a live shared-trip proposal.
             from app.models.intents import get_intent
-            return any(inv.get("intent_id") and
+            return any(not inv.get("intent_id") or
                        (get_intent(inv["intent_id"]) or {}).get("status") == "active"
                        for inv in get_pending_invites_for(character_name))
         return False
@@ -236,29 +340,20 @@ class PartySkill(PluginSkill):
                 "round — joining instead of counter-inviting", character_name,
                 target)
             return self._join(character_name, {**data, "leader": target})
-        if P.get_party_of(target) is not None:
+        result = standing_invite(character_name, target)
+        if result["reason"] == "in_party":
             return f"{target} is already in a party."
-        from app.models.character import is_temporary_npc
-        from app.models.account import is_player_controlled
-        _is_avatar = is_player_controlled(target)
-        if not _is_avatar and is_temporary_npc(target):
+        if result["reason"] == "temporary_npc":
             return "A temporary NPC needs a destination-bound trip, not a standing party invitation."
-        # The invitation is recorded for EVERY target, avatar or NPC: it is
-        # what the brake above reads when the invitee answers with an invite
-        # of its own.
-        invite_id = P.create_pending_invite(character_name, target)
-        if not invite_id:
+        if result["reason"]:
             return "The party invitation could not be saved."
-        if _is_avatar:
+        if result["player_target"]:
             # An avatar cannot decide via LLM -> the pending invite is the UI
             # question.
             return (f"{character_name} invited {target} to the party "
                     f"— waiting for their answer.")
-        from plugins.party.trip_intents import request_consent
-        request_consent(invite_id)
-        invitation = P.get_invite(invite_id) or {}
         return (f"{character_name} invites {target} to come along "
-                f"— {invitation.get('status', 'pending')}.")
+                f"— {result['status']}.")
 
 
     def _join(self, character_name: str, data: Dict[str, Any]) -> str:

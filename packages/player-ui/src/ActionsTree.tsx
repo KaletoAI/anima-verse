@@ -11,7 +11,10 @@
  *                           all its group actions: pick 2..n people, then Ask
  *                           on any group action that takes that many
  *   All potential partners  one node per person; under it "Stop" while the
- *                           avatar is in a pair with them, then one row per
+ *                           avatar is in a pair with them, "Invite to party"
+ *                           (`POST /play/party/invite`; only with a party
+ *                           package, greyed with the reason for a follower or
+ *                           someone already in the party), then one row per
  *                           pair action with them — the free pair poses first
  *                           (pairActions.tsx, no furniture), then the furniture
  *                           ones (`label · piece`) — each with Ask / Just do it
@@ -27,7 +30,8 @@ import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { isMember, type InteractionMembers } from './interactionMembers'
 import { usePairOptions, usePairPropose } from './pairActions'
-import { offerKind, partnerNodes, pieceGroups, pieceNodes, pieceText, type PieceNode } from './actionsTreeModel'
+import { offerKind, partnerNodes, partyInviteVerdict, pieceGroups, pieceNodes, pieceText,
+  type PartyInviteState, type PieceNode } from './actionsTreeModel'
 import { propActionReason } from './propActionReasons'
 import { GroupPicker, type OfferGroup } from './PropActionsPanel'
 import { usePropActions } from './usePropActions'
@@ -60,13 +64,15 @@ function readOpen(): Set<string> {
   } catch { return new Set() }
 }
 
-export function ActionsTree({ avatar, present, interaction, onChanged }: {
+export function ActionsTree({ avatar, present, interaction, partyInvite, onChanged }: {
   /** The active avatar ('' = spectator: nothing is rendered). */
   avatar: string
   /** Who is in the room (the scene payload's `present`). */
   present: string[]
   /** The pair the avatar is in, if any — its partner's node offers "Stop". */
   interaction?: { members: InteractionMembers } | null
+  /** The scene payload's party facts for "Invite to party" (absent = no leaf). */
+  partyInvite?: PartyInviteState | null
   /** After an action was asked for (refresh the host's scene). */
   onChanged: () => void | Promise<void>
 }) {
@@ -102,6 +108,15 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
   const strike = (pose: SoloPose) => void perform(async () => {
     await apiPost('/play/self/activity', { pose_key: pose.key })
     notifyPropActionChanged()
+  })
+  /** Invite one person into the avatar's party; the answer comes later (an
+   *  NPC is asked at once, a player sees the question), so the note says so. */
+  const inviteToParty = (name: string) => void perform(async () => {
+    const res = await apiPost<{ status?: string }>('/play/party/invite', { target: name })
+    const text = res?.status === 'accepted' ? t('{name} joins your party.')
+      : res?.status === 'declined' ? t('{name} turns down your invitation.')
+        : t('Waiting for {name}…')
+    setNote(text.replace('{name}', name))
   })
 
   const offers = data?.offers ?? []
@@ -220,10 +235,22 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
       {partners.length ? partners.map(person => {
         const id = `partner:${person.name}`
         const stoppable = isMember(interaction?.members, person.name) && isMember(interaction?.members, avatar)
+        const invite = partyInviteVerdict(person.name, partyInvite)
         return <Branch key={id} id={id} open={open} toggle={toggle} label={person.name}
-          count={pairOptions.poses.length + person.entries.length}>
+          count={pairOptions.poses.length + person.entries.length + (invite ? 1 : 0)}>
           {stoppable && <div className="player-actions-tree-leaf">
             <button type="button" className="player-chip" onClick={() => void pairActions.stop()}>{t('Stop')}</button>
+          </div>}
+          {invite && <div className="player-actions-tree-leaf">
+            <HoverHint text={invite.reason ? t(invite.reason).replace('{name}', invite.name)
+              : t('Ask {name} to come along with you').replace('{name}', person.name)}>
+              <button type="button" className="player-chip" disabled={busy || !!invite.reason}
+                aria-disabled={invite.reason ? true : undefined}
+                style={{ pointerEvents: invite.reason ? 'none' : undefined }}
+                onClick={() => inviteToParty(person.name)}>
+                {t('Invite to party')}
+              </button>
+            </HoverHint>
           </div>}
           {pairOptions.poses.map(pose => <div key={`pose:${pose.key}`}
             className={`player-actions-tree-leaf${pairOptions.blocked ? ' off' : ''}`}>

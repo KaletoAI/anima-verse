@@ -1408,7 +1408,10 @@ export function Hud({ avatar, username, role }: {
               <div className="hud-panel-body">
                 <ErrorBoundary inline label="Actions">
                   <ActionsTree avatar={data.avatar} present={data.present || []}
-                    interaction={data.interaction} onChanged={refreshScene} />
+                    interaction={data.interaction} onChanged={refreshScene}
+                    partyInvite={{ skill: data.capability_actions?.party_invite || '',
+                      capabilities: data.capabilities, blocks: data.capability_blocks,
+                      party: data.party }} />
                 </ErrorBoundary>
               </div>
             </section>

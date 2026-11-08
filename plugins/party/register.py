@@ -20,3 +20,10 @@ decision.register_point(
 from plugins.party.trip_intents import register
 
 register()
+
+# The player's "Invite to party" (POST /play/party/invite) runs the package's
+# own invitation rules; the route names no skill (R1).
+from app.core import hooks
+from plugins.party.skill import player_invite
+
+hooks.register_provider("play.party_invite", player_invite, owner="party")

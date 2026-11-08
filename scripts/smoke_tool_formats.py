@@ -57,6 +57,17 @@ Usage:  ./.venv/bin/python scripts/smoke_tool_formats.py
       tool not offered (TalkTo) -> no call. strip_bare_json_calls leaves ""
       for the call alone, "Ja, gern." for speech plus a call line, and
       ``Act {broken`` unchanged.
+  (i) ``ToolName for: {json}`` without the ``Use`` verb (2026-11-08: the
+      temporary NPC Hannibal's rp_first tool step answered the logged text
+      below, format natural_en; neither the taught format nor the
+      ``Use X for:`` fallback nor (h) matched it, the party join was dropped
+      silently — fails on 4dd5c7b0). Offered JoinParty/TalkTo/Act:
+      - the logged answer (call line, blank line, [INTENT:] marker line) ->
+        exactly ONE call ``("JoinParty", <the JSON object verbatim>)``;
+      - ``JoinParty für: {...}`` and ``JoinParty fuer: {...}`` -> one call each;
+      - ``JoinParty for: she agrees`` (no JSON), ``GoToCharacter for: {...}``
+        (not offered) and ``JoinParty for {...}`` (no colon after "for") ->
+        no call.
 """
 import sys
 from pathlib import Path
@@ -178,6 +189,21 @@ check("call only -> nothing said", strip_bare_json_calls("InteractWith " + conse
 check("speech kept", strip_bare_json_calls("Ja, gern.\nInteractWith " + consent, offered_h).strip(),
       "Ja, gern.")
 check("prose untouched", strip_bare_json_calls("Act {broken", offered_h), "Act {broken")
+
+print("(i) ToolName for: {json} without the Use verb")
+offered_i = {"JoinParty": None, "TalkTo": None, "Act": None}
+join = ('{"target":"Lirien Edwinsdottir","destination":'
+        '{"location_id":"e73591d5","room_id":"933ecd23"}}')
+LOGGED_JOIN = ("JoinParty for: " + join + "\n\n[INTENT: Kellerbesuch | Wir gehen mit Lirien in den "
+               "Keller des Gasthauses. | when=now | prio=3 | by=self]")
+check("Hannibal's join", find_tool_calls("natural_en", LOGGED_JOIN, offered_i), [("JoinParty", join)])
+for verb in ("für", "fuer"):
+    check("JoinParty " + verb + ":", find_tool_calls(
+        "natural_en", "JoinParty " + verb + ': {"target": "Kai"}', offered_i),
+        [("JoinParty", '{"target": "Kai"}')])
+for text in ("JoinParty for: she agrees", 'GoToCharacter for: {"partner": "Kai"}',
+             'JoinParty for {"target": "Kai"}'):
+    check("no call: " + text, find_tool_calls("natural_en", text, offered_i), [])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed"
       + (": " + ", ".join(FAILURES) if FAILURES else ""))
