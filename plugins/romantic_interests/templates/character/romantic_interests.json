@@ -1,7 +1,5 @@
 {
-  "apply_to": [
-    "human-roleplay"
-  ],
+  "apply_to": ["human-roleplay", "npc-temporary"],
   "sections": [
     {
       "id": "characteristics",

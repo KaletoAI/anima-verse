@@ -255,6 +255,14 @@
       ]
     },
     {
+      "id": "characteristics",
+      "label": "Characteristics",
+      "label_de": "Eigenschaften",
+      "column": 2,
+      "row": 2,
+      "fields": []
+    },
+    {
       "id": "npc_lifetime",
       "label": "Temporary NPC",
       "label_de": "Temporärer NPC",
