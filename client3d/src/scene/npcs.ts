@@ -5,7 +5,7 @@ import type { PropActionMotion, PropActionDeparture } from '@anima/player-ui/pro
 import type { SyncCounters } from '../game/perfstats';
 import type { LocomotionOverride, MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { pairBlend, BLEND_S, type PairPose } from '../game/pairBlend';
+import { pairBlend, pairBlendOrigin, BLEND_S, type PairPose } from '../game/pairBlend';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { adoptFinale, stepFinale, type FinalePlay } from '../game/finaleClip';
 import { handBackYaw, entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
@@ -1352,8 +1352,12 @@ export class NpcManager {
       const clipDuration = it.clip_duration_s ?? 0;
       const loop = !!it.loop;
       const newId = npc.interaction?.id !== it.id;
+      // The blend starts where the figure is SHOWN: a figure handing over its
+      // prop entry (ended by this very poll, `adoptPropEntry` below) is on
+      // the seat, while its root still stands on the access point.
       const blend = npc.interaction?.id === it.id ? npc.interaction.blend : {
-        from: { ...npc.root.position, yaw: npc.figure?.root.rotation.y ?? 0 }, at: performance.now(),
+        from: pairBlendOrigin(npc.root.position, npc.figure?.root.rotation.y ?? 0, npc.entry?.spec),
+        at: performance.now(),
       };
       npc.interaction = {
         blend, id: it.id, clip, base,
