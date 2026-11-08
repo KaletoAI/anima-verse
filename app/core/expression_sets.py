@@ -7,11 +7,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
+import threading
 from types import MappingProxyType
 from typing import Mapping
 from app.core.pose_catalog_edit import CatalogEditError
 
-from app.core import pose_catalog
+from app.core import embedding, pose_catalog
+from app.core.embedding import SingleFlight
 
 SHIPPED_SETS = frozenset({"humanoid", "animal"})
 
@@ -390,27 +392,56 @@ def edit_entry(action: str, key: str, body: Mapping, *, set_id: str):
 
 
 _embedding_maps = {}
+_embedding_maps_lock = threading.Lock()
+#: One computation per ``(revision, set, model)`` at a time — the start-up
+#: warm-up and every request share it (see ``pose_catalog._ALIAS_FLIGHTS``).
+_ALIAS_FLIGHTS = SingleFlight("expression-alias-embeddings")
 
 
-def alias_embeddings(catalog, spec, embed_fn):
-    """Cache one set's vectors under its captured catalog/model identity."""
+def alias_embeddings(catalog, spec, embed_fn, *, wait: bool = True):
+    """One set's ``{alias: vector}``, cached under its captured catalog/model
+    identity and computed by ONE thread at a time (batched through
+    ``embedding.embed_map``); other callers of the same key wait for it.
+
+    ``wait=False`` never waits: a cold map returns ``None`` and is computed in
+    the background instead."""
     cache_key = (catalog.revision, spec.id, pose_catalog._embed_model_key(embed_fn))
     cached = _embedding_maps.get(cache_key)
     if cached is not None:
         return cached
-    aliases = {alias for key in spec.members for alias in (key, *catalog.entries[key]["synonyms"])}
-    vectors = {alias: vector for alias in sorted(aliases) if (vector := embed_fn(alias))}
-    if vectors:
-        if len(_embedding_maps) >= 64:
-            _embedding_maps.clear()
-        _embedding_maps[cache_key] = vectors
-    return vectors
+
+    def compute():
+        cached = _embedding_maps.get(cache_key)
+        if cached is not None:
+            return cached
+        aliases = {alias for key in spec.members
+                   for alias in (key, *catalog.entries[key]["synonyms"])}
+        vectors = embedding.embed_map(sorted(aliases), embed_fn)
+        if vectors:
+            with _embedding_maps_lock:
+                if len(_embedding_maps) >= 64:
+                    _embedding_maps.clear()
+                _embedding_maps[cache_key] = vectors
+        return vectors
+
+    if not wait:
+        _ALIAS_FLIGHTS.kick(cache_key, compute)
+        return None
+    return _ALIAS_FLIGHTS.do(cache_key, compute) or {}
 
 
-def resolve_text(text: str, *, set_id: str, embed_fn=None):
-    """Resolve within one immutable set, rejecting stale decision answers."""
+def resolve_text(text: str, *, set_id: str, embed_fn=None, wait: bool = True):
+    """Resolve within one immutable set, rejecting stale decision answers.
+
+    ``wait=False`` (request path) never waits on an embedding or the decision
+    model: an exact alias still answers, anything else returns the set
+    default with ``how == "cold"`` — no candidate, no decision record — and
+    the set's alias map is warmed in the background. A caller that wants the
+    real match later resolves again with ``wait=True`` (the memo of
+    ``expression_pose_maps.resolve_expression_key`` does that in the
+    background)."""
     import uuid
-    from app.core import decision, decision_points, embedding
+    from app.core import decision, decision_points
     cat = catalog_snapshot()
     spec = cat.sets.get(set_id)
     if spec is None:
@@ -422,6 +453,10 @@ def resolve_text(text: str, *, set_id: str, embed_fn=None):
                for alias in (key, *cat.entries[key]["synonyms"])}
     if cleaned in aliases:
         return aliases[cleaned], "exact"
+    fn = embed_fn or embedding.embed
+    if not wait:
+        alias_embeddings(cat, spec, fn, wait=False)
+        return spec.default, "cold"
     point = decision_points.CATALOG_POINTS["expression"]
     dkey = f"expression:{set_id}:{uuid.uuid4().hex}"
     if decision.is_active(point):
@@ -437,7 +472,6 @@ def resolve_text(text: str, *, set_id: str, embed_fn=None):
                 decision.mark_taken(point, dkey)
                 pose_catalog.record_candidate("expression", cleaned, "", None, set_id=set_id)
                 return spec.default, "decision_none"
-    fn = embed_fn or embedding.embed
     query = fn(cleaned)
     vectors = alias_embeddings(cat, spec, fn)
     best_alias, score = "", 0.0

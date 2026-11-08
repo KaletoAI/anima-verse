@@ -11,6 +11,7 @@ path in ``character.set_pose_intent``; expression: by
 
 from typing import Dict
 
+from app.core.embedding import SingleFlight
 from app.core.log import get_logger
 from app.core.pose_catalog import (
     get_catalog,
@@ -107,16 +108,25 @@ def is_partner_activity(pose_key: str) -> bool:
 
 # A mood is free text everywhere (``current_feeling``) and is never stored as
 # a key, so — unlike the pose — it has to be resolved on the READ path, which
-# includes the /play poll (peek_cached_expression on every request). Without
+# includes the /play poll (``play._expr_version`` on every request). Without
 # this memo an unknown mood would cost one embedding call plus one candidate
 # upsert per poll. Cleared by reload_presets(); a full memo is dropped whole
 # (moods are few, the cap only guards against a pathological producer).
 _EXPRESSION_KEY_MEMO: Dict[tuple, str] = {}
 _MEMO_MAX_ENTRIES = 512
+#: The background resolutions behind a cold poll — one per memo key at a time.
+_RESOLVE_FLIGHTS = SingleFlight("expression-key-resolve")
 
 
-def resolve_expression_key(mood_free_text: str, *, set_id: str) -> str:
-    """Resolve mood within one set; generation scopes only this derived memo."""
+def resolve_expression_key(mood_free_text: str, *, set_id: str, wait: bool = True) -> str:
+    """Resolve mood within one set; generation scopes only this derived memo.
+
+    ``wait=False`` is the poll mode (``/play/scene``, ``/play/self``, the
+    portrait GETs): a memo hit or an exact alias answers at once; anything
+    else answers the set default WITHOUT memoising it, and the real
+    resolution (embedding / decision model) runs once in the background and
+    fills the memo — the next poll then sees the real key. A cold result is
+    never memoised, so it cannot outlive the warm-up."""
     from app.core.expression_sets import catalog_snapshot
     cat = catalog_snapshot()
     text = (mood_free_text or "").strip().lower()
@@ -124,7 +134,11 @@ def resolve_expression_key(mood_free_text: str, *, set_id: str) -> str:
     cached = _EXPRESSION_KEY_MEMO.get(memo_key)
     if cached is not None:
         return cached
-    key, _how = resolve_to_catalog(text, "expression", set_id=set_id)
+    key, how = resolve_to_catalog(text, "expression", set_id=set_id, wait=wait)
+    if how == "cold":
+        _RESOLVE_FLIGHTS.kick(
+            memo_key, lambda: resolve_expression_key(text, set_id=set_id))
+        return key
     if len(_EXPRESSION_KEY_MEMO) >= _MEMO_MAX_ENTRIES:
         _EXPRESSION_KEY_MEMO.clear()
     _EXPRESSION_KEY_MEMO[memo_key] = key

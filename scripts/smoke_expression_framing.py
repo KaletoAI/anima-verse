@@ -210,7 +210,9 @@ with patch("app.core.expression_regen.expression_snapshot",
         patch.object(char_routes, "get_character_current_feeling", lambda _n: "furious"):
     char_routes._expression_request("demo", default_expression=True)
     char_routes._expression_request("demo", "", {}, [], True)
-check(seen[0] == ("", {"equipped_pieces": None, "equipped_items": None}),
+# wait=True: _expression_request blocks by default (the POST generation path);
+# only the polled GETs ask with wait=False.
+check(seen[0] == ("", {"equipped_pieces": None, "equipped_items": None, "wait": True}),
       f"default expression: current outfit, default mood (got {seen[0]})")
 check(seen[1][1]["equipped_pieces"] == {}, "an override with empty pieces is an empty outfit")
 

@@ -718,10 +718,14 @@ def _set_decency_exempt_route_sync(character_name: str,
 # --- Outfit-bound expression images ---
 
 def _expression_request(character_name, mood="", pieces="", items="", override=False,
-                        default_expression=False):
+                        default_expression=False, wait=True):
     """``default_expression``: the set's default expression in the CURRENT
     outfit — no mood lookup, no outfit override (an override with empty
-    pieces renders the character undressed)."""
+    pieces renders the character undressed).
+
+    ``wait=False`` for the polled GETs (status, portrait image): the mood is
+    resolved without waiting on embeddings — cold alias embeddings answer
+    the set's default member until the background resolution is done."""
     from app.core.expression_regen import expression_snapshot
     from app.core.pose_catalog_edit import CatalogEditError
     explicit = bool(override or pieces or items)
@@ -737,7 +741,7 @@ def _expression_request(character_name, mood="", pieces="", items="", override=F
         mood = get_character_current_feeling(character_name) or ""
     try:
         return expression_snapshot(character_name, str(mood), equipped_pieces=eqp if explicit else None,
-                                   equipped_items=eqi if explicit else None)
+                                   equipped_items=eqi if explicit else None, wait=wait)
     except CatalogEditError as exc:
         raise HTTPException(exc.status, exc.detail) from exc
 
@@ -839,7 +843,8 @@ def expression_status_route(character_name: str, request: Request, attempt_id: s
         if attempt is None:
             raise HTTPException(404, "Unknown expression attempt; the server may have restarted")
         return asdict(attempt)
-    return expression_status(_expression_request(character_name, mood, pieces, items, bool(override)))
+    return expression_status(_expression_request(character_name, mood, pieces, items, bool(override),
+                                                 wait=False))
 
 
 @router.get("/{character_name}/expression-cleanup")
@@ -872,7 +877,7 @@ def get_outfit_expression(character_name: str, request: Request, mood: str = "",
     from app.core import expression_regen as er
     from app.core.http_files import snapshot_response
     from app.core.keyed_lock import keyed_lock
-    snap = _expression_request(character_name, mood, pieces, items, bool(override))
+    snap = _expression_request(character_name, mood, pieces, items, bool(override), wait=False)
     exact = er.get_cached_expression(snap)
     if exact is None and not (override or pieces or items):
         er.trigger_expression_generation(snap, ignore_cooldown=True)

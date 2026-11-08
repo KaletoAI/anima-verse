@@ -224,7 +224,15 @@ class ExpressionSnapshot:
     is_base: bool = True
 
 
-def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None, equipped_items=None):
+def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None, equipped_items=None,
+                        wait: bool = True):
+    """The immutable render request of ``character``'s expression for ``mood``.
+
+    ``wait=False`` is for polled request paths: the mood is resolved without
+    waiting on an embedding (``resolve_expression_key(wait=False)``) — while
+    the alias embeddings are cold, a non-exact mood yields the set's default
+    member, and the real member follows on a later call once the background
+    resolution is done."""
     from app.models.character import get_character_profile
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     from app.core.expression_sets import catalog_snapshot, set_for_character, ExpressionSetError
@@ -245,7 +253,7 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
             outfit = outfit_signature_raw(pieces, items, character, profile=profile)
             appearance = person_description(character, body_profile=profile, apply_state_modifiers=False, neutral_state=True)
             epoch = mutation_epoch(character)
-        expression = resolve_expression_key(mood, set_id=spec.id)
+        expression = resolve_expression_key(mood, set_id=spec.id, wait=wait)
         with keyed_lock("character_profile", character):
             current = dict(get_character_profile(character) or {})
             if not current:

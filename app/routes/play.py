@@ -48,12 +48,19 @@ _SHELL = Path("static/client3d/index.html")
 
 
 def _expr_version(name: str) -> str:
-    """Version of requested expression identity and the actually served bytes."""
+    """Version of requested expression identity and the actually served bytes.
+
+    Polled (``/play/scene``, ``/play/self``, ``/play/others``), so the mood is
+    resolved WITHOUT waiting on embeddings (``wait=False``): with cold alias
+    embeddings an unknown mood versions the set's default member, and the
+    version moves to the real member once the background resolution is done
+    (nothing here caches beyond one request)."""
     import hashlib
     from app.core.expression_regen import expression_snapshot, expression_status
     from app.models.character import get_character_current_feeling
     try:
-        request = expression_snapshot(name, get_character_current_feeling(name) or "")
+        request = expression_snapshot(name, get_character_current_feeling(name) or "",
+                                      wait=False)
         status = expression_status(request)
         return hashlib.sha256(f"{request.stem}:{status['content_version']}:{status['fallback_version']}".encode()).hexdigest()[:16]
     except (ValueError, OSError):
@@ -2226,7 +2233,7 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
         # — no second record_utterance here or entries duplicate.
         scope = "location" if volume == "shout" else "here"
         await perform_act(actor, text, scope)
-        logger.info("Storyteller-Fallback narrierte für %s (scope=%s)", actor, scope)
+        logger.info("Storyteller fallback narrated for %s (scope=%s)", actor, scope)
     except Exception as e:  # noqa: BLE001
         logger.warning("storyteller fallback failed: %s", e)
 

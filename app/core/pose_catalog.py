@@ -910,7 +910,22 @@ def _embed_model_key(embed_fn) -> str:
     return f"fn:{id(embed_fn)}"
 
 
-def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
+#: One alias-map computation per ``(axis, model id)`` at a time: the start-up
+#: warm-up and every request that finds the map cold used to embed the same
+#: few hundred aliases in parallel (thread dump 2026-11-08: ~19 min stall).
+from app.core.embedding import SingleFlight  # noqa: E402
+_ALIAS_FLIGHTS = SingleFlight("pose-alias-embeddings")
+
+
+def _alias_embeddings(axis: str, embed_fn, *, wait: bool = True) -> Optional[Dict[str, list]]:
+    """``{alias: vector}`` of one axis for ``embed_fn``'s model.
+
+    Cached per ``(axis, model id)``; a cold map is computed by ONE thread
+    (single-flight, batched through ``embedding.embed_map``) while every
+    other caller of the same key waits for it. ``wait=False`` never waits:
+    a cold map returns ``None`` and starts the computation in the
+    background instead (the request path must not hang on an embedding
+    endpoint)."""
     # Resolve the aliases BEFORE taking _lock: _alias_index() -> get_catalog()
     # takes the same (non-reentrant) lock and would deadlock on itself.
     # The generation is read BEFORE the aliases: a drop between the two reads
@@ -923,55 +938,79 @@ def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
         cached = _embed_cache.get(key)
     if cached is not None:
         return cached
-    # The warm-up runs OUTSIDE the lock: with an external embedding backend it
-    # is one HTTP call per alias, and _lock is the same lock every catalog
-    # reader takes. Two threads racing here just embed twice — harmless.
-    vecs = {}
-    for alias in aliases:
-        v = embed_fn(alias)
-        if v:
-            vecs[alias] = v
-    if not vecs:
-        # Nothing came back (no model, endpoint down): do NOT cache the empty
-        # map — that would pin "no embeddings" until the next catalog reload.
-        return vecs
-    with _lock:
-        if generation != _generation:
-            # The catalog was dropped while this map was embedded (external
-            # file edit, reload): these aliases may be stale — hand them out
-            # once, cache nothing, the next lookup embeds the new catalog.
+
+    def compute() -> Dict[str, list]:
+        with _lock:
+            cached = _embed_cache.get(key)
+        if cached is not None:
+            # Filled by the flight that ended between the check above and
+            # this one becoming the owner.
+            return cached
+        # Embedded OUTSIDE _lock: with an external backend this is network
+        # traffic, and _lock is the same lock every catalog reader takes.
+        from app.core.embedding import embed_map
+        vecs = embed_map(list(aliases), embed_fn)
+        if not vecs:
+            # Nothing came back (no model, endpoint down): do NOT cache the
+            # empty map — that would pin "no embeddings" until the next
+            # catalog reload.
             return vecs
-        return _embed_cache.setdefault(key, vecs)
+        with _lock:
+            if generation != _generation:
+                # The catalog was dropped while this map was embedded
+                # (external file edit, reload): these aliases may be stale —
+                # hand them out once, cache nothing, the next lookup embeds
+                # the new catalog.
+                return vecs
+            return _embed_cache.setdefault(key, vecs)
+
+    if not wait:
+        _ALIAS_FLIGHTS.kick(key, compute)
+        return None
+    return _ALIAS_FLIGHTS.do(key, compute) or {}
 
 
 def prewarm_alias_embeddings() -> None:
     """Embed every alias of both catalogs once, so the first pose/expression
-    match of a chat turn does not pay one embedding call per alias on the
-    event loop. Meant for a background thread at server start (the lifespan
-    runs it after the provider manager is up, so an external route resolves).
-    Never raises."""
+    match does not pay for the whole map. Meant for a background thread at
+    server start (the lifespan runs it after the provider manager is up, so
+    an external route resolves). Shares the single-flight of the lookups: a
+    request that needs a map while this runs waits for (or, on the request
+    path, skips) this computation instead of starting its own. Never raises."""
     try:
         from app.core.embedding import embed
+        started = time.monotonic()
         vecs = _alias_embeddings("pose", embed)
-        logger.info("Alias embeddings warmed: pose (%d aliases)", len(vecs))
+        logger.info("Alias embeddings warmed: pose (%d aliases) in %.1f s",
+                    len(vecs), time.monotonic() - started)
         from app.core.expression_sets import catalog_snapshot, alias_embeddings
         snapshot = catalog_snapshot()
         for spec in snapshot.sets.values():
+            set_started = time.monotonic()
             vecs = alias_embeddings(snapshot, spec, embed)
-            logger.info("Expression aliases warmed: %s (%d aliases)", spec.id, len(vecs))
+            logger.info("Expression aliases warmed: %s (%d aliases) in %.1f s",
+                        spec.id, len(vecs), time.monotonic() - set_started)
+        logger.info("Alias embedding warm-up finished in %.1f s",
+                    time.monotonic() - started)
     except Exception as e:
         logger.warning("Alias embedding warm-up failed: %s", e)
 
 
-def resolve_to_catalog(text: str, axis: str, _embed=None, *, set_id: str = "") -> Tuple[str, str]:
+def resolve_to_catalog(text: str, axis: str, _embed=None, *, set_id: str = "",
+                       wait: bool = True) -> Tuple[str, str]:
     """Maps free text onto a catalog key. Never raises, never returns an
     unknown key. `_embed` overrides the embedding function (tests).
 
     Order: exact alias → decision model (plan-decision-models.md § 4.2,
-    only when its point is active) → embedding → default."""
+    only when its point is active) → embedding → default.
+
+    ``wait=False`` is the request-path mode: it never waits on an embedding
+    or the decision model. Whatever an exact alias does not answer returns
+    the default with ``how == "cold"`` — no candidate, no decision record —
+    and the alias map is warmed in the background meanwhile."""
     if axis == "expression":
         from app.core.expression_sets import resolve_text
-        return resolve_text(text, set_id=set_id, embed_fn=_embed)
+        return resolve_text(text, set_id=set_id, embed_fn=_embed, wait=wait)
     if set_id:
         raise ValueError("Pose matching does not use an expression set")
     cleaned = (text or "").strip().lower()
@@ -980,6 +1019,11 @@ def resolve_to_catalog(text: str, axis: str, _embed=None, *, set_id: str = "") -
     index = _alias_index(axis)
     if cleaned in index:
         return index[cleaned], "exact"
+    if not wait:
+        if _embed is None:
+            from app.core.embedding import embed as _embed
+        _alias_embeddings(axis, _embed, wait=False)
+        return get_default_key(axis), "cold"
     picked, point, dkey = _decide_catalog_key(cleaned, axis)
     if picked is not None:
         return picked
