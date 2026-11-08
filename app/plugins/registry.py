@@ -318,6 +318,9 @@ class BodySlotSpec:
     # LoRAs join the face prompt there; every other non-face slot stays out.
     portrait: bool = False
     back: bool = False  # Include fragments in rear-view renders.
+    # Part of the base body (app/core/base_body.py): its ``always`` fragment
+    # describes the bald, unclothed figure every outfit is painted onto.
+    base_body: bool = False
     rigs: List[RigSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
     # Mesh-input (T-pose) text chosen by one attribute's value:

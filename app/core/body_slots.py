@@ -18,6 +18,10 @@ Decisions wired in (dialog 2026-07-08):
 - F3: slot fragments are sent along even when a reference image is
   attached (callers do not filter them out).
 
+A slot may declare ``base_body: true`` — its ``always`` fragment belongs to
+the base body (``app/core/base_body.py``), the bald, unclothed figure the
+outfits are painted onto. Slots without the flag stay out of it.
+
 A slot may declare ``back: true`` — its anatomy is visible from BEHIND as
 well. A render that shows the character's back (the T-pose back view) keeps
 only those exposed fragments and their LoRAs; the rest describe the front
@@ -325,7 +329,8 @@ def prompt_fragments(character_name: str,
                      back_view: bool = False,
                      mesh_input: bool = False,
                      neutral_state: bool = False,
-                     portrait_only: bool = False) -> Dict[str, List[str]]:
+                     portrait_only: bool = False,
+                     base_body: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -342,8 +347,15 @@ def prompt_fragments(character_name: str,
     ``portrait_only`` keeps only slots declared ``portrait: true`` — the body
     a waist-up portrait shows besides the face (expression images, whose
     face part comes from the face prompt).
+    ``base_body`` keeps only slots declared ``base_body: true`` and renders
+    only their ``always`` fragment (into ``general``) in the neutral state —
+    the base body is unclothed, so covered/exposed texts and state flags
+    never apply to it.
     """
     specs = slots_for_character(character_name, profile=profile)
+    if base_body:
+        specs = [s for s in specs if getattr(s, "base_body", False)]
+        neutral_state = True
     if face_only:
         specs = [s for s in specs if getattr(s, "face", False)]
     if portrait_only:
@@ -408,6 +420,8 @@ def prompt_fragments(character_name: str,
         frag = _render(spec.prompt.get("always", ""), vals)
         if frag:
             general.append(frag)
+        if base_body:
+            continue
         if is_slot_exposed(spec, profile) and not (back_view and not spec.back):
             # Per-character override of the exposed fragment (stored under
             # the reserved 'exposed_prompt' slot value); the manifest text

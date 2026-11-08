@@ -81,6 +81,7 @@ body_slots:
         very long: "hair lying behind the shoulders and falling down the back"
   - id: eyes
     face: true   # belongs into portrait/expression prompts
+    base_body: true   # part of the bald, unclothed base body (app/core/base_body.py)
     attributes:
       color:
         type: select
@@ -90,6 +91,7 @@ body_slots:
       always: "{color} eyes"
   - id: skin
     face: true   # belongs into portrait/expression prompts
+    base_body: true
     attributes:
       tone:
         type: select
@@ -103,6 +105,7 @@ body_slots:
   # below still resolves: app/core/height.py renders the centimetres as the
   # same descriptive phrase this slot used to store.
   - id: build
+    base_body: true
     attributes:
       type:
         type: select

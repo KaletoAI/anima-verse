@@ -92,14 +92,28 @@ logger = get_logger(__name__)
 #   shoulder or chest) sit in the negative.
 # The admin override image_generation.tpose_prompt stays untouched — whoever
 # replaces this text takes the responsibility with it.
+#
+# The hair clauses are named constants so the base body (app/core/base_body.py,
+# a bald figure) can take them out of the SAME pose texts instead of keeping a
+# second copy of each pose.
+TPOSE_FRONT_HAIR_CLAUSE = (
+    "no hair on the chest or in front of the shoulders, chest, collarbones "
+    "and front of the shoulders fully uncovered"
+)
+TPOSE_CHEST_HAIR_CLAUSE = "no hair on the chest or in front of the shoulders"
+TPOSE_REFERENCE_HAIR_CLAUSE = (
+    "the same hairstyle, hair length and hair volume as the reference"
+)
+# Longest first: the front clause contains the chest clause.
+TPOSE_HAIR_CLAUSES = (TPOSE_FRONT_HAIR_CLAUSE, TPOSE_REFERENCE_HAIR_CLAUSE,
+                      TPOSE_CHEST_HAIR_CLAUSE)
 TPOSE_PROMPT_DEFAULT = (
     "standing upright facing the camera, A-pose, arms straight and angled "
     "about 45 degrees down and away from the body, not touching the body, "
     "palms facing the thighs, all five fingers straight, relaxed and slightly "
     "apart, each finger clearly separated and visible, hands in natural "
     "proportion to the body, legs clearly apart with open space visible "
-    "between them, no hair on the chest or in front of the shoulders, chest, "
-    "collarbones and front of the shoulders fully uncovered"
+    "between them, " + TPOSE_FRONT_HAIR_CLAUSE
 )
 
 # Animals use a strict profile, not a three-quarter view, to keep the mesh
@@ -150,8 +164,7 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "angled about 45 degrees down and away from the body, not touching the "
     "body, palms facing the thighs, hands in natural proportion to the body, "
     "all five fingers straight, relaxed and slightly apart, legs clearly apart "
-    "with open space visible between them, the same hairstyle, hair length "
-    "and hair volume as the reference"
+    "with open space visible between them, " + TPOSE_REFERENCE_HAIR_CLAUSE
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -170,9 +183,8 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "arm straight and angled down and away from the body, not touching the "
     "body, not foreshortened toward the camera, palms facing the thighs, "
     "hands in natural proportion to the body, all five fingers straight, "
-    "relaxed and slightly apart, legs clearly apart, the same hairstyle, hair "
-    "length and hair volume as the reference, no hair on the chest or in "
-    "front of the shoulders"
+    "relaxed and slightly apart, legs clearly apart, "
+    + TPOSE_REFERENCE_HAIR_CLAUSE + ", " + TPOSE_CHEST_HAIR_CLAUSE
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
@@ -1158,10 +1170,11 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
         _fire_kinds(character_name, kinds, force=force, tpose_view=tpose_view)
 
 
-def current_profile_image(character_name: str) -> Optional[Path]:
-    """Resolve only the current profile file inside this character's images."""
+def current_profile_image(character_name: str, *, profile: Optional[dict] = None) -> Optional[Path]:
+    """Resolve only the current profile file inside this character's images.
+    ``profile``: an already-loaded profile to read the file name from."""
     from app.models.character import get_character_dir, get_character_profile_image
-    filename = get_character_profile_image(character_name)
+    filename = get_character_profile_image(character_name, profile=profile)
     if not isinstance(filename, str) or not filename or Path(filename).name != filename:
         return None
     try:
