@@ -966,7 +966,8 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         gates still apply,
       * EXIT: ``boundary_entry.may_leave`` with the room the avatar stands in
         — across a NEAR opening from the room it links to, from the entry room
-        over any edge, or freely when the location declares no entry room —
+        or an open room (the ground, a room without walls) over any edge, or
+        freely when the location declares no entry room —
         AND ``rules.check_leave``, the same rule gate every other movement
         path asks before it moves anybody,
       * location → location (adjacent or NESTED footprints — a hut on a
@@ -1269,8 +1270,9 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                      if math.hypot(ox - x, oz - z) <= _POS_OPENING_TOLERANCE_M]
             if not any(may_leave(current_loc, current_room, entry_gate, edge)
                        for edge in (edges or [None])):
-                logger.info("pos refused (leave): %s out of %s from room %r",
-                            avatar, current_id, current_room)
+                logger.info("pos refused (leave): %s out of %s from room %r "
+                            "at %.2f,%.2f", avatar, current_id, current_room,
+                            x, z)
                 refuse(403, "leave_blocked",
                        t("You cannot leave the place here — take the way you "
                          "came in.", lang))

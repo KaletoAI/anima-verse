@@ -707,13 +707,16 @@ user acceptance; the proxy smoke checks forwarding configuration only.
 >     Erdgeschosses (`__floor__0`) sein — von den reservierten Fluren NUR
 >     dieser (`world.valid_entry_room`); in einem Kellerflur kommt niemand an.
 >     **Das Verlassen entscheidet EINE Funktion**
->     (`boundary_entry.may_leave`). Drei Wege hinaus, und es genügt, dass
+>     (`boundary_entry.may_leave`). Vier Wege hinaus, und es genügt, dass
 >     EINER zutrifft: über eine autorisierte Öffnung DIESER Kante aus dem
 >     Raum heraus, den sie verknüpft — ohne Verknüpfung führt sie auf die
 >     Grundfläche, also ist die Grundfläche der Raum, aus dem sie
->     herauslässt (der Rundweg derselben Öffnung); aus dem `entry_room`,
->     dem Gameplay-Gate jeder anderen Kante; und von überall, wenn die
->     Location keinen `entry_room` erklärt.
+>     herauslässt (der Rundweg derselben Öffnung); aus einem OFFENEN Raum
+>     über jede Kante (`boundary_entry.room_is_open`: die Grundfläche oder
+>     ein Raum ohne Wände, `no_walls` bzw. `always_visible`; Entscheidung
+>     2026-11-08 — sonst ist die Kante eines offenen Sees eine unsichtbare
+>     Wand); aus dem `entry_room`, dem Gameplay-Gate jeder anderen Kante;
+>     und von überall, wenn die Location keinen `entry_room` erklärt.
 >     Einen Kompass, der das vorab **pro Richtung** beantwortet, gibt es
 >     nicht mehr: `GET /world/avatar/neighbors` ist mit dem Kachel-Schritt
 >     zusammen gestrichen — auf einer Meter-Karte gibt es keine vier Pfeile

@@ -24,7 +24,12 @@ change accepts an opening as a legitimate crossing point —
   since plan-grundflaeche.md the ground is a room like any other, so that is
   the room it lets out of — nobody is roomless any more.
 
-The ``entry_room`` gate stays the gameplay authority for every other edge.
+The ``entry_room`` gate stays the gameplay authority for every other edge —
+except where nothing stands between the walker and the edge: the ground and
+a room without walls (``no_walls``, or an outdoor zone ``always_visible``)
+let one out over ANY edge (user decision 2026-11-08). Before that the open
+lake of a location whose entry room is its shore was an invisible wall:
+every step over its edge was refused and the avatar snapped back.
 
 Pure functions over location dicts on purpose: no DB, no config (the one
 import from ``app.models.world`` is the ground room's constant id, nothing
@@ -209,23 +214,41 @@ def may_leave(current: Dict[str, Any], current_room: str, entry_room: str,
               exit_edge: Any) -> bool:
     """Whether the avatar may leave ``current`` across ``exit_edge``.
 
-    Three ways out, in this order:
+    Four ways out, in this order:
 
     - across an authored opening on that edge, from the room it links to — an
       opening without a link leads onto the ground, so standing on the ground
       is what that one requires (the round trip of an opening entry);
-    - from the entry room, the gameplay gate for every other edge;
-    - from anywhere when the location declares no entry room.
+    - from anywhere when the location declares no entry room;
+    - from an OPEN room over any edge (:func:`room_is_open` — the ground, or
+      a room without walls): no wall stands between it and the edge, so a
+      gate there would be an invisible one (user decision 2026-11-08);
+    - from the entry room, the gameplay gate for every other edge.
 
-    The middle rule is what keeps someone standing on the ground out of a
-    trap: in a location without openings they may not walk out over any edge,
-    but they can always enter the entry room first and leave from there.
+    A WALLED room other than the entry room stays shut: whoever stands in it
+    walks into the entry room (or out onto the ground) first.
     """
     for op in _openings(current):
         if op["edge"] != exit_edge:
             continue
         if (op["room"] or GROUND_ROOM_ID) == current_room:
             return True
-    if not entry_room:
+    if not entry_room or room_is_open(current, current_room):
         return True
     return current_room == entry_room
+
+
+def room_is_open(location: Dict[str, Any], room_id: str) -> bool:
+    """Whether nothing stands between ``room_id`` and the location's edge:
+    the ground, or a room of ``location`` without walls — ``no_walls`` (open
+    zone, pavilion) or ``always_visible`` (an outdoor zone, which builds no
+    shell either; the same pair ``scene_recipe`` reads for "no wall here").
+    A room the location does not list counts as walled."""
+    if room_id == GROUND_ROOM_ID:
+        return True
+    for room in (location.get("rooms") if isinstance(location, dict) else None) or []:
+        if isinstance(room, dict) and str(room.get("id") or "").strip() == room_id:
+            lay = room.get("layout")
+            lay = lay if isinstance(lay, dict) else {}
+            return bool(lay.get("no_walls") or lay.get("always_visible"))
+    return False

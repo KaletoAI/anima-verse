@@ -33,7 +33,17 @@ Part 3 — entry gate (app/core/boundary_entry.py; wired into
     gate; the route reads it off the crossing point, never off a compass.
     Entering across an edge with an authored opening routes into the linked
     room (fallback entry_room); leaving across it is allowed from the linked
-    room. Everything else keeps the entry_room gate.
+    room. Everything else keeps the entry_room gate — except an OPEN room
+    (user decision 2026-11-08): the ground and a room whose layout says
+    no_walls or always_visible leave over ANY edge, because nothing stands
+    between them and it. Fixture "lake" (no_walls), "terrace"
+    (always_visible), "hut" (layout without either), entry room "square",
+    plain edge 2 without an opening:
+      ground  / lake / terrace over edge 2 or no edge → allowed
+      hut / kitchen (not listed) over edge 2          → refused
+      lake over edge 2 when the location has NO openings at all → allowed
+      (the Mondscheinsee case: entry room = the shore, the lake reaches the
+      edge; before the fix every step over it was refused).
     Since plan-grundflaeche.md the ground is a ROOM, so an opening without a
     room link leads onto the ground room — and whoever stands there may walk
     back out through it. Nobody is roomless any more.
@@ -80,7 +90,7 @@ paths.init(tempfile.mkdtemp(prefix="boundary-entry-storage-"))
 
 from app.core import scene_recipe  # noqa: E402
 from app.core.boundary_entry import (  # noqa: E402
-    has_entrance, may_leave, opening_entry_room, opening_on_edge,
+    has_entrance, may_leave, opening_entry_room, opening_on_edge, room_is_open,
 )
 from app.models.world import GROUND_ROOM_ID, get_arrival_room_id  # noqa: E402
 
@@ -209,8 +219,8 @@ def main():
           may_leave(loc, "road", "square", 1) is True)
     check("leaving FROM THE GROUND over a roomless opening",
           may_leave(loc, GROUND_ROOM_ID, "square", 0) is True)
-    check("on the ground: NO exit over an edge without an opening",
-          may_leave(loc, GROUND_ROOM_ID, "square", 2) is False)
+    check("the ground is open: it leaves over an edge without an opening",
+          may_leave(loc, GROUND_ROOM_ID, "square", 2) is True)
     check("a room is not the ground: no exit over a roomless opening",
           may_leave(loc, "kitchen", "square", 0) is False)
     check("the entry room remains the gate everywhere else",
@@ -225,6 +235,34 @@ def main():
     check("no edge at all: the entry-room rule is what is left",
           may_leave(loc, "square", "square", None) is True
           and may_leave(loc, "kitchen", "square", None) is False)
+
+    # Open rooms (user decision 2026-11-08) — see the derivation in Part 3.
+    open_loc = {
+        "map3d": {"boundary_openings": [dict(op) for op in OPENINGS]},
+        "rooms": [{"id": "square"},
+                  {"id": "lake", "layout": {"no_walls": True}},
+                  {"id": "terrace", "layout": {"always_visible": True}},
+                  {"id": "hut", "layout": {"level": 0}},
+                  {"id": GROUND_ROOM_ID}],
+        "entry_room": "square",
+    }
+    check("room_is_open: ground, no_walls, always_visible",
+          room_is_open(open_loc, GROUND_ROOM_ID) is True
+          and room_is_open(open_loc, "lake") is True
+          and room_is_open(open_loc, "terrace") is True)
+    check("room_is_open: a walled room and an unknown room are not",
+          room_is_open(open_loc, "hut") is False
+          and room_is_open(open_loc, "kitchen") is False)
+    check("a wall-less room leaves over a plain edge and without an edge",
+          may_leave(open_loc, "lake", "square", 2) is True
+          and may_leave(open_loc, "terrace", "square", None) is True)
+    check("a walled room still may not",
+          may_leave(open_loc, "hut", "square", 2) is False
+          and may_leave(open_loc, "kitchen", "square", 2) is False)
+    lake_only = {"rooms": open_loc["rooms"], "entry_room": "square"}
+    check("no openings at all: the lake leaves anywhere, the hut does not",
+          may_leave(lake_only, "lake", "square", None) is True
+          and may_leave(lake_only, "hut", "square", None) is False)
 
     print("Part 4 — where an arrival lands (§ 6: entry_room is optional)")
     check("entry_room set and existing: one arrives there",
