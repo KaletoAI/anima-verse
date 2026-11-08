@@ -15,24 +15,32 @@
  * Two compare switches: "Real room models" swaps the level boxes for the
  * rooms' ACTIVE models (rooms without one keep their box), "Building model
  * overlay" ghosts the location's building model over the plan. Models are
- * fetched once and cached; the scene rebuilds live while dragging in the
- * editor (the three.js scene itself is created once). three.js is imported
+ * fetched once and cached; the three.js scene itself is created once and its
+ * CONTENT is rebuilt from each new server recipe. three.js is imported
  * dynamically — it stays in the shared chunk.
+ *
+ * WHAT THIS PREVIEW IS FOR: seeing whether things stand right (user ruling
+ * 2026-11-08). So it is deliberately plain and cheap — no mirror pass, no
+ * water animation, no playing clips (each figure is posed once), no shadows,
+ * pixel ratio 1, and frames are drawn ON DEMAND (camera motion, a rebuild, a
+ * texture landing, a resize), never while the canvas is out of view or the
+ * tab is hidden. Geometry and placement stay exactly what the payload says.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AnimationClip, Group, Material, Mesh, Object3D, Sprite, SpriteMaterial,
+  Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildPropWater, buildWall,
   anchorFigureBind, clipHipsDrop, figureRootY, hipsTrackMedian, clipHeightOffsetM,
   pairPoints, pairYaw,
   applyClipOutline, applyDepthCut, applySlotMaterials,
-  disposeClipMaterials, disposeCutMaterials, disposeSlotMaterials,
+  disposeClipMaterials, disposeCutMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, flatGround, storeyGroundLift,
-  VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
+  VERIFY_EPS, surfaceMaterial, wallLength,
   wallTargets } from '@anima/scene-render'
-import type { CutoutHandle, MirrorOptions, SurfaceMaterialSpec,
+import type { CutoutHandle, SceneSlotValues, SurfaceMaterialSpec,
   VerifyRow, ClipHeightOffsetsCm } from '@anima/scene-render'
 import { fmtM, levelOutline } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './worldTypes'
@@ -59,10 +67,29 @@ const AID = {
   figure: 0x8b949e,
   ruler: 0xc9d1d9,
 }
-// THIS preview's view policy for mirror panes (§ B2 v5, preset `mirror`) —
-// lighter than the 3D client's: a small canvas next to a form, one mirror
-// pass per frame at 512 px and nothing beyond 12 m.
-const MIRROR_OPTS: MirrorOptions = { textureSize: 512, maxPerFrame: 1, maxDistanceM: 12 }
+
+/** The slot map WITHOUT its `mirror` presets. A mirror pane costs a second
+ *  render of the whole scene, and this preview judges placement, not looks —
+ *  so the pane keeps the material it was modelled with (a plain flat surface).
+ *  The test is `slotFill`'s own: a non-blank image wins over any preset, so
+ *  only a value with no picture and the preset `mirror` goes. Pictures and
+ *  `glass` stay — they are cheap and say which surface is which. */
+const withoutMirrors = (slots: SceneSlotValues | undefined): SceneSlotValues | undefined => {
+  if (!slots) return slots
+  const out: SceneSlotValues = {}
+  for (const [name, v] of Object.entries(slots)) {
+    if (v && !(v.image || '').trim()
+        && (v.preset || '').trim().toLowerCase() === 'mirror') continue
+    out[name] = v
+  }
+  return out
+}
+
+/** A picture loaded for a texture slot, kept across rebuilds (keyed by URL):
+ *  a rebuild used to re-download, re-decode and re-upload every picture.
+ *  `waiters` are the slot materials still waiting to hear about a failure
+ *  (null once the load settled); `failed` answers later rebuilds directly. */
+interface SlotTexEntry { tex: Texture; failed: boolean; waiters: Array<() => void> | null }
 
 interface CachedModel {
   obj: Object3D
@@ -149,14 +176,34 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   verifyRef.current = verify
   const [verifyReport, setVerifyReport] = useState<{
     checked: number; rows: VerifyRow[]; notes: string[] } | null>(null)
-  // Model-load completion re-triggers the rebuild (loads are async, the
-  // rebuild itself is synchronous against the cache).
-  const [bump, setBump] = useState(0)
   // Triangle budget of the last rebuild — what the location costs to draw.
   const [budget, setBudget] = useState<{ tris: number; meshes: number
     models: number } | null>(null)
-  // Scene handle for the incremental rebuild (drag updates arrive per
-  // pointermove — recreating the whole renderer would thrash).
+  // How often the content was rebuilt and how long the last one took — the
+  // preview's own cost, visible as numbers next to the triangle budget.
+  const [rebuildStats, setRebuildStats] = useState<{ ms: number; count: number } | null>(null)
+  const rebuildCountRef = useRef(0)
+  // REBUILD SCHEDULING. Every trigger — a new recipe, a toggle, a model /
+  // clip / texture load finishing — only marks the content dirty; ONE rebuild
+  // runs per animation frame at most. Opening a location with N props used to
+  // run N full rebuilds, each re-cloning everything loaded so far.
+  const rebuildRafRef = useRef(0)
+  const rebuildDirtyRef = useRef(false)
+  // Visible = the canvas intersects the viewport AND the tab is shown. While
+  // not visible nothing is rebuilt or drawn; the dirty flag waits.
+  const visibleRef = useRef(typeof document === 'undefined'
+    || document.visibilityState === 'visible')
+  // The on-demand frame request of the live renderer (null before init and
+  // after teardown) — loads and rebuilds ask it for ONE frame.
+  const renderReqRef = useRef<(() => void) | null>(null)
+  // Label sprite materials by "<kind>|<text>" and slot pictures by URL, kept
+  // across rebuilds. Entries no rebuild used are freed at the end of the
+  // next one; everything is freed on unmount. The scene marks the sprites
+  // `__sharedMaterial`, so the per-rebuild disposal leaves them alone.
+  const labelCacheRef = useRef<Map<string, SpriteMaterial>>(new Map())
+  const slotTexRef = useRef<Map<string, SlotTexEntry>>(new Map())
+  // Scene handle for the incremental rebuild (recreating the whole renderer
+  // per recipe would thrash).
   const handleRef = useRef<{
     THREE: typeof import('three')
     boxes: Group
@@ -165,6 +212,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
      *  solo view of a BASEMENT has to see through it. */
     ground: Mesh
   } | null>(null)
+  // The rebuild closure of the latest render (assigned below its definition).
+  const rebuildRef = useRef<((h: NonNullable<typeof handleRef.current>,
+                              current: Room[]) => void) | null>(null)
   // Cutout handle of the last rebuild (area locations): its material clones
   // must be released before the next one patches fresh clones.
   const cutoutRef = useRef<CutoutHandle | null>(null)
@@ -239,19 +289,74 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // clip, and then nothing is put back.
   const standRefRef = useRef<{ status: 'idle' | 'loading' | 'resolved'
     value: number | null }>({ status: 'idle', value: null })
-  const mixersRef = useRef<AnimationMixer[]>([])
-  const clockRef = useRef<Clock | null>(null)
+
+  // Run the pending rebuild NOW (if there is one and the canvas is seen).
+  // Reads everything through refs — `rebuildRef` is the rebuild closure of
+  // the latest render, so a load finishing long after it started still
+  // builds against the current props.
+  // Both are stable (refs + a state setter only), so effects and loaders of
+  // any render may hold them.
+  const flushRebuild = useCallback(() => {
+    const h = handleRef.current
+    if (!h || !rebuildDirtyRef.current || !visibleRef.current) return
+    rebuildDirtyRef.current = false
+    const t0 = performance.now()
+    rebuildRef.current?.(h, roomsRef.current)
+    const ms = performance.now() - t0
+    rebuildCountRef.current += 1
+    setRebuildStats({ ms, count: rebuildCountRef.current })
+    renderReqRef.current?.()
+  }, [])
+  // Mark dirty and coalesce into the next animation frame.
+  const requestRebuild = useCallback(() => {
+    rebuildDirtyRef.current = true
+    if (rebuildRafRef.current || !visibleRef.current) return
+    rebuildRafRef.current = requestAnimationFrame(() => {
+      rebuildRafRef.current = 0
+      flushRebuild()
+    })
+  }, [flushRebuild])
+
+  // Visibility: an IntersectionObserver on the mount plus the tab's own
+  // visibility. Coming back into view catches up on a pending rebuild and
+  // draws one frame (the canvas may have been resized or rebuilt meanwhile).
+  useEffect(() => {
+    const mount = mountRef.current
+    let inView = true
+    const update = () => {
+      const was = visibleRef.current
+      visibleRef.current = inView && document.visibilityState === 'visible'
+      if (visibleRef.current && !was) {
+        flushRebuild()
+        renderReqRef.current?.()
+      }
+    }
+    const io = typeof IntersectionObserver !== 'undefined' && mount
+      ? new IntersectionObserver((entries) => {
+          inView = entries.some((e) => e.isIntersecting)
+          update()
+        })
+      : null
+    if (io && mount) io.observe(mount)
+    document.addEventListener('visibilitychange', update)
+    return () => {
+      io?.disconnect()
+      document.removeEventListener('visibilitychange', update)
+      cancelAnimationFrame(rebuildRafRef.current)
+      rebuildRafRef.current = 0
+    }
+  }, [flushRebuild])
 
   useEffect(() => {
     const refresh = () => {
       clipListRef.current = { status: 'idle', clips: [], pairs: {} }
       clipCacheRef.current.clear()
       standRefRef.current = { status: 'idle', value: null }
-      setBump((b) => b + 1)
+      requestRebuild()
     }
     window.addEventListener('animation-clips-changed', refresh)
     return () => window.removeEventListener('animation-clips-changed', refresh)
-  }, [])
+  }, [requestRebuild])
 
   // Stand-in until the first payload: the declared REAL storey height read as
   // if k were 1. From then on `scene.storey_m` decides.
@@ -276,11 +381,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       if (det?.locationId === locationId) {
         cacheRef.current.delete(`building:${locationId}`)
       }
-      setBump((b) => b + 1)
+      requestRebuild()
     }
     window.addEventListener('anima-model3d-changed', onChanged)
     return () => window.removeEventListener('anima-model3d-changed', onChanged)
-  }, [locationId])
+  }, [locationId, requestRebuild])
 
   // The plan width is the ONLY scale anchor since 2026-07-28 — there is no
   // second path to derive it from a model any more (that one existed to feed
@@ -319,12 +424,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       } catch {
         cache.set(key, 'missing')  // 404 = no model — the box stays
       }
-      setBump((b) => b + 1)
+      requestRebuild()
     })()
     return null
   }
 
-  // Test figure + clip loaders (async → bump; rebuild stays synchronous).
+  // Test figure + clip loaders (async → requestRebuild; the rebuild itself
+  // stays synchronous against the caches).
   const ensureTestFigure = (): Object3D | null => {
     const f = figRef.current
     if (f.status === 'ready') return f.obj || null
@@ -364,7 +470,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       } catch {
         figRef.current = { status: 'missing' }  // no figure → mannequin
       }
-      setBump((b) => b + 1)
+      requestRebuild()
     })()
     return null
   }
@@ -380,7 +486,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
                pairs?: typeof idx.pairs }>('/assets/animation-clips')
         .then((d) => {
           clipListRef.current = { status: 'ready', clips: d.clips || [], pairs: d.pairs || {} }
-          setBump((b) => b + 1)
+          requestRebuild()
         })
         .catch(() => { clipListRef.current = { status: 'missing', clips: [], pairs: {} } })
       return null
@@ -417,13 +523,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       } catch {
         clipCacheRef.current.set(cacheKey, 'missing')
       }
-      setBump((b) => b + 1)
+      requestRebuild()
     })()
     return null
   }
 
   /** The standing reference, once `standHipsRef` has answered; `undefined`
-   *  while it resolves (a rebuild is bumped when it is in). */
+   *  while it resolves (a rebuild is requested when it is in). */
   const ensureStandRef = (): number | null | undefined => {
     const st = standRefRef.current
     if (st.status === 'resolved') return st.value
@@ -433,14 +539,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         .catch(() => null)
         .then((value) => {
           standRefRef.current = { status: 'resolved', value }
-          setBump((b) => b + 1)
+          requestRebuild()
         })
     }
     return undefined
   }
 
-  // Rebuild the plan content from the current layout (called on every rooms/
-  // toggle change and once after scene init).
+  // Rebuild the plan content from the current recipe + layout. Never called
+  // directly — `requestRebuild` marks it dirty, `flushRebuild` runs it at most
+  // once per frame (and once after scene init).
   const rebuild = (h: NonNullable<typeof handleRef.current>, current: Room[]) => {
     const { THREE, boxes } = h
     // Exclusive level view: everything level-bound derives from the
@@ -552,8 +659,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // whole editor unmounted (user finding 2026-07-28). Room ids are unique
     // on their own.
     const bAnchor = ensureModel(`building:${locationId}`)
-    for (const mixer of mixersRef.current) mixer.stopAllAction()
-    mixersRef.current = []
     // Recursive disposal that BAILS on __noDispose subtrees — cached-model
     // and test-figure clones share geometry/materials with their caches
     // (a plain traverse would visit and kill the shared resources).
@@ -566,11 +671,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         return
       }
       const mesh = o as Mesh
-      mesh.geometry?.dispose?.()
+      // A sprite's geometry is three's ONE module-level quad shared by every
+      // sprite — disposing it per rebuild only forced a re-upload.
+      if (!(o as Sprite).isSprite) mesh.geometry?.dispose?.()
       const m = mesh.material as Material | Material[] | undefined
-      // Per-mesh texture CLONES (tiled walls/floors) and the label
-      // CanvasTextures die with their material — the shared caches sit in
-      // __noDispose subtrees and are never visited.
+      // Per-mesh texture CLONES (tiled walls/floors) die with their material
+      // — the shared caches sit in __noDispose subtrees and are never
+      // visited, and the cached label materials are `__sharedMaterial`.
       const disposeMat = (x: Material) => {
         (x as Material & { map?: Texture | null }).map?.dispose?.()
         x.dispose?.()
@@ -585,11 +692,73 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // sit on __noDispose clones that disposeSafe deliberately leaves alone.
     cutoutRef.current?.dispose()
     cutoutRef.current = null
-    disposeSlotMaterials(slotMatsRef.current)
-    slotMatsRef.current = []
+    // Slot clones: the MATERIAL only. Their maps are not theirs — a picture
+    // belongs to the slot cache below, a `glass` clone keeps the modelled
+    // map of the model cache — and there is no mirror render target to free,
+    // because `withoutMirrors` never lets a mirror preset through. (Which is
+    // why this is not `disposeSlotMaterials`: that one frees the maps too.)
+    // Emptied IN PLACE: the unmount cleanup holds this very array.
+    for (const m of slotMatsRef.current.splice(0)) m.dispose()
     for (const child of [...boxes.children]) {
       boxes.remove(child)
       disposeSafe(child)
+    }
+
+    // ── Cached labels + slot pictures ──────────────────────────────────
+    // Every key this rebuild asks for is recorded; whatever the previous
+    // rebuild had and this one did not use is freed at the end.
+    const labelUsed = new Set<string>()
+    const slotTexUsed = new Set<string>()
+    /** A canvas label sprite, its material shared across rebuilds by `key`
+     *  (which must name everything `paint` draws). */
+    const labelSprite = (key: string, w: number, hgt: number,
+                         paint: (ctx: CanvasRenderingContext2D) => void): Sprite => {
+      labelUsed.add(key)
+      let mat = labelCacheRef.current.get(key)
+      if (!mat) {
+        const c = document.createElement('canvas')
+        c.width = w
+        c.height = hgt
+        const ctx = c.getContext('2d')
+        if (ctx) paint(ctx)
+        mat = new THREE.SpriteMaterial({
+          map: new THREE.CanvasTexture(c), transparent: true, depthTest: false,
+        })
+        labelCacheRef.current.set(key, mat)
+      }
+      const spr = new THREE.Sprite(mat)
+      spr.userData.__sharedMaterial = true
+      return spr
+    }
+    /** The slot loader handed to `applySlotMaterials`: one texture per URL
+     *  for the life of the preview. `onError` still reaches every material
+     *  that hung the picture — queued while it loads, and for an already
+     *  failed URL as a microtask, i.e. AFTER `applySlotMaterials` has set the
+     *  map it is meant to take back off. */
+    const loadSlotTexture = (url: string, onError?: () => void): Texture => {
+      slotTexUsed.add(url)
+      const cache = slotTexRef.current
+      let entry = cache.get(url)
+      if (!entry) {
+        const e: SlotTexEntry = { tex: null as unknown as Texture, failed: false, waiters: [] }
+        e.tex = new THREE.TextureLoader().load(url,
+          () => { e.waiters = null; renderReqRef.current?.() },
+          undefined,
+          () => {
+            const waiting = e.waiters || []
+            e.failed = true
+            e.waiters = null
+            for (const f of waiting) f()
+            renderReqRef.current?.()
+          })
+        cache.set(url, e)
+        entry = e
+      }
+      if (onError) {
+        if (entry.failed) queueMicrotask(onError)
+        else entry.waiters?.push(onError)
+      }
+      return entry.tex
     }
 
     const deg = (v?: number) => ((v || 0) * Math.PI) / 180
@@ -621,11 +790,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       // 3D client calls, so a poster hangs at the same brightness in both. It
       // runs FIRST of the material passes: the clip and the cut below clone
       // what they traverse, and a picture written here rides into their clones.
+      // No mirror options: mirror presets are filtered out (`withoutMirrors`).
       slotMatsRef.current.push(
-        ...applySlotMaterials(THREE, outer, spec.slots,
-                              (url, onError) => new THREE.TextureLoader()
-                                .load(url, undefined, undefined, onError),
-                              MIRROR_OPTS))
+        ...applySlotMaterials(THREE, outer, withoutMirrors(spec.slots),
+                              loadSlotTexture))
       // Room clip (§ B1): the client discards diorama fragments outside the
       // room hull — without the same call here the preview showed the FULL
       // diorama including its baked surroundings and diverged massively from
@@ -664,7 +832,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         } catch {
           cacheRef.current.set(key, 'missing')
         }
-        setBump((b) => b + 1)
+        requestRebuild()
       })()
       return null
     }
@@ -684,7 +852,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           }
         })
         .catch(() => {})
-        .finally(() => { s.status = 'ready'; setBump((b) => b + 1) })
+        .finally(() => { s.status = 'ready'; requestRebuild() })
       return false
     }
     // Loaded texture (RepeatWrapping, sRGB) + its real-world tile size, or
@@ -703,7 +871,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         tex.wrapT = THREE.RepeatWrapping
         tex.colorSpace = THREE.SRGBColorSpace
         cache.set(kind, { tex, sizeM: info.sizeM })
-        setBump((b) => b + 1)
+        requestRebuild()
       }, undefined, () => cache.set(kind, { tex: null, sizeM: info.sizeM }))
       return null
     }
@@ -784,10 +952,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           ? modelHips.getWorldPosition(new THREE.Vector3()).y
           : null
         pivot.position.y -= clipHipsDrop(hipsBindY, anim.hipsMedian, standRef)
+        // STATIC POSE: one evaluation at t = 0 writes the clip's first frame
+        // into the bones, and they keep it — nothing animates in this preview
+        // (it judges where a body sits, not how it moves). The mixer is
+        // deliberately NOT kept or stopped: stopping an action restores the
+        // bind pose, and an unreferenced mixer goes with the clone.
         const mixer = new THREE.AnimationMixer(inst)
         mixer.clipAction(anim.clip).play()
         mixer.update(0)
-        mixersRef.current.push(mixer)
         pivot.userData.__noDispose = true
         fig.add(pivot)
       } else {
@@ -823,22 +995,16 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       fig.rotation.order = 'YXZ'
       fig.rotation.set(deg(opts.tilt), deg(opts.facing ?? 0), deg(opts.roll))
       if (opts.label) {
-        const mc = document.createElement('canvas')
-        mc.width = 128
-        mc.height = 40
-        const mctx = mc.getContext('2d')
-        if (mctx) {
+        const text = opts.label.slice(0, 14)
+        const msprite = labelSprite(`marker|${text}`, 128, 40, (mctx) => {
           mctx.font = '600 22px sans-serif'
           mctx.textAlign = 'center'
           mctx.textBaseline = 'middle'
           mctx.shadowColor = 'rgba(0,0,0,0.9)'
           mctx.shadowBlur = 5
           mctx.fillStyle = AID.markerLabel
-          mctx.fillText(opts.label.slice(0, 14), 64, 20)
-        }
-        const msprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: new THREE.CanvasTexture(mc), transparent: true, depthTest: false,
-        }))
+          mctx.fillText(text, 64, 20)
+        })
         msprite.scale.set(1.3, 0.4, 1)
         msprite.position.y = figBase * 1.15
         fig.add(msprite)
@@ -999,23 +1165,16 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       }
 
       // Name label as a canvas sprite floating above the box.
-      const canvas = document.createElement('canvas')
-      canvas.width = 256
-      canvas.height = 64
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
+      const roomLabel = (room.name || room.id || '').slice(0, 18)
+      const sprite = labelSprite(`room|${roomLabel}`, 256, 64, (ctx) => {
         ctx.font = '600 26px sans-serif'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         ctx.shadowColor = 'rgba(0,0,0,0.9)'
         ctx.shadowBlur = 6
         ctx.fillStyle = '#fff'
-        ctx.fillText((room.name || room.id || '').slice(0, 18), 128, 32)
-      }
-      const tex = new THREE.CanvasTexture(canvas)
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tex, transparent: true, depthTest: false,
-      }))
+        ctx.fillText(roomLabel, 128, 32)
+      })
       sprite.scale.set(3.2, 0.8, 1)
       sprite.position.y = lhEff * 0.62
       roomGroup.add(sprite)
@@ -1454,11 +1613,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           new THREE.Vector3(rx - len, y, rz), new THREE.Vector3(rx + len, y, rz),
         ]), rulerMat))
         if (yi !== 0 && yi % labelEvery === 0) {
-          const c = document.createElement('canvas')
-          c.width = 64
-          c.height = 32
-          const cctx = c.getContext('2d')
-          if (cctx) {
+          const spr = labelSprite(`ruler|${yi}`, 64, 32, (cctx) => {
             cctx.font = '600 20px sans-serif'
             cctx.textAlign = 'center'
             cctx.textBaseline = 'middle'
@@ -1466,10 +1621,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             cctx.shadowBlur = 4
             cctx.fillStyle = '#c9d1d9'
             cctx.fillText(`${yi}`, 32, 16)
-          }
-          const spr = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: new THREE.CanvasTexture(c), transparent: true, depthTest: false,
-          }))
+          })
           spr.scale.set(0.6, 0.3, 1)
           spr.position.set(rx - 0.55, y, rz)
           boxes.add(spr)
@@ -1561,7 +1713,22 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const modelCount = (sc?.models || []).length
       setBudget({ tris, meshes, models: modelCount })
     }
+
+    // Free cached labels / pictures this rebuild no longer shows (renames
+    // while typing, a removed poster). The old scene content is already gone.
+    for (const [key, mat] of labelCacheRef.current) {
+      if (labelUsed.has(key)) continue
+      mat.map?.dispose()
+      mat.dispose()
+      labelCacheRef.current.delete(key)
+    }
+    for (const [url, entry] of slotTexRef.current) {
+      if (slotTexUsed.has(url)) continue
+      entry.tex.dispose()
+      slotTexRef.current.delete(url)
+    }
   }
+  rebuildRef.current = rebuild
 
   useEffect(() => {
     let disposed = false
@@ -1586,7 +1753,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // three ignores `Material.clippingPlanes` and only ONE of the two
         // renderers would cut, which is the drift § B5 exists to prevent.
         renderer.localClippingEnabled = true
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+        // Pixel ratio 1 on purpose: a HiDPI screen would quadruple the fill
+        // cost of a canvas whose job is checking placement, not detail.
+        renderer.setPixelRatio(1)
         renderer.setSize(width, height)
         mount.appendChild(renderer.domElement)
 
@@ -1631,6 +1800,57 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           )
           camera.lookAt(cam.target)
         }
+
+        // ── Frames ON DEMAND ──────────────────────────────────────────────
+        // Nothing in this scene moves by itself (static water, posed figures,
+        // no mirror pass), so a frame is drawn only when something asks for
+        // one: camera input, a rebuild, a texture landing, a resize. While
+        // dist/yaw still ease towards their goals the frame asks for the next
+        // one itself; once both are within epsilon they snap and it stops.
+        // Out of view / hidden tab = no frame at all (`visibleRef`).
+        let raf = 0
+        // Timestamp of the previous frame of the CURRENT burst (0 = idle).
+        // The first frame of a burst takes one nominal 60 Hz step, so a long
+        // idle gap never reads as a huge dt that snaps the eased camera.
+        let lastTs = 0
+        const frame = (now: number) => {
+          raf = 0
+          if (!visibleRef.current) { lastTs = 0; return }
+          const delta = lastTs ? Math.min((now - lastTs) / 1000, 0.1) : 1 / 60
+          lastTs = now
+          // Contract smoothing: dist/yaw approach their goals with
+          // 1 − exp(−8·dt) per frame.
+          const k = 1 - Math.exp(-8 * delta)
+          cam.dist += (cam.distGoal - cam.dist) * k
+          cam.yaw += (cam.yawGoal - cam.yaw) * k
+          const easing = Math.abs(cam.distGoal - cam.dist) > 1e-3 * cam.distGoal
+            || Math.abs(cam.yawGoal - cam.yaw) > 1e-4
+          if (!easing) {
+            cam.dist = cam.distGoal
+            cam.yaw = cam.yawGoal
+          }
+          applyCamera()
+          // Recipe camera culling: hide a wall piece whose OUTSIDE faces
+          // the camera — the interior stays visible despite the walls.
+          for (const w of wallCullRef.current) {
+            w.mesh.visible =
+              (camera.position.x - w.mx) * w.nx + (camera.position.z - w.mz) * w.nz <= 0
+          }
+          renderer.render(scene, camera)
+          if (easing) raf = requestAnimationFrame(frame)
+          else lastTs = 0
+        }
+        const requestRender = () => {
+          if (raf || !visibleRef.current) return
+          raf = requestAnimationFrame(frame)
+        }
+        renderReqRef.current = requestRender
+        disposers.push(() => {
+          cancelAnimationFrame(raf)
+          raf = 0
+          renderReqRef.current = null
+        })
+
         const groundPoint = (clientX: number, clientY: number) => {
           const rect = renderer.domElement.getBoundingClientRect()
           const ndc = new THREE.Vector2(
@@ -1671,12 +1891,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             if (g && dragRefLocal.startGround) {
               cam.target.add(dragRefLocal.startGround.clone().sub(g))
               applyCamera()
+              requestRender()
             }
           } else {
             const dx = e.clientX - dragRefLocal.lastX
             const dy = e.clientY - dragRefLocal.lastY
             cam.yawGoal -= dx * 0.005
             cam.pitchOffset = Math.min(35, Math.max(-35, cam.pitchOffset + dy * 0.25))
+            requestRender()
           }
           dragRefLocal.lastX = e.clientX
           dragRefLocal.lastY = e.clientY
@@ -1696,6 +1918,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           if (cursor && cam.distGoal < old) {
             cam.target.lerp(cursor, 1 - cam.distGoal / old)
           }
+          requestRender()
         }
         const onContext = (e: Event) => e.preventDefault()
         renderer.domElement.addEventListener('pointerdown', onPointerDown)
@@ -1761,10 +1984,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         })
 
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
-        clockRef.current = new THREE.Clock()
         handleRef.current = { THREE, boxes, skclone, ground }
         disposers.push(() => { handleRef.current = null })
-        rebuild(handleRef.current, roomsRef.current)
+        // The first build runs right here (no frame of waiting); if the
+        // canvas is out of view it stays dirty until it comes into view.
+        rebuildDirtyRef.current = true
+        flushRebuild()
 
         // Initial framing: distance so the reference square fits comfortably.
         const ext0 = sceneRef.current?.extent_m || DEFAULT_EXTENT_M
@@ -1773,38 +1998,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         applyCamera()
 
         setLoading(false)
+        requestRender()
 
-        let raf = 0
-        const animate = () => {
-          raf = requestAnimationFrame(animate)
-          const delta = clockRef.current?.getDelta() || 0
-          updateSurfaceMaterials(delta)   // one clock for every water surface
-          // Recipe camera culling: hide a wall piece whose OUTSIDE faces
-          // the camera — the interior stays visible despite the walls.
-          for (const w of wallCullRef.current) {
-            w.mesh.visible =
-              (camera.position.x - w.mx) * w.nx + (camera.position.z - w.mz) * w.nz <= 0
-          }
-          for (const mixer of mixersRef.current) mixer.update(delta)
-          // Contract smoothing: dist/yaw approach their goals with
-          // 1 − exp(−8·dt) per frame.
-          const k = 1 - Math.exp(-8 * delta)
-          cam.dist += (cam.distGoal - cam.dist) * k
-          cam.yaw += (cam.yawGoal - cam.yaw) * k
-          applyCamera()
-          renderer.render(scene, camera)
-        }
-        animate()
-        disposers.push(() => cancelAnimationFrame(raf))
-
+        // Resizing clears the canvas, so it is one of the frame triggers. The
+        // mount's own size is what matters (a panel can resize without the
+        // window doing so).
         const onResize = () => {
           const w = mount.clientWidth || width
           camera.aspect = w / height
           camera.updateProjectionMatrix()
           renderer.setSize(w, height)
+          requestRender()
         }
-        window.addEventListener('resize', onResize)
-        disposers.push(() => window.removeEventListener('resize', onResize))
+        if (typeof ResizeObserver !== 'undefined') {
+          const ro = new ResizeObserver(onResize)
+          ro.observe(mount)
+          disposers.push(() => ro.disconnect())
+        } else {
+          window.addEventListener('resize', onResize)
+          disposers.push(() => window.removeEventListener('resize', onResize))
+        }
       } catch (e) {
         cleanup?.()
         if (!disposed) {
@@ -1825,6 +2038,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   useEffect(() => {
     const cache = cacheRef.current
     const clipCache = clipCacheRef.current
+    const slotMats = slotMatsRef.current
+    const slotTex = slotTexRef.current
+    const labels = labelCacheRef.current
     return () => {
       const disposeTree = (root: Object3D) => root.traverse((o: Object3D) => {
         const mesh = o as Mesh
@@ -1842,6 +2058,16 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       if (figRef.current.obj) disposeTree(figRef.current.obj)
       figRef.current = { status: 'idle' }
       clipCache.clear()
+      // The caches that outlive single rebuilds: slot clones of the last
+      // build, the slot pictures and the label materials with their canvases.
+      for (const m of slotMats.splice(0)) m.dispose()
+      for (const entry of slotTex.values()) entry.tex.dispose()
+      slotTex.clear()
+      for (const mat of labels.values()) {
+        mat.map?.dispose()
+        mat.dispose()
+      }
+      labels.clear()
     }
   }, [])
 
@@ -1850,12 +2076,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     rooms.filter((r) => r.layout)
       .map((r) => r.layout!.level || 0))).sort((a, b) => a - b), [rooms])
 
-  // Live-apply layout edits (drag/resize/rotate in the editor) and toggle/
-  // load-completion changes — content rebuild only, the scene/renderer stay.
+  // Content rebuild (the scene/renderer stay) on a new RECIPE and on view
+  // state — deliberately NOT on `rooms` / `map3d`. Walls, plates, models and
+  // markers all come from `scene`, and every draft change produces a new one
+  // (useScenePreview, debounced); rebuilding per pointermove of a room drag
+  // tore down and re-cloned the whole location for a picture whose walls had
+  // not moved yet. The room boxes and labels read the draft through
+  // `roomsRef` and so follow at the recipe's pace — together with the walls
+  // around them instead of ahead of them. Load completions arrive through
+  // `requestRebuild` directly.
   useEffect(() => {
-    if (handleRef.current) rebuild(handleRef.current, rooms)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
+    requestRebuild()
+  }, [requestRebuild, showModels, showBuilding, showWalls, soloLevel, lh,
       scene, calibration, previewPose, poseCatalog, verify, measure])
 
   return (
@@ -1875,6 +2107,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             △ {budget.tris >= 1000
               ? `${Math.round(budget.tris / 1000)}k` : budget.tris}
             {' · '}{budget.models} {t('models')}
+          </span>
+        ) : null}
+        {rebuildStats ? (
+          <span
+            className="ga-hint"
+            style={{ fontSize: 11 }}
+            title={t('Scene rebuilds since the preview opened, and how long the last one took. A rebuild runs when the server sends a new scene recipe, a view switch changes or a model/texture finishes loading — at most once per frame.')}
+          >
+            ⟳ {rebuildStats.count} · {rebuildStats.ms.toFixed(rebuildStats.ms < 10 ? 1 : 0)} ms
           </span>
         ) : null}
         {previewLevels.length > 1 ? (
