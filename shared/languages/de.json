@@ -3788,6 +3788,8 @@
     "Finale": "Abschluss",
     "Ask {name} first": "Erst {name} fragen",
     "choose {n}": "{n} wählen",
+    "choose {min}–{max}": "{min}–{max} wählen",
+    "Takes at most {n} others": "Höchstens {n} weitere",
     "Not enough people here for this action": "Für diese Aktion sind nicht genug Personen hier",
     "The people chosen do not fit this action's roles": "Die gewählten Personen passen nicht zu den Rollen dieser Aktion",
     "Other participants in the room": "Weitere Beteiligte im Raum",

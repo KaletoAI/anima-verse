@@ -24,6 +24,18 @@
 //     (dimmed: nothing usable), "Sofa · 2.5 m 3", "Table 1"; "All potential
 //     partners 3" with Ben 1, Kira 1, Mira 0. No piece's action is shown
 //     while its piece is closed. Spectator ('' avatar) renders nothing.
+// [6] Groups run with fewer people than their clip has roles (2026-11-08).
+//     GROUP_MIN_OTHERS 2 (Core's GROUP_MIN_PEOPLE 3 minus the avatar).
+//     Feast (participants 3) takes at most 2 others; a "Circle" for 5 on the
+//     same table at most 4. groupFit(Feast): 1 too_few, 2 fits, 3 too_many;
+//     groupFit(Circle): 2, 3, 4 fit, 5 too_many. groupPickRange over both,
+//     candidates Feast [Kira, Ben], Circle [Ben, Mira, Kira]: candidates in
+//     first-seen order [Kira, Ben, Mira], fewest 2, most min(3 candidates,
+//     4) = 3; Feast alone: most min(2, 2) = 2; a group with one candidate:
+//     most 1 (below fewest: the picker never completes). pieceGroups of the
+//     table with both: single [], group [Feast, Circle] (the piece's order,
+//     both usable -> by label: Circle, Feast); of the sofa: single = its three
+//     actions, group [].
 // [5] The chat mount `PropActionsPanel showOffers={false}`: offers alone
 //     render nothing (they were a section with chips before); with a running
 //     row it shows the row and its Stop, but no offer chip ("With Kira").
@@ -53,7 +65,8 @@ function moduleUrl(file) {
   return url;
 }
 const src = name => moduleUrl(new URL(`./src/${name}`, import.meta.url));
-const { offerKind, pieceNodes, partnerNodes } = await import(src('actionsTreeModel.ts'));
+const { offerKind, pieceNodes, partnerNodes, pieceGroups, groupFit, groupPickRange, GROUP_MIN_OTHERS } =
+  await import(src('actionsTreeModel.ts'));
 const { I18nProvider } = await import(src('I18nProvider.tsx'));
 const { ActionsTree } = await import(src('ActionsTree.tsx'));
 const { PropActionsPanel } = await import(src('PropActionsPanel.tsx'));
@@ -114,6 +127,23 @@ assert.match(tree, /class="player-actions-tree-node off"><button[^>]*aria-expand
 assert.doesNotMatch(tree, /Cuddle|Feast|Ask/, 'a closed piece shows none of its actions');
 assert.equal(render(ActionsTree, { avatar: '', present, interaction: null, onChanged() {} }), '');
 console.log('PASS action tree rendering');
+
+// [6]
+const feast = offers.find(o => o.action_id === 'feast');
+const circle = offer({ action_id: 'circle', label: 'Circle', prop_label: 'Table', distance_m: null,
+  target: target('table', 'round'), participants: 5, candidates: ['Ben', 'Mira', 'Kira'] });
+assert.equal(GROUP_MIN_OTHERS, 2);
+assert.deepEqual([1, 2, 3].map(n => groupFit(feast, n)), ['too_few', 'fits', 'too_many']);
+assert.deepEqual([2, 3, 4, 5].map(n => groupFit(circle, n)), ['fits', 'fits', 'fits', 'too_many']);
+assert.deepEqual(groupPickRange([feast, circle]), { fewest: 2, most: 3, candidates: ['Kira', 'Ben', 'Mira'] });
+assert.deepEqual(groupPickRange([feast]), { fewest: 2, most: 2, candidates: ['Kira', 'Ben'] });
+assert.equal(groupPickRange([{ ...circle, candidates: ['Ben'] }]).most, 1);
+const table = pieceNodes([...offers, circle]).find(p => p.label === 'Table');
+assert.deepEqual(Object.entries(pieceGroups(table)).map(([k, v]) => [k, v.map(o => o.label)]),
+  [['single', []], ['group', ['Circle', 'Feast']]]);
+assert.deepEqual(pieceGroups(pieces[2]).single.map(o => o.label), ['Cuddle', 'Sit', 'Rest']);
+assert.deepEqual(pieceGroups(pieces[2]).group, []);
+console.log('PASS group size and the per-piece group node');
 
 // [5]
 assert.equal(render(PropActionsPanel, { showOffers: false }), '', 'offers alone: nothing in the chat');

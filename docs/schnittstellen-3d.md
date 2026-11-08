@@ -2717,6 +2717,19 @@ mit mehr Figuren:
   `client3d/scripts/smoke_group_role_points.mjs`. Gegenprobe gegen den Server
   in `scripts/smoke_group_role_points.py`.
 - Der Abschluss (§ A8c) einer Gruppe nennt die Rolle des Mitglieds, `a`..`e`.
+- **Leere Rollen (2026-11-08).** Eine Gruppe darf kleiner sein als ihr Clip:
+  Eine Gruppen-Aktion (`participants` 3..5 = Rollenzahl des Clips = die
+  HÖCHSTzahl) läuft mit drei Personen (Auslöser + zwei Eingeladene,
+  `prop_action_engine.GROUP_MIN_PEOPLE`) bis `participants`. Die Rollenwahl
+  bleibt die oben beschriebene; Rollen, die niemand nimmt, bleiben LEER.
+  `interaction.members` (und `roles.clip` der Lauf-Zeile) nennen nur die
+  besetzten Rollen, in Clip-Reihenfolge, mit Lücken (`{a, c, e}` ist gültig).
+  JEDE Rolle darf leer sein, auch `a` (drei Männer auf einem Clip mit einer
+  Frauen-Rolle A). Eine leere Rolle hat keine Figur, keinen Slot, keinen
+  Rollenpunkt und keinen Abschluss: Ein Client zeichnet für sie NICHTS und
+  leitet aus der Rollenzahl des Clips keine fehlende Figur ab; jede
+  vorhandene Figur spielt wie immer ihre eigene Hälfte am Anker. Paare
+  (`participants` 2) und Solo bleiben genau.
 
 **Alt-Hälften (G6, 2026-11-03).** Eine Rolle eines Paars oder einer Gruppe darf
 Ersatz-Hälften haben, die mit derselben Szene aufgenommen wurden (eine andere
@@ -2897,7 +2910,9 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
 ## A8c. Abschluss-Clip einer laufenden Aktion (`finale`)
 
 Eine Pose darf im Katalog einen **Abschluss-Clip** nennen (`finale_animation`, Clip-Kind): bei einer
-Paar-Pose ein vollständiges Paar (§ A8a), bei einer Solo-Pose ein Solo-Clip. Ohne das Feld darf ein Paket
+Paar-Pose ein vollständiges Paar (§ A8a), bei einer Gruppen-Pose ein Clip mit allen Rollen der Pose (auch wenn die
+laufende Gruppe Rollen leer lässt, § A8a — jedes Mitglied schließt in der Hälfte SEINER Rolle, eine leere Rolle
+hat keinen Abschluss), bei einer Solo-Pose ein Solo-Clip. Ohne das Feld darf ein Paket
 einen ableiten (Provider `pose.finale_animation`). WANN er spielt, entscheidet
 nicht der Client und nicht der Kern, sondern ein Paket über `prop_action_engine.begin_finale(execution_id,
 name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt dann
@@ -8379,8 +8394,10 @@ pick among the pieces offering it, nearest first), `label`, `description`, `enab
 (the head count, actor included) and declared `effects`. A GROUP action (`participants` 3..5, G4 of
 plan-gruppen-animationen.md) is offered once per piece with `required_partner` true, no
 `available_targets` and `candidates` — the people in the room the player may pick (awake persons, minus
-those a package rules out for a "policy" action; busy ones stay pickable). `enabled` only says whether
-there are enough of them (else `partners_missing`); one exact choice is judged by
+those a package rules out for a "policy" action; busy ones stay pickable). `participants` is the MOST
+people a group takes (2026-11-08): the player picks 2 up to `participants - 1` of them (a group runs with
+3 people up to its clip's role count, `GROUP_MIN_PEOPLE`; the roles nobody takes stay empty, § A8a).
+`enabled` only says whether there are at least two candidates (else `partners_missing`); one exact choice is judged by
 `POST /play/prop-actions/check`. Group actions are never offered to an LLM (`_requestable`, the named
 `PropAction` request answers `no_such_offer`): only the player starts a group. Checks cover every
 present person, awake/exact partners, effective requirements, exclusive claims,
@@ -8398,16 +8415,17 @@ Player routes require the authenticated user's current authorized avatar:
   read-only preflight of one exact choice (a group's picked people); no claim, no run.
 - `POST /play/prop-actions/request`: `{target,action_id,revision,members?,request_id?,consent?}`.
   `members` (2026-11-03, replaces `partner`): the invitees in invitation order —
-  exactly `participants - 1` distinct names other than the actor (one for a pair,
-  2..4 for a group action), none for a solo action; anything else is
-  `invalid_partner`. `consent` (default `ask`): `ask` waits until EVERY invitee
+  distinct names other than the actor — exactly one for a pair, 2 up to
+  `participants - 1` for a group action (2026-11-08: a group may be smaller
+  than its clip, the roles nobody takes stay empty, § A8a), none for a solo
+  action; anything else is `invalid_partner`. `consent` (default `ask`): `ask` waits until EVERY invitee
   has said yes (the run starts with the last "yes"; one "no" ends it as
   `consent_declined`, the row's `declined_by` names who), `react` — pairs only,
   else `invalid_consent` — starts at once and the partner reacts and may push it
   away; every pair action offers both, the requester chooses. Clip roles follow
   the clip's `role_gender` (a group: each gendered person takes the first free
-  role of their gender in invitation order, the rest fill up; no fitting role is
-  `roles_unfit`); every member claims its person and a slot. A request naming the run the actor
+  role of their gender in invitation order, the rest fill the first free roles,
+  the roles left over stay empty; no fitting role is `roles_unfit`); every member claims its person and a slot. A request naming the run the actor
   already takes part in (same action, piece and pair) answers that run with
   `already: true` instead of refusing it as `participant_claimed`; an open
   invitation asked again is answered the same way.

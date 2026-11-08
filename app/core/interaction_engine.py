@@ -57,8 +57,10 @@ from app.core.timeutils import game_time
 logger = get_logger(__name__)
 
 
-def _narrate(anchor: str, key: str, **fmt) -> None:
-    """Record a pair event in the anchor's language and room. Never raises."""
+def _narrate(anchor: str, key: str, *, literal: bool = False, **fmt) -> None:
+    """Record a pair event in the anchor's language and room. Never raises.
+    ``literal``: ``key`` is told as it is (a reaction line already written in
+    the room's language), not translated or formatted."""
     try:
         from app.core.i18n import t
         from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
@@ -67,11 +69,15 @@ def _narrate(anchor: str, key: str, **fmt) -> None:
         from app.models.character import (get_character_current_location,
                                           get_character_current_room,
                                           get_character_language)
-        lang = get_character_language(anchor)
-        pose_key = fmt.pop("pose_key")
+        if literal:
+            content = key
+        else:
+            lang = get_character_language(anchor)
+            pose_key = fmt.pop("pose_key")
+            content = t(key, lang).format(**fmt, pose=pose_label(pose_key, lang))
         record_utterance(
             speaker=STORYTELLER_SPEAKER,
-            content=t(key, lang).format(**fmt, pose=pose_label(pose_key, lang)),
+            content=content,
             volume=VOLUME_NORMAL,
             location_id=get_character_current_location(anchor) or "",
             room_id=get_character_current_room(anchor) or "",
@@ -580,8 +586,11 @@ def group_roles(names: List[str], profiles: Dict[str, Dict[str, Any]],
     the first free role of that gender, in invitation order (a tie goes to
     whoever was asked first); everyone else (no gender, or one the clip does
     not name) then takes the first free role. Without a gender assignment the
-    roles go in invitation order, the initiator plays A. Raises
-    ``ValueError("roles_unfit")`` when the clip has another number of roles,
+    roles go in invitation order, the initiator plays A. A group may be
+    smaller than its clip (``prop_action_engine.GROUP_MIN_PEOPLE`` up to the
+    role count): the roles nobody takes stay EMPTY and are left out of the
+    result, which lists the taken roles in clip order. Raises
+    ``ValueError("roles_unfit")`` when the clip has fewer roles than people,
     or a person finds no free role of their gender (three women for two
     female roles)."""
     from app.core.animation_clips import _meta_roles, clip_role_gender
@@ -593,7 +602,7 @@ def group_roles(names: List[str], profiles: Dict[str, Dict[str, Any]],
         a, b = assign_roles(names[0], names[1], sex(names[0]), sex(names[1]), gender)
         return {"a": a, "b": b}
     roles = _meta_roles(meta)
-    if len(roles) != len(names):
+    if len(roles) < len(names):
         raise ValueError("roles_unfit")
     if not gender:
         return dict(zip(roles, names))
@@ -606,9 +615,11 @@ def group_roles(names: List[str], profiles: Dict[str, Dict[str, Any]],
             taken[role] = name
     rest = [n for n in names if n not in taken.values()]
     for role in roles:
+        if not rest:
+            break
         if role not in taken:
             taken[role] = rest.pop(0)
-    return {role: taken[role] for role in roles}
+    return {role: taken[role] for role in roles if role in taken}
 
 
 def shared_slot(place: dict) -> int:
@@ -625,7 +636,8 @@ def plan_interaction_at(names: List[str], pose_key: str, place: dict, *, profile
     """Shared clip-role allocation BEFORE a prop owner claims access/slots.
 
     ``names``: the initiator first, then the invitees in invitation order;
-    roles by :func:`group_roles`. Everything is keyed by NAME: ``slots``,
+    roles by :func:`group_roles` — only the TAKEN roles of a group smaller
+    than its clip get a slot or point. Everything is keyed by NAME: ``slots``,
     ``points`` and ``access_roles`` — the marker access of clip role A is
     ``actor``, of every other role ``partner``. Semantic initiator/invitee
     identities stay with the run, including effect targets.
@@ -1383,8 +1395,10 @@ def pending_invites_for(invitee: str) -> List[Dict[str, Any]]:
 
 
 def outgoing_invite_of(inviter: str) -> Optional[Dict[str, Any]]:
-    """The open, fresh invitation ``inviter`` is waiting on — so the UI can
-    show "waiting for X…" with a way to take it back."""
+    """The open, fresh invitation ``inviter`` is waiting on — a question, or
+    a pair started without asking whose reaction is still out
+    (``reacting``) — so the UI can show "waiting for X…" with a way to take
+    it back."""
     from app.core.db import get_connection
     inviter = (inviter or "").strip()
     if not inviter:
@@ -1392,7 +1406,7 @@ def outgoing_invite_of(inviter: str) -> Optional[Dict[str, Any]]:
     try:
         r = get_connection().execute(
             "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
-            "FROM interaction_invites WHERE inviter=? AND status='pending' "
+            "FROM interaction_invites WHERE inviter=? AND status IN ('pending', 'reacting') "
             "ORDER BY created_at DESC LIMIT 1", (inviter,)).fetchone()
     except Exception:
         return None
@@ -1570,6 +1584,16 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
                  "{invitee} does not feel like {pose} with {inviter} right now.",
                  inviter=inv["inviter"], invitee=inv["invitee"], pose_key=inv["pose_key"])
         return {**out, "status": "declined"}
+    return _accept_claimed(inv)
+
+
+def _accept_claimed(inv: Dict[str, Any]) -> Dict[str, Any]:
+    """A yes for the invitation this call has claimed (``answering``): start
+    the pair, walk over when only the metres are missing, or fail it with its
+    reason. The answer to an invitation and an unanswered or accepted react
+    pair (:func:`react`) end here alike."""
+    invite_id = inv["invite_id"]
+    out = {k: v for k, v in inv.items() if k != "status"}
     blocked = check_can_pair(inv["inviter"], inv["invitee"], inv["pose_key"])
     if blocked:
         _fail_invite(inv, blocked)
@@ -1687,9 +1711,12 @@ def settle_approaches() -> int:
     the pair is attempted once: it either starts, or the invitation is over
     (the other one moved on, fell asleep, sat down elsewhere). Retrying
     forever would leave a character walking after someone across the world.
+    The same beat lets a react pair whose reaction never came go on
+    (:func:`_settle_reactions`).
     """
     from app.core.db import get_connection
     from app.core.travel_engine import get_journey
+    _settle_reactions()
     try:
         rows = get_connection().execute(
             "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
@@ -1734,16 +1761,176 @@ def settle_approaches() -> int:
     return bound
 
 
+# ------------------------------------------------------ without asking
+
+#: How a free pair begins — chosen by whoever proposes it, the same two ways
+#: as a furniture pair run (``prop_action_engine.CONSENTS``): "ask" (an
+#: invitation the partner answers) or "react" (:func:`start_without_asking`).
+CONSENTS = ("ask", "react")
+
+
+def start_without_asking(actor: str, partner: str, pose_key: str) -> Dict[str, Any]:
+    """``actor`` starts the free pair pose ``pose_key`` with ``partner``
+    WITHOUT asking — the free-pose twin of a furniture pair run requested
+    with consent "react".
+
+    No question is put: the row is recorded as ``reacting`` (no
+    ``interaction.invited``, so nobody is woken to answer it) and the room
+    hears "{actor} approaches {partner}: {pose}.". What happens next depends
+    on the partner's reaction (``pair_reaction.request_state``):
+
+    * ``player`` (a player-controlled partner) or ``none`` (no package
+      answers ``pair_reaction``) — nothing waits, the pair is accepted at once
+      (:func:`_accept_claimed`: it starts, or ``walker_of`` walks over); a
+      player partner ends it with the ordinary Stop.
+    * ``pending`` — the ``pair_reaction`` provider is asked and the pair
+      WAITS for the answer before it binds, as a furniture run waits at the
+      furniture: :func:`react` accepts (the same start or walk) or resists
+      (the row ends ``declined`` / ``partner_resisted``, nothing ever ran).
+      Unlike a furniture run the walk over starts only after the answer — a
+      free pair has no place to walk to beforehand, its meeting point is laid
+      when it binds. Without an answer after ``REACTION_WAIT_S`` (counted from
+      the row's ``created_at``) :func:`settle_approaches` goes on as accepted.
+
+    Returns resolve_invite's shape — ``started`` / ``approaching`` /
+    ``cannot`` with its ``reason`` — or ``reacting`` while the reaction is
+    out. The same pair asked again while its reaction is out is that row
+    (a double click starts nothing twice).
+    """
+    from app.core import pair_reaction, sync_topics
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now_iso
+    actor, partner, pose_key = ((actor or "").strip(), (partner or "").strip(),
+                                (pose_key or "").strip())
+    if not actor or not partner or actor == partner or not pose_key:
+        return {"status": "cannot", "reason": "an interaction needs two different characters"}
+    blocked = check_can_pair(actor, partner, pose_key)
+    if blocked:
+        return {"status": "cannot", "reason": blocked}
+    invite_id, waiting = "iinv_" + uuid.uuid4().hex[:10], ""
+    try:
+        with transaction() as conn:
+            row = conn.execute(
+                "SELECT invite_id, created_at FROM interaction_invites WHERE inviter=? "
+                "AND invitee=? AND pose_key=? AND status='reacting' "
+                "ORDER BY created_at DESC LIMIT 1", (actor, partner, pose_key)).fetchone()
+            if row and pair_reaction.waited_s(row[1]) < pair_reaction.REACTION_WAIT_S:
+                waiting = row[0]
+            else:
+                # Starting it takes the place of the actor's own open question.
+                conn.execute(
+                    "UPDATE interaction_invites SET status='cancelled' "
+                    "WHERE inviter=? AND invitee=? AND status='pending'", (actor, partner))
+                conn.execute(
+                    "INSERT INTO interaction_invites (invite_id, inviter, invitee, "
+                    "pose_key, created_at, status) VALUES (?, ?, ?, ?, ?, 'reacting')",
+                    (invite_id, actor, partner, pose_key, utc_now_iso()))
+    except Exception as e:
+        logger.debug("start_without_asking failed: %s", e)
+        return {"status": "cannot", "reason": "the action could not be started"}
+    if waiting:
+        return {"status": "reacting", "invite_id": waiting, "inviter": actor,
+                "invitee": partner, "pose_key": pose_key}
+    sync_topics.avatars([actor, partner], "presence")
+    _narrate(actor, "{actor} approaches {partner}: {pose}.",
+             actor=actor, partner=partner, pose_key=pose_key)
+    state = pair_reaction.request_state(partner)["state"]
+    logger.info("interaction %s: %s starts '%s' with %s without asking (reaction %s)",
+                invite_id, actor, pose_key, partner, state)
+    if state == "pending":
+        pair_reaction.ask("interaction", invite_id, actor, partner)
+        return {"status": "reacting", "invite_id": invite_id, "inviter": actor,
+                "invitee": partner, "pose_key": pose_key}
+    inv = get_invite(invite_id)
+    if not inv or not _claim_invite(invite_id, "reacting"):
+        # Taken back (or swept) in between: nothing starts.
+        return {"status": "cannot", "invite_id": invite_id, "reason": "the action was called off"}
+    return _accept_claimed(inv)
+
+
+def react(partner: str, invite_id: str, accept: bool, *, line: str = "",
+          feeling: int = 0, romantic: bool = False) -> Dict[str, Any]:
+    """The partner's reaction to a free pair started without asking
+    (:func:`start_without_asking`) — the same answer as
+    ``prop_action_engine.react`` gives a furniture run.
+
+    ``accept`` True starts the pair (or the walk over, :func:`_accept_claimed`);
+    False ends it before it began: the row becomes ``declined`` with reason
+    ``partner_resisted`` and the answer is ``resisted``. ``line`` is told to
+    the room as it is; ``feeling`` (-2..2) and ``romantic`` are booked on the
+    relationship (``pair_reaction.book``). A reaction for a row that no longer
+    waits (taken back, timed out, already answered) changes nothing and
+    answers ``not_waiting``; one by anybody but the partner is refused.
+    """
+    from app.core import pair_reaction, sync_topics
+    from app.core.db import transaction
+    from app.core.pose_catalog import pose_label
+    if type(accept) is not bool:
+        return {"status": "refused", "reason": "invalid_response"}
+    feeling = pair_reaction.clamp_feeling(feeling)
+    inv = get_invite(invite_id)
+    if not inv or inv["invitee"] != partner:
+        return {"status": "refused", "reason": "not_partner"}
+    out = {k: v for k, v in inv.items() if k != "status"}
+    if inv["status"] != "reacting" or not _claim_invite(invite_id, "reacting"):
+        return {**out, "status": "not_waiting"}
+    line = line.strip() if isinstance(line, str) else ""
+    if line:
+        _narrate(partner, line, literal=True)
+    pair_reaction.book(inv["inviter"], partner, pose_label(inv["pose_key"], "en"),
+                       accept, feeling, bool(romantic))
+    logger.info("interaction %s: %s %s %s's '%s' (feeling %d)", invite_id, partner,
+                "accepts" if accept else "resists", inv["inviter"], inv["pose_key"], feeling)
+    if accept:
+        return _accept_claimed(inv)
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE interaction_invites SET status='declined', reason='partner_resisted' "
+            "WHERE invite_id=? AND status='answering'", (invite_id,))
+    sync_topics.avatars([inv["inviter"], partner], "presence")
+    return {**out, "status": "resisted", "reason": "partner_resisted"}
+
+
+def _settle_reactions() -> int:
+    """Go on as accepted with every react pair whose reaction has not come
+    within ``REACTION_WAIT_S`` — a model that is down must not block every
+    pair started without asking. Returns how many went on."""
+    from app.core import pair_reaction
+    from app.core.db import get_connection
+    try:
+        rows = get_connection().execute(
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "FROM interaction_invites WHERE status='reacting'").fetchall()
+    except Exception:
+        return 0
+    moved = 0
+    for r in rows:
+        inv = _invite_row(r)
+        if pair_reaction.waited_s(inv["created_at"]) < pair_reaction.REACTION_WAIT_S:
+            continue
+        try:
+            if not _claim_invite(inv["invite_id"], "reacting"):
+                continue
+            logger.info("interaction %s: no reaction from %s within %.0f s — goes on",
+                        inv["invite_id"], inv["invitee"], pair_reaction.REACTION_WAIT_S)
+            _accept_claimed(inv)
+            moved += 1
+        except Exception as e:          # one bad row must not stop the beat
+            logger.debug("settling the reaction of %s failed: %s", inv.get("invite_id"), e)
+    return moved
+
+
 def cancel_invite(invite_id: str) -> bool:
-    """Take back an invitation — before it is answered, or while the one who
-    agreed is still walking over. True when there was one to take back.
+    """Take back an invitation — before it is answered (a react pair: before
+    the reaction came), or while the one who agreed is still walking over.
+    True when there was one to take back.
 
     Calling off an approach also calls off the WALK: the trip existed only to
     make that pair possible, and leaving it running would march the character
     to a spot it has no reason to be at.
     """
     inv = get_invite(invite_id)
-    if not inv or inv["status"] not in ("pending", "approaching"):
+    if not inv or inv["status"] not in ("pending", "reacting", "approaching"):
         return False
     if not _set_invite_status(invite_id, "cancelled", expected_status=inv["status"]):
         return False
@@ -1771,10 +1958,10 @@ def clear_invites_for(character: str) -> None:
         with transaction() as conn:
             affected = conn.execute(
                 "SELECT inviter, invitee FROM interaction_invites "
-                "WHERE status IN ('pending', 'approaching') AND (inviter=? OR invitee=?)",
+                "WHERE status IN ('pending', 'reacting', 'approaching') AND (inviter=? OR invitee=?)",
                 (c, c)).fetchall()
             conn.execute("UPDATE interaction_invites SET status='stale' "
-                         "WHERE status IN ('pending', 'approaching') "
+                         "WHERE status IN ('pending', 'reacting', 'approaching') "
                          "AND (inviter=? OR invitee=?)", (c, c))
             stored_tx_1 = True
         from app.core import sync_topics

@@ -2058,7 +2058,8 @@ def _interact_charge(avatar: str) -> None:
 
 @router.post("/play/interact")
 async def play_interact(request: Request, user=Depends(get_current_user)):
-    """The avatar proposes a shared action to a present character."""
+    """The avatar proposes a shared action to a present character — or
+    starts it without asking (``consent`` "react")."""
     import asyncio
     body = await request.json() or {}
     return await asyncio.to_thread(_play_interact_sync, body)
@@ -2069,8 +2070,14 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
 
     Answers ``{"ok", "status"}``: "started" when the partner had already
     asked for the same thing (the avatar's proposal is then its consent),
-    otherwise "asked". 400 on an unknown pose, 409 with the engine's reason
-    when the two cannot pair up at all.
+    otherwise "asked". 400 on an unknown pose or ``consent``, 409 with the
+    engine's reason when the two cannot pair up at all.
+
+    ``consent`` (``interaction_engine.CONSENTS``, default "ask") is how the
+    pair begins, like a furniture pair run: "ask" puts the question below;
+    "react" starts it without one (``interaction_engine.start_without_asking``)
+    and answers "reacting" while the partner's reaction is out, else
+    "started" / "approaching" — a pair that cannot start is a 409.
 
     An "asked" carries how the question stands the moment it was recorded:
     a temporary NPC answers SYNCHRONOUSLY inside ``create_invite`` (the
@@ -2087,6 +2094,9 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="partner and pose required")
     if pose not in dict(IE.partner_poses()):
         raise HTTPException(status_code=400, detail="not a two-person action")
+    consent = body.get("consent", "ask")
+    if consent not in IE.CONSENTS:
+        raise HTTPException(status_code=400, detail="consent must be 'ask' or 'react'")
     # The NPC's verb runs through the skill gate; the avatar's route does too
     # (block rules, costs — asking and answering alike). A plain string
     # detail: the panel shows it as it is.
@@ -2104,6 +2114,13 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         _interact_charge(avatar)
         return {"ok": True, "status": res["status"], "partner": partner,
                 "pose": pose}
+    if consent == "react":
+        res = IE.start_without_asking(avatar, partner, pose)
+        if res["status"] not in ("reacting", "started", "approaching"):
+            raise HTTPException(status_code=409, detail=res.get("reason") or res["status"])
+        _interact_charge(avatar)
+        return {"ok": True, "status": res["status"], "partner": partner, "pose": pose,
+                "invite_id": res.get("invite_id", "")}
     blocked = IE.check_can_pair(avatar, partner, pose)
     if blocked:
         raise HTTPException(status_code=409, detail=blocked)

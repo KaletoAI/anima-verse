@@ -446,13 +446,14 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             targets, candidates = [], []
             if group:
                 # A group (plan-gruppen-animationen.md G4): the player picks
-                # the people from ``candidates``; whether that very choice
-                # fits is the preflight ``check`` with all of them — a verdict
-                # per combination would cost a plan per subset.
+                # the people from ``candidates`` — from the fewest a group
+                # runs with up to ``participants`` - 1; whether that very
+                # choice fits is the preflight ``check`` with all of them — a
+                # verdict per combination would cost a plan per subset.
                 key = str(action.get("pose_key") or "") if action.get("presence") == "policy" else None
                 candidates = [n for n in present if _group_candidate(n, key, location_id, room_id, query)]
-                need = action["participants"] - 1
-                checked = (dict(enabled=True, reason="") if len(candidates) >= need
+                checked = (dict(enabled=True, reason="")
+                           if len(candidates) >= engine.GROUP_MIN_PEOPLE - 1
                            else dict(enabled=False, reason="partners_missing"))
             elif pair:
                 for partner in present:

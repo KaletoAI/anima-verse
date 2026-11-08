@@ -22,10 +22,10 @@ templates:
   llm: templates/llm
 
 llm_tasks:
-  # A furniture pair action requested with consent "react" starts without
-  # asking; this short call decides the partner's reaction while both walk
-  # over (the run waits at the furniture for it). The scene waits on it, so it
-  # ranks with a live conversation on the lanes.
+  # A pair action requested with consent "react" (on furniture or a free
+  # pair pose) starts without asking; this short call decides the partner's
+  # reaction (the pair waits for it before it binds). The scene waits on it,
+  # so it ranks with a live conversation on the lanes.
   pair_reaction:
     label: Pair action reaction
     category: chat

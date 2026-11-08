@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { apiPost } from './api'
-import { pieceText } from './actionsTreeModel'
+import { groupFit, groupMostOthers, groupPickRange, pieceText } from './actionsTreeModel'
 import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
@@ -52,11 +52,15 @@ function groupActions(offers: PropActionOffer[], partner?: string): OfferGroup[]
   return [...groups.values()]
 }
 
-/** The open group action: pick the others (exactly participants − 1 of the
- *  offer's `candidates`), then ask them on one piece. Each piece's button
- *  waits for Core's preflight of that exact choice — its reason is the
- *  hover text; everyone picked must agree before it starts. Also the chat's
- *  action tree (ActionsTree.tsx) opens it for a group action. */
+/** The open group action(s): pick the others (from `GROUP_MIN_OTHERS` up to
+ *  the largest action's `participants` − 1 of the offers' `candidates` — a
+ *  group runs with fewer people than its clip has roles), then ask them on
+ *  one entry. An entry that takes fewer people than picked stays visible,
+ *  greyed, saying how many it takes at most; every other entry's button waits
+ *  for Core's preflight of that exact choice — its reason is the hover text;
+ *  everyone picked must agree before it starts. The entries may be one action
+ *  on several pieces (the canvas menus) or several actions of one piece (the
+ *  chat's action tree, ActionsTree.tsx: one "Group" node per piece). */
 export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
   group: OfferGroup
   busy: boolean
@@ -67,9 +71,8 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
   const { t } = useI18n()
   const [picked, setPicked] = useState<string[]>([])
   const [verdicts, setVerdicts] = useState<Record<string, PropActionChoice>>({})
-  const need = group.entries[0].offer.participants - 1
-  const candidates = [...new Set(group.entries.flatMap(entry => entry.offer.candidates ?? []))]
-  const complete = picked.length === need
+  const { fewest, most, candidates } = groupPickRange(group.entries.map(entry => entry.offer))
+  const complete = picked.length >= fewest
   const entryKey = (offer: PropActionOffer) => JSON.stringify([offer.target, offer.action_id])
   const checkKey = complete ? JSON.stringify([picked, group.entries.map(entry => entryKey(entry.offer))]) : ''
   useEffect(() => {
@@ -78,7 +81,8 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
     let live = true
     for (const entry of group.entries) {
       const offer = entry.offer
-      if (!offer.enabled || !picked.every(name => offer.candidates?.includes(name))) continue
+      if (!offer.enabled || groupFit(offer, picked.length) !== 'fits'
+        || !picked.every(name => offer.candidates?.includes(name))) continue
       checkPropAction(offer.action_id, offer.target, offer.definition_revision, picked)
         .then(verdict => { if (live) setVerdicts(v => ({ ...v, [entryKey(offer)]: verdict })) })
         .catch((e: unknown) => {
@@ -89,27 +93,35 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkKey])
   const toggle = (name: string) => setPicked(list => list.includes(name) ? list.filter(n => n !== name)
-    : list.length < need ? [...list, name] : list)
+    : list.length < most ? [...list, name] : list)
+  const choose = most > fewest
+    ? t('choose {min}–{max}').replace('{min}', String(fewest)).replace('{max}', String(most))
+    : t('choose {n}').replace('{n}', String(fewest))
+  // The action is named where the entries are several actions (one piece's group node).
+  const actions = new Set(group.entries.map(entry => entry.offer.label)).size > 1
   return <div className="player-prop-offers-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
-    <span style={{ opacity: 0.7 }}>{group.label} · {t('choose {n}').replace('{n}', String(need))}:</span>
+    <span style={{ opacity: 0.7 }}>{group.label} · {choose}:</span>
     {candidates.map(name => {
       const on = picked.includes(name)
       return <button key={`who:${name}`} type="button" className={`player-chip${on ? ' on' : ''}`} aria-pressed={on}
-        disabled={busy || (!on && complete)} onClick={() => toggle(name)}>{name}</button>
+        disabled={busy || (!on && picked.length >= most)} onClick={() => toggle(name)}>{name}</button>
     })}
     {complete && group.entries.map(entry => {
       const verdict = verdicts[entryKey(entry.offer)]
+      const tooMany = groupFit(entry.offer, picked.length) === 'too_many'
       const fits = picked.every(name => entry.offer.candidates?.includes(name))
-      const enabled = entry.enabled && fits && !!verdict?.enabled
-      const reason = !entry.enabled ? entry.reason : !fits ? 'participant_unavailable'
+      const enabled = entry.enabled && !tooMany && fits && !!verdict?.enabled
+      const reason = tooMany ? '' : !entry.enabled ? entry.reason : !fits ? 'participant_unavailable'
         : verdict && !verdict.enabled ? verdict.reason : ''
-      const piece = group.entries.length > 1 || nameProps ? `${pieceText(entry.offer)} · ` : ''
-      return <HoverHint key={`ask:${entryKey(entry.offer)}`}
-        text={reason ? propActionReason(reason, t) : t('Ask {name} first').replace('{name}', picked.join(', '))}>
+      const hint = tooMany ? t('Takes at most {n} others').replace('{n}', String(groupMostOthers(entry.offer)))
+        : reason ? propActionReason(reason, t) : t('Ask {name} first').replace('{name}', picked.join(', '))
+      const action = actions ? `${entry.offer.label} · ` : ''
+      const piece = (group.entries.length > 1 && !actions) || nameProps ? `${pieceText(entry.offer)} · ` : ''
+      return <HoverHint key={`ask:${entryKey(entry.offer)}`} text={hint}>
         <button type="button" className="player-chip" disabled={busy || !enabled} aria-disabled={!enabled ? true : undefined}
           style={{ pointerEvents: !enabled ? 'none' : undefined }}
           onClick={() => onPick(entry.offer, picked)}>
-          {piece}{verdict || reason ? t('Ask') : '…'}
+          {action}{piece}{verdict || reason || tooMany ? t('Ask') : '…'}
         </button>
       </HoverHint>
     })}

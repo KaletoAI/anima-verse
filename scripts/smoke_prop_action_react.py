@@ -9,7 +9,7 @@ Real temporary world, real journeys, real claims — the fixtures of
 ``smoke_prop_action_runs.py`` (``authored_pair``: actor at (1,5), partner at
 (2,5), a two-place seat; 30 game seconds bring both to their access points).
 The ``pair_reaction`` provider is a recorder; the model never runs. Expected
-values hand-derived from ``prop_action_engine`` (REACTION_WAIT_S = 60 system
+values hand-derived from ``pair_reaction`` (REACTION_WAIT_S = 60 system
 seconds, sentiment step 0.05 per feeling, romantic step 0.02, resisted
 actor -0.03) and ``relationship.record_interaction`` (fresh pair: strength
 10, sentiments 0; the average sentiment delta below -0.01 turns the strength
@@ -17,7 +17,8 @@ change into avg*10):
 
   [1] react start: status "approaching" at once (no invitation), 4 claims
       (2 slots + 2 persons, like an accepted ask run), consented, reaction
-      "pending"; the provider is asked ONCE with (execution, actor, partner);
+      "pending"; the provider is asked ONCE with (kind "prop_action",
+      reference = the execution, actor, partner);
       the room hears "{actor} approaches {partner}: run-pair." (the pose key
       is its own label — the fixture pose has none). Rows: the
       partner's has own_role partner, partner_consent react, can_resist; the
@@ -118,7 +119,7 @@ class React(unittest.TestCase):
         self.assertEqual(len(R.claims()), 4)
         self.assertTrue(run["data"]["consented"])
         self.assertEqual(run["data"]["reaction"]["state"], "pending")
-        self.assertEqual(self.asked, [dict(execution_id=eid, actor=name, partner=partner)])
+        self.assertEqual(self.asked, [dict(kind="prop_action", reference=eid, actor=name, partner=partner)])
         # Room-entry lines of the fixture set-up aside, the run tells ONE line.
         told = [line for line in self.lines if name in line and partner in line]
         self.assertEqual(told, [f"{name} approaches {partner}: run-pair."])
@@ -167,7 +168,8 @@ class React(unittest.TestCase):
         self.assertEqual(R.get(eid)["phase"], "")
         self.assertIsNone(A.due_in_s(F.game_time()))
         later = A.utc_now() + timedelta(seconds=61)
-        with patch.object(A, "utc_now", lambda: later):
+        from app.core import pair_reaction
+        with patch.object(A, "utc_now", lambda: later), patch.object(pair_reaction, "utc_now", lambda: later):
             self.assertEqual(A.due_in_s(F.game_time()), 0.0)
             A.advance(F.game_time())
         run = R.get(eid)
@@ -237,11 +239,11 @@ class React(unittest.TestCase):
         self.enterContext(patch.object(prompt_templates, "register_package_template_dirs",
                                        lambda dirs: register([*dirs, interact])))
         register([*prompt_templates.template_search_dirs()[1:], interact])
-        system, user = reaction_prompt(eid, name, partner)
+        system, user = reaction_prompt("prop_action", eid, name, partner)
         self.assertIn('"reaction": "accept" or "resist"', system)
         self.assertIn(f'Right now: {name} starts "Rest" with {partner} on the Approach fixture, without asking.', user)
         A.react(partner, eid, True)
-        self.assertIsNone(reaction_prompt(eid, name, partner))
+        self.assertIsNone(reaction_prompt("prop_action", eid, name, partner))
 
     def test_9_lane_priority(self):
         from app.core import llm_lanes, llm_tasks

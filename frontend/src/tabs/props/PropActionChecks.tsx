@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Field } from '@anima/player-ui'
+import { Field, GROUP_MIN_OTHERS } from '@anima/player-ui'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import type { PropActionIssue } from './propTypes'
 import type { PropWorkspace } from './usePropWorkspace'
@@ -95,11 +95,14 @@ export function PropActionChecks({ workspace, onIssue }: {
   const room = targets?.rooms.find((entry) => entry.id === roomId)
   const placement = room?.placements.find((entry) => entry.target.placement_id === placementId)
   const savedAction = prop.actions.find((entry) => entry.id === selectedActionId)
-  // Everyone but the actor: one partner for a pair, up to four for a group.
+  // Everyone but the actor: one partner for a pair; for a group from two up
+  // to participants − 1 (a group runs with fewer people than its clip has
+  // roles — Core's GROUP_MIN_PEOPLE, prop_action_engine.py).
   const need = Math.max(0, (savedAction?.participants ?? 1) - 1)
+  const fewest = need > 1 ? GROUP_MIN_OTHERS : need
   const awake = (name: string) => room?.persons.some((person) => person.name === name && !person.sleeping && name !== actor)
   const actorPresent = room?.persons.some((person) => person.name === actor && !person.sleeping)
-  const partnerPresent = partners.length === need && partners.every(awake)
+  const partnerPresent = partners.length >= fewest && partners.length <= need && partners.every(awake)
   const request: PropPlacementCheckRequest | null = placement && savedAction && actorPresent && partnerPresent
     ? { target: placement.target, action_id: savedAction.id, revision: targets!.revision,
       actor, members: partners } : null
@@ -286,7 +289,7 @@ export function PropActionChecks({ workspace, onIssue }: {
             </option>)}
           </select>
         </Field>}
-        {need > 1 && <Field label={`${t('Other participants in the room')} (${partners.length}/${need})`}>
+        {need > 1 && <Field label={`${t('Other participants in the room')} (${partners.length}/${fewest < need ? `${fewest}–${need}` : need})`}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {room.persons.filter((person) => person.name !== actor).map((person) => {
               const on = partners.includes(person.name)

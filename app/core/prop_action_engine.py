@@ -18,9 +18,11 @@ import uuid
 from app.core import prop_action_store as store, places, props, travel_engine as travel
 from app.core.game_time import GameTime, GameDuration
 from app.core import timeutils
-from app.core.timeutils import game_time, game_speed_factor, parse_iso, utc_now
+from app.core.timeutils import game_time, game_speed_factor, utc_now
 from app.core.keyed_lock import keyed_lock, _DeferredRLock
 from app.core.log import get_logger
+from app.core import pair_reaction
+from app.core.pair_reaction import REACTION_WAIT_S
 from app.models import character as C
 from app.models.world import is_world_frozen
 
@@ -32,16 +34,6 @@ _TARGET = ("location_id", "room_id", "placement_id", "variant_uid")
 _INTERNAL_MUTATION = ContextVar("prop_action_owned_mutation", default=False)
 logger = get_logger("prop_action_engine")
 
-#: A pair run requested with ``consent="react"`` waits at the furniture this long (SYSTEM
-#: seconds: it waits for a model, not for the world) for the partner's
-#: reaction; without one it goes on as accepted.
-REACTION_WAIT_S = 60.0
-#: Relationship change per ``feeling`` step (-2..2) of a reaction: the
-#: partner's sentiment toward the actor, romantic tension for a romantic
-#: action; a resisted actor's own sentiment drops by the fixed amount.
-_REACTION_SENTIMENT_STEP = 0.05
-_REACTION_ROMANTIC_STEP = 0.02
-_RESISTED_ACTOR_SENTIMENT = -0.03
 
 
 @contextmanager
@@ -111,6 +103,21 @@ def _join(names):
 #: (every invitee consents first) or "react" (a pair only: it starts at once,
 #: the partner reacts and may resist).
 CONSENTS = ("ask", "react")
+
+#: The fewest people a GROUP action (``participants`` > 2) runs with, the
+#: actor included. Its ``participants`` — the role count of its clip — is the
+#: most; the roles nobody takes stay empty (``interaction_engine.group_roles``).
+GROUP_MIN_PEOPLE = 3
+
+
+def head_count_fits(participants: int, invitees: int) -> bool:
+    """Whether the actor plus ``invitees`` others fit an action for
+    ``participants``: a solo or pair action takes exactly that many, a group
+    action any count from ``GROUP_MIN_PEOPLE`` up to ``participants``."""
+    people = invitees + 1
+    if participants > 2:
+        return GROUP_MIN_PEOPLE <= people <= participants
+    return people == participants
 
 
 def _reacts(run):
@@ -502,7 +509,10 @@ def _plan(run, *, conn, _query=None, replaces=()):
         free = [s for s in places.free_slots(place, [t for t in occupancy.get(place["id"], []) if t[0] not in own])
                 if store.held(store.slot_key(target, place["marker_id"], s), conn=conn) in (None, "", *replaces)]
         from app.core.pose_catalog import pose_places
-        need = pose_places(definition["pose_key"]) if definition["ability"] == "pair" else len(_members(run))
+        # A group with fewer people than roles holds a slot per person at
+        # most: the roles nobody takes need no place.
+        need = (min(pose_places(definition["pose_key"]), len(_members(run)))
+                if definition["ability"] == "pair" else len(_members(run)))
         if len(free) < need:
             continue
         if definition["ability"] == "pair":
@@ -615,8 +625,9 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
                           members=(), request_id: str = "", consent: str = "ask") -> tuple[dict, bool]:
     """Return (result, created), with creation decided at the SQLite insert.
 
-    ``members``: the invitees, in invitation order — as many as the action
-    takes beside the actor (``participants`` - 1), none for a solo action.
+    ``members``: the invitees, in invitation order — one for a pair action,
+    ``GROUP_MIN_PEOPLE`` - 1 up to ``participants`` - 1 for a group action
+    (``head_count_fits``), none for a solo action.
     ``consent`` (requests with others): "ask" — every invitee consents
     first — or "react", a pair only (``CONSENTS``). Naming the run one
     already takes part in again — the partner's tool repeating the action it
@@ -650,7 +661,7 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     definition, reason = _definition(target, action_id, revision)
     if reason:
         return _refused(reason), False
-    if len(invitees) != definition["participants"] - 1:
+    if not head_count_fits(definition["participants"], len(invitees)):
         return _refused("invalid_partner"), False
     if consent == "react" and len(invitees) != 1:
         return _refused("invalid_consent"), False
@@ -2163,7 +2174,7 @@ def check(actor: str, target: dict, action_id: str, revision: str, members=(), *
     definition, reason = _definition(target, action_id, revision, _query=query)
     if reason:
         return dict(enabled=False, reason=reason)
-    if len(invitees) != definition["participants"] - 1:
+    if not head_count_fits(definition["participants"], len(invitees)):
         return dict(enabled=False, reason="invalid_partner")
     run = dict(execution_id="", actor=actor, members=invitees, action_id=action_id,
                definition_revision=revision, target=target, definition=definition,
@@ -2301,44 +2312,20 @@ def _meters(run):
 
 
 def _reaction_request(partner):
-    """The reaction a react run starts with: ``player`` — a player-controlled
-    partner reacts with the HUD (it can push the run away), nothing waits;
-    ``none`` — no package supplies ``pair_reaction``, nothing waits;
-    ``pending`` — the model is asked, the run waits at the furniture."""
-    from app.core.hooks import get_provider
-    from app.models.account import is_player_controlled
-    if is_player_controlled(partner):
-        state = "player"
-    elif get_provider("pair_reaction") is None:
-        state = "none"
-    else:
-        state = "pending"
-    return dict(state=state, asked_at=utc_now().isoformat())
+    """The reaction a react run starts with (``pair_reaction.request_state``):
+    ``player`` (the partner pushes it away with the HUD), ``none`` (no
+    package answers) — nothing waits; ``pending`` — the run waits at the
+    furniture for the model."""
+    return pair_reaction.request_state(partner)
 
 
 def _ask_reaction(run):
-    """Hand the reaction to the ``pair_reaction`` provider after every lock;
-    the provider returns at once and answers through :func:`react`."""
-    from app.core.hooks import get_provider
-    from app.core.keyed_lock import _after_locks
-    provider = get_provider("pair_reaction")
-    if provider is None:
-        return
-
-    def ask():
-        try:
-            provider(execution_id=run["execution_id"], actor=run["actor"], partner=run["members"][0])
-        except Exception as e:
-            logger.warning("pair_reaction provider failed for %s: %s", run["execution_id"], e)
-
-    _after_locks(ask)
+    """Ask the ``pair_reaction`` provider; the answer comes through :func:`react`."""
+    pair_reaction.ask("prop_action", run["execution_id"], run["actor"], run["members"][0])
 
 
 def _reaction_waited_s(reaction):
-    try:
-        return (utc_now() - parse_iso(reaction["asked_at"])).total_seconds()
-    except (KeyError, TypeError, ValueError):
-        return REACTION_WAIT_S
+    return pair_reaction.waited_s((reaction or {}).get("asked_at"))
 
 
 def _awaits_reaction(run) -> bool:
@@ -2357,26 +2344,9 @@ def _awaits_reaction(run) -> bool:
 
 
 def _book_reaction(run, accepted, feeling, romantic):
-    """The reaction's mark on the pair, after every lock: the partner's
-    sentiment toward the actor by ``feeling``, romantic tension for a romantic
-    action, and a resisted actor's own sentiment."""
-    from app.core.keyed_lock import _after_locks
-    actor, partner, name = run["actor"], run["members"][0], run["definition"]["name"]
-
-    def book():
-        try:
-            from app.models.relationship import record_interaction
-            record_interaction(
-                partner, actor, "pair_reaction",
-                summary=f"{partner} {'accepted' if accepted else 'resisted'} {actor}'s {name}",
-                sentiment_delta_a=_REACTION_SENTIMENT_STEP * feeling,
-                sentiment_delta_b=0.0 if accepted else _RESISTED_ACTOR_SENTIMENT,
-                strength_delta=1.0,
-                romantic_delta=_REACTION_ROMANTIC_STEP * feeling if romantic else 0.0)
-        except Exception as e:
-            logger.warning("booking the reaction of %s failed: %s", partner, e)
-
-    _after_locks(book)
+    """The reaction's mark on the pair (``pair_reaction.book``)."""
+    pair_reaction.book(run["actor"], run["members"][0], run["definition"]["name"],
+                       accepted, feeling, romantic)
 
 
 def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
@@ -2392,10 +2362,7 @@ def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
     """
     if type(accept) is not bool:
         return _refused("invalid_response")
-    try:
-        feeling = max(-2, min(2, int(feeling)))
-    except (TypeError, ValueError):
-        feeling = 0
+    feeling = pair_reaction.clamp_feeling(feeling)
     with _lock(execution_id):
         run = store.get(execution_id)
         if not run or run["members"] != [partner] or not _reacts(run):

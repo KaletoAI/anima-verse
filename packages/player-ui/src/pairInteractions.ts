@@ -1,4 +1,5 @@
 import { apiPost } from './api'
+import type { PropActionConsent } from './propActions'
 
 export type PairFacingPhase = 'begin' | 'keep' | 'rollback'
 type Facing = (phase: PairFacingPhase, requestId: string, partner: string) => void
@@ -25,8 +26,11 @@ async function request(path: string, body: unknown, partner?: string): Promise<u
   }
 }
 
-export function invitePair(partner: string, pose: string): Promise<unknown> {
-  return request('/play/interact', { partner, pose }, partner)
+/** Propose a free pair pose: "ask" (default) puts the question, "react"
+ *  starts it at once and the partner reacts — the same two ways as a
+ *  furniture pair action (`requestPropAction`). */
+export function invitePair(partner: string, pose: string, consent: PropActionConsent = 'ask'): Promise<unknown> {
+  return request('/play/interact', { partner, pose, ...(consent === 'react' ? { consent } : {}) }, partner)
 }
 
 export function respondPair(inviteId: string, accept: boolean, partner?: string): Promise<unknown> {

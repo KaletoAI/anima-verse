@@ -18,6 +18,32 @@ export function offerKind(offer: PropActionOffer): OfferKind {
   return offer.participants > 2 ? 'group' : offer.required_partner ? 'pair' : 'solo'
 }
 
+/** The fewest people the player picks for a group action, the avatar not
+ *  counted — Core's `GROUP_MIN_PEOPLE` (prop_action_engine.py) minus the
+ *  avatar. A group action's `participants` is the MOST it takes (its clip's
+ *  role count); the roles nobody takes stay empty (schnittstellen-3d § A8a). */
+export const GROUP_MIN_OTHERS = 2
+
+/** The most others one group action takes beside the avatar. */
+export const groupMostOthers = (offer: PropActionOffer) => Math.max(0, offer.participants - 1)
+
+/** Whether one group action takes `count` picked others: from
+ *  `GROUP_MIN_OTHERS` up to its own maximum. */
+export type GroupFit = 'fits' | 'too_few' | 'too_many'
+export function groupFit(offer: PropActionOffer, count: number): GroupFit {
+  return count < GROUP_MIN_OTHERS ? 'too_few' : count > groupMostOthers(offer) ? 'too_many' : 'fits'
+}
+
+/** What the group picker offers for a set of group actions: the candidates
+ *  of all of them (first seen first) and how many of them may be picked —
+ *  `fewest` = `GROUP_MIN_OTHERS`, `most` = the largest action's maximum, but
+ *  never more than there are candidates. */
+export function groupPickRange(offers: PropActionOffer[]): { fewest: number; most: number; candidates: string[] } {
+  const candidates = [...new Set(offers.flatMap(offer => offer.candidates ?? []))]
+  const most = Math.min(candidates.length, Math.max(0, ...offers.map(groupMostOthers)))
+  return { fewest: GROUP_MIN_OTHERS, most, candidates }
+}
+
 /** One furniture piece and every action it offers. */
 export interface PieceNode {
   /** Exact identity of the piece (Core's target minus the action). */
@@ -50,6 +76,15 @@ export function pieceNodes(offers: PropActionOffer[]): PieceNode[] {
   }
   return [...pieces.values()].sort((a, b) => byDistance(a.distance_m, b.distance_m)
     || byLabel(a.label, b.label) || byLabel(a.key, b.key))
+}
+
+/** A piece's actions split for the tree: the ones listed one by one (solo
+ *  and pair, in the piece's order) and its group actions, which share ONE
+ *  "Group" node — the people are picked once, then every group action of the
+ *  piece is shown for that choice. */
+export function pieceGroups(piece: PieceNode): { single: PropActionOffer[]; group: PropActionOffer[] } {
+  return { single: piece.offers.filter(offer => offerKind(offer) !== 'group'),
+    group: piece.offers.filter(offer => offerKind(offer) === 'group') }
 }
 
 /** One furniture action possible with one partner — Core's verdict for

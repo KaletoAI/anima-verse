@@ -18,10 +18,10 @@ module is where that knowledge lives:
 * the ``tool_decision.open_questions`` provider names every open invitation
   to a character with the exact yes/no call — what a tool-calling reader
   needs, while the invitee's own roleplay prompt only hears the question;
-* the ``pair_reaction`` provider (``reaction.py``): a furniture pair action
-  requested with ``consent="react"`` starts without asking, and an NPC
-  partner's reaction — accept or resist — comes from the ``pair_reaction``
-  task. Without this package such runs simply go on.
+* the ``pair_reaction`` provider (``reaction.py``): a pair action requested
+  with ``consent="react"`` — on furniture or a free pair pose — starts
+  without asking, and an NPC partner's reaction — accept or resist — comes
+  from the ``pair_reaction`` task. Without this package such pairs simply go on.
 """
 from app.core import decision, decision_points
 from app.core.hooks import register, register_provider

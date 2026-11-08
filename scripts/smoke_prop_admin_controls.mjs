@@ -53,7 +53,7 @@ for (const name of ['pendingFields', 'propActionAuthoring', 'propActionChecks', 
   const module = { exports: {} };
   runInNewContext(outputText, { module, exports: module.exports, require: id => {
     if (id === 'react') return hooks;
-    if (id === '@anima/player-ui') return { Field: () => null };
+    if (id === '@anima/player-ui') return { Field: () => null, GROUP_MIN_OTHERS: 2 };
     if (id === '../../lib/api') return api;
     if (id.startsWith('./') && modules.has(id.slice(2))) return modules.get(id.slice(2));
     return require(id);

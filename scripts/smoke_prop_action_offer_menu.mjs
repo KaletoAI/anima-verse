@@ -30,6 +30,19 @@
  *    which picks the bed with members [Mia, Ben] and consent "ask". A
  *    preflight refusal (roles_unfit) leaves "Ask" disabled with that reason.
  *    A partner's own menu shows no group action.
+ * f. A group runs with fewer people than its clip has roles (2026-11-08): the
+ *    picker asks for 2 up to the most any of its actions takes. The chat's
+ *    action tree opens ONE picker per piece for all its group actions —
+ *    here "Trio" (participants 3: at most 2 others, candidates Mia, Ben,
+ *    Ola) and "Circle" (participants 5: at most 4, candidates Mia, Ben, Ola,
+ *    Kai) on the bed, label "Group". Range 2 up to min(4 candidates, 4) = 4:
+ *    "Group · choose 2–4:" with the chips Mia, Ben, Ola, Kai and ✕. Mia
+ *    alone: no Ask, nothing checked. Mia + Ben: both actions are checked with
+ *    [Mia, Ben]; then "Trio · Ask" and "Circle · Ask" (the action is named,
+ *    the one piece is not). + Ola: Trio greyed with the hover text "Takes at
+ *    most 2 others" and NOT checked; Circle checked once with [Mia, Ben, Ola]
+ *    and usable. Kai stays pickable (3 < 4). The canvas menu's own picker for
+ *    Circle alone reads "Circle · choose 2–4:" and asks with two people.
  * Design: 976efe70 (compact rows), a1c5af11 (per-request consent choices).
  */
 import assert from 'node:assert/strict';
@@ -226,3 +239,52 @@ assert.equal(checks.length, 1);
 states = []; effects = [];
 assert.deepEqual(rows(renderGroup({ partner: 'Mia' }).tree)[0][1].map(b => b[0]), []);
 console.log('PASS e: a group action picks its people, waits for the preflight, then asks them');
+
+// f. fewer people than roles; one picker for all group actions of a piece
+const { GroupPicker } = module.exports;
+const groupTrio = offer('Trio', 'Bed', 'g', 2.5, { participants: 3, required_partner: true, candidates: ['Mia', 'Ben', 'Ola'] });
+const circle = offer('Circle', 'Bed', 'g', 2.5, { participants: 5, required_partner: true, candidates: ['Mia', 'Ben', 'Ola', 'Kai'] });
+const pieceGroup = { key: 'group:g', label: 'Group', usable: true,
+  entries: [groupTrio, circle].map(o => ({ offer: o, enabled: true, reason: '' })) };
+const asked = [];
+states = []; effects = []; checks = []; verdict = { enabled: true, reason: '' };
+const renderPiece = (group = pieceGroup) => {
+  cursor = 0;
+  return pickerRow(GroupPicker({ group, busy: false, nameProps: false,
+    onPick: (o, members) => asked.push([o.action_id, members]), onClose() {} }));
+};
+[label, buttons] = renderPiece();
+assert.equal(label, 'Group · choose 2–4:');
+assert.deepEqual(buttons.map(b => [b[0], b[1]]), [['Mia', false], ['Ben', false], ['Ola', false], ['Kai', false], ['✕', false]]);
+buttons[0][3].props.onClick();
+[, buttons] = renderPiece();
+assert.deepEqual(buttons.map(b => b[0]), ['Mia', 'Ben', 'Ola', 'Kai', '✕'], 'one person: no Ask yet');
+assert.equal(checks.length, 0);
+buttons[1][3].props.onClick();
+renderPiece();
+assert.equal(JSON.stringify(checks.map(c => [c[0], c[3]])), JSON.stringify([['Trio', ['Mia', 'Ben']], ['Circle', ['Mia', 'Ben']]]));
+await Promise.resolve(); await Promise.resolve();
+[, buttons] = renderPiece();
+assert.deepEqual(buttons.slice(4).map(b => [b[0], b[1]]), [['Trio · Ask', false], ['Circle · Ask', false], ['✕', false]]);
+buttons[2][3].props.onClick();
+checks = [];
+renderPiece();
+assert.equal(JSON.stringify(checks.map(c => [c[0], c[3]])), JSON.stringify([['Circle', ['Mia', 'Ben', 'Ola']]]));
+await Promise.resolve(); await Promise.resolve();
+[, buttons] = renderPiece();
+assert.deepEqual(buttons.map(b => [b[0], b[1], b[2]]), [
+  ['Mia', false, undefined], ['Ben', false, undefined], ['Ola', false, undefined], ['Kai', false, undefined],
+  ['Trio · Ask', true, 'Takes at most 2 others'], ['Circle · Ask', false, 'Ask Mia, Ben, Ola first'], ['✕', false, undefined]]);
+buttons[5][3].props.onClick();
+assert.equal(JSON.stringify(asked), JSON.stringify([['Circle', ['Mia', 'Ben', 'Ola']]]));
+states = []; effects = []; checks = [];
+const circleOnly = { key: 'circle', label: 'Circle', usable: true, entries: [{ offer: circle, enabled: true, reason: '' }] };
+[label, buttons] = renderPiece(circleOnly);
+assert.equal(label, 'Circle · choose 2–4:');
+buttons[3][3].props.onClick(); renderPiece(circleOnly);
+buttons[0][3].props.onClick(); renderPiece(circleOnly);
+await Promise.resolve(); await Promise.resolve();
+[, buttons] = renderPiece(circleOnly);
+assert.deepEqual(buttons.slice(4).map(b => [b[0], b[1]]), [['Ask', false], ['✕', false]]);
+assert.equal(JSON.stringify(checks.map(c => c[3])), JSON.stringify([['Kai', 'Mia']]));
+console.log('PASS f: a smaller group: 2 up to the most, one picker for a piece, too small actions greyed');

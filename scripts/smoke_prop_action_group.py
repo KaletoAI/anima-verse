@@ -34,7 +34,8 @@ c slot 2. Hand-derived from ``prop_action_engine`` / ``interaction_engine``:
       b, C the next, c -> {a: B, b: A, c: C} once everyone agreed.
   [7] All three female for that clip: A takes b, B takes c, C finds no free
       female role -> the request is refused "roles_unfit".
-  [8] A wrong number of invitees (only B for a trio) -> "invalid_partner";
+  [8] A wrong number of invitees (only B for a trio: two people, fewer
+      than a group's three) -> "invalid_partner";
       "react" with two invitees -> "invalid_consent"; an invitee named
       twice -> "invalid_partner".
   [10] The OFFER of the trio (G4) to A, with B and C awake in the room:
@@ -60,6 +61,31 @@ c slot 2. Hand-derived from ``prop_action_engine`` / ``interaction_engine``:
       own half (alt ""). "nope" and B's "gone" are "unknown_alt", someone
       outside the run "not_participant"; "" puts C back on [0.6, 0] — 0.6 m
       from the anchor, 0 m from where it started.
+  [12] FEWER PEOPLE THAN ROLES (2026-11-08): a group action runs with 3
+      people up to its ``participants`` (= the clip's role count). The fixture
+      grows to five roles "run-five" (anchors -1.2 / -0.6 / 0 / 0.6 / 1.2 m =
+      slots 0..4 of a capacity-5 marker), role_gender {a female, b female,
+      c male, d female, e male}; A female, B male, C male. A asks [B, C]:
+      A takes the first free female role a, B the first male role c, C the
+      next male role e -> clip roles {a: A, c: B, e: C}, b and d stay EMPTY
+      and are not in the result. Once both agreed: "approaching", 6 claims
+      (3 persons + 3 slots — none for the empty roles), slots A 0, B 2, C 4,
+      access A "actor" (role a), B and C "partner". Active: every profile's
+      interaction has members {a: A, c: B, e: C} and its own role a / c / e;
+      the state row's roles.clip says the same; "group_started" names
+      [A, B, C]. The pose's finale "run-five-climax" has all five roles
+      (finale_kind compares the POSE's participants 5 with the clip's 5
+      roles, not the head count): B's finale plays role c, C's role e.
+  [13] Head counts: on the five, A + [B] (two people, a pair's count) is
+      "invalid_partner" for request and check alike; on the trio with a
+      fourth person D in the room, A + [B, C, D] (four people, one more than
+      its three roles) is "invalid_partner" too. group_roles itself: four
+      names for three roles "roles_unfit"; three names for five roles
+      without role_gender take a, b, c in invitation order.
+  [14] The offer of the five with only B and C awake beside A: two
+      candidates are enough -> enabled, candidates [B, C], participants 5,
+      and the preflight [B, C] is enabled; C asleep -> candidates [B],
+      "partners_missing".
   [9] Migration: a table with the old ``partner`` column, one open pair
       invitation (A -> B, plans/access keyed actor/partner) and one solo
       row: members [B] / [], plans and access re-keyed to A / B, consents
@@ -80,33 +106,37 @@ F.paths.init(F.ROOT / "world")
 from app.core import hooks                                              # noqa: E402
 
 
-def authored_trio(genders=None, role_gender=None):
+def authored_trio(genders=None, role_gender=None, *, roles=3, people=3, kind="run-trio"):
+    """The group fixture: ``roles`` clip roles (anchors 0.6 m apart around the
+    centre, one slot each on a capacity-``roles`` marker), ``people``
+    characters in the room at x = 1, 2, 3, … on z = 5."""
     name, partner, target, pid = S.authored_pair()
-    third = F.actor(target["location_id"], at=(3, 5))
+    others = [F.actor(target["location_id"], at=(3 + i, 5)) for i in range(people - 2)]
     entries = pose_catalog.world_entries("pose")
-    entries["run-trio"] = dict(participants=3, animation="run-trio", group="seat", places=3,
-                               yaw_offset=90, prompt="Three people sharing a seat")
+    entries[kind] = dict(participants=roles, animation=kind, group="seat", places=roles,
+                         yaw_offset=90, prompt="People sharing a seat")
     pose_catalog.replace_world_entries("pose", entries)
     pose_catalog.reload_catalogs()
     directory = F.ROOT / "clips"
-    for role in ("a", "b", "c"):
-        (directory / f"run-trio__{role}.fbx").write_bytes(b"private group fixture")
-    meta = dict(kind="run-trio", pair=True, duration_s=2, loop=True, roles=["a", "b", "c"],
-                geometry=dict(roles=dict(a=dict(anchor_xz_m=[-.6, 0]), b=dict(anchor_xz_m=[0, 0]),
-                                         c=dict(anchor_xz_m=[.6, 0]))))
+    names = "abcde"[:roles]
+    for role in names:
+        (directory / f"{kind}__{role}.fbx").write_bytes(b"private group fixture")
+    meta = dict(kind=kind, pair=True, duration_s=2, loop=True, roles=list(names),
+                geometry=dict(roles={role: dict(anchor_xz_m=[round(.6 * (i - (roles - 1) / 2), 3), 0])
+                                     for i, role in enumerate(names)}))
     if role_gender:
         meta["role_gender"] = role_gender
-    (directory / "run-trio.json").write_text(json.dumps(meta))
+    (directory / f"{kind}.json").write_text(json.dumps(meta))
     clips._clear_entries_cache()
     doc = F.props.read_sidecar(pid)
-    doc["actions"][0].update(participants=3, pose_key="run-trio")
+    doc["actions"][0].update(participants=roles, pose_key=kind)
     marker = doc["model_variants"][0]["markers"][0]
-    marker.update(capacity=3, spacing_m=.6)
+    marker.update(capacity=roles, spacing_m=.6)
     marker.pop("access", None)
     F.props._write_sidecar(pid, doc)
     target["definition_revision"] = F.props.get_prop(pid)["revision"]
-    S.measured_entry("run-trio")
-    people = [name, partner, third]
+    S.measured_entry(kind)
+    people = [name, partner, *others]
     for who, gender in zip(people, genders or ()):
         profile = F.C.get_character_profile(who)
         profile["gender"] = gender
@@ -236,6 +266,93 @@ class Group(unittest.TestCase):
         F.C.save_character_profile(c, profile)
         row = next(o for o in P.offers(a) if o["action_id"] == target["action_id"])
         self.assertEqual((row["candidates"], row["enabled"], row["reason"]), ([b], False, "partners_missing"))
+
+
+FIVE_GENDER = dict(a="female", b="female", c="male", d="female", e="male")
+
+
+class Smaller(unittest.TestCase):
+    def tearDown(self):
+        for run in R.live_runs():
+            A.cancel(run["actor"], run["execution_id"])
+        F.assert_no_external_work()
+
+    def test_12_three_people_on_five_roles(self):
+        started = []
+        hooks.register("prop_action.group_started", lambda **kw: started.append(kw), tag="smoke.smaller")
+        self.addCleanup(hooks._hooks.pop, ("prop_action.group_started", "smoke.smaller"), None)
+        (a, b, c), target = authored_trio(("female", "male", "male"), FIVE_GENDER, roles=5, kind="run-five")
+        directory = F.ROOT / "clips"
+        for role in "abcde":
+            (directory / f"run-five-climax__{role}.fbx").write_bytes(b"private finale fixture")
+        (directory / "run-five-climax.json").write_text(json.dumps(dict(
+            kind="run-five-climax", pair=True, duration_s=1, roles=list("abcde"))))
+        clips._clear_entries_cache()
+        entries = pose_catalog.world_entries("pose")
+        entries["run-five"]["finale_animation"] = "run-five-climax"
+        pose_catalog.replace_world_entries("pose", entries)
+        pose_catalog.reload_catalogs()
+
+        print("[12] three people on a five-role clip: two roles stay empty")
+        eid = S.request(a, target, members=[b, c])["execution_id"]
+        self.assertEqual(R.get(eid)["status"], "awaiting_consent")
+        A.respond(b, eid, True)
+        result = A.respond(c, eid, True)
+        self.assertEqual(result["status"], "approaching", result)
+        run = R.get(eid)
+        self.assertEqual(run["data"]["clip_roles"], {"a": a, "c": b, "e": c})
+        self.assertEqual(len(R.claims(eid)), 6)
+        self.assertEqual({who: plan["entry_anchor"]["slot"] for who, plan in run["data"]["plans"].items()},
+                         {a: 0, b: 2, c: 4})
+        self.assertEqual(run["data"]["access_roles"], {a: "actor", b: "partner", c: "partner"})
+        S.tick(30)
+        tick(2)
+        tick(2)
+        self.assertEqual(R.get(eid)["status"], "active", R.get(eid))
+        for who, role in ((a, "a"), (b, "c"), (c, "e")):
+            inter = F.C.get_character_profile(who)["interaction"]
+            self.assertEqual((inter["members"], inter["role"]), ({"a": a, "c": b, "e": c}, role), who)
+        self.assertEqual(row(a, eid)["roles"]["clip"], {"a": a, "c": b, "e": c})
+        self.assertEqual([kw["members"] for kw in started], [[a, b, c]])
+        self.assertEqual(A.begin_finale(eid, b), {"ok": True, "reason": ""})
+        self.assertEqual(A.finale_for(b)["role"], "c")
+        self.assertEqual(A.begin_finale(eid, c), {"ok": True, "reason": ""})
+        self.assertEqual(A.finale_for(c)["role"], "e")
+
+    def test_13_head_counts(self):
+        from app.core import interaction_engine as I
+        (a, b, c), target = authored_trio(("female", "male", "male"), FIVE_GENDER, roles=5, kind="run-five")
+        exact = {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")}
+        print("[13] at least three people, at most one per role")
+        self.assertEqual(S.request(a, target, members=[b])["reason"], "invalid_partner")
+        self.assertEqual(A.check(a, exact, target["action_id"], target["definition_revision"], [b],
+                                 offer=True)["reason"], "invalid_partner")
+        (a, b, c, d), target = authored_trio(people=4)
+        exact = {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")}
+        self.assertEqual(S.request(a, target, members=[b, c, d])["reason"], "invalid_partner")
+        self.assertEqual(A.check(a, exact, target["action_id"], target["definition_revision"], [b, c, d],
+                                 offer=True)["reason"], "invalid_partner")
+        three = dict(roles=["a", "b", "c"])
+        with self.assertRaisesRegex(ValueError, "roles_unfit"):
+            I.group_roles(["P", "Q", "R", "S"], {}, three)
+        self.assertEqual(I.group_roles(["P", "Q", "R"], {}, dict(roles=list("abcde"))),
+                         {"a": "P", "b": "Q", "c": "R"})
+
+    def test_14_two_candidates_are_enough(self):
+        (a, b, c), target = authored_trio(roles=5, kind="run-five")
+        from app.core import prop_actions as P
+        print("[14] the five is offered with two candidates")
+        offer = next(o for o in P.offers(a) if o["action_id"] == target["action_id"])
+        self.assertEqual((offer["participants"], offer["candidates"], offer["enabled"], offer["reason"]),
+                         (5, [b, c], True, ""), offer)
+        exact = {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")}
+        self.assertEqual(A.check(a, exact, target["action_id"], target["definition_revision"], [b, c],
+                                 offer=True), dict(enabled=True, reason=""))
+        profile = F.C.get_character_profile(c)
+        profile["is_sleeping"] = True
+        F.C.save_character_profile(c, profile)
+        offer = next(o for o in P.offers(a) if o["action_id"] == target["action_id"])
+        self.assertEqual((offer["candidates"], offer["enabled"], offer["reason"]), ([b], False, "partners_missing"))
 
 
 def test_9_migration():

@@ -7,10 +7,14 @@
  *                           with `pose_key`)
  *   All furniture           one node per piece, nearest first; under it the
  *                           piece's actions (solo: click; pair: pick a partner,
- *                           then Ask / Just do it; group: the group picker)
- *   All potential partners  one node per person; under it the free pair poses
- *                           (pairActions.tsx — the same chips as the Others
- *                           card) and the furniture actions with that person
+ *                           then Ask / Just do it) and ONE "Group" node for
+ *                           all its group actions: pick 2..n people, then Ask
+ *                           on any group action that takes that many
+ *   All potential partners  one node per person; under it "Stop" while the
+ *                           avatar is in a pair with them, then one row per
+ *                           pair action with them — the free pair poses first
+ *                           (pairActions.tsx, no furniture), then the furniture
+ *                           ones (`label · piece`) — each with Ask / Just do it
  *
  * What RUNS (incoming / outgoing / current, Accept / Stop / meters) is not
  * here: that needs an immediate answer and stays in the chat window
@@ -22,8 +26,8 @@ import { ApiError, apiGet, apiPost } from './api'
 import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { isMember, type InteractionMembers } from './interactionMembers'
-import { pairActionChips, usePairOptions, usePairPropose } from './pairActions'
-import { offerKind, partnerNodes, pieceNodes, pieceText } from './actionsTreeModel'
+import { usePairOptions, usePairPropose } from './pairActions'
+import { offerKind, partnerNodes, pieceGroups, pieceNodes, pieceText, type PieceNode } from './actionsTreeModel'
 import { propActionReason } from './propActionReasons'
 import { GroupPicker, type OfferGroup } from './PropActionsPanel'
 import { usePropActions } from './usePropActions'
@@ -127,7 +131,25 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
       t('Start at once; {name} reacts and may push you away').replace('{name}', partner))}
   </>
 
-  /** One action of a furniture piece. */
+  /** The same "Ask" / "Just do it" for one free pair pose (no furniture) —
+   *  `POST /play/interact` with that consent. `hint`: why the pair verb is
+   *  blocked, already in words ("" = usable). */
+  const poseButtons = (pose: string, partner: string, hint: string) => {
+    const button = (consent: PropActionConsent, label: string, title: string) =>
+      <HoverHint key={`${consent}:pose:${pose}:${partner}`} text={hint || title}>
+        <button type="button" className="player-chip" disabled={busy || pairActions.pending || !!hint}
+          aria-disabled={hint ? true : undefined} style={{ pointerEvents: hint ? 'none' : undefined }}
+          onClick={() => void pairActions.propose(partner, pose, consent)}>
+          {label}
+        </button>
+      </HoverHint>
+    return <>
+      {button('ask', t('Ask'), t('Ask {name} first').replace('{name}', partner))}
+      {button('react', t('Just do it'), t('Start at once; {name} reacts and may push you away').replace('{name}', partner))}
+    </>
+  }
+
+  /** One solo or pair action of a furniture piece. */
   const pieceAction = (piece: string, offer: PropActionOffer) => {
     const kind = offerKind(offer)
     if (kind === 'solo') {
@@ -137,15 +159,6 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
       </div>
     }
     const id = `act:${piece}:${offer.action_id}`
-    if (kind === 'group') {
-      const group: OfferGroup = { key: id, label: offer.label, usable: offer.enabled,
-        entries: [{ offer, enabled: offer.enabled, reason: offer.reason }] }
-      return <Branch key={id} id={id} open={open} toggle={toggle} label={offer.label}
-        disabled={!offer.enabled} reason={offer.reason}>
-        <GroupPicker group={group} busy={off} nameProps={false}
-          onPick={(picked, members) => request(picked, members, 'ask')} onClose={() => toggle(id)} />
-      </Branch>
-    }
     // A pair action: pick the partner — each row is Core's verdict for that person.
     const usable = offer.available_targets.some(choice => choice.enabled)
     return <Branch key={id} id={id} open={open} toggle={toggle} label={offer.label}
@@ -158,6 +171,23 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
         </HoverHint>
         {consentButtons(offer, choice.partner, choice.enabled, choice.reason)}
       </div>)}
+    </Branch>
+  }
+
+  /** The piece's ONE "Group" node: the people are picked once (2 up to the
+   *  largest group action's maximum), then each group action of the piece
+   *  offers "Ask" — greyed where it takes fewer people than picked. A group
+   *  is only ever asked, never started at once. */
+  const pieceGroup = (piece: PieceNode) => {
+    const offers = pieceGroups(piece).group
+    if (!offers.length) return null
+    const id = `group:${piece.key}`
+    const group: OfferGroup = { key: id, label: t('Group'), usable: offers.some(offer => offer.enabled),
+      entries: offers.map(offer => ({ offer, enabled: offer.enabled, reason: offer.reason })) }
+    return <Branch key={id} id={id} open={open} toggle={toggle} label={t('Group')} count={offers.length}
+      disabled={!group.usable} reason={offers[0].reason}>
+      <GroupPicker group={group} busy={off} nameProps={false}
+        onPick={(picked, members) => request(picked, members, 'ask')} onClose={() => toggle(id)} />
     </Branch>
   }
 
@@ -180,7 +210,8 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
         const id = `piece:${piece.key}`
         return <Branch key={id} id={id} open={open} toggle={toggle} label={pieceText(piece.offers[0])}
           count={piece.offers.length} disabled={!piece.offers.some(o => o.enabled)}>
-          {piece.offers.map(offer => pieceAction(piece.key, offer))}
+          {pieceGroups(piece).single.map(offer => pieceAction(piece.key, offer))}
+          {pieceGroup(piece)}
         </Branch>
       }) : <div className="player-actions-tree-empty">{t('No furniture actions here.')}</div>}
     </Branch>
@@ -189,11 +220,18 @@ export function ActionsTree({ avatar, present, interaction, onChanged }: {
       {partners.length ? partners.map(person => {
         const id = `partner:${person.name}`
         const stoppable = isMember(interaction?.members, person.name) && isMember(interaction?.members, avatar)
-        const chips = pairActionChips({ target: { name: person.name }, options: pairOptions, stoppable,
-          actions: pairActions, t })
         return <Branch key={id} id={id} open={open} toggle={toggle} label={person.name}
           count={pairOptions.poses.length + person.entries.length}>
-          {chips.length > 0 && <div className="player-actions-tree-leaf">{chips}</div>}
+          {stoppable && <div className="player-actions-tree-leaf">
+            <button type="button" className="player-chip" onClick={() => void pairActions.stop()}>{t('Stop')}</button>
+          </div>}
+          {pairOptions.poses.map(pose => <div key={`pose:${pose.key}`}
+            className={`player-actions-tree-leaf${pairOptions.blocked ? ' off' : ''}`}>
+            <HoverHint text={pairOptions.blocked || undefined}>
+              <span className="player-actions-tree-name">{pose.label || pose.key}</span>
+            </HoverHint>
+            {poseButtons(pose.key, person.name, pairOptions.blocked)}
+          </div>)}
           {person.entries.map(entry => <div key={offerKey(entry.offer)}
             className={`player-actions-tree-leaf${entry.enabled ? '' : ' off'}`}>
             <HoverHint text={entry.enabled ? pieceText(entry.offer) : propActionReason(entry.reason, t)}>

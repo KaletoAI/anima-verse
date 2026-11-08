@@ -811,6 +811,7 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 | `get_interaction(character_name, profile=None)` | Läuft gerade eine? |
 | `create_invite(inviter, invitee, pose_key, *, request_id=None) -> Optional[str]` | Ask through the ordinary consent flow. A supplied id atomically creates/reuses only the exact inviter/invitee/pose row, emits the offer once, and never replaces another pending question. A mismatching existing id is rejected. Ordinary same-pose repeats reuse the fresh question; replacements mark old questions cancelled instead of deleting their identity |
 | `resolve_invite(invite_id, accept) -> Dict` | Answer an invitation. `status` `cannot` ends an accepted yes as `failed` with its saved reason |
+| `start_without_asking(actor, partner, pose_key) -> Dict` / `react(partner, invite_id, accept, *, line="", feeling=0, romantic=False) -> Dict` | Consent "react" for a free pair pose (`CONSENTS = ("ask", "react")`): no question, the row waits as `reacting` for the partner's reaction (`pair_reaction`, see Hooks) and then starts like an accepted invitation — or ends `declined` / `partner_resisted` on a resist. A player-controlled partner or a missing provider means no wait. The player route only; NPCs always ask |
 | `get_invite(invite_id)` / `cancel_invite(invite_id) -> bool` / `clear_invites_for(character)` | Read/close invitations. Cancellation conditionally claims only a pending/approaching row; an answer that already claimed it wins. A live pair's accepted invitation survives housekeeping |
 | `last_answer_of(inviter) -> Optional[dict]` / `dismiss_answer(invite_id, inviter) -> bool` | Read the newest fresh own declined/failed answer (`invite_id`, `invitee`, `pose_key`, `status`, `reason`); dismiss only an own declined/failed row as cancelled |
 | `end_interaction(character_name, reason='ended', *, interaction_id='', keep_places=()) -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended. After a normal end (`reason` `ended`/`avatar`/`cancelled`) a free pair's partners take their follow pose (`follow_pose_for`); `keep_places` (furniture pairs only) names partners whose place the ending run keeps for theirs |
@@ -1201,7 +1202,7 @@ Capabilities, die der Core heute abfragt:
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
 | `shared_activity_options`, `shared_activity_validate`, `shared_activity_request`, `shared_activity_status`, `shared_activity_cancel` | Structured intent continuation and exact pair ownership | No pair continuation; available options are empty. The action is only `{type:"pair", pose_key:"<exact available key>"}`. Request/status return `pending`, `approaching`, `running`, `declined` or `blocked` with `invite_id` and optional `interaction_id`/`reason`; status never starts anything. Initial unsubmitted requests alone may return `not_found`; missing questions without exact live pair provenance and accepted-but-not-live requests block, never replay. Exact provenance reports a running pair even before `accepted` or start hooks persist. Cancel's optional `interaction_id` restricts actual receipt/provenance ownership; it never grants ownership or ends another pair |
 | `tool_decision.open_questions` | `streaming.tool_state_note` / `open_questions_note`: the rp_first tool decision (both paths) and, for a `single` character, the chat turn's scene state. `fn(agent_name, tool_names) -> list[str]`: one line per question someone put to the character that an offered verb answers, with the exact yes and no call (multiple providers: party and pair invitations; each failure is isolated) | No open-question block; the invitee only hears the question in prose |
-| `pair_reaction` | `prop_action_engine`: a pair furniture action requested with consent "react" that an NPC partner did not start. Called with the keywords execution_id, actor and partner, it must return at once; the answer goes to `app.core.prop_action_engine.react` (below). The run waits at the furniture for it up to `REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such runs never wait: reaction `none`, the action goes straight in |
+| `pair_reaction` | `app.core.pair_reaction.ask`: a pair action requested with consent "react" that an NPC partner did not start — a furniture pair run (`kind` `"prop_action"`, `reference` = its execution id) or a free pair pose (`kind` `"interaction"`, `reference` = its invite id). Called with the keywords kind, reference, actor and partner, it must return at once; `app.core.pair_reaction.pending(kind, reference, actor, partner, lang)` names the waiting action (`{"action", "piece"}`, piece `""` for a free pose; None = no longer waits) and the answer goes to `app.core.pair_reaction.answer` (below). The pair waits for it before it binds up to `pair_reaction.REACTION_WAIT_S` (60 system seconds) and then goes on as accepted (`interact`: the `pair_reaction` LLM task) | Such pairs never wait: reaction `none`, the action goes straight in |
 | `play.say_intercept` | `routes/play.py` `play_say`, after the addressees are filtered and before spell detection. Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called in registration order, off the event loop, with the keywords `avatar`, `content`, `volume`, `addressees` (the reachable ones), `location_id`, `room_id`; answer `None` to pass or `{"consumed": True, "result": {...}}` to take the message. The first consuming contributor wins: no utterance is recorded, no spell detection and no room reaction runs, the route answers `{"ok": true, "intercepted": <result>}`. A raising contributor is logged and skipped; image-only messages are not offered | Every message is spoken into the room as usual |
 | `character_panel:<package id>` | `app.core.character_panels` for the admin routes `/characters/{name}/panels/{package}` and the skill listing (`panel_package`); see "Character panels" below | No panel on the Skills tab, the routes answer 404 |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
@@ -1766,16 +1767,26 @@ for; `app.models.character.set_pose_intent` refuses such a pose (returns
 False, nothing written) — a package that sets poses reaches furniture through
 `take_furniture_for_pose` instead.
 
-`app.core.prop_action_engine.react(partner, execution_id, accept, *, line="",
-feeling=0, romantic=False) -> dict` answers a waiting run requested with
-consent "react": `accept=False` ends it (`cancelled` / `partner_resisted`), `True` lets it
-go on (into the furniture at once if both already wait there). `line` is told
-to the room as it is; `feeling` (-2..2) moves the partner's sentiment toward
-the actor by 0.05 per step, `romantic` the romantic tension by 0.02 per step,
-and a resist lowers the actor's own sentiment by 0.03 (`record_interaction`
-type `pair_reaction`). An answer for a run that no longer waits changes
-nothing. A player-controlled partner pushes such a run away with the ordinary
-`cancel` while it is approaching — the same resist with `feeling` -1.
+`app.core.pair_reaction.answer(kind, reference, partner, accept, *, line="",
+feeling=0, romantic=False) -> dict` answers a waiting pair action requested
+with consent "react" and routes it by `kind`:
+`app.core.prop_action_engine.react(partner, execution_id, accept, ...)` for a
+furniture run — `accept=False` ends it (`cancelled` / `partner_resisted`), `True`
+lets it go on (into the furniture at once if both already wait there) — and
+`app.core.interaction_engine.react(partner, invite_id, accept, ...)` for a free
+pair pose — `False` answers `resisted` (the invitation row ends `declined` /
+`partner_resisted`, the pair never started), `True` starts it like an accepted
+invitation (`started` / `approaching` / `cannot`). `line` is told to the room as
+it is; `feeling` (-2..2) moves the partner's sentiment toward the actor by 0.05
+per step, `romantic` the romantic tension by 0.02 per step, and a resist lowers
+the actor's own sentiment by 0.03 (`pair_reaction.book`, `record_interaction`
+type `pair_reaction`). An answer for a pair that no longer waits changes
+nothing (a free pose answers `not_waiting`). A player-controlled partner is
+never asked: it pushes a furniture run away with the ordinary `cancel` while it
+is approaching — the same resist with `feeling` -1 — and ends a free pair with
+the ordinary Stop. A free pair pose is started without asking by
+`app.core.interaction_engine.start_without_asking(actor, partner, pose_key)`
+(`POST /play/interact` with `consent` "react"); NPCs propose free poses only by asking.
 
 `app.core.interaction_engine.check_can_pair(actor, partner) -> str` returns
 an empty string when two distinct characters are awake, present and free to

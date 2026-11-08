@@ -775,8 +775,13 @@ _OFFER_MAX_LINES = 12
 
 def _company(participants: int) -> str:
     """How the offer marks a pose that needs others: "with partner" for a
-    pair, "with N others" for a group."""
-    return "with partner" if participants == 2 else f"with {participants - 1} others"
+    pair, "with N others" / "with 2 to N others" for a group (it runs with
+    fewer people than its roles, ``prop_action_engine.GROUP_MIN_PEOPLE``)."""
+    if participants == 2:
+        return "with partner"
+    from app.core.prop_action_engine import GROUP_MIN_PEOPLE
+    fewest, most = GROUP_MIN_PEOPLE - 1, participants - 1
+    return f"with {most} others" if fewest >= most else f"with {fewest} to {most} others"
 _ANYWHERE_MAX = 8             # poses on the "Anywhere here" line, defaults first
 #: The preposition a prompt puts before a held place, per group — a group
 #: nobody listed here (an admin-made place type) reads "at the". What is
