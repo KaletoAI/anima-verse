@@ -102,6 +102,8 @@ import { composePlacements, dependentIndices, pickSupport, toSupportFrame, withP
 import { pointInPolygon } from '../map/mapMath'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
+import { usePropSprites } from '../map/usePropSprites'
+import { groupPlacementSpecs, placementSpecModelUrl, placementSpecOf } from './planPropSprites'
 
 /** Narrowest the 2D plan is ever drawn, in px. SINCE THE WORKBENCH REBUILD
  *  (plan-grundriss-werkbank.md § W1) A FLOOR, NOT THE WIDTH: the canvas takes
@@ -495,6 +497,11 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // default — a plan whose rectangles carry no real size is exactly the
   // problem these aids exist for. The scale bar has no switch at all.
   const [aids, setAids] = useState(true)
+  // "Props from above": every placed prop drawn as its MODEL seen straight
+  // down inside its footprint — the map editor's sprite layer, brought to the
+  // plan. Session state, off by default: each distinct mesh costs one WebGL
+  // render, and nothing is asked for while the switch is off.
+  const [propsFromAbove, setPropsFromAbove] = useState(false)
   // Position of the reference figure in LOCAL METRES; null = "wherever the
   // window's bottom-left is right now", so it starts visible whatever the plot
   // looks like and stays where the user last put it afterwards.
@@ -737,6 +744,31 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   /** Rooms only — the yard is never "placed" by an author, so it must not
    *  answer the questions that ask whether anybody drew anything yet. */
   const placedHere = placed.filter((p) => !p.ground)
+  /** The scene payload's placement specs per room — WHICH mesh variant every
+   *  placement shows is the server's decision and is read there, never
+   *  re-derived here (`planPropSprites`). */
+  const placementSpecs = useMemo(() => groupPlacementSpecs(scene?.models), [scene])
+  /** The meshes the shapes on THIS storey show, while the switch is on —
+   *  and only then: an empty list asks the render chain for nothing. */
+  const propSpriteUrls = useMemo(() => {
+    if (!propsFromAbove) return []
+    const out: string[] = []
+    for (const { room } of placed) {
+      const props = room.layout?.props || []
+      for (let i = 0; i < props.length; i++) {
+        const spec = placementSpecOf(placementSpecs, room.id || '', i, props[i])
+        const url = spec ? placementSpecModelUrl(spec) : ''
+        if (url) out.push(url)
+      }
+    }
+    return out
+  }, [propsFromAbove, placed, placementSpecs])
+  // The SAME session cache and one-at-a-time chain as the map's sprites
+  // (`renderPropTopDown`): a mesh pictured once is never rendered again.
+  const propPictures = usePropSprites(propSpriteUrls, propsFromAbove)
+  const propSprites = useMemo(() => (propsFromAbove
+    ? { specs: placementSpecs, pictures: propPictures } : null),
+  [propsFromAbove, placementSpecs, propPictures])
   /** Fraction-era leftovers: rooms whose rectangle is a few centimetres
    *  across because it was a [0,1] share before rooms were stored in metres.
    *  NOTHING repairs them by itself — a room with a diorama model heals from
@@ -2405,6 +2437,15 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
         >
           📏
         </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${propsFromAbove ? ' ga-btn-primary' : ''}`}
+          onClick={() => setPropsFromAbove((v) => !v)}
+          aria-label={t('Props from above')}
+          title={t('Props from above: draw every placed prop as its model seen straight down inside its footprint, turned as it stands and in true size. A prop without a model keeps its plain rectangle.')}
+        >
+          🪑
+        </button>
         {/* Drawing raster. Every drawn point, every dragged rectangle and
             every placement falls onto it; Shift is the per-click escape, and
             real geometry (a wall, a boundary edge, a vertex) always beats the
@@ -2690,6 +2731,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
         ghostSel={ghostSel}
         setGhostSel={setGhostSel}
         aids={aids}
+        propSprites={propSprites}
         underlay={underlay}
         bUnderlay={bUnderlay}
         underlayUrl={underlayUrl}

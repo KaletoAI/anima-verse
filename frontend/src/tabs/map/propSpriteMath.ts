@@ -2,7 +2,10 @@
  * propSpriteMath — the pure arithmetic of the map's "Props from above" layer
  * (no React, no DOM, no three.js): how big a top-down prop sprite is drawn,
  * how it is TURNED so that it faces the way the prop's direction pin points,
- * and which mesh URL a placement or a scatter instance shows.
+ * and which mesh URL a placement or a scatter instance shows. The floor
+ * plan's "Props from above" (`PlanCanvas`) reads the same pictures for room
+ * placements and sizes/turns them with the `propSpritePlaced*` functions —
+ * the scale and fix `place()` applies to a scene spec, not a target height.
  *
  * A sprite is a VIEW of a placement the shared package already decided
  * (§ A9): nothing in here moves a prop or picks a variant — the sampler's
@@ -93,6 +96,58 @@ export function propSpriteSizeM(dims: PropSpriteDims, targetHeightM: number): {
     fieldM: propSpriteFieldM(dims.widthM, dims.depthM) * scale,
     scale,
   }
+}
+
+/** The scale `place()` gives a PLACED prop — a room placement in the scene
+ *  payload, `measure: 'xyz'`: the largest edge of the box after the
+ *  orientation fix, with that fix SNAPPED to 90° for the measuring
+ *  (`placeTransform`), is scaled to `max_m`. A 90° snap only permutes the
+ *  box axes, so that edge is the largest edge of the RAW box the sprite
+ *  measured whatever the fix — `max_m / max(w, h, d)`, no fix needed here.
+ *  0 for junk, like `propSpriteScale`. */
+export function propSpritePlacedScale(dims: PropSpriteDims, maxM: number): number {
+  const edge = Math.max(Number(dims.widthM) || 0, Number(dims.heightM) || 0,
+    Number(dims.depthM) || 0)
+  const m = Number(maxM)
+  if (!(edge > 0) || !(m > 0)) return 0
+  return m / edge
+}
+
+/** `propSpriteSizeM` for a PLACED prop: the same drawn sizes, but at the
+ *  scale `place()` really uses for it (`propSpritePlacedScale`) instead of
+ *  a target height — the floor plan draws the very mesh the 3D preview
+ *  stands in the room. */
+export function propSpritePlacedSizeM(dims: PropSpriteDims, maxM: number): {
+  widthM: number; depthM: number; fieldM: number; scale: number
+} {
+  const scale = propSpritePlacedScale(dims, maxM)
+  return {
+    widthM: dims.widthM * scale,
+    depthM: dims.depthM * scale,
+    fieldM: propSpriteFieldM(dims.widthM, dims.depthM) * scale,
+    scale,
+  }
+}
+
+/** The WORLD turn of a placed prop's sprite, or null when the picture cannot
+ *  show it. `renderPropTopDown` shoots the file AS IT STANDS, but `place()`
+ *  first turns it by the orientation fix (Euler 'YXZ', yaw outermost) and
+ *  then by the placement yaw, both as `rotation.y = +rad`. With no tilt and
+ *  no roll the two are one turn about y — `yaw + fix.y` — and the sprite
+ *  turns by that (the footprint's own sign is applied by the caller, see
+ *  `propSpriteRotateDeg`). A fix that tilts or rolls the mesh (x or z not a
+ *  whole turn) makes the file's top view a view of some OTHER side of the
+ *  placed model; no turn of the picture repairs that, so the answer is null
+ *  and the caller keeps its plain footprint. */
+export function propSpritePlacedYawDeg(yawDeg: number,
+  fix: { x?: number; y?: number; z?: number } | null | undefined): number | null {
+  const whole = (v: unknown) => {
+    const n = Number(v) || 0
+    const r = ((n % 360) + 360) % 360
+    return r < 1e-6 || 360 - r < 1e-6
+  }
+  if (!whole(fix?.x) || !whole(fix?.z)) return null
+  return (Number(yawDeg) || 0) + (Number(fix?.y) || 0)
 }
 
 /** The target height of a scatter or along row — `scatterTargetH` of the 3D

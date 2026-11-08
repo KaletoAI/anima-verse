@@ -40,6 +40,13 @@ import type {
 } from './worldTypes'
 import type { FurnishJob } from './FurnishDialog'
 import type { PropSlot } from '../props/propTypes'
+import type { PropSprite } from './topDownSnapshot'
+import {
+  propSpritePlacedSizeM, propSpritePlacedYawDeg, propSpriteRotateDeg,
+} from '../map/propSpriteMath'
+import type { PropSpriteMap } from '../map/usePropSprites'
+import { placementSpecModelUrl, placementSpecOf } from './planPropSprites'
+import type { PlanPropSpecs } from './planPropSprites'
 
 /** The 2D symbol of one wall opening (door swing arc, window double line,
  *  dashed passage) — shared by the editable markers and the mirrored,
@@ -219,6 +226,10 @@ interface Props {
 
   // ── View aids (no geometry, only what is shown) ────────────────────────
   aids: boolean
+  /** "Props from above": the scene payload's placement specs per room (the
+   *  server-resolved mesh of every placement) and the pictures that have
+   *  landed so far. null = switched off, every prop is its plain footprint. */
+  propSprites: { specs: PlanPropSpecs; pictures: PropSpriteMap } | null
   underlay: boolean
   bUnderlay: boolean
   underlayUrl: string
@@ -248,6 +259,28 @@ interface Props {
 }
 
 
+/** The picture ONE placed prop draws with "Props from above", or null for the
+ *  plain footprint: no matching spec in the payload yet, no mesh, a picture
+ *  still rendering or failed, a fix the top view cannot show, or junk sizes.
+ *  `fieldM` is the side of the square picture in true metres at the scale
+ *  `place()` gives that very spec (`max_m`), `fixYawDeg` the part of the
+ *  mesh's turn the placement yaw does not carry. */
+function planSpriteOf(sprites: { specs: PlanPropSpecs; pictures: PropSpriteMap },
+  roomId: string, index: number, prop: { prop_id?: string; id?: string }):
+    { sprite: PropSprite; fieldM: number; fixYawDeg: number } | null {
+  const spec = placementSpecOf(sprites.specs, roomId, index, prop)
+  const url = spec ? placementSpecModelUrl(spec) : ''
+  const sprite = url ? sprites.pictures.get(url) : undefined
+  if (!spec || !sprite) return null
+  // The fix alone: with yaw 0 the function answers fix.y, or null for a
+  // tilted/rolled mesh. The placement yaw is the LIVE composed one, added by
+  // the caller, so a dragged or just-turned piece turns its picture along.
+  const fixYawDeg = propSpritePlacedYawDeg(0, spec.fix_euler)
+  const { fieldM } = propSpritePlacedSizeM(sprite, spec.max_m || 0)
+  if (fixYawDeg === null || !(fieldM > 0)) return null
+  return { sprite, fieldM, fixYawDeg }
+}
+
 export function PlanCanvas({
   canvasRef, baseW, planZoom, canvasPx, view, fx, fz, svgX, svgZ, uPerM,
   pointerM, rooms, map3d, placed, placedHere, unplaced, sceneRooms,
@@ -261,7 +294,7 @@ export function PlanCanvas({
   commitRoomDraft, armedProp, propGhost, setPropGhost, ghostYaw, gridStep,
   propDraggedRef, startDrag, startModelDrag, startPropDrag, startOpeningDrag,
   startCurveDrag, startGhostDrag, furnish, reviewing, ghostSel, setGhostSel,
-  aids, underlay, bUnderlay, underlayUrl, snapshotFrame, drawTarget,
+  aids, propSprites, underlay, bUnderlay, underlayUrl, snapshotFrame, drawTarget,
   figureAt, setFigurePos, onMap3d,
   writeBoundary, onPlaceHullDoor, hullSel, onSelectHull, ownerOpeningIndex,
 }: Props) {
@@ -832,6 +865,41 @@ export function PlanCanvas({
               reasoning and the same hand-checked case as
               PlacementLayer.tsx:105 — yaw 90 must send the local (+5, +5)
               corner to screen (+5, −5), which only rotate(−yaw) does. */}
+          {/* "Props from above": each placed prop's MODEL seen straight
+              down, in its own pass UNDER every footprint — a later picture
+              must not paint over an earlier piece's outline. Inert to the
+              pointer: the footprint div above it keeps the press, the drag
+              and the stack cycle exactly as without pictures. */}
+          {propSprites ? (content?.props || []).map((p, i) => {
+            const pic = planSpriteOf(propSprites, room.id || '', i, p)
+            const pose = composedProps[i]
+            if (!pic || !pose) return null
+            // CENTRE: the composed `at` the footprint is drawn at. The picture
+            // is centred on the mesh's box, and `place()` hangs a placed prop
+            // on that very box centre, so there is no anchor shift (the
+            // map's world props, `anchor: 'centre'`).
+            // TURN: the footprint's own sign — rotate(−yaw) on this y-down
+            // screen, see the comment on the footprints below — of the turn
+            // the MESH really has: the placement yaw plus the orientation fix
+            // the picture was taken without (`propSpritePlacedYawDeg`).
+            return (
+              <img
+                key={`prop-pic-${i}`}
+                src={pic.sprite.url}
+                alt=""
+                draggable={false}
+                style={{
+                  position: 'absolute',
+                  left: `${ax(pose.at[0])}%`, top: `${az(pose.at[1])}%`,
+                  // The SQUARE picture's side in true metres — `rx`/`rz` per
+                  // axis, because the shape div is w × d metres, not square.
+                  width: `${rx(pic.fieldM)}%`, height: `${rz(pic.fieldM)}%`,
+                  transform: `translate(-50%, -50%) rotate(${propSpriteRotateDeg(pose.yaw + pic.fixYawDeg)}deg)`,
+                  pointerEvents: 'none', userSelect: 'none',
+                }}
+              />
+            )
+          }) : null}
           {(content?.props || []).map((p, i) => {
             const dims = propDims[p.prop_id]
             // True size: the prop's own metres over the room's metres.
@@ -839,6 +907,12 @@ export function PlanCanvas({
             const fd = rz(dims?.depth_m || 1)
             const sel = room.id === selected && propSel === i
             const pose = composedProps[i]
+            // With its picture underneath, the footprint becomes a thin
+            // outline: the picture is what the eye reads, the outline is what
+            // shows the selection and where to grab. The div itself — size,
+            // place, handlers — is unchanged.
+            const pictured = !!propSprites
+              && !!planSpriteOf(propSprites, room.id || '', i, p)
             return (
               <div
                 key={`prop-${i}`}
@@ -867,8 +941,9 @@ export function PlanCanvas({
                   left: `${ax(pose.at[0])}%`, top: `${az(pose.at[1])}%`,
                   width: `${fw}%`, height: `${fd}%`,
                   transform: `translate(-50%, -50%) rotate(${-pose.yaw}deg)`,
-                  border: `1.5px ${dims ? 'solid' : 'dashed'} ${sel ? '#fff' : '#d29922'}`,
-                  background: 'rgba(210,153,34,0.22)', borderRadius: 2,
+                  border: `${pictured ? 1 : 1.5}px ${dims ? 'solid' : 'dashed'} ${sel ? '#fff' : '#d29922'}`,
+                  background: pictured ? 'transparent' : 'rgba(210,153,34,0.22)',
+                  borderRadius: 2,
                   boxSizing: 'border-box',
                   cursor: clickMode || armedProp ? 'crosshair' : 'grab',
                 }}

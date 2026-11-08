@@ -116,6 +116,51 @@
  * (D3) yaw 180: (−2, −1) — the mirror of D1.
  * (D4) a WORLD PROP source (anchor 'centre') shifts by nothing, whatever
  *      the box says: (0, 0).
+ *
+ * ============================================================================
+ * (E) THE FLOOR PLAN — a PLACED prop (`measure 'xyz'`), its scale and turn
+ * ============================================================================
+ * The plan's "Props from above" draws `layout.props` from the scene payload's
+ * placement specs. `place()` (`placeTransform`) scales the largest edge of
+ * the box under the orientation fix SNAPPED to 90° to `max_m`; a 90° snap
+ * permutes the axes, so the edge is the raw box's largest edge.
+ *
+ * (E1) raw box 1 × 0.5 × 2 (w × h × d), max_m 4: largest edge 2,
+ *        scale = 4 / 2 = 2 → drawn 2 m × 4 m; the square picture holds
+ *        max(1, 2) · 1.05 = 2.1 m at scale 1, i.e. 4.2 m drawn.
+ * (E2) a TALL mesh, 0.5 × 3 × 1, max_m 1.5: the largest edge is the
+ *        HEIGHT 3, scale 0.5 → 0.25 m × 0.5 m, picture 1 · 1.05 · 0.5 = 0.525 m.
+ *        (A target-height law would agree here only because max_m is the
+ *        height; E1 shows it is the largest edge that counts.)
+ * (E3) junk: max_m 0 or a box with no extent scales by 0, never NaN.
+ * (E4) the turn: `place()` turns the file by fix (YXZ, y outermost) and then
+ *        by the yaw, both `rotation.y = +rad`; with fix x = z = 0 that is ONE
+ *        turn of yaw + fix.y. yaw 30, fix y 90 → 120; no fix → 30;
+ *        fix x 360 is a whole turn = none → 30 + 0.
+ * (E5) a tilt (fix x 90) or a roll (fix z −90) puts another side of the mesh
+ *        on top — the file's top view is not the placed model's: null.
+ * (E6) the screen rotation is the footprint's rotate(−turn): turn 120 →
+ *        rotate(−120) (B derived the sign; the plan's footprint div uses the
+ *        same `rotate(${-pose.yaw}deg)`, pinned on its source below).
+ *
+ * ============================================================================
+ * (F) THE FLOOR PLAN — which spec belongs to `layout.props[i]`
+ * ============================================================================
+ * `room_recipe._join_placements` turns every dict of a room's `layout.props`
+ * into ONE placement in list order, `scene_recipe._prop_models` every
+ * placement into ONE spec (`role 'prop'`, `measure 'xyz'`, the room's
+ * `room_id`); door/window leaves are `measure 'fit'`, scatter copies come
+ * after the placements. A payload of
+ *     [door 'd1' (fit, room R), prop 'chair' (R), building, prop 'table' (R),
+ *      prop 'lamp' (room S)]
+ * therefore groups to R → [chair, table], S → [lamp].
+ * (F1) props[1] of R with prop_id 'table' → the 'table' spec.
+ * (F2) props[1] of R with prop_id 'chair' (a stale payload: the draft was
+ *      reordered) → null — the footprint stays plain.
+ * (F3) placement ids that disagree ('a' vs 'b') → null; one side without an
+ *      id → matched by index + prop id alone.
+ * (F4) the URL is the server's resolved variant: `model_variants` [A, B],
+ *      `variant` 1 → B's full tier; no mesh (`variants` {}) → ''.
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -126,6 +171,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SRC = join(ROOT, 'frontend/src/tabs/map/propSpriteMath.ts');
 const PIN_SRC = join(ROOT, 'frontend/src/tabs/map/WorldPropLayer.tsx');
 const MATH_SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
+const PLAN_SRC = join(ROOT, 'frontend/src/tabs/world/planPropSprites.ts');
+const CANVAS_SRC = join(ROOT, 'frontend/src/tabs/world/PlanCanvas.tsx');
 
 /** Bundled and imported — the module pulls in `@anima/scene-render`
  *  (`pickVariant`), which esbuild resolves and inlines. */
@@ -164,7 +211,8 @@ async function main() {
   const {
     PROP_SPRITE_MAX, propSpriteFieldM, propSpriteScale, propSpriteSizeM,
     propSpriteRotateDeg, propSpriteTransform, propSpriteTargetH,
-    propSpriteAnchorShift,
+    propSpriteAnchorShift, propSpritePlacedScale, propSpritePlacedSizeM,
+    propSpritePlacedYawDeg,
     scatterModelUrl, scatterVariantCount, worldPropModelUrl,
   } = m;
 
@@ -275,6 +323,65 @@ async function main() {
     [(() => { const v = propSpriteAnchorShift(NaN, 0, 2, 0, 'origin'); return [v.dx, v.dz]; })(),
       shift(NaN)],
     [[0, 0], [2, 1]]);
+
+  console.log('(E) the floor plan: a placed prop');
+  const E1 = propSpritePlacedSizeM({ widthM: 1, heightM: 0.5, depthM: 2 }, 4);
+  check('E1 1 × 0.5 × 2, max_m 4 → scale 2, 2 m × 4 m, picture 4.2 m',
+    [E1.scale, E1.widthM, E1.depthM, r9(E1.fieldM)], [2, 2, 4, 4.2]);
+  const E2 = propSpritePlacedSizeM({ widthM: 0.5, heightM: 3, depthM: 1 }, 1.5);
+  check('E2 a tall mesh scales by its HEIGHT edge: 0.5 → 0.25 × 0.5, picture 0.525',
+    [E2.scale, E2.widthM, E2.depthM, r9(E2.fieldM)], [0.5, 0.25, 0.5, 0.525]);
+  check('E3 junk scales by 0, never NaN',
+    [propSpritePlacedScale({ widthM: 1, heightM: 1, depthM: 1 }, 0),
+      propSpritePlacedScale({ widthM: 0, heightM: 0, depthM: 0 }, 2),
+      propSpritePlacedScale({ widthM: NaN, heightM: NaN, depthM: NaN }, 2)],
+    [0, 0, 0]);
+  check('E4 yaw 30 + fix y 90 = 120; no fix 30; fix x 360 is none',
+    [propSpritePlacedYawDeg(30, { x: 0, y: 90, z: 0 }),
+      propSpritePlacedYawDeg(30, null),
+      propSpritePlacedYawDeg(30, { x: 360, y: 0, z: 0 })],
+    [120, 30, 30]);
+  check('E5 a tilt or a roll → null (the top view shows another side)',
+    [propSpritePlacedYawDeg(30, { x: 90, y: 0, z: 0 }),
+      propSpritePlacedYawDeg(30, { x: 0, y: 0, z: -90 })],
+    [null, null]);
+  check('E6 turn 120 → rotate(−120)', propSpriteRotateDeg(120), -120);
+  const canvasSrc = await readFile(CANVAS_SRC, 'utf8');
+  check('E6 …the plan footprint and its picture both turn by rotate(−…)',
+    [canvasSrc.includes('transform: `translate(-50%, -50%) rotate(${-pose.yaw}deg)`'),
+      canvasSrc.includes('rotate(${propSpriteRotateDeg(pose.yaw + pic.fixYawDeg)}deg)')],
+    [true, true]);
+
+  console.log('(F) the floor plan: spec ↔ layout.props[i]');
+  const p = await loadBundled(PLAN_SRC, 'planpropsprite-');
+  const { groupPlacementSpecs, placementSpecOf, placementSpecModelUrl } = p;
+  const spec = (over) => ({ role: 'prop', measure: 'xyz', room_id: 'R', level: 0,
+    fix_euler: { x: 0, y: 0, z: 0 }, yaw_deg: 0, anchor: [0, 0], bottom_y: 0,
+    variants: { full: '/m' }, max_m: 1, ...over });
+  const groups = groupPlacementSpecs([
+    spec({ id: 'd1', measure: 'fit' }),
+    spec({ id: 'chair', placement_id: 'a' }),
+    spec({ id: 'house', role: 'building' }),
+    spec({ id: 'table', placement_id: '' }),
+    spec({ id: 'lamp', room_id: 'S' }),
+  ]);
+  check('F0 R → [chair, table], S → [lamp]',
+    [(groups.get('R') || []).map((x) => x.id), (groups.get('S') || []).map((x) => x.id)],
+    [['chair', 'table'], ['lamp']]);
+  check('F1 props[1] of R named table → the table spec',
+    placementSpecOf(groups, 'R', 1, { prop_id: 'table' })?.id, 'table');
+  check('F2 a stale payload (props[1] is now the chair) → null',
+    placementSpecOf(groups, 'R', 1, { prop_id: 'chair' }), null);
+  check('F3 ids disagree → null; one side without an id → matched',
+    [placementSpecOf(groups, 'R', 0, { prop_id: 'chair', id: 'b' }),
+      placementSpecOf(groups, 'R', 0, { prop_id: 'chair' })?.id,
+      placementSpecOf(groups, 'R', 1, { prop_id: 'table', id: 'z' })?.id],
+    [null, 'chair', 'table']);
+  check('F4 the resolved variant: [A, B] at 1 → B; no mesh → \'\'',
+    [placementSpecModelUrl(spec({ variants: { full: '/A' },
+      model_variants: [{ full: '/A' }, { full: '/B' }], variant: 1 })),
+    placementSpecModelUrl(spec({ variants: {} }))],
+    ['/B', '']);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
