@@ -9,6 +9,9 @@ import math
 
 from app.core.game_time import GameTime
 from app.core.stat_rules import round_half_away
+from app.core.log import get_logger
+
+logger = get_logger("effect_application")
 
 
 def merge_changes(aggregate: dict, changes: dict) -> None:
@@ -61,7 +64,9 @@ def apply_effects_to_profile(profile: dict, effects: list[dict], now: GameTime) 
         elif typ in ('condition_add', 'condition_remove'):
             name = effect['condition_id']
             active = result.setdefault('active_conditions', [])
-            matches = [entry for entry in active if isinstance(entry, dict) and entry.get('name') == name]
+            key = str(name).strip().lower()
+            matches = [entry for entry in active if isinstance(entry, dict)
+                       and str(entry.get('name') or '').strip().lower() == key]
             live = [entry for entry in matches if not _expired(entry, now)]
             if typ == 'condition_remove':
                 result['active_conditions'] = [entry for entry in active if entry not in matches]
@@ -85,7 +90,10 @@ def effect_catalogs() -> dict:
     from app.core.prompt_filters import load_filters
     from app.core.stat_rules import template_rules
     from app.models.character_template import list_templates, get_template
-    return dict(conditions={f['id'] for f in load_filters() if f.get('enabled', True)},
+    # Condition ids compare case-insensitively, like every other condition
+    # match (prompt_filters): an item naming "libido increased" applies the
+    # condition "libido Increased" (2026-11-09, it was dropped silently).
+    return dict(conditions={str(f['id']).strip().lower() for f in load_filters() if f.get('enabled', True)},
                 templates={entry['name']: set(template_rules(get_template(entry['name']) or {}))
                            for entry in list_templates()})
 
@@ -100,7 +108,7 @@ def validate_profile_effects(profile, effects, catalogs):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 return 'missing_character_stat'
         elif effect['type'] in ('condition_add', 'condition_remove'):
-            if effect['condition_id'] not in catalogs['conditions']:
+            if str(effect['condition_id']).strip().lower() not in catalogs['conditions']:
                 return 'unknown_condition'
     return ''
 
@@ -158,7 +166,16 @@ def apply_character_effects(name, effects, now, *, source=''):
             profile = C.read_effect_profile(conn, name)
             # Legacy item/danger deltas ignore unknown/missing actor stats, not
             # manufacture new values. Unknown conditions never become state text.
-            valid = [effect for effect in effects if not validate_profile_effects(profile, [effect], catalogs)]
+            valid = []
+            for effect in effects:
+                reason = validate_profile_effects(profile, [effect], catalogs)
+                if not reason:
+                    valid.append(effect)
+                elif reason == 'unknown_condition':
+                    # Never silent: the item says it applies a condition the
+                    # world does not define (or has disabled).
+                    logger.warning("%s: condition '%s' for %s is unknown or disabled — not applied",
+                                   source or 'effect', effect.get('condition_id'), name)
             result = apply_effects_to_profile(profile, valid, now)
             C.write_effect_profile(conn, name, result['profile'])
     notify_effects({name: result}, source)
