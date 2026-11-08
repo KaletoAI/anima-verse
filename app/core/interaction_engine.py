@@ -1206,7 +1206,8 @@ def _sweep_before() -> str:
 
 def _invite_row(r) -> Dict[str, Any]:
     return {"invite_id": r[0], "inviter": r[1], "invitee": r[2],
-            "pose_key": r[3], "created_at": r[4], "status": r[5], "reason": r[6]}
+            "pose_key": r[3], "created_at": r[4], "status": r[5], "reason": r[6],
+            "consent": r[7] or "ask"}
 
 
 def _fresh(created_at: str, max_age_minutes: int = INVITE_MAX_AGE_MIN) -> bool:
@@ -1227,7 +1228,7 @@ def _sweep_invites() -> None:
             "DELETE FROM interaction_invites WHERE status NOT IN ('pending', 'accepted') "
             "AND created_at < ?", (before,))
         rows = conn.execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE status='accepted' AND created_at < ?",
             (before,)).fetchall()
         stored_tx_1 = True
@@ -1352,7 +1353,7 @@ def get_invite(invite_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE invite_id=?", (invite_id,)).fetchone()
     except Exception:
         return None
@@ -1375,7 +1376,7 @@ def pending_invites_for(invitee: str) -> List[Dict[str, Any]]:
         return []
     try:
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE invitee=? AND status='pending' "
             "ORDER BY created_at ASC", (invitee,)).fetchall()
     except Exception:
@@ -1405,7 +1406,7 @@ def outgoing_invite_of(inviter: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE inviter=? AND status IN ('pending', 'reacting') "
             "ORDER BY created_at DESC LIMIT 1", (inviter,)).fetchone()
     except Exception:
@@ -1426,7 +1427,7 @@ def approach_of(character: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE status='approaching' "
             "AND (inviter=? OR invitee=?) ORDER BY created_at DESC LIMIT 1",
             (c, c)).fetchone()
@@ -1447,7 +1448,7 @@ def find_pending_invite(inviter: str, invitee: str,
     invitee = (invitee or "").strip()
     if not inviter or not invitee:
         return None
-    sql = ("SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+    sql = ("SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
            "FROM interaction_invites WHERE inviter=? AND invitee=? "
            "AND status='pending'")
     args: List[Any] = [inviter, invitee]
@@ -1500,10 +1501,17 @@ def _fail_invite(inv: dict, reason: str, *, expected_status: str = "answering") 
             (reason, inv["invite_id"], expected_status)).rowcount == 1
     if not changed:
         return
-    _narrate(inv["invitee"],
-             "{invitee} would like to, but {pose} with {inviter} is not possible ({reason}).",
-             inviter=inv["inviter"], invitee=inv["invitee"],
-             pose_key=inv["pose_key"], reason=reason)
+    if inv.get("consent") == "react":
+        # Nobody was asked: the actor's own start fell through, not a yes.
+        _narrate(inv["inviter"],
+                 "{inviter} wanted to start {pose} with {invitee}, but it is not possible ({reason}).",
+                 inviter=inv["inviter"], invitee=inv["invitee"],
+                 pose_key=inv["pose_key"], reason=reason)
+    else:
+        _narrate(inv["invitee"],
+                 "{invitee} would like to, but {pose} with {inviter} is not possible ({reason}).",
+                 inviter=inv["inviter"], invitee=inv["invitee"],
+                 pose_key=inv["pose_key"], reason=reason)
     emit("interaction.invite_failed", invite_id=inv["invite_id"],
          inviter=inv["inviter"], invitee=inv["invitee"], pose_key=inv["pose_key"], reason=reason)
     sync_topics.avatars([inv["inviter"], inv["invitee"]], "presence")
@@ -1513,7 +1521,7 @@ def last_answer_of(inviter: str) -> Optional[dict]:
     """Return only the newest own question if freshly declined or failed."""
     from app.core.db import get_connection
     row = get_connection().execute(
-        "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+        "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
         "FROM interaction_invites WHERE inviter=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (inviter,)).fetchone()
     if not row:
@@ -1719,7 +1727,7 @@ def settle_approaches() -> int:
     _settle_reactions()
     try:
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE status='approaching'").fetchall()
     except Exception:
         return 0
@@ -1823,7 +1831,8 @@ def start_without_asking(actor: str, partner: str, pose_key: str) -> Dict[str, A
                     "WHERE inviter=? AND invitee=? AND status='pending'", (actor, partner))
                 conn.execute(
                     "INSERT INTO interaction_invites (invite_id, inviter, invitee, "
-                    "pose_key, created_at, status) VALUES (?, ?, ?, ?, ?, 'reacting')",
+                    "pose_key, created_at, status, consent) "
+                    "VALUES (?, ?, ?, ?, ?, 'reacting', 'react')",
                     (invite_id, actor, partner, pose_key, utc_now_iso()))
     except Exception as e:
         logger.debug("start_without_asking failed: %s", e)
@@ -1899,7 +1908,7 @@ def _settle_reactions() -> int:
     from app.core.db import get_connection
     try:
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason, consent "
             "FROM interaction_invites WHERE status='reacting'").fetchall()
     except Exception:
         return 0

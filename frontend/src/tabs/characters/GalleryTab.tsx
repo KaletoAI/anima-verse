@@ -10,7 +10,9 @@
  * (the same routes as the player gallery; the render runs in the background,
  * so the tab polls until the image changed) · generate video:
  * POST …/images/{file}/animate (+ …/suggest-animate-prompt), the MP4 lands
- * next to the still as {stem}.mp4 — the tab polls until it appears.
+ * next to the still as {stem}.mp4 — the tab polls until it appears, or until
+ * the render's track (`track_id`) shows up failed in GET /queue/status
+ * `recent_tasks`; then it stops and toasts the error.
  * The lightbox is the shared singleton; its ONE host is mounted in main.tsx.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -40,6 +42,16 @@ interface ImagesResp {
     animate_prompt?: string
     animate_created_at?: string
   }>
+}
+
+/** Why a tracked background job ended without its result: the error of its
+ *  row in GET /queue/status `recent_tasks` once it finished as anything but
+ *  `completed` ('' while it runs, after success, or once it left the list). */
+async function trackFailure(trackId: string): Promise<string> {
+  const q = await apiGet<{ recent_tasks?: { task_id?: string; status?: string; error?: string }[] }>(
+    '/queue/status')
+  const row = (q.recent_tasks || []).find((r) => r.task_id === trackId)
+  return row && row.status !== 'completed' ? (row.error || row.status || 'failed') : ''
 }
 
 /** The open regenerate dialog: which file + who the server saw in it. */
@@ -105,9 +117,11 @@ export function GalleryTab({ character }: { character: string }) {
     setRegen({ file: f, detected, available })
   }
 
-  // Poll until `stamp` of the gallery answer changed (then refresh the tiles).
+  // Poll until `stamp` of the gallery answer changed (then refresh the tiles),
+  // or until `failure` reports why the background job gave up.
   const waitForChange = (before: ImagesResp | null, stamp: (d: ImagesResp | null) => string,
-    intervalMs: number, maxRounds: number, onDone?: () => void) => {
+    intervalMs: number, maxRounds: number, onDone?: () => void,
+    failure?: () => Promise<string>) => {
     stopPoll()
     const was = stamp(before)
     let round = 0
@@ -117,6 +131,8 @@ export function GalleryTab({ character }: { character: string }) {
       try {
         const d = await fetchImages()
         if (stamp(d) !== was) { setData(d); setRev((r) => r + 1); onDone?.(); return }
+        const error = failure ? await failure() : ''
+        if (error) { toast(t('Video generation failed: {error}').replace('{error}', error), 'error'); return }
       } catch { /* try again */ }
       if (round < maxRounds) pollTimer.current = window.setTimeout(() => { void tick() }, intervalMs)
     }
@@ -128,10 +144,11 @@ export function GalleryTab({ character }: { character: string }) {
       (d) => `${d?.images.length ?? 0}|${d?.image_metadata?.[f]?.created_at ?? ''}`,
       REGEN_POLL_MS, REGEN_POLL_MAX)
   // Animate: the still's companion video appeared or was replaced.
-  const waitForVideo = (f: string, before: ImagesResp | null) =>
+  const waitForVideo = (f: string, before: ImagesResp | null, trackId: string) =>
     waitForChange(before,
       (d) => `${d?.image_videos?.[f] ?? ''}|${d?.image_metadata?.[f]?.animate_created_at ?? ''}`,
-      VIDEO_POLL_MS, VIDEO_POLL_MAX, () => toast(t('Video ready')))
+      VIDEO_POLL_MS, VIDEO_POLL_MAX, () => toast(t('Video ready')),
+      trackId ? () => trackFailure(trackId) : undefined)
 
   const suggestAnimate = async (f: string, opts: { system_prompt: string }) => {
     try {
@@ -148,9 +165,9 @@ export function GalleryTab({ character }: { character: string }) {
     const f = animate
     if (!f) return
     try {
-      await apiPost(`${imgUrl(f)}/animate`, payload)
+      const res = await apiPost<{ track_id?: string }>(`${imgUrl(f)}/animate`, payload)
       toast(t('Video generation started'))
-      waitForVideo(f, data)
+      waitForVideo(f, data, res?.track_id || '')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }

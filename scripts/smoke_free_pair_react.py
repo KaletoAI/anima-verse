@@ -59,6 +59,16 @@ sentiment_a = partner -> actor, sentiment_b = actor -> partner):
    empty piece (StrictUndefined holds) — 'Right now: Ann starts "hug" with
    Kai, without asking.' — and is None once answered;
    pair_reaction.answer with an unknown kind -> refused "invalid_kind".
+15 a react pair accepted but blocked on start (Lea asleep by then): answer
+   "cannot" with that reason, row "failed" / consent "react", nothing
+   started, and the room hears the ACTOR's attempt — "Ann wanted to start
+   hug with Lea, but it is not possible (Lea is asleep)." — never the
+   invitation line "Lea would like to, ..." (nobody asked Lea).
+16 the ask twin: Ann asks Mo, Mo is blocked by the time he says yes ->
+   "cannot", row "failed" / consent "ask", and the invitation line stays
+   "Mo would like to, but hug with Ann is not possible (Mo is asleep)."
+   (consent of a row: case 2's / 10's rows read "react" / "ask"; case 9's
+   walk keeps "react" while "approaching".)
 """
 import sys
 import tempfile
@@ -179,6 +189,7 @@ check("no interaction.invited", [e for e, _ in EMITTED if e == "interaction.invi
 check("narration", LINES, ["Ann approaches Bob: hug."])
 check("nothing started", STARTED, [])
 check("outgoing shows it", (IE.outgoing_invite_of(AVATAR) or {}).get("invite_id"), iid)
+check("row consent react", row(iid).get("consent"), "react")
 check("pending words", pair_reaction.pending("interaction", iid, AVATAR, "Bob"), {"action": "hug", "piece": ""})
 
 print("3 accept")
@@ -253,6 +264,7 @@ iid = route(partner="Gil", pose=POSE, consent="react").get("invite_id", "")
 res = IE.react("Gil", iid, True)
 check("approaching", res.get("status"), "approaching")
 check("row approaching", row(iid).get("status"), "approaching")
+check("approach keeps consent react", row(iid).get("consent"), "react")
 FAR.discard("Gil")
 IE.cancel_invite(iid)
 
@@ -261,6 +273,7 @@ reset()
 r = route(partner="Hal", pose=POSE)
 check("asked", r.get("status"), "asked")
 check("row pending", rows_of(AVATAR, "Hal"), ["pending"])
+check("row consent ask", (IE.outgoing_invite_of(AVATAR) or {}).get("consent"), "ask")
 check("interaction.invited once", [e for e, _ in EMITTED if e == "interaction.invited"], ["interaction.invited"])
 check("provider not asked", ASKED, [])
 check("narration", LINES, ["Ann suggests hug to Hal."])
@@ -305,6 +318,30 @@ check("no piece", 'Right now: Ann starts "hug" with Kai, without asking.' in (pr
 IE.react("Kai", iid, True)
 check("None once answered", reaction_prompt("interaction", iid, AVATAR, "Kai"), None)
 check("unknown kind", pair_reaction.answer("other", iid, "Kai", True).get("reason"), "invalid_kind")
+
+print("15 react accepted, blocked on start -> the actor's attempt is narrated")
+reset()
+iid = route(partner="Lea", pose=POSE, consent="react").get("invite_id", "")
+BLOCKED["Lea"] = "Lea is asleep"
+LINES.clear()
+res = IE.react("Lea", iid, True)
+check("cannot with the reason", (res.get("status"), res.get("reason")), ("cannot", "Lea is asleep"))
+check("row failed, consent react", (row(iid).get("status"), row(iid).get("consent")), ("failed", "react"))
+check("nothing started", STARTED, [])
+check("actor's line", LINES, ["Ann wanted to start hug with Lea, but it is not possible (Lea is asleep)."])
+BLOCKED.pop("Lea")
+
+print("16 ask accepted, blocked on start -> the invitation line stays")
+reset()
+IE.cancel_invite((IE.outgoing_invite_of(AVATAR) or {}).get("invite_id", ""))
+iid = IE.create_invite(AVATAR, "Mo", POSE)
+BLOCKED["Mo"] = "Mo is asleep"
+LINES.clear()
+res = IE.resolve_invite(iid, True)
+check("cannot", res.get("status"), "cannot")
+check("row failed, consent ask", (row(iid).get("status"), row(iid).get("consent")), ("failed", "ask"))
+check("invitation line", LINES, ["Mo would like to, but hug with Ann is not possible (Mo is asleep)."])
+BLOCKED.pop("Mo")
 
 hooks.emit = _real_emit
 print()

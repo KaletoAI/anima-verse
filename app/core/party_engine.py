@@ -157,9 +157,14 @@ def disband_party(party_id: str) -> None:
     emit("party_membership_changed", party=p, character=p["leader"], reason="disbanded")
 
 
+#: The columns ``_row_to_invite`` reads, in its order.
+_INVITE_COLUMNS = "invite_id, inviter, invitee, created_at, status, intent_id, answer_requests"
+
+
 def _row_to_invite(row) -> Dict:
     return {"invite_id": row[0], "inviter": row[1], "invitee": row[2],
-            "created_at": row[3], "status": row[4], "intent_id": row[5] or ""}
+            "created_at": row[3], "status": row[4], "intent_id": row[5] or "",
+            "answer_requests": int(row[6] or 0)}
 
 
 def invite_is_fresh(invite: Dict, max_age_minutes: int = INVITE_MAX_AGE_MINUTES) -> bool:
@@ -177,7 +182,7 @@ def create_pending_invite(inviter: str, invitee: str, intent_id: str = "") -> Op
     stale = []
     with keyed_lock("party_membership", "world"):
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+            f"SELECT {_INVITE_COLUMNS} "
             "FROM party_invites WHERE inviter=? AND invitee=? AND status='pending'",
             (inviter, invitee)).fetchall()
         for row in rows:
@@ -207,14 +212,14 @@ def get_invite(invite_id: str) -> Optional[Dict]:
     if not invite_id:
         return None
     row = get_connection().execute(
-        "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+        f"SELECT {_INVITE_COLUMNS} "
         "FROM party_invites WHERE invite_id=?", (invite_id,)).fetchone()
     return _row_to_invite(row) if row else None
 
 
 def get_pending_invites_for(invitee: str) -> List[Dict]:
     rows = get_connection().execute(
-        "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+        f"SELECT {_INVITE_COLUMNS} "
         "FROM party_invites WHERE invitee=? AND status='pending' ORDER BY created_at",
         ((invitee or "").strip(),)).fetchall()
     out = []
@@ -231,10 +236,61 @@ def get_pending_invites_for(invitee: str) -> List[Dict]:
     return out
 
 
+def get_pending_invites_from(inviter: str) -> List[Dict]:
+    """The fresh invitations ``inviter`` put to others and nobody answered
+    yet, oldest first — the outgoing half of ``get_pending_invites_for``
+    (the player's "Waiting for {name}…"). No location filter: a question
+    stays open while its invitee steps away, and the inviter may still take
+    it back (``withdraw_invite``)."""
+    rows = get_connection().execute(
+        f"SELECT {_INVITE_COLUMNS} "
+        "FROM party_invites WHERE inviter=? AND status='pending' ORDER BY created_at",
+        ((inviter or "").strip(),)).fetchall()
+    return [inv for inv in map(_row_to_invite, rows) if invite_is_fresh(inv)]
+
+
+def withdraw_invite(invite_id: str, inviter: str) -> Dict:
+    """The inviter takes back its own open question.
+
+    Answers ``{"status": "withdrawn"}``, or the invitation's own status when
+    it was already answered/closed, or ``"not_found"`` for an unknown id or
+    someone else's invitation. A withdrawn row is ``cancelled`` and closed
+    with ``party_invite_closed`` (reason ``"withdrawn"``), so a linked plan
+    ends with it; inviter and invitee are told through ``presence``."""
+    with keyed_lock("party_membership", "world"):
+        inv = get_invite(invite_id)
+        if not inv or inv["inviter"] != (inviter or "").strip():
+            return {"status": "not_found"}
+        if inv["status"] != "pending":
+            return {"status": inv["status"]}
+        stored_tx_1 = False
+        with transaction() as conn:
+            conn.execute("UPDATE party_invites SET status='cancelled' "
+                         "WHERE invite_id=? AND status='pending'", (invite_id,))
+            stored_tx_1 = True
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([inv["inviter"], inv["invitee"]], ("presence", "notices"))
+    emit("party_invite_closed", invite=inv, reason="withdrawn")
+    return {"status": "withdrawn"}
+
+
+def note_answer_request(invite_id: str) -> int:
+    """Count one more answer turn requested for an open invitation and return
+    the new count (0 when the invitation is no longer pending). A package
+    reads it back as ``answer_requests`` to stop asking."""
+    with keyed_lock("party_membership", "world"), transaction() as conn:
+        conn.execute("UPDATE party_invites SET answer_requests=answer_requests+1 "
+                     "WHERE invite_id=? AND status='pending'", (invite_id,))
+        row = conn.execute("SELECT answer_requests, status FROM party_invites "
+                           "WHERE invite_id=?", (invite_id,)).fetchone()
+    return int(row[0]) if row and row[1] == "pending" else 0
+
+
 def find_pending_invite(inviter: str, invitee: str,
                         max_age_minutes: int = INVITE_MAX_AGE_MINUTES) -> Optional[Dict]:
     row = get_connection().execute(
-        "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+        f"SELECT {_INVITE_COLUMNS} "
         "FROM party_invites WHERE inviter=? AND invitee=? AND status='pending' "
         "ORDER BY created_at DESC LIMIT 1", (inviter, invitee)).fetchone()
     inv = _row_to_invite(row) if row else None

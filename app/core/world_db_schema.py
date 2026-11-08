@@ -855,7 +855,8 @@ SCHEMA_STATEMENTS = [
         invitee    TEXT NOT NULL,
         created_at TEXT NOT NULL,
         status     TEXT NOT NULL DEFAULT 'pending',
-        intent_id  TEXT NOT NULL DEFAULT ''
+        intent_id  TEXT NOT NULL DEFAULT '',
+        answer_requests INTEGER NOT NULL DEFAULT 0
     )""",
     "CREATE INDEX IF NOT EXISTS idx_party_invites_invitee ON party_invites (invitee, status)",
 
@@ -1066,12 +1067,21 @@ ALTER_MIGRATIONS = [
     ("user_sessions", "ttl_hours", "INTEGER"),
     ("item_reading_sessions", "session_id", "TEXT NOT NULL DEFAULT ''"),
     ("interaction_invites", "reason", "TEXT NOT NULL DEFAULT ''"),
+    # interaction_invites: how the pair began — "ask" (a question the invitee
+    # answers) or "react" (started without asking, interaction_engine.
+    # start_without_asking). A react start that falls through is narrated as
+    # the actor's own attempt, not as an invitee's failed yes.
+    ("interaction_invites", "consent", "TEXT NOT NULL DEFAULT 'ask'"),
     # improvements: the admin's "Run now" — the entry works off all its steps
     # past the idle window, the engine switch, a freeze and a queue pause, and
     # the engine clears the flag once nothing is left to run.
     ("improvements", "forced", "INTEGER NOT NULL DEFAULT 0"),
     # Destination-bound invitations refer to the existing intent store.
     ("party_invites", "intent_id", "TEXT NOT NULL DEFAULT ''"),
+    # How often the invitee was asked in an answer turn
+    # (party_engine.note_answer_request): a standing invitation a temporary
+    # NPC leaves unanswered is asked once more, then declined.
+    ("party_invites", "answer_requests", "INTEGER NOT NULL DEFAULT 0"),
     # thoughts: characters present at the time of the thought (JSON name list)
     # — context for the admin journal (user feedback 2026-07-29). Old rows
     # stay empty.

@@ -152,7 +152,9 @@ for (const surface of ['gallery', 'instagram']) {
   const { PlayerAnimateDialog } = load(resolve('packages/player-ui/src/PlayerAnimateDialog.tsx'));
   const { PromptImprover } = load(resolve('packages/player-ui/src/PromptImprover.tsx'));
   const submitted = [];
-  const ctl = { prompt: 'She waves', sourceImageUrl: '', hasVideo: false, onSuggest: async () => 'x',
+  const suggested = [];
+  const ctl = { prompt: 'She waves', sourceImageUrl: '', hasVideo: false,
+    onSuggest: async opts => { suggested.push(opts); return 'x'; },
     onSubmit: payload => { submitted.push(payload); }, onClose() {} };
   const dialog = instance(PlayerAnimateDialog);
   const draw = () => dialog({ ctl });
@@ -184,6 +186,10 @@ for (const surface of ['gallery', 'instagram']) {
   await tree.props.onSubmit();
   assert.deepEqual(submitted.at(-1), { prompt: 'Improved motion', loras: [{ name: 'motion-l', strength: 1 }] },
     'Auto sends no service but keeps the auto-scoped LoRA pick');
+  // "Suggest" asks with the system prompt only: the LLM is the routed one
+  // (no per-call LLM pick — the field it once sent was never used).
+  await find(draw(), n => n.type === 'button' && n.props.children === 'Suggest').props.onClick(); await flush();
+  assert.deepEqual(suggested, [{ system_prompt: '' }]);
 }
 console.log('animate dialog: PASS (video picker, LoRA slots per backend, improver in video mode, service/loras payload)');
 console.log('regenerate backend: PASS (shared picker, four scoped slots, Auto, explicit payloads through gallery + Instagram)');

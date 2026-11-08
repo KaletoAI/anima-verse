@@ -34,7 +34,7 @@ export function PlayerAnimateDialog({ ctl }: { ctl: InstagramAnimateControl }) {
       setSuggesting(true)
       setError('')
       try {
-        const suggestion = await ctl.onSuggest({ system_prompt: '', llm_override: '' })
+        const suggestion = await ctl.onSuggest({ system_prompt: '' })
         if (alive.current) setPrompt(suggestion)
       } catch (err) {
         if (alive.current) setError(err instanceof Error ? err.message : t('Suggestion failed.'))

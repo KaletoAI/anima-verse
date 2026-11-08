@@ -369,7 +369,9 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         logger.debug("follow_suggestions failed: %s", _fe)
 
     # Party state (hide the compass for a follower) + the invitations pending
-    # for the avatar (a yes/no question in the chat window).
+    # for the avatar (a yes/no question in the chat window) + the ones the
+    # avatar put to others and nobody answered yet (the action drawer's
+    # "Waiting for {name}…" with its "Take back").
     party = _party_block(avatar)
     try:
         from app.core.party_engine import get_pending_invites_for
@@ -378,6 +380,12 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
                           if key in i} for i in get_pending_invites_for(avatar)]
     except Exception:
         party_invites = []
+    try:
+        from app.core.party_engine import get_pending_invites_from
+        party_invites_sent = [{key: i[key] for key in ("invite_id", "invitee", "created_at")}
+                              for i in get_pending_invites_from(avatar)]
+    except Exception:
+        party_invites_sent = []
 
     # Pair interactions: the questions waiting for the avatar, the one it is
     # waiting on itself, its latest answer, and its approaching or running pair.
@@ -408,11 +416,19 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         interaction = ({"members": _IE.members_of(_run), "pose_key": _run["pose_key"],
                         "pose_label": pose_label(_run["pose_key"], lang)}
                        if _run else None)
+        # Who of the present is in a pair WITHOUT the avatar: the action
+        # drawer greys their free pair poses (the Others card's "busy").
+        present_busy = []
+        for _c in present:
+            _their = _IE.get_interaction(_c) if _c != avatar else None
+            if _their and avatar not in _IE.members_of(_their).values():
+                present_busy.append(_c)
     except Exception as _ie:
         logger.debug("interaction block failed: %s", _ie)
         interaction_invites, interaction_pending = [], None
         interaction_answered = None
         interaction_approaching, interaction = None, None
+        present_busy = []
 
     # MARK the storyteller lines, then localise their label — in that order,
     # and the mark UNCONDITIONALLY.
@@ -454,11 +470,13 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         "present_badges": present_badges,
         "follow_suggestions": follow_suggestions,
         "party": party, "party_invites": party_invites,
+        "party_invites_sent": party_invites_sent,
         "interaction_invites": interaction_invites,
         "interaction_pending": interaction_pending,
         "interaction_answered": interaction_answered,
         "interaction_approaching": interaction_approaching,
         "interaction": interaction,
+        "present_busy": present_busy,
         "speaker_expr_versions": speaker_expr_versions,
         "avatar_expr_version": _expr_v(avatar),
         "bg_version": _bg_version(loc, room) if loc else "",
@@ -2028,6 +2046,32 @@ def _play_party_invite_sync(body: Any) -> Dict[str, Any]:
                             detail=t(message, lang).replace("{name}", target))
     charge(avatar, skill.SKILL_ID)
     return {"ok": True, "status": res["status"], "invite_id": res["invite_id"]}
+
+
+@router.post("/play/party/cancel")
+async def play_party_cancel(request: Request, user=Depends(get_current_user)):
+    """The avatar takes back its own open party invitation."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_party_cancel_sync, body)
+
+
+def _play_party_cancel_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``play_party_cancel`` — only the invitation's
+    own inviter may take it back (someone else's invitation is a 404, like
+    ``/play/interact/cancel``). Answers ``{"ok", "status"}``: ``ok`` with
+    status "withdrawn"; otherwise the invitation's status when it was
+    answered or closed in the meantime."""
+    from app.core.party_engine import get_invite, withdraw_invite
+    avatar = _require_avatar()
+    invite_id = str(body.get("invite_id") or "").strip() if isinstance(body, dict) else ""
+    if not invite_id:
+        raise HTTPException(status_code=400, detail="invite_id required")
+    inv = get_invite(invite_id)
+    if not inv or inv.get("inviter") != avatar:
+        raise HTTPException(status_code=404, detail="invite not found")
+    res = withdraw_invite(invite_id, avatar)
+    return {"ok": res.get("status") == "withdrawn", **res}
 
 
 # ── pair interactions (app/core/interaction_engine.py) ──────────────────

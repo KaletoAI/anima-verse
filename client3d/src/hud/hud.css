@@ -303,8 +303,11 @@
    What the avatar can START (ActionsTree from the shared package) sits in a
    drawer beside the chat instead of under the transcript. The chat clips its
    children, so the drawer is a sibling: Hud.tsx writes its left/top/height
-   from the chat's measured box (and the left edge into
-   `--hud-actions-left`, for the width cap below).
+   from the chat's measured box (and the free width on its side into
+   `--hud-actions-room`, for the width cap below). With the chat at the right
+   window edge the drawer flips to the chat's LEFT edge (`.flipped`, placed by
+   `right`; `actionsDrawerSide` in chatPanel.ts decides): the row runs
+   mirrored, the handle's open edge faces the chat.
 
    The drawer box is as tall as the chat and mostly empty while closed, so it
    takes NO pointer — only the handle and the panel do (the pointer rule at
@@ -324,7 +327,9 @@
   height: 56px;
   padding: 0;
   border: 1px solid var(--border, #30363d);
-  border-left: none;
+  /* Widths only, never the shorthand: the colour stays the theme's on
+     every side, so the flipped drawer below can swap the open edge. */
+  border-left-width: 0;
   border-radius: 0 8px 8px 0;
   background: var(--bg-container, #161b22);
   color: inherit;
@@ -338,11 +343,22 @@
   border-color: var(--accent, #6aa9ff);
   opacity: 1;
 }
-/* Own width, never wider than what is left of the window right of the chat
-   (handle and margins taken off), never narrower than a usable column. */
+#hud .hud-chat-actions.flipped {
+  flex-direction: row-reverse;
+  padding-left: 0;
+  padding-right: 3px;
+}
+#hud .hud-chat-actions.flipped .hud-chat-actions-handle {
+  border-left-width: 1px;
+  border-right-width: 0;
+  border-radius: 8px 0 0 8px;
+}
+/* Own width, never wider than what is left of the window on the drawer's
+   side of the chat (handle and margins taken off, ACTIONS_CHROME_W), never
+   narrower than a usable column. */
 #hud .hud-chat-actions-panel {
   align-self: stretch;
-  width: min(280px, max(160px, calc(100vw - var(--hud-actions-left, 0px) - 36px)));
+  width: min(280px, max(160px, calc(var(--hud-actions-room, 100vw) - 36px)));
 }
 
 /* ---- Two columns: pictures left, transcript right (2b, decision E2) ----

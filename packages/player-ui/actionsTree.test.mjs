@@ -45,6 +45,17 @@
 //     with name Zoe; a block {invite_to_party: 'Not now.'} -> 'Not now.'.
 //     Rendered with the leader state, every person node counts one more:
 //     Ben 2, Kira 2, Mira 1 (the leaf stays even where it is greyed).
+// [8] freePoseHint (2026-11-08): busy = the scene's present_busy ['Kira'];
+//     Kira -> 'Busy with someone else' (even when the verb is free, and it
+//     wins over a verb block 'Not now.'); Ben (not busy) -> the verb's block
+//     as it is ('' when free, 'Not now.' when blocked); busy undefined -> ''.
+// [9] Open invitation (2026-11-08): the leader state plus sent [{invite_id
+//     pinv_1, invitee Ben}] -> Ben {reason '', name Ben, waiting pinv_1}
+//     (even with a block 'Not now.' or as a follower: an open question can
+//     always be taken back); Mira (no open invitation) -> usable as in [7];
+//     no skill -> null all the same. Rendered, the counts stay Ben 2, Kira 2,
+//     Mira 1 (the waiting leaf replaces the invite leaf; person nodes are
+//     never remembered open, so their leaves are not in a server render).
 // [5] The chat mount `PropActionsPanel showOffers={false}`: offers alone
 //     render nothing (they were a section with chips before); with a running
 //     row it shows the row and its Stop, but no offer chip ("With Kira").
@@ -74,7 +85,8 @@ function moduleUrl(file) {
   return url;
 }
 const src = name => moduleUrl(new URL(`./src/${name}`, import.meta.url));
-const { offerKind, pieceNodes, partnerNodes, pieceGroups, groupFit, groupPickRange, GROUP_MIN_OTHERS, partyInviteVerdict } =
+const { offerKind, pieceNodes, partnerNodes, pieceGroups, groupFit, groupPickRange, GROUP_MIN_OTHERS, partyInviteVerdict,
+  freePoseHint } =
   await import(src('actionsTreeModel.ts'));
 const { I18nProvider } = await import(src('I18nProvider.tsx'));
 const { ActionsTree } = await import(src('ActionsTree.tsx'));
@@ -171,6 +183,29 @@ const invitable = textNodes(render(ActionsTree, { avatar: 'Ann', present, intera
   partyInvite: leaderState, onChanged() {} }));
 assert.ok(invitable.endsWith('All potential partners3▸Ben2▸Kira2▸Mira1'), invitable);
 console.log('PASS invite to party verdicts and counts');
+
+// [8]
+const ident = s => s;
+assert.equal(freePoseHint('Kira', ['Kira'], '', ident), 'Busy with someone else');
+assert.equal(freePoseHint('Kira', ['Kira'], 'Not now.', ident), 'Busy with someone else');
+assert.equal(freePoseHint('Ben', ['Kira'], '', ident), '');
+assert.equal(freePoseHint('Ben', ['Kira'], 'Not now.', ident), 'Not now.');
+assert.equal(freePoseHint('Kira', undefined, '', ident), '');
+console.log('PASS free pair poses greyed for a busy partner');
+
+// [9]
+const waitingState = { ...leaderState, sent: [{ invite_id: 'pinv_1', invitee: 'Ben', created_at: '' }] };
+assert.deepEqual(partyInviteVerdict('Ben', waitingState), { reason: '', name: 'Ben', waiting: 'pinv_1' });
+assert.deepEqual(partyInviteVerdict('Ben', { ...waitingState, blocks: { invite_to_party: 'Not now.' } }),
+  { reason: '', name: 'Ben', waiting: 'pinv_1' });
+assert.deepEqual(partyInviteVerdict('Ben', { ...waitingState, capabilities: [],
+  party: { role: 'follower', leader: 'Zoe', members: ['Ann'] } }), { reason: '', name: 'Ben', waiting: 'pinv_1' });
+assert.deepEqual(partyInviteVerdict('Mira', waitingState), { reason: '', name: 'Mira' });
+assert.equal(partyInviteVerdict('Ben', { ...waitingState, skill: '' }), null);
+const waiting = textNodes(render(ActionsTree, { avatar: 'Ann', present, interaction: null,
+  partyInvite: waitingState, onChanged() {} }));
+assert.ok(waiting.endsWith('All potential partners3▸Ben2▸Kira2▸Mira1'), waiting);
+console.log('PASS open invitation waits with take back');
 
 // [5]
 assert.equal(render(PropActionsPanel, { showOffers: false }), '', 'offers alone: nothing in the chat');

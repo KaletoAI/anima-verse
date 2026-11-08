@@ -357,3 +357,28 @@ export function rowAtCenter(rows: readonly RowExtent[], centerY: number): number
   }
   return null;
 }
+
+/**
+ * THE ACTION DRAWER'S SIDE. The drawer (`ActionsTree`) hangs beside the chat
+ * as a sibling; by default on the chat's RIGHT edge. Dragged to the right
+ * window edge, that side keeps only a sliver and the drawer was squeezed to
+ * its stylesheet floor — so it FLIPS to the chat's left edge when the right
+ * side cannot hold `ACTIONS_MIN_W` but the left side holds more than the
+ * right. `room` is the free width on the chosen side (window minus chat
+ * box), which the stylesheet caps the panel by (`--hud-actions-room`, the
+ * panel width there is `room - ACTIONS_CHROME_W`, between 160 and 280).
+ */
+export const ACTIONS_MIN_W = 260;
+/** What the drawer needs beside its panel: handle 16 + gap 4 + padding 3 +
+ *  a margin to the window edge — the 36px the stylesheet takes off `room`. */
+export const ACTIONS_CHROME_W = 36;
+
+export interface ChatBoxX { x: number; w: number }
+export interface ActionsSide { side: 'right' | 'left'; room: number }
+
+export function actionsDrawerSide(box: ChatBoxX, containerW: number): ActionsSide {
+  const right = Math.max(0, containerW - (box.x + box.w));
+  const left = Math.max(0, box.x);
+  if (right < ACTIONS_MIN_W + ACTIONS_CHROME_W && left > right) return { side: 'left', room: left };
+  return { side: 'right', room: right };
+}

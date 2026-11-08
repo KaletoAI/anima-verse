@@ -541,6 +541,11 @@ def request_consent(invite_id: str) -> bool:
     from app.core.agent_loop import get_agent_loop
     if not answer_turn:
         return get_agent_loop().bump(invitation["invitee"], hint=content)
+    if not invitation.get("intent_id"):
+        # A standing invitation is asked at most STANDING_ANSWER_TURNS times
+        # (``_on_standing_response_finished``); counted before the bump, so
+        # the finished turn can never read a count it has not seen yet.
+        P.note_answer_request(invite_id)
     requested = get_agent_loop().bump_respond(invitation["invitee"], speaker=invitation["inviter"],
                                              content=content, hint=content, on_demand=True,
                                              request_id=invite_id)
@@ -552,10 +557,18 @@ def request_consent(invite_id: str) -> bool:
     return requested
 
 
+#: How many answer turns a standing invitation gets before it counts as
+#: declined: the first question and one repeat.
+STANDING_ANSWER_TURNS = 2
+
+
 def _on_response_finished(character_name: str, request_id: str, outcome: str) -> None:
     invitation = P.get_invite(request_id)
-    if not invitation or not invitation.get("intent_id") or invitation["invitee"] != character_name \
+    if not invitation or invitation["invitee"] != character_name \
             or invitation["status"] != "pending":
+        return
+    if not invitation.get("intent_id"):
+        _on_standing_response_finished(invitation, outcome)
         return
     with keyed_lock("intent_execution", invitation["intent_id"]):
         intent = I.get_intent(invitation["intent_id"])
@@ -563,6 +576,28 @@ def _on_response_finished(character_name: str, request_id: str, outcome: str) ->
             return
         _save(intent, {**_state(intent), "consent_request_session": "",
                        "reason": "No explicit answer was received; the next world check asks again."})
+
+
+def _on_standing_response_finished(invitation: Dict, outcome: str) -> None:
+    """A standing invitation's answer turn ended and the question is still
+    open — the invitee spoke but called no JoinParty. Ask once more; after
+    ``STANDING_ANSWER_TURNS`` unanswered turns the invitation is declined and
+    narrated like a spoken no, so the inviter sees an answer instead of a
+    question that silently expires.
+
+    Only a turn that really RAN counts (``completed``; a failed LLM call ends
+    as one too): a request that was superseded, dropped as ineligible or
+    cancelled never reached the invitee, and the invitation's expiry stays
+    its backstop."""
+    if outcome != "completed" or not _answer_turn(invitation):
+        return
+    if invitation.get("answer_requests", 0) < STANDING_ANSWER_TURNS:
+        request_consent(invitation["invite_id"])
+        return
+    if P.settle_pending_invite(invitation["invite_id"], False).get("status") == "declined":
+        logger.info("standing party invitation %s: %s left %d answer turns unanswered — declined",
+                    invitation["invite_id"], invitation["invitee"], STANDING_ANSWER_TURNS)
+        _narrate_answer(invitation, False)
 
 
 def _narrate_answer(invitation: Dict, accepted: bool) -> None:

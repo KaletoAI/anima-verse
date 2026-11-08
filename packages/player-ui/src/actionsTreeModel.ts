@@ -122,21 +122,29 @@ export function partnerNodes(offers: PropActionOffer[], present: string[], avata
 /** What the drawer knows about the avatar's party invitations — straight
  *  from the scene payload: the skill behind the player action
  *  `party_invite` (`capability_actions`; '' = no party package), the
- *  avatar's capabilities and their transient blocks, and its party. */
+ *  avatar's capabilities and their transient blocks, its party, and the
+ *  invitations it put to others that nobody answered yet
+ *  (`party_invites_sent`). */
 export interface PartyInviteState {
   skill: string
   capabilities?: string[]
   blocks?: Record<string, string>
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
+  sent?: Array<{ invite_id: string; invitee: string; created_at?: string }>
 }
 
 /** The "Invite to party" leaf for one person: `null` = no leaf (no party
  *  package, or the avatar has no invite verb); otherwise `reason` '' = usable,
  *  else an English sentence to translate, `{name}` standing for `name`. A
- *  rule block or cost shortfall is Core's text and comes as it is. */
+ *  rule block or cost shortfall is Core's text and comes as it is.
+ *  `waiting` is the id of the avatar's open invitation to `person`: the leaf
+ *  then reads "Waiting for {name}…" and offers "Take back" — before every
+ *  other test, so an open question can always be taken back. */
 export function partyInviteVerdict(person: string, state?: PartyInviteState | null):
-  { reason: string; name: string } | null {
+  { reason: string; name: string; waiting?: string } | null {
   if (!state?.skill) return null
+  const open = state.sent?.find(inv => inv.invitee === person)
+  if (open) return { reason: '', name: person, waiting: open.invite_id }
   const party = state.party
   // A follower's invite verb is hidden by Core (visible_for), so the
   // follower test comes before the capability test: the leaf stays and says why.
@@ -148,4 +156,13 @@ export function partyInviteVerdict(person: string, state?: PartyInviteState | nu
   const blocked = state.blocks?.[state.skill]
   if (blocked) return { reason: blocked, name: person }
   return { reason: '', name: person }
+}
+
+/** Why the free pair poses with `person` are greyed ('' = usable): "Busy
+ *  with someone else" while that person is in a pair without the avatar
+ *  (`busy`, the scene payload's `present_busy` — the Others card's `busy`),
+ *  else the pair verb's own block (`blocked`, already in words). */
+export function freePoseHint(person: string, busy: readonly string[] | undefined, blocked: string,
+  t: (s: string) => string): string {
+  return busy?.includes(person) ? t('Busy with someone else') : blocked
 }

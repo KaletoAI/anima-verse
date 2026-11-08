@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
-import { ModelPicker, type PickerOption } from './ModelPicker'
 import { apiGet, apiPost } from '../lib/api'
 import { useEnlarge } from './ZoomButton'
 
 /**
  * AnimateDialog — image→video dialog (separate from ImageGenDialog, since the
  * options differ fundamentally): an animation Service selector and a prompt
- * with an LLM "suggest" button (+ optional system-prompt / LLM override) and
+ * with an LLM "suggest" button (+ an optional system prompt) and
  * the "Improvement request" row of the image dialogs (POST
  * /world/imagegen-enhance-prompt with mode "video": the LLM keeps motion,
  * camera and pacing).
@@ -19,7 +18,9 @@ import { useEnlarge } from './ZoomButton'
  * LoRA slots show only for a backend that takes LoRAs.
  *
  * The caller wires it to a concrete subject (Instagram post or gallery image):
- *  - `onSuggest({system_prompt, llm_override})` → returns a suggested prompt
+ *  - `onSuggest({system_prompt})` → returns a suggested prompt (the LLM is
+ *    the one the LLM routing gives the suggest task — no per-call pick, like
+ *    the image dialogs' "Improve prompt")
  *  - `onSubmit({prompt, service?})` → fires the animate request (fire-and-forget;
  *    the caller posts + polls the track_id).
  * The preselected service entry is "Auto (routing)": it sends NO `service`, so
@@ -65,7 +66,7 @@ interface Props {
   sourceImageUrl: string
   defaultPrompt: string
   /** Ask the backend to suggest an animation prompt; returns the suggestion. */
-  onSuggest: (opts: { system_prompt: string; llm_override: string }) => Promise<string>
+  onSuggest: (opts: { system_prompt: string }) => Promise<string>
   onSubmit: (payload: AnimateSubmit) => void | Promise<void>
   onClose: () => void
 }
@@ -88,14 +89,6 @@ export function AnimateDialog({
   // Under "Auto" the LoRA offer follows the backend the chain resolves to.
   const effectiveService = isAuto ? routedName : serviceId
   const [prompt, setPrompt] = useState(defaultPrompt)
-  const [llmModels, setLlmModels] = useState<string[]>([])
-  // 'provider::name' entries → searchable ModelPicker options (grouped).
-  const llmModelOptions: PickerOption[] = useMemo(
-    () => llmModels.map((m) => {
-      const [prov, name] = m.includes('::') ? m.split('::', 2) : ['', m]
-      return { value: m, label: name || m, group: prov }
-    }), [llmModels])
-  const [llmOverride, setLlmOverride] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
@@ -129,7 +122,7 @@ export function AnimateDialog({
     })
   }, [svcLoras])
 
-  // Load services and the LLM list once.
+  // Load the services once.
   useEffect(() => {
     if (!open || services !== null) return
     apiGet<VideoOptions>('/world/imagegen-options?occasion=video')
@@ -140,15 +133,6 @@ export function AnimateDialog({
         setServiceId(AUTO)
       })
       .catch(() => { setServices([]); setRoutedName('') })
-    apiGet<{ providers?: Record<string, { models?: { name: string }[] }> }>('/characters/available-models')
-      .then((d) => {
-        const out: string[] = []
-        for (const [prov, pd] of Object.entries(d.providers || {})) {
-          for (const m of pd.models || []) out.push(`${prov}::${m.name}`)
-        }
-        setLlmModels(out)
-      })
-      .catch(() => setLlmModels([]))
   }, [open, services])
 
   // ESC closes; lock body scroll.
@@ -164,12 +148,12 @@ export function AnimateDialog({
   const doSuggest = useCallback(async () => {
     setSuggesting(true)
     try {
-      const s = await onSuggest({ system_prompt: systemPrompt.trim(), llm_override: llmOverride.trim() })
+      const s = await onSuggest({ system_prompt: systemPrompt.trim() })
       if (s) setPrompt(s)
     } finally {
       setSuggesting(false)
     }
-  }, [onSuggest, systemPrompt, llmOverride])
+  }, [onSuggest, systemPrompt])
 
   // "Improve": the LLM rewrites the motion prompt — from the change request,
   // or (empty request) just optimised for the video model — into the prompt
@@ -312,14 +296,6 @@ export function AnimateDialog({
               </div>
               {showAdvanced ? (
                 <>
-                  <label className="ga-imagegen-label">{t('Suggest LLM (optional)')}</label>
-                  <ModelPicker
-                    options={llmModelOptions}
-                    value={llmOverride}
-                    emptyLabel={t('default')}
-                    placeholder={t('default')}
-                    onChange={setLlmOverride}
-                  />
                   <label className="ga-imagegen-label">{t('Suggest system prompt (optional)')}</label>
                   <textarea className="ga-textarea" rows={3}
                     placeholder={t('Empty = backend default')}

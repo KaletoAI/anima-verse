@@ -122,6 +122,19 @@
  * pointer → that row; else stuck to the end → null (the resting state, i.e.
  * the whole history); else the row in the middle. So the mouse beats "middle",
  * and scrolling back to the end returns to the resting state on its own.
+ *
+ * ── THE ACTION DRAWER'S SIDE ────────────────────────────────────────────
+ * The drawer needs ACTIONS_MIN_W 260 + ACTIONS_CHROME_W 36 = 296px beside the
+ * chat. It stays RIGHT unless the right side is under 296 AND the left side
+ * is wider than the right; `room` is the free width on the chosen side.
+ * Container 1600 wide:
+ *     chat x 20,   w 600  → right 980              → right, room 980
+ *     chat x 704,  w 600  → right 296 (not < 296)  → right, room 296
+ *     chat x 705,  w 600  → right 295, left 705    → LEFT,  room 705
+ *     chat x 1000, w 560  → right 40,  left 1000   → LEFT,  room 1000
+ *     chat x 1200, w 600  → right −200 → 0, left 1200 → LEFT, room 1200
+ * Container 500 wide, chat x 0, w 480 → right 20, left 0: the left side is
+ * no better → right, room 20 (the stylesheet's 160px floor takes over).
  */
 import * as fs from 'fs'
 import * as path from 'path'
@@ -141,6 +154,7 @@ async function main() {
     pickPortraitSpeakers, portraitSlots, NARRATOR_SLOT,
     clampChatSize, readChatSize, writeChatSize,
     readChatAlpha, readPortraitCount, chatFocusId, rowAtCenter,
+    actionsDrawerSide, ACTIONS_MIN_W, ACTIONS_CHROME_W,
     CHAT_MIN_W, CHAT_MAX_W, CHAT_MIN_H, CHAT_MAX_H, CHAT_COL_W,
     CHAT_ALPHA_MIN, CHAT_ALPHA_MAX, PORTRAITS_MIN, PORTRAITS_MAX,
   } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
@@ -392,6 +406,16 @@ async function main() {
   check('the bottom edge of the last row is past it', rowAtCenter(ROWS, 80), null)
   check('above the list', rowAtCenter(ROWS, -5), null)
   check('an empty list', rowAtCenter([], 10), null)
+
+  console.log('\n[9] the action drawer flips to the chat\'s left edge when the right side'
+    + ' cannot hold it')
+  check('the drawer needs 260 + 36', [ACTIONS_MIN_W, ACTIONS_CHROME_W], [260, 36])
+  check('plenty of room right', actionsDrawerSide({ x: 20, w: 600 }, 1600), { side: 'right', room: 980 })
+  check('exactly 296 right stays right', actionsDrawerSide({ x: 704, w: 600 }, 1600), { side: 'right', room: 296 })
+  check('295 right flips left', actionsDrawerSide({ x: 705, w: 600 }, 1600), { side: 'left', room: 705 })
+  check('chat at the right edge', actionsDrawerSide({ x: 1000, w: 560 }, 1600), { side: 'left', room: 1000 })
+  check('chat past the right edge', actionsDrawerSide({ x: 1200, w: 600 }, 1600), { side: 'left', room: 1200 })
+  check('no better side: stays right', actionsDrawerSide({ x: 0, w: 480 }, 500), { side: 'right', room: 20 })
 
   console.log(`\n${failures.length
     ? 'FAILED: ' + failures.join(', ') : 'all checks passed'}`)

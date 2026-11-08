@@ -53,7 +53,7 @@ INVENTORY = {
     "app/models/character.py": "save_character_current_location save_character_current_room _publish_activity_changed enter_offmap_sleep wake_from_offmap appear_in_world _clear_location_and_room set_is_sleeping save_character_current_feeling delete_character set_character_profile_image add_character_image delete_character_image".split(),
     "app/core/places.py": "assign release assign_pair".split(),
     "app/core/travel_engine.py": "start_journey start_journey_to_point cancel_journey _settle_arrival".split(),
-    "app/core/party_engine.py": "add_to_party leave_party disband_party create_pending_invite settle_pending_invite close_intent_invites clear_invites_for".split(),
+    "app/core/party_engine.py": "add_to_party leave_party disband_party create_pending_invite settle_pending_invite withdraw_invite close_intent_invites clear_invites_for".split(),
     "app/core/interaction_engine.py": "start_interaction end_interaction create_invite _set_invite_status _claim_invite cancel_invite clear_invites_for _sweep_invites".split(),
     "app/models/inventory.py": ["_notify_outfit_changed"],
     "app/core/model3d.py": ["_publish_signature", "_serial_model"],

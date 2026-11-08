@@ -72,6 +72,7 @@ import {
   PORTRAITS_MIN, chatFocusId, clampChatSize, pickPortraitSpeakers,
   readChatAlpha, readChatSize, readPortraitCount, rowAtCenter, writeChatSize,
   type ChatSize, type RowExtent,
+  actionsDrawerSide,
 } from './chatPanel';
 import { mergeRects } from './bridge';
 import { gameActions, getHudUiState, getBoot, subscribeBoot, setHudUiState, setPerfStats, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
@@ -614,7 +615,9 @@ export function Hud({ avatar, username, role }: {
    * listener catches the moves that keep the size (the panel hangs on the
    * bottom edge). OFFSETS, not the bounding rect: the arrival animation's
    * transform must not shift the drawer. Its handle lies OUTSIDE the chat,
-   * so the chat's right-edge grip (inside it) keeps working.
+   * so the chat's right-edge grip (inside it) keeps working. With the chat
+   * dragged to the right window edge the drawer flips to the chat's LEFT
+   * edge (`actionsDrawerSide` in chatPanel.ts) instead of being squeezed.
    */
   const [actionsOpen, setActionsOpen] = useState(
     () => localStorage.getItem(CHAT_ACTIONS_KEY) === '1');
@@ -624,15 +627,18 @@ export function Hud({ avatar, username, role }: {
   const toggleActions = useCallback(() => setActionsOpen((o) => !o), []);
   /** the rendered drawer — for the idle timeout's "still in use" check */
   const actionsRef = useRef<HTMLDivElement | null>(null);
+  // `cw`: the width of the chat's container — what the drawer may use on
+  // either side (`actionsDrawerSide`, chatPanel.ts).
   const [chatBox, setChatBox] = useState<
-    { x: number; y: number; w: number; h: number } | null>(null);
+    { x: number; y: number; w: number; h: number; cw: number } | null>(null);
   useEffect(() => {
     const el = chatRef.current;
     if (!chatShown || spectating || !el) return;
     const measure = () => setChatBox((prev) => {
-      const next = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+      const cw = (el.offsetParent as HTMLElement | null)?.clientWidth ?? window.innerWidth;
+      const next = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight, cw };
       return prev && prev.x === next.x && prev.y === next.y && prev.w === next.w
-        && prev.h === next.h ? prev : next;
+        && prev.h === next.h && prev.cw === next.cw ? prev : next;
     });
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -1378,46 +1384,55 @@ export function Hud({ avatar, username, role }: {
         </section>
       )}
 
-      {/* The action drawer, glued to the chat's right edge (see the block
-          around `chatBox`). Only with an avatar of one's own: a spectator
+      {/* The action drawer, glued to the chat's right edge — or its left
+          edge when the right side is too narrow (see the block around
+          `chatBox`). Only with an avatar of one's own: a spectator
           starts nothing. */}
-      {!spectating && chatShown && !!data?.avatar && chatBox && (
-        <div ref={actionsRef} className={`hud-chat-actions${actionsOpen ? ' open' : ''}`}
-          style={{
-            left: chatBox.x + chatBox.w,
-            top: chatBox.y,
-            height: chatBox.h,
-            '--hud-actions-left': `${chatBox.x + chatBox.w}px`,
-          } as React.CSSProperties}>
-          <button type="button" className="hud-chat-actions-handle"
-            aria-expanded={actionsOpen}
-            title={actionsOpen ? t('Hide actions') : t('Show actions')}
-            aria-label={actionsOpen ? t('Hide actions') : t('Show actions')}
-            onClick={toggleActions}>
-            {actionsOpen ? '◂' : '▸'}
-          </button>
-          {actionsOpen && (
-            <section className="hud-panel hud-chat-actions-panel" aria-label={t('Actions')}>
-              <header className="hud-panel-head">
-                <span className="hud-panel-title">{t('Actions')}</span>
-                <button className="hud-panel-close" onClick={toggleActions}
-                  title={t('Close')} aria-label={t('Close')}>
-                  <Icon name="close" size={14} />
-                </button>
-              </header>
-              <div className="hud-panel-body">
-                <ErrorBoundary inline label="Actions">
-                  <ActionsTree avatar={data.avatar} present={data.present || []}
-                    interaction={data.interaction} onChanged={refreshScene}
-                    partyInvite={{ skill: data.capability_actions?.party_invite || '',
-                      capabilities: data.capabilities, blocks: data.capability_blocks,
-                      party: data.party }} />
-                </ErrorBoundary>
-              </div>
-            </section>
-          )}
-        </div>
-      )}
+      {!spectating && chatShown && !!data?.avatar && chatBox && (() => {
+        // Right of the chat, or left of it when the chat sits at the right
+        // window edge and the right side cannot hold the drawer.
+        const place = actionsDrawerSide(chatBox, chatBox.cw);
+        const flipped = place.side === 'left';
+        return (
+          <div ref={actionsRef}
+            className={`hud-chat-actions${actionsOpen ? ' open' : ''}${flipped ? ' flipped' : ''}`}
+            style={{
+              left: flipped ? undefined : chatBox.x + chatBox.w,
+              right: flipped ? chatBox.cw - chatBox.x : undefined,
+              top: chatBox.y,
+              height: chatBox.h,
+              '--hud-actions-room': `${place.room}px`,
+            } as React.CSSProperties}>
+            <button type="button" className="hud-chat-actions-handle"
+              aria-expanded={actionsOpen}
+              title={actionsOpen ? t('Hide actions') : t('Show actions')}
+              aria-label={actionsOpen ? t('Hide actions') : t('Show actions')}
+              onClick={toggleActions}>
+              {actionsOpen !== flipped ? '◂' : '▸'}
+            </button>
+            {actionsOpen && (
+              <section className="hud-panel hud-chat-actions-panel" aria-label={t('Actions')}>
+                <header className="hud-panel-head">
+                  <span className="hud-panel-title">{t('Actions')}</span>
+                  <button className="hud-panel-close" onClick={toggleActions}
+                    title={t('Close')} aria-label={t('Close')}>
+                    <Icon name="close" size={14} />
+                  </button>
+                </header>
+                <div className="hud-panel-body">
+                  <ErrorBoundary inline label="Actions">
+                    <ActionsTree avatar={data.avatar} present={data.present || []}
+                      busy={data.present_busy} interaction={data.interaction} onChanged={refreshScene}
+                      partyInvite={{ skill: data.capability_actions?.party_invite || '',
+                        capabilities: data.capabilities, blocks: data.capability_blocks,
+                        party: data.party, sent: data.party_invites_sent }} />
+                  </ErrorBoundary>
+                </div>
+              </section>
+            )}
+          </div>
+        );
+      })()}
 
       {/* The dropdowns: one column each, hanging below the top bar, side by
           side in opening order. The row itself stays drag-through; only the

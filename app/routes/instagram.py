@@ -400,32 +400,34 @@ def get_instagram_video_webm(video_filename: str, request: Request):
 
 @router.post("/post/{post_id}/suggest-animate-prompt")
 async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Dict[str, str]:
-    """Generiert einen Animation-Prompt fuer ein Instagram-Bild via Tools-LLM."""
+    """A motion prompt for one Instagram image (the animate dialog's
+    "Suggest"), from its image analysis through the ``animation_prompt``
+    template. Body: { system_prompt? } — it replaces the template's system
+    part; the LLM is the one the routing gives the task."""
     import asyncio
 
     data = await request.json()
     user_id = data.get("user_id", "")
     custom_system_prompt = data.get("system_prompt", "")
-    llm_override = data.get("llm_override", "").strip()
 
     post = get_post(post_id)
     if not post:
-        raise HTTPException(status_code=404, detail="Post nicht gefunden")
+        raise HTTPException(status_code=404, detail="Post not found")
 
     character_name = post.get("agent_name", "")
     image_filename = post.get("image_filename", "")
     instagram_dir = get_instagram_dir()
     image_path = instagram_dir / image_filename
     if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bilddatei nicht gefunden")
+        raise HTTPException(status_code=404, detail="Image file not found")
 
     def _generate_prompt() -> str:
         meta = load_image_meta(image_filename) or {}
 
-        # Bildanalyse aus Metadaten lesen oder neu generieren
+        # Image analysis from the metadata, or generated (and stored) when missing
         image_analysis = meta.get("image_analysis", "")
         if not image_analysis:
-            logger.info("[suggest-animate] Instagram: Keine Bildanalyse, generiere neu...")
+            logger.info("[suggest-animate] Instagram: no image analysis, generating one...")
             try:
                 from app.imagegen.service import get_image_service
                 skill = get_image_service()
@@ -434,12 +436,12 @@ async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Di
                     meta["image_analysis"] = image_analysis
                     save_image_meta(image_filename, meta)
             except Exception as e:
-                logger.warning("[suggest-animate] Bildanalyse fehlgeschlagen: %s", e)
+                logger.warning("[suggest-animate] image analysis failed: %s", e)
 
         if not image_analysis:
-            raise ValueError("Bildanalyse nicht verfuegbar")
+            raise ValueError("No image analysis available")
 
-        logger.info("[suggest-animate] Instagram: Bildanalyse vorhanden, rufe LLM auf... (llm_override=%s)", llm_override or "")
+        logger.info("[suggest-animate] Instagram: image analysis present, calling the LLM...")
 
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
@@ -461,7 +463,7 @@ async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Di
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        logger.error("[suggest-animate] Instagram fehlgeschlagen: %s", e)
+        logger.error("[suggest-animate] Instagram failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

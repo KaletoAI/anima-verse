@@ -36,6 +36,17 @@ D) The video lands where the gallery finds it: the REAL publisher of
    meta; GET /characters/Mara/images then answers image_videos
    {"still.png": "still.mp4"} (keyed by the FULL image name).
 E) Both new routes depend on require_admin.
+F) A failed render is observable where the gallery looks for it — the
+   ``recent_tasks`` of GET /queue/status (``TaskQueue.get_tracked_recent``),
+   read by the tab's poll to stop and toast the error. Real TaskQueue on the
+   throwaway storage, thread inline:
+   F1 run_video_op answers {ok False, error "Animation failed — no backend
+      of the video chain rendered"} -> the answer's track_id has ONE recent
+      row: status "failed", error exactly that sentence, type
+      "image_animate".
+   F2 run_video_op raises RuntimeError("hub down") -> its row: status
+      "failed", error "hub down".
+   F3 a successful render (ok True) -> status "completed", error "".
 """
 import os
 import sys
@@ -200,6 +211,28 @@ for path in ("/{character_name}/images/{image_name}/animate",
     route = next(r for r in characters_routes.router.routes if getattr(r, "path", "").endswith(path))
     calls = [d.call for d in route.dependant.dependencies]
     check(f"E {path.rsplit('/', 1)[-1]} requires admin", require_admin in calls, True)
+
+print("F) a failure is observable in the queue's recent tasks")
+from app.core.task_queue import TaskQueue  # noqa: E402
+real_queue = TaskQueue()
+
+
+def recent_row(track_id):
+    rows = [r for r in real_queue.get_tracked_recent() if r["task_id"] == track_id]
+    return [(r["status"], r["error"], r["task_type"]) for r in rows]
+
+
+for label, op_effect, want in (
+        ("F1 ok False", {"return_value": {"ok": False, "error": (
+            "Animation failed — no backend of the video chain rendered")}},
+         ("failed", "Animation failed — no backend of the video chain rendered")),
+        ("F2 raises", {"side_effect": RuntimeError("hub down")}, ("failed", "hub down")),
+        ("F3 ok True", {"return_value": {"ok": True}}, ("completed", ""))):
+    with patch("app.core.task_queue.get_task_queue", return_value=real_queue), \
+         patch("app.skills.animate.run_video_op", MagicMock(**op_effect)), \
+         patch("threading.Thread", side_effect=InlineThread):
+        tid = start("still.png", {"prompt": "wave"})["track_id"]
+    check(label, recent_row(tid), [(*want, "image_animate")])
 
 TEMP.cleanup()
 print()

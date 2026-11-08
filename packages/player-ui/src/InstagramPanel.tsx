@@ -121,7 +121,7 @@ export interface InstagramAnimateControl {
   /** The post already has an animation — this run replaces it. */
   hasVideo: boolean
   /** Ask the backend to suggest a motion prompt; returns the suggestion. */
-  onSuggest: (opts: { system_prompt: string; llm_override: string }) => Promise<string>
+  onSuggest: (opts: { system_prompt: string }) => Promise<string>
   /** Animate: posts the animate route and closes the dialog. */
   onSubmit: (payload: InstagramAnimateSubmit) => void | Promise<void>
   /** Dismiss without animating. */
@@ -357,7 +357,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
 
   // Animate: suggest the motion prompt for the open post, then fire the video job.
   const suggestAnimate = useCallback(
-    async (opts: { system_prompt: string; llm_override: string }): Promise<string> => {
+    async (opts: { system_prompt: string }): Promise<string> => {
       const p = animatePost
       if (!p) return ''
       try {

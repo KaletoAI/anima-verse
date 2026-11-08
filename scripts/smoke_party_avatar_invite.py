@@ -49,6 +49,36 @@ Hand-derived expectations:
       trip …"), and no agent turn is requested for it.
   (g) Without the provider the route answers 404 "Party invitations are not
       available." — never a 500.
+
+Open invitations and unanswered answer turns (added 2026-11-08, run before (g)):
+  (h) The avatar invites Demo Guide again: ``play_scene`` for the avatar
+      carries ``party_invites_sent`` == [{"invite_id": <that id>, "invitee":
+      "Demo Guide", "created_at": <the row's created_at>}] (exactly these
+      three keys); for Demo Guide as the active character it is [] — the
+      outgoing list is the INVITER's alone (the guide sees the same row in
+      its incoming ``party_invites`` instead).
+  (i) ``POST /play/party/cancel``: no invite_id -> 400; Demo Leader as the
+      active character -> 404 "invite not found" and the row stays pending;
+      the avatar -> {"ok": True, "status": "withdrawn"}, the row is
+      "cancelled" and the avatar's ``party_invites_sent`` is []; a second
+      cancel -> {"ok": False, "status": "cancelled"}; an unknown id -> 404.
+  (j) The avatar invites the temporary NPC Demo Visitor: one bump_respond,
+      ``answer_requests`` 1. Its answer turn reports back through the
+      ``respond_finished`` hook without a JoinParty:
+        outcome "superseded" -> nothing (no second bump_respond, pending, 1);
+        "completed" from someone else ("Demo Host") -> nothing;
+        "completed" -> asked once more: a second bump_respond("Demo Visitor",
+          request_id=<same id>, on_demand=True), pending, ``answer_requests`` 2;
+        "completed" again -> declined: status "declined", no third
+          bump_respond, exactly one storyteller line (speaker
+          STORYTELLER_SPEAKER, source "party", anchor "Demo Visitor") reading
+          "Demo Visitor declines Demo Avatar's invitation.", and the avatar's
+          ``party_invites_sent`` is [];
+        "completed" once more -> nothing (no longer pending, no second line).
+  (k) A standing invitation answered in a THOUGHT turn (avatar -> Demo
+      Guide) is not re-asked by a finished answer turn: "completed" leaves it
+      pending with no bump_respond and ``answer_requests`` 0 — the
+      repeat belongs to answer turns only.
 """
 import json
 import os
@@ -95,7 +125,9 @@ def main():
         from app.core.users import create_user, update_user
         from app.models import character as chars, world
         from app.plugins.context import PluginContext
-        from app.routes.play import _play_party_invite_sync, _player_skill_payload
+        from app.routes.play import (_play_party_cancel_sync, _play_party_invite_sync,
+                                     _player_skill_payload, play_scene)
+        from app.core.perception import STORYTELLER_SPEAKER
         from plugins.party.skill import PartySkill, player_invite
         from plugins.party.trip_intents import open_questions
         get_skill_manager()
@@ -217,6 +249,101 @@ def main():
             check("refused", out.startswith('A temporary NPC needs a destination-bound trip'), out)
             check("nobody asked", loop.bump.call_count == 0 and loop.bump_respond.call_count == 0)
             check("no row", party.find_pending_invite('Demo Guide', 'Demo Visitor') is None)
+
+            print("(h) the avatar's open invitations in the scene payload")
+            party.clear_invites_for(avatar)
+            res = _play_party_invite_sync({'target': 'Demo Guide'})
+            sent_id = res.get('invite_id', '')
+            row = party.get_invite(sent_id) or {}
+            sent = play_scene(user=user).get('party_invites_sent')
+            check("avatar sees its open invitation",
+                  sent == [{'invite_id': sent_id, 'invitee': 'Demo Guide',
+                            'created_at': row.get('created_at')}], sent)
+            with patch('app.models.account.get_active_character', return_value='Demo Guide'):
+                guide_scene = play_scene(user=user)
+            check("the invitee's sent list is empty", guide_scene.get('party_invites_sent') == [],
+                  guide_scene.get('party_invites_sent'))
+            check("the invitee sees it as incoming",
+                  [i.get('invite_id') for i in guide_scene.get('party_invites') or []] == [sent_id],
+                  guide_scene.get('party_invites'))
+
+            print("(i) take back")
+
+            def cancel_status(body):
+                try:
+                    _play_party_cancel_sync(body)
+                except HTTPException as e:
+                    return e.status_code, e.detail
+                return 200, None
+
+            check("no invite_id -> 400", cancel_status({}) == (400, 'invite_id required'))
+            with patch('app.models.account.get_active_character', return_value='Demo Leader'):
+                check("someone else -> 404", cancel_status({'invite_id': sent_id}) == (404, 'invite not found'))
+            check("still pending", (party.get_invite(sent_id) or {}).get('status') == 'pending')
+            res = _play_party_cancel_sync({'invite_id': sent_id})
+            check("inviter withdraws", res == {'ok': True, 'status': 'withdrawn'}, res)
+            check("row cancelled", (party.get_invite(sent_id) or {}).get('status') == 'cancelled')
+            sent = play_scene(user=user).get('party_invites_sent')
+            check("sent list empty after take back", sent == [], sent)
+            res = _play_party_cancel_sync({'invite_id': sent_id})
+            check("second take back", res == {'ok': False, 'status': 'cancelled'}, res)
+            check("unknown id -> 404", cancel_status({'invite_id': 'pinv_nope'}) == (404, 'invite not found'))
+
+            print("(j) answer turns without JoinParty: asked again, then declined")
+            loop.reset_mock()
+            res = _play_party_invite_sync({'target': 'Demo Visitor'})
+            vid = res.get('invite_id', '')
+
+            def requests():
+                return (party.get_invite(vid) or {}).get('answer_requests')
+
+            def status():
+                return (party.get_invite(vid) or {}).get('status')
+
+            check("first answer turn", loop.bump_respond.call_count == 1 and requests() == 1,
+                  f"{loop.bump_respond.call_args_list} / {requests()}")
+            finished = lambda who, outcome: hooks.emit(
+                'respond_finished', character_name=who, request_id=vid, outcome=outcome)
+            narrate = Mock()
+            with patch('app.core.perception.record_utterance', narrate):
+                finished('Demo Visitor', 'superseded')
+                check("superseded: nothing", loop.bump_respond.call_count == 1
+                      and status() == 'pending' and requests() == 1)
+                finished('Demo Host', 'completed')
+                check("someone else's turn: nothing", loop.bump_respond.call_count == 1
+                      and status() == 'pending' and requests() == 1)
+                finished('Demo Visitor', 'completed')
+                call = loop.bump_respond.call_args
+                check("asked once more", loop.bump_respond.call_count == 2 and call.args == ('Demo Visitor',)
+                      and call.kwargs.get('request_id') == vid and call.kwargs.get('on_demand') is True,
+                      loop.bump_respond.call_args_list)
+                check("still pending, two requests", status() == 'pending' and requests() == 2,
+                      f"{status()} / {requests()}")
+                check("no narration yet", narrate.call_count == 0, narrate.call_args_list)
+                finished('Demo Visitor', 'completed')
+                check("declined", status() == 'declined', status())
+                check("no third answer turn", loop.bump_respond.call_count == 2, loop.bump_respond.call_args_list)
+                kw = narrate.call_args.kwargs if narrate.call_args else {}
+                check("declined narration", narrate.call_count == 1
+                      and kw.get('speaker') == STORYTELLER_SPEAKER and kw.get('source') == 'party'
+                      and kw.get('anchor') == 'Demo Visitor'
+                      and kw.get('content') == "Demo Visitor declines Demo Avatar's invitation.",
+                      narrate.call_args_list)
+                sent = play_scene(user=user).get('party_invites_sent')
+                check("sent list empty after the decline", sent == [], sent)
+                finished('Demo Visitor', 'completed')
+                check("settled: nothing more", narrate.call_count == 1
+                      and loop.bump_respond.call_count == 2 and status() == 'declined')
+
+            print("(k) a thought-turn invitation is not re-asked")
+            loop.reset_mock()
+            res = _play_party_invite_sync({'target': 'Demo Guide'})
+            gid = res.get('invite_id', '')
+            hooks.emit('respond_finished', character_name='Demo Guide', request_id=gid, outcome='completed')
+            row = party.get_invite(gid) or {}
+            check("left alone", row.get('status') == 'pending' and row.get('answer_requests') == 0
+                  and loop.bump_respond.call_count == 0, f"{row} / {loop.bump_respond.call_args_list}")
+            party.clear_invites_for(avatar)
 
             print("(g) without the provider")
             hooks.unregister_owned_providers('party')

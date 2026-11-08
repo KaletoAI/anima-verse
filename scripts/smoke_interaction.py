@@ -183,6 +183,9 @@ Hand-derived expectations:
       Ann (en) sees embracing and Bob (de) sees Umarmen in incoming, pending,
       approaching, running and Others card rows. A refused yes yields failed plus reason
       and no pending row. Dismissal permits a new pending invitation.
+      present_busy (the action drawer's "Busy with someone else") while Ann
+      and Bob are in a pair: Cid, with both present, gets [Ann, Bob]; Ann,
+      with Bob present, gets [] (Bob is in the pair WITH her).
 
 Usage:  ./.venv/bin/python scripts/smoke_interaction.py
 """
@@ -1084,6 +1087,11 @@ check("[13] Others card uses viewer language", _cards[0]["interaction"].get("pos
 check("[13] scene and Others card carry members", scene_for("Bob")["interaction"].get("members")
       == _cards[0]["interaction"].get("members") == {"a": "Ann", "b": "Bob"}
       and "partner" not in _cards[0]["interaction"], str(_cards[0]["interaction"]))
+with patch("app.core.perception.addressable_for", return_value=["Ann", "Bob"]):
+    check("[13] present_busy for a third", scene_for("Cid").get("present_busy") == ["Ann", "Bob"],
+          str(scene_for("Cid").get("present_busy")))
+with patch("app.core.perception.addressable_for", return_value=["Bob"]):
+    check("[13] present_busy spares the own partner", scene_for("Ann").get("present_busy") == [])
 ie.end_interaction("Ann", reason="smoke")
 check("[13] the result names the members", get_character_profile("Ann")["last_interaction_result"].get("members")
       == {"a": "Ann", "b": "Bob"})

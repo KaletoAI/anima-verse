@@ -104,6 +104,9 @@ export interface SceneData {
   follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
   party_invites?: Array<{ invite_id: string; inviter: string; intent_id?: string; destination_label?: string; after_arrival_label?: string; participants?: string[] }>
+  /** The avatar's own party invitations nobody answered yet (the action
+   *  drawer's "Waiting for {name}…" + "Take back"). */
+  party_invites_sent?: Array<{ invite_id: string; invitee: string; created_at: string }>
   /** Pair interactions (app/core/interaction_engine.py). A shared action is
    *  ASKED, never imposed, so the banner shows questions waiting
    *  for the avatar, its pending or answered question, and the pair it is
@@ -121,6 +124,9 @@ export interface SceneData {
   } | null
   /** The running interaction; `members` includes the avatar. */
   interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string } | null
+  /** Who of `present` is in a pair without the avatar (the action drawer
+   *  greys their free pair poses). */
+  present_busy?: string[]
   rooms: RoomInfo[]
   travel?: TravelInfo | null
   /** GONE since E3 Task 5 — the grid compass they described does not exist
