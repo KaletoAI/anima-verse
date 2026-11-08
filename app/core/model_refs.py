@@ -1,8 +1,9 @@
-"""Character reference renders for the 3D pipeline (T-pose + default pose).
+"""Character reference renders for the 3D pipeline (mesh-input pose + default pose).
 
 After every outfit change (equip/unequip of a piece, outfit switch) a
 DEBOUNCED trigger renders two full-body reference images of the character in
-the CURRENT outfit: one in T-pose (the input for image->3D/rigging chains)
+the CURRENT outfit: one in the mesh-input pose — an A-pose for humanoids —
+(the input for image->3D/rigging chains; kind "tpose" for historical reasons)
 and one in the default pose. Both live under characters/<name>/model_refs/,
 deliberately separate from the expression-variant cache.
 
@@ -35,68 +36,70 @@ logger = get_logger(__name__)
 # background come from the use-case style ("tpose" / "tpose_animal"), the
 # face from the expression layer (REF_EXPRESSION_PROMPT below).
 #
+# A-POSE, not T-pose (user decision 2026-11-08, base-body programme): the
+# humanoid mesh input shows the arms straight and angled about 45 degrees
+# down and away from the body. The rig_humanoid chain binds an A-pose mesh
+# into the T-pose rig unchanged (proven on a rigged A-pose body), and the
+# A-pose wording is the one the hub image model delivered in the base-body
+# spike. The internal identifiers (use cases "tpose*", config keys
+# image_generation.tpose_*_prompt, file kind "tpose") keep their names.
+# The old T-pose ("T-pose, arms raised to shoulder height") now sits in the
+# NEGATIVE so it cannot return, together with arms touching the body and
+# hands on the hips — the A-pose needs the arms CLEAR of the body, or the
+# mesher fuses arm and torso.
+#
 # Kept deliberately SHORT — every extra clause dilutes the load-bearing ones.
 # What stays is load-bearing:
-# - "arms straight out to the sides at shoulder height, forming the letter T":
-#   "T-pose" alone is weakly trained in photo models and drifts into an A-pose.
-# - Palms face DOWN toward the floor, in every view (user decision
-#   2026-09-24, reverses "palms forward" of 2026-08-31): that is the Mixamo
-#   bind pose, and a mesh generated with turned palms can get its hand bones
-#   bound 90° off, twisting the hands in animation clips. "palms facing the
-#   camera / up" sit in the T-pose negative so the old pose cannot return.
-# - Fingers SLIGHTLY SPREAD (user decision 2026-09-24, reverses the closed
-#   hand of 2026-09-02), in every view. "slightly" is load-bearing — a
-#   widely fanned hand is a thin splayed surface the img2mesh bake inflates
+# - "A-pose" plus the explicit angle ("about 45 degrees down and away from
+#   the body, not touching the body"): the bare token is not enough on its
+#   own, and an arm that rests on the body bakes into the torso.
+# - Palms face the THIGHS (inward) in an A-pose. "palms facing the camera /
+#   up" stay in the negative: a mesh generated with turned palms can get its
+#   hand bones bound 90 degrees off, twisting the hands in animation clips.
+# - Fingers straight, relaxed and SLIGHTLY apart, each one separated (user
+#   decision 2026-09-24, reworded by the spike). "slightly" is load-bearing —
+#   a widely fanned hand is a thin splayed surface the img2mesh bake inflates
 #   into an oversized paddle, so "splayed/fanned fingers" stay in the
-#   negative.
-# - Hands "in natural proportion to the body", fingers "slender" (2026-09-26,
-#   user report: the meshes still came out with oversized hands and thick
-#   fingers with the fingers already only slightly spread). The bake adds
+#   negative, and "fingers pressed together"/"fused fingers" keep them from
+#   closing.
+# - Hands "in natural proportion to the body" (2026-09-26, user report: the
+#   meshes came out with oversized hands and thick fingers). The bake adds
 #   thickness of its own: the Trellis2 multi-view workflow (ai-hub/
 #   sample_comfyui_workflows/img2mesh-trellis2_multiview_api.json, node 34)
 #   decides occupancy at sparse_structure_resolution 32 over the WHOLE
-#   bounding box — arm-span wide in a T-pose, ≈5.6 cm per cell at 1.8 m —
-#   before the 1024 cascade and the 1024 dual contouring refine the shape
-#   inside the occupied cells; a 1.5–2 cm finger sits far below that, so a
-#   thin hand blurs into a thicker one. An image model's habit of drawing
-#   hands a size too big lands on top of that, and nothing takes it back
-#   afterwards — the Blender pass scales the whole figure uniformly, never a
-#   body part. So the render has to deliver the hand size the mesh should
-#   END with, and the failure modes (large hands, thick/chunky/swollen/fused
-#   fingers) sit in the negative. Neither the render resolution nor face_num
-#   is a lever here: the img2mesh conditioner downsamples its input, and
-#   face_num only decimates the same structure (the world that reported
-#   this already rendered 1536 px into 50k–200k faces).
+#   bounding box before the 1024 cascade and the 1024 dual contouring refine
+#   the shape inside the occupied cells; a 1.5–2 cm finger sits far below
+#   one cell, so a thin hand blurs into a thicker one. An image model's habit
+#   of drawing hands a size too big lands on top of that, and nothing takes
+#   it back afterwards — the Blender pass scales the whole figure uniformly,
+#   never a body part. So the render has to deliver the hand size the mesh
+#   should END with, and the failure modes (large hands, thick/chunky/
+#   swollen/fused fingers) sit in the negative — that is where "slender
+#   fingers" lives now. Neither the render resolution nor face_num is a lever
+#   here: the img2mesh conditioner downsamples its input, and face_num only
+#   decimates the same structure.
 # - Legs CLEARLY APART with open space between them (user decision
 #   2026-09-03): a clean separation, not a straddle. What the mesher needs is
 #   the GAP, not the width — with the legs touching it fuses both into one
-#   column. This used to demand a wide stance with the feet wider than the
-#   shoulders, because models under-deliver separation and rendered
-#   (especially female) characters with touching ankles. That over-ask now
-#   sits in the NEGATIVE (touching legs/ankles, narrow stance) instead, so
-#   the positive text can say what the picture should actually show.
-# - Hair CLEAR of the chest (user decision 2026-09-27, reworded from "hair
-#   behind the shoulders"): hair over the chest bakes into the torso
-#   geometry. The old wording named a DIRECTION ("behind the shoulders"),
-#   which presupposes hair long enough to push somewhere — on a short-haired
-#   character there is nowhere to push it, and the instruction is either
-#   impossible to satisfy or tempts the model into growing the hair to make
-#   it satisfiable. Naming the OUTCOME instead (clear of the chest) states
-#   what actually matters for the mesh and is true of short hair for free —
-#   the identity layer still says how long the hair actually is.
-#   Strengthened 2026-10-25 (user: the clause was too weak, long hair and
-#   braids still fell onto the chest): the outcome is now spelled out as the
-#   uncovered surfaces (chest, collarbones, front of the shoulders), and the
-#   failure images (hair/braid/ponytail over the shoulder or chest) sit in
-#   the T-pose negative — still no direction, so short hair stays satisfied.
+#   column. The over-ask (touching legs/ankles, narrow stance) sits in the
+#   NEGATIVE, so the positive text says what the picture should show.
+# - Hair CLEAR of the chest (user decision 2026-09-27, strengthened
+#   2026-10-25): hair over the chest bakes into the torso geometry. The text
+#   names the OUTCOME (chest, collarbones and front of the shoulders
+#   uncovered), never a direction such as "behind the shoulders" — that
+#   presupposes hair long enough to push somewhere and tempts the model into
+#   growing short hair. The failure images (hair/braid/ponytail over the
+#   shoulder or chest) sit in the negative.
 # The admin override image_generation.tpose_prompt stays untouched — whoever
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
-    "T-pose, standing upright facing the camera, arms straight out to the "
-    "sides at shoulder height, forming the letter T, palms facing down "
-    "toward the floor, hands in natural proportion to the body, fingers "
-    "straight, slender and slightly spread apart, legs clearly apart with "
-    "open space visible between them, no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders fully uncovered"
+    "standing upright facing the camera, A-pose, arms straight and angled "
+    "about 45 degrees down and away from the body, not touching the body, "
+    "palms facing the thighs, all five fingers straight, relaxed and slightly "
+    "apart, each finger clearly separated and visible, hands in natural "
+    "proportion to the body, legs clearly apart with open space visible "
+    "between them, no hair on the chest or in front of the shoulders, chest, "
+    "collarbones and front of the shoulders fully uncovered"
 )
 
 # Animals use a strict profile, not a three-quarter view, to keep the mesh
@@ -143,32 +146,33 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "the same figure turned around, back view, seen directly from behind, "
     "the back of the head, the upper back and the shoulder blades facing the "
     "camera, the head facing straight away from the camera in the same "
-    "direction as the body, standing upright in T-pose, arms straight out to "
-    "the sides at shoulder height, palms facing down toward the floor, hands "
-    "in natural proportion to the body, fingers straight, slender and slightly "
-    "spread apart, legs clearly apart with open space visible between them, "
-    "the same hairstyle, hair length and hair volume as the reference"
+    "direction as the body, standing upright in A-pose, arms straight and "
+    "angled about 45 degrees down and away from the body, not touching the "
+    "body, palms facing the thighs, hands in natural proportion to the body, "
+    "all five fingers straight, relaxed and slightly apart, legs clearly apart "
+    "with open space visible between them, the same hairstyle, hair length "
+    "and hair volume as the reference"
 )
 
 # Both profiles share one text — the side is the only difference, so they
-# cannot drift apart. A profile of a T-pose is the hardest view: the arms
-# point at and away from the camera, and models resolve that by drawing the
-# arms forward or letting them hang ("toward the camera / away from the
-# camera" demonstrably was not enough). So the text says what the picture
-# actually SHOWS — a strongly foreshortened near arm that hides the far one —
-# and the forward/down failure modes are pushed away in _NEG_TPOSE_SIDE.
+# cannot drift apart. In an A-pose profile the near arm hangs angled down and
+# away from the body (toward the rear edge of the frame is wrong as much as
+# forward): the text says what the picture SHOWS — the far arm partly hidden
+# behind the body, the near arm clear of the torso and NOT foreshortened
+# toward the camera (that was the T-pose profile, whose arm pointed at the
+# lens). The forward failure modes are pushed away in _NEG_TPOSE_SIDE.
 # "the same figure turned sideways" speaks to the reference — like the back
-# view, a profile slots the main T-pose render.
+# view, a profile slots the main pose render.
 TPOSE_SIDE_PROMPT_TEMPLATE = (
     "the same figure turned sideways, strict {side} side profile view, the "
-    "whole body in profile facing the "
-    "{side} edge of the frame, standing upright in T-pose, arms straight out "
-    "to the sides at shoulder height so the near arm points at the camera and "
-    "hides the far arm, strongly foreshortened, palms facing down toward the "
-    "floor, hands in natural proportion to the body, fingers straight, slender "
-    "and slightly spread apart, legs clearly apart, the same hairstyle, hair "
-    "length and hair volume as the reference, no hair on the chest or in front "
-    "of the shoulders"
+    "whole body in profile facing the {side} edge of the frame, standing "
+    "upright in A-pose, the far arm partly hidden behind the body, the near "
+    "arm straight and angled down and away from the body, not touching the "
+    "body, not foreshortened toward the camera, palms facing the thighs, "
+    "hands in natural proportion to the body, all five fingers straight, "
+    "relaxed and slightly apart, legs clearly apart, the same hairstyle, hair "
+    "length and hair volume as the reference, no hair on the chest or in "
+    "front of the shoulders"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
@@ -255,7 +259,8 @@ def _cfg(key: str, default: Any = None) -> Any:
 
 
 def get_tpose_prompt() -> str:
-    """T-pose prompt: admin override (image_generation.tpose_prompt) or built-in."""
+    """Humanoid mesh-input pose (A-pose): admin override
+    (image_generation.tpose_prompt) or built-in."""
     override = str(_cfg("tpose_prompt", "") or "").strip()
     return override or TPOSE_PROMPT_DEFAULT
 
@@ -273,7 +278,7 @@ def get_animal_pose_prompt() -> str:
 
 
 def get_tpose_view_prompt(view: str) -> str:
-    """Pose prompt of one extra T-pose view: admin override
+    """Pose prompt of one extra mesh-input view: admin override
     (image_generation.tpose_<view>_prompt) or built-in."""
     override = str(_cfg(f"tpose_{view}_prompt", "") or "").strip()
     return override or TPOSE_VIEW_PROMPT_DEFAULTS.get(view, "")
@@ -313,9 +318,9 @@ def _enabled() -> bool:
 
 
 def _tpose_size() -> tuple:
-    """(width, height) of the T-pose render — square by default. Outstretched
-    arms span roughly the body height, so the portrait outfit format crops the
-    hands."""
+    """(width, height) of the mesh-input pose render — square by default. The
+    arms held away from the body widen the figure, and the portrait outfit
+    format used to crop the hands of the former T-pose."""
     def _px(key: str, fallback: int) -> int:
         try:
             val = int(_cfg(key, 0) or 0)

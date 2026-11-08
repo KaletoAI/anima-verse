@@ -406,7 +406,7 @@ export function FieldModelRefs({
   // scheduled timer must not stop the user from triggering right away.
   const blocked = busy || running
 
-  const label = (kind: RefKind) => (kind === 'tpose' ? t('T-pose') : t('Default pose'))
+  const label = (kind: RefKind) => (kind === 'tpose' ? t('Pose') : t('Default pose'))
   // Own source strings on purpose: the bare "Back" is the navigation label
   // elsewhere and localizes accordingly — a back VIEW does not.
   const viewLabel = (view: string) =>
@@ -525,7 +525,7 @@ export function FieldModelRefs({
       </div>
       <div className="ga-hint">
         {kindList.includes('tpose')
-          ? t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The T-pose image feeds the image-to-3D pipeline.')
+          ? t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The pose render feeds the image-to-3D pipeline.')
           : t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.')}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -566,7 +566,7 @@ export function FieldModelRefs({
               <label
                 key={view}
                 style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
-                title={view === 'face' ? t('Render a face close-up for face retexture') : t('Render this extra T-pose view for multi-view 3D generation')}
+                title={view === 'face' ? t('Render a face close-up for face retexture') : t('Render this extra pose view for multi-view 3D generation')}
               >
                 <input
                   type="checkbox"

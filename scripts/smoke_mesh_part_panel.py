@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory() as tmp:
     root = Path(__file__).resolve().parents[1]
     de = json.loads((root/'shared/languages/de.json').read_text())['translations']
     source = (root/'frontend/src/tabs/characters/FieldModel3D.tsx').read_text()
-    for text in ('Part', 'built', 'not built', 'built — body still shows a protrusion of {n} mm; regenerate the T-pose'):
+    for text in ('Part', 'built', 'not built', 'built — body still shows a protrusion of {n} mm; regenerate the pose render'):
         assert text in de and f"t('{text}')" in source, text
     assert "!partBuilt ? 'red' : part.warning ? 'yellow' : 'green'" in source
 print('PASS mesh_part panel/i18n: absent, built, threshold 12/13/20, failed, German keys')

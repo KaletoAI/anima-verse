@@ -66,8 +66,8 @@
     },
     {
       "id": "tpose_tab",
-      "label": "T-pose",
-      "label_de": "T-Pose",
+      "label": "Pose",
+      "label_de": "Pose",
       "columns": [26]
     },
     {
@@ -153,8 +153,8 @@
     },
     {
       "id": "model_refs",
-      "label": "T-pose (image-to-3D input)",
-      "label_de": "T-Pose (Bild→3D-Input)",
+      "label": "Pose (image-to-3D input)",
+      "label_de": "Pose (Bild→3D-Input)",
       "column": 26,
       "row": 0,
       "special": "model_refs",

@@ -1803,7 +1803,7 @@ def generate_character_model3d(character_name: str, force: bool = False,
     if not find_ref_image(character_name, "tpose"):
         raise HTTPException(
             status_code=409,
-            detail="No T-pose render for the current outfit — generate it first")
+            detail="No pose render for the current outfit — generate it first")
     if (backend or "").strip():
         # The rig check stays in generate_mesh (the rig is known there).
         require_explicit_backend(backend.strip(), media="mesh")

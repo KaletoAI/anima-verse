@@ -112,7 +112,7 @@ _NEG_EXPRESSION = (_NEG_PHOTO + ", full body shot, full length, legs, knees, "
 
 # Negatives of the mesh-input renders — ONE text per use case, shared by both
 # style families (deliberately NOT _NEG_PHOTO: "posed"/"studio lighting" would
-# fight the T-pose / flat-light goal). Unlike _NEG_PHOTO they do NOT negate
+# fight the mesh-input pose / flat-light goal). Unlike _NEG_PHOTO they do NOT negate
 # "cgi"/"3d render" either: the render IS the image-to-3D input and is asked
 # for as a realistic 3D figure (user decision 2026-09-01) — the skin terms
 # (airbrushed/plastic/flawless) stay so the textures remain lifelike.
@@ -126,8 +126,16 @@ _NEG_EXPRESSION = (_NEG_PHOTO + ", full body shot, full length, legs, knees, "
 # 2026-09-26: the bake pads every hand by a structure cell and nothing after
 # it scales a body part back, so the render must already show the hand size
 # the mesh should end with (model_refs.TPOSE_PROMPT_DEFAULT has the why).
-# "palms facing the camera / up" guard the palms-DOWN pose text (the Mixamo
-# bind pose, user decision 2026-09-24) against the old palms-forward render.
+# The ARM terms guard the A-pose (user decision 2026-11-08, pose text in
+# model_refs.TPOSE_PROMPT_DEFAULT): the former T-pose ("T-pose, arms raised to
+# shoulder height") is negated so it cannot return, and so are arms resting on
+# the body and hands on the hips — the A-pose needs the arms clear of the
+# torso or the mesher fuses them. Until 2026-11-08 this negative carried
+# "A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms"
+# to protect the T-pose; those terms would cancel the A-pose and are gone.
+# "palms facing the camera / up" guard the inward palms of the pose text
+# against the old palms-forward render (turned palms bind the hand bones
+# 90 degrees off).
 # The leg terms carry what the pose text no longer over-asks for: it wants a
 # clear separation instead of a straddle (user decision 2026-09-03), so the
 # failure it must not fall back into — legs touching, ankles together — is
@@ -144,7 +152,7 @@ _NEG_EXPRESSION = (_NEG_PHOTO + ", full body shot, full length, legs, knees, "
 # The hair terms (2026-10-25) pair with the front/side pose text "no hair on
 # the chest or in front of the shoulders": long hair and braids kept falling
 # onto the chest, which bakes into the torso mesh.
-_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, shadows on the face, one side of the face darker, shadow under the nose, shadowed eye sockets, directional key light, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, hair over the chest, hair covering the chest, strands of hair on the chest, hair over the shoulders, hair in front of the shoulders, hair falling forward, braid over the shoulder, ponytail over the shoulder")
+_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, shadows on the face, one side of the face darker, shadow under the nose, shadowed eye sockets, directional key light, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, T-pose, arms raised to shoulder height, arms touching the body, hands on hips, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, hair over the chest, hair covering the chest, strands of hair on the chest, hair over the shoulders, hair in front of the shoulders, hair falling forward, braid over the shoulder, ponytail over the shoulder")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up, walking, mid-stride, one paw raised, staggered legs, head turned, looking at viewer")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
@@ -152,10 +160,10 @@ _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, w
 # turns the character back toward the camera, or lets it look over its
 # shoulder, so the render ends up as yet another front-ish view. The profile
 # text additionally pushes away the observed arm failures of a side view —
-# the raised arms drawn FORWARD along the view axis or dropped toward the
-# body ("arms going forward and down", the reported failure). Deliberately
-# NOT negated: a single visible arm — in a strict profile the near arm
-# correctly hides the far one.
+# the arms drawn FORWARD along the view axis or laid against the body
+# ("arms going forward", the reported failure; an A-pose arm must stay clear
+# of the torso, user decision 2026-11-08). Deliberately NOT negated: a
+# partly hidden far arm — in a strict profile the body covers it.
 _NEG_TPOSE_BACK = _NEG_TPOSE + ", front view, face visible, eyes, facial features, looking at the camera, looking over the shoulder, head turned, three-quarter view"
 _NEG_TPOSE_SIDE = _NEG_TPOSE + ", front view, back view, facing the camera, looking at the camera, three-quarter view, both arms on one side, arms pointing forward, arms reaching forward, arms in front of the body, arms angled forward, arm resting along the body"
 
@@ -529,10 +537,11 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the full outfit head-to-toe against a plain background. Do not mention pose or facial expression.",
         },
     },
-    # Style for the T-pose reference render (image->3D / texture-baking
-    # input): flat shadowless light — shadows would bake into the 3D
-    # texture. Deliberately NOT _NEG_PHOTO ("posed", "studio lighting"
-    # would fight the T-pose / flat-light goal). Pose-free like all styles.
+    # Style for the mesh-input pose render (humanoids: A-pose since
+    # 2026-11-08; image->3D / texture-baking input): flat shadowless light —
+    # shadows would bake into the 3D texture. Deliberately NOT _NEG_PHOTO
+    # ("posed", "studio lighting" would fight the pose / flat-light goal).
+    # Pose-free like all styles.
     # The FACE gets its own lighting clause (2026-10-15, user report: "flat
     # shadowless" alone still left a studio key light on the face — one cheek
     # darker, shadows under nose and brows — and the face retexture projects
@@ -614,8 +623,8 @@ _DEFAULT_IMAGE_USE_CASES = {
         },
     },
     # Shared by the left and the right profile. No arm-span clause here: in a
-    # profile one arm points AT the camera and hides the other, so demanding a
-    # visible span would only fight the view.
+    # profile the body partly hides the far arm, so demanding a visible span
+    # would only fight the view.
     "tpose_side": {
         "keywords": {
             "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",

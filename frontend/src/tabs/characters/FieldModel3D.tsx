@@ -368,7 +368,7 @@ export function FieldModel3D({ character }: { character: string }) {
         startPoll()
       } catch (e) {
         const msg = e instanceof ApiError && e.status === 409
-          ? t('No T-pose render for the current outfit — generate it first')
+          ? t('No pose render for the current outfit — generate it first')
           : (e as Error).message
         toast(t('Error') + ': ' + msg, 'error')
         setBusy(false)
@@ -860,16 +860,16 @@ export function FieldModel3D({ character }: { character: string }) {
   const part = model?.attached_part
   const partBuilt = part?.status === 'built' || part?.status === 'applied'
   const partText = partBuilt ? (part?.warning
-    ? t('built — body still shows a protrusion of {n} mm; regenerate the T-pose').replace('{n}', String(part.protrusion_mm))
+    ? t('built — body still shows a protrusion of {n} mm; regenerate the pose render').replace('{n}', String(part.protrusion_mm))
     : t('built')) : part?.reason || t('not built')
   const weights = model?.limb_weights
   const weightsText = weights?.error ? t('Error') : !weights?.checked ? t('not checked')
     : weights.vertices > 0 ? t('{n} vertices repaired').replace('{n}', String(weights.vertices)) : t('clean')
   const statusPanel = <div className="ga-model3d-status">
-    {statusRow(t('T-pose'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
+    {statusRow(t('Pose render'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
       : tp === 'other_outfit' ? t('other outfit') : t('unknown'),
       tp === 'current' ? 'green' : tp === 'changed' ? 'red' : tp === 'other_outfit' ? 'yellow' : 'grey',
-      t('T-pose source freshness'))}
+      t('Pose render freshness'))}
     {statusRow(t('Mesh'), model?.mesh_backend || '–', model?.mesh_backend ? 'green' : 'grey', model?.mesh_backend || t('unknown'))}
     {statusRow(t('Rig'), rigText, model?.rig_error ? 'red' : turned ? 'yellow' : model?.rig_backend && currentTwist != null ? 'green' : 'grey', model?.rig_error || rigText)}
     {mixamo && statusRow(t('Weights'), weightsText, weights?.error ? 'red' : weights?.checked ? 'green' : 'yellow',
@@ -1028,7 +1028,7 @@ export function FieldModel3D({ character }: { character: string }) {
           {model.diagnosis ? (
             <div className="ga-hint" style={model.diagnosis.suspect ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>
               {model.diagnosis.suspect
-                ? `⚠ ${t('Geometry looks broken (all three markers fire): garment surfaces far off their bones, most joints without vertices, many floating fragments. Regenerating with a better T-pose render usually fixes this.')}`
+                ? `⚠ ${t('Geometry looks broken (all three markers fire): garment surfaces far off their bones, most joints without vertices, many floating fragments. Regenerating with a better pose render usually fixes this.')}`
                 : `${t('geometry check')}: ${t('no defect pattern')}`}
               {model.diagnosis.data
                 ? ` · ${t('spread')} ${(model.diagnosis.data.skin_spread_max ?? 0).toFixed(1)}`
@@ -1060,7 +1060,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <div className="ga-hint">
           {pending
             ? t('Generating the 3D model — this takes a few minutes.')
-            : t('No 3D model for this outfit yet — upload one or generate it from the T-pose render.')}
+            : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
         </div>
       )}
       {!st.pending && st.rerig_result ? <div className="ga-hint" role="status">
@@ -1112,7 +1112,7 @@ export function FieldModel3D({ character }: { character: string }) {
                       setFaceCheck(null)
                     }}>
                     <option value="face" disabled={!faceCheck?.face_available}>{t('Face view')}</option>
-                    <option value="front">{t('Front view (T-pose)')}</option>
+                    <option value="front">{t('Front view (pose render)')}</option>
                   </select>
                   {faceCheck?.face_problem ? <div className="ga-field-hint">
                     {faceCheck.face_problem.message} {faceCheck.face_problem.fix}
@@ -1261,7 +1261,7 @@ export function FieldModel3D({ character }: { character: string }) {
             className="ga-btn ga-btn-sm"
             disabled={pending || !st.has_input}
             onClick={openDialog}
-            title={!st.has_input ? t('No T-pose render for the current outfit — generate it first') : undefined}
+            title={!st.has_input ? t('No pose render for the current outfit — generate it first') : undefined}
           >
             {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
           </button>
@@ -1369,7 +1369,7 @@ export function FieldModel3D({ character }: { character: string }) {
             type="button"
             className="ga-btn ga-btn-sm"
             onClick={() => setBatchOpen(true)}
-            title={t('Renders the T-pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
+            title={t('Renders the pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
           >
             ⚙ {t('All outfits…')}
           </button>
