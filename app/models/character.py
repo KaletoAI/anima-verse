@@ -3470,12 +3470,18 @@ def _get_rembg_session(model: str = "u2net"):
     return _REMBG_SESSIONS[model]
 
 
-# Mesh inputs (T-pose and its views) feed image-to-3D, which reads the
-# silhouette from the alpha: u2net leaves a soft halo and background between
-# hair strands there, BiRefNet keeps hair edges (measured 2026-10-25, ~5 s CPU
-# per 1024 px render against a 30-170 s render). Expression images use the
-# same matte since 2026-11-06 (u2net cut hair and shoulders poorly).
+# The matte of expression images (since 2026-11-06; u2net cut hair and
+# shoulders poorly): BiRefNet keeps hair edges where u2net leaves a soft halo
+# and background between strands (measured 2026-10-25, ~5 s CPU per 1024 px
+# render against a 30-170 s render).
 PORTRAIT_REMBG_MODEL = "birefnet-portrait"
+
+# Mesh inputs use BiRefNet-DIS instead: the portrait model leaves background
+# between spread fingers, which image-to-3D turns into webbed or fused fingers;
+# DIS cuts them cleanly (measured 2026-11-08 on T-pose fronts/backs, UniForge
+# meshes with five separate fingers). DIS is too hard on loose hair strands
+# (bright rims), so expression images stay on the portrait model.
+MESH_INPUT_REMBG_MODEL = "birefnet-dis"
 
 # ONE matte at a time per process. A BiRefNet run peaked at ~9.5 GB RSS
 # (measured 2026-11-07, 768 px); two expression renders finishing seconds
@@ -3528,10 +3534,12 @@ def postprocess_outfit_image(image_path: Path, mesh_input: bool = False,
 
     Args:
         image_path: Path to the outfit image.
-        mesh_input: A T-pose render for image-to-3D: BiRefNet's mask is put
-            on the ORIGINAL colours. rembg's own cutout blends edge pixels
-            toward black, which reads as a dark rim around hair and limbs.
-        portrait_matte: the same BiRefNet matte for an expression image.
+        mesh_input: A T-pose render for image-to-3D: the BiRefNet-DIS mask
+            (MESH_INPUT_REMBG_MODEL) is put on the ORIGINAL colours. rembg's
+            own cutout blends edge pixels toward black, which reads as a dark
+            rim around hair and limbs.
+        portrait_matte: the BiRefNet portrait matte (PORTRAIT_REMBG_MODEL),
+            also on the original colours, for an expression image.
 
     Returns:
         Path to the processed image (possibly renamed to .png).
@@ -3543,7 +3551,8 @@ def postprocess_outfit_image(image_path: Path, mesh_input: bool = False,
         png_path = image_path.with_suffix(".png")
         if mesh_input or portrait_matte:
             import io as _io
-            mask = run_rembg(img_data, PORTRAIT_REMBG_MODEL, only_mask=True)
+            mask = run_rembg(img_data, MESH_INPUT_REMBG_MODEL if mesh_input
+                             else PORTRAIT_REMBG_MODEL, only_mask=True)
             with Image.open(_io.BytesIO(img_data)) as _src:
                 cut = _src.convert("RGB")
             cut.putalpha(Image.open(_io.BytesIO(mask)).convert("L").resize(cut.size))
