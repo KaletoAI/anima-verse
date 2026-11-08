@@ -1341,14 +1341,22 @@ def _resolve_character_model_snapshot(character_name: str):
 
 
 def _model_asset_response(character_name: str, request: Request, *, tier: str = "",
-                          texture: bool = False, download: bool = False):
-    """Select and open under publication lock; stream the same descriptor."""
+                          texture: bool = False, download: bool = False,
+                          signature: str = ""):
+    """Select and open under publication lock; stream the same descriptor.
+
+    ``signature`` serves the stored full model of exactly that signature
+    (no serving chain, no tier) — the caller has vetted it."""
     from app.core.http_files import snapshot_response
     from app.core.keyed_lock import keyed_lock
-    from app.core.model3d import get_model3d_dir, find_model3d_serving_tier, find_texture
+    from app.core.model3d import get_model3d_dir, find_model3d, find_model3d_serving_tier, find_texture
     publication = keyed_lock("model3d_publication", str(get_model3d_dir(character_name)))
+    def serving():
+        if signature:
+            return find_model3d(character_name, signature)
+        return find_model3d_serving_tier(character_name, tier)[0]
     def pick():
-        path, _, _ = find_model3d_serving_tier(character_name, tier)
+        path = serving()
         if texture:
             return find_texture(character_name, path.stem) if path else None
         return path
@@ -1357,7 +1365,7 @@ def _model_asset_response(character_name: str, request: Request, *, tier: str = 
         p = pick()
         chosen["path"] = p
         if p is not None:
-            src, _, _ = find_model3d_serving_tier(character_name, tier)
+            src = serving()
             chosen["filename"] = (src.name if (src is not None and not texture) else p.name)
         return p
     def media_for(p: Path) -> str:
@@ -1651,6 +1659,31 @@ def set_character_base_body_pipeline(character_name: str, body: BaseBodyPipeline
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
     return {"pipeline": is_base_pipeline(character_name)}
+
+
+class BaseBodyModelRequest(BaseModel):
+    force: bool = False
+
+
+@router.post("/{character_name}/base-body/model", status_code=202)
+def generate_character_base_body_model(character_name: str, body: BaseBodyModelRequest,
+                                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Build the rigged base model from the base images in a worker thread
+    (cached per base signature unless ``force``). 400 for a non-humanoid,
+    409 without a profile picture or base images, or while a 3D model
+    generation runs for the character."""
+    from app.core.base_body import MissingInput, check_model_ready, start_base_model
+    _require_character(character_name)
+    try:
+        check_model_ready(character_name)
+    except MissingInput as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not start_base_model(character_name, force=body.force):
+        raise HTTPException(status_code=409,
+                            detail="A 3D model generation is already running for this character")
+    return {"started": True}
 
 
 @router.get("/{character_name}/base-body/images/{view}")
@@ -2246,14 +2279,36 @@ def _set_character_model3d_options_sync(character_name: str,
 
 @router.get("/{character_name}/model3d/file")
 def get_character_model3d_file(character_name: str, request: Request,
-                               tier: str = "", download: bool = False):
+                               tier: str = "", download: bool = False,
+                               signature: str = ""):
     """Serves the mesh for the current outfit combination — exact entry,
     else the nearest stored one (find_model3d_serving). ETag +
     If-None-Match — the files are several MB. 404 when absent.
 
     ``tier=low`` serves the reduced version of the SAME combination, falling
     back to the full mesh when none was built. ``download=true`` serves
-    the stored original with attachment disposition."""
+    the stored original with attachment disposition.
+
+    ``signature`` accepts exactly two values: the current outfit signature
+    (served as without it) and the character's CURRENT base-body signature
+    (admin only; that stored model itself, full tier). Anything else is 404."""
+    if signature:
+        from fastapi.responses import Response
+        from app.core.model_refs import current_outfit_state
+        try:
+            outfit_signature = current_outfit_state(character_name)[2]
+        except Exception:
+            outfit_signature = ""
+        if signature != outfit_signature:
+            from app.core.base_body import base_signature, is_base_signature
+            from app.core.model_refs import is_humanoid
+            if (not is_base_signature(signature) or not get_character_dir(character_name).exists()
+                    or not is_humanoid(character_name)
+                    or signature != base_signature(character_name)):
+                return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+            require_admin(request)
+            return _model_asset_response(character_name, request, download=download,
+                                         signature=signature)
     return _model_asset_response(character_name, request, tier=tier, download=download)
 
 

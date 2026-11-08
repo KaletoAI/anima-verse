@@ -499,8 +499,10 @@ def request_lod(character_name: str, model_path: Path) -> bool:
     The admin stays in charge: the generated mesh is a floor, not a ceiling.
     A better low-poly version made elsewhere can replace it at any time.
     """
+    meta = _read_sidecar(model_path)
+    # A base body is copied per outfit, never shown at range: no low tier.
     if (not _auto_lod_enabled() or model_path.suffix.lower() != ".glb"
-            or _read_sidecar(model_path).get("rig") == "none"):
+            or meta.get("rig") == "none" or meta.get("base")):
         return False
     if character_name in getattr(_staging, "directories", {}):
         result = build_lod(character_name, model_path.stem, ratio=_auto_lod_ratio())
@@ -518,10 +520,10 @@ def request_lod(character_name: str, model_path: Path) -> bool:
             res = build_lod(character_name, model_path.stem,
                             ratio=_auto_lod_ratio())
             if not res.get("ok"):
-                logger.debug("Model3D %s: LOD nicht erzeugt (%s)",
+                logger.debug("Model3D %s: LOD not built (%s)",
                              character_name, res.get("error"))
         except Exception as e:                              # noqa: BLE001
-            logger.warning("Model3D %s: LOD-Bau fehlgeschlagen: %s",
+            logger.warning("Model3D %s: LOD build failed: %s",
                            character_name, e)
         finally:
             with _lock:
@@ -579,8 +581,12 @@ def find_model3d_serving(character_name: str) -> tuple:
     if d.is_dir():
         from app.core.model_refs import is_state_fork
         from app.core.outfit_match import outfit_similarity
+        from app.core.base_body import is_base_signature
         for p in d.iterdir():
             if p.suffix.lower() not in MODEL_EXTS or is_state_fork(p.stem) or "-p" in p.stem:
+                continue
+            # The base body is never an outfit's model (nor its stand-in).
+            if is_base_signature(p.stem):
                 continue
             manifest = _stored_manifest(character_name, p.stem)
             if manifest is None:
@@ -595,7 +601,7 @@ def find_model3d_serving(character_name: str) -> tuple:
             if best is None or key > best[0]:
                 best = (key, p)
     if best is not None:
-        logger.debug("Model3D %s: nearest %s fuer Kombination %s (score %.2f)",
+        logger.debug("Model3D %s: nearest %s for combination %s (score %.2f)",
                      character_name, best[1].stem, sig, best[0][0])
         return best[1], "nearest"
     return None, ""
@@ -685,7 +691,7 @@ def list_shrink_backends() -> Dict[str, Any]:
                 "lod_stages": bool(getattr(b, "supports_lod_stages", False)),
             })
     except Exception as e:
-        logger.debug("Shrink-Backends listen fehlgeschlagen: %s", e)
+        logger.debug("Listing shrink backends failed: %s", e)
     return {"backends": out}
 
 
@@ -758,6 +764,28 @@ def versioned_model_urls(character_name: str, enc_base: str) -> Dict[str, str]:
     with publication:
         captured = _capture_model_urls(character_name, enc_base)
     return _finish_model_urls(captured, publication)
+
+
+def signature_model_url(character_name: str, signature: str) -> Optional[str]:
+    """Versioned URL of the stored full model of ONE explicit signature
+    (``/characters/<name>/model3d/file?signature=<sig>&v=<content>``), or
+    None. The file route accepts only the current outfit or the current base
+    signature there; the version is the delivered file's, like ``url``."""
+    from app.core.keyed_lock import keyed_lock
+    base = (f"/characters/{quote(character_name, safe='')}/model3d/file"
+            f"?signature={quote(signature, safe='')}&v=")
+    publication = keyed_lock("model3d_publication", str(get_model3d_dir(character_name)))
+    with publication:
+        path = find_model3d(character_name, signature)
+        if path is None:
+            return None
+        f = open(path, "rb")
+        try:
+            captured = [("url", base, path, f, os.fstat(f.fileno()), True)]
+        except BaseException:
+            f.close()
+            raise
+    return _finish_model_urls(captured, publication).get("url")
 
 
 def attached_part_info(extension):
@@ -1074,6 +1102,10 @@ def _read_sidecar(path: Path) -> Dict[str, Any]:
         return {}
 
 
+# Extension-group operations that build an anatomy part (and its bone).
+PART_OPS = ("attached_part", "attached_part_bone", "inset_part")
+
+
 def _auto_extension_rig(character_name: str, path: Path,
                         meta: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
     """Build declared extensions from a clean source; failed gates preserve bytes."""
@@ -1089,6 +1121,12 @@ def _auto_extension_rig(character_name: str, path: Path,
     # clothing (or anatomy) over the slot never gets a procedural part.
     mesh_variant = meta.get("mesh_variant") or ""
     declarations = rig_groups_for(character_name, profile=profile, mesh_variant=mesh_variant)
+    # A base body gets every extension group BUT the anatomy parts: those
+    # belong to the outfit models painted onto it (spec B.4), which inherit
+    # this rig with its jiggle/secondary bones.
+    base = bool(meta.get("base"))
+    if base:
+        declarations = [g for g in declarations if g["op"] not in PART_OPS]
     overrides = model_extension_overrides(profile, path.stem)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
@@ -1106,7 +1144,8 @@ def _auto_extension_rig(character_name: str, path: Path,
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem,
-                                                   mesh_variant=mesh_variant) if g["enabled"]]
+                                                   mesh_variant=mesh_variant)
+              if g["enabled"] and not (base and g["op"] in PART_OPS)]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "group_ops": {g["id"]: g["op"] for g in declarations},
              "group_params": {g["id"]: g["params"] for g in declarations if g["op"] in ("attached_part", "inset_part")},
@@ -1261,7 +1300,8 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
     result = _auto_extension_rig(character_name, path, meta, force=force)
     if not result.get("noop"):
         _publish_sidecar(path, meta)
-    if result.get("ok") and tier == FULL_TIER and (meta.get("extension_rig") or {}).get("status") in ("applied", "none_applicable"):
+    if (result.get("ok") and tier == FULL_TIER and not meta.get("base")
+            and (meta.get("extension_rig") or {}).get("status") in ("applied", "none_applicable")):
         low = tier_variant(path, LOW_TIER)
         low_meta = _read_sidecar(low) if low else {}
         state = meta.get("extension_rig") or {}
@@ -1362,7 +1402,7 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     meta.setdefault("extension_rig", extension_metadata(character_name, signature=target.stem))
     _publish_sidecar(target, meta)
     request_lod(character_name, target)
-    logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
+    logger.info("Model3D %s: upload %s (%d bytes, combination %s)",
                 character_name, target.name, len(contents), signature)
     return meta
 
@@ -1486,7 +1526,7 @@ def _auto_retexture(character_name: str, path: Path,
         "at": utc_now_iso(),
     }
     if not res.get("applied") and res.get("error"):
-        logger.info("Model3D %s: Textur-Neukodierung nicht angewandt (%s)",
+        logger.info("Model3D %s: texture re-encode not applied (%s)",
                     character_name, res["error"])
 
 
@@ -1597,7 +1637,7 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
     try:
         _publish_sidecar(path, meta)
     except OSError as e:
-        logger.warning("Model3D %s: Messung nicht gespeichert: %s", path.name, e)
+        logger.warning("Model3D %s: measurement not stored: %s", path.name, e)
     return {"ok": True, "cached": False, "measured": meta["measured"]}
 
 
@@ -1703,7 +1743,7 @@ def retexture_model(character_name: str,
     try:
         _publish_sidecar(path, meta)
     except OSError as e:
-        logger.warning("Model3D %s: Sidecar nicht geschrieben: %s", path.name, e)
+        logger.warning("Model3D %s: sidecar not written: %s", path.name, e)
     return {"ok": True, "applied": bool(res.get("applied")),
             "reason": res.get("error", ""),
             "bytes_saved": meta["refined"]["bytes_saved"],
@@ -2010,10 +2050,13 @@ def _op_subject(character_name: str, signature: str) -> str:
     return f"model3d:{character_name}:{signature}"
 
 
-def _op_match(character_name: str, signature: Optional[str]):
+def _op_match(character_name: str, signature: Optional[str], *, base: Optional[bool] = None):
+    """``base`` (mesh records only): True/False match only base-body /
+    outfit records — an outfit run never resumes a base one, nor back."""
     def match(inputs: Dict[str, Any]) -> bool:
         return (inputs.get("character") == character_name
-                and (signature is None or inputs.get("signature") == signature))
+                and (signature is None or inputs.get("signature") == signature)
+                and (base is None or bool(inputs.get("base")) == base))
     return match
 
 
@@ -2051,9 +2094,17 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 prefer_cheapest: bool = False,
                                 signature: Optional[str] = None,
                                 face_num: Any = None,
-                                texture_size: Any = None) -> Dict[str, Any]:
+                                texture_size: Any = None,
+                                base: bool = False) -> Dict[str, Any]:
     """Generates the mesh for the currently worn outfit — or a given
     combination — from its T-pose render.
+
+    ``base=True`` (with ``signature`` = the base signature,
+    ``base_body.generate_base_model``) builds the base body instead: every
+    stored base view goes in whatever the view toggles say, the anatomy-part
+    extension batches and the distance tier are skipped, the sidecar records
+    ``"base": true``. The flag is frozen into the record, so a resume behaves
+    the same.
 
     Backend: ``backend_glob`` (explicit) → the mesh occasion's chain of the
     image routing (``mesh_occasion_for_rig`` of the character's rig);
@@ -2069,7 +2120,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     neither the cache check nor the T-pose lookup run again.
     """
     from app.core import hub_ops
-    op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature))
+    if base and not signature:
+        raise ValueError("A base-body model needs its base signature")
+    op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base))
     if op is not None:
         return _resume_entry(op, lambda: _generate_for_current_outfit(
             character_name, signature=op.inputs["signature"], _op_ctx={"op": op}),
@@ -2077,7 +2130,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     return hub_ops.run_new(lambda ctx: _generate_for_current_outfit(
         character_name, force=force, backend_glob=backend_glob,
         prefer_cheapest=prefer_cheapest, signature=signature, face_num=face_num,
-        texture_size=texture_size, _op_ctx=ctx))
+        texture_size=texture_size, base=base, _op_ctx=ctx))
 
 
 @_serial_model
@@ -2087,10 +2140,12 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                                  signature: Optional[str] = None,
                                  face_num: Any = None,
                                  texture_size: Any = None,
+                                 base: bool = False,
                                  _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The staged half of ``generate_for_current_outfit``: preprocessing and
     the record (fresh run), then the stages — or the stages alone when
-    ``_op_ctx`` already carries the record (resume)."""
+    ``_op_ctx`` already carries the record (resume; ``base`` then comes from
+    the record's inputs, never from this argument)."""
     from app.core import hub_ops
     from app.imagegen.service import get_image_service
     from app.core.task_queue import get_task_queue
@@ -2110,7 +2165,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             if not force:
                 cached = find_model3d(character_name, signature)
                 if cached:
-                    logger.info("Model3D %s: Kombination %s bereits erzeugt (%s)",
+                    logger.info("Model3D %s: combination %s already generated (%s)",
                                 character_name, signature, cached.name)
                     return {"ok": True, "cached": True, "path": str(cached)}
 
@@ -2128,7 +2183,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
 
             src = find_ref_image(character_name, "tpose", signature)
             if not src:
-                logger.warning("Model3D %s: kein T-Pose-Bild fuer Kombination %s",
+                logger.warning("Model3D %s: no T-pose image for combination %s",
                                character_name, signature)
                 return {"ok": False, "error": "no_tpose_input"}
 
@@ -2138,14 +2193,21 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             # passed on — a view that failed to render must not block the mesh.
             from app.core.model_refs import enabled_tpose_views, is_humanoid
             view_images = {}
-            for _view in enabled_tpose_views(character_name):
+            if base:
+                # The base body always sends every view it has rendered,
+                # independent of the outfit view toggles.
+                from app.core.base_body import BASE_VIEWS
+                wanted_views = [v for v in BASE_VIEWS if v != "front"]
+            else:
+                wanted_views = enabled_tpose_views(character_name)
+            for _view in wanted_views:
                 if _view == "face":
                     continue  # Close-up texture reference, never reconstruction input.
                 _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
                 if _vp:
                     view_images[_view] = str(_vp)
             if view_images:
-                logger.info("Model3D %s: Zusatz-Ansichten fuer %s: %s",
+                logger.info("Model3D %s: extra views for %s: %s",
                             character_name, signature, ", ".join(sorted(view_images)))
 
             out_dir = get_model3d_dir(character_name)
@@ -2155,7 +2217,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 return {"ok": False, "error": "character_gone"}
             try:
                 task_id = get_task_queue().track_start(
-                    "model3d_generation", f"3D model: {character_name}",
+                    "model3d_generation",
+                    f"{'Base-body 3D model' if base else '3D model'}: {character_name}",
                     agent_name=character_name, start_running=True)
             except Exception:
                 task_id = ""
@@ -2216,9 +2279,11 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
                 "view_images": {v: Path(p).name for v, p in view_images.items()},
                 "view_images_sha256": {v: hashlib.sha256(blob).hexdigest() for v, blob in view_bytes.items()},
-                "manifest": _ref_manifest(src),
+                # A base body stands for no outfit: no piece manifest.
+                "manifest": {} if base else _ref_manifest(src),
+                **({"base": True} if base else {}),
                 **face_inputs,
-            }, label=f"3D model: {character_name}", track_id=task_id)
+            }, label=f"{'Base-body 3D model' if base else '3D model'}: {character_name}", track_id=task_id)
             if _op_ctx is not None:
                 _op_ctx["op"] = op
             op.path("inputs", src.name).write_bytes(source_bytes)
@@ -2257,6 +2322,7 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
     from app.core.model_validate import validate_glb, validate_fbx
     inputs = op.inputs
     signature, rig = inputs["signature"], inputs["rig"]
+    base = bool(inputs.get("base"))
     out_dir = get_model3d_dir(character_name)
 
     if not op.done("mesh"):
@@ -2292,7 +2358,8 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
                                         "source_image_sha256": inputs["source_image_sha256"],
                                         **({"view_images_sha256": dict(inputs["view_images_sha256"])}
                                            if "view_images_sha256" in inputs else {}),
-                                        **(inputs.get("manifest") or {})})
+                                        **(inputs.get("manifest") or {}),
+                                        **({"base": True} if base else {})})
         if not stored.get("ok"):
             return {"ok": False, "error": stored["error"]}
         _checkpoint_mesh(character_name, signature)
@@ -2422,10 +2489,13 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
     # source of truth is copied rather than derived a second time (frozen
     # with the record when the run started).
     meta.update(inputs.get("manifest") or {})
+    if base:
+        meta["base"] = True
     if face_status is not None:
         meta["face_retexture"] = face_status
     _auto_retexture(character_name, path, meta)
     _auto_normalize(character_name, path, meta)
+    # Reads meta["base"]: a base body skips the anatomy-part batches.
     _auto_extension_rig(character_name, path, meta)
     # AFTER the re-encode and the normalisation: the numbers have to
     # describe the file that is actually served, not the one the backend
@@ -2438,8 +2508,9 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
     from app.core.extension_rig import extension_metadata
     meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
     _publish_sidecar(path, meta)
-    request_lod(character_name, path)
-    logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
+    if not base:
+        request_lod(character_name, path)
+    logger.info("Model3D %s: %s (%d bytes, combination %s)", character_name,
                 path.name, path.stat().st_size, signature)
     return {"ok": True, "cached": False, "path": str(path),
             "filename": path.name, "warnings": res.get("validation_warnings", [])}
@@ -2600,7 +2671,8 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
-            "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view")}
+            "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view",
+            "base")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
@@ -2643,7 +2715,9 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         _attach_measurement(meta, path)
         _publish_sidecar(path, meta)
         try:
-            if low or (face_meta and _auto_lod_enabled()):
+            if meta.get("base"):
+                pass  # A base body has no distance tier.
+            elif low or (face_meta and _auto_lod_enabled()):
                 result = build_lod(character_name, signature, ratio=low_meta.get("lod_ratio") or _auto_lod_ratio())
                 if not result.get("ok"):
                     raise RuntimeError(result.get("error") or "Low tier rebuild failed")
@@ -2837,16 +2911,21 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
 
 def _run(character_name: str, force: bool, backend_glob: str = "",
          prefer_cheapest: bool = False, face_num: Any = None,
-         texture_size: Any = None) -> None:
+         texture_size: Any = None, base: bool = False) -> None:
     with _char_lock(character_name):
         try:
-            generate_for_current_outfit(character_name, force=force,
-                                        backend_glob=backend_glob,
-                                        prefer_cheapest=prefer_cheapest,
-                                        face_num=face_num,
-                                        texture_size=texture_size)
+            if base:
+                # Signature and readiness are read when the run starts.
+                from app.core.base_body import generate_base_model
+                generate_base_model(character_name, force=force)
+            else:
+                generate_for_current_outfit(character_name, force=force,
+                                            backend_glob=backend_glob,
+                                            prefer_cheapest=prefer_cheapest,
+                                            face_num=face_num,
+                                            texture_size=texture_size)
         except Exception as e:
-            logger.error("Model3D-Generierung fuer %s fehlgeschlagen: %s",
+            logger.error("Model3D generation for %s failed: %s",
                          character_name, e)
         finally:
             with _lock:
@@ -2857,11 +2936,13 @@ def trigger_generation(character_name: str, *, force: bool = False,
                        backend_glob: str = "",
                        prefer_cheapest: bool = False,
                        face_num: Any = None,
-                       texture_size: Any = None) -> bool:
+                       texture_size: Any = None,
+                       base: bool = False) -> bool:
     """Starts the mesh generation in the background.
     ``backend_glob`` picks the mesh backend (empty = the rig's mesh occasion
     chain of the image routing; ``prefer_cheapest`` always cheapest of the
-    rig — the auto hook).
+    rig — the auto hook). ``base`` builds the base body
+    (``base_body.generate_base_model``) instead of the outfit's model.
     False when one is already running for this character."""
     with _lock:
         if character_name in _generating:
@@ -2869,7 +2950,7 @@ def trigger_generation(character_name: str, *, force: bool = False,
         _generating.add(character_name)
     threading.Thread(target=_run,
                      args=[character_name, force, backend_glob, prefer_cheapest,
-                           face_num, texture_size],
+                           face_num, texture_size, base],
                      daemon=True).start()
     return True
 
@@ -2890,13 +2971,13 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
         if not find_ref_image(character_name, "tpose", signature):
             return False  # render failed / not there yet — wait for the next pass
     except Exception as e:
-        logger.debug("Model3D-Auto-Check fuer %s fehlgeschlagen: %s",
+        logger.debug("Model3D auto check for %s failed: %s",
                      character_name, e)
         return False
     started = trigger_generation(character_name, prefer_cheapest=True)
     if started:
-        logger.info("Model3D %s: Auto-Generierung gestartet (T-Pose vorhanden, "
-                    "guenstigstes Backend)", character_name)
+        logger.info("Model3D %s: auto generation started (T-pose present, "
+                    "cheapest backend)", character_name)
     return started
 
 

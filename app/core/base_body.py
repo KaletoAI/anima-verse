@@ -9,7 +9,8 @@ painted onto that body later (spec
 
 This module holds the description, the view prompts with their negative, the
 base signature that keys every stored base image and model, the rendering of
-the four views (``generate_base_images``), the per-character pipeline switch
+the four views (``generate_base_images``), the rigged base model built from
+them (``generate_base_model``), the per-character pipeline switch
 (``set_pipeline``) and the UI info (``base_info``).
 
 What describes the body:
@@ -61,6 +62,13 @@ POSE_NEGATIVE = ("hands touching body, fists, curled fingers, fused fingers, mit
 BASE_NEGATIVE = ", ".join((HAIR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
 
 _HAIR_RE = re.compile(r"\bhair", re.IGNORECASE)
+# The shape of ``base_signature`` — never an outfit signature (pure hex).
+BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
+
+
+def is_base_signature(signature: Optional[str]) -> bool:
+    """Whether a model/ref signature is a base-body one (by its shape)."""
+    return bool(signature) and BASE_SIG_RE.fullmatch(signature) is not None
 
 
 def _profile_of(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -387,9 +395,8 @@ def start_base_images(character_name: str, *, view: Optional[str] = None,
 
 def base_info(character_name: str) -> Dict[str, Any]:
     """UI info: ``{pipeline, humanoid, signature, images: {view: url|None},
-    status: {view: ...}, model}``. ``model`` is filled once base models
-    exist (Task 4); the image URLs carry the file's mtime so a re-render
-    is fetched anew."""
+    status: {view: ...}, model}`` (``model``: see ``base_model_info``); the
+    image URLs carry the file's mtime so a re-render is fetched anew."""
     from app.core.model_refs import find_ref_image, is_humanoid
     profile = _profile_of(character_name, None)
     humanoid = bool(is_humanoid(character_name, profile=profile))
@@ -406,7 +413,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
     from app.core.timeutils import utc_now
     return {"pipeline": is_base_pipeline(character_name, profile=profile), "humanoid": humanoid,
             "signature": signature, "images": images, "status": base_status(character_name),
-            "model": None, "now": _iso(utc_now())}
+            "model": base_model_info(character_name, signature), "now": _iso(utc_now())}
 
 
 def base_image_path(character_name: str, view: str) -> Optional[Path]:
@@ -415,6 +422,119 @@ def base_image_path(character_name: str, view: str) -> Optional[Path]:
         return None
     from app.core.model_refs import find_ref_image
     return find_ref_image(character_name, _kind(view), base_signature(character_name))
+
+
+# --- The base model ---------------------------------------------------------
+
+# Base model runs in memory, like the image status: character -> base
+# signature of the run in progress, and the last failed run per character.
+# Runs of one character are serial (model3d's generation guard).
+_model_running: Dict[str, str] = {}
+_model_failed: Dict[str, Dict[str, Any]] = {}
+
+
+def check_model_ready(character_name: str, *,
+                      profile: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], str]:
+    """``(profile, base signature)`` when a base model can be built: the
+    preconditions of the images (``check_renderable``) plus the stored front
+    image of the CURRENT base signature (``MissingInput`` without it)."""
+    profile = check_renderable(character_name, profile=profile)
+    bsig = base_signature(character_name, profile=profile)
+    from app.core.model_refs import find_ref_image
+    if find_ref_image(character_name, "tpose", bsig) is None:
+        raise MissingInput("No base-body images. Render the base-body images first")
+    return profile, bsig
+
+
+def generate_base_model(character_name: str, *, force: bool = False) -> Dict[str, Any]:
+    """Build the rigged base model from the base images. Blocking (minutes)
+    — call from a worker thread.
+
+    The staged mesh run of ``model3d.generate_for_current_outfit`` with
+    ``signature=<bsig>`` and ``base=True`` (frozen into the hub-op inputs):
+    source ``tpose_<bsig>``, every stored base view, the character's mesh
+    occasion; after the rig no anatomy parts and no distance tier, the
+    sidecar records ``"base": true`` and the unrigged checkpoint
+    ``model3d/unrigged/<bsig>.glb`` stays. Cached per base signature unless
+    ``force``."""
+    from app.core import model3d
+    from app.core.timeutils import utc_now
+    bsig = ""
+    error: Optional[str] = None
+    try:
+        _profile, bsig = check_model_ready(character_name)
+        with _status_lock:
+            _model_running[character_name] = bsig
+            _model_failed.pop(character_name, None)
+        result = model3d.generate_for_current_outfit(character_name, force=force,
+                                                     signature=bsig, base=True)
+        if not result.get("ok"):
+            error = str(result.get("error") or "Base model generation failed")
+        return result
+    except Exception as e:
+        error = str(e) or type(e).__name__
+        raise
+    finally:
+        with _status_lock:
+            _model_running.pop(character_name, None)
+            if error is not None:
+                _model_failed[character_name] = {"signature": bsig, "error": error,
+                                                 "failed_at": utc_now()}
+
+
+def start_base_model(character_name: str, *, force: bool = False) -> bool:
+    """Run ``generate_base_model`` in a worker thread under model3d's
+    per-character generation guard and lock. False when a 3D model
+    generation already runs for the character. The run counts as running
+    from THIS moment (the UI polls ``base_info``)."""
+    from app.core import model3d
+    bsig = base_signature(character_name)
+    with _status_lock:
+        reserved = character_name not in _model_running
+        if reserved:
+            _model_running[character_name] = bsig
+    started = model3d.trigger_generation(character_name, force=force, base=True)
+    if not started and reserved:
+        with _status_lock:
+            _model_running.pop(character_name, None)
+    return started
+
+
+def base_model_info(character_name: str, signature: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """``{signature, url, created_at, status, error}`` of the base model of
+    the CURRENT base signature, or None when none is stored, running or
+    failed. ``status``: ``running``; ``failed`` (the last run ended with an
+    error, or the stored model is the static checkpoint whose rig failed —
+    its sidecar ``rig_error``); ``unrigged`` (a static checkpoint without a
+    run, e.g. one interrupted by a restart); ``ready``. ``url`` serves the
+    stored model (``/characters/<name>/model3d/file?signature=<bsig>``)."""
+    from app.core import model3d
+    if signature is None:
+        from app.core.model_refs import is_humanoid
+        signature = base_signature(character_name) if is_humanoid(character_name) else ""
+    if not signature:
+        return None
+    with _status_lock:
+        running = _model_running.get(character_name)
+        failure = dict(_model_failed.get(character_name) or {})
+    path = model3d.find_model3d(character_name, signature)
+    meta = model3d._read_sidecar(path) if path else {}
+    if running == signature:
+        status, error = "running", ""
+    elif failure.get("signature") == signature:
+        status, error = "failed", failure.get("error") or ""
+    elif path is None:
+        return None
+    elif meta.get("rig_error"):
+        status, error = "failed", str(meta["rig_error"])
+    elif meta.get("rig") in (None, "", "none"):
+        status, error = "unrigged", ""
+    else:
+        status, error = "ready", ""
+    return {"signature": signature,
+            "url": model3d.signature_model_url(character_name, signature) if path else None,
+            "created_at": meta.get("created_at") or None,
+            "status": status, "error": error}
 
 
 def set_pipeline(character_name: str, enabled: bool) -> bool:
