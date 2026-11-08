@@ -151,6 +151,22 @@ SECTIONS = {
             },
         },
     },
+    "body_retexture": {
+        "label": "Body retexture", "scope": "instance",
+        "fields": {
+            "worker_dir": {
+                "type": "str", "label": "Worker directory", "default": "",
+                "description": "Path of the GLBBodyRetexture repo whose .venv runs the worker; empty = off. "
+                               "Runs locally as a CPU subprocess (python -m body_core) and paints outfits "
+                               "onto a character's base body. A leading ~ is expanded.",
+            },
+            "timeout_seconds": {
+                "type": "int", "label": "Timeout (seconds)", "default": 1800, "min": 1,
+                "description": "A run that takes longer is killed with everything it started and counts as failed. "
+                               "Four views take about 1–2 minutes of CPU at default settings.",
+            },
+        },
+    },
     "server": {
         "label": "Server",
         "icon": "⚙",

@@ -557,7 +557,8 @@ def part_a(schema):
 
 TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
                   "embedding", "decision", "tts", "knowledge",
-                  "content_marketplace", "ui", "image_generation", "model_test"]
+                  "content_marketplace", "ui", "image_generation", "model_test",
+                  "body_retexture"]
 TABLE_WORLD = ["extension_motion", "chat", "thoughts", "intents", "relationships", "social_reactions",
                "random_events", "npc", "story_engine", "game", "messaging_frame",
                "game_calendar", "game_seasons", "memory", "packages", "inventory"]
