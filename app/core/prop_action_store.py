@@ -133,6 +133,24 @@ def save(conn, run):
     return True
 
 
+def mark_late_answer(execution_id, name) -> bool:
+    """Record ``name``'s answer to an invitation that had already EXPIRED
+    (cancelled/consent_expired) — once: True only the first time, so the
+    inviter hears of a late "yes" once per invitee. The one write a terminal
+    run takes (``save`` never touches one); its status stays as it is."""
+    with transaction() as conn:
+        run = get(execution_id, conn=conn)
+        if not run or (run["status"], run["reason"]) != ("cancelled", "consent_expired"):
+            return False
+        late = run["data"].setdefault("late_answers", [])
+        if name in late:
+            return False
+        late.append(name)
+        conn.execute("UPDATE prop_action_runs SET data=?,updated_at=? WHERE execution_id=?",
+                     (encode(run["data"]), utc_now_iso(), execution_id))
+    return True
+
+
 def migrate_members(conn):
     """One-shot (db.init_schema): the old ``partner`` column becomes the
     ``members`` list, and a run's per-person data is keyed by NAME instead

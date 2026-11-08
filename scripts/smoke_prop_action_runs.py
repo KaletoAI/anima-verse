@@ -1111,7 +1111,7 @@ class Runs(unittest.TestCase):
         result = request(name, target, members=[partner])
         F.set_game_time(F.game_time() + GameDuration.of(seconds=299))
         A.advance(F.game_time())
-        self.assertEqual(R.get(result["execution_id"])["data"]["consent_elapsed"], 299)
+        self.assertEqual(R.get(result["execution_id"])["data"]["consent_wait_s"], 299)
         F.set_game_time(F.game_time() + GameDuration.of(seconds=2))
         before = {who: F.C.get_character_profile(who) for who in (name, partner)}
         expired = A.respond(partner, result["execution_id"], True)

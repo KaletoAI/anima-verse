@@ -104,6 +104,25 @@ def _join(names):
 #: the partner reacts and may resist).
 CONSENTS = ("ask", "react")
 
+#: How long an invitation waits for its answers: REAL seconds on the motion
+#: clock (``timeutils.motion_time`` — the seconds the world has run unfrozen),
+#: so the game-speed factor never shortens it and a frozen world (or a server
+#: downtime) pauses it, as the game-time count before it did. The answers come
+#: from models that take real time, not game time. A group gets
+#: ``CONSENT_WINDOW_PER_EXTRA_INVITEE_S`` more for every invitee beyond the
+#: first: the questions are answered one after another.
+CONSENT_WINDOW_S = 300.0
+CONSENT_WINDOW_PER_EXTRA_INVITEE_S = 120.0
+
+#: A "yes" that arrives this many motion-clock seconds after its invitation
+#: expired still reaches the inviter ("would have agreed"); later, nothing.
+LATE_ANSWER_WINDOW_S = 600.0
+
+
+def consent_window_s(run) -> float:
+    """The motion-clock seconds ``run``'s invitation waits for its answers."""
+    return CONSENT_WINDOW_S + CONSENT_WINDOW_PER_EXTRA_INVITEE_S * max(0, len(run["members"]) - 1)
+
 #: The fewest people a GROUP action (``participants`` > 2) runs with, the
 #: actor included. Its ``participants`` — the role count of its clip — is the
 #: most; the roles nobody takes stay empty (``interaction_engine.group_roles``).
@@ -672,9 +691,10 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
                status="awaiting_consent" if asks else "approaching", phase="", reason="", target=target,
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
                                                 last_game=now, last_motion=_motion_now(),
-                                                elapsed=0.0, consent_elapsed=0.0,
+                                                elapsed=0.0,
                                                 **({"consent": consent} if invitees else {}),
-                                                **({"consents": {m: "pending" for m in invitees}} if asks else {})))
+                                                **({"consents": {m: "pending" for m in invitees},
+                                                    "consent_wait_s": 0.0} if asks else {})))
     replaces = _replaced_runs(actor, invitees, target, action_id)
     if not replaces:
         return _admit(run, fingerprint)
@@ -777,6 +797,49 @@ def _last_consent(run, name) -> bool:
     return all(answer == "yes" for member, answer in consents.items() if member != name)
 
 
+def _consent_over(run) -> bool:
+    """Advance ``run``'s invitation wait to now on the motion clock and tell
+    whether its window (``consent_window_s``) has closed. As in the tick's
+    ``_clock``, time from before this process started does not count, and a
+    frozen world's motion clock stands still. A run stored before the wait
+    moved to the motion clock starts its window again here."""
+    data = run["data"]
+    now_s = _motion_now()
+    if data["process"] == _PROCESS:
+        data["consent_wait_s"] = (data.get("consent_wait_s", 0.0)
+                                  + max(0.0, now_s - float(data.get("last_motion", now_s))))
+    data.update(last_game=game_time().canonical(), last_motion=now_s, process=_PROCESS)
+    return data.get("consent_wait_s", 0.0) >= consent_window_s(run)
+
+
+def _late_answer(run, name, accept):
+    """``name`` answers an invitation that had already expired before it
+    did. A "yes" up to ``LATE_ANSWER_WINDOW_S`` after the expiry tells the
+    inviter — a line in the room and a notice for a player — once per
+    invitee; a "no" (or a later "yes") changes nothing. After every lock:
+    the expiry may not be committed before that."""
+    if accept is not True:
+        return
+    from app.core.keyed_lock import _after_locks
+    execution_id = run["execution_id"]
+
+    def deliver():
+        try:
+            current = store.get(execution_id)
+            expired_at = (current or {}).get("data", {}).get("expired_at_s")
+            if expired_at is None or _motion_now() - float(expired_at) > LATE_ANSWER_WINDOW_S:
+                return
+            if not store.mark_late_answer(execution_id, name):
+                return
+            key = "{name} would have agreed — the invitation had already expired."
+            _narrate(current, key, name=name)
+            _tell_inviter(current, key, name=name)
+        except Exception:
+            logger.exception("late answer of %s to %s failed", name, execution_id)
+
+    _after_locks(deliver)
+
+
 def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) -> dict:
     with _lock(execution_id):
         run = store.get(execution_id)
@@ -784,7 +847,11 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
             return _refused("not_invitee")
         if type(accept) is not bool:
             return _refused("invalid_response")
-        if run["status"] != "awaiting_consent" or run["data"]["consents"].get(actor) != "pending":
+        pending = (run["data"].get("consents") or {}).get(actor) == "pending"
+        if (run["status"], run["reason"]) == ("cancelled", "consent_expired") and pending:
+            _late_answer(run, actor, accept)
+            return _result(run)
+        if run["status"] != "awaiting_consent" or not pending:
             return _result(run)
         if not accept:
             # One "no" ends the invitation for everyone, naming who said it.
@@ -792,6 +859,13 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
             return _finish(run, "cancelled", "consent_declined")
         if is_world_frozen():
             return _refused("world_frozen")
+        if _consent_over(run):
+            # The window closed before this "yes" and no tick has noticed yet:
+            # the invitation expires now, and the answer is a late one.
+            run["data"]["expired_at_s"] = run["data"]["last_motion"]
+            _finish(run, "cancelled", "consent_expired")
+            _late_answer(run, actor, accept)
+            return _result(run)
         if not _last_consent(run, actor):
             # Agreed; the run waits for the others before anything is planned.
             run["data"]["consents"][actor] = "yes"
@@ -812,14 +886,15 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
             run = store.get(execution_id, conn=conn)
             if run["status"] != "awaiting_consent":
                 return _result(run)
-            now = game_time()
             data = run["data"]
-            if data["process"] == _PROCESS:
-                data["consent_elapsed"] += max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
-            data.update(last_game=now.canonical(), last_motion=_motion_now(), process=_PROCESS)
-            if data["consent_elapsed"] >= 300:
+            if _consent_over(run):
+                # Expired while this answer was planned. Lines and notices go
+                # out after the commit (the place lock defers them).
+                data["expired_at_s"] = data["last_motion"]
                 run.update(status="cancelled", reason="consent_expired")
                 store.save(conn, run)
+                _narrate_finish(run, "awaiting_consent", "cancelled", "consent_expired", set())
+                _late_answer(run, actor, accept)
                 return _result(run)
             if not reason:
                 data.update(plans=plans, clip_roles=planned_roles, access_roles=planned_access)
@@ -1239,6 +1314,30 @@ def _narrate(run, key, *, literal=False, **fmt):
     _after_locks(deliver)
 
 
+def _tell_inviter(run, key, **fmt):
+    """``key`` (formatted with ``fmt``) as a notice for the run's inviter when
+    a player steers it: the HUD's notice banner shows unread notifications
+    (``/play/notices``), and ``create_notification`` pushes the inviter's
+    ``notices`` topic. An NPC inviter has the room line. After every lock;
+    never raises."""
+    from app.core.keyed_lock import _after_locks
+    inviter, execution_id = run["actor"], run["execution_id"]
+
+    def deliver():
+        try:
+            from app.models.account import is_player_controlled
+            if not is_player_controlled(inviter):
+                return
+            from app.core.i18n import t
+            from app.models.notifications import create_notification
+            create_notification(inviter, t(key, C.get_character_language(inviter)).format(**fmt),
+                                notification_type="prop_action", metadata={"execution_id": execution_id})
+        except Exception as e:
+            logger.debug("prop-action notice for %s failed: %s", inviter, e)
+
+    _after_locks(deliver)
+
+
 def _group_line(lines, run):
     from app.core.pose_catalog import get_catalog
     return lines.get((get_catalog("pose").get(_held_pose(run)) or {}).get("group"), "")
@@ -1251,10 +1350,19 @@ def _narrate_finish(run, before, status, reason, kept):
         _narrate(run, "{invitee} does not feel like {pose} with {inviter} right now.",
                  inviter=run["actor"], invitee=run["data"].get("declined_by") or _join(run["members"]))
     elif reason == "consent_expired":
+        # Who stayed silent, and who had agreed already (a group only: a
+        # pair's one "yes" starts the run). Not a refusal — the line says so.
         consents = run["data"].get("consents") or {}
         silent = [m for m in run["members"] if consents.get(m) != "yes"] or run["members"]
-        _narrate(run, "{invitee} does not respond to the invitation from {inviter}.",
-                 inviter=run["actor"], invitee=_join(silent))
+        agreed = [m for m in run["members"] if consents.get(m) == "yes"]
+        fmt = dict(inviter=run["actor"], silent=_join(silent))
+        if agreed:
+            key = "The invitation from {inviter} has expired — {silent} did not answer in time ({agreed} had agreed)."
+            fmt["agreed"] = _join(agreed)
+        else:
+            key = "The invitation from {inviter} has expired — {silent} did not answer in time."
+        _narrate(run, key, **fmt)
+        _tell_inviter(run, key, **fmt)
     elif before in ("active", "sleeping"):
         # A pair ends through end_interaction, which tells the room itself;
         # a seat kept for the actor's next place or follow pose is no getting up.
@@ -1436,7 +1544,7 @@ def _follow_up(run, follows):
                               target=dict(target), definition=definition,
                               data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
                                         last_game=now, last_motion=_motion_now(),
-                                        elapsed=0.0, consent_elapsed=0.0,
+                                        elapsed=0.0,
                                         follow_of=run["execution_id"],
                                         **({} if name in avatars else {"follow_limit_s": FOLLOW_NPC_LIMIT_S})))
                 result, _created = _admit(follow, fingerprint, replaces=(run["execution_id"],), direct=True)
@@ -2014,8 +2122,11 @@ def advance(now: GameTime) -> int:
                 continue
             data = run["data"]
             if run["status"] == "awaiting_consent":
-                data["consent_elapsed"] += delta
-                if data["consent_elapsed"] >= 300:
+                # The invitation waits on the motion clock (real seconds the
+                # world ran), never on game time: see CONSENT_WINDOW_S.
+                data["consent_wait_s"] = data.get("consent_wait_s", 0.0) + motion_delta
+                if data["consent_wait_s"] >= consent_window_s(run):
+                    data["expired_at_s"] = data["last_motion"]
                     _finish(run, "cancelled", "consent_expired")
                     continue
             elif run["status"] == "approaching":
@@ -2393,7 +2504,8 @@ def respond(actor: str, execution_id: str, accept: bool) -> dict:
     run = store.get(execution_id)
     replaces = ()
     if (accept is True and run and actor in run["members"] and run["status"] == "awaiting_consent"
-            and _last_consent(run, actor) and not is_world_frozen()):
+            and _last_consent(run, actor) and not is_world_frozen()
+            and not _consent_over(run)):   # an expired invitation ends nothing
         replaces = _replaced_runs(run["actor"], run["members"], run["target"], run["action_id"])
         if replaces and _validate(run, replaces=replaces):
             replaces = ()   # refused anyway: _respond says why, nothing ends
