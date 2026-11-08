@@ -152,11 +152,20 @@
       "fields": []
     },
     {
+      "id": "base_body",
+      "label": "Base body",
+      "label_de": "Basiskörper",
+      "column": 26,
+      "row": 0,
+      "special": "base_body",
+      "fields": []
+    },
+    {
       "id": "model_refs",
       "label": "Pose (image-to-3D input)",
       "label_de": "Pose (Bild→3D-Input)",
       "column": 26,
-      "row": 0,
+      "row": 1,
       "special": "model_refs",
       "fields": []
     },

@@ -24,6 +24,8 @@ import { StatsPanel } from './StatsPanel'
 import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
+import { FieldBaseBody } from './FieldBaseBody'
+import { BaseBodyOutfitStatus } from './BaseBodyOutfitStatus'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
 import { SecretsEditor } from './SecretsEditor'
@@ -135,7 +137,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
 ])
 
@@ -1113,7 +1115,16 @@ export function CharactersTab() {
                           savedSignal={savedSignal}
                         />
                       ),
-                      model_refs: <FieldModelRefs character={selected} kinds={['tpose']} />,
+                      // Base body (bald A-pose views + rigged base model) above
+                      // the pose tiles; on the pipeline the outfit model's
+                      // retexture status sits under them.
+                      base_body: <FieldBaseBody key={selected} character={selected} />,
+                      model_refs: (
+                        <>
+                          <FieldModelRefs character={selected} kinds={['tpose']} />
+                          <BaseBodyOutfitStatus key={selected} character={selected} />
+                        </>
+                      ),
                       model3d_gen: <FieldModel3D key={selected} character={selected} />,
                       model3d_animations: <Model3DAnimations character={selected} />,
                       model3d_extensions: <Model3DExtensions character={selected} />,
