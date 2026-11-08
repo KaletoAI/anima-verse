@@ -1392,6 +1392,22 @@
       ],
       "animation": "hover",
       "group": "stand"
+    },
+    "casting a spell": {
+      "prompt": "standing in a firm stance, both arms thrust forward with open palms, releasing a spell, focused gaze",
+      "synonyms": [
+        "zaubern",
+        "zaubert",
+        "einen zauber wirken",
+        "wirkt einen zauber",
+        "zauberspruch sprechen",
+        "casting a spell",
+        "casts a spell",
+        "spellcasting",
+        "using magic"
+      ],
+      "animation": "spell_casting",
+      "group": "stand"
     }
   }
 }

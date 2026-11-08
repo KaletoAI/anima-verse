@@ -1066,8 +1066,9 @@ def _held_pose(run):
 #
 # A FINALE is one participant's closing clip inside a running action: the
 # pose names it (catalog ``finale_animation``), a package decides WHEN
-# (``begin_finale``), the person plays it once and goes back to the action's
-# loop while the partner plays on untouched. It is an animation, so it runs
+# (``begin_finale``), the person plays it — ONE cycle, or ``loop_count``
+# cycles when the finale clip is a counted loop (sidecar ``loop_count``) —
+# and goes back to the action's loop while the partner plays on untouched. It is an animation, so it runs
 # on the SYSTEM clock like every clip (a frozen world still finishes it), and
 # it lives in this process only: lost on a restart, it was a second long.
 
@@ -1135,8 +1136,12 @@ def _solo_finale_clip(kind, name, profile):
 
 
 def _finale_duration_s(kind, role, name):
-    """The clip's own length in seconds — the half this person plays."""
-    from app.core.animation_clips import clip_entries, clip_meta
+    """``(seconds, cycles)`` of the finale the half this person plays: the
+    clip's own length times its cycles — the sidecar's ``loop_count`` when
+    the finale clip is a counted loop, else 1. A finale always ends, so a
+    looped finale clip WITHOUT a count plays one cycle, like a one-shot.
+    ``(0.0, 1)`` without a usable length."""
+    from app.core.animation_clips import clip_entries, clip_loop_count, clip_meta
     if role:
         entry = next((e for e in clip_entries() if e["kind"] == kind and e["role"] == role), None)
         meta = clip_meta(kind, entry["set"]) if entry else None
@@ -1146,8 +1151,11 @@ def _finale_duration_s(kind, role, name):
     try:
         duration = float((meta or {}).get("duration_s") or 0)
     except (TypeError, ValueError):
-        return 0.0
-    return duration if math.isfinite(duration) and duration > 0 else 0.0
+        return 0.0, 1
+    if not (math.isfinite(duration) and duration > 0):
+        return 0.0, 1
+    cycles = clip_loop_count(meta) or 1
+    return duration * cycles, cycles
 
 
 def begin_finale(execution_id: str, name: str) -> dict:
@@ -1174,7 +1182,7 @@ def begin_finale(execution_id: str, name: str) -> dict:
             return dict(ok=False, reason="no_finale")
         role = (next((r for r, member in run["data"].get("clip_roles", {}).items() if member == name), "")
                 if run["members"] else "")
-        duration = _finale_duration_s(kind, role, name)
+        duration, cycles = _finale_duration_s(kind, role, name)
         if duration <= 0:
             return dict(ok=False, reason="no_finale")
         # Playing an alt half: the finale closes in that alt when its clip
@@ -1191,7 +1199,8 @@ def begin_finale(execution_id: str, name: str) -> dict:
                 return dict(ok=False, reason="finale_playing")
             _finales[name] = dict(id=uuid.uuid4().hex[:12], execution_id=execution_id,
                                   kind=kind, role=role or None, alt=alt,
-                                  pose_key=pose, started=utc_now(), duration_s=duration)
+                                  pose_key=pose, started=utc_now(), duration_s=duration,
+                                  loop_count=cycles)
         _notify(run)
     _after_locks(lambda: emit("prop_action.finale_started", execution_id=execution_id,
                               name=name, kind=kind, pose_key=pose))
@@ -1205,11 +1214,12 @@ def _finale_live(finale) -> bool:
 
 def finale_for(name: str) -> dict | None:
     """The worldmap row's ``finale`` block of ``name`` (§ A8c):
-    ``{id, kind, role, alt, elapsed_s, duration_s}`` — the half (``role``
-    a..e, None for a solo clip; ``alt`` its alt half, ``""`` none) a client
-    plays ONCE per ``id``, then back to the action's own clip. Shown until
-    ``FINALE_SHOW_S`` past the clip's end, so a polling bystander sees it
-    too; ``elapsed_s`` in SYSTEM seconds."""
+    ``{id, kind, role, alt, elapsed_s, duration_s, loop_count}`` — the half
+    (``role`` a..e, None for a solo clip; ``alt`` its alt half, ``""`` none)
+    a client plays ONCE per ``id`` for ``loop_count`` cycles (1 = once),
+    then back to the action's own clip; ``duration_s`` is the WHOLE finale,
+    every cycle. Shown until ``FINALE_SHOW_S`` past its end, so a polling
+    bystander sees it too; ``elapsed_s`` in SYSTEM seconds."""
     with _finales_mutex:
         finale = _finales.get(name)
         if not _finale_live(finale):
@@ -1217,7 +1227,8 @@ def finale_for(name: str) -> dict | None:
         elapsed = (utc_now() - finale["started"]).total_seconds()
         return dict(id=finale["id"], kind=finale["kind"], role=finale["role"],
                     alt=finale.get("alt") or "",
-                    elapsed_s=round(max(0.0, elapsed), 3), duration_s=round(finale["duration_s"], 3))
+                    elapsed_s=round(max(0.0, elapsed), 3), duration_s=round(finale["duration_s"], 3),
+                    loop_count=int(finale.get("loop_count") or 1))
 
 
 def _emit_lifecycle(event, run, **extra):

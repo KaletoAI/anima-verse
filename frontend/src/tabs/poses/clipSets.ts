@@ -32,6 +32,8 @@ export interface ApiClipRow {
   fps?: number | null
   frames?: number | null
   loop?: boolean
+  /** cycles a looped clip plays before it holds its last frame; null = endless */
+  loop_count?: number | null
   /** Pair and group halves only: which gender plays which role
    *  (`{a: 'male', b: 'female'}` or reversed; a group names every role up to
    *  `e`); empty = not assigned, the initiator plays A. */

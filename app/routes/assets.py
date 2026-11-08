@@ -57,6 +57,7 @@ from app.core.animation_clips import (CLIP_EXTS, CLIP_ROLES, ClipExists,
                                       orient_clip, pair_kinds, rename_clip, role_counts,
                                       library_revision, save_transitions,
                                       set_clip_height_offsets, set_clip_loop,
+                                      set_clip_loop_count, valid_loop_count,
                                       set_clip_role_gender, validate_height_offsets)
 from app.core.movement import movement_pose_kinds
 from app.core.auth_dependency import require_admin
@@ -185,8 +186,8 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                                ) -> Dict[str, Any]:
     """Renames or moves a clip and/or edits its playback metadata.
 
-    Body ``{kind?, set?, library?, loop?, role_gender?, height_offsets_cm?,
-    overwrite?}``, at least one edit field. ``height_offsets_cm`` is a partial
+    Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
+    height_offsets_cm?, overwrite?}``, at least one edit field. ``height_offsets_cm`` is a partial
     map of ground/seat/lie to finite numbers from -50 to 50 cm; zero removes
     only that surface. Corrections are absolute for a 1.70 m figure, shared
     by pair halves and applied by the renderer, never baked into the clip.
@@ -197,7 +198,10 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     ``library: ""`` is a bad request, not a silent no-op. ``loop`` is the
     admin's "repeat this clip / hold its last frame" and is written into the
     ``<kind>.json`` beside the clip, so it holds for both halves of a pair and
-    every variant of the kind in that set. ``overwrite`` is the answer to the
+    every variant of the kind in that set. ``loop_count`` beside it is how
+    many cycles a looped clip plays before it holds its last frame — an
+    integer 1..99, ``null`` = endless (a 400 for anything else).
+    ``overwrite`` is the answer to the
     409 a taken name earns: the file at the target is replaced instead of the
     move being refused. The answer carries the touched clips in the shape of
     the listing.
@@ -209,10 +213,12 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in
-               ("kind", "set", "library", "loop", "role_gender", "height_offsets_cm")):
+               ("kind", "set", "library", "loop", "loop_count", "role_gender",
+                "height_offsets_cm")):
         raise HTTPException(
             status_code=400,
-            detail="one of kind, set, library, loop, role_gender, height_offsets_cm is required")
+            detail="one of kind, set, library, loop, loop_count, role_gender, "
+                   "height_offsets_cm is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -222,6 +228,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                             detail="library must be 'free' or 'licensed'")
     if "loop" in body and not isinstance(body["loop"], bool):
         raise HTTPException(status_code=400, detail="loop must be true or false")
+    if "loop_count" in body:
+        try:
+            valid_loop_count(body["loop_count"])
+        except ClipLibraryError as error:
+            raise HTTPException(status_code=400, detail=str(error))
     if "overwrite" in body and not isinstance(body["overwrite"], bool):
         raise HTTPException(status_code=400,
                             detail="overwrite must be true or false")
@@ -246,6 +257,8 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                 rel = str(clips[0].get("rel") or rel)
         if "loop" in body:
             clips = set_clip_loop(library, rel, bool(body["loop"]))
+        if "loop_count" in body:
+            clips = set_clip_loop_count(library, rel, body["loop_count"])
         if "role_gender" in body:
             clips = set_clip_role_gender(library, rel, body["role_gender"])
         if "height_offsets_cm" in body:

@@ -1,6 +1,7 @@
 import { facingYaw, easeNpcYaw } from '../game/npcWalk';
 import { createFocusQueue } from '../game/focusQueue';
 import { commitInListOrder } from '../game/clipCommit';
+import { clipLoopMode, validLoopCount } from '../game/clipLoop';
 import type { ClipResult } from '../game/clipCommit';
 import { withPhase, markPhase } from '../game/boot';
 import type { MotionPayload } from "../types";
@@ -65,6 +66,9 @@ export const BASE_FIGURE_HEIGHT_M = 1.70;
  *  listing without the field) LOOPS — a walk cycle must never stop
  *  mid-stride. */
 const clipLoopFlags = new WeakMap<THREE.AnimationClip, boolean>();
+/** The listing's `loop_count` per loaded clip file: cycles before the clip
+ *  holds its last frame. No entry = endless (`game/clipLoop.ts`). */
+const clipLoopCounts = new WeakMap<THREE.AnimationClip, number>();
 const clipHeightOffsets = new WeakMap<THREE.AnimationClip, ClipHeightOffsetsCm>();
 const clipShifts = new WeakMap<THREE.AnimationClip, ClipShiftCm>();
 
@@ -79,9 +83,13 @@ export function setClipHeightOffsets(clip: THREE.AnimationClip,
   if (offsets) clipHeightOffsets.set(clip, offsets);
 }
 
-/** Remembers the listing's flag for one loaded clip file. */
-function setClipLoop(clip: THREE.AnimationClip, loop: boolean | undefined): void {
+/** Remembers the listing's flag (and repeat count) for one loaded clip file. */
+function setClipLoop(clip: THREE.AnimationClip, loop: boolean | undefined,
+                     loopCount?: number | null): void {
   if (loop !== undefined) clipLoopFlags.set(clip, loop);
+  const count = validLoopCount(loopCount);
+  if (count !== null) clipLoopCounts.set(clip, count);
+  else clipLoopCounts.delete(clip);
 }
 
 /** Apply server-owned loop declarations to a model's exact embedded takes. */
@@ -102,6 +110,8 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
     const source = byName.get(c.name.toLowerCase());
     const flag = source && clipLoopFlags.get(source);
     if (flag !== undefined) clipLoopFlags.set(c, flag);
+    const count = source && clipLoopCounts.get(source);
+    if (count !== undefined) clipLoopCounts.set(c, count);
     const heights = source && clipHeightOffsets.get(source);
     if (heights) clipHeightOffsets.set(c, heights);
     const shift = source && clipShifts.get(source);
@@ -956,11 +966,11 @@ export class FigureLibrary {
       // So does the ROOT-MOTION flag: a file imported with `keep`/`foot_lock`
       // carries a travel in its hips track that the figure is to follow
       // (`Figure.update`); `strip` or no block plays in place as before.
-      const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
+      const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
-          url: c.url, loop: c.loop,
+          url: c.url, loop: c.loop, loopCount: c.loop_count,
           rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
           rootMotionMode: c.root_motion?.mode,
           heightOffsets: c.height_offsets_cm,
@@ -1016,7 +1026,7 @@ export class FigureLibrary {
       const committed = commitInListOrder(sources, results, {
         rename: (clip, kind) => { clip.name = kind; return clip; },
         setFlags: (clip, source) => {
-          setClipLoop(clip, source.loop);
+          setClipLoop(clip, source.loop, source.loopCount);
           setClipRootMotion(clip, source.rootMotion, source.rootMotionMode);
           setClipHeightOffsets(clip, source.heightOffsets);
           setClipShift(clip, source.shift);
@@ -1093,7 +1103,7 @@ export class FigureLibrary {
             clip = await this.parseReloadClip(await res.arrayBuffer(), source.url) ?? undefined;
             if (clip) {
               clip.name = kind;
-              setClipLoop(clip, source.loop);
+              setClipLoop(clip, source.loop, source.loop_count);
               setClipRootMotion(clip, !!source.root_motion && source.root_motion.mode !== 'strip', source.root_motion?.mode);
               setClipHeightOffsets(clip, source.height_offsets_cm);
               setClipShift(clip, source.orientation?.shift_cm);
@@ -1605,7 +1615,7 @@ export class FigureLibrary {
           c.name = kind;
           // The set chain has just decided WHICH file this character plays
           // for this kind — its flag is the one that counts from here on.
-          setClipLoop(c, clipLoopFlags.get(clip));
+          setClipLoop(c, clipLoopFlags.get(clip), clipLoopCounts.get(clip));
           setClipRootMotion(c, clipRootMotionFlags.get(clip), clipKeepsFacing(clip) ? 'keep' : undefined);
           const heights = clipHeightOffsets.get(clip);
           if (heights) clipHeightOffsets.set(c, heights);
@@ -2339,10 +2349,11 @@ export class Figure {
     // Loop or last frame (E5): the flag of the CLIP that actually plays —
     // this figure's set decided which file that is, and a stand-in serves its
     // own motion, so it decides its own end. `clampWhenFinished` is what
-    // makes "no loop" a held pose instead of a snap back to frame 0.
-    const loop = clipLoops(resolved.getClip());
-    resolved.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-    resolved.clampWhenFinished = !loop;
+    // makes "no loop" a held pose instead of a snap back to frame 0 — and
+    // what holds a counted loop (`loop_count`) after its last cycle.
+    const mode = clipLoopMode(clipLoops(resolved.getClip()), clipLoopCounts.get(resolved.getClip()));
+    resolved.setLoop(mode.repeat ? THREE.LoopRepeat : THREE.LoopOnce, mode.repetitions);
+    resolved.clampWhenFinished = mode.clamp;
     warnTurnWithoutRoot(resolved.getClip());
     resolved.reset().fadeIn(0.25).play();
     this.current?.fadeOut(0.25);
@@ -2750,6 +2761,14 @@ export class Figure {
       this.currentKind = clipName;
       this.root.userData.clipKind = clipName;
       this.root.userData.clipBound = true;
+    } else if ((action.loop === THREE.LoopRepeat) !== loop) {
+      // The same half changes its mode: a counted loop entering its LAST
+      // cycle (`pairClipPhase`'s `cycling`) or a finale's last cycle
+      // (`stepFinale`'s `loop`) stops repeating and holds its end.
+      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      action.clampWhenFinished = !loop;
+      action.paused = false;
+      action.time = want;
     } else {
       // drift: a cycle's time wraps at the clip end, so its distance is
       // measured on the circle; a one-shot's is the plain difference.

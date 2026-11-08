@@ -25,7 +25,7 @@ EXPECTATIONS, DERIVED BY HAND
 [2] PAIR FINALE. Both active, `begin_finale(run, partner)` -> ok. The
     partner's block at t0 + 0.4 s is
         {id <12 hex>, kind run-pair-end, role <its clip role>, alt "" (no alt half),
-        elapsed_s 0.4, duration_s 1.5}
+        elapsed_s 0.4, duration_s 1.5, loop_count 1} (a one-shot plays once)
     and the actor has none (the partner alone closes, the actor plays on).
     A second begin for the partner -> `finale_playing`; an outsider ->
     `not_participant`. `prop_action.finale_started` fired once, with the pose
@@ -59,7 +59,7 @@ EXPECTATIONS, DERIVED BY HAND
 [6] THE RUN ENDS -> the finale ends. Cancelling the run while the partner's
     finale plays drops it at once and fires `finale_done`.
 [7] SOLO. The pose action on `sitting` (finale `run-end`): `begin_finale`
-    -> ok, block {kind run-end, role None, alt "", duration_s 0.8}; the offer of the
+    -> ok, block {kind run-end, role None, alt "", duration_s 0.8, loop_count 1}; the offer of the
     action carries `finale` true, and false once the pose names no finale.
 [8] AUTOMATIC. Without the catalog field a provider `pose.finale_animation`
     answering "<animation>-end" (asked with participants 2) makes `run-pair`
@@ -67,6 +67,13 @@ EXPECTATIONS, DERIVED BY HAND
     with `sit-end` (no such clip: ""). An explicit field wins over the
     provider; a provider answering a solo kind for the pair pose gives "".
     Without a provider: "".
+[12] COUNTED FINALE (sidecar `loop_count`). The pair finale `run-pair-end`
+    rewritten as `loop: true, loop_count: 3` (1.5 s a cycle): the block says
+    duration_s 1.5 · 3 = 4.5 and loop_count 3; it is still shown at
+    t0 + 4.5 + 4.0 − 0.1 = 8.4 and gone at 8.5. The same clip `loop: true`
+    WITHOUT a count (an endless loop) closes after ONE cycle — a finale
+    always ends: duration_s 1.5, loop_count 1. `loop: false` with a stored
+    `loop_count: 3` is a one-shot: 1.5 / 1 (the count belongs to a loop).
 """
 import json
 import sys
@@ -165,7 +172,8 @@ class Finale(RUNS.Runs):
             block = A.finale_for(partner)
             first = block.pop("id")
             self.assertRegex(first, r"^[0-9a-f]{12}$")
-            self.assertEqual(block, dict(kind="run-pair-end", role=role, alt="", elapsed_s=0.4, duration_s=1.5))
+            self.assertEqual(block, dict(kind="run-pair-end", role=role, alt="", elapsed_s=0.4, duration_s=1.5,
+                                         loop_count=1))
             self.assertIsNone(A.finale_for(name))
         started = events("prop_action.finale_started")
         self.assertEqual(len(started), 1)
@@ -183,6 +191,31 @@ class Finale(RUNS.Runs):
             self.assertNotEqual(A.finale_for(partner)["id"], first)
         with clock(12):
             RUNS.tick(1)
+
+    def test_12_counted_finale(self):
+        name, partner, run = active_pair()
+        eid = run["execution_id"]
+        sidecar = F.ROOT / "clips" / "run-pair-end.json"
+        cases = [(dict(loop=True, loop_count=3), 4.5, 3),
+                 (dict(loop=True), 1.5, 1),
+                 (dict(loop=False, loop_count=3), 1.5, 1)]
+        try:
+            for i, (flags, duration, cycles) in enumerate(cases):
+                sidecar.write_text(json.dumps(dict(kind="run-pair-end", pair=True, duration_s=1.5, **flags)))
+                clips._clear_entries_cache()
+                base = 100.0 * (i + 1)
+                with clock(base):
+                    self.assertTrue(A.begin_finale(eid, partner)["ok"], flags)
+                with clock(base + 0.1):
+                    block = A.finale_for(partner)
+                    self.assertEqual((block["duration_s"], block["loop_count"]), (duration, cycles), flags)
+                with clock(base + duration + 4.0 - 0.1):
+                    self.assertIsNotNone(A.finale_for(partner), flags)
+                with clock(base + duration + 4.0):
+                    self.assertIsNone(A.finale_for(partner), flags)
+                    RUNS.tick(1)
+        finally:
+            finale_clips()
 
     def test_4_beat(self):
         name, partner, run = active_pair()
@@ -257,7 +290,8 @@ class Finale(RUNS.Runs):
         with clock(0.2):
             block = A.finale_for(name)
             block.pop("id")
-            self.assertEqual(block, dict(kind="run-end", role=None, alt="", elapsed_s=0.2, duration_s=0.8))
+            self.assertEqual(block, dict(kind="run-end", role=None, alt="", elapsed_s=0.2, duration_s=0.8,
+                                         loop_count=1))
         A.cancel(name, result["execution_id"])
         set_finale("sitting", "")
         P._offers_cache.clear()

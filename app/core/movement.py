@@ -68,6 +68,22 @@ def clip_file_for(kind: str, chain: List[str], *,
     return None
 
 
+def pose_clip_play_s(name: str, pose_key: str, profile: Optional[Dict[str, Any]] = None
+                     ) -> Optional[float]:
+    """How long ``name``'s figure plays the clip of ``pose_key`` before it
+    holds the last frame (``animation_clips.clip_play_s`` of the file its
+    set chain resolves to): a one-shot's length, a counted loop's
+    ``duration_s × loop_count``. None for an endless loop, a pose without a
+    clip and a clip without a length."""
+    from app.core.animation_clips import clip_meta, clip_play_s
+    from app.core.animation_sets import resolve_sets
+    kind = played_pose_kind(pose_key) if pose_key else ""
+    if not kind:
+        return None
+    found = clip_file_for(kind, resolve_sets(name, profile), free_only=False)
+    return clip_play_s(clip_meta(kind, found["set"])) if found else None
+
+
 def character_animations(name: str, pose: str = "") -> Dict[str, Any]:
     """Resolve played and public situation clips along a character's set chain."""
     from app.core.animation_sets import resolve_sets

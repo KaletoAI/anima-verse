@@ -36,7 +36,7 @@
  * The import's own dial is gone by then and most mocap sources with it, so
  * this is the only way a clip that lies across the bed gets straightened.
  *
- *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
+ *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, loop_count?, overwrite?}
  *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
@@ -137,6 +137,51 @@ function GroupGenders({ roles, value, disabled, onApply, t }: {
           onClick={() => onApply(null)}>{t('Clear')}</button>
       ) : null}
     </div>
+  )
+}
+
+/** The repeat count of a looped clip: how many cycles before it holds its
+ *  last frame. Empty = endless; a whole number 1..99 otherwise. Saved on
+ *  blur or Enter, never per keystroke; a value the server would refuse is
+ *  not sent. */
+function LoopCountField({ value, disabled, onApply, t }: {
+  value: number | null | undefined
+  disabled: boolean
+  onApply: (v: number | null) => void
+  t: (s: string) => string
+}) {
+  const saved = value == null ? '' : String(value)
+  const [draft, setDraft] = useState(saved)
+  useEffect(() => { setDraft(saved) }, [saved])
+  const text = draft.trim()
+  const parsed = text === '' ? null : Number(text)
+  const valid = parsed === null || (Number.isInteger(parsed) && parsed >= 1 && parsed <= 99)
+  const commit = () => {
+    if (!valid || text === saved) return
+    onApply(parsed)
+  }
+  return (
+    <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, marginLeft: 22 }}
+      title={t('How many times the clip plays before it holds its last frame — for every variant of the kind in this set.')}>
+      <span>{t('Repeats')}</span>
+      <input
+        type="number"
+        className="ga-input"
+        style={{ width: 70 }}
+        min={1}
+        max={99}
+        step={1}
+        value={draft}
+        placeholder="∞"
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
+      />
+      <span className="ga-form-hint" style={valid ? undefined : { color: 'var(--danger, #f85149)' }}>
+        {valid ? t('empty = endless') : t('a whole number from 1 to 99, or empty')}
+      </span>
+    </label>
   )
 }
 
@@ -623,6 +668,11 @@ export function ClipLibrary({
           <span>{t('Loop')}</span>
           <span className="ga-form-hint">{t('Repeat the clip; off = hold the last frame')}</span>
         </label>
+        {clip.loop ? (
+          <LoopCountField value={clip.loop_count} t={t}
+            disabled={busy || clip.has_sidecar === false}
+            onApply={(v) => run(clip, { loop_count: v })} />
+        ) : null}
         {clip.root_motion ? (
           <div className="ga-form-hint" style={{ marginTop: 2 }}>
             {t('Root motion')}: {rootMotionSummary(clip.root_motion, t)}

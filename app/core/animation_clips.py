@@ -1078,6 +1078,54 @@ def clip_loops(meta: Optional[Dict[str, Any]]) -> bool:
     return bool(isinstance(geometry, dict) and geometry.get("loop"))
 
 
+#: The largest repeat count a looped clip may carry (``loop_count``).
+LOOP_COUNT_MAX = 99
+
+
+def valid_loop_count(raw: Any) -> Optional[int]:
+    """``raw`` as a repeat count — an integer 1..``LOOP_COUNT_MAX`` — or None
+    (``None`` itself = endless). Anything else raises ``ClipLibraryError``:
+    a bool, a float, a string, 0, 100."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ClipLibraryError("loop_count must be a whole number or null")
+    if not 1 <= raw <= LOOP_COUNT_MAX:
+        raise ClipLibraryError(f"loop_count must lie between 1 and {LOOP_COUNT_MAX}")
+    return raw
+
+
+def clip_loop_count(meta: Optional[Dict[str, Any]]) -> Optional[int]:
+    """How many cycles a LOOPED clip plays before it holds its last frame:
+    the sidecar's ``loop_count`` (1..``LOOP_COUNT_MAX``), None = endless.
+
+    Only a clip that loops (:func:`clip_loops`) has a count — a one-shot
+    plays once whatever its sidecar says, and a stored count that is not a
+    valid one counts as none (endless), never as a guess."""
+    if not clip_loops(meta):
+        return None
+    try:
+        return valid_loop_count((meta or {}).get("loop_count"))
+    except ClipLibraryError:
+        return None
+
+
+def clip_play_s(meta: Optional[Dict[str, Any]]) -> Optional[float]:
+    """How long the clip plays before it holds its last frame, in seconds:
+    its ``duration_s`` for a one-shot, ``duration_s × loop_count`` for a
+    counted loop, None for an endless loop or a sidecar without a length."""
+    try:
+        duration = float((meta or {}).get("duration_s") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(duration) and duration > 0):
+        return None
+    if not clip_loops(meta):
+        return duration
+    count = clip_loop_count(meta)
+    return duration * count if count else None
+
+
 #: The genders a role can be assigned to — the two the profile field
 #: ``gender`` names unambiguously (the same pair ``animation_sets`` derives).
 ROLE_GENDERS = ("male", "female")
@@ -1260,6 +1308,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
         "loop": clip_loops(meta),
+        # How many cycles a looped clip plays before it holds its last frame;
+        # None = endless (and always None for a one-shot).
+        "loop_count": clip_loop_count(meta),
         "height_offsets_cm": clip_height_offsets(_height_meta(
             path, entry["kind"], library_root(entry["source"]).resolve(),
             pair=bool(entry["role"]))),
@@ -1628,6 +1679,40 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     return [_view_of(dest, new_set, new_library) for _s, dest in moves]
 
 
+def _write_kind_flag(library: str, rel: str, what: str, mutate) -> List[Dict[str, Any]]:
+    """Applies ``mutate(data)`` to the shared ``<kind>.json`` of the clip at
+    ``rel`` and to every variant's OWN sidecar of that kind in that set —
+    the playback flags belong to the KIND in its set, not to a single file.
+    ``what`` names the flag in the error. Returns the touched clips as
+    listing views."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, _role = parse_clip_role(path.name)
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(
+            f"'{kind}' has no sidecar {sidecar.name} — the {what} is stored "
+            "there, so the clip has to be (re-)imported first")
+    files = _kind_files(path.parent, kind)
+    targets = [sidecar] + [s for s in (_own_sidecar(p) for p in files)
+                           if s is not None]
+    for target in targets:
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ClipLibraryError(f"{target.name} is not readable: {e}")
+        if not isinstance(data, dict):
+            raise ClipLibraryError(f"{target.name} is not an object")
+        mutate(data)
+        target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")
+    reload_clip_caches()
+    return [_view_of(p, cset, library) for p in files]
+
+
 @_library_writer
 def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
     """Writes the LOOP flag of a clip — the admin's decision after the import
@@ -1643,34 +1728,33 @@ def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
     were never written cannot be given a flag (``ClipLibraryError``). Returns
     the touched clips as listing views.
     """
-    path = resolve_clip(library, rel)
-    if not path.is_file():
-        raise ClipNotFound(f"{rel} does not exist in the {library} library")
-    kind, _role = parse_clip_role(path.name)
-    root = library_root(library).resolve()
-    cset = path.parent.name if path.parent.resolve() != root else ""
-    sidecar = path.parent / f"{kind}.json"
-    if not sidecar.is_file():
-        raise ClipLibraryError(
-            f"'{kind}' has no sidecar {sidecar.name} — the loop flag is stored "
-            "there, so the clip has to be (re-)imported first")
-    files = _kind_files(path.parent, kind)
-    targets = [sidecar] + [s for s in (_own_sidecar(p) for p in files)
-                           if s is not None]
-    for target in targets:
-        try:
-            data = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            raise ClipLibraryError(f"{target.name} is not readable: {e}")
-        if not isinstance(data, dict):
-            raise ClipLibraryError(f"{target.name} is not an object")
-        data["loop"] = bool(loop)
-        target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                          encoding="utf-8")
-    reload_clip_caches()
-    logger.info("clip loop flag: %s%s (%s) -> %s", f"{cset}/" if cset else "",
-                kind, library, bool(loop))
-    return [_view_of(p, cset, library) for p in files]
+    views = _write_kind_flag(library, rel, "loop flag",
+                             lambda data: data.__setitem__("loop", bool(loop)))
+    logger.info("clip loop flag: %s (%s) -> %s", rel, library, bool(loop))
+    return views
+
+
+@_library_writer
+def set_clip_loop_count(library: str, rel: str, loop_count: Any) -> List[Dict[str, Any]]:
+    """Writes how many cycles a LOOPED clip plays before it holds its last
+    frame (``loop_count``, 1..``LOOP_COUNT_MAX``); ``None`` removes the
+    count — the loop is endless again. Same place and reach as the loop flag
+    (:func:`set_clip_loop`): the shared ``<kind>.json`` and every variant's
+    own sidecar. A count on a clip without loop is stored but has no effect
+    (:func:`clip_loop_count`) — it comes back with the loop switch.
+    ``ClipLibraryError`` for anything but an integer in range or None."""
+    count = valid_loop_count(loop_count)
+
+    def mutate(data: Dict[str, Any]) -> None:
+        if count is None:
+            data.pop("loop_count", None)
+        else:
+            data["loop_count"] = count
+
+    views = _write_kind_flag(library, rel, "repeat count", mutate)
+    logger.info("clip loop count: %s (%s) -> %s", rel, library,
+                count if count is not None else "endless")
+    return views
 
 
 @_library_writer

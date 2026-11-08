@@ -264,6 +264,8 @@ export interface PairPlay {
   /** the clip's own length — a looping clip replays every clipDuration */
   clipDuration: number;
   loop: boolean;
+  /** cycles of the loop before it holds its last frame; null = endless */
+  loopCount: number | null;
   /** game seconds per real second (0 = frozen) */
   rate: number;
   stamp: number;
@@ -1351,6 +1353,7 @@ export class NpcManager {
       const rate = it.rate ?? 0;
       const clipDuration = it.clip_duration_s ?? 0;
       const loop = !!it.loop;
+      const loopCount = loop && typeof it.loop_count === 'number' ? it.loop_count : null;
       const newId = npc.interaction?.id !== it.id;
       // The blend starts where the figure is SHOWN: a figure handing over its
       // prop entry (ended by this very poll, `adoptPropEntry` below) is on
@@ -1363,8 +1366,8 @@ export class NpcManager {
         blend, id: it.id, clip, base,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, rate, stamp,
-        clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, clipDurationS: clipDuration }).clipT,
-        clipDuration, loop,
+        clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, loopCount, clipDurationS: clipDuration }).clipT,
+        clipDuration, loop, loopCount,
       };
       if (newId) this.pairPreviews.delete(npc.name);
       npc.route = null;
@@ -1379,7 +1382,7 @@ export class NpcManager {
     if (cur.stamp !== stamp) {
       if (Math.abs(cur.elapsed - it.elapsed_s) > PAIR_SNAP_S) cur.elapsed = it.elapsed_s;
       cur.clipT = pairClipPhase({
-        elapsedGameS: it.elapsed_s, rate: cur.rate, loop: cur.loop,
+        elapsedGameS: it.elapsed_s, rate: cur.rate, loop: cur.loop, loopCount: cur.loopCount,
         clipDurationS: cur.clipDuration, localClipT: cur.clipT,
       }).clipT;
       cur.stamp = stamp;
@@ -1403,8 +1406,10 @@ export class NpcManager {
     // the CLIP clock: the frame's real seconds, unscaled — a frozen world
     // (rate 0) adds nothing and the clip stands where it is.
     if (it.rate > 0) it.clipT += dt;
-    const { phase: loopPhase } = pairClipPhase({
-      elapsedGameS: null, rate: it.rate, loop: it.loop,
+    // A counted loop repeats its first N−1 cycles and holds the end of the
+    // last one (`cycling` false from then on) — that is the mode `playPair` sets.
+    const { phase: loopPhase, cycling } = pairClipPhase({
+      elapsedGameS: null, rate: it.rate, loop: it.loop, loopCount: it.loopCount,
       clipDurationS: it.clipDuration, localClipT: it.clipT,
     });
     // An ALT half (G6) this rig lacks plays as the role's own half — the
@@ -1413,11 +1418,12 @@ export class NpcManager {
       !!this.figures!.pairRootAt(name, t) && npc.figure!.hasClip(name);
     let clip = it.base && it.clip !== it.base && !usable(it.clip, loopPhase) ? it.base : it.clip;
     // This person's finale (§ A8c): its own half of the closing pair at the
-    // same anchor, once; the loop phase above keeps counting under it. A half
+    // same anchor, its `loop_count` cycles (repeating until the last one,
+    // which holds); the loop phase above keeps counting under it. A half
     // this rig lacks drops the finale, never the action; a missing alt half
     // falls back to the role's own.
     let phase = loopPhase;
-    let loop = it.loop;
+    let loop = cycling;
     if (npc.finale?.role) {
       const step = stepFinale(npc.finale, dt, it.rate <= 0);
       npc.finale = step.play;
@@ -1426,7 +1432,7 @@ export class NpcManager {
       if (closing) {
         clip = closing;
         phase = step.t;
-        loop = false;
+        loop = step.loop;
       } else {
         npc.finale = null;
       }
@@ -1685,7 +1691,7 @@ export class NpcManager {
       if (!paired && sample.phase === 'arrived' && !motion.cancel && npc.figure) {
         const step = npc.finale && !npc.finale.role ? stepFinale(npc.finale, dt, false) : null;
         if (step) npc.finale = step.play;
-        if (step?.clip && npc.figure.hasClip(step.clip) && npc.figure.playPair(step.clip, step.t, false, false)) {
+        if (step?.clip && npc.figure.hasClip(step.clip) && npc.figure.playPair(step.clip, step.t, false, step.loop)) {
           motion.finaleOn = true;
         } else {
           if (step) npc.finale = null;

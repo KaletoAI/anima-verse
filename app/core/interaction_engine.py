@@ -18,6 +18,7 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
         "started_at_sys": "2026-10-30T20:00:00.000000+00:00",  # SYSTEM stamp, ordering only
         "clip_duration_s": 2.533,     # the clip's own length, from the sidecar
         "loop": True,                 # repeat the clip, or hold its last frame
+        "loop_count": 3,              # cycles of a loop before it holds; None = endless
         "alt": "wave",                # optional: this one plays the ALT half
                                       # <kind>__<role>~<alt> (``set_alt``)
     }
@@ -290,6 +291,9 @@ def payload_for(character_name: str, profile: Dict[str, Any],
         # replayed (phase mod clip length), a one-shot holds its last frame
         "clip_duration_s": float(inter.get("clip_duration_s") or 0.0),
         "loop": bool(inter.get("loop")),
+        # how many cycles the loop plays before it holds its last frame;
+        # None = endless (always None for a one-shot)
+        "loop_count": inter.get("loop_count") if inter.get("loop") else None,
         "rate": round(float(rate or 0.0), 4),
         # the ALT half this one plays instead of its role's own ("" = none):
         # the clip is <kind>__<role>~<alt>, same anchor, same phase (§ A8a)
@@ -686,7 +690,7 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
     profile through ``commit_profiles`` under the sorted profile locks.
     """
     from app.core import places, prop_action_store as runs
-    from app.core.animation_clips import clip_loops, clip_meta
+    from app.core.animation_clips import clip_loop_count, clip_loops, clip_meta
     from app.core.pose_catalog import pose_places
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
@@ -710,6 +714,7 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
     if clip_duration <= 0:
         raise ValueError(f"pair clip '{kind}' has no sidecar duration")
     loop = clip_loops(meta)
+    loop_count = clip_loop_count(meta)
     # The pose-independent side of "can they pair up"; the run asked its
     # furniture presence rule itself, so no pose goes to the packages here.
     for other in names[1:]:
@@ -766,6 +771,7 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
                 "pose_key": pose_key, "anchor": anchor,
                 "started_at_game": started, "started_at_sys": started_sys,
                 "clip_duration_s": round(clip_duration, 3), "loop": loop,
+                "loop_count": loop_count,
                 "execution_ref": execution_id, "execution_kind": "prop_action",
             }
             runtime[name] = dict(interaction=interaction,
@@ -800,7 +806,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     within ``_STEP_IN_M`` of its first-frame point, else ``TooFarApart`` sends
     it over. ``arrived`` (the approach just ended) binds without that check:
     the walker steps the last bit in."""
-    from app.core.animation_clips import clip_loops, clip_meta, clip_role_gender
+    from app.core.animation_clips import (clip_loop_count, clip_loops, clip_meta,
+                                          clip_role_gender)
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
                                       get_character_pos, get_character_profile,
@@ -820,6 +827,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # the scene lasts, a one-shot holds its last frame. How long the SCENE
     # lasts is not a number here — a signal ends it (E4).
     loop = clip_loops(meta)
+    loop_count = clip_loop_count(meta)
 
     # The pose-independent side of "can these two pair up" — one definition,
     # asked here and by the invitation. Checked AFTER the clip: a pose with no
@@ -889,6 +897,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
                 "pose_key": pose_key, "anchor": anchor,
                 "started_at_game": started, "started_at_sys": started_sys,
                 "clip_duration_s": round(clip_duration, 3), "loop": loop,
+                "loop_count": loop_count,
             }
             if invite_id:
                 prof["interaction"]["invite_id"] = invite_id

@@ -383,6 +383,8 @@ export interface MapInteraction {
    *  it the clip holds its last frame */
   clip_duration_s?: number;
   loop?: boolean;
+  /** cycles a loop plays before it holds its last frame; null/missing = endless */
+  loop_count?: number | null;
   /** GAME seconds per REAL second right now (0 = frozen world) */
   rate: number;
   /** the ALT half this figure plays instead of its role's own (G6): the clip

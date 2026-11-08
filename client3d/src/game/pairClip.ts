@@ -32,6 +32,9 @@ export interface PairClipInput {
   rate: number;
   /** does the clip repeat, or does it hold its last frame? */
   loop: boolean;
+  /** how many cycles a loop plays before it holds its last frame;
+   *  null/missing = endless. Ignored without `loop`. */
+  loopCount?: number | null;
   /** the clip's own length in seconds (0/unknown = no wrap, no clamp) */
   clipDurationS: number;
   /** the clip clock this figure carries, in REAL seconds. `undefined` adopts
@@ -48,6 +51,11 @@ export interface PairClipTime {
   /** the time to seek the clip half to: wrapped for a cycle, clamped for a
    *  one-shot */
   phase: number;
+  /** does the mixer repeat the clip right now? An endless loop always; a
+   *  counted loop (`loopCount` N) in its first N−1 cycles — the last one
+   *  plays as a one-shot and holds, so the mixer never wraps to frame 0
+   *  past the count; a one-shot never. */
+  cycling: boolean;
 }
 
 /** Where in the clip a pair half stands right now, and the clock it carries
@@ -67,12 +75,19 @@ export function pairClipPhase(input: PairClipInput): PairClipTime {
   else if (serverT !== null && Math.abs(local - serverT) > snapS) clipT = serverT;
   else clipT = local;
   clipT = Math.max(0, clipT);
-  return { clipT, phase: clipPhaseAt(clipT, loop, clipDurationS) };
+  return { clipT, ...clipPhaseAt(clipT, loop, clipDurationS, input.loopCount) };
 }
 
 /** The clip clock mapped onto the clip: a cycle replays, a one-shot holds its
+ *  last frame, a counted loop replays `loopCount` times and then holds its
  *  last frame. Without a length there is nothing to wrap in. */
-function clipPhaseAt(clipT: number, loop: boolean, clipDurationS: number): number {
-  if (!(clipDurationS > 0)) return clipT;
-  return loop ? clipT % clipDurationS : Math.min(clipT, clipDurationS);
+function clipPhaseAt(clipT: number, loop: boolean, clipDurationS: number,
+  loopCount: number | null | undefined): { phase: number; cycling: boolean } {
+  if (!(clipDurationS > 0)) return { phase: clipT, cycling: loop };
+  if (!loop) return { phase: Math.min(clipT, clipDurationS), cycling: false };
+  const count = typeof loopCount === 'number' && Number.isInteger(loopCount) && loopCount >= 1
+    ? loopCount : null;
+  if (count === null) return { phase: clipT % clipDurationS, cycling: true };
+  if (clipT >= count * clipDurationS) return { phase: clipDurationS, cycling: false };
+  return { phase: clipT % clipDurationS, cycling: clipT < (count - 1) * clipDurationS };
 }

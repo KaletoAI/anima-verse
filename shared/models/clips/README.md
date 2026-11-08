@@ -6,7 +6,7 @@ Skeletal animation clips for the 3D character models, shared across ALL worlds
     GET    /assets/animation-clips                          the listing (public)
     GET    /assets/animation-clips/[licensed/][<set>/]<file> one clip (public)
     GET    /assets/animation-rig                            ../rig/reference.fbx
-    PATCH  /assets/animation-clips/<library>/<rel>          rename/move/loop/roles
+    PATCH  /assets/animation-clips/<library>/<rel>          rename/move/loop/loop_count/roles
     POST   /assets/animation-clips/<library>/<rel>/orient   turn + lift the FILE
     DELETE /assets/animation-clips/<library>/<rel>          both halves of a pair
 
@@ -49,6 +49,7 @@ Written by the importer, edited by the Poses tab. What a renderer reads:
 | `kind`, `pair`, `roles` | the kind, whether it is a pair and which role letters exist |
 | `fps`, `source_fps`, `frames`, `duration_s` | timing; `speed` is `1.0` for everything converted since the capture rate reached Blender |
 | `loop` | `true` = repeat, `false` = hold the last frame (Three.js `LoopOnce` + `clampWhenFinished`). Measured on import, overridden by the admin's switch in the Poses tab; it holds for both halves of a pair and for every numbered take of that kind in that set. A kind with NO listing entry counts as looping — locomotion must never stand still |
+| `loop_count` | only with `loop: true`: how many cycles the clip plays before it holds its last frame — a whole number 1..99; absent = endless. Set beside the loop switch in the Poses tab ("Repeats"), same reach as `loop`. A finale clip (§ A8c) plays its count, a looped finale without one plays once |
 | `height_offsets_cm` | independent absolute height corrections for `ground`, `seat` and `lie`, in centimetres of the 1.70 m reference figure; missing/zero = no correction. Applied at playback from the actual selected clip/set, never baked into the FBX |
 | `geometry` | what the conversion measured: `floor_shift_cm`, the `root_motion` block of a solo clip (`mode` strip/keep/foot_lock, `travel_m` = `[x, z]` where the clip ends up in the clip frame — +Z forward, +X the figure's left, metres of the reference rig —, `ref_height_m` = the reference rig's standing height, `contact_s` = the full-contact spans `[[start, end], …]` in seconds, `max_drift_cm` = the worst planted-foot slide foot_lock left), `foot_plant` of a solo clip = the feet the import put onto the rig's floor, `{"<Foot>": {"frames", "max_cm", "pin_max_cm"}}` (`LeftFoot`/`RightFoot`, only a foot it actually moved; `frames` = frames with a correction, `max_cm` = the largest vertical one, `pin_max_cm` = the largest horizontal pin, foot_lock only), the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
 | `source` | where it came from: the CMU take plus its credit, or the file, take and `bone_map` of an inbox import |

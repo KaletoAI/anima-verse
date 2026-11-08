@@ -1,5 +1,5 @@
 export interface ClipSource {
-  kind: string; set: string; url: string; loop?: boolean; rootMotion?: boolean;
+  kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null; rootMotion?: boolean;
   rootMotionMode?: string;
   heightOffsets?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
   shift?: readonly [number, number] | null;

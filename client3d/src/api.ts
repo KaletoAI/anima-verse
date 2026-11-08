@@ -598,6 +598,9 @@ export interface ApiClip {
   /** repeat the clip, or hold its last frame? The admin's flag per kind and
    *  set (§ A8); missing = the listing predates it, which counts as a loop. */
   loop?: boolean;
+  /** how many cycles a looped clip plays before it holds its last frame;
+   *  null/missing = endless (§ A8, the sidecar's `loop_count`) */
+  loop_count?: number | null;
   height_offsets_cm?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
   orientation?: { shift_cm?: [number, number] | null };
   /** How the import treated the root's travel (the sidecar's

@@ -2471,6 +2471,22 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   dort gesetztes `loop` schlägt die `geometry.loop`-Messung des Imports. Es
   gilt für Solo- UND Paar-Clips. Ein Kind OHNE Eintrag in der Auflistung gilt
   im Client als Loop — Locomotion darf nie stehen bleiben.
+- **Wiederholungen eines Loops** (2026-11-09): Neben `loop` trägt jeder Clip
+  der Auflistung `loop_count` — wie oft ein Loop-Clip läuft, bevor er sein
+  letztes Bild hält: eine ganze Zahl 1..99, `null` = endlos (fehlt das Feld im
+  Sidecar, ist der Loop endlos). Bei `loop: false` ist es immer `null` — ein
+  Einmal-Clip läuft einmal. Gesetzt im Poses-Tab neben dem Loop-Schalter
+  („Repeats“, `PATCH … {loop_count}`, 400 für alles außer 1..99/`null`),
+  geschrieben ins selbe Sidecar wie `loop` und mit derselben Reichweite (Kind
+  im Set, beide Hälften, jede Variante). Der Client spielt einen gezählten Loop
+  als Three.js `LoopRepeat` mit `repetitions = loop_count` und
+  `clampWhenFinished` (`client3d/src/game/clipLoop.ts`); was DANACH kommt,
+  entscheidet der Kontext: eine Pose bleibt stehen (letztes Bild), ein
+  Abschluss (§ A8c) gibt an den Clip der Aktion zurück, der Zauber-Pose nimmt
+  der Server sie nach `duration_s × loop_count` wieder ab
+  (`spell_engine.end_cast_pose_after_clip`, Systemzeit, nur im Prozess).
+  Prüfung: `scripts/smoke_clip_loop_count.py`,
+  `client3d/scripts/smoke_clip_loop_count.mjs`.
 - **Übergangsclips mit Weg** (2026-09-25, plan-bruecken-root-motion): Der
   Import legt je Solo-Clip fest, was mit dem waagerechten Weg der Wurzel
   geschieht — `root_motion` = `strip` (Default, Hüfte bleibt am Ursprung),
@@ -2811,8 +2827,8 @@ Bild (s. u.).
   "members": {"a": "Ann", "b": "Bob"},
   "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
-  "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "rate": 1.0,
-  "alt": ""
+  "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "loop_count": null,
+  "rate": 1.0, "alt": ""
 }
 ```
 `members` = Rolle → Name ALLER Beteiligten, die eigene Figur eingeschlossen
@@ -2824,7 +2840,9 @@ tragen dieselben `members` neben `pose_key`/`pose_label`.
 `null`, wenn keine läuft (auch unter Nebel ausgedünnt). `elapsed_s` ist die
 verstrichene SPIELzeit zum Payload-Zeitpunkt, `rate` Spielsekunden pro
 Realsekunde (0 = Freeze), `clip_duration_s` die eigene Länge des Clips aus
-seinem Sidecar und `loop` sein Kennzeichen (Poses-Tab → Library, E5). Ein
+seinem Sidecar und `loop` sein Kennzeichen (Poses-Tab → Library, E5),
+`loop_count` die Wiederholungen eines Loops (`null` = endlos, beim Einmal-Clip
+immer `null`; beim Start der Interaktion aus dem Sidecar übernommen). Ein
 Ende-Feld gibt es NICHT.
 
 **Der Clip läuft in ECHTZEIT** — unabhängig vom Spieluhr-Faktor, genau wie ein
@@ -2833,7 +2851,11 @@ sind REALsekunden seit dem Start) und zählt zwischen zwei Polls mit der realen
 Frame-Zeit weiter; sein Mixer läuft immer mit `timeScale 1`. `rate = 0` friert
 die Phase ein (kein Serverwert zum Teilen, die lokale Phase bleibt stehen).
 Ein Loop-Clip wiederholt sich (`Phase mod clip_duration_s`), ein Einmal-Clip
-hält sein letztes Bild (`min(Phase, clip_duration_s)`). Die Spieluhr entscheidet
+hält sein letztes Bild (`min(Phase, clip_duration_s)`), ein gezählter Loop
+(`loop_count` N) wiederholt sich N-mal und hält dann sein letztes Bild — ab
+`N × clip_duration_s` ist die Phase `clip_duration_s`; der Mixer wiederholt nur
+die ersten N−1 Durchläufe und spielt den letzten als Einmal-Clip, damit er nie
+für ein Bild auf den Anfang springt (`pairClip.ts` → `cycling`). Die Spieluhr entscheidet
 also nur, WO der Clip bei einem Poll steht und ob er überhaupt weiterläuft.
 Regel und handgerechnete Zahlen: `client3d/src/game/pairClip.ts` +
 `client3d/scripts/smoke_pair_realtime.mjs`.
@@ -2919,7 +2941,14 @@ name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt d
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `finale` | `{id, kind, role, alt, elapsed_s, duration_s}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `alt` = deren Alt-Hälfte (§ A8a, G6; `""` = keine, dann `<kind>__<role>`); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Cliplänge |
+| `finale` | `{id, kind, role, alt, elapsed_s, duration_s, loop_count}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `alt` = deren Alt-Hälfte (§ A8a, G6; `""` = keine, dann `<kind>__<role>`); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Länge des GANZEN Abschlusses (Cliplänge × `loop_count`); `loop_count` = Durchläufe des Clips (≥ 1) |
+
+**Durchläufe.** Ist der Abschluss-Clip ein gezählter Loop (Sidecar `loop: true` + `loop_count` N, § A8), spielt
+er N Durchläufe, sonst einen — auch ein Loop-Clip OHNE Zahl spielt einen, denn ein Abschluss endet immer. Der
+Server rechnet `duration_s = Cliplänge × N` und hält Feld, Sperre und das Paket (das an `duration_s − elapsed_s`
+das Ende der Aktion knüpft) an dieser Länge fest. Der Client teilt `duration_s` in N gleiche Durchläufe, seekt
+die Zeit IM Durchlauf und lässt den Mixer bis zum vorletzten wiederholen; den letzten spielt er als Einmal-Clip,
+der sein Ende hält (`finaleClip.ts` → `stepFinale().loop`).
 
 Der Client spielt den Abschluss **einmal pro `id`, von vorn, sobald er das Feld zum ersten Mal sieht** — die
 Clips dauern um eine Sekunde, ein Poll alle 3 s: ein Abspielen ab `elapsed_s` zeigte meist nichts, und ein
@@ -5929,7 +5958,8 @@ sie produziert.
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
-| `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`) |
+| `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
+| `client3d/scripts/smoke_clip_loop_count.mjs` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
 | `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
 | `client3d/scripts/smoke_pair_storey.mjs` | die HÖHE eines Paares (§ A8a): ohne Platz steht es auf dem Boden SEINES Raums (`tiles.roomStandY` — Obergeschoss, Keller, Flur), nicht auf dem Gelände unter dem Haus; nur der Grund des Ortes nimmt das Gelände, ein Platz seine Slot-Höhe |
 | `client3d/scripts/smoke_marker_floor.mjs` | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |

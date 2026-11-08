@@ -198,7 +198,7 @@ def test_listing() -> None:
           set(data["clips"][0]) == {"kind", "role", "set", "source", "library",
                                     "rel", "name", "filename", "url", "size",
                                     "has_sidecar", "origin", "duration_s",
-                                    "fps", "frames", "loop", "role_gender",
+                                    "fps", "frames", "loop", "loop_count", "role_gender",
                                     "orientation", "root_motion", "generator",
                                     "license", "height_offsets_cm"},
           str(sorted(data["clips"][0])))

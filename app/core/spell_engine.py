@@ -6,11 +6,64 @@ configured tool LLM; execution applies costs before rolling."""
 import json
 import random as _random
 import re
+import threading
+import uuid
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 
 logger = get_logger("spell_engine")
+
+
+# The cast pose lasts as long as its clip PLAYS: a one-shot once, a counted
+# loop (sidecar ``loop_count``) its cycles — then the figure gets back into its
+# ordinary state. An endless loop keeps the pose until something else changes
+# it, as before. Like a finale it runs on the SYSTEM clock and lives in this
+# process only (a restart keeps the pose). Per name the token of the latest
+# cast: a second cast inside the window is not cut short by the first one.
+_cast_ends: Dict[str, str] = {}
+_cast_ends_lock = threading.Lock()
+
+
+def end_cast_pose_after_clip(name: str) -> Optional[float]:
+    """Schedules the end of ``name``'s cast pose when its clip has played
+    (``movement.pose_clip_play_s``) — the seconds, or None when the clip
+    loops endlessly (nothing is scheduled). The timer clears the pose only
+    while it is still the one the cast set."""
+    from app.core.movement import pose_clip_play_s
+    from app.models.character import get_character_profile
+    profile = get_character_profile(name) or {}
+    pose_key = str(profile.get("pose_key") or "")
+    seconds = pose_clip_play_s(name, pose_key, profile) if pose_key else None
+    if not seconds:
+        return None
+    token = uuid.uuid4().hex
+    with _cast_ends_lock:
+        _cast_ends[name] = token
+    timer = threading.Timer(seconds, _end_cast_pose, args=(name, pose_key, token))
+    timer.daemon = True
+    timer.start()
+    logger.info("Cast pose of %s ends after its clip: %.2f s", name, seconds)
+    return seconds
+
+
+def _end_cast_pose(name: str, pose_key: str, token: str) -> bool:
+    """The timer of :func:`end_cast_pose_after_clip`: clears the pose when
+    this cast is still the latest one and ``pose_key`` still the pose."""
+    from app.models.character import clear_pose_intent, get_character_profile
+    with _cast_ends_lock:
+        if _cast_ends.get(name) != token:
+            return False
+        _cast_ends.pop(name, None)
+    if str((get_character_profile(name) or {}).get("pose_key") or "") != pose_key:
+        return False
+    try:
+        clear_pose_intent(name)
+    except Exception as e:
+        logger.warning("Cast pose of %s could not be cleared: %s", name, e)
+        return False
+    logger.info("Cast pose of %s ended with its clip", name)
+    return True
 
 
 def build_spell_catalog(character_name: str) -> List[Dict[str, Any]]:
@@ -334,6 +387,7 @@ def execute_cast(avatar_name: str, target_name: str,
                 from app.models.character import set_pose_intent
                 set_pose_intent(avatar_name, cast_activity)
                 logger.info("Cast pose set: %s -> %s", avatar_name, cast_activity)
+                end_cast_pose_after_clip(avatar_name)
             except PairPoseWithoutPartner as e:
                 # A spell cannot conscript a partner — the cast succeeds, the
                 # pose does not.
