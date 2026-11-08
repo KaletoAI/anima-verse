@@ -21,9 +21,12 @@ Hand-derived expectations:
       is "invite_to_party"; the provider ``play.party_invite`` is registered.
   (b) Avatar -> Demo Guide (ordinary NPC): ``{"ok": True, "status":
       "pending", "invite_id": <pinv_…>}``; the row is pending, inviter the
-      avatar; the guide is asked in a THOUGHT turn: exactly one
-      ``bump("Demo Guide", hint=…)`` whose hint carries the invite id and the
-      no-destination sentence of consent.md, no ``bump_respond``.
+      avatar; the guide is asked in an ANSWER turn like every NPC the player
+      invites (a thought turn is skipped while the player's chat with it is
+      hot — 2026-11-08): exactly one ``bump_respond("Demo Guide",
+      speaker="Demo Avatar", on_demand=True, request_id=<that id>)`` whose
+      content carries the invite id and the no-destination sentence of
+      consent.md, no ``bump``.
   (c) Avatar -> Demo Host (temporary NPC): pending as well, but asked in an
       ANSWER turn: exactly one ``bump_respond("Demo Host", speaker="Demo
       Avatar", on_demand=True, request_id=<that invite id>)``, no ``bump``.
@@ -75,10 +78,11 @@ Open invitations and unanswered answer turns (added 2026-11-08, run before (g)):
           "Demo Visitor declines Demo Avatar's invitation.", and the avatar's
           ``party_invites_sent`` is [];
         "completed" once more -> nothing (no longer pending, no second line).
-  (k) A standing invitation answered in a THOUGHT turn (avatar -> Demo
-      Guide) is not re-asked by a finished answer turn: "completed" leaves it
-      pending with no bump_respond and ``answer_requests`` 0 — the
-      repeat belongs to answer turns only.
+  (k) A standing invitation between two NPCs (Demo Leader -> Demo Guide) is
+      still asked in a THOUGHT turn (one ``bump("Demo Guide", hint=…)``, no
+      ``bump_respond``) and is not re-asked by a finished answer turn:
+      "completed" leaves it pending with no bump_respond and
+      ``answer_requests`` 0 — the repeat belongs to answer turns only.
 """
 import json
 import os
@@ -183,7 +187,7 @@ def main():
                   payload['capability_actions'])
             check("provider registered", hooks.get_provider('play.party_invite') is player_invite)
 
-            print("(b) avatar -> ordinary NPC: thought turn")
+            print("(b) avatar -> ordinary NPC: answer turn")
             res = _play_party_invite_sync({'target': 'Demo Guide'})
             guide_id = res.get('invite_id', '')
             check("answer", res == {'ok': True, 'status': 'pending', 'invite_id': guide_id}
@@ -191,12 +195,15 @@ def main():
             row = party.get_invite(guide_id) or {}
             check("pending row", row.get('status') == 'pending' and row.get('inviter') == avatar
                   and row.get('invitee') == 'Demo Guide', row)
-            hint = (loop.bump.call_args.kwargs.get('hint', '') if loop.bump.call_args else '')
-            check("one bump for the guide", loop.bump.call_count == 1
-                  and loop.bump.call_args.args == ('Demo Guide',), loop.bump.call_args_list)
+            call = loop.bump_respond.call_args
+            hint = call.kwargs.get('content', '') if call else ''
+            check("one bump_respond for the guide", loop.bump_respond.call_count == 1
+                  and call.args == ('Demo Guide',) and call.kwargs.get('speaker') == avatar
+                  and call.kwargs.get('on_demand') is True
+                  and call.kwargs.get('request_id') == guide_id, loop.bump_respond.call_args_list)
             check("consent names the invite and no destination",
                   guide_id in hint and 'There is no fixed destination' in hint, hint)
-            check("no answer turn", loop.bump_respond.call_count == 0, loop.bump_respond.call_args_list)
+            check("no thought bump", loop.bump.call_count == 0, loop.bump.call_args_list)
 
             print("(c) avatar -> temporary NPC: answer turn")
             loop.reset_mock()
@@ -337,13 +344,18 @@ def main():
 
             print("(k) a thought-turn invitation is not re-asked")
             loop.reset_mock()
-            res = _play_party_invite_sync({'target': 'Demo Guide'})
-            gid = res.get('invite_id', '')
+            from plugins.party.trip_intents import request_consent
+            gid = party.create_pending_invite('Demo Leader', 'Demo Guide') or ''
+            request_consent(gid)
+            check("NPC -> NPC: one thought bump", loop.bump.call_count == 1
+                  and loop.bump.call_args.args == ('Demo Guide',)
+                  and loop.bump_respond.call_count == 0,
+                  f"{loop.bump.call_args_list} / {loop.bump_respond.call_args_list}")
             hooks.emit('respond_finished', character_name='Demo Guide', request_id=gid, outcome='completed')
             row = party.get_invite(gid) or {}
             check("left alone", row.get('status') == 'pending' and row.get('answer_requests') == 0
                   and loop.bump_respond.call_count == 0, f"{row} / {loop.bump_respond.call_args_list}")
-            party.clear_invites_for(avatar)
+            party.clear_invites_for('Demo Leader')
 
             print("(g) without the provider")
             hooks.unregister_owned_providers('party')

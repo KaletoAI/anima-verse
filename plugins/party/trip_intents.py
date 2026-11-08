@@ -473,16 +473,18 @@ def invite_projection(invitation: Dict) -> Dict:
 def _answer_turn(invitation: Dict) -> bool:
     """Whether the invitee answers in an ANSWER turn (``bump_respond``, a
     visible reply plus its tool step) rather than a thought turn: every
-    destination-bound trip, and a standing invitation from a player-controlled
-    inviter to a temporary NPC — a temporary NPC thinks no thoughts, so a
-    thought bump would never reach it. A standing invitation between two NPCs
-    stays a thought: an NPC proposes a trip to a temporary NPC instead."""
+    destination-bound trip, and every standing invitation from a
+    player-controlled inviter to an NPC. A temporary NPC thinks no thoughts at
+    all, and an ordinary NPC the player has just been talking to skips its
+    thought turns while that chat is hot (agent_loop ``_IN_CHAT_HOT_MIN``) —
+    which is nearly always the case for someone the player invites, so a
+    thought bump left the question unanswered (2026-11-08). A standing
+    invitation between two NPCs stays a thought: an NPC proposes a trip to a
+    temporary NPC instead."""
     if invitation.get("intent_id"):
         return True
     from app.models.account import is_player_controlled
-    from app.models.character import is_temporary_npc
-    return (is_temporary_npc(invitation["invitee"])
-            and not is_player_controlled(invitation["invitee"])
+    return (not is_player_controlled(invitation["invitee"])
             and is_player_controlled(invitation["inviter"]))
 
 
