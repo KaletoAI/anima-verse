@@ -550,6 +550,17 @@ class ThoughtRunner:
         _rut_hint = rut_hint(character_name)
         if _rut_hint:
             user_input += "\n\n" + _rut_hint
+        if mode != "rp_first" and tools_dict:
+            # A thought model that calls tools itself gets the exact answer
+            # calls of an open question (an invitation waiting for yes/no) —
+            # the same lines the rp_first tool decision reads; the bump hint
+            # that asks the question is prose only. Volatile, so the user
+            # turn, never the system prompt.
+            from app.core.streaming import open_questions_note
+            _questions = await asyncio.to_thread(
+                open_questions_note, character_name, tools_dict, "")
+            if _questions:
+                user_input += "\n\n" + _questions.rstrip()
 
         logger.info("Starte Agent-Loop fuer %s (tools: %d, tool_llm: %s, history: %d)",
                     character_name, len(tools_dict), 'JA' if tool_llm else 'NEIN', len(recent_history))

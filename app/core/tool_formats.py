@@ -425,6 +425,47 @@ def strip_bare_json_calls(text: str, known_tools: Dict) -> str:
     return text
 
 
+_BOLD_LINE_RE = re.compile(r"^[ \t]*\*\*([^*\n]+?)\*\*[ \t]*(?:\n|$)", re.MULTILINE)
+
+
+def strip_pseudo_tool_lines(text: str, known_tools: Dict) -> str:
+    """``text`` without the lines that are a tool call WRITTEN AS PROSE: a
+    line that is entirely bold and whose text starts with the exact name of
+    a tool offered this turn, followed by call-shaped arguments —
+    ``**JoinParty with leader=Kai, invite_id=pinv_1**``,
+    ``**InteractWith Kai: cellar_invite**``, ``**SetLocation**``.
+
+    A roleplay model that cannot call tools copies a call it saw in its
+    prompt into its spoken reply (2026-11-08): the line reached the room as
+    speech, and the tool decision reading the reply took it for a yes the
+    prose had declined. Nothing executes such a line — the real call is the
+    tool decision's — so it is dropped from what the character says.
+
+    Call-shaped = nothing after the name, or ``=``/``:``/``{``/``(`` in the
+    rest of the line. That keeps bold prose that merely begins with a word
+    that is also a verb name (``**Sleep tight!**``, ``**Act with care**``),
+    every bold line that names no offered tool (``**Wow!**``), and the
+    fallback markers (``**I feel …**``, ``**I do …**``) — no tool is called
+    ``I``. Case-sensitive: the copied call keeps the tool's spelling."""
+    if not known_tools or "**" not in text:
+        return text
+    names = sorted((str(n) for n in known_tools if n), key=len, reverse=True)
+
+    def _is_call(inner: str) -> bool:
+        inner = inner.strip()
+        for name in names:
+            if not inner.startswith(name):
+                continue
+            rest = inner[len(name):]
+            if rest and not (rest[0].isspace() or rest[0] in ":({"):
+                continue  # "SleepyHead" is not "Sleep"
+            if not rest.strip() or any(c in rest for c in "=:{("):
+                return True
+        return False
+
+    return _BOLD_LINE_RE.sub(lambda m: "" if _is_call(m.group(1)) else m.group(0), text)
+
+
 def find_tool_calls(format_name: str, text: str,
                     known_tools: Optional[Dict] = None) -> List[Tuple[str, str]]:
     """Finds all tool calls in a text.

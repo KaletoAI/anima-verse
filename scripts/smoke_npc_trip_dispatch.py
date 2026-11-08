@@ -51,6 +51,7 @@ from app.core.users import create_user, update_user
 from app.models import character as chars, intents, world
 from app.plugins.context import PluginContext
 from plugins.party.skill import PartySkill
+from plugins.party.trip_intents import open_questions
 
 get_skill_manager()
 LOCATION = world.add_location("Demo inn", "Two real rooms.", rooms=[
@@ -80,8 +81,12 @@ def reply(owner, responder, speaker, content, *args, **kwargs):
     if FAIL_RESPONSES:
         FAIL_RESPONSES -= 1
         raise ConnectionError("scripted external provider failure")
-    reference = re.search(r"invite_id=(pinv_[a-z0-9]+)", content)
-    assert reference, "the actual response content must identify its proposal"
+    # The consent text is prose only; the exact reference reaches the tool
+    # decision through the open question (party ``open_questions``).
+    assert "JoinParty" not in content and "pinv_" not in content, content
+    reference = re.search(r'"invite_id": "(pinv_[a-z0-9]+)"',
+                          "\n".join(open_questions(responder, ["JoinParty"])))
+    assert reference, "the open question must identify its proposal"
     return JOIN.execute(json.dumps({"agent_name": responder, "leader": speaker,
                                     "invite_id": reference.group(1), "answer": "yes" if ACCEPT else "no"}))
 

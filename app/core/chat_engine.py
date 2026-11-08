@@ -849,7 +849,13 @@ def run_chat_turn(
     # In room mode the transcript already carries the triggering utterance as
     # its last line → do not append it again. Only as a fallback (empty
     # transcript) set the trigger explicitly, else the LLM has no last user turn.
-    if not ctx.get("room_mode") or not ctx["messages"]:
+    # A request that hands the SAME text as incoming line and as hint (an
+    # invitation, a discovery — nothing anyone said aloud) already stands in
+    # the scene state as that hint: appending it as well put the block into
+    # the prompt twice (party consent, 2026-11-08). attach_moment below
+    # makes the scene state the last user turn when nothing else is.
+    _incoming_is_hint = bool(hint.strip()) and hint.strip() == (incoming_message or "").strip()
+    if (not ctx.get("room_mode") or not ctx["messages"]) and not _incoming_is_hint:
         messages.append({"role": "user", "content": incoming_message})
     # The few memories that fit THIS line, BEHIND the scene state and inside
     # the same user turn (app/core/memory_situational.py): it is built for the
@@ -918,13 +924,21 @@ def run_chat_turn(
                            responder, _me)
             _inline_matches = []
 
+    # A call written as a bold prose line ("**JoinParty with leader=…**")
+    # is not speech and runs nothing: it leaves the reply BEFORE anything
+    # reads it — the utterance, the history, the tool decision (which once
+    # took such a line for a yes the prose had declined, 2026-11-08) and the
+    # post-processing all see ``spoken`` / ``clean``. The inline scan above
+    # still read the raw text.
+    from app.core.tool_formats import strip_pseudo_tool_lines
+    spoken = strip_pseudo_tool_lines(raw, ctx.get("tools_dict") or {})
     # A bare "ToolName {json}" call is not tag-shaped, so clean_response
     # keeps it: strip it here, or the call itself becomes the spoken line.
     if _inline_matches:
         from app.core.tool_formats import strip_bare_json_calls
-        clean = clean_response(strip_bare_json_calls(raw, ctx["tools_dict"]))
+        clean = clean_response(strip_bare_json_calls(spoken, ctx["tools_dict"]))
     else:
-        clean = clean_response(raw)
+        clean = clean_response(spoken)
     if not clean:
         if _inline_matches:
             # The character DID something, it just said nothing: the tool
@@ -1198,7 +1212,7 @@ def run_chat_turn(
                     post_process_response(
                         owner_id=owner_id, character_name=responder,
                         user_input=incoming_message,
-                        rp_response=raw,
+                        rp_response=spoken,
                         full_response=(clean + ("\n" + _markers if _markers else "")),
                         agent_config=ctx["agent_config"], llm=ctx["llm"],
                         user_display_name=(speaker or ctx["user_display_name"]),

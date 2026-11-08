@@ -25,8 +25,11 @@ Hand-derived expectations:
       invites (a thought turn is skipped while the player's chat with it is
       hot — 2026-11-08): exactly one ``bump_respond("Demo Guide",
       speaker="Demo Avatar", on_demand=True, request_id=<that id>)`` whose
-      content carries the invite id and the no-destination sentence of
-      consent.md, no ``bump``.
+      content carries the no-destination sentence of
+      consent.md — prose only: no "JoinParty" and no invite id (2026-11-08,
+      a roleplay model copied the call into its spoken reply); the id
+      reaches the tool-calling reader through the guide's open question —
+      no ``bump``.
   (c) Avatar -> Demo Host (temporary NPC): pending as well, but asked in an
       ANSWER turn: exactly one ``bump_respond("Demo Host", speaker="Demo
       Avatar", on_demand=True, request_id=<that invite id>)``, no ``bump``.
@@ -201,8 +204,11 @@ def main():
                   and call.args == ('Demo Guide',) and call.kwargs.get('speaker') == avatar
                   and call.kwargs.get('on_demand') is True
                   and call.kwargs.get('request_id') == guide_id, loop.bump_respond.call_args_list)
-            check("consent names the invite and no destination",
-                  guide_id in hint and 'There is no fixed destination' in hint, hint)
+            check("consent is prose: no destination, no call syntax, no invite id",
+                  'There is no fixed destination' in hint and 'Consent is your choice.' in hint
+                  and 'JoinParty' not in hint and guide_id not in hint, hint)
+            check("the guide's open question carries the invite id",
+                  any(guide_id in line for line in open_questions('Demo Guide', ['JoinParty'])))
             check("no thought bump", loop.bump.call_count == 0, loop.bump.call_args_list)
 
             print("(c) avatar -> temporary NPC: answer turn")
