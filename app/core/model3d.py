@@ -191,7 +191,7 @@ def _serial_model(function):
         signature = bound.arguments.get("signature")
         if not signature:
             if name in ("set_model3d_rig", "delete_model3d"):
-                exact = find_model3d(character_name)
+                exact = find_model3d(character_name, include_stale=name == "delete_model3d")
                 signature = exact.stem if exact else None
             elif name in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model", "rerig_model", "face_retexture_model", "revert_face_retexture"):
                 served = find_model3d_serving(character_name)[0]
@@ -435,12 +435,20 @@ def available_tiers(model_path: Optional[Path]) -> List[str]:
 
 
 def find_model3d(character_name: str,
-                 signature: Optional[str] = None) -> Optional[Path]:
+                 signature: Optional[str] = None, *,
+                 include_stale: bool = False) -> Optional[Path]:
     """Path of the cached mesh for the given outfit combination (default: the
     currently worn one), or None.
 
     States do not enter mesh identity. Explicit signatures are matched exactly;
-    retired state forks are rejected."""
+    retired state forks are rejected.
+
+    Base-body pipeline: an outfit model not built on the CURRENT base body
+    (sidecar ``base_signature`` / ``base_model_sha256`` differ or are
+    absent — an older or regenerated base, or a whole-body model from
+    before the switch) counts as missing, so the next
+    trigger rebuilds it (``_on_older_base``). ``include_stale`` finds it
+    anyway (deletion, status display)."""
     from app.core.model_refs import is_state_fork
     if is_state_fork(signature) or "-p" in (signature or ""):
         return None
@@ -456,8 +464,38 @@ def find_model3d(character_name: str,
         for ext in MODEL_EXTS:
             p = d / f"{sig}{ext}"
             if p.exists():
+                if not include_stale and _on_older_base(p, _current_base(character_name)):
+                    return None
                 return p
     return None
+
+
+def _current_base(character_name: str) -> Optional[tuple]:
+    """``(base signature, base model sha256)`` when the character is on the
+    base-body pipeline (``base_body.current_base``), else None (no stale
+    rule applies). An unreadable profile counts as off the pipeline — the
+    stored model keeps being found."""
+    try:
+        from app.core.base_body import current_base
+        from app.models.character import get_character_profile
+        return current_base(character_name, profile=get_character_profile(character_name) or {})
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Model3D %s: base body unreadable: %s", character_name, e)
+        return None
+
+
+def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
+    """Whether a stored outfit model is not built on the current base body
+    (``base`` from ``_current_base``; None = off the pipeline, never stale):
+    another base signature, another base model under the same signature,
+    or none recorded (a whole-body model from before the switch). The base
+    model itself is never stale here."""
+    if not base:
+        return False
+    from app.core.base_body import built_on_current_base, is_base_signature
+    if is_base_signature(path.stem):
+        return False
+    return not built_on_current_base(_read_sidecar(path), base)
 
 
 def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -560,7 +598,8 @@ def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tup
 def find_model3d_serving(character_name: str) -> tuple:
     """(path, match) of the mesh to SERVE for the worn outfit — the serving
     chain behind the byte/meta routes. ``match`` is how it was found:
-    ``"exact"`` / ``"nearest"``
+    ``"exact"`` / ``"stale"`` (this combination's model, built on an
+    older base body — base-body pipeline only) / ``"nearest"``
     (no entry for this combination — the stored mesh whose recorded piece
     combination is closest to the worn one, so a fresh outfit never degrades
     the character to a placeholder figure). (None, "") without any match.
@@ -576,12 +615,17 @@ def find_model3d_serving(character_name: str) -> tuple:
     for ext in MODEL_EXTS:
         p = d / f"{sig}{ext}"
         if p.exists():
-            return p, "exact"
+            base = _current_base(character_name)
+            # Base-body pipeline: a model built on an older base body is
+            # still this outfit, so it stays on screen until its rebuild is
+            # published — but never as the current one ("stale").
+            return p, ("stale" if _on_older_base(p, base) else "exact")
     best = None
     if d.is_dir():
         from app.core.model_refs import is_state_fork
         from app.core.outfit_match import outfit_similarity
         from app.core.base_body import is_base_signature
+        base = _current_base(character_name)
         for p in d.iterdir():
             if p.suffix.lower() not in MODEL_EXTS or is_state_fork(p.stem) or "-p" in p.stem:
                 continue
@@ -596,13 +640,14 @@ def find_model3d_serving(character_name: str) -> tuple:
                 continue
             score = outfit_similarity(pieces, items,
                                       manifest["pieces"], manifest["items"])
-            # Ties: prefer the newest neutral outfit entry.
-            key = (score, p.stat().st_mtime)
+            # Ties: prefer the newest neutral outfit entry; a model on the
+            # current base body beats one built on an older base.
+            key = (not _on_older_base(p, base), score, p.stat().st_mtime)
             if best is None or key > best[0]:
                 best = (key, p)
     if best is not None:
         logger.debug("Model3D %s: nearest %s for combination %s (score %.2f)",
-                     character_name, best[1].stem, sig, best[0][0])
+                     character_name, best[1].stem, sig, best[0][1])
         return best[1], "nearest"
     return None, ""
 
@@ -2106,6 +2151,11 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     ``"base": true``. The flag is frozen into the record, so a resume behaves
     the same.
 
+    A character on the base-body pipeline (``base_body.is_base_pipeline``)
+    gets its outfit model from ``base_body.build_outfit_model`` instead of
+    the img2mesh stages: the rigged base body retextured with the outfit's
+    dressed images (backend arguments do not apply).
+
     Backend: ``backend_glob`` (explicit) → the mesh occasion's chain of the
     image routing (``mesh_occasion_for_rig`` of the character's rig);
     ``prefer_cheapest`` = cheapest available unrigged img2mesh (auto hook).
@@ -2168,6 +2218,16 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                     logger.info("Model3D %s: combination %s already generated (%s)",
                                 character_name, signature, cached.name)
                     return {"ok": True, "cached": True, "path": str(cached)}
+
+            if not base:
+                from app.core.base_body import build_outfit_model, is_base_pipeline
+                if is_base_pipeline(character_name):
+                    # Base-body pipeline: the outfit model is the rigged base
+                    # body with the outfit painted on (CPU worker) — no
+                    # img2mesh, no rig job, no hub record.
+                    if not get_model3d_dir(character_name).is_dir():
+                        return {"ok": False, "error": "character_gone"}
+                    return build_outfit_model(character_name, signature)
 
             from app.imagegen.routing import character_spec
             if (not backend_glob and prefer_cheapest
@@ -2909,9 +2969,16 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             _generating.discard(character_name)
 
 
+# Characters on the base-body pipeline whose outfit-change trigger found a
+# generation running: once it ends, the auto hook runs again for the outfit
+# worn THEN (a newer combination gets its own run, never a mixed one).
+_outfit_followups: set = set()
+
+
 def _run(character_name: str, force: bool, backend_glob: str = "",
          prefer_cheapest: bool = False, face_num: Any = None,
          texture_size: Any = None, base: bool = False) -> None:
+    followup = False
     with _char_lock(character_name):
         try:
             if base:
@@ -2930,6 +2997,10 @@ def _run(character_name: str, force: bool, backend_glob: str = "",
         finally:
             with _lock:
                 _generating.discard(character_name)
+                followup = character_name in _outfit_followups
+                _outfit_followups.discard(character_name)
+    if followup:
+        maybe_auto_generate_for_outfit(character_name)
 
 
 def trigger_generation(character_name: str, *, force: bool = False,
@@ -2937,15 +3008,19 @@ def trigger_generation(character_name: str, *, force: bool = False,
                        prefer_cheapest: bool = False,
                        face_num: Any = None,
                        texture_size: Any = None,
-                       base: bool = False) -> bool:
+                       base: bool = False, followup: bool = False) -> bool:
     """Starts the mesh generation in the background.
     ``backend_glob`` picks the mesh backend (empty = the rig's mesh occasion
     chain of the image routing; ``prefer_cheapest`` always cheapest of the
     rig — the auto hook). ``base`` builds the base body
     (``base_body.generate_base_model``) instead of the outfit's model.
-    False when one is already running for this character."""
+    False when one is already running for this character; ``followup``
+    then marks the auto hook to run again once it has ended (base-body
+    outfit trigger)."""
     with _lock:
         if character_name in _generating:
+            if followup:
+                _outfit_followups.add(character_name)
             return False
         _generating.add(character_name)
     threading.Thread(target=_run,
@@ -2961,19 +3036,35 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
     exists (freshly rendered or cached). Conditions: the character's
     ``auto_generate`` option is on, the combination has no mesh yet, no
     run is active. Uses the CHEAPEST matching mesh backend (user decision
-    2026-07-18). Returns True when a generation was started."""
+    2026-07-18). Returns True when a generation was started.
+
+    Base-body pipeline: no ``auto_generate`` needed (the outfit model costs
+    no GPU — ``base_body.build_outfit_model``); the input is the dressed
+    front made from the current base body. A run already in progress marks
+    a follow-up: when it ends, this hook runs again for the outfit worn
+    then."""
     try:
-        if not get_model3d_options(character_name).get("auto_generate"):
+        from app.core.base_body import base_signature, dressed_image, is_base_pipeline
+        pipeline = is_base_pipeline(character_name)
+        if not pipeline and not get_model3d_options(character_name).get("auto_generate"):
             return False
         _, _, signature = current_outfit_state(character_name)
         if not signature or find_model3d(character_name, signature):
             return False
-        if not find_ref_image(character_name, "tpose", signature):
+        if pipeline:
+            if not dressed_image(character_name, "front", signature, base_signature(character_name)):
+                return False  # the dressed edits failed / are not there yet
+        elif not find_ref_image(character_name, "tpose", signature):
             return False  # render failed / not there yet — wait for the next pass
     except Exception as e:
         logger.debug("Model3D auto check for %s failed: %s",
                      character_name, e)
         return False
+    if pipeline:
+        started = trigger_generation(character_name, followup=True)
+        logger.info("Model3D %s: outfit model on the base body %s", character_name,
+                    "started" if started else "queued behind the running generation")
+        return started
     started = trigger_generation(character_name, prefer_cheapest=True)
     if started:
         logger.info("Model3D %s: auto generation started (T-pose present, "
@@ -2984,8 +3075,9 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
 @_serial_model
 def delete_model3d(character_name: str, signature: Optional[str] = None) -> bool:
     """Deletes the cached mesh (+ sidecar + texture + reduced tiers); True if
-    removed. A tier is derived from this file, so it never outlives it."""
-    path = find_model3d(character_name, signature)
+    removed. A tier is derived from this file, so it never outlives it.
+    A model built on an older base body can be deleted too."""
+    path = find_model3d(character_name, signature, include_stale=True)
     if not path:
         return False
     _purge_combination(path.parent, path.stem)

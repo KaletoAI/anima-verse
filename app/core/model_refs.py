@@ -790,7 +790,12 @@ def generate_model_ref_images(character_name: str,
 
     ``tpose_view`` selects main or one body-form view for a manual render.
     An extra view reuses the cached main even with ``force=True``; it never
-    regenerates another view. Without a cached main it raises ValueError."""
+    regenerates another view. Without a cached main it raises ValueError.
+
+    A humanoid on the base-body pipeline gets its "tpose" kind from
+    ``base_body.generate_dressed_images`` instead: edits of the four
+    base-body views into the same files (``tpose_view`` "main" = front,
+    a view = that view alone; no main needed for a view)."""
     from app.core.expression_regen import render_character_image
     from app.core.expression_pose_maps import default_pose_prompt
 
@@ -839,6 +844,19 @@ def generate_model_ref_images(character_name: str,
     if "tpose" in kinds and humanoid and tpose_view is None and get_view_kinds(character_name).get("face"):
         # Independent lane: queued GPU work or a face failure cannot delay the T-pose.
         _start_face_view(character_name, force=False)
+    # Base-body pipeline: the outfit's mesh inputs are edits of the base-body
+    # views (all four, independent of the view toggles), not fresh renders.
+    # The default-pose ref ("pose") keeps its own path below.
+    base_results: Dict[str, Optional[str]] = {}
+    if "tpose" in kinds and humanoid:
+        from app.core.base_body import generate_dressed_images, is_base_pipeline
+        if is_base_pipeline(character_name):
+            base_results = generate_dressed_images(
+                character_name, pieces=pieces, items=items, signature=signature, force=force,
+                view=None if tpose_view is None else "front" if tpose_view == "main" else tpose_view)
+            kinds = tuple(k for k in kinds if k != "tpose")
+            if not kinds:
+                return base_results
     views = tuple(v for v in enabled_tpose_views(character_name) if v != "face")
     if tpose_view is not None:
         views = () if tpose_view == "main" else (tpose_view,)
@@ -857,14 +875,14 @@ def generate_model_ref_images(character_name: str,
                         character_name, signature, ", ".join(cached))
         kinds = tuple(k for k in kinds if k not in cached)
     if not kinds:
-        return {}
+        return base_results
 
     refs_dir = get_model_refs_dir(character_name)
     prompts = {
         "tpose": get_tpose_prompt() if humanoid else get_animal_pose_prompt(),
         "pose": default_pose_prompt() if humanoid else "",
     }
-    results: Dict[str, Optional[str]] = {}
+    results: Dict[str, Optional[str]] = dict(base_results)
 
     from contextlib import ExitStack
     from app.core.prompt_filters import image_modifier_snapshot

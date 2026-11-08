@@ -13,6 +13,13 @@ the four views (``generate_base_images``), the rigged base model built from
 them (``generate_base_model``), the per-character pipeline switch
 (``set_pipeline``) and the UI info (``base_info``).
 
+Outfits (spec § B, phase 3): every outfit combination of a character on the
+pipeline gets four DRESSED images — edits of the base views
+(``generate_dressed_images``, prompt ``dress_prompt``) stored as the usual
+``tpose[_<view>]_<sig>`` refs — and an outfit model that is the rigged base
+with the outfit painted on by the local GLBBodyRetexture worker
+(``build_outfit_model``, base colour swapped by ``replace_base_color``).
+
 What describes the body:
 
 * gender and age through the template's ``character_appearance`` replacement
@@ -395,8 +402,10 @@ def start_base_images(character_name: str, *, view: Optional[str] = None,
 
 def base_info(character_name: str) -> Dict[str, Any]:
     """UI info: ``{pipeline, humanoid, signature, images: {view: url|None},
-    status: {view: ...}, model}`` (``model``: see ``base_model_info``); the
-    image URLs carry the file's mtime so a re-render is fetched anew."""
+    status: {view: ...}, model, outfit}`` (``model``: see
+    ``base_model_info``; ``outfit``: the CURRENT outfit's model on the
+    pipeline, see ``outfit_info`` — None off the pipeline); the image URLs
+    carry the file's mtime so a re-render is fetched anew."""
     from app.core.model_refs import find_ref_image, is_humanoid
     profile = _profile_of(character_name, None)
     humanoid = bool(is_humanoid(character_name, profile=profile))
@@ -411,9 +420,12 @@ def base_info(character_name: str) -> Dict[str, Any]:
         images[view] = (f"/characters/{quote(character_name, safe='')}/base-body/images/{view}?v={stamp}"
                         if stamp is not None else None)
     from app.core.timeutils import utc_now
-    return {"pipeline": is_base_pipeline(character_name, profile=profile), "humanoid": humanoid,
+    pipeline = is_base_pipeline(character_name, profile=profile)
+    return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "status": base_status(character_name),
-            "model": base_model_info(character_name, signature), "now": _iso(utc_now())}
+            "model": base_model_info(character_name, signature),
+            "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
+            "now": _iso(utc_now())}
 
 
 def base_image_path(character_name: str, view: str) -> Optional[Path]:
@@ -557,3 +569,627 @@ def set_pipeline(character_name: str, enabled: bool) -> bool:
                 return True
             profile.pop("model_pipeline")
         return bool(save_character_profile(character_name, profile))
+
+
+# --- Outfits on the base body (spec § B) -----------------------------------
+
+# The edit form of the S1 spike (claude-out/s1-base-body/kleidung_real/
+# front.json): keep everything, change only the clothing.
+DRESS_KEEP = ("Keep the image exactly as it is: the same person, same body shape, same pose, same arm and hand "
+              "position, same framing and background.")
+DRESS_STYLE_NEGATIVE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth "
+                        "flawless skin, overexposed, glossy, fantasy, studio lighting, cartoon, drawing, sketch, "
+                        "watermark, signature, text, logo, deformed, blurry, low quality")
+# The spike's garment words, each with the words that mean the outfit itself
+# names it — such a term leaves the negative (a skirt must not be forbidden
+# from an outfit that IS a skirt). "hair": the base body is bald until the
+# hair mesh (phase 4); the edit must not grow any.
+DRESS_GARMENT_NEGATIVE = (
+    ("loose clothing", r"loose"),
+    ("baggy", r"baggy"),
+    ("skirt", r"skirts?"),
+    ("dress", r"dress(?:es)?"),
+    ("jacket", r"jackets?|coats?|blazers?"),
+    ("shoes", r"shoes?|boots?|sandals?|sneakers?|heels|slippers?|loafers?|footwear"),
+    ("socks", r"socks?|stockings?|tights"),
+    ("hair", r"hair"),
+)
+
+BASE_IMAGES_MISSING = "Base body images missing — render them in the Pose tab"
+BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
+DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
+OLDER_BASE = "Built on an older base body"
+
+
+def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
+               items: Optional[list], profile: Optional[Dict[str, Any]] = None) -> str:
+    """What the dressed edit says the figure now wears — "" for an undressed
+    combination (nothing worn, or an undressed free-text wardrobe).
+
+    The outfit text of the mesh-input render (``render_outfit(mesh_input=
+    True, back_view=view == "back")``), composed as
+    ``expression_regen.render_character_image`` composes its "is wearing"
+    layer: the pieces, else (nothing structured worn) a dressed free-text
+    wardrobe's text; the items follow with their own verb ("holding …")."""
+    from app.core.outfit_renderer import render_outfit
+    profile = dict(_profile_of(character_name, profile))
+    profile["equipped_pieces"] = dict(pieces or {})
+    profile["equipped_items"] = list(items or [])
+    rendered = render_outfit(profile=profile, equipped_pieces=dict(pieces or {}),
+                             equipped_items=list(items or []), back_view=view == "back",
+                             mesh_input=True)
+    wear = (rendered.get("pieces") or "").strip()
+    if not wear and not (pieces or items):
+        free = rendered.get("full") or ""
+        if free.startswith("wearing: "):
+            wear = free[len("wearing: "):].strip()
+    held = (rendered.get("items") or "").strip()
+    if wear and held:
+        return f"they now wear {wear}, {held}"
+    if wear:
+        return f"they now wear {wear}"
+    if held:
+        return f"they are now {held}"
+    return ""
+
+
+def dress_negative(text: str) -> str:
+    """The spike's negative minus the garment terms ``text`` names."""
+    kept = [term for term, pattern in DRESS_GARMENT_NEGATIVE
+            if not re.search(rf"\b(?:{pattern})\b", text or "", re.IGNORECASE)]
+    return ", ".join([DRESS_STYLE_NEGATIVE, *kept])
+
+
+def dress_prompt(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
+                 items: Optional[list], profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+    """``(prompt, negative)`` of the dressed edit of one base view: the
+    spike's edit form "Keep the image exactly as it is: … Only change their
+    clothing: they now wear {outfit}." and its negative without the garment
+    words the outfit names. ValueError for an undressed combination (that
+    one copies the base images, there is nothing to edit)."""
+    if view not in BASE_VIEWS:
+        raise ValueError(f"unknown base-body view: {view!r}")
+    text = dress_text(character_name, view, pieces=pieces, items=items, profile=profile)
+    if not text:
+        raise ValueError("An undressed combination has no dressed edit")
+    return f"{DRESS_KEEP} Only change their clothing: {text}.", dress_negative(text)
+
+
+# Outfit status, in memory like the base status: (character, stage) ->
+# signature of the run in progress (stage "images" or "model"), and the last
+# failure per (character, signature).
+_outfit_running: Dict[Tuple[str, str], str] = {}
+_outfit_failed: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _outfit_start(character_name: str, signature: str, stage: str) -> None:
+    with _status_lock:
+        _outfit_running[(character_name, stage)] = signature
+
+
+def _outfit_end(character_name: str, signature: str, stage: str, error: Optional[str]) -> None:
+    """End a stage: a failure is stored for the signature; a success clears
+    a failure of the same stage (a model success clears every failure)."""
+    from app.core.timeutils import utc_now
+    with _status_lock:
+        if _outfit_running.get((character_name, stage)) == signature:
+            _outfit_running.pop((character_name, stage), None)
+        key = (character_name, signature)
+        if error is not None:
+            _outfit_failed[key] = {"stage": stage, "error": error, "failed_at": utc_now()}
+        elif stage == "model" or (_outfit_failed.get(key) or {}).get("stage") == stage:
+            _outfit_failed.pop(key, None)
+
+
+def _ref_sidecar(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+# path -> ((size, mtime_ns, inode), sha256): content identity of base files,
+# hashed again only when the file's stat changes (a copied world rehashes
+# once and keeps its outfits current).
+_hash_cache: Dict[str, Tuple[Tuple[int, int, int], str]] = {}
+
+
+def file_sha256(path: Optional[Path]) -> str:
+    """sha256 of a file's content, "" when it does not exist."""
+    if path is None:
+        return ""
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    key = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    with _status_lock:
+        cached = _hash_cache.get(str(path))
+    if cached and cached[0] == key:
+        return cached[1]
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+    with _status_lock:
+        _hash_cache[str(path)] = (key, digest)
+    return digest
+
+
+def base_model_sha256(character_name: str, bsig: str) -> str:
+    """Content identity of the stored rigged base model of ``bsig`` (the
+    REAL model directory, also from inside a staged run), "" without one.
+    An outfit model records it: a regenerated base under the same signature
+    makes every outfit model built on the old one stale."""
+    from app.models.character import get_character_dir
+    return file_sha256(get_character_dir(character_name) / "model3d" / f"{bsig}.glb")
+
+
+def current_base(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, str]]:
+    """``(base signature, base model sha256)`` of a character on the
+    pipeline — what an outfit model must have been built on to be current —
+    or None off the pipeline."""
+    profile = _profile_of(character_name, profile)
+    if not is_base_pipeline(character_name, profile=profile):
+        return None
+    bsig = base_signature(character_name, profile=profile)
+    return bsig, base_model_sha256(character_name, bsig)
+
+
+def built_on_current_base(meta: Dict[str, Any], base: Tuple[str, str]) -> bool:
+    """Whether an outfit model's sidecar names the current base body."""
+    return (meta.get("base_signature") == base[0]
+            and meta.get("base_model_sha256") == base[1])
+
+
+def dressed_image(character_name: str, view: str, signature: str, bsig: str) -> Optional[Path]:
+    """The stored dressed image of one view of an outfit, or None — only one
+    edited from the CURRENT base view counts (base signature ``bsig`` and
+    the base view file's content; an edit of an older base body, or of a
+    re-rendered one, does not line up with it)."""
+    from app.core.model_refs import find_ref_image
+    path = find_ref_image(character_name, _kind(view), signature)
+    if path is None:
+        return None
+    meta = _ref_sidecar(path)
+    if (meta.get("base_signature") != bsig or meta.get("base_image_sha256")
+            != file_sha256(find_ref_image(character_name, _kind(view), bsig))):
+        return None
+    return path
+
+
+def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, str]],
+                            items: Optional[list], signature: str, force: bool = False,
+                            view: Optional[str] = None) -> Dict[str, Optional[str]]:
+    """The outfit's mesh-input images on the base-body pipeline. Blocking —
+    called from ``model_refs.generate_model_ref_images`` (kind ``tpose``),
+    serial per character on its tpose lane.
+
+    For each of ``BASE_VIEWS`` (or ``view`` alone) an EDIT of the base view
+    image of the current base signature: ``reference_image`` = that base view
+    on grey, ``bare_prompt`` = ``dress_prompt``, occasion ``tpose_view`` (an
+    edit of a given image, routed on the edit chain), use case ``tpose`` /
+    ``TPOSE_VIEW_USE_CASES[view]``, the character's own LoRAs, the dressed
+    negative APPENDED to the use case's. Stored as ``tpose_<sig>`` /
+    ``tpose_<view>_<sig>``, sidecar ``base_signature``, ``dressed: true`` and
+    ``base_image_sha256`` (the edited base view's content, ``dressed_image``).
+    An undressed combination copies the base images instead (no GPU run;
+    ``dressed: false``). A view that exists for the current base signature is
+    skipped unless ``force``.
+
+    Missing base images: the status error ``BASE_IMAGES_MISSING``, nothing
+    rendered. Returns ``{kind: path | None}`` for every view it produced."""
+    import shutil
+    from app.core import expression_regen
+    from app.core.model_refs import (TPOSE_VIEW_USE_CASES, _tpose_size, find_ref_image,
+                                     get_model_refs_dir, mesh_variant, neutral_view_reference)
+    if view is not None and view not in BASE_VIEWS:
+        raise ValueError(f"unknown base-body view: {view!r}")
+    profile = _profile_of(character_name, None)
+    bsig = base_signature(character_name, profile=profile)
+    wanted = BASE_VIEWS if view is None else (view,)
+    base_views = {v: find_ref_image(character_name, _kind(v), bsig) for v in wanted}
+    if any(path is None for path in base_views.values()):
+        logger.warning("Dressed images %s (%s): base images of %s missing", character_name, signature, bsig)
+        _outfit_end(character_name, signature, "images", BASE_IMAGES_MISSING)
+        return {}
+    todo = [v for v in wanted if force or dressed_image(character_name, v, signature, bsig) is None]
+    if not todo:
+        _outfit_end(character_name, signature, "images", None)
+        return {}
+    refs_dir = get_model_refs_dir(character_name)
+    mesh_profile = deepcopy(profile)
+    mesh_profile["equipped_pieces"] = dict(pieces or {})
+    mesh_profile["equipped_items"] = list(items or [])
+    dressed = bool(dress_text(character_name, "front", pieces=pieces, items=items, profile=mesh_profile))
+    results: Dict[str, Optional[str]] = {}
+    errors = []
+    _outfit_start(character_name, signature, "images")
+    try:
+        if not dressed:
+            from app.core.timeutils import utc_now_iso
+            variant = mesh_variant(character_name, dict(pieces or {}), mesh_profile)
+            for v in todo:
+                source = base_views[v]
+                target = refs_dir / f"{_kind(v)}_{signature}{source.suffix}"
+                shutil.copyfile(source, target)
+                meta = {**_ref_sidecar(source), "created_at": utc_now_iso(),
+                        "equipped_pieces": dict(pieces or {}), "equipped_items": list(items or []),
+                        "mesh_variant": variant, "base_signature": bsig,
+                        "base_image_sha256": file_sha256(source), "dressed": False}
+                target.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                                       encoding="utf-8")
+                results[_kind(v)] = str(target)
+        else:
+            width, height = _tpose_size()
+            for v in todo:
+                prompt, negative = dress_prompt(character_name, v, pieces=pieces, items=items,
+                                                profile=mesh_profile)
+                try:
+                    with neutral_view_reference(base_views[v], refs_dir) as reference:
+                        path = expression_regen.render_character_image(
+                            character_name,
+                            output_stem=refs_dir / f"{_kind(v)}_{signature}",
+                            equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
+                            pose_prompt="", expression_prompt="",
+                            bare_prompt=prompt, extra_negative=negative,
+                            image_use_case="tpose" if v == "front" else TPOSE_VIEW_USE_CASES[v],
+                            occasion="tpose_view",
+                            override_width=width, override_height=height,
+                            apply_state_modifiers=False,
+                            mesh_input_profile=mesh_profile,
+                            back_view=v == "back",
+                            reference_image=reference,
+                            sidecar_extra={"base_signature": bsig, "dressed": True,
+                                           "base_image_sha256": file_sha256(base_views[v])},
+                            character_loras=True)
+                    if path is None:
+                        errors.append(f"Dressed {v} edit failed")
+                except Exception as e:  # noqa: BLE001 — one view never kills the pass
+                    path = None
+                    errors.append(f"Dressed {v} edit failed: {e}")
+                    logger.warning("Dressed %s %s (%s) failed: %s", character_name, v, signature, e)
+                results[_kind(v)] = str(path) if path else None
+    finally:
+        _outfit_end(character_name, signature, "images", errors[0] if errors else None)
+    logger.info("Dressed images %s (%s on %s): %s", character_name, signature, bsig,
+                {k: bool(p) for k, p in results.items()})
+    return results
+
+
+# --- GLB base colour --------------------------------------------------------
+
+_MIME_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}
+
+
+def _base_color_targets(gltf: Dict[str, Any]) -> Tuple[int, Dict[int, str]]:
+    """``(primary, {image index: role})`` of a document's base colour: every
+    image a material's ``baseColorTexture`` resolves to — the preferred one
+    (``model_validate.texture_image_index``: an EXT_texture_webp source, else
+    the core source) is ``primary`` and must be the same for every material;
+    a WebP texture's core fallback is replaced too (role ``core``)."""
+    from app.core.model_validate import texture_image_index
+    textures = gltf.get("textures") or []
+    primaries, targets = set(), {}
+    for material in gltf.get("materials") or []:
+        info = ((material or {}).get("pbrMetallicRoughness") or {}).get("baseColorTexture")
+        if not isinstance(info, dict):
+            continue
+        texture = textures[info["index"]]
+        primary = texture_image_index(gltf, texture)
+        primaries.add(primary)
+        targets[primary] = "webp" if "EXT_texture_webp" in (texture.get("extensions") or {}) else "core"
+        if targets[primary] == "webp" and isinstance(texture.get("source"), int):
+            targets[texture["source"]] = "core"
+    if len(primaries) != 1:
+        raise ValueError(f"Expected exactly one base-colour image, found {len(primaries)}")
+    return next(iter(primaries)), targets
+
+
+def base_color_image(glb: bytes) -> Tuple[bytes, str]:
+    """``(bytes, mime)`` of a GLB's one base-colour image."""
+    from app.core.model_validate import parse_glb
+    parsed = parse_glb(glb)
+    gltf, binary = parsed["gltf"], parsed["bin"]
+    primary, _targets = _base_color_targets(gltf)
+    image = gltf["images"][primary]
+    view = (gltf.get("bufferViews") or [])[image["bufferView"]] if "bufferView" in image else None
+    if view is None or view.get("buffer", 0) != 0:
+        raise ValueError("The base-colour image is not embedded in the GLB")
+    start = int(view.get("byteOffset", 0))
+    return bytes(binary[start:start + int(view["byteLength"])]), image.get("mimeType", "")
+
+
+def _encode(image: bytes, mime: str, target: str) -> bytes:
+    if mime == target:
+        return image
+    import io
+    from PIL import Image
+    with Image.open(io.BytesIO(image)) as decoded:
+        decoded.load()
+        out = io.BytesIO()
+        if target == "image/jpeg":
+            decoded.convert("RGB").save(out, format="JPEG", quality=95)
+        elif target == "image/webp":
+            decoded.save(out, format="WEBP", lossless=True, exact=True, quality=100)
+        else:
+            decoded.save(out, format="PNG")
+    return out.getvalue()
+
+
+def replace_base_color(glb: bytes, image: bytes, mime: str) -> bytes:
+    """The GLB with ``image`` as its base colour; nodes, skins, meshes,
+    accessors, materials and textures stay as they are.
+
+    The image entries the base colour resolves to get the new bytes: a
+    core (PNG/JPEG) source takes ``image`` as given when it is PNG or JPEG
+    (its ``mimeType`` follows), a WebP source of EXT_texture_webp gets it
+    re-encoded as lossless WebP. The BIN chunk is repacked in bufferView
+    order (4-byte aligned) — only the bufferViews' offsets/lengths and the
+    buffer length change. ValueError for anything this cannot rewrite
+    safely: not exactly one base-colour image, an image outside the BIN
+    chunk or sharing its bufferView, a second buffer, a bufferView with
+    extensions (meshopt names raw buffer offsets)."""
+    import struct
+    from app.core.model_validate import parse_glb
+    if mime not in _MIME_FORMATS:
+        raise ValueError(f"Unsupported base-colour image type: {mime!r}")
+    parsed = parse_glb(glb)
+    gltf, binary = parsed["gltf"], parsed["bin"]
+    _primary, targets = _base_color_targets(gltf)
+    images, views = gltf.get("images") or [], gltf.get("bufferViews") or []
+    if len(gltf.get("buffers") or []) != 1:
+        raise ValueError("Base-colour replacement needs a single-buffer GLB")
+    used = {}
+    for i, img in enumerate(images):
+        if "bufferView" in img:
+            used.setdefault(img["bufferView"], []).append(("image", i))
+    for i, accessor in enumerate(gltf.get("accessors") or []):
+        if "bufferView" in accessor:
+            used.setdefault(accessor["bufferView"], []).append(("accessor", i))
+    replaced: Dict[int, bytes] = {}
+    for index, role in targets.items():
+        img = images[index]
+        if "bufferView" not in img or "uri" in img:
+            raise ValueError("The base-colour image is not embedded in the GLB")
+        if used.get(img["bufferView"]) != [("image", index)]:
+            raise ValueError("The base-colour image shares its bufferView")
+        target = "image/webp" if role == "webp" else (mime if mime != "image/webp" else "image/png")
+        replaced[img["bufferView"]] = _encode(image, mime, target)
+        img["mimeType"] = target
+    packed = bytearray()
+    for i, view in enumerate(views):
+        if view.get("buffer", 0) != 0 or view.get("extensions"):
+            raise ValueError("Base-colour replacement cannot repack this bufferView")
+        start, length = int(view.get("byteOffset", 0)), int(view["byteLength"])
+        if start < 0 or length < 0 or start + length > len(binary):
+            raise ValueError("Invalid bufferView in the GLB")
+        raw = replaced.get(i, binary[start:start + length])
+        packed.extend(b"\0" * (-len(packed) % 4))
+        view["byteOffset"] = len(packed)
+        view["byteLength"] = len(raw)
+        packed.extend(raw)
+    packed.extend(b"\0" * (-len(packed) % 4))
+    gltf["buffers"][0]["byteLength"] = len(packed)
+    document = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    document += b" " * (-len(document) % 4)
+    return (struct.pack("<III", 0x46546C67, 2, 28 + len(document) + len(packed))
+            + struct.pack("<I4s", len(document), b"JSON") + document
+            + struct.pack("<I4s", len(packed), b"BIN\0") + bytes(packed))
+
+
+# --- The outfit model -------------------------------------------------------
+
+class OutfitError(RuntimeError):
+    """A precondition of the outfit model is missing (base model, images)."""
+
+
+# Base sidecar keys that describe the base run itself, never the outfit
+# model copied from it.
+_BASE_ONLY_META = ("base", "created_at", "signature", "source", "lod_error", "diagnosis", "measured",
+                   "rig_error", "source_image", "source_image_sha256", "view_images",
+                   "view_images_sha256", "job_id", "source_filename", "pieces", "items",
+                   "mesh_variant", "refined", "retexture_proof", "base_signature",
+                   "base_model_sha256", "dressed")
+
+
+def _snapshot_base_model(character_name: str, bsig: str) -> Dict[str, Any]:
+    """The current base model's files, read under the publication lock of
+    the REAL model directory (the outfit run is staged on its own
+    signature): rigged GLB + sidecar, the unrigged checkpoint, the clean
+    prerig source + sidecar when it exists."""
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model3d import _read_sidecar
+    from app.models.character import get_character_dir
+    directory = get_character_dir(character_name) / "model3d"
+    with keyed_lock("model3d_publication", str(directory)):
+        rigged = directory / f"{bsig}.glb"
+        meta = _read_sidecar(rigged)
+        if not rigged.is_file() or not meta.get("base") or meta.get("rig") != "mixamo" or meta.get("rig_error"):
+            raise OutfitError(BASE_MODEL_MISSING)
+        unrigged = directory / "unrigged" / f"{bsig}.glb"
+        if not unrigged.is_file():
+            raise OutfitError("Base body model has no unrigged source — regenerate the base model")
+        prerig = directory / "prerig" / f"{bsig}.glb"
+        return {"rigged": rigged.read_bytes(), "meta": meta, "unrigged": unrigged.read_bytes(),
+                "prerig": prerig.read_bytes() if prerig.is_file() else None,
+                "prerig_meta": _read_sidecar(prerig) if prerig.is_file() else {}}
+
+
+def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
+    """Build the outfit model ``model3d/<signature>.glb`` of a character on
+    the pipeline: the rigged base model with the outfit painted on. Called by
+    ``model3d._generate_for_current_outfit`` INSTEAD of the img2mesh stages,
+    inside its staging (writes go to the stage of ``signature``; the base is
+    read from the real directory). Blocking; CPU only.
+
+    Inputs, frozen when the run starts: the current base model (rigged GLB,
+    unrigged checkpoint ``model3d/unrigged/<bsig>.glb``, clean prerig
+    source), the dressed images ``tpose[_<view>]_<signature>`` made from the
+    current base and their registration images ``tpose[_<view>]_<bsig>``.
+    The worker gets the unrigged geometry carrying the rigged base's CURRENT
+    base-colour image (same UV layout) and writes the dressed GLB; its base
+    colour goes into a copy of the rigged base GLB (and of its prerig
+    source). An undressed combination is the base copy without a worker
+    run. Then the usual post-steps: texture re-encode, the extension rig
+    (``model3d._auto_extension_rig`` — the copied base state makes it a
+    no-op unless this outfit's ``mesh_variant`` declares other groups, e.g.
+    anatomy parts; then every group is rebuilt once from the clean prerig
+    copy, never on top of the base's extension bones), measurement,
+    sidecar (``base_signature``, ``base_model_sha256``, ``retexture_proof``,
+    ``source: "base_body"``), distance tier.
+
+    Errors (worker unavailable/refused, missing base model or images, an
+    output that cannot be read) → ``{"ok": False, "error": <message>}``,
+    recorded for the outfit status; nothing is written, so the previous
+    model of the signature stays."""
+    import tempfile
+    from app.core import body_retexture, model3d
+    from app.core.extension_rig import extension_metadata
+    from app.core.model_refs import find_ref_image
+    from app.core.task_queue import get_task_queue
+    from app.core.timeutils import utc_now_iso
+    _outfit_start(character_name, signature, "model")
+    error: Optional[str] = None
+    task_id = ""
+    try:
+        try:
+            task_id = get_task_queue().track_start(
+                "model3d_generation", f"Outfit retexture: {character_name}",
+                agent_name=character_name, start_running=True)
+        except Exception:  # noqa: BLE001 — tracking is display only
+            task_id = ""
+        profile = _profile_of(character_name, None)
+        if not is_base_pipeline(character_name, profile=profile):
+            raise OutfitError("The character is not on the base-body pipeline")
+        bsig = base_signature(character_name, profile=profile)
+        base = _snapshot_base_model(character_name, bsig)
+        with tempfile.TemporaryDirectory(prefix="body-retexture-") as tmp:
+            work = Path(tmp)
+            views: Dict[str, Tuple[Path, Path]] = {}
+            front_meta: Dict[str, Any] = {}
+            manifest: Dict[str, Any] = {}
+            names: Dict[str, str] = {}
+            for v in BASE_VIEWS:
+                dressed = dressed_image(character_name, v, signature, bsig)
+                registration = find_ref_image(character_name, _kind(v), bsig)
+                if v == "front" and registration is None:
+                    raise OutfitError(BASE_IMAGES_MISSING)
+                if v == "front" and dressed is None:
+                    raise OutfitError(DRESSED_IMAGES_MISSING)
+                if dressed is None or registration is None:
+                    continue
+                # Frozen copies: a re-render while the worker runs must not
+                # change its input.
+                frozen = (work / f"dressed_{v}{dressed.suffix}", work / f"registration_{v}{registration.suffix}")
+                frozen[0].write_bytes(dressed.read_bytes())
+                frozen[1].write_bytes(registration.read_bytes())
+                views[v] = frozen
+                names[v] = dressed.name
+                if v == "front":
+                    front_meta = _ref_sidecar(dressed)
+                    manifest = model3d._ref_manifest(dressed)
+            proof: Optional[Dict[str, Any]] = None
+            outfit = base["rigged"]
+            if front_meta.get("dressed") is not False:
+                image, mime = base_color_image(base["rigged"])
+                worker_in = work / "base_in.glb"
+                worker_in.write_bytes(replace_base_color(base["unrigged"], image, mime))
+                out_glb = work / "dressed.glb"
+                proof = body_retexture.retexture(worker_in, views, out_glb,
+                                                 proof=work / "proof.json", atlas=work / "atlas.png")
+                if not out_glb.is_file():
+                    raise OutfitError("Body retexture worker wrote no GLB")
+                atlas, atlas_mime = base_color_image(out_glb.read_bytes())
+                outfit = replace_base_color(base["rigged"], atlas, atlas_mime)
+            verdict = model3d._validator_for("mixamo", character_name)(outfit)
+            if not verdict.get("ok"):
+                raise OutfitError("Retextured model is invalid: " + "; ".join(verdict.get("errors") or []))
+        out_dir = model3d.get_model3d_dir(character_name)
+        path = out_dir / f"{signature}.glb"
+        model3d._purge_combination(out_dir, signature, keep_model=path)
+        model3d._publish_model_bytes(path, outfit)
+        meta = {k: v for k, v in deepcopy(base["meta"]).items() if k not in _BASE_ONLY_META}
+        meta.update({"created_at": utc_now_iso(), "source": "base_body", "signature": signature,
+                     "character": character_name, "format": "glb", "rig": "mixamo",
+                     "base_signature": bsig,
+                     "base_model_sha256": hashlib.sha256(base["rigged"]).hexdigest(),
+                     "retexture_proof": proof,
+                     "dressed": front_meta.get("dressed") is not False,
+                     "source_image": names["front"],
+                     "view_images": {v: n for v, n in names.items() if v != "front"}})
+        meta.update(manifest)
+        model3d._auto_retexture(character_name, path, meta)
+        if base["prerig"] is not None:
+            # The clean source of the extension rig carries the same texture
+            # as the model, so a rebuild from it keeps the outfit.
+            prerig = out_dir / "prerig" / path.name
+            prerig.parent.mkdir(parents=True, exist_ok=True)
+            source = base["prerig"]
+            if proof is not None or path.read_bytes() != base["rigged"]:
+                source = replace_base_color(source, *base_color_image(path.read_bytes()))
+            model3d._publish_model_bytes(prerig, source)
+            model3d._publish_sidecar(prerig, base["prerig_meta"])
+        model3d._auto_extension_rig(character_name, path, meta)
+        model3d._attach_measurement(meta, path)
+        meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
+        model3d._publish_sidecar(path, meta)
+        model3d.request_lod(character_name, path)
+        logger.info("Outfit model %s (%s on %s): %s", character_name, signature, bsig,
+                    "retextured" if proof is not None else "undressed base copy")
+        return {"ok": True, "cached": False, "path": str(path), "filename": path.name, "proof": proof}
+    except (OutfitError, body_retexture.RetextureUnavailable, body_retexture.RetextureFailed,
+            ValueError) as e:
+        error = str(e) or type(e).__name__
+        logger.warning("Outfit model %s (%s) failed: %s", character_name, signature, error)
+        return {"ok": False, "error": error}
+    except Exception as e:
+        error = str(e) or type(e).__name__
+        raise
+    finally:
+        _outfit_end(character_name, signature, "model", error)
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=error or "")
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
+                signature: Optional[str] = None) -> Dict[str, Any]:
+    """``{signature, status, error, proof, url}`` of an outfit model on the
+    pipeline (default: the CURRENT outfit). ``status``: ``running`` (dressed
+    images or model in progress), ``failed`` (the last run's error),
+    ``stale`` (the stored model was built on an older base body — or before
+    the pipeline — and is rebuilt on the next trigger; ``error`` says so),
+    ``ready``, ``missing``. ``proof``: the worker's proof of the stored
+    model (None for an undressed base copy)."""
+    from app.core import model3d
+    from app.core.model_refs import current_outfit_state
+    if signature is None:
+        signature = current_outfit_state(character_name)[2]
+    if base_sig is None:
+        base_sig = base_signature(character_name)
+    current = (base_sig, base_model_sha256(character_name, base_sig))
+    with _status_lock:
+        running = any(sig == signature for (name, _stage), sig in _outfit_running.items()
+                      if name == character_name)
+        failure = dict(_outfit_failed.get((character_name, signature)) or {})
+    path = model3d.find_model3d(character_name, signature, include_stale=True)
+    meta = model3d._read_sidecar(path) if path else {}
+    if running:
+        status, error = "running", ""
+    elif failure:
+        status, error = "failed", failure.get("error") or ""
+    elif path is None:
+        status, error = "missing", ""
+    elif not built_on_current_base(meta, current):
+        status, error = "stale", OLDER_BASE
+    else:
+        status, error = "ready", ""
+    return {"signature": signature, "status": status, "error": error,
+            "proof": meta.get("retexture_proof") if path else None,
+            "url": model3d.signature_model_url(character_name, signature) if status == "ready" else None}
