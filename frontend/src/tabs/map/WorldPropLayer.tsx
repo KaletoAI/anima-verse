@@ -7,8 +7,12 @@
  * pointer handler with a transparent hit disc, and the drag is the same
  * window-listener gesture (slop, live preview, ONE commit on release).
  *
- * Geometry only — no text, no `t()`. Everything the user reads lives in the
- * chip and the tray of `MapTab`, the same split the placement layer keeps.
+ * Geometry only, no `t()`. Everything the user reads lives in the chip and
+ * the tray of `MapTab`, the same split the placement layer keeps — with ONE
+ * exception that is data, not UI text: the prop's library NAME under the
+ * marker the pointer rests on (`hoverId`), drawn like a location's name so a
+ * prop can be identified without selecting it. A prop whose record is gone
+ * (`missing`, name '') shows its id instead.
  *
  * The yaw sign is the placement layer's: a stored `yaw_deg` is a § A1.1 world
  * angle, and an SVG `rotate()` turns the other way, so it is NEGATED for the
@@ -96,6 +100,8 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
                                 showBoxes, sprites }: WorldPropLayerProps) {
   const { view, w, h } = useMapView()
   const [drag, setDrag] = useState<{ id: string; x: number; z: number } | null>(null)
+  /** The placement under the pointer — its name is drawn while it rests there. */
+  const [hoverId, setHoverId] = useState('')
 
   const viewRef = useRef(view); viewRef.current = view
   const snapRef = useRef(snapM); snapRef.current = snapM
@@ -228,7 +234,9 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
         const fy = p.y - FACE_PX * Math.cos(rad)
         return (
           <g key={wp.id} style={{ cursor: 'move' }}
-             onPointerDown={(e) => startDrag(e, wp)}>
+             onPointerDown={(e) => startDrag(e, wp)}
+             onPointerEnter={() => setHoverId(wp.id)}
+             onPointerLeave={() => setHoverId((cur) => (cur === wp.id ? '' : cur))}>
             {sprite && want ? (
               <PropSpriteImage p={p} yawDeg={wp.yaw_deg || 0} sprite={sprite}
                 targetHeightM={want.targetHeightM} pxPerM={view.pxPerM} />
@@ -250,6 +258,22 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
           </g>
         )
       })}
+      {/* The hovered prop's name, AFTER every marker so no neighbour covers
+          it; inert, so it never steals the pointer from the marker below. */}
+      {(() => {
+        const wp = hoverId ? worldProps.find((x) => x.id === hoverId) : undefined
+        if (!wp) return null
+        const dragging = drag && drag.id === wp.id
+        const p = worldToScreen(dragging ? drag.x : wp.x, dragging ? drag.z : wp.z,
+                                view, w, h)
+        return (
+          <text x={p.x} y={p.y + HIT_PX + 11} fontSize={11} textAnchor="middle"
+            fill={wp.id === selectedId ? COL_SELECTED : '#e6edf3'} pointerEvents="none"
+            style={{ paintOrder: 'stroke', stroke: '#0d1117', strokeWidth: 3 }}>
+            {wp.name || wp.prop_id}
+          </text>
+        )
+      })()}
       {ghostPt ? (() => {
         const p = worldToScreen(ghostPt.x, ghostPt.z, view, w, h)
         return (
