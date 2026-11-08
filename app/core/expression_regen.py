@@ -822,11 +822,17 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            backend: str = "", dialog_loras: Optional[list] = None,
                            negative_prompt: str = "",
                            framing: str = "",
-                           expression_set_loras: Optional[list] = None) -> Optional[Path]:
+                           expression_set_loras: Optional[list] = None,
+                           extra_negative: str = "",
+                           sidecar_extra: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
     Ordinary expressions pass a frozen neutral profile and publish separately.
+
+    ``negative_prompt`` REPLACES the use case's negative; ``extra_negative``
+    is appended to it instead (``service.resolve_negative_prompt``).
+    ``sidecar_extra`` adds keys to the sidecar JSON of the render.
     """
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
@@ -1047,6 +1053,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
             model_override = ""
     if negative_prompt:
         payload["negative_prompt"] = negative_prompt
+    if extra_negative:
+        payload["negative_prompt_extra"] = extra_negative
     if model_override:
         payload["model_override"] = model_override
     # LoRAs: character override + slot-override LoRAs of ACTIVE (empty,
@@ -1209,6 +1217,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
         for _rk in ROUTE_META_KEYS:
             if _gen_meta.get(_rk):
                 _expr_meta[_rk] = _gen_meta[_rk]
+        if sidecar_extra:
+            _expr_meta.update(sidecar_extra)
         if record_provenance:
             _expr_meta.update(reference_sha256=reference_sha256,
                               image_sha256=image_sha256)

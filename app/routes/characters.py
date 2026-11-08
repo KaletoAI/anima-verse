@@ -8,7 +8,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
 from app.core.auth_dependency import get_current_user_from_ctx, require_admin
 from app.core.explicit_backend import require_explicit_backend
 from app.core.http_files import etag_file_response, etag_matches
@@ -1590,6 +1590,83 @@ def get_character_model_ref_image(character_name: str, kind: str, request: Reque
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _ = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request, media_type or "application/octet-stream")
+
+
+# --- Base body (bald A-pose figure per humanoid, app/core/base_body.py) ---
+
+class BaseBodyImagesRequest(BaseModel):
+    view: Optional[Literal["front", "back", "left", "right"]] = None
+    force: bool = False
+
+
+class BaseBodyPipelineRequest(BaseModel):
+    enabled: bool
+
+
+def _require_character(character_name: str) -> None:
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+
+
+@router.get("/{character_name}/base-body")
+def get_character_base_body(character_name: str,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """``{pipeline, humanoid, signature, images, status, model, now}`` of the
+    character's base body (see ``base_body.base_info``)."""
+    from app.core.base_body import base_info
+    _require_character(character_name)
+    return base_info(character_name)
+
+
+@router.post("/{character_name}/base-body/images", status_code=202)
+def generate_character_base_body_images(character_name: str, body: BaseBodyImagesRequest,
+                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Render the base-body views in a worker thread: all four (cached ones
+    skipped unless ``force``) or one ``view``. 400 for a non-humanoid, 409
+    when the profile picture or (for a single view) the front is missing."""
+    from app.core.base_body import MissingInput, check_renderable, start_base_images
+    _require_character(character_name)
+    try:
+        check_renderable(character_name, view=body.view)
+    except MissingInput as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    start_base_images(character_name, view=body.view, force=body.force)
+    return {"started": True}
+
+
+@router.post("/{character_name}/base-body/pipeline")
+def set_character_base_body_pipeline(character_name: str, body: BaseBodyPipelineRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Switch the character onto or off the base-body model pipeline; 400 for
+    a non-humanoid."""
+    from app.core.base_body import is_base_pipeline, set_pipeline
+    _require_character(character_name)
+    try:
+        saved = set_pipeline(character_name, body.enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    return {"pipeline": is_base_pipeline(character_name)}
+
+
+@router.get("/{character_name}/base-body/images/{view}")
+def get_character_base_body_image(character_name: str, view: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)):
+    """One stored base-body view of the CURRENT base signature; 404 when
+    absent. ETag, so a re-render is picked up."""
+    from fastapi.responses import Response
+    from app.core.base_body import BASE_VIEWS, base_image_path
+    if view not in BASE_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(BASE_VIEWS)}")
+    _require_character(character_name)
+    path = base_image_path(character_name, view)
+    if not path:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _encoding = mimetypes.guess_type(str(path))
     return etag_file_response(path, request, media_type or "application/octet-stream")
 
 

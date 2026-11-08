@@ -7,9 +7,10 @@ the character's profile image, and one model built from them. Outfits are
 painted onto that body later (spec
 ``docs/superpowers/specs/2026-11-08-base-body-outfits-design.md`` § A).
 
-This module holds only the pure parts: the description, the view prompts with
-their negative, and the base signature that keys every stored base image and
-model. Rendering lives elsewhere.
+This module holds the description, the view prompts with their negative, the
+base signature that keys every stored base image and model, the rendering of
+the four views (``generate_base_images``), the per-character pipeline switch
+(``set_pipeline``) and the UI info (``base_info``).
 
 What describes the body:
 
@@ -28,7 +29,12 @@ has no hair to keep off the chest or to match to the reference.
 import hashlib
 import json
 import re
-from typing import Any, Dict, Optional, Tuple
+import threading
+from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple
+from urllib.parse import quote
 
 from app.core.log import get_logger
 
@@ -161,3 +167,267 @@ def is_base_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] =
         return False
     from app.core.model_refs import is_humanoid
     return bool(is_humanoid(character_name, profile=profile))
+
+
+# --- Rendering the four views ---------------------------------------------
+
+# Status per (character, view), in memory like the model-refs status: the
+# count of reservations still holding the view (a route thread waiting on the
+# character lock counts — it WILL render), since when, and the last failure.
+_status_lock = threading.Lock()
+_running: Dict[Tuple[str, str], Tuple[datetime, int]] = {}
+_failed: Dict[Tuple[str, str], Dict[str, Any]] = {}
+# One base render per character at a time: the views edit the front, and a
+# second run would race the same files.
+_char_locks: Dict[str, threading.Lock] = {}
+
+
+def _char_lock(character_name: str) -> threading.Lock:
+    with _status_lock:
+        return _char_locks.setdefault(character_name, threading.Lock())
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat(timespec="seconds") if dt else None
+
+
+def reserve_views(character_name: str, views: Iterable[str]) -> None:
+    """Mark views running (counted, so nested and queued runs stack)."""
+    from app.core.timeutils import utc_now
+    with _status_lock:
+        for view in views:
+            key = (character_name, view)
+            started, count = _running.get(key, (utc_now(), 0))
+            _running[key] = (started, count + 1)
+
+
+def release_views(character_name: str, views: Iterable[str]) -> None:
+    with _status_lock:
+        for view in views:
+            key = (character_name, view)
+            started, count = _running.get(key, (None, 0))
+            if count <= 1:
+                _running.pop(key, None)
+            else:
+                _running[key] = (started, count - 1)
+
+
+def _record(character_name: str, view: str, error: Optional[str]) -> None:
+    from app.core.timeutils import utc_now
+    with _status_lock:
+        if error is None:
+            _failed.pop((character_name, view), None)
+        else:
+            _failed[(character_name, view)] = {"error": error, "failed_at": utc_now()}
+
+
+def base_status(character_name: str) -> Dict[str, Dict[str, Any]]:
+    """Per view: ``{running, started_at, failed, error, failed_at}`` — SYSTEM
+    stamps (``utc_now``), shaped like ``model_refs.get_render_status``."""
+    out: Dict[str, Dict[str, Any]] = {}
+    with _status_lock:
+        for view in BASE_VIEWS:
+            started, _count = _running.get((character_name, view), (None, 0))
+            failure = _failed.get((character_name, view)) or {}
+            out[view] = {"running": started is not None, "started_at": _iso(started),
+                         "failed": bool(failure), "error": failure.get("error"),
+                         "failed_at": _iso(failure.get("failed_at"))}
+    return out
+
+
+class MissingInput(ValueError):
+    """A precondition the user can fix (a profile picture, the front image)
+    — a route answers 409, unlike a request that can never work (400)."""
+
+
+class MissingFront(MissingInput):
+    """A single side/back view was asked for before its front exists."""
+
+
+def _kind(view: str) -> str:
+    return "tpose" if view == "front" else f"tpose_{view}"
+
+
+def check_renderable(character_name: str, *, view: Optional[str] = None,
+                     profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The profile, or ValueError when no base body can be rendered: an
+    unknown view, a non-humanoid character (animals keep the whole-body
+    path), or no profile image (the identity of the base body comes from
+    it — ``MissingInput``), or a single view without its front
+    (``MissingFront``)."""
+    if view is not None and view not in BASE_VIEWS:
+        raise ValueError(f"unknown base-body view: {view!r}")
+    profile = _profile_of(character_name, profile)
+    from app.core.model_refs import current_profile_image, find_ref_image, is_humanoid
+    if not is_humanoid(character_name, profile=profile):
+        raise ValueError("The base body is for humanoid characters only")
+    if current_profile_image(character_name, profile=profile) is None:
+        raise MissingInput("No profile picture. Set a profile picture, then render the base body")
+    if view not in (None, "front") and find_ref_image(
+            character_name, "tpose", base_signature(character_name, profile=profile)) is None:
+        raise MissingFront("A base-body view requires the front image")
+    return profile
+
+
+def generate_base_images(character_name: str, *, view: Optional[str] = None,
+                         force: bool = False) -> Dict[str, Optional[str]]:
+    """Render the base-body views. Blocking — call from a worker thread.
+
+    Front first (the ``tpose`` render path: use case ``tpose``, occasion
+    ``tpose``, the profile image as identity reference), then back/left/right
+    as edits of the front on grey (occasion ``tpose_view``, use cases
+    ``model_refs.TPOSE_VIEW_USE_CASES``). Stored as ``tpose_<bsig>`` and
+    ``tpose_<view>_<bsig>`` in ``model_refs/``; every sidecar records
+    ``base_signature``. The mesh-input matte applies because the occasion
+    is a mesh-input one (``render_character_image``).
+
+    Cached per base signature: a view that exists is skipped unless
+    ``force``. ``view`` renders that one view only (a non-front view needs
+    the front). The prompts carry no use-case style — the image service
+    adds the style and the use case's negative; ``base_prompt``'s negative
+    is APPENDED to it (``extra_negative``), never a replacement.
+
+    Returns ``{view: path | None}`` for every view it rendered (None =
+    failed); a front that fails stops the run — the views need it."""
+    from app.core import expression_regen
+    from app.core.model_refs import (TPOSE_VIEW_USE_CASES, _tpose_size, find_ref_image,
+                                     get_model_refs_dir, neutral_view_reference)
+    with _char_lock(character_name):
+        # Read at run time: a run queued behind another one renders the
+        # profile (image, body slots) current when it starts.
+        profile = check_renderable(character_name, view=view)
+        bsig = base_signature(character_name, profile=profile)
+        refs_dir = get_model_refs_dir(character_name)
+        wanted = BASE_VIEWS if view is None else (view,)
+        todo = [v for v in wanted
+                if force or find_ref_image(character_name, _kind(v), bsig) is None]
+        if not todo:
+            logger.info("Base body %s (%s): already rendered", character_name, bsig)
+            return {}
+        width, height = _tpose_size()
+        mesh_profile = deepcopy(profile)
+        mesh_profile["equipped_pieces"] = {}
+        mesh_profile["equipped_items"] = []
+        results: Dict[str, Optional[str]] = {}
+
+        def render(v: str, reference: Optional[Path]) -> Optional[Path]:
+            prompt, negative = base_prompt(character_name, v, profile=profile)
+            reserve_views(character_name, (v,))
+            try:
+                path = expression_regen.render_character_image(
+                    character_name,
+                    output_stem=refs_dir / f"{_kind(v)}_{bsig}",
+                    equipped_pieces={}, equipped_items=[],
+                    pose_prompt="", expression_prompt="",
+                    bare_prompt=prompt, extra_negative=negative,
+                    image_use_case="tpose" if v == "front" else TPOSE_VIEW_USE_CASES[v],
+                    occasion="tpose" if v == "front" else "tpose_view",
+                    override_width=width, override_height=height,
+                    apply_state_modifiers=False,
+                    mesh_input_profile=mesh_profile,
+                    back_view=v == "back",
+                    reference_image=reference,
+                    sidecar_extra={"base_signature": bsig})
+                error = None if path else "render failed"
+            except Exception as e:  # noqa: BLE001 — one view never kills the run
+                path, error = None, str(e) or type(e).__name__
+                logger.warning("Base body %s %s (%s) failed: %s", character_name, v, bsig, e)
+            finally:
+                release_views(character_name, (v,))
+            _record(character_name, v, error)
+            results[v] = str(path) if path else None
+            return path
+
+        front = find_ref_image(character_name, "tpose", bsig)
+        if "front" in todo:
+            front = render("front", None)
+            if front is None:
+                logger.warning("Base body %s (%s): front failed, views skipped", character_name, bsig)
+                return results
+        views = [v for v in todo if v != "front"]
+        if views and front is None:
+            raise MissingFront("A base-body view requires the front image")
+        if views:
+            # Every view edits the front, on neutral grey (an RGBA cut-out
+            # turns black at the backend).
+            with neutral_view_reference(front, refs_dir) as reference:
+                for v in views:
+                    render(v, reference)
+        logger.info("Base body %s (%s): %s", character_name, bsig,
+                    {k: bool(p) for k, p in results.items()})
+        return results
+
+
+def start_base_images(character_name: str, *, view: Optional[str] = None,
+                      force: bool = False) -> None:
+    """Run ``generate_base_images`` in a worker thread. The requested views
+    count as running from THIS moment (the UI polls ``base_info``), and an
+    error that ends the whole run is recorded on them."""
+    views = BASE_VIEWS if view is None else (view,)
+    reserve_views(character_name, views)
+
+    def run() -> None:
+        try:
+            generate_base_images(character_name, view=view, force=force)
+        except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
+            logger.error("Base body render for %s failed: %s", character_name, e)
+            for v in views:
+                _record(character_name, v, str(e) or type(e).__name__)
+        finally:
+            release_views(character_name, views)
+
+    threading.Thread(target=run, daemon=True, name=f"base-body-{character_name}").start()
+
+
+def base_info(character_name: str) -> Dict[str, Any]:
+    """UI info: ``{pipeline, humanoid, signature, images: {view: url|None},
+    status: {view: ...}, model}``. ``model`` is filled once base models
+    exist (Task 4); the image URLs carry the file's mtime so a re-render
+    is fetched anew."""
+    from app.core.model_refs import find_ref_image, is_humanoid
+    profile = _profile_of(character_name, None)
+    humanoid = bool(is_humanoid(character_name, profile=profile))
+    signature = base_signature(character_name, profile=profile) if humanoid else ""
+    images: Dict[str, Optional[str]] = {}
+    for view in BASE_VIEWS:
+        path = find_ref_image(character_name, _kind(view), signature) if signature else None
+        try:
+            stamp = path.stat().st_mtime_ns if path else None
+        except OSError:
+            stamp = None
+        images[view] = (f"/characters/{quote(character_name, safe='')}/base-body/images/{view}?v={stamp}"
+                        if stamp is not None else None)
+    from app.core.timeutils import utc_now
+    return {"pipeline": is_base_pipeline(character_name, profile=profile), "humanoid": humanoid,
+            "signature": signature, "images": images, "status": base_status(character_name),
+            "model": None, "now": _iso(utc_now())}
+
+
+def base_image_path(character_name: str, view: str) -> Optional[Path]:
+    """The stored image of one view for the CURRENT base signature."""
+    if view not in BASE_VIEWS:
+        return None
+    from app.core.model_refs import find_ref_image
+    return find_ref_image(character_name, _kind(view), base_signature(character_name))
+
+
+def set_pipeline(character_name: str, enabled: bool) -> bool:
+    """Switch the character onto (``model_pipeline: "base_body"``) or off the
+    base-body pipeline. ValueError for a non-humanoid on switching on — the
+    profile stays untouched. Returns the save result."""
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model_refs import is_humanoid
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if enabled:
+            if not is_humanoid(character_name, profile=profile):
+                raise ValueError("The base-body pipeline is for humanoid characters only")
+            if profile.get("model_pipeline") == "base_body":
+                return True
+            profile["model_pipeline"] = "base_body"
+        else:
+            if "model_pipeline" not in profile:
+                return True
+            profile.pop("model_pipeline")
+        return bool(save_character_profile(character_name, profile))

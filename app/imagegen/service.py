@@ -62,6 +62,17 @@ def _name_once(name: str, text: str) -> str:
     return f"{name}: {text}"
 
 
+def resolve_negative_prompt(input_data: Dict[str, Any], use_case_negative: str) -> str:
+    """The negative a render runs with. An explicit ``negative_prompt``
+    REPLACES the use case's (the image dialog shows and edits the effective
+    one); ``negative_prompt_extra`` is APPENDED to whichever applies — a
+    caller that brings its own subject negatives (the base-body views) keeps
+    the use case's framing and lighting negatives."""
+    negative = input_data.get("negative_prompt") or use_case_negative or ""
+    extra = str(input_data.get("negative_prompt_extra") or "").strip()
+    return ", ".join(part for part in (negative, extra) if part)
+
+
 def _log_image_failure(lv: dict, error_msg: str) -> None:
     """Write a failed image generation to the image log. ``lv`` contains
     caller locals; optional values are read defensively with .get()."""
@@ -2050,6 +2061,8 @@ class ImageService:
             "set_profile": ctx.get("set_profile", False),
             "use_source_as_reference": bool(ctx.get("use_source_as_reference", False)),
             "negative_prompt": ctx.get("negative_prompt", ""),
+            # Appended to the effective negative (resolve_negative_prompt).
+            "negative_prompt_extra": ctx.get("negative_prompt_extra", ""),
             "skip_gallery": ctx.get("skip_gallery", False),
             "appearances": ctx.get("appearances", None),
             "auto_enhance": ctx.get("auto_enhance", True),
@@ -2277,7 +2290,7 @@ class ImageService:
             _uc_name, _uc_img_model,
             clothed=bool(input_data.get("clothed", True)))
         prompt_style = _ucp.get("prompt_style", "")
-        negative_prompt = input_data.get("negative_prompt") or _ucp.get("prompt_negative", "")
+        negative_prompt = resolve_negative_prompt(input_data, _ucp.get("prompt_negative", ""))
 
         # Register the task in the queue system for uniform visibility.
         # start_running=False: prompt build (LLM calls) + GPU channel wait time

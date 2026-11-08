@@ -37,6 +37,13 @@ So there are two ways to judge a cache entry, in this order:
 The worn combination is never reported stale, whatever the rules say.
 The reachable set is only enumerated when an entry WITHOUT a manifest exists
 — with every entry carrying one, the cartesian product is never built.
+
+**Base bodies** (``app/core/base_body.py``) share both directories under a
+base signature (``"base"`` + 8 hex — never an outfit signature, which is
+pure hex): ``tpose[_<view>]_<bsig>`` refs and the ``<bsig>`` model group.
+Exactly the character's CURRENT base signature is valid; every other base
+entry is stale (a new profile image or body description made it obsolete).
+No manifest is read for them.
 """
 
 import re
@@ -54,11 +61,13 @@ MAX_REACHABLE_COMBOS = 5_000_000
 #: parses as kind "tpose" with a mangled signature.
 REF_PREFIXES = ("tpose_animal_", "tpose_front_", "tpose_right_", "tpose_back_", "tpose_left_",
                 "tpose_", "pose_")
-#: The shape of a mesh cache key: ``model_refs.outfit_signature`` (md5[:12])
-#: or a retired -s fork (accepted only for deletion). Only a stem of this
-#: shape is ever handed to the purger, whose
+#: The shape of a mesh cache key: ``model_refs.outfit_signature`` (md5[:12]),
+#: a retired -s fork (accepted only for deletion) or a base-body signature.
+#: Only a stem of this shape is ever handed to the purger, whose
 #: argument goes into a glob.
-_MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?")
+_MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?|base[0-9a-f]{8}")
+#: The shape of a base-body signature (``base_body.base_signature``).
+_BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
 
 
 def reachable_signatures(character_name: str) -> Set[str]:
@@ -231,6 +240,22 @@ def _worn_signature(character_name: str) -> str:
         return ""
 
 
+def _current_base_signature(character_name: str) -> Optional[str]:
+    """The base signature that is valid right now: ``""`` for a character
+    that has none (non-humanoid — every base entry of it is stale), None when
+    it cannot be computed (then no base entry is judged at all — never delete
+    on a guess)."""
+    try:
+        from app.core.base_body import base_signature
+        from app.core.model_refs import is_humanoid
+        if not is_humanoid(character_name):
+            return ""
+        return base_signature(character_name)
+    except Exception:
+        logger.exception("Cache GC %s: base signature unavailable", character_name)
+        return None
+
+
 def _sidecar_of(files: Iterable[Path]) -> Optional[Path]:
     for p in files:
         if p.suffix.lower() == ".json":
@@ -270,6 +295,7 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
     from app.core.model3d import _stored_manifest
     owned = _inventory_ids(character_name)
     worn = _worn_signature(character_name)
+    current_base = _current_base_signature(character_name)
 
     stale: List[str] = []
     out: Dict[str, Any] = {"stale_signatures": stale,
@@ -281,6 +307,16 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
         for signature, files in groups.items():
             if signature and signature == worn:
                 valid += 1
+                continue
+            if _BASE_SIG_RE.fullmatch(signature):
+                # Base body: only the current one counts; a run in progress
+                # (checkpoint without its top model yet) is current too.
+                if current_base is None or signature == current_base:
+                    valid += 1
+                    continue
+                stale_bytes += _bytes_of(files)
+                if signature not in stale:
+                    stale.append(signature)
                 continue
             if key == "meshes":
                 # A lone low/raw leftover can never be served: stale.
