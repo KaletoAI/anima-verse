@@ -1,5 +1,6 @@
 /**
- * FieldBaseBody — the Pose tab's base-body section (spec
+ * FieldBaseBody — the Base body tab (template tab `base_body_tab`, before
+ * Pose; spec
  * docs/superpowers/specs/2026-11-08-base-body-outfits-design.md): the
  * per-character switch onto the base-body pipeline, the four bald A-pose
  * views of the base body, and the rigged base model built from them.
@@ -11,8 +12,9 @@
  * POST .../base-body/model {force?} (409 while another 3D run of the
  * character is going — base and outfit share one guard).
  *
- * Non-humanoids keep the whole-body path: the section shows only a hint.
- * The outfit model's retexture status lives under the pose tiles
+ * The section is humanoid-only in the template (`visible_when`); should a
+ * non-humanoid still reach it, it shows only a hint. The outfit model's
+ * retexture status lives under the Pose tab's pose tiles
  * (BaseBodyOutfitStatus), not here.
  */
 import { useCallback, useState } from 'react'

@@ -65,6 +65,12 @@
       ]
     },
     {
+      "id": "base_body_tab",
+      "label": "Base body",
+      "label_de": "Grundkörper",
+      "columns": [28]
+    },
+    {
       "id": "tpose_tab",
       "label": "Pose",
       "label_de": "Pose",
@@ -161,10 +167,11 @@
       "id": "base_body",
       "label": "Base body",
       "label_de": "Basiskörper",
-      "column": 26,
+      "column": 28,
       "row": 0,
       "special": "base_body",
-      "fields": []
+      "fields": [],
+      "visible_when": { "feature": "humanoid" }
     },
     {
       "id": "hair",
@@ -181,7 +188,7 @@
       "label": "Pose (image-to-3D input)",
       "label_de": "Pose (Bild→3D-Input)",
       "column": 26,
-      "row": 1,
+      "row": 0,
       "special": "model_refs",
       "fields": []
     },

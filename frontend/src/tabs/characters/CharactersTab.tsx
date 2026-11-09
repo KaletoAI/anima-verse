@@ -1116,9 +1116,9 @@ export function CharactersTab() {
                           savedSignal={savedSignal}
                         />
                       ),
-                      // Base body (bald A-pose views + rigged base model) above
-                      // the pose tiles; on the pipeline the outfit model's
-                      // retexture status sits under them.
+                      // Base body (bald A-pose views + rigged base model) in
+                      // its own tab before Pose; on the pipeline the outfit
+                      // model's retexture status sits under the pose tiles.
                       base_body: <FieldBaseBody key={selected} character={selected} />,
                       // Hair as its own mesh (garment chain); the description
                       // is derived from Appearance, so the tab links there.

@@ -4091,7 +4091,7 @@
     "Garments": "Kleidungs-Meshes",
     "Gate": "Prüfung",
     "Hair as its own mesh is for humanoid characters only.": "Haare als eigenes Mesh gibt es nur für humanoide Charaktere.",
-    "Hair as its own mesh needs the base body pipeline — switch it on in the Pose tab": "Haare als eigenes Mesh brauchen die Basiskörper-Pipeline — im Tab Pose einschalten",
+    "Hair as its own mesh needs the base body pipeline — switch it on in the Base body tab": "Haare als eigenes Mesh brauchen die Basiskörper-Pipeline — im Tab Grundkörper einschalten",
     "Hair description": "Haarbeschreibung",
     "Hair description changed": "Haarbeschreibung geändert",
     "Hair has no collision yet — it can pass through arms and shoulders when they move": "Haare haben noch keine Kollision — sie können bei Bewegung durch Arme und Schultern gehen",

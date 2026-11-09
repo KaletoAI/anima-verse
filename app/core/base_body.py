@@ -721,7 +721,7 @@ DRESS_VIEW = {
               "frame; keep it a side profile view, do not turn the figure toward the camera."),
 }
 
-BASE_IMAGES_MISSING = "Base body images missing — render them in the Pose tab"
+BASE_IMAGES_MISSING = "Base body images missing — render them in the Base body tab"
 BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
 DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
 OLDER_BASE = "Built on an older base body"

@@ -377,7 +377,7 @@ export function FieldHair({ character, onEditAppearance }: {
   if (!info.pipeline) {
     return (
       <div className="ga-hint">
-        {t('Hair as its own mesh needs the base body pipeline — switch it on in the Pose tab')}
+        {t('Hair as its own mesh needs the base body pipeline — switch it on in the Base body tab')}
       </div>
     )
   }
