@@ -16,8 +16,8 @@ vertex is weighted 1.0 to ONE joint:
          rings of radius 0.04 around Arm→ForeArm (weighted Arm) and ForeArm→Hand (weighted ForeArm);
   torso  Hips (0, 1.0, 0) → Spine1 (0, 1.2, 0) → Spine2 (0, 1.35, 0) → Neck (0, 1.5, 0); ELLIPSE rings
          x = 0.12 cos θ, z = 0.10 sin θ around each segment, weighted to its start bone;
-  head   Head (0, 1.6, 0) → HeadTop_End (0, 1.8, 0); a capsule SURFACE of radius 0.09 (rings + the two
-         hemispheres), weighted Head — every vertex exactly 0.09 from the segment ("head sphere 0.09").
+  head   Head (0, 1.6, 0), HeadTop_End (0, 1.8, 0); a capsule SURFACE of radius 0.09 around 1.6..1.8 (rings
+         + two hemispheres of 10 rows × 72, polar angle φ = 0.1..π/2), weighted Head ("head sphere 0.09").
 Each ring: 720 evenly spaced θ at 9 stations t = 0.1..0.9 of the segment (all strictly inside, so the distance
 to the segment is the distance to the axis).
 
@@ -26,7 +26,11 @@ Expected, derived by hand:
     A uniform ring has ONE distance, so every quantile = its radius:
       legs  0.060 + 6 mm = 0.066 (left/right thigh, left/right shin)
       arms  0.040 + 6 mm = 0.046 (left/right upper arm, left/right forearm)
-      head  0.090 + 0    = 0.090
+      head  crown rule (a = b = Head, b_pos): body axis u = Hips→Head = +y; crown = the highest Head vertex =
+            the top row φ = 0.1 of the upper hemisphere: 1.8 + 0.09·cos 0.1 = 1.889550; distances to
+            Head→crown: rings (6480) and the lower hemisphere (720, all below Head → distance to Head) are 0.09,
+            the upper hemisphere (720) is 0.09·sin φ ≤ 0.09 → p50 = 0.090; b_pos = crown − r·u =
+            (0, 1.889550 − 0.09, 0) = (0, 1.7996, 0) — the synthetic capsule's own end, recovered.
     The ellipse ring: d(θ)² = b² + (a² − b²)·cos²θ, a = 0.12, b = 0.10. For θ uniform, P(cos²θ ≤ c) =
     1 − (2/π)·arccos(√c), so the q-quantile is d_q = sqrt(b² + (a² − b²)·sin²(qπ/2)):
       hips  q = 0.02: sin²(0.01π) = 0.000987 → sqrt(0.0100 + 0.0044·0.000987) = 0.10002 → 0.1000
@@ -34,10 +38,11 @@ Expected, derived by hand:
       chest q = 0.10: same → 0.1005
     (p95 would give sqrt(0.0100 + 0.0044·0.99384) = 0.1199 — the table's torso quantile is what is checked.)
     Tolerance 0.3 mm (discrete θ, 0.1-mm rounding). Joint names come back as in the model ("mixamorig:…").
-[2] Without HeadTop_End: 11 capsules, skipped = [head, reason "joint HeadTop_End missing"]. Without LeftFoot:
-    left_shin skipped "joint LeftFoot missing", everything else unchanged — no crash.
+[2] Without HeadTop_End: still 12 capsules, the head identical (the crown rule needs no crown joint). Without
+    Head: head skipped "joint Head missing". Without LeftFoot: left_shin skipped "joint LeftFoot missing",
+    everything else unchanged — no crash.
 [3] Region scale 1.2 everywhere → every radius × 1.2 (thigh 0.0792, upper arm 0.0552, hips 0.1200, spine
-    0.1206, head 0.1080, ±0.4 mm); {"leg": 1.2} alone → legs 0.0792, arms stay 0.046. validate_scales refuses
+    0.1206, head 0.1080 with b_pos y = 1.889550 − 0.108 = 1.7816, ±0.4 mm); {"leg": 1.2} alone → legs 0.0792, arms stay 0.046. validate_scales refuses
     0.4, 1.6, "x", an unknown region; fills missing regions with 1.0.
 [4] A grafted garment node (``garment_dress_x``, a ring of radius 0.30 weighted LeftUpLeg) changes nothing:
     left_thigh stays 0.066 (body_arrays skips garment nodes).
@@ -56,7 +61,7 @@ Expected, derived by hand:
 [7] model_overview: base_model_steps / outfit_model_steps carry a "collision" row after extension_rig:
       record with 12 capsules → done "12 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head
       9.0 cm", numbers count 12; on the outfit "… · from the base model"; none → missing "Not computed";
-      error → failed with the error; a skipped capsule → warning "… · skipped head (joint HeadTop_End
+      error → failed with the error; a skipped capsule → warning "… · skipped left_shin (joint LeftFoot
       missing)".
 """
 import hashlib
@@ -217,16 +222,22 @@ def main() -> int:
     near("hips (ellipse q0.02)", r.get("hips"), 0.10002, 0.0003)
     near("spine (ellipse q0.10)", r.get("spine"), 0.10054, 0.0003)
     near("chest (ellipse q0.10)", r.get("chest"), 0.10054, 0.0003)
-    near("head (capsule surface)", r.get("head"), 0.090, 0.0003)
+    near("head (crown rule)", r.get("head"), 0.090, 0.0003)
+    head = next(c for c in full["capsules"] if c["id"] == "head")
+    check("head endpoints", (head["a"], head["b"], "a_pos" in head), ("mixamorig:Head", "mixamorig:Head", False))
+    check("head b_pos at the crown minus r", head.get("b_pos"), [0.0, 1.7996, 0.0])
+    check("limbs carry no positions", any("a_pos" in c or "b_pos" in c for c in full["capsules"] if c["id"] != "head"),
+          False)
     thigh = next(c for c in full["capsules"] if c["id"] == "left_thigh")
     check("joint names as in the model", (thigh["a"], thigh["b"], thigh["region"]),
           ("mixamorig:LeftUpLeg", "mixamorig:LeftLeg", "leg"))
 
     print("[2] missing joints are skipped and reported")
-    nohead = collision.fit_capsules(make_body(drop=("HeadTop_End",)))
-    check("11 capsules", len(nohead["capsules"]), 11)
-    check("head skipped", [(s["id"], s["reason"]) for s in nohead["skipped"]],
-          [("head", "joint HeadTop_End missing")])
+    notop = collision.fit_capsules(make_body(drop=("HeadTop_End",)))
+    check("no HeadTop_End: 12 capsules, head identical", (len(notop["capsules"]), notop["skipped"],
+          next(c for c in notop["capsules"] if c["id"] == "head")), (12, [], head))
+    nohead = collision.fit_capsules(make_body(drop=("Head",)))
+    check("head skipped", [(s["id"], s["reason"]) for s in nohead["skipped"]], [("head", "joint Head missing")])
     nofoot = collision.fit_capsules(make_body(drop=("LeftFoot",)))
     check("left_shin skipped", [(s["id"], s["reason"]) for s in nofoot["skipped"]],
           [("left_shin", "joint LeftFoot missing")])
@@ -239,6 +250,8 @@ def main() -> int:
                       ("spine", 0.12065), ("head", 0.108)):
         near(f"{cid} × 1.2", scaled.get(cid), want, 0.0004)
     legs = radii(collision.fit_capsules(body, scales={"leg": 1.2}))
+    scaled_head = next(c for c in collision.fit_capsules(body, scales={"head": 1.2})["capsules"] if c["id"] == "head")
+    near("head × 1.2: b_pos y keeps the cap at the crown", scaled_head["b_pos"][1], 1.7816, 0.0002)
     near("leg only: thigh", legs.get("left_thigh"), 0.0792, 0.0004)
     near("leg only: upper arm unchanged", legs.get("left_upper_arm"), 0.046, 0.0003)
     for bad in ({"leg": 0.4}, {"arm": 1.6}, {"torso": "x"}, {"tail": 1.0}, [1.0]):
@@ -278,7 +291,7 @@ def main() -> int:
     check("fitted once", len(calls), 1)
     collision.ensure_path("Demo", own, scales=defaults)
     check("current: not refitted", len(calls), 1)
-    other = make_body(drop=("HeadTop_End",))
+    other = make_body(drop=("LeftFoot",))
     own.write_bytes(other)
     rec = collision.ensure_path("Demo", own, scales=defaults)
     check("new bytes: refitted", (len(calls), rec["sha256"], len(rec["capsules"])),
@@ -358,11 +371,11 @@ def main() -> int:
     got = row(mo.base_model_steps({"rig": "mixamo", "collision": {**record, "capsules": [], "error": "boom"}},
                                   front_meta=None))
     check("error: failed", got and got[:2], ("failed", "boom"))
-    skipped = {**real_fit(make_body(drop=("HeadTop_End",))), "source": "own", "sha256": "x"}
+    skipped = {**real_fit(make_body(drop=("LeftFoot",))), "source": "own", "sha256": "x"}
     got = row(mo.base_model_steps({"rig": "mixamo", "collision": skipped}, front_meta=None))
     check("skipped: warning", got and got[:2],
-          ("warning", "11 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · skipped head "
-                      "(joint HeadTop_End missing)"))
+          ("warning", "11 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head 9.0 cm · skipped "
+                      "left_shin (joint LeftFoot missing)"))
     outfit_meta = {"rig": "mixamo", "source": "base_body", "collision": {**record, "source": "base"}}
     got = row(mo.outfit_model_steps(outfit_meta, base=None, base_meta=None, wanted_variant=None, deciders=[],
                                     shown=[], dressed_records={}, garments=[], tiers=["full"]))

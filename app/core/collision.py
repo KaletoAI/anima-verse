@@ -9,9 +9,11 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
     {"version": 1,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
-                   "r": 0.1, "region": "leg"}, ...],
-     "skipped":  [{"id": "head", "a": "mixamorig:Head", "b": "HeadTop_End",
-                   "reason": "joint HeadTop_End missing"}],
+                   "r": 0.1, "region": "leg"},
+                  {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
+                   "b_pos": [0.0, 1.62, 0.13], "r": 0.075, "region": "head"}, ...],
+     "skipped":  [{"id": "left_shin", "a": "mixamorig:LeftLeg", "b": "LeftFoot",
+                   "reason": "joint LeftFoot missing"}],
      "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0},
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
@@ -21,6 +23,13 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 ``a``/``b`` are the joint names AS IN THE MODEL (matched through ``rig_contract.norm_bone_name``), ``r`` in
 metres of the model's bind space. A capsule whose joint is missing (or whose start bone owns too few vertices)
 is not in ``capsules`` but in ``skipped`` with the reason — never a crash.
+
+ENDPOINT RULE. Each endpoint may carry an optional bind-space position, ``a_pos`` / ``b_pos`` (``[x, y, z]``
+in the space of the body's POSITION accessor). Absent → the joint's own bind position (inverse bind matrix).
+Present → a point FIXED TO THAT JOINT: it moves exactly like a body vertex skinned 100 % to the joint,
+``p_now = boneWorld · inverse(boneBindWorld) · p_bind`` (three.js: the joint's ``matrixWorld`` times its
+``skeleton.boneInverses`` entry, inside the skinned mesh's bind frame). The head capsule uses it: ``a`` = ``b``
+= Head, ``b_pos`` = a point above the Head joint (the rig contract has no crown joint).
 
 WHICH MODEL GETS WHICH SET. Humanoid (``rig "mixamo"``) GLB models only. A model of its own (generated,
 uploaded, the base body itself) is fitted on its own file (``source "own"``, ``sha256`` = the file). An outfit
@@ -59,8 +68,12 @@ SCALE_MIN, SCALE_MAX = 0.5, 1.5
 #: A start bone owning fewer body vertices than this gives no capsule (a quantile of a handful is noise).
 MIN_VERTICES = 16
 
-#: THE capsule table: ``(id, start joint, end joint, region, quantile, margin m)``. Joint names are the Mixamo
-#: base names (compared after ``norm_bone_name``).
+#: THE capsule table: ``(id, start joint, end joint, region, quantile, margin m, end rule)``. Joint names are the
+#: Mixamo base names (compared after ``norm_bone_name``). End rule ``"joint"``: the segment ends at the end
+#: joint. ``"crown"`` (head): the end is a ``b_pos`` fixed to the end joint (module docstring, ENDPOINT RULE):
+#: body axis ``u`` = Hips→Head; crown = the highest vertex owned by the start bone along ``u``; radius =
+#: quantile of the distances of those vertices to Head→crown (+ margin, × scale); ``b_pos`` = crown − r·u, so the
+#: capsule's cap ends AT the crown instead of r above it (never below the Head joint — then it is a sphere).
 #:
 #: Limbs — p95 + 6 mm: the S1 spike's leg capsules at that radius cut garment penetration to ≤ 0.6 % on walk
 #: and run without ballooning the skirt (p100 did).
@@ -81,24 +94,30 @@ MIN_VERTICES = 16
 #:   spine2→neck   p10 5.4–7.7  p15 5.8–8.2 cm → p10 (inside on all five).
 #: Margin 0: a torso capsule protects hair and extension bones from sinking DEEP, it must never float them.
 #:
-#: Head — ``HeadTop_End`` is not part of the 52-joint rig contract (``shared/models/rig/joints.json``), so real
-#: models carry no end joint and the head capsule is skipped and reported. The quantile is set for rigs that do
-#: have it: p50, margin 0 (distances of Head vertices to Head→crown on the five bodies: p50 6.9–8.5 cm, p95
-#: 9.3–12.8 cm — the face and jaw widen the tail; hair lies on the scalp, a fatter head capsule floats it).
-CAPSULES: Tuple[Tuple[str, str, str, str, float, float], ...] = (
-    ("left_thigh", "LeftUpLeg", "LeftLeg", "leg", 0.95, 0.006),
-    ("left_shin", "LeftLeg", "LeftFoot", "leg", 0.95, 0.006),
-    ("right_thigh", "RightUpLeg", "RightLeg", "leg", 0.95, 0.006),
-    ("right_shin", "RightLeg", "RightFoot", "leg", 0.95, 0.006),
-    ("left_upper_arm", "LeftArm", "LeftForeArm", "arm", 0.95, 0.006),
-    ("left_forearm", "LeftForeArm", "LeftHand", "arm", 0.95, 0.006),
-    ("right_upper_arm", "RightArm", "RightForeArm", "arm", 0.95, 0.006),
-    ("right_forearm", "RightForeArm", "RightHand", "arm", 0.95, 0.006),
-    ("hips", "Hips", "Spine1", "torso", 0.02, 0.0),
-    ("spine", "Spine1", "Spine2", "torso", 0.10, 0.0),
-    ("chest", "Spine2", "Neck", "torso", 0.10, 0.0),
-    ("head", "Head", "HeadTop_End", "head", 0.50, 0.0),
+#: Head — ``HeadTop_End`` is not part of the 52-joint rig contract (``shared/models/rig/joints.json``), so the
+#: head capsule uses the crown rule. p50, margin 0: hair lies on the scalp, a fatter head capsule floats it
+#: (HEAD_MEASURED below; p95 is 2–4 cm larger — the face and jaw widen the tail).
+CAPSULES: Tuple[Tuple[str, str, str, str, float, float, str], ...] = (
+    ("left_thigh", "LeftUpLeg", "LeftLeg", "leg", 0.95, 0.006, "joint"),
+    ("left_shin", "LeftLeg", "LeftFoot", "leg", 0.95, 0.006, "joint"),
+    ("right_thigh", "RightUpLeg", "RightLeg", "leg", 0.95, 0.006, "joint"),
+    ("right_shin", "RightLeg", "RightFoot", "leg", 0.95, 0.006, "joint"),
+    ("left_upper_arm", "LeftArm", "LeftForeArm", "arm", 0.95, 0.006, "joint"),
+    ("left_forearm", "LeftForeArm", "LeftHand", "arm", 0.95, 0.006, "joint"),
+    ("right_upper_arm", "RightArm", "RightForeArm", "arm", 0.95, 0.006, "joint"),
+    ("right_forearm", "RightForeArm", "RightHand", "arm", 0.95, 0.006, "joint"),
+    ("hips", "Hips", "Spine1", "torso", 0.02, 0.0, "joint"),
+    ("spine", "Spine1", "Spine2", "torso", 0.10, 0.0, "joint"),
+    ("chest", "Spine2", "Neck", "torso", 0.10, 0.0, "joint"),
+    ("head", "Head", "Head", "head", 0.50, 0.0, "crown"),
 )
+#: The joint that, with the start bone, gives the body axis of the crown rule.
+CROWN_AXIS_FROM = "Hips"
+
+#: HEAD_MEASURED (crown rule, 2026-11-09, same five bodies as the torso; body axis Hips→Head): crown above the
+#: Head joint 18.9 / 20.3 / 19.4 / 16.1 / 18.7 cm; p50 radius 7.1 / 7.8 / 7.5 / 6.9 / 8.1 cm; ``b_pos`` 11.7 /
+#: 12.5 / 11.9 / 9.3 / 10.6 cm above the Head joint; the capsule's top lands within 6 mm of the body's top
+#: (1.694–1.701 m on 1.700-m bodies).
 
 
 # --- region scales (per character) ---------------------------------------------------------------------------------
@@ -216,18 +235,17 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None) 
     dominant = np.where(body.weights[rows, strongest] > 0, dominant, -1)
     capsules: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
-    for capsule_id, start, end, region, quantile, margin in CAPSULES:
+    for capsule_id, start, end, region, quantile, margin, end_rule in CAPSULES:
         a_index, b_index = index_of.get(norm_bone_name(start)), index_of.get(norm_bone_name(end))
         a_name = names[a_index] if a_index is not None else start
         b_name = names[b_index] if b_index is not None else end
-        missing = [n for n, i in ((start, a_index), (end, b_index)) if i is None]
+        needed = [(start, a_index), (end, b_index)]
+        if end_rule == "crown":
+            needed.append((CROWN_AXIS_FROM, index_of.get(norm_bone_name(CROWN_AXIS_FROM))))
+        missing = list(dict.fromkeys(n for n, i in needed if i is None))
         if missing:
             skipped.append({"id": capsule_id, "a": a_name, "b": b_name,
                             "reason": "joint " + " and ".join(missing) + " missing"})
-            continue
-        a, b = positions[a_index], positions[b_index]
-        if float(np.linalg.norm(b - a)) < 1e-4:
-            skipped.append({"id": capsule_id, "a": a_name, "b": b_name, "reason": "degenerate segment"})
             continue
         # The body's skin indexes ITS joint list (skin 0 = the same list as above).
         owned = body.positions[dominant == a_index]
@@ -235,9 +253,31 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None) 
             skipped.append({"id": capsule_id, "a": a_name, "b": b_name,
                             "reason": f"too few vertices on {start} ({len(owned)})"})
             continue
+        a = positions[a_index]
+        if end_rule == "crown":
+            axis = a - positions[index_of[norm_bone_name(CROWN_AXIS_FROM)]]
+            if float(np.linalg.norm(axis)) < 1e-4:
+                skipped.append({"id": capsule_id, "a": a_name, "b": b_name, "reason": "no body axis"})
+                continue
+            axis = axis / np.linalg.norm(axis)
+            height = float(((owned - a) @ axis).max())
+            if height < 1e-3:
+                skipped.append({"id": capsule_id, "a": a_name, "b": b_name,
+                                "reason": f"no vertices above {start}"})
+                continue
+            b = a + axis * height
+        else:
+            b = positions[b_index]
+        if float(np.linalg.norm(b - a)) < 1e-4:
+            skipped.append({"id": capsule_id, "a": a_name, "b": b_name, "reason": "degenerate segment"})
+            continue
         distance = float(np.quantile(_segment_distances(owned, a, b), quantile))
         radius = (distance * unit + margin) * scales[region]
-        capsules.append({"id": capsule_id, "a": a_name, "b": b_name, "r": round(radius, 4), "region": region})
+        capsule = {"id": capsule_id, "a": a_name, "b": b_name, "r": round(radius, 4), "region": region}
+        if end_rule == "crown":
+            # The cap ends at the crown: the segment end lies r below it (never below the Head joint).
+            capsule["b_pos"] = [round(float(v), 4) for v in a + axis * max(height - radius / unit, 0.0)]
+        capsules.append(capsule)
     return {"version": VERSION, "capsules": capsules, "skipped": skipped, "scales": scales}
 
 

@@ -12112,6 +12112,34 @@ No motion field belongs to the scene-recipe payload or its fingerprint.
 Motion currently uses package defaults and fixes `rest_deg` at zero. World settings,
 equipment damping and motion overrides are resolved below; state poses remain P4.
 
+### Collision capsules (`collision`)
+
+One capsule set per humanoid (`rig "mixamo"`) GLB model, computed by the server (`app/core/collision.py`,
+spec `docs/superpowers/specs/2026-11-08-collision-capsules-design.md`) and applied by both renderers through
+`@anima/scene-render`: garment/hair vertices and extension-bone tips are kept outside them. Stored in the model
+sidecar (`collision`) and delivered as `model.collision` by `GET /characters/{name}/model3d` and as `collision`
+by `/characters/{name}/model/meta`, next to `extension_rig` (not in the worldmap poll — a client fetches the
+model meta when `model_sig` changes). `null` for a model that gets none.
+
+```
+{"version": 1,
+ "capsules": [{"id", "a", "b", "r", "region", "a_pos"?, "b_pos"?}],
+ "skipped":  [{"id", "a", "b", "reason"}],
+ "scales": {"leg", "arm", "torso", "head"}, "source": "own" | "base", "base_signature"?, "sha256",
+ "computed_at", "error"?}
+```
+
+- `a`/`b` — joint names as in the model (compare with `normBoneName`); `r` — metres of the bind space;
+  `region` — `leg` / `arm` / `torso` / `head`.
+- **Endpoint rule.** An endpoint WITHOUT `a_pos`/`b_pos` is the joint's position. An endpoint WITH one is a
+  bind-space point (the space of the body's POSITION accessor) fixed to that joint: it moves like a body vertex
+  skinned 100 % to the joint, `p_now = boneWorld · inverse(boneBindWorld) · p_bind`. The head capsule uses it
+  (`a` = `b` = Head, `b_pos` above the Head joint so the cap ends at the crown — the rig contract has no crown
+  joint). `a == b` positions are a sphere.
+- A capsule that could not be fitted (missing joint, too few vertices) is listed in `skipped`, never in
+  `capsules`; `error` = the fit failed, `capsules` is empty.
+- An outfit model on the base-body pipeline carries the set of the base body it was built on (`source "base"`).
+
 ### P2 runtime contract: secondary motion
 
 Both `client3d/src/scene/figures.ts` and the admin `Model3DViewer.tsx` use
