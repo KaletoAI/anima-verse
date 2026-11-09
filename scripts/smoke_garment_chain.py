@@ -87,6 +87,12 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
     lock held by the smoke: start_garment -> True (status "queued" at once),
     a second start_garment -> False; released, the run finds nothing to do
     and the "queued" mark ends without a failure.
+[5b] The fit record of [5] carries fit_version = garment_fit.FIT_VERSION["hair"].
+    Rewritten without it: _fit_state "stale"; after_base_model queues the
+    item and the run re-fits ONLY: 0 renders, 0 mesh calls, 1 decimation
+    (the low tier of the new fit; the prepared mesh stays cached); the new
+    record accepted, fit_version current, base sha unchanged; "accepted"
+    again. A record with fit_version one lower is "stale" as well.
 [6] New profile image -> B2 (base images + base model for B2 written):
     after_base_model runs the whole chain under F2: 4 renders, 1 mesh call,
     fit record base_signature B2.
@@ -310,8 +316,8 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         from app.blender import refine
-        from app.core import (base_body, expression_regen, extension_rig, garment_assembly, garment_hair,
-                              glb_delivery, model3d, model_refs, sync_topics)
+        from app.core import (base_body, expression_regen, extension_rig, garment_assembly, garment_fit,
+                              garment_hair, glb_delivery, model3d, model_refs, sync_topics)
         from app.core import garment_store as gs
         from app.imagegen import service
         from app.models import character as charmod
@@ -577,6 +583,27 @@ def main() -> int:
         check("idle", garments.wait_idle(60), True)
         check("queued mark ended", (gs.status("Demo", hid)["running_step"], gs.status("Demo", hid)["failed"]),
               (None, None))
+
+        # --- [5b] fit by an older fit algorithm ---------------------------------------------
+        print("[5b] fit record without fit_version -> stale -> fit only")
+        check("record carries the version", rec5.get("fit_version"), garment_fit.FIT_VERSION["hair"])
+        old = {k: v for k, v in rec5.items() if k != "fit_version"}
+        gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), old)
+        check("stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
+        before = counts()
+        check("after_base_model starts", garments.after_base_model("Demo"), True)
+        check("idle", garments.wait_idle(120), True)
+        after = counts()
+        check("no render, no mesh, refit (prepared kept, low rebuilt)",
+              (after[0] - before[0], after[1] - before[1], after[2] - before[2]), (0, 0, 1))
+        rec5b = fit_record(f1)
+        check("refit record", (rec5b.get("accepted"), rec5b.get("fit_version"), rec5b.get("base_model_sha256")),
+              (True, garment_fit.FIT_VERSION["hair"], new_sha))
+        check("accepted again", garments._fit_state("Demo", hid, f1, new_sha), "accepted")
+        older = {**rec5b, "fit_version": garment_fit.FIT_VERSION["hair"] - 1}
+        gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), older)
+        check("older version stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
+        gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), rec5b)
 
         # --- [6] new bsig ---------------------------------------------------------------
         print("[6] new profile image -> new base signature -> whole chain")

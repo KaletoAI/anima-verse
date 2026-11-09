@@ -287,7 +287,8 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
                method: str = "edit_chain") -> str:
     """``accepted`` (on the current base model, from the current prepared
     mesh — HairDeck: from its seed's hair, still stored unchanged under an
-    accepted job), ``stale`` (accepted on another base model), ``outdated``
+    accepted job), ``stale`` (accepted on another base model, or by an
+    older fit algorithm: ``garment_fit.FIT_VERSION``), ``outdated``
     (accepted, but the prepared mesh / HairDeck hair it was fitted from was
     replaced or removed) or ``missing``."""
     from app.core.garment_store import HAIRDECK, garment_path, read_record
@@ -297,6 +298,9 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
         return "missing"
     if not base_model_sha or record.get("base_model_sha256") != base_model_sha:
         return "stale"
+    from app.core.garment_fit import FIT_VERSION
+    if record.get("fit_version") != FIT_VERSION.get(str(record.get("kind"))):
+        return "stale"  # fitted by an older fit algorithm: the chain re-runs the fit only
     if method == HAIRDECK:
         inputs = record.get("inputs") or {}
         try:
@@ -610,8 +614,9 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     ``record``, decimate the distance tier to ``low/`` and schedule the
     assembly. Shared by both hair methods."""
     from app.blender import refine
-    from app.core import glb_mesh
+    from app.core import garment_fit, glb_mesh
     from app.core.garment_store import garment_path, write_record
+    record["fit_version"] = garment_fit.FIT_VERSION[kind]
     blob = glb_mesh.graft(rigged, result.garment, name=f"garment_{kind}_{item_id}",
                           extras={"kind": kind, "item_id": item_id, "fsig": fsig})
     fit = garment_path(character_name, item_id, fsig, "fit")

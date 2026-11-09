@@ -83,6 +83,13 @@ DELTA_SMOOTH_PASSES = 25
 RIGGED_ITERATIONS = 10
 RIGGED_SMOOTH_UNTIL = 7
 
+#: Fit algorithm version per garment kind, written into every fit record (``fit_version``, ``garments._publish_fit``).
+#: A record with an older or missing version is stale (``garments._fit_state``): the chain re-runs the FIT only — CPU,
+#: no hub job; images and mesh stay cached under the unchanged fsig. Bump a kind whenever its fit output changes.
+#: 2 (2026-11-10): clothing — skinned transfer (sleeves, 3b4b0abf) and the smoothed skirt leg weights; hair — the
+#: Head -> Neck -> Spine2 ramp between the ear line and the shoulder top.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 2}
+
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
     "bib_cm2": ("max", 50.0, "bib area in front of the neck"),
