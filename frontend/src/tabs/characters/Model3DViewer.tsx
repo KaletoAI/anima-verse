@@ -34,6 +34,8 @@ import { CLOSE_TOL_PX } from '../world/planGeometry'
 import { areaKindOf } from '../props/propTypes'
 import type { AreaOutline, LeafBbox, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
+import { FreshnessCorner } from './FreshnessBadge'
+import type { Freshness } from './FreshnessBadge'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
@@ -270,7 +272,7 @@ export interface ActionAccessOverlay {
   yaw: number
 }
 
-export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, lightPoint, waterRegions, onPickModelPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -279,6 +281,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
+    /** Current / outdated / no data of the shown model (server verdict,
+     *  app/core/model_overview.py) — a badge in the top left corner. */
+    freshness?: Freshness | null
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -2233,6 +2238,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           </div>
         )
       ) : null}
+      <FreshnessCorner freshness={freshness} />
       {/* THE VIEW CONTROLS — one column at the top right, so no button has to
           know how many of its neighbours happen to be shown. */}
       {!loading && !error && (motion || onFrontalChange || keepCamera

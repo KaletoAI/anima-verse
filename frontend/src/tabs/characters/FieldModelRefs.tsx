@@ -27,6 +27,7 @@ import { useToast } from '../../lib/Toast'
 import { ImageGenDialog } from '../../components/ImageGenDialog'
 import type { ImageGenSubmit } from '../../components/ImageGenDialog'
 import { RefImage } from './RefImage'
+import type { Freshness } from './FreshnessBadge'
 
 interface RefInfo {
   filename?: string
@@ -37,6 +38,10 @@ interface RefInfo {
   backend?: string
   /** A base-body dressed back kept although its fit checks failed. */
   warning?: string
+  /** Made from current data? (server, model_overview.annotate_model_refs_info:
+   *  dressed views and drafts against the current base, the face view
+   *  against the profile picture) — the tile's corner badge. */
+  freshness?: Freshness | null
 }
 
 /** What the backend is doing to ONE kind right now (system-time stamps). */

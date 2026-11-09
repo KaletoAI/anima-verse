@@ -1,7 +1,7 @@
 /**
  * RefImage — the ONE image tile of the character tabs (Base body, Pose with
  * the dressed outfit views, T-pose and extra views, Hair): the picture plus
- * two corner badges, and a click that opens it in the shared Lightbox.
+ * three corner badges, and a click that opens it in the shared Lightbox.
  *
  * Lower left: when the image was made (`createdAt` — the sidecar's stamp,
  * else the file's mtime, both supplied by the server), formatted with the
@@ -11,19 +11,27 @@
  * (naturalWidth/Height), i.e. what the file actually is, not what the config
  * asked for. When the two do not fit side by side, the time moves up a line.
  *
+ * Upper left: whether the image comes from current data (`freshness`,
+ * FreshnessBadge — decided by the server, app/core/model_overview.py).
+ *
  * Backend payloads that carry `model` / `created_at`:
  * `model_refs.image_tile_meta` (model-refs info, base_info.image_meta,
- * garment_info image steps and their attempts).
+ * garment_info image steps and their attempts); `freshness` is added by
+ * the info routes (`model_overview.annotate_*`).
  */
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEnlarge } from '../../components/ZoomButton'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
+import { FreshnessCorner } from './FreshnessBadge'
+import type { Freshness } from './FreshnessBadge'
 
 /** The tile meta the server hands along with an image URL. */
 export interface ImageTileMeta {
   model?: string | null
   created_at?: string | null
+  /** Current / outdated / no data — the server's verdict. */
+  freshness?: Freshness | null
 }
 
 const BADGE_STYLE: CSSProperties = {
@@ -118,6 +126,7 @@ export function RefImage({
           {right ? <span style={{ ...badge, marginLeft: 'auto' }}>{right}</span> : null}
         </div>
       ) : null}
+      {!hidden ? <FreshnessCorner freshness={meta?.freshness} compact={compact} inset={inset} /> : null}
       {action ? (
         <div style={{ position: 'absolute', top: inset, right: inset }}>{action}</div>
       ) : null}

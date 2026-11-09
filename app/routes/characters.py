@@ -1478,9 +1478,12 @@ def get_character_model_refs(character_name: str) -> Dict[str, Any]:
     ``{tpose, pose, status, now}`` — ``status`` carries per kind whether a
     render is ``running`` and whether one is only ``scheduled`` (debounce
     timer armed), with the matching system stamps; ``now`` is the server
-    clock, so a client measures a state's age without its own clock skew."""
+    clock, so a client measures a state's age without its own clock skew.
+    Every image info carries a ``freshness``
+    (``model_overview.annotate_model_refs_info``)."""
+    from app.core.model_overview import annotate_model_refs_info
     from app.core.model_refs import get_model_refs_info
-    return get_model_refs_info(character_name)
+    return annotate_model_refs_info(character_name, get_model_refs_info(character_name))
 
 
 @router.post("/{character_name}/model-refs/generate")
@@ -1723,10 +1726,13 @@ def _require_character(character_name: str) -> None:
 def get_character_base_body(character_name: str,
                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """``{pipeline, humanoid, signature, images, status, model, now}`` of the
-    character's base body (see ``base_body.base_info``)."""
+    character's base body (see ``base_body.base_info``), with the base
+    model's ``steps`` / ``freshness`` and a ``freshness`` per view
+    (``model_overview.annotate_base_info``)."""
     from app.core.base_body import base_info
+    from app.core.model_overview import annotate_base_info
     _require_character(character_name)
-    return base_info(character_name)
+    return annotate_base_info(character_name, base_info(character_name))
 
 
 @router.post("/{character_name}/base-body/images", status_code=202)
@@ -1854,7 +1860,8 @@ def get_character_hair(character_name: str,
     the world default; ``hairdeck`` the HairDeck section of the current
     ``hsig`` (``garments.hairdeck_panel``) and ``other`` the last result of
     the method not selected (``garments.other_method_info``), both None
-    without an item."""
+    without an item. Every image carries a ``freshness`` and both previews a
+    ``preview_freshness`` (``model_overview.annotate_hair``)."""
     from app.core import (base_body, garment_fit, garment_gates, garment_hair, garment_hairdeck, garment_mesh,
                           garments)
     from app.core.model_refs import is_humanoid
@@ -1875,22 +1882,24 @@ def get_character_hair(character_name: str,
         except ValueError:
             info = hairdeck = other = None
     method, method_source = garment_hair.hair_method_source(character_name, profile=profile)
-    return {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
-            "humanoid": humanoid,
-            "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
-            "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
-                                                                                     profile=profile)),
-            "item_id": item_id, "equipped": equipped, "garment": info, "collision": False,
-            "limits": {**garment_gates.limits(),
-                       "mesh": {"largest_component_share": {"op": "ge",
-                                                            "value": garment_mesh.MIN_COMPONENT_SHARE}},
-                       "fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
-                               for key, (kind, limit, _label) in garment_fit.GATES.items()},
-                       "hairdeck_fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
-                                        for key, (kind, limit, _label) in garment_hairdeck.GATES.items()}},
-            "method": method, "method_source": method_source,
-            "world_method": garment_hair.world_hair_method(),
-            "hairdeck": hairdeck, "other": other}
+    payload = {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
+                "humanoid": humanoid,
+                "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
+                "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
+                                                                                         profile=profile)),
+                "item_id": item_id, "equipped": equipped, "garment": info, "collision": False,
+                "limits": {**garment_gates.limits(),
+                           "mesh": {"largest_component_share": {"op": "ge",
+                                                                "value": garment_mesh.MIN_COMPONENT_SHARE}},
+                           "fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
+                                   for key, (kind, limit, _label) in garment_fit.GATES.items()},
+                           "hairdeck_fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
+                                            for key, (kind, limit, _label) in garment_hairdeck.GATES.items()}},
+                "method": method, "method_source": method_source,
+                "world_method": garment_hair.world_hair_method(),
+                "hairdeck": hairdeck, "other": other}
+    from app.core.model_overview import annotate_hair
+    return annotate_hair(payload)
 
 
 @router.post("/{character_name}/hair/method")
@@ -2107,14 +2116,17 @@ def get_character_animations(character_name: str, pose: str = "") -> Dict[str, A
 def get_character_model3d(character_name: str, request: Request, preview_states: Optional[str] = None) -> Dict[str, Any]:
     """Status of the generated mesh for the CURRENT outfit combination
     ({signature, has_input, model, pending}) + the character's animation set
-    (explicit or derived), so the preview can offer the matching clips."""
+    (explicit or derived), so the preview can offer the matching clips.
+    ``model`` carries ``freshness`` and — for an outfit model on the
+    base-body pipeline — its ``steps`` (``model_overview.annotate_model3d_info``)."""
     from app.core.animation_sets import derive_set, resolve_sets
     from app.core.model3d import get_model3d_info
     selected = None
     if preview_states is not None:
         require_admin(request)
         selected = [] if preview_states == "none" else [value.strip() for value in preview_states.split(",") if value.strip()]
-    info = get_model3d_info(character_name, preview_states=selected)
+    from app.core.model_overview import annotate_model3d_info
+    info = annotate_model3d_info(character_name, get_model3d_info(character_name, preview_states=selected))
     chain = resolve_sets(character_name)
     info["animation_set"] = chain[0] if chain else ""
     info["animation_sets"] = chain          # explicit first, then derived

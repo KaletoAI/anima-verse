@@ -9,6 +9,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
+import type { Freshness } from './FreshnessBadge'
+import type { ModelStep } from './ModelSteps'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -33,6 +35,11 @@ export interface BaseModelInfo {
    *  unrigged (static checkpoint without a run) · ready */
   status: 'running' | 'failed' | 'unrigged' | 'ready'
   error: string
+  /** What was done to the stored model, step by step (server,
+   *  app/core/model_overview.py) — absent while none is stored. */
+  steps?: ModelStep[]
+  /** Built from the base views stored now? */
+  freshness?: Freshness | null
 }
 
 /** The current outfit's model on the pipeline. */
@@ -56,7 +63,7 @@ export interface BaseBodyInfo {
   humanoid: boolean
   signature: string
   images: Partial<Record<BaseView, string | null>>
-  /** Per stored view: model + creation time for the image tile. */
+  /** Per stored view: model, creation time and freshness for the image tile. */
   image_meta?: Partial<Record<BaseView, ImageTileMeta | null>>
   status: Partial<Record<BaseView, BaseViewStatus>>
   model: BaseModelInfo | null

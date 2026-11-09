@@ -23,6 +23,9 @@ import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Field } from '@anima/player-ui'
 import { Model3DViewer } from './Model3DViewer'
+import { ModelSteps } from './ModelSteps'
+import type { ModelStep } from './ModelSteps'
+import type { Freshness } from './FreshnessBadge'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 
@@ -119,6 +122,12 @@ interface Model3DInfo {
   /** Base-body pipeline: the served file was built on an older base body
    *  (or before the pipeline) — shown with all its details, plus a hint. */
   stale_base?: boolean
+  /** The side overview of an outfit model on the base-body pipeline (server,
+   *  app/core/model_overview.py); absent for a model of the old path, which
+   *  keeps the overview built here. */
+  steps?: ModelStep[]
+  /** Current / outdated / no data — the viewer's corner badge. */
+  freshness?: Freshness | null
   stale_reason?: 'older_base' | 'before_pipeline' | 'detail_changed'
   /** Base-body pipeline: the face belongs to the base body — the face
    *  dialog and its status act on this signature. */
@@ -872,7 +881,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const weights = model?.limb_weights
   const weightsText = weights?.error ? t('Error') : !weights?.checked ? t('not checked')
     : weights.vertices > 0 ? t('{n} vertices repaired').replace('{n}', String(weights.vertices)) : t('clean')
-  const statusPanel = <div className="ga-model3d-status">
+  const statusPanel = model?.steps?.length ? <ModelSteps steps={model.steps} /> : <div className="ga-model3d-status">
     {statusRow(t('Pose render'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
       : tp === 'other_outfit' ? t('other outfit') : t('unknown'),
       tp === 'current' ? 'green' : tp === 'changed' ? 'red' : tp === 'other_outfit' ? 'yellow' : 'grey',
@@ -900,6 +909,7 @@ export function FieldModel3D({ character }: { character: string }) {
             previewTilt
             height={480}
             statusPanel={statusPanel}
+            freshness={model.freshness}
             motion={rigless ? undefined : previewMotion}
             motionToolbar={rigless ? undefined : motionToolbar}
             url={viewerUrl}

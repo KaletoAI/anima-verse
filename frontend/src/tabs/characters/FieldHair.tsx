@@ -475,7 +475,8 @@ function OtherMethod({ other, method, limits }: {
         limits={hairdeck ? limits.hairdeck_fit : limits.fit}
       />
       {open && other.preview_url ? (
-        <Model3DViewer key={other.preview_url} url={other.preview_url} format="glb" height={300} />
+        <Model3DViewer key={other.preview_url} url={other.preview_url} format="glb" height={300}
+          freshness={other.preview_freshness} />
       ) : null}
       <div className="ga-hint">
         {t('Select this method above to use it again — its files stay, the switch generates nothing.')}
@@ -993,7 +994,8 @@ export function FieldHair({ character, onEditAppearance }: {
 
           <div className="ga-fieldset-title">{t('Preview')}</div>
           {garment?.preview_url ? (
-            <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={360} />
+            <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={360}
+              freshness={garment.preview_freshness} />
           ) : (
             <div className="ga-hint">{t('No fitted hair yet')}</div>
           )}

@@ -12,6 +12,9 @@
  * POST .../base-body/model {force?} (409 while another 3D run of the
  * character is going — base and outfit share one guard).
  *
+ * Every view tile and the base model carry the server's freshness badge;
+ * the base model shows its steps (ModelSteps) beside the preview.
+ *
  * The section is humanoid-only in the template (`visible_when`); should a
  * non-humanoid still reach it, it shows only a hint. The outfit model's
  * retexture status lives under the Pose tab's pose tiles
@@ -24,6 +27,7 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { Model3DViewer } from './Model3DViewer'
+import { ModelSteps } from './ModelSteps'
 import { RefImage } from './RefImage'
 import { BASE_VIEWS, modelRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
@@ -210,7 +214,11 @@ export function FieldBaseBody({ character }: { character: string }) {
             <div className="ga-hint" style={ERROR_STYLE}>{model.error}</div>
           ) : null}
           {model?.url ? (
-            <Model3DViewer key={model.url} url={model.url} format="glb" height={360} />
+            // The side overview like the 3D tab's: what was done to the base
+            // model and how each step came out (server-built steps).
+            <Model3DViewer key={model.url} url={model.url} format="glb" height={360} previewTilt
+              freshness={model.freshness}
+              statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined} />
           ) : null}
         </>
       ) : null}

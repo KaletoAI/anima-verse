@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
+import type { Freshness } from './FreshnessBadge'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
@@ -124,6 +125,8 @@ export interface OtherMethodInfo {
   metrics: Record<string, number>
   colour?: { target: string | null; source: string } | null
   on_current_base: boolean
+  /** Current / outdated of its preview (server, model_overview.annotate_hair). */
+  preview_freshness?: Freshness | null
 }
 
 export interface GarmentFailure {
@@ -158,6 +161,8 @@ export interface GarmentInfo {
   failed: GarmentFailure | null
   preview_url: string | null
   served_fsig: string | null
+  /** Current fsig fit on screen, or an older one and why (server). */
+  preview_freshness?: Freshness | null
 }
 
 /** A chip limit (`garment_gates.limits` + mesh + fit in the route). */
