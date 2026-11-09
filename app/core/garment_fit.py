@@ -27,7 +27,13 @@ import numpy as np
 from app.core.glb_mesh import BodyMesh, GarmentMesh
 
 # R9 — fit constants in METRES (the spike's unit constants x 1.70)
-CLEAR_M = 0.0068
+# Clearance from the REAL body surface. The spike asked for 0.004 units (0.0068 m), but its raw voxel field put the
+# zero level ~1.8 voxels outside the surface, and with the field's two-voxel jump in the boundary cell its pushes
+# landed 1.5 voxels further out than asked (measured on spheres of 30..75 voxels radius: 3.48..3.52 voxels for a
+# 2-voxel request). Its visually verified look therefore had 0.0068 + 1.5 * 0.0034 = 0.0119 m of real clearance.
+# ``body_sdf`` measures from the real surface, so the default asks for that distance directly (controller ruling
+# 2026-11-09: the default reproduces the spike's look).
+CLEAR_M = 0.0119
 VOX_M = 0.0034
 SPREAD_M = 0.0085
 SPREAD_DEPTH_M = 0.119

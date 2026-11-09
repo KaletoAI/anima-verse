@@ -63,9 +63,11 @@ No world, no server, no external assets: every mesh below is built in this file.
       the disc -> uncovered ~ 0.48, inside 0.5 +- 0.05.
     - The gate passes the spike's best numbers and names every limit it refuses (R7).
 
-(f) ``fit_hair`` end to end on synthetic GLBs: the hair cap of (c) (r 0.106 units) is generated in its own frame
+(f) ``fit_hair`` end to end on synthetic GLBs: a hair cap at r 0.108 units is generated in its own frame
     (x4, shifted by (3, -2, 1)) and placed through the shared image framing (1000 px per unit for both masks),
-    centred in depth on the head, pushed (nothing to push, clearance 0.006 > 0.004), transferred to the rigged body:
+    centred in depth on the head, pushed (nothing to push: clearance 0.008 units = 0.0136 m > CLEAR_M 0.0119 m),
+    transferred to the rigged body. The scalp metric counts the inner wall too (r 0.098 -> 0.1666 m): the hair at
+    1.7 * 0.108 = 0.1836 m is 0.017 m from it, within the 2 cm, so nothing is uncovered.
     every vertex ends within 0.005 m of 1.7 * cap + (0, 0.05, 0), k = 1.700 +- 0.002, the gate passes, all weights
     are Head (the cap is above the chin 1.7 * 0.8 + 0.05 = 1.41). Masks of different sizes (no shared framing) are
     refused.
@@ -461,7 +463,8 @@ def test_fit_hair():
     rigged = make_glb(br.positions, br.faces, br.uvs, joints=br.joints, weights=br.weights,
                       joint_names=br.joint_names)
     c = np.array([0, 0.9, 0])
-    hair, hf = cap(0.106, c)
+    hair, hf = cap(0.108, c, n_el=31, nlon=120)  # 3-degree grid: a ring lies in the +-0.004 probe band at y 0.96,
+    # and the rigged spacing (~1 cm at r 0.187 m) keeps every scalp vertex within 2 cm of hair
     hu = np.stack([np.linspace(0, 1, len(hair)), np.linspace(1, 0, len(hair))], 1)
     prepared = make_glb(4 * (hair - c) + np.array([3, -2, 1]), hf, hu, image=png())
     # 1000 px per unit, column 500 = x 0, row 100 = y 1.0 (the head top)
@@ -476,8 +479,8 @@ def test_fit_hair():
     res = gf.fit_hair(prepared, unrigged, rigged, bm, gm)
     g = res.garment
     expect = 1.7 * hair + np.array([0, 0.05, 0])
-    # the 60 copies of the pole weld into one vertex: every copy stays (each is used by a surviving face), only the
-    # 60 faces with two pole corners collapse
+    # the 120 copies of the pole weld into one vertex: every copy stays (each is used by a surviving face), only the
+    # 120 faces with two pole corners collapse
     check(len(g.positions) == len(hair), f"fit_hair: all {len(hair)} vertices kept (got {len(g.positions)})")
     err = np.abs(g.positions - expect).max()
     check(err <= 0.005, f"fit_hair: placed within 5 mm of 1.7 * cap + t (max err {err:.4f})")
@@ -492,7 +495,7 @@ def test_fit_hair():
         check(False, "fit_hair: masks of different sizes refused")
     except ValueError:
         check(True, "fit_hair: masks of different sizes refused (no shared framing)")
-    check(len(g.indices) == len(hf) - 60, f"fit_hair: the 60 faces collapsing onto the welded pole are dropped "
+    check(len(g.indices) == len(hf) - 120, f"fit_hair: the 120 faces collapsing onto the welded pole are dropped "
           f"({len(hf)} -> {len(g.indices)})")
 
 
