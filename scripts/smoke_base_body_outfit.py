@@ -169,7 +169,8 @@ Expected, derived by hand from the brief:
         state no longer matches), atlas kept. A partial outfit_piece without
         the key keeps true and asks nothing.
     (c) rebuild_extension_rig(Demo, osig, force) (2.5) -> ok, noop False,
-        ONE worker call (build_outfit_model), base_variant rigged, batch
+        NO worker call (build_outfit_model reuses the current painted body
+        of the outfit's texture, plan 2026-11-10), base_variant rigged, batch
         [jiggle, tip] from the prerig, atlas kept. Flag false -> asked again;
         forced run -> covered.
     (d) covered file deleted, _ensure_covered_variant stubbed off -> forced
@@ -664,9 +665,20 @@ def main() -> int:
             front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
             back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()
             draft_file = refs / "drafts" / f"tpose_back_{osig}.png"
-            check("front sidecar extra", front_r.get("sidecar_extra"),
+            # The texture fields (plan 2026-11-10 texture-body reuse) are
+            # checked on their own: the texture signature's shape and the
+            # front's dress text of [2]; smoke_texture_body_reuse pins the rule.
+            texture_keys = ("texture_signature", "dress_text")
+            front_extra = dict(front_r.get("sidecar_extra") or {})
+            fit_extra = dict(fit_r.get("sidecar_extra") or {})
+            check("front texture fields", (bool(base_body.is_texture_signature(front_extra.get("texture_signature"))),
+                                           front_extra.get("dress_text")),
+                  (True, "they now wear a fitted red cotton dress with white sneakers"))
+            check("fit names the front's texture", fit_extra.get("texture_signature"),
+                  front_extra.get("texture_signature"))
+            check("front sidecar extra", {k: v for k, v in front_extra.items() if k not in texture_keys},
                   {"base_signature": bsig, "dressed": True, "base_image_sha256": front_sha})
-            check("fit sidecar extra", fit_r.get("sidecar_extra"),
+            check("fit sidecar extra", {k: v for k, v in fit_extra.items() if k not in texture_keys},
                   {"base_signature": bsig, "dressed": True, "base_image_sha256": back_sha,
                    "back_draft": draft_file.name,
                    "back_draft_sha256": hashlib.sha256(draft_file.read_bytes()).hexdigest()
@@ -929,8 +941,11 @@ def main() -> int:
                       inventory.get_item(dress)["outfit_piece"].get("exposed_detail"), True)
                 check("unchanged flag asks nothing", asked, [])
                 # (c) the forced extension rig of the OUTFIT (2.5) builds the
-                # outfit model anew (one worker call; rigged -> [jiggle, tip]
-                # from the prerig again), never from the outfit's own geometry.
+                # outfit model anew (rigged -> [jiggle, tip] from the prerig
+                # again), never from the outfit's own geometry. The painted
+                # body of its texture is current (same base model, same views):
+                # reused, NO worker call (plan 2026-11-10 texture-body reuse —
+                # the extension rig never needed a repaint).
                 SCRIPT_CALLS.clear()
                 calls_before = len(calls())
                 result = model3d.rebuild_extension_rig("Demo", osig, force=True)
@@ -938,7 +953,7 @@ def main() -> int:
                 check("2.5: forced extension rig rebuilt the outfit",
                       (result.get("ok"), result.get("noop"), len(calls()) - calls_before,
                        meta12.get("base_variant"), SCRIPT_CALLS),
-                      (True, False, 1, "rigged", [("extension_bones", ["jiggle", "tip"])]))
+                      (True, False, 0, "rigged", [("extension_bones", ["jiggle", "tip"])]))
                 check("2.5: atlas kept", pixel(parts(model.read_bytes())[2]), colour_of(f"tpose_{osig}"))
                 inventory.update_item(dress, {"outfit_piece": {**piece, "exposed_detail": False}})
                 check("flag off asks again", asked, ["Demo"])

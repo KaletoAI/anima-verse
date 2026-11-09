@@ -2660,7 +2660,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                     # img2mesh, no rig job, no hub record.
                     if not get_model3d_dir(character_name).is_dir():
                         return {"ok": False, "error": "character_gone"}
-                    return build_outfit_model(character_name, signature)
+                    return build_outfit_model(character_name, signature, force=force)
 
             from app.imagegen.routing import character_spec
             if (not backend_glob and prefer_cheapest

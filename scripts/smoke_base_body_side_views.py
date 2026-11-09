@@ -597,7 +597,9 @@ def main() -> int:
                 check("left fit prompt + size", (lf.get("bare_prompt"), lf.get("override_width"),
                                                  lf.get("override_height")), (FIT_PROMPT, 8, 8))
                 left_draft = refs / "drafts" / f"tpose_left_{sig2}.png"
-                check("left fit sidecar extra", lf.get("sidecar_extra"),
+                # Texture fields (plan 2026-11-10) checked by smoke_texture_body_reuse.
+                check("left fit sidecar extra", {k: v for k, v in (lf.get("sidecar_extra") or {}).items()
+                                                 if k not in ("texture_signature", "dress_text")},
                       {"base_signature": bsig, "dressed": True,
                        "base_image_sha256": hashlib.sha256((refs / f"tpose_left_{bsig}.png").read_bytes())
                        .hexdigest(),

@@ -55,6 +55,16 @@ accepted fit on the current base model (``garment_store.accepted_fit``, R11).
 Every other recognised garment group is stale; a file whose name the store
 does not recognise is never judged. When the keep set cannot be computed, no
 garment group is judged at all.
+
+**Painted bodies** (``base_body`` texture store, plan
+2026-11-10-texture-body-reuse Task 1) live in ``model3d/texture/`` and
+``model_refs/texture/[drafts/]`` under a texture signature (``"tex"`` + 12
+hex); the report names such a group ``texture:<tsig>``. A group is kept
+while an outfit model (``model3d/<sig>.json``) or an outfit's dressed view
+(``model_refs/tpose*_<sig>.json`` — the current outfit's among them) names
+it as ``texture_signature`` AND none of its sidecars names another base
+signature than the current one (a body of an old base is never served
+again). Unreferenced groups are stale.
 """
 
 import re
@@ -306,6 +316,77 @@ def _garment_files(character_name: str) -> Dict[str, List[Path]]:
             for (item, fsig), files in garment_store.stored_groups(character_name).items()}
 
 
+TEXTURE_KEY_PREFIX = "texture:"
+
+
+def _texture_dirs(character_name: str) -> List[Path]:
+    from app.core.base_body import DRAFT_DIR, TEXTURE_DIR
+    from app.models.character import get_character_dir
+    root = get_character_dir(character_name)
+    refs = root / "model_refs" / TEXTURE_DIR
+    return [root / "model3d" / TEXTURE_DIR, refs, refs / DRAFT_DIR]
+
+
+def _texture_files(character_name: str) -> Dict[str, List[Path]]:
+    """``texture:<tsig>`` → its files in the texture store (painted body +
+    sidecar, dressed views, drafts); a name that is no texture signature is
+    never judged."""
+    from app.core.base_body import TEXTURE_SIG_RE
+    out: Dict[str, List[Path]] = {}
+    for folder in _texture_dirs(character_name):
+        if not folder.is_dir():
+            continue
+        for p in sorted(folder.iterdir()):
+            if not p.is_file():
+                continue
+            stem = p.stem
+            for prefix in REF_PREFIXES:
+                if stem.startswith(prefix):
+                    stem = stem[len(prefix):]
+                    break
+            if TEXTURE_SIG_RE.fullmatch(stem):
+                out.setdefault(TEXTURE_KEY_PREFIX + stem, []).append(p)
+    return out
+
+
+def _texture_referenced(character_name: str) -> Set[str]:
+    """Texture signatures named by an outfit model or an outfit's dressed
+    view (top-level sidecars only — never the store's own)."""
+    import json
+    from app.core.base_body import is_texture_signature
+    from app.models.character import get_character_dir
+    root = get_character_dir(character_name)
+    sidecars = list((root / "model3d").glob("*.json")) + list((root / "model_refs").glob("tpose*.json"))
+    out: Set[str] = set()
+    for sidecar in sidecars:
+        try:
+            tsig = json.loads(sidecar.read_text(encoding="utf-8")).get("texture_signature")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if is_texture_signature(tsig):
+            out.add(str(tsig))
+    return out
+
+
+def _texture_valid(files: Iterable[Path], referenced: Set[str], key: str,
+                   current_base: Optional[str]) -> bool:
+    import json
+    if key[len(TEXTURE_KEY_PREFIX):] not in referenced:
+        return False
+    if current_base is None:
+        return True  # the base cannot be judged: never delete on a guess
+    for p in files:
+        if p.suffix.lower() != ".json":
+            continue
+        try:
+            recorded = json.loads(p.read_text(encoding="utf-8")).get("base_signature")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if recorded and recorded != current_base:
+            return False
+    return True
+
+
 def _garment_keep(character_name: str) -> Optional[Set[str]]:
     """The garment groups that stay: per garment item — every equipped mesh
     piece (hair) and every own-mesh outfit piece the character HOLDS or wears
@@ -353,7 +434,7 @@ def _garment_keep(character_name: str) -> Optional[Set[str]]:
 def verify_cache(character_name: str) -> Dict[str, Any]:
     """Report on both caches:
 
-    ``{refs: {total, valid, stale, stale_bytes}, meshes: {…}, garments: {…},
+    ``{refs: {total, valid, stale, stale_bytes}, meshes: {…}, garments: {…}, textures: {…},
     stale_signatures: [...], protected: [sig]}``
 
     Signature counts, not file counts — one signature owns an image and its
@@ -428,8 +509,21 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
     out["garments"] = {"total": len(garment_groups), "valid": garment_valid,
                        "stale": len(garment_groups) - garment_valid,
                        "stale_bytes": garment_stale_bytes}
-    logger.info("Cache GC %s: refs %s, meshes %s, garments %s, %d stale signature(s)",
-                character_name, out["refs"], out["meshes"], out["garments"], len(stale))
+    texture_groups = _texture_files(character_name)
+    referenced = _texture_referenced(character_name) if texture_groups else set()
+    texture_valid = 0
+    texture_stale_bytes = 0
+    for tkey, files in texture_groups.items():
+        if _texture_valid(files, referenced, tkey, current_base):
+            texture_valid += 1
+            continue
+        texture_stale_bytes += _bytes_of(files)
+        stale.append(tkey)
+    out["textures"] = {"total": len(texture_groups), "valid": texture_valid,
+                       "stale": len(texture_groups) - texture_valid,
+                       "stale_bytes": texture_stale_bytes}
+    logger.info("Cache GC %s: refs %s, meshes %s, garments %s, textures %s, %d stale signature(s)",
+                character_name, out["refs"], out["meshes"], out["garments"], out["textures"], len(stale))
     return out
 
 
@@ -506,6 +600,22 @@ def purge_stale(character_name: str,
             except OSError as e:
                 logger.warning("Cache GC %s: %s not removed: %s",
                                character_name, p.name, e)
+    texture_roots = [d.resolve(strict=False) for d in _texture_dirs(character_name)]
+    for tkey, files in _texture_files(character_name).items():
+        if tkey not in wanted or tkey not in allowed:
+            continue
+        for p in files:
+            try:
+                if p.resolve().parent not in texture_roots:
+                    logger.warning("Cache GC %s: %s is outside the texture store, not removed",
+                                   character_name, p)
+                    continue
+                size = p.stat().st_size
+                p.unlink()
+                deleted += 1
+                freed += size
+            except OSError as e:
+                logger.warning("Cache GC %s: %s not removed: %s", character_name, p.name, e)
     logger.info("Cache GC %s: %d file(s) deleted, %.1f MB freed, %d signature(s) "
                 "skipped (no longer stale)", character_name, deleted,
                 freed / 1e6, skipped)

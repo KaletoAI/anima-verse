@@ -17,7 +17,8 @@ a 3D model or an image, decided here on the server.
      re-encode, measurement.
    - ``outfit_model_steps``: an outfit model on the base-body pipeline
      (sidecar ``source: "base_body"``) — base model used, base variant and
-     the piece that decided it, every dressed view with its fit gate and
+     the piece that decided it, the painted body (texture signature,
+     reused or painted, shared with N outfits), every dressed view with its fit gate and
      view guard, the back refit, the body retexture proof, the restored face
      texels, the extension rig (inherited from the base), the collision
      capsules (the base's set, ``collision.py``), the own-mesh
@@ -467,6 +468,22 @@ def _variant_step(meta: Dict[str, Any], *, wanted: Optional[str], deciders: List
     return step("variant", "Base variant", DONE, detail)
 
 
+def _painted_body_step(meta: Dict[str, Any], shared: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The painted body an outfit model is built on (sidecar
+    ``texture_signature``, plan 2026-11-10-texture-body-reuse Task 1):
+    its texture signature, whether this build painted it or reused it, and
+    how many stored outfit models use it (``shared``). None for a model
+    built before texture bodies."""
+    tsig = meta.get("texture_signature")
+    if not isinstance(tsig, str) or not tsig:
+        return None
+    parts = [tsig, "reused" if meta.get("texture_reused") else "painted for this outfit"]
+    if shared is not None and shared > 1:
+        parts.append(f"shared with {shared} outfits")
+    return step("painted_body", "Painted body", DONE, " · ".join(parts),
+                {"texture_signature": tsig, "shared": shared})
+
+
 def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]],
                        guard: Dict[str, Any], delta_e: Optional[float]) -> Dict[str, Any]:
     label = {"front": "Dressed front", "back": "Dressed back", "left": "Dressed left",
@@ -617,7 +634,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        deciders: List[str], shown: List[str], dressed_records: Dict[str, Optional[Dict[str, Any]]],
                        garments: List[Dict[str, Any]], tiers: List[str], low_tris: Any = None,
                        refit_limit: float = 4.0, covered_missing_text: str = "",
-                       item_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+                       item_names: Optional[Dict[str, str]] = None,
+                       texture_shared: Optional[int] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit model on the base-body pipeline (pure).
     ``meta``: its sidecar; ``base``: the current ``(bsig, base model
     sha256)``; ``base_meta``: the sidecar of the base model it names (None
@@ -627,7 +645,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     ``dressed_records``: the sidecar of every dressed view the build looked
     at (front, back, sides), None when the file is gone; ``garments``: see
     ``_garment_steps``; ``tiers`` / ``low_tris``: the distance mesh;
-    ``item_names``: item id -> name for the own-mesh pieces row."""
+    ``item_names``: item id -> name for the own-mesh pieces row;
+    ``texture_shared``: how many stored outfit models use its painted body."""
     proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
     used = {"front"} | set(_dict(meta.get("view_images")))
@@ -635,6 +654,9 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     rows = [_base_used_step(meta, base),
             _variant_step(meta, wanted=wanted_variant, deciders=deciders, shown=shown,
                           covered_missing_text=covered_missing_text)]
+    painted = _painted_body_step(meta, texture_shared)
+    if painted is not None:
+        rows.append(painted)
     deltas = {v: _num(_dict(_dict(_dict(proof.get("views")).get(v)).get("dressed_alignment")).get("unchanged_delta_e"))
               for v in views}
     if meta.get("dressed") is not False:
@@ -921,7 +943,10 @@ def outfit_model_overview(character_name: str,
                                refit_limit=base_body.BACK_REFIT_DELTA_E,
                                covered_missing_text=base_body.COVERED_MISSING,
                                item_names={i: str((items.get(i) or {}).get("name") or i)
-                                           for i in base_body.mesh_items_intended(meta)})
+                                           for i in base_body.mesh_items_intended(meta)},
+                               texture_shared=(len(base_body.texture_users(character_name).get(
+                                   str(meta.get("texture_signature")), [])) if meta.get("texture_signature")
+                                   else None))
     return steps, dressed_newer(str(meta.get("created_at") or ""), records)
 
 
