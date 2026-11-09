@@ -81,8 +81,21 @@
  *       - after Spine → (0, 2, 0): local b (0, 2, −0.25), bind b still
  *         (0, 1, −0.25); uniforms collideBindA[0] = (0, 0, −0.25, 0) (w ≥ 0 =
  *         rule on), collideBindB[0] = (0, 1, −0.25, 0);
- *       - the clothing has no bind rule: its collideBindA[0].w = −1;
+ *       - the clothing is under the bind rule too: its bind torso capsule
+ *         a (−0.5, 0, 0), b (−0.5, 1, 0), uniform collideBindA[0].w = 0;
  *       - hair only → one entry (no longer inert).
+ * [10] CLOTHING AT REST (bind rule for every garment): the clothing mesh at
+ *     the origin, its vertex v0 = (0.05, 0.5, 0) lies 0.05 from the torso
+ *     axis (0,0,0)→(0,1,0), inside r 0.1. The plain push (Task 3) moved it to
+ *     (0.1, 0.5, 0) in the REST pose — 0.05 m of puff. With the bind rule its
+ *     bind distance d0 = 0.05 caps the radius: displacement 0 in the rest
+ *     pose. Posed: Hips moved to (−0.02, 0, 0) (whole torso axis x = −0.02,
+ *     v0 skinned to Hips moves along to (0.03, 0.5, 0) — distance still 0.05)
+ *     → still 0; Spine-weighted v1 = (0, 1, 0) sits ON the axis end b → stays.
+ *     Body swung into the cloth: the entry's local capsule shifted to
+ *     x = +0.03, the cloth point (0.05, 0.5, 0) with the same bind point:
+ *     d = 0.02 < d0 = 0.05 → pushed outwards (+x) to 0.03 + 0.05 →
+ *     (0.08, 0.5, 0) — back to its bind distance, not to r (0.13).
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -256,7 +269,7 @@ async function main() {
   }
 
   console.log('--- [9] createGarmentCollision on a figure ---')
-  const build = ({ clothing = true, hair = true, weighted = false } = {}) => {
+  const build = ({ clothing = true, hair = true, weighted = false, clothingAt = [0.5, 0, 0] } = {}) => {
     const figure = new THREE.Group()
     const hips = new THREE.Bone(); hips.name = 'mixamorig:Hips'
     const spine = new THREE.Bone(); spine.name = 'mixamorig:Spine'
@@ -278,7 +291,7 @@ async function main() {
       if (weighted) g.setAttribute('_collide', new THREE.Float32BufferAttribute([1, 0.5], 1))
       meshes.clothing = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial())
       meshes.clothing.name = 'garment_clothing_x'
-      meshes.clothing.position.set(0.5, 0, 0)
+      meshes.clothing.position.set(...clothingAt)
       figure.add(meshes.clothing)
     }
     if (hair) {
@@ -329,7 +342,9 @@ async function main() {
     && near(hl.r, 0.1), `${fmt(hl.a)} ${fmt(hl.b)} ${hl.r}`)
   check('hair bind capsule a (0,0,−0.25), b (0,1,−0.25)', !!hl.bind && vnear(hl.bind.a, [0, 0, -0.25]) && vnear(hl.bind.b, [0, 1, -0.25]),
     hl.bind ? `${fmt(hl.bind.a)} ${fmt(hl.bind.b)}` : 'none')
-  check('clothing: no bind rule', gc.entries[0].local.every((c) => !c.bind))
+  const cb = gc.entries[0].local[0].bind
+  check('clothing bind capsule a (−0.5,0,0), b (−0.5,1,0)', !!cb && vnear(cb.a, [-0.5, 0, 0]) && vnear(cb.b, [-0.5, 1, 0]),
+    cb ? `${fmt(cb.a)} ${fmt(cb.b)}` : 'none')
   const hairMat = fig.meshes.hair.material
   check('hair material patched (a clone)', String(hairMat.customProgramCacheKey()).includes('collide'))
   for (const [name, mat] of [['material', own], ['depth', fig.meshes.clothing.customDepthMaterial],
@@ -357,7 +372,9 @@ async function main() {
   check('same frame again → unchanged', near(B.y, 2), String(B.y))
   fig.meshes.clothing.onBeforeShadow(fakeRenderer(2), null, null, null, null, null, null)
   check('onBeforeShadow frame 2 → b y 3', near(B.y, 3), String(B.y))
-  check('clothing uniform collideBindA[0].w = −1', near(uniformsOf.collideBindA.value[0].w, -1))
+  const cba = uniformsOf.collideBindA.value[0]
+  check('clothing uniform collideBindA[0] = (−0.5, 0, 0, 0)', vnear([cba.x, cba.y, cba.z], [-0.5, 0, 0]) && near(cba.w, 0),
+    fmt([cba.x, cba.y, cba.z, cba.w]))
   fig.spine.position.set(0, 2, 0)
   fig.figure.updateMatrixWorld(true)
   fig.meshes.hair.onBeforeRender(fakeRenderer(3), null, null, null, hairMat, null)
@@ -388,6 +405,32 @@ async function main() {
   const ho = createGarmentCollision(THREE, hairOnly.figure, payload)
   check('hair only → one hair entry', ho?.entries.length === 1 && ho.entries[0].kind === 'hair')
   ho?.dispose()
+
+  console.log('--- [10] clothing at rest: no puff ---')
+  const rest = build({ hair: false, clothingAt: [0, 0, 0] })
+  const gr = createGarmentCollision(THREE, rest.figure, payload)
+  const ce = gr.entries[0]
+  const geoPos = ce.mesh.geometry.attributes.position
+  const v0 = [geoPos.getX(0), geoPos.getY(0), geoPos.getZ(0)]
+  q = pushOutOfCapsules(v0, ce.local, 1, v0)
+  check('rest pose: v0 (0.05, 0.5, 0) not displaced (plain push: (0.1, 0.5, 0))', vnear(q, v0, 0), fmt(q))
+  const plainRest = pushOutOfCapsules(v0, ce.local)
+  check('the plain push WOULD puff it to (0.1, 0.5, 0)', vnear(plainRest, [0.1, 0.5, 0]), fmt(plainRest))
+  rest.hips.position.set(-0.02, 0, 0)
+  rest.figure.updateMatrixWorld(true)
+  gr.update()
+  const v0posed = new THREE.Vector3(...v0)
+  ce.mesh.applyBoneTransform(0, v0posed)
+  q = pushOutOfCapsules([v0posed.x, v0posed.y, v0posed.z], ce.local, 1, v0)
+  check('rigid move of body + cloth: (0.03, 0.5, 0) stays', vnear(q, [0.03, 0.5, 0]), fmt(q))
+  const v1 = [geoPos.getX(1), geoPos.getY(1), geoPos.getZ(1)]
+  const v1posed = new THREE.Vector3(...v1); ce.mesh.applyBoneTransform(1, v1posed)
+  q = pushOutOfCapsules([v1posed.x, v1posed.y, v1posed.z], ce.local, 1, v1)
+  check('v1 on the axis end stays', vnear(q, [v1posed.x, v1posed.y, v1posed.z], 0), fmt(q))
+  const swung = ce.local.map((c) => ({ ...c, a: [0.03, c.a[1], c.a[2]], b: [0.03, c.b[1], c.b[2]] }))
+  q = pushOutOfCapsules([0.05, 0.5, 0], swung, 1, v0)
+  check('body swung into the cloth: pushed back to its bind distance → (0.08, 0.5, 0)', vnear(q, [0.08, 0.5, 0]), fmt(q))
+  gr.dispose()
 
   if (failures.length) {
     console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)

@@ -12153,10 +12153,11 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   The optional glTF vertex attribute `_COLLIDE` (0..1) scales a vertex's whole push; absent = 1. Which capsules
   push which garment is decided per garment `kind` (node extras `garment.kind`, § A3a): `hair` the `torso`, `arm`
   and `head` regions, every other kind all regions except `arm` (an arm passes through cloth; pushed out of the
-  arm capsule the cloth goes into the body). Hair is pushed under the BIND RULE: per vertex and capsule the radius
-  is capped at the vertex's distance to that capsule in the bind pose (unskinned `position` against the capsule's
-  bind-pose endpoints), so hair rooted into the scalp or lying on the shoulders is never lifted — the push moves
-  nothing in the bind pose, only what a pose drives deeper. The body is never pushed. Shadows use patched
+  arm capsule the cloth goes into the body). Every garment is pushed under the BIND RULE: per vertex and capsule
+  the radius is capped at the vertex's distance to that capsule in the bind pose (unskinned `position` against the
+  capsule's bind-pose endpoints), so hair rooted into the scalp or lying on the shoulders is never lifted and cloth
+  never puffs out to the capsule radii at rest — the push moves nothing in the bind pose, only what a pose drives
+  deeper. The body is never pushed. Shadows use patched
   depth/distance materials with the same capsules. Without a garment mesh or capsules nothing is patched. The shader and the TypeScript `pushOutOfCapsules` are one rule
   (`scripts/smoke_garment_collision.mjs` executes the shader text); `scripts/check_garment_collision.mjs`
   measures the penetration of a garment through the body on the real clips before/after the push.

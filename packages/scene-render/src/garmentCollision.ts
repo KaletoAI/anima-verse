@@ -20,15 +20,22 @@
  * most `COLLIDE_MAX` per mesh, the FIRST ones in payload order —
  * deterministic, and the server table has 12 (`app/core/collision.py`).
  *
- * BIND RULE (hair, `garmentBindRule`). A vertex is never pushed further from
- * a capsule than it lay in the BIND pose: the radius is capped per vertex
- * and capsule at the vertex's bind distance (computed in the shader from the
- * unskinned `position` and the bind-pose capsule, `BoundCapsule.bind`).
- * Card hair is rooted INTO the scalp and lies on the shoulders inside the
- * upper-arm caps; the plain push would lift it there in every frame. The
- * bind rule keeps the fit as it is (no push at all in the bind pose) and
- * pushes only what a pose drives deeper — it also covers the scalp under the
- * head capsule, so no Head-weight exclusion or height cut is needed.
+ * BIND RULE (every garment). A vertex is never pushed further from a
+ * capsule than it lay in the BIND pose: the radius is capped per vertex and
+ * capsule at the vertex's bind distance (computed in the shader from the
+ * unskinned `position` and the bind-pose capsule, `BoundCapsule.bind`). The
+ * fit is authoritative where it put the garment: the push moves nothing in
+ * the bind pose and only pushes what a pose drives deeper. Measured
+ * (`scripts/check_garment_collision.mjs`, share moved > 1 mm in the bind
+ * pose): Kira's HairDeck hair 6.65 % → 0 % (p99 17 mm, max 27 mm — card hair
+ * rooted into the scalp under the head capsule, lying on the shoulders inside
+ * the upper-arm caps); the S1 phase-5 dress 8.26 % → 0 % (p99 20 mm, max
+ * 35 mm — the dress puffed out to the capsule radii in the rest pose). The
+ * motion numbers stay the same (dress walk 1.22 / run 0.79 / sit 6.77 %,
+ * hair celebrating 7.59 vs 7.57 %). It also covers the scalp under the head
+ * capsule, so hair needs no Head-weight exclusion or height cut (an
+ * exclusion of the head capsule alone, measured first, left the upper-arm
+ * lift in place).
  *
  * WHERE THE CAPSULES COME FROM. `bindCollision` (`collision.ts`, the ONE
  * endpoint rule) gives them in world space; per garment mesh they are taken
@@ -262,7 +269,7 @@ export const HAIR_REGIONS: readonly string[] = ['torso', 'arm', 'head']
 /**
  * Which bound capsules push a garment of `kind`, in payload order, at most
  * `COLLIDE_MAX`.
- *  - hair: the `HAIR_REGIONS`, under the bind rule (`garmentBindRule`);
+ *  - hair: the `HAIR_REGIONS`;
  *  - every other kind: all regions EXCEPT the arms. Cloth lies ON the body,
  *    and an arm that swings or rests against it is the arm passing through
  *    the cloth, not the cloth through the arm: pushed out of the arm capsule
@@ -274,20 +281,6 @@ export const HAIR_REGIONS: readonly string[] = ['torso', 'arm', 'head']
 export function garmentCapsules<T extends { capsule: { region: string } }>(kind: string | null, bound: readonly T[]): T[] {
   if (kind === 'hair') return bound.filter(entry => HAIR_REGIONS.includes(entry.capsule.region)).slice(0, COLLIDE_MAX)
   return bound.filter(entry => entry.capsule.region !== 'arm').slice(0, COLLIDE_MAX)
-}
-
-/**
- * Whether the BIND RULE applies to a garment of `kind` (module docstring,
- * `COLLIDE_GLSL_FUNCTION`): HAIR. Measured on Kira's HairDeck hair: without
- * it 6.65 % of the hair moves > 1 mm in the BIND pose (p99 17 mm, max 27 mm:
- * the upper-arm caps over the shoulders, the head capsule over the scalp
- * roots); with it 0 %, and the motion numbers stay the same (celebrating
- * 7.57 vs 7.59 %). A Head-weight exclusion of the head capsule alone
- * (measured first) left the upper-arm lift in place. Cloth keeps the plain
- * push measured for it (Task 3).
- */
-export function garmentBindRule(kind: string | null): boolean {
-  return kind === 'hair'
 }
 
 /** The skinned garment meshes under `root` that collide at all (`garmentCapsules` gives their kind capsules). */
@@ -317,7 +310,7 @@ export interface GarmentCollisionEntry {
   readonly kind: string | null
   /** The bound capsules this mesh is pushed out of (payload order). */
   readonly capsules: readonly BoundCapsule[]
-  /** The capsules in this mesh's local space as of the last update — what the shader holds (`bind` under the bind rule). */
+  /** The capsules in this mesh's local space as of the last update — what the shader holds (incl. `bind`). */
   readonly local: readonly CollideCapsule[]
 }
 
@@ -343,7 +336,7 @@ export function createGarmentCollision(three: Three, root: Object3D,
 
   interface State {
     entry: { mesh: SkinnedMesh; kind: string | null; capsules: BoundCapsule[]; local: CollideCapsule[] }
-    binds: Array<{ a: Vec3; b: Vec3 }> | null
+    binds: Array<{ a: Vec3; b: Vec3 }>
     uniforms: CollideUniforms
     original: Material | Material[]
     owned: Material[]
@@ -386,16 +379,15 @@ export function createGarmentCollision(three: Three, root: Object3D,
     const inv = new three.Matrix4().copy(mesh.matrixWorld).invert().elements
     state.entry.local = capsules.map((c, i) => {
       const l: CollideCapsule = capsuleInFrame(c.now, inv)
-      if (state.binds) l.bind = state.binds[i]
+      l.bind = state.binds[i]
       return l
     })
     state.entry.local.forEach((c, i) => {
       state.uniforms.collideA.value[i].set(c.a[0], c.a[1], c.a[2], c.r)
       state.uniforms.collideB.value[i].set(c.b[0], c.b[1], c.b[2], 0)
-      if (c.bind) {
-        state.uniforms.collideBindA.value[i].set(c.bind.a[0], c.bind.a[1], c.bind.a[2], 0)
-        state.uniforms.collideBindB.value[i].set(c.bind.b[0], c.bind.b[1], c.bind.b[2], 0)
-      } else state.uniforms.collideBindA.value[i].set(0, 0, 0, -1)
+      const bind = c.bind ?? c   // always set here (bind rule for every garment)
+      state.uniforms.collideBindA.value[i].set(bind.a[0], bind.a[1], bind.a[2], 0)
+      state.uniforms.collideBindB.value[i].set(bind.b[0], bind.b[1], bind.b[2], 0)
     })
     state.uniforms.collideCount.value = state.entry.local.length
   }
@@ -414,8 +406,7 @@ export function createGarmentCollision(three: Three, root: Object3D,
     const capsules = garmentCapsules(kind, binding.capsules)
     if (!capsules.length) continue
     // Bind rule: the bind-pose capsules (body bind world) in THIS mesh's geometry space — where `position` is.
-    const binds = garmentBindRule(kind)
-      ? capsules.map(c => capsuleInFrame(c.bind, mesh.bindMatrixInverse.elements)) : null
+    const binds = capsules.map(c => capsuleInFrame(c.bind, mesh.bindMatrixInverse.elements))
     const uniforms: CollideUniforms = {
       collideA: { value: Array.from({ length: COLLIDE_MAX }, () => new three.Vector4()) },
       collideB: { value: Array.from({ length: COLLIDE_MAX }, () => new three.Vector4()) },

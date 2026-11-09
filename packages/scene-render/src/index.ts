@@ -186,5 +186,5 @@ export type { CollisionCapsule, CollisionPayload, CapsuleNow, JointNow, BoundCap
 
 export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_DECLARATIONS, COLLIDE_GLSL_FUNCTION,
   COLLIDE_GLSL_APPLY, pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, garmentKind, garmentCapsules,
-  HAIR_REGIONS, garmentBindRule, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
+  HAIR_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
