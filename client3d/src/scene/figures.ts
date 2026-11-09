@@ -21,6 +21,7 @@ import {
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
+import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
 import { clipIndexName, getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, steerCancelsBridge, clipTransition, poseClip, setClipTransitions,
@@ -1191,11 +1192,7 @@ export class FigureLibrary {
           const tex = await textureLoader.loadAsync(m.texture);
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.flipY = !!m.textureFlipY;
-          template.traverse((o) => {
-            if ((o as THREE.Mesh).isMesh) {
-              (o as THREE.Mesh).material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0.0 });
-            }
-          });
+          applyFigureTexture(template, tex);
         }
         const bbox = figureBox(THREE, template);
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
@@ -1703,40 +1700,11 @@ export class FigureLibrary {
       buildStart = performance.now();
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.flipY = false;   // FBX UVs follow the glTF convention
-      template.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) {
-          (o as THREE.Mesh).material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0 });
-        }
-      });
+      applyFigureTexture(template, tex);
     }
-    // Characters are DIELECTRICS: metalness forced to 0 (AV3D-14).
-    // Since Rosi the gateway embeds a metal-roughness texture for humanoids
-    // too, whose B channel claims ~0.5 metalness over the whole body —
-    // physically nonsense on skin and cloth; on top of that `metallicFactor`
-    // is often unset, and the glTF default is 1.0. Uncorrected, the body
-    // renders wrong without an env map (Rosi turned greenish).
-    // Deliberately NO env-map solution as for buildings/props: a half-metallic
-    // body is wrong with an env map as well. metalness = 0 zeroes the
-    // metalnessMap multiplicatively; the ROUGHNESS from the G channel of the
-    // same texture stays active and is wanted — which is why `roughness` is
-    // NOT touched.
-    const matLog: string[] = [];
-    template.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-        const std = m as THREE.MeshStandardMaterial;
-        if (!std.isMeshStandardMaterial) continue;
-        const before = std.metalness;
-        const mr = std.metalnessMap ? 'MR map' : 'no MR map';
-        if (before !== 0) {
-          std.metalness = 0;
-          std.needsUpdate = true;
-        }
-        matLog.push(`metalness ${before}->${std.metalness} (${mr}, roughness ${std.roughness}`
-          + `${std.roughnessMap ? ' + map' : ''})`);
-      }
-    });
+    // Characters are DIELECTRICS: metalness forced to 0 (AV3D-14) — the
+    // reasoning lives with `zeroFigureMetalness`.
+    const matLog = zeroFigureMetalness(template);
     if (matLog.length) console.info(`[figures] ${name}: ${matLog.join(' | ')}`);
 
     // The FIGURE's box (`figureBox`): garment meshes grafted onto the body

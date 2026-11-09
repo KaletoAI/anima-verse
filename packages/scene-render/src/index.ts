@@ -125,7 +125,7 @@ export {
 
 export { pickVariant, pickModelVariant } from './types'
 
-export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureBox, figureRootY, isGarmentNode,
+export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureBox, figureRootY, inGarment, isGarmentNode,
   hipsTrackMedian, rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM } from './figure'
 export { clipShiftM } from './figure'
 export type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'

@@ -21,6 +21,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   restCorrections, restPoseOf, rigHipsHeight,
   standingHipsRef, clipHeightOffsetM } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm } from '@anima/scene-render'
+import { applyViewerTexture } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -949,18 +950,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           tex.wrapS = THREE.RepeatWrapping
           tex.wrapT = THREE.RepeatWrapping
           tex.needsUpdate = true
-          object.traverse((o: Object3D) => {
-            const mesh = o as Mesh
-            if (!mesh.isMesh) return
-            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-            for (const m of mats) {
-              const mat = m as MeshStandardMaterial
-              mat.map = tex
-              // A grey/tinted base colour would multiply into the texture.
-              mat.color?.set(0xffffff)
-              mat.needsUpdate = true
-            }
-          })
+          applyViewerTexture(object, tex)
         }
 
         // A pivot carries the orientation fix: the clip animates the model's

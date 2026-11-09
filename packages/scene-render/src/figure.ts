@@ -218,6 +218,19 @@ export function isGarmentNode(o: Object3D): boolean {
 }
 
 /**
+ * Whether `o` lies INSIDE a garment subtree — itself or an ancestor is a
+ * garment node. three hangs a multi-primitive garment as a Group carrying the
+ * extras with plain meshes under it, so the mesh alone does not say it.
+ * A garment brings its own material (card hair: vertex colours, double-sided,
+ * no texture, § A3a): a renderer that swaps a model's materials for a
+ * separate texture leaves these meshes alone.
+ */
+export function inGarment(o: Object3D): boolean {
+  for (let n: Object3D | null = o; n; n = n.parent) if (isGarmentNode(n)) return true
+  return false
+}
+
+/**
  * The FIGURE's box: `Box3.setFromObject(root)` over everything EXCEPT
  * garment subtrees. A garment is not the figure — hair standing 8 cm over
  * the crown must not make a 1.70 m body 1.78 m tall, and with it every

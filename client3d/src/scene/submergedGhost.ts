@@ -293,6 +293,9 @@ export class SubmergedGhost {
       depthFunc: THREE.GreaterDepth,
       depthWrite: false,
       side: std?.side ?? THREE.FrontSide,
+      // Card hair (§ A3a) carries its colour ONLY as COLOR_0: without this its
+      // ghost is the bare water tint, not hair seen through water.
+      vertexColors: !!std?.vertexColors,
       // A cutout leaf is a cutout leaf under water too: without this the ghost
       // of a foliage prop is a stack of opaque tinted quads.
       alphaTest: std?.alphaTest ?? 0,
