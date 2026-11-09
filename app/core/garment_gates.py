@@ -590,6 +590,26 @@ def neckline(region) -> Dict[str, Any]:
     return {"depth": centre_top - top, "notch": notch}
 
 
+def _touching(region, ghost, height: int) -> np.ndarray:
+    """The parts (connected components) of the garment region that the ghost
+    mask grown by 8 px @1536 touches; the whole region when it touches none.
+    A part it does not reach is no garment the ghost lost but skin the worn
+    view re-shaded: the fitted Black Blazer back (Kira, 2026-11-10) had a hand
+    in its region (columns 4..33, 40 px from the ghost's sleeve), which moved
+    the region's bbox centre by 0.006 Hb, plus a knee and both feet that set
+    its bottom. ``outside`` / ``skin_left`` are the same
+    either way (a ghost pixel within the margin of a dropped part would have
+    reached it)."""
+    from scipy import ndimage
+    labels, count = ndimage.label(region)
+    if count <= 1:
+        return region
+    near = _margin(ghost, height)
+    keep = np.unique(labels[near & region])
+    keep = keep[keep > 0]
+    return np.isin(labels, keep) if len(keep) else region
+
+
 def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask, *,
                         view: str) -> Dict[str, Any]:
     """Step 2 gate of clothing: the piece alone against the garment region of
@@ -609,6 +629,9 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     not gated (a filled notch still meshes into an open neckline, see the
     calibration block).
     ``bottom`` (row) and ``hem_t`` = (bottom − y0) / Hb feed ``hems_agree``.
+    The region is measured by its parts the ghost reaches (``_touching``).
+    The chain registers the ghost onto the region before this gate
+    (``register``), so the offsets are the residual of that correction.
     Calibration: the "Clothing" block above."""
     _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
     m0 = np.asarray(base_mask, dtype=bool)
@@ -621,6 +644,7 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     if zones is None or zones[1] <= 0:
         return {"view": view, "ok": False, "reasons": ["no figure in the base view"]}
     y0, hb = zones
+    region = _touching(region, ghost, height)
     a, b = _bbox(region), _bbox(ghost)
     out: Dict[str, Any] = {"view": view, "H": height, "body_top": y0, "body_h": hb,
                            "bbox_garment": a, "bbox_ghost": b}
@@ -694,6 +718,133 @@ def hems_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Option
             f"(front {front_gate.get('hem_t')}, back {back_gate.get('hem_t')})")
 
 
+# --- Registration of a piece-only (ghost) image -------------------------------
+#
+# The edit model redraws the piece alone, and it may redraw it a centimetre or
+# two off or a few per cent larger (live, Kira's "Black Blazer" back,
+# 2026-11-10: attempt 1 drawn 5 % larger and 9 px higher — refused for
+# top_dy -0.0064 / centre_dx 0.0088 — although the piece itself is right).
+# A pure 2-D offset/scale is corrected before the position gates: ``register``
+# estimates a similarity (translation + uniform scale about the ghost's
+# centroid, no rotation) of the ghost silhouette onto the reference (the
+# worn view's garment region / the haired view's hair), ``warp`` applies it,
+# and the gates then measure the RESIDUAL with their unchanged limits.
+#
+# The estimate: the outline points of the ghost mask, minus those whose
+# outward normal faces down (cos > REG_DOWN_FACING: hems, cuffs, the hair's
+# ends — the ghost shows the inside there and the worn region of a fitted
+# back runs on into the re-shaded legs) and minus those below the
+# reference's last row (the hair reference stops at 0.22·Hb), are moved
+# onto the reference outline: Nelder-Mead on the mean distance to that
+# outline (distance transform, bilinear), truncated first at REG_SHIFT_MAX
+# then at REG_TRUNC_FINE (fragments of the reference — a re-shaded hand —
+# pull at most that far). A correction beyond REG_SHIFT_MAX (|centroid
+# shift| / Hb) or outside [REG_SCALE_MIN, REG_SCALE_MAX] (the hair width
+# gate's range) is not applied: the gates measure the image as it is.
+# Measured on the blazer back (``~/claude-out/blazer-ghost``): attempt 1
+# shift (0.0035, -0.0036) Hb, scale 0.950, outline distance 6.55 -> 0.72 px;
+# attempt 2 (0.0004, 0.0006) Hb, scale 1.002 (1.03 -> 0.87 px).
+REG_SHIFT_MAX = 0.04        # |centroid shift| / Hb a registration may correct
+REG_SCALE_MIN = 0.93
+REG_SCALE_MAX = 1.07
+REG_TRUNC_FINE = 0.01       # second-stage truncation of the outline distance / Hb
+REG_DOWN_FACING = 0.7       # outline points facing down more than this (cos) are left out
+REG_SMOOTH = 2.0            # Gaussian sigma @1536 of the mask for the outline normals
+REG_MAX_POINTS = 3000       # outline points used (evenly thinned)
+REG_NEGLIGIBLE_PX = 1.0     # a correction moving no ghost pixel further than this is not applied
+
+
+def _outline(mask: np.ndarray) -> np.ndarray:
+    from scipy import ndimage
+    return mask & ~ndimage.binary_erosion(mask)
+
+
+def register(reference_mask, ghost_mask, *, body_h: int) -> Optional[Dict[str, Any]]:
+    """The similarity that lays the ghost silhouette onto ``reference_mask``
+    (both full-frame bool masks of one size; ``body_h`` = Hb in px), see the
+    "Registration" block: ``{centre: [row, col], shift_px: [dy, dx], scale,
+    shift: [dx, dy] / Hb, fit_px: [mean outline distance before, after]
+    (truncated at REG_TRUNC_FINE·Hb), within_caps, negligible}``. A ghost
+    pixel p maps to ``centre + scale·(p − centre) + shift_px``. None when
+    either mask is empty or the ghost has no usable outline."""
+    from scipy import ndimage, optimize
+    ref = np.asarray(reference_mask, dtype=bool)
+    ghost = np.asarray(ghost_mask, dtype=bool)
+    if ref.shape != ghost.shape:
+        raise ValueError("reference and ghost masks differ in size")
+    if not ref.any() or not ghost.any() or body_h <= 0:
+        return None
+    height = ghost.shape[0]
+    dist = ndimage.distance_transform_edt(~_outline(ref))
+    smooth = ndimage.gaussian_filter(ghost.astype(np.float32), REG_SMOOTH * height / SPIKE_HEIGHT)
+    grad_y, grad_x = np.gradient(smooth)
+    pts = np.argwhere(_outline(ghost))
+    ny, nx = -grad_y[pts[:, 0], pts[:, 1]], -grad_x[pts[:, 0], pts[:, 1]]
+    keep = ny / (np.hypot(ny, nx) + 1e-9) <= REG_DOWN_FACING
+    keep &= pts[:, 0] <= np.nonzero(ref.any(1))[0].max()
+    pts = pts[keep].astype(np.float64)
+    if len(pts) < 8:
+        return None
+    if len(pts) > REG_MAX_POINTS:
+        pts = pts[np.linspace(0, len(pts) - 1, REG_MAX_POINTS).astype(int)]
+    centre = np.argwhere(ghost).mean(0)
+
+    def cost(p, trunc):
+        moved = centre + np.exp(p[2]) * (pts - centre) + p[:2]
+        d = ndimage.map_coordinates(dist, moved.T, order=1, mode="nearest")
+        return float(np.minimum(d, trunc).mean())
+
+    p = np.zeros(3)
+    for trunc in (REG_SHIFT_MAX * body_h, REG_TRUNC_FINE * body_h):
+        simplex = [p, p + (5.0, 0, 0), p + (0, 5.0, 0), p + (0, 0, 0.01)]
+        p = optimize.minimize(cost, p, args=(trunc,), method="Nelder-Mead",
+                              options={"xatol": 0.05, "fatol": 1e-4, "initial_simplex": simplex}).x
+    fine = REG_TRUNC_FINE * body_h
+    dy, dx, scale = float(p[0]), float(p[1]), float(np.exp(p[2]))
+    shift = float(np.hypot(dx, dy)) / body_h
+    # The farthest any ghost pixel moves: the shift plus the scale at the bbox corners.
+    rows, cols = np.nonzero(ghost)
+    reach = max(abs(rows.min() - centre[0]), abs(rows.max() - centre[0]),
+                abs(cols.min() - centre[1]), abs(cols.max() - centre[1]))
+    moved_px = float(np.hypot(dx, dy)) + abs(scale - 1.0) * float(reach) * np.sqrt(2.0)
+    return {"centre": [round(float(centre[0]), 3), round(float(centre[1]), 3)],
+            "shift_px": [round(dy, 3), round(dx, 3)], "scale": round(scale, 5),
+            "shift": [_r(dx / body_h, 5), _r(dy / body_h, 5)], "shift_abs": _r(shift, 5),
+            "fit_px": [_r(cost(np.zeros(3), fine), 3), _r(cost(p, fine), 3)],
+            "within_caps": bool(shift <= REG_SHIFT_MAX and REG_SCALE_MIN <= scale <= REG_SCALE_MAX),
+            "negligible": bool(moved_px < REG_NEGLIGIBLE_PX)}
+
+
+def warp(array, registration: Dict[str, Any], *, factor: Tuple[float, float] = (1.0, 1.0),
+         fill: Optional[Sequence[float]] = None) -> np.ndarray:
+    """``array`` (an ``(H, W)`` bool mask or an ``(H, W, 3)`` RGB image)
+    moved by ``registration`` (``register``): every output pixel q takes the
+    input at ``centre + (q − centre − shift_px) / scale``. ``factor`` =
+    (rows, cols) of this array per pixel of the registration's frame (an
+    image of another size than the masks). A mask is resampled bilinearly
+    and thresholded at 0.5; an image bilinearly per channel, the uncovered
+    border filled with ``fill`` (default: the median of the image's border
+    pixels — the plain background)."""
+    from scipy import ndimage
+    arr = np.asarray(array)
+    f = np.asarray(factor, dtype=np.float64)
+    centre = np.asarray(registration["centre"], dtype=np.float64) * f
+    shift = np.asarray(registration["shift_px"], dtype=np.float64) * f
+    scale = float(registration["scale"])
+    offset = centre - (centre + shift) / scale
+    matrix = np.full(2, 1.0 / scale)
+    if arr.ndim == 2:
+        out = ndimage.affine_transform(arr.astype(np.float32), matrix, offset=offset, order=1,
+                                       mode="constant", cval=0.0)
+        return out >= 0.5
+    if fill is None:
+        border = np.concatenate([arr[0, :, :3], arr[-1, :, :3], arr[:, 0, :3], arr[:, -1, :3]])
+        fill = np.median(border.astype(np.float32), 0)
+    channels = [ndimage.affine_transform(arr[..., k].astype(np.float32), matrix, offset=offset, order=1,
+                                         mode="constant", cval=float(fill[k])) for k in range(3)]
+    return np.clip(np.rint(np.stack(channels, -1)), 0, 255).astype(np.uint8)
+
+
 def gate_summary(records: Sequence[Dict[str, Any]]) -> str:
     """One line for a refusal: every attempt's reasons."""
     parts = []
@@ -729,6 +880,7 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
                 "w_ratio": {"op": "range", "value": [CLOTH_W_RATIO_MIN, CLOTH_W_RATIO_MAX]},
                 "skin_left": {"op": "le", "value": SKIN_LEFT_MAX},
                 "outside": {"op": "le", "value": CLOTH_OUTSIDE_MAX},
+                **_registration_limits(),
             },
         }
     if kind != "hair":
@@ -744,5 +896,13 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
             "centre_dx": {"op": "abs_le", "value": CENTRE_DX_MAX, "per_height": True},
             "w_ratio": {"op": "range", "value": [W_RATIO_MIN, W_RATIO_MAX]},
             "body_left": {"op": "le", "value": BODY_LEFT_MAX},
+            **_registration_limits(),
         },
     }
+
+
+def _registration_limits() -> Dict[str, Dict[str, Any]]:
+    """The caps of the ghost registration as chips (record keys ``reg_shift``
+    / ``reg_scale``, set by the chain): beyond them nothing was corrected."""
+    return {"reg_shift": {"op": "le", "value": REG_SHIFT_MAX},
+            "reg_scale": {"op": "range", "value": [REG_SCALE_MIN, REG_SCALE_MAX]}}

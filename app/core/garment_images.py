@@ -21,6 +21,16 @@ edit model re-frames the figure by ~2 % and the body gate refuses a correct
 image (2026-11-09 end-to-end run: body XOR 0.111 narrow vs 0.005–0.007
 square).
 
+A step with a ``position_reference`` (the ghost: the worn view's garment
+region / the haired view's hair) is REGISTERED onto it before its gate
+(``_register``): the edit model may redraw the piece a centimetre off or a
+few per cent larger (Kira's Black Blazer back, 2026-11-10), so a similarity
+(shift + uniform scale, capped: ``garment_gates.REG_SHIFT_MAX`` /
+``REG_SCALE_MIN..MAX``) is estimated from the silhouettes and the attempt
+file is rewritten moved; the gate then measures the residual. The record
+keeps the correction (``registration``, chip keys ``reg_shift`` /
+``reg_scale``). Everything after the ghost reads the moved file.
+
 The kind's own module (``kind_module``: ``garment_hair``,
 ``garment_clothing``) gives the edit steps, prompts and gates.
 
@@ -93,7 +103,7 @@ def render_size(size: Tuple[int, int]) -> Tuple[int, int]:
 
 def kind_module(kind: str):
     """The module of a garment kind's image chain (``EDIT_STEPS``,
-    ``edit_prompt``, ``gate``, ``SUBJECT`` and the pair hooks ``PAIR_STEP``,
+    ``edit_prompt``, ``gate``, ``position_reference``, ``SUBJECT`` and the pair hooks ``PAIR_STEP``,
     ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``, ``front_hints``).
     ValueError for a kind without one."""
     if kind == "hair":
@@ -372,10 +382,22 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             record: Dict[str, Any] = {"view": view, "ok": False, "reasons": ["render failed"]}
         else:
             path = _crop_back(Path(path), target, side, offset, source_size)
+            edit_rgb, edit_mask = _rgb(path, base_size), _mask(path, base_size)
+            reference = (kind.position_reference(step, base_rgb=base_rgb, base_mask=base_mask,
+                                                 source_rgb=source_rgb, source_mask=source_mask)
+                         if source_rgb is not None else None)
+            registration = None
+            if reference is not None:
+                edit_rgb, edit_mask, registration = _register(
+                    kind, step, view, path, base_size, reference,
+                    gate_args={"base_rgb": base_rgb, "base_mask": base_mask, "source_rgb": source_rgb,
+                               "source_mask": source_mask, "item_id": item_id},
+                    edit_rgb=edit_rgb, edit_mask=edit_mask)
             record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask,
                                source_rgb=source_rgb, source_mask=source_mask,
-                               edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
-                               item_id=item_id)
+                               edit_rgb=edit_rgb, edit_mask=edit_mask, item_id=item_id)
+            if registration is not None:
+                record = _with_registration(record, registration)
             reason = pair_check(record) if pair_check is not None else None
             if reason:
                 record = {**record, "ok": False, "reasons": [*(record.get("reasons") or []), reason]}
@@ -389,6 +411,57 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         if record["ok"]:
             return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt)
     raise GateRefused(step, view, records)
+
+
+#: The gate numbers a registration corrects; after it they are the residual.
+POSITION_KEYS = ("top_dy", "centre_dx", "w_ratio")
+
+
+def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int], reference, *,
+              gate_args: Dict[str, Any], edit_rgb, edit_mask) -> Tuple[Any, Any, Optional[Dict[str, Any]]]:
+    """Register an attempt of a step with a ``position_reference`` (the
+    ghost) onto that reference (``garment_gates.register``) BEFORE its gate:
+    within the caps and not negligible, the attempt file at ``path`` is
+    rewritten moved (``garment_gates.warp``, in the file's own pixels) — the
+    cut-out, the mesh views and the fit's framing all read that file — and
+    the returned arrays are the moved image (re-read) and the moved mask.
+    Returns ``(edit_rgb, edit_mask, registration)``; the registration
+    record carries the estimate, ``applied``, a ``note`` when not applied,
+    and ``before`` = the position numbers of the image as rendered. None
+    when nothing can be estimated (no figure, empty masks)."""
+    import numpy as np
+    from PIL import Image
+    from app.core import garment_gates
+    zones = garment_gates._zones(gate_args["base_mask"])
+    if zones is None or zones[1] <= 0:
+        return edit_rgb, edit_mask, None
+    estimate = garment_gates.register(reference, edit_mask, body_h=zones[1])
+    if estimate is None:
+        return edit_rgb, edit_mask, None
+    before = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
+    applied = estimate["within_caps"] and not estimate["negligible"]
+    info: Dict[str, Any] = {**estimate, "applied": applied,
+                            "before": {k: before.get(k) for k in (*POSITION_KEYS, "ok")}}
+    if not applied:
+        info["note"] = ("negligible" if estimate["within_caps"]
+                        else "beyond the correction caps — gated as rendered")
+        return edit_rgb, edit_mask, info
+    with Image.open(path) as im:
+        rgb = np.asarray(im.convert("RGB"))
+    factor = (rgb.shape[0] / base_size[1], rgb.shape[1] / base_size[0])
+    tmp = path.with_name(f".{path.name}.tmp")
+    Image.fromarray(garment_gates.warp(rgb, estimate, factor=factor)).save(tmp, format="PNG")
+    tmp.replace(path)
+    return _rgb(path, base_size), garment_gates.warp(edit_mask, estimate), info
+
+
+def _with_registration(record: Dict[str, Any], registration: Dict[str, Any]) -> Dict[str, Any]:
+    """The gate record with its registration: ``registration`` (+ the
+    ``residual`` = the record's position numbers) and the chip keys
+    ``reg_shift`` (|centroid shift| / Hb) and ``reg_scale``."""
+    residual = {k: record.get(k) for k in POSITION_KEYS}
+    return {**record, "reg_shift": registration.get("shift_abs"), "reg_scale": registration.get("scale"),
+            "registration": {**registration, "residual": residual}}
 
 
 def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind, *,

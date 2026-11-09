@@ -491,6 +491,17 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
     raise ValueError(f"no hair edit step {step!r}")
 
 
+def position_reference(step: str, *, base_rgb, base_mask, source_rgb, source_mask):
+    """The mask an attempt of ``step`` is registered onto before its gate
+    (``garment_gates.register``): for ``ghost`` the hair of the accepted
+    haired image (``garment_gates.hair_ref``) — what its position gate
+    measures against; None for ``haired`` (an edit of the base view)."""
+    from app.core import garment_gates
+    if step != "ghost":
+        return None
+    return garment_gates.hair_ref(base_rgb, base_mask, source_rgb, source_mask)
+
+
 # --- The pair hooks of the orchestration (``garments``) -----------------------
 
 #: What the messages call the thing in the images ("No hair found …").

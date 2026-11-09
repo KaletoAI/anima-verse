@@ -5,7 +5,7 @@ spec ``2026-11-08-base-body-outfits-design.md``).
 
 The kind module of garment kind ``clothing`` (``garment_set.CLOTHING``), the
 same protocol as ``garment_hair``: ``EDIT_STEPS``, ``edit_prompt``, ``gate``,
-``fsig_inputs`` and the pair hooks the orchestration (``garments``) calls —
+``position_reference``, ``fsig_inputs`` and the pair hooks the orchestration (``garments``) calls —
 ``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``,
 ``front_hints`` — plus ``SUBJECT`` for messages.
 
@@ -194,6 +194,17 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view)
     raise ValueError(f"no clothing edit step {step!r}")
+
+
+def position_reference(step: str, *, base_rgb, base_mask, source_rgb, source_mask):
+    """The mask an attempt of ``step`` is registered onto before its gate
+    (``garment_gates.register``): for ``ghost`` the garment region of the
+    accepted worn image — the region its position gate measures against;
+    None for ``worn`` (an edit of the base view, nothing to register)."""
+    from app.core import garment_gates
+    if step != "ghost":
+        return None
+    return garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
 
 
 def pair_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:

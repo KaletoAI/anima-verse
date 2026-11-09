@@ -98,6 +98,10 @@ const GHOST_CHIPS: ChipSpec[] = [
   { key: 'centre_dx', label: 'Centre offset', scale: 1, unit: 'px', digits: 1 },
   { key: 'w_ratio', label: 'Width ratio', scale: 1, unit: '', digits: 3 },
   { key: 'body_left', label: 'Body left', scale: 100, unit: '%', digits: 2 },
+  // The correction applied before the gate (garment_images._register); the offsets
+  // above are its residual. Fractions of the figure height / a factor.
+  { key: 'reg_shift', label: 'Registration shift', scale: 100, unit: '%', digits: 2 },
+  { key: 'reg_scale', label: 'Registration scale', scale: 1, unit: '', digits: 3 },
 ]
 
 const FIT_CHIPS: ChipSpec[] = [

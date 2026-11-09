@@ -94,7 +94,9 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
     An item without a fragment -> ValueError "has no prompt fragment".
 [3] Gates as derived above (ok flags, the named reasons, the numbers of the
-    good records); limits("clothing") names worn + ghost keys, limits() is
+    good records); limits("clothing") names worn + ghost keys (ghost incl.
+    the registration caps reg_shift / reg_scale,
+    scripts/smoke_garment_ghost_registration.py), limits() is
     still the hair table (keys fit/ghost/haired… untouched: [haired, ghost]).
     Fix round 1 (slot zones, garment_gates.SLOT_ZONES = {head: (head,)}):
     the clothing module's worn gate with item_id — Hat (slots [head]) on
@@ -283,7 +285,7 @@ def gates_part(gg, kept):
     check("raised refused", (reason(raised, "garment top moved"), raised["top_dy"]), ((False, True), -0.01001))
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
           {"worn": ["garment_share", "head_garment", "outside_dRGB", "outside_xor"],
-           "ghost": ["centre_dx", "outside", "skin_left", "top_dy", "w_ratio"]})
+           "ghost": ["centre_dx", "outside", "reg_scale", "reg_shift", "skin_left", "top_dy", "w_ratio"]})
     check("limits hair unchanged", sorted(gg.limits()), ["ghost", "haired"])
 
     print("[4] hems")

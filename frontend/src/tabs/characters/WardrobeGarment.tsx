@@ -77,6 +77,10 @@ const GHOST_CHIPS: ChipSpec[] = [
   { key: 'skin_left', label: 'Skin left', scale: 100, unit: '%', digits: 2 },
   { key: 'outside', label: 'Outside the worn piece', scale: 100, unit: '%', digits: 1 },
   { key: 'neck_fill', label: 'Neckline filled', scale: 100, unit: '%', digits: 0 },
+  // The correction applied before the gate (garment_images._register); the offsets
+  // above are its residual. Fractions of the figure height / a factor.
+  { key: 'reg_shift', label: 'Registration shift', scale: 100, unit: '%', digits: 2 },
+  { key: 'reg_scale', label: 'Registration scale', scale: 1, unit: '', digits: 3 },
 ]
 
 const FIT_CHIPS: ChipSpec[] = [
