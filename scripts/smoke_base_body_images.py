@@ -23,7 +23,9 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
       front: occasion "tpose", image_use_case "tpose", reference_image None
              (the profile image is slotted by render_character_image's
              profile_only payload, as for every tpose render), stem
-             model_refs/tpose_<bsig>;
+             model_refs/.handgate_<random>/attempt1/tpose_<bsig> (the hand
+             gate's staging dir; the recorder's 8x8 image has no figure to
+             measure, so attempt 1 passes and lands on model_refs/tpose_<bsig>);
       back:  occasion "tpose_view", use case "tpose_back"
              (TPOSE_VIEW_USE_CASES), back_view True, stem tpose_back_<bsig>,
              reference_image NAMED tpose_<bsig>.png (neutral_view_reference
@@ -202,7 +204,11 @@ def main() -> int:
             views = ["front", "back", "left", "right"]
             stems = [f"tpose_{bsig}", f"tpose_back_{bsig}", f"tpose_left_{bsig}", f"tpose_right_{bsig}"]
             check("stems", [c["stem"].name for c in CALLS], stems)
-            check("stem dir", {c["stem"].parent for c in CALLS}, {refs})
+            check("front stem dir", (CALLS[0]["stem"].parent.name, CALLS[0]["stem"].parent.parent.parent,
+                                     CALLS[0]["stem"].parent.parent.name.startswith(".handgate_")),
+                  ("attempt1", refs, True))
+            check("view stem dir", {c["stem"].parent for c in CALLS[1:]}, {refs})
+            check("staging gone", [p.name for p in refs.iterdir() if p.is_dir()], [])
             check("occasions", [c["occasion"] for c in CALLS], ["tpose", "tpose_view", "tpose_view", "tpose_view"])
             check("use cases", [c["image_use_case"] for c in CALLS], ["tpose", "tpose_back", "tpose_side", "tpose_side"])
             check("front reference", CALLS[0]["ref"], None)

@@ -45,6 +45,7 @@ const EMPTY_TILE: CSSProperties = {
 }
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
+const WARNING_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
 
 function ViewTile({ info, view, label, busy, onRender }: {
   info: BaseBodyInfo
@@ -73,6 +74,9 @@ function ViewTile({ info, view, label, busy, onRender }: {
         <div className="ga-hint" style={ERROR_STYLE} title={st.error || ''}>
           {t('Failed')}{st.error ? `: ${st.error}` : ''}
         </div>
+      ) : null}
+      {url && st?.warning && !st.running ? (
+        <div className="ga-hint" style={WARNING_STYLE} title={st.warning}>{st.warning}</div>
       ) : null}
       <button
         type="button"

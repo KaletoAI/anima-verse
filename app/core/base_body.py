@@ -9,7 +9,8 @@ painted onto that body later (spec
 
 This module holds the description, the view prompts with their negative, the
 base signature that keys every stored base image and model, the rendering of
-the four views (``generate_base_images``), the rigged base model built from
+the four views (``generate_base_images``, the front through the hand-pose
+gate of ``base_body_gates``), the rigged base model built from
 them (``generate_base_model``), the per-character pipeline switch
 (``set_pipeline``) and the UI info (``base_info``).
 
@@ -41,7 +42,7 @@ import threading
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
 from app.core.log import get_logger
@@ -243,26 +244,34 @@ def release_views(character_name: str, views: Iterable[str]) -> None:
                 _running[key] = (started, count - 1)
 
 
-def _record(character_name: str, view: str, error: Optional[str]) -> None:
+def _record(character_name: str, view: str, error: Optional[str], *, warning: bool = False) -> None:
+    """The outcome of one view: ``error`` None = fine; with ``warning`` the
+    text is a caveat on a view that WAS stored (``base_status`` reports it
+    as ``warning``, not as ``failed``)."""
     from app.core.timeutils import utc_now
     with _status_lock:
         if error is None:
             _failed.pop((character_name, view), None)
         else:
-            _failed[(character_name, view)] = {"error": error, "failed_at": utc_now()}
+            _failed[(character_name, view)] = {"error": error, "warning": warning, "failed_at": utc_now()}
 
 
 def base_status(character_name: str) -> Dict[str, Dict[str, Any]]:
-    """Per view: ``{running, started_at, failed, error, failed_at}`` — SYSTEM
-    stamps (``utc_now``), shaped like ``model_refs.get_render_status``."""
+    """Per view: ``{running, started_at, failed, error, failed_at, warning}``
+    — SYSTEM stamps (``utc_now``), shaped like
+    ``model_refs.get_render_status``; ``warning`` is the caveat of a view
+    that was stored anyway (the hand gate), None otherwise."""
     out: Dict[str, Dict[str, Any]] = {}
     with _status_lock:
         for view in BASE_VIEWS:
             started, _count = _running.get((character_name, view), (None, 0))
             failure = _failed.get((character_name, view)) or {}
+            warned = bool(failure.get("warning"))
             out[view] = {"running": started is not None, "started_at": _iso(started),
-                         "failed": bool(failure), "error": failure.get("error"),
-                         "failed_at": _iso(failure.get("failed_at"))}
+                         "failed": bool(failure) and not warned,
+                         "error": None if warned else failure.get("error"),
+                         "failed_at": None if warned else _iso(failure.get("failed_at")),
+                         "warning": failure.get("error") if warned else None}
     return out
 
 
@@ -300,6 +309,43 @@ def check_renderable(character_name: str, *, view: Optional[str] = None,
     return profile
 
 
+#: Front renders per run at most: the first one plus two re-renders when the
+#: hand gate (``base_body_gates.hand_pose_gate``) fails. Each is a fresh
+#: render — the backend picks a new seed.
+HAND_GATE_ATTEMPTS = 3
+
+
+def hand_gate_warning(attempts: int) -> str:
+    """The status warning of a front kept although no attempt passed."""
+    return (f"Palms may face the camera (hand check failed after {attempts} "
+            f"attempt{'' if attempts == 1 else 's'})")
+
+
+def _publish_staged(staged: Path, final_stem: Path, hand_gate: Dict[str, Any]) -> Optional[Path]:
+    """Move a staged front attempt (image + sidecar, ``hand_gate`` written
+    into the sidecar) onto the view's stem in ``model_refs``. A stored image
+    of the stem with another extension goes, like ``render_character_image``
+    drops it. None when ``model_refs`` is gone (the character was deleted
+    during the render)."""
+    import shutil
+    if not final_stem.parent.is_dir():
+        return None
+    sidecar = staged.with_suffix(".json")
+    try:
+        meta = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.is_file() else {}
+    except (OSError, ValueError):
+        meta = {}
+    meta["hand_gate"] = hand_gate
+    sidecar.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = final_stem.parent / f"{final_stem.name}{staged.suffix}"
+    for old in final_stem.parent.glob(f"{final_stem.name}.*"):
+        if old.suffix.lower() != ".json" and old != target:
+            old.unlink()
+    shutil.move(str(staged), str(target))
+    shutil.move(str(sidecar), str(target.with_suffix(".json")))
+    return target
+
+
 def generate_base_images(character_name: str, *, view: Optional[str] = None,
                          force: bool = False) -> Dict[str, Optional[str]]:
     """Render the base-body views. Blocking — call from a worker thread.
@@ -312,6 +358,19 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
     ``base_signature``. The mesh-input matte applies because the occasion
     is a mesh-input one (``render_character_image``).
 
+    Hand gate on the front: the palms should face the thighs, and whether
+    they do depends on the seed. Each front attempt renders into a private
+    staging dir inside ``model_refs`` (``.handgate_*``, one subdir per
+    attempt) and is measured by ``base_body_gates.hand_pose_gate``; the
+    first passing attempt — else, after ``HAND_GATE_ATTEMPTS``, the one with
+    the lowest score — is moved onto the front's stem with the gate numbers
+    of every attempt in its sidecar (``hand_gate``). Attempt files never sit
+    beside the stored refs: ``find_ref_image``, the cache GC and the outfit
+    scans parse every file name there as a signature of its own. A front
+    kept without a pass records ``hand_gate_warning`` as a status warning;
+    the run goes on. A later attempt that fails to render ends the attempts
+    with what was rendered. Back/left/right edit the chosen front.
+
     Cached per base signature: a view that exists is skipped unless
     ``force``. ``view`` renders that one view only (a non-front view needs
     the front). The prompts carry no use-case style — the image service
@@ -320,7 +379,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
 
     Returns ``{view: path | None}`` for every view it rendered (None =
     failed); a front that fails stops the run — the views need it."""
-    from app.core import expression_regen
+    import tempfile
+    from app.core import base_body_gates, expression_regen
     from app.core.model_refs import (TPOSE_VIEW_USE_CASES, _tpose_size, find_ref_image,
                                      get_model_refs_dir, neutral_view_reference)
     with _char_lock(character_name):
@@ -341,34 +401,79 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
         mesh_profile["equipped_items"] = []
         results: Dict[str, Optional[str]] = {}
 
-        def render(v: str, reference: Optional[Path]) -> Optional[Path]:
+        def draw(v: str, stem: Path, reference: Optional[Path]) -> Optional[Path]:
             prompt, negative = base_prompt(character_name, v, profile=profile)
+            return expression_regen.render_character_image(
+                character_name,
+                output_stem=stem,
+                equipped_pieces={}, equipped_items=[],
+                pose_prompt="", expression_prompt="",
+                bare_prompt=prompt, extra_negative=negative,
+                image_use_case="tpose" if v == "front" else TPOSE_VIEW_USE_CASES[v],
+                occasion="tpose" if v == "front" else "tpose_view",
+                override_width=width, override_height=height,
+                apply_state_modifiers=False,
+                mesh_input_profile=mesh_profile,
+                back_view=v == "back",
+                reference_image=reference,
+                sidecar_extra={"base_signature": bsig},
+                # The character's identity/pose LoRAs as on its tpose
+                # render (tpose_loras, else loras); no slot LoRAs.
+                character_loras=True)
+
+        def draw_front(final: Path) -> Tuple[Optional[Path], Optional[str]]:
+            """``(stored path, warning)`` of the gated front attempts."""
+            attempts: List[Tuple[Path, Dict[str, Any]]] = []
+            with tempfile.TemporaryDirectory(prefix=".handgate_", dir=refs_dir,
+                                             ignore_cleanup_errors=True) as staging:
+                for n in range(1, HAND_GATE_ATTEMPTS + 1):
+                    stem = Path(staging) / f"attempt{n}" / final.name
+                    stem.parent.mkdir()
+                    try:
+                        path = draw("front", stem, None)
+                    except Exception as e:  # noqa: BLE001 — keep what was rendered
+                        if not attempts:
+                            raise
+                        logger.warning("Base body %s (%s): front attempt %d failed: %s",
+                                       character_name, bsig, n, e)
+                        break
+                    if not path:
+                        if not attempts:
+                            return None, None
+                        logger.warning("Base body %s (%s): front attempt %d rendered nothing",
+                                       character_name, bsig, n)
+                        break
+                    gate = base_body_gates.hand_pose_gate(path)
+                    attempts.append((path, gate))
+                    logger.info("Base body %s (%s): front attempt %d hand gate %s (score %s, limit %s)",
+                                character_name, bsig, n, "passed" if gate["ok"] else "failed",
+                                gate.get("score"), gate.get("limit"))
+                    if gate["ok"]:
+                        break
+                chosen, passed = base_body_gates.best_attempt([g for _p, g in attempts])
+                record = {"ok": passed, "chosen": chosen + 1, "limit": base_body_gates.HAND_LIMIT,
+                          "attempts": [g for _p, g in attempts]}
+                stored = _publish_staged(attempts[chosen][0], final, record)
+            if stored is None:
+                return None, None
+            return stored, None if passed else hand_gate_warning(len(attempts))
+
+        def render(v: str, reference: Optional[Path]) -> Optional[Path]:
+            final = refs_dir / f"{_kind(v)}_{bsig}"
+            warning = None
             reserve_views(character_name, (v,))
             try:
-                path = expression_regen.render_character_image(
-                    character_name,
-                    output_stem=refs_dir / f"{_kind(v)}_{bsig}",
-                    equipped_pieces={}, equipped_items=[],
-                    pose_prompt="", expression_prompt="",
-                    bare_prompt=prompt, extra_negative=negative,
-                    image_use_case="tpose" if v == "front" else TPOSE_VIEW_USE_CASES[v],
-                    occasion="tpose" if v == "front" else "tpose_view",
-                    override_width=width, override_height=height,
-                    apply_state_modifiers=False,
-                    mesh_input_profile=mesh_profile,
-                    back_view=v == "back",
-                    reference_image=reference,
-                    sidecar_extra={"base_signature": bsig},
-                    # The character's identity/pose LoRAs as on its tpose
-                    # render (tpose_loras, else loras); no slot LoRAs.
-                    character_loras=True)
+                if v == "front":
+                    path, warning = draw_front(final)
+                else:
+                    path = draw(v, final, reference)
                 error = None if path else "render failed"
             except Exception as e:  # noqa: BLE001 — one view never kills the run
                 path, error = None, str(e) or type(e).__name__
                 logger.warning("Base body %s %s (%s) failed: %s", character_name, v, bsig, e)
             finally:
                 release_views(character_name, (v,))
-            _record(character_name, v, error)
+            _record(character_name, v, error or warning, warning=error is None and warning is not None)
             results[v] = str(path) if path else None
             return path
 

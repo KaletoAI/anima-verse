@@ -20,6 +20,8 @@ export interface BaseViewStatus {
   failed: boolean
   error?: string | null
   failed_at?: string | null
+  /** A caveat on a view that was stored anyway (the front's hand check). */
+  warning?: string | null
 }
 
 /** Base model of the CURRENT base signature. */
