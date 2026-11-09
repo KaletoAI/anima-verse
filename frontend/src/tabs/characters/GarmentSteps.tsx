@@ -10,17 +10,138 @@
  * server's `freshness` (RefImage / Model3DViewer render the badge).
  *
  * Runs go through the caller (`onRun` → POST
- * /characters/{n}/garments/{item}/run {step?, view?, force?}).
+ * /characters/{n}/garments/{item}/run {step?, view?, force?}, useGarmentRun).
+ * A click answers on the clicked button at once ("Starting…" while the POST
+ * is in flight, a refusal beside it); the targeted tile then carries its run
+ * state (Queued / Generating… / Will be redone — `runMark`) and the panel's
+ * sticky status line (RunStatusLine) says what the item waits for.
  */
 import { Fragment } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { EMPTY_TILE, ERROR_STYLE, MESH_CHIPS, ROW, TILE_HEIGHT, WARN_STYLE, flatFit, num } from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
 import { RefImage } from './RefImage'
-import { GARMENT_VIEWS } from './useGarment'
-import type { GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord } from './useGarment'
+import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
+import type {
+  GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, RunFeedback, RunMark,
+} from './useGarment'
+
+const MARK_LABELS: Record<Exclude<RunMark, null>, string> = {
+  queued: 'Queued',
+  generating: 'Generating…',
+  redo: 'Will be redone',
+}
+
+const MARK_COLORS: Record<Exclude<RunMark, null>, string> = {
+  queued: 'var(--accent, #6aa9ff)',
+  generating: 'var(--accent, #6aa9ff)',
+  redo: 'var(--warning, #d29922)',
+}
+
+/** The run state of a targeted tile/step: a small pill. */
+export function RunBadge({ mark }: { mark: RunMark }) {
+  const { t } = useI18n()
+  if (!mark) return null
+  return (
+    <span className={`ga-run-badge${mark === 'generating' ? ' ga-run-badge-live' : ''}`}
+      style={{ borderColor: MARK_COLORS[mark], color: MARK_COLORS[mark] }}>
+      {t(MARK_LABELS[mark])}
+    </span>
+  )
+}
+
+/** The other garment runs of the character, for the queue and refusal texts. */
+function othersText(fb: RunFeedback | undefined, stepLabels: Record<string, string>,
+  t: (s: string) => string): string {
+  return (fb?.others || [])
+    .map((o) => `${o.name} (${t(stepLabels[o.step || ''] || o.step || '')})`)
+    .join(', ')
+}
+
+/** A run button: "Starting…" while its own POST is in flight (every run
+ *  button waits meanwhile), the server's refusal right beside it. */
+export function RunButton({ feedback, slot, label, disabled, title, ariaLabel, stepLabels, style, primary,
+  onClick }: {
+  feedback?: RunFeedback
+  slot: string
+  label: string
+  disabled?: boolean
+  title?: string
+  ariaLabel?: string
+  stepLabels: Record<string, string>
+  style?: CSSProperties
+  primary?: boolean
+  onClick: () => void
+}) {
+  const { t } = useI18n()
+  const starting = feedback?.pending === slot
+  const refused = feedback?.refused?.slot === slot ? feedback.refused : null
+  const others = othersText(feedback, stepLabels, t)
+  return (
+    <>
+      <button
+        type="button"
+        className={`ga-btn ga-btn-sm${primary ? ' ga-btn-primary' : ''}`}
+        style={style}
+        disabled={disabled || feedback?.pending != null}
+        title={title}
+        aria-label={ariaLabel}
+        aria-busy={starting || undefined}
+        onClick={onClick}
+      >
+        {starting ? t('Starting…') : label}
+      </button>
+      {refused ? (
+        <div className="ga-hint" role="status" style={{ ...ERROR_STYLE, flexBasis: '100%' }} title={refused.message}>
+          {t('Another piece of this character is being generated — this run was not started')}
+          {others ? ` · ${t('Running')}: ${others}` : ''}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+/** The panel's status line while the item runs or waits — sticky, so it
+ *  stays in view while the steps scroll: Starting… / Queued (behind the
+ *  character's other runs) / Running: <step>, with the start time. */
+export function RunStatusLine({ garment, feedback, stepLabels }: {
+  garment: GarmentInfo | null
+  feedback?: RunFeedback
+  stepLabels: Record<string, string>
+}) {
+  useClockSettings()
+  const { t } = useI18n()
+  const running = garment?.running_step || null
+  if (!running && feedback?.pending == null) return null
+  const target = feedback?.target
+  const requested = target?.step
+    ? `${t(stepLabels[target.step] || target.step)}${target.view
+      ? ` · ${target.view === 'front' ? t('Front view') : t('Back view')}` : ''}`
+    : ''
+  let text: string
+  if (!running) {
+    text = t('Starting…')
+  } else if (running === 'queued') {
+    const others = othersText(feedback, stepLabels, t)
+    text = others ? t('Queued behind {items}').replace('{items}', others) : t('Queued')
+  } else {
+    text = `${t('Running')}: ${t(stepLabels[running] || running)}`
+  }
+  return (
+    <div className="ga-hint ga-run-status" role="status">
+      {running ? <RunBadge mark={running === 'queued' ? 'queued' : 'generating'} /> : null}
+      <span style={{ flex: '1 1 0', minWidth: 0 }}>
+        {[
+          text,
+          requested ? `${t('Requested')}: ${requested}` : '',
+          running && garment?.started_at ? `${t('started')} ${formatDateTime(garment.started_at, clockSettings())}` : '',
+        ].filter(Boolean).join(' · ')}
+      </span>
+    </div>
+  )
+}
 
 const FIT_STATUS: Record<string, string> = {
   accepted: 'Accepted',
@@ -147,7 +268,8 @@ function shownRecord(img: GarmentImageInfo | undefined): GateRecord | null {
   return last?.gate ?? null
 }
 
-function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle, onRegenerate, extra }: {
+function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle, onRegenerate, extra, feedback,
+  slot, mark, stepLabels }: {
   img: GarmentImageInfo | undefined
   label: string
   small?: boolean
@@ -158,14 +280,26 @@ function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle,
   blockedTitle?: string
   onRegenerate: () => void
   extra?: ReactNode
+  feedback?: RunFeedback
+  slot: string
+  mark: RunMark
+  stepLabels: Record<string, string>
 }) {
   const { t } = useI18n()
   const url = img?.url || null
   const height = small ? 120 : TILE_HEIGHT
   const attempts = img?.attempts ?? []
+  const starting = feedback?.pending === slot
+  const ring = mark ? MARK_COLORS[mark] : starting ? 'var(--accent, #6aa9ff)' : null
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div className="ga-hint">{label}</div>
+    <div style={{
+      flex: 1, minWidth: 0, borderRadius: 6, padding: 3, margin: -3,
+      outline: ring ? `2px solid ${ring}` : undefined, outlineOffset: -1,
+    }}>
+      <div className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span>{label}</span>
+        <RunBadge mark={mark} />
+      </div>
       {url ? (
         <RefImage key={url} src={url} height={height} label={label} meta={img} compact={small} />
       ) : (
@@ -191,17 +325,17 @@ function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle,
           ))}
         </details>
       ) : null}
-      <button
-        type="button"
-        className="ga-btn ga-btn-sm"
+      <RunButton
+        feedback={feedback}
+        slot={slot}
         style={{ marginTop: 4 }}
         disabled={busy || !!blockedTitle}
         title={blockedTitle}
         onClick={onRegenerate}
-        aria-label={`${t('Regenerate')} · ${label}`}
-      >
-        {url ? t('Regenerate') : t('Generate')}
-      </button>
+        ariaLabel={`${t('Regenerate')} · ${label}`}
+        label={url ? t('Regenerate') : t('Generate')}
+        stepLabels={stepLabels}
+      />
     </div>
   )
 }
@@ -229,7 +363,8 @@ function upscaleText(upscale: Record<string, unknown> | null | undefined, t: (s:
 
 /** The fit: status, Re-fit, the chips of the fit record (or of a refused
  *  fit's numbers), the distance tier and the step state. */
-export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailedText }: {
+export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailedText, feedback, order,
+  stepLabels }: {
   garment: GarmentInfo | null
   chips: ChipSpec[]
   limits: Record<string, GateLimit> | undefined
@@ -239,6 +374,10 @@ export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailed
   onRun: (body: GarmentRunBody) => void
   /** Shown with the error when the distance tier failed (the full mesh is used). */
   lowFailedText: string
+  feedback?: RunFeedback
+  /** The method's step order (the run marks). */
+  order: readonly string[]
+  stepLabels: Record<string, string>
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -252,20 +391,21 @@ export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailed
     <>
       <div className="ga-fieldset-title">{t('Fit')}</div>
       <div style={ROW}>
+        <RunBadge mark={runMark(feedback, garment, order, 'fit')} />
         <span className="ga-hint">
           {t(FIT_STATUS[fit?.status || 'missing'])}
           {fit?.tris ? ` · ${t('Triangles')} ${fit.tris.toLocaleString()}` : ''}
           {fit?.created_at ? ` · ${formatDateTime(fit.created_at, clockSettings())}` : ''}
         </span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
+        <RunButton
+          feedback={feedback}
+          slot={runSlot({ step: 'fit' })}
           disabled={busy || !garment || !ready}
           title={garment && !ready ? t('Run the previous step first') : undefined}
           onClick={() => { onRun({ step: 'fit', force: true }) }}
-        >
-          {t('Re-fit')}
-        </button>
+          label={t('Re-fit')}
+          stepLabels={stepLabels}
+        />
       </div>
       <GateChips specs={chips} record={fitRecord} limits={limits} />
       {fit?.low && fit.low.ok === false ? (
@@ -314,7 +454,7 @@ export interface ImageStepSpec {
 /** The edit chain: the image steps (each needs the previous one accepted
  *  per view), the mesh (needs both cut-outs) and the fit (needs the mesh). */
 export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, lowFailedText,
-  compact = false }: {
+  compact = false, feedback }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -325,6 +465,8 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
   lowFailedText: string
   /** Small image tiles everywhere (a narrow panel). */
   compact?: boolean
+  /** The panel's own run clicks (useGarmentRun). */
+  feedback?: RunFeedback
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -333,6 +475,7 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
   const accepted = (step: GarmentImageStep, view: GarmentView) => !!steps[step]?.[view]?.accepted
   const lastImage = imageSteps[imageSteps.length - 1]?.step
   const mesh = steps.mesh
+  const order = [...imageSteps.map((s) => s.step), 'mesh', 'fit']
 
   const imageRow = ({ step, chips }: ImageStepSpec, index: number) => {
     const prev = index > 0 ? imageSteps[index - 1].step : undefined
@@ -355,6 +498,10 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
                 busy={busy || !garment}
                 blockedTitle={blocked}
                 onRegenerate={() => { onRun({ step, view, force: true }) }}
+                feedback={feedback}
+                slot={runSlot({ step, view })}
+                mark={runMark(feedback, garment, order, step, view)}
+                stepLabels={stepLabels}
                 extra={step === 'cutout' && img?.url ? (
                   <div className="ga-hint" title={img.upscale?.reason ? String(img.upscale.reason) : undefined}>
                     {[
@@ -379,6 +526,7 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
 
       <div className="ga-fieldset-title">{t('Mesh')}</div>
       <div style={ROW}>
+        <RunBadge mark={runMark(feedback, garment, order, 'mesh')} />
         <span className="ga-hint">
           {!mesh || mesh.status === 'missing' ? t('Not built yet')
             : mesh.status === 'refused' ? t('Refused')
@@ -389,15 +537,15 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
           {mesh?.metrics.backend ? ` · ${mesh.metrics.backend}` : ''}
           {mesh?.created_at ? ` · ${formatDateTime(mesh.created_at, clockSettings())}` : ''}
         </span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
+        <RunButton
+          feedback={feedback}
+          slot={runSlot({ step: 'mesh' })}
           disabled={busy || !garment || !cutoutsReady}
           title={garment && !cutoutsReady ? t('Run the previous step first') : undefined}
           onClick={() => { onRun({ step: 'mesh', force: true }) }}
-        >
-          {mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
-        </button>
+          label={mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
+          stepLabels={stepLabels}
+        />
       </div>
       <GateChips specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} />
       {mesh?.status === 'refused' && mesh.gates.length ? (
@@ -411,7 +559,8 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
       {garment ? <StepState garment={garment} step="mesh" /> : null}
 
       <FitBlock garment={garment} chips={fitChips} limits={limits.fit} ready={mesh?.status === 'accepted'}
-        busy={busy} onRun={onRun} lowFailedText={lowFailedText} />
+        busy={busy} onRun={onRun} lowFailedText={lowFailedText} feedback={feedback} order={order}
+        stepLabels={stepLabels} />
     </>
   )
 }

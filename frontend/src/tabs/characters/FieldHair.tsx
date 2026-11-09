@@ -12,7 +12,8 @@
  * POST /characters/{n}/hair (create + wear the item, start the chain),
  * POST /characters/{n}/hair/equipped {equipped},
  * POST /characters/{n}/garments/{item}/run {step?, view?, force?}
- * (409 while a garment run of the character goes).
+ * (409 while a garment run of the character goes — shown beside the clicked
+ * button; useGarmentRun gives every run click its own feedback).
  *
  * The hair description is DERIVED from Appearance (R3) — read-only here.
  * Changing it does not start GPU work (R14): the tab shows "Hair description
@@ -38,17 +39,22 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
-import { FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, StepState } from './GarmentSteps'
+import {
+  FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, RunBadge, RunButton, RunStatusLine, StepState,
+} from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, flatFit, num } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
-import { garmentRunning, useGarment } from './useGarment'
+import { garmentRunning, runMark, runSlot, useGarment, useGarmentRun } from './useGarment'
 import type { HairDeckPanel, HairInfo, HairMethod, HairPlacement, OtherMethodInfo } from './useGarment'
 
 /** HairDeck's three image tiles: small, a click enlarges. */
 const HAIRDECK_TILE = 140
+
+/** The HairDeck method's steps (`garment_store.steps_for`). */
+const HAIRDECK_ORDER = ['hairdeck', 'fit'] as const
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -395,11 +401,8 @@ export function FieldHair({ character, onEditAppearance }: {
   )
 
   const itemId = info?.item_id || ''
-  const run = useCallback(
-    (body: { step?: string; view?: string; force?: boolean }) =>
-      call(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, body),
-    [call, enc, itemId],
-  )
+  const onError = useCallback((message: string) => { toast(t('Error') + ': ' + message, 'error') }, [t, toast])
+  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll, onError)
 
   const create = useCallback(
     () => call(`/characters/${enc}/hair`, {}, (d) => {
@@ -462,13 +465,13 @@ export function FieldHair({ character, onEditAppearance }: {
   ) : null
 
   const garment = info.garment
-  const busy = posting || garmentRunning(info)
+  const busy = posting || feedback.pending !== null || garmentRunning(info)
   const limits = info.limits || {}
   const fit = garment?.steps.fit
   const hd = info.hairdeck
   const isHairDeck = info.method === 'hairdeck'
   const noHair = !!garment && !garment.served_fsig && !garment.running_step && fit?.status !== 'accepted'
-  const onRun = (body: GarmentRunBody) => { void run(body) }
+  const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
 
   const editChainSection = (
     <GarmentSteps
@@ -481,6 +484,7 @@ export function FieldHair({ character, onEditAppearance }: {
       onRun={onRun}
       lowFailedText="Distance tier failed — the full hair is used"
       compact
+      feedback={feedback}
     />
   )
 
@@ -507,6 +511,7 @@ export function FieldHair({ character, onEditAppearance }: {
         })}
       </div>
       <div style={ROW}>
+        <RunBadge mark={runMark(feedback, garment, HAIRDECK_ORDER, 'hairdeck')} />
         <span className="ga-hint">
           {t(HAIRDECK_STATUS[hd.status] || hd.status)}
           {hd.attempt ? ` · ${t('Attempt')} ${hd.attempt}` : ''}
@@ -515,15 +520,15 @@ export function FieldHair({ character, onEditAppearance }: {
           {hd.backend ? ` · ${hd.backend}` : ''}
           {hd.created_at ? ` · ${formatDateTime(hd.created_at, clockSettings())}` : ''}
         </span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
+        <RunButton
+          feedback={feedback}
+          slot={runSlot({ step: 'hairdeck' })}
           disabled={busy || !garment || !hd.images.input}
           title={!hd.images.input ? t('Set a profile picture first') : undefined}
-          onClick={() => { void run({ step: 'hairdeck', force: true }) }}
-        >
-          {t('Regenerate hair (HairDeck)')}
-        </button>
+          onClick={() => onRun({ step: 'hairdeck', force: true })}
+          label={t('Regenerate hair (HairDeck)')}
+          stepLabels={STEP_LABELS}
+        />
       </div>
       {hd.notes.length ? <div className="ga-hint">{t('Notes')}: {hd.notes.join(' · ')}</div> : null}
       {hd.status === 'refused' && hd.error ? <div className="ga-hint" style={ERROR_STYLE}>{hd.error}</div> : null}
@@ -531,7 +536,8 @@ export function FieldHair({ character, onEditAppearance }: {
 
       <FitBlock garment={garment} chips={HAIRDECK_FIT_CHIPS} limits={limits.hairdeck_fit}
         ready={hd.status === 'accepted'} busy={busy} onRun={onRun}
-        lowFailedText="Distance tier failed — the full hair is used" />
+        lowFailedText="Distance tier failed — the full hair is used"
+        feedback={feedback} order={HAIRDECK_ORDER} stepLabels={STEP_LABELS} />
       {hd.attempts.length ? (
         <details>
           <summary className="ga-hint" style={{ cursor: 'pointer' }}>
@@ -638,12 +644,7 @@ export function FieldHair({ character, onEditAppearance }: {
             <span>{t('Wear hair')}</span>
           </label>
 
-          {garment?.running_step ? (
-            <div className="ga-hint">
-              {t('Running')}: {t(STEP_LABELS[garment.running_step] || garment.running_step)}
-              {garment.started_at ? ` · ${formatDateTime(garment.started_at, clockSettings())}` : ''}
-            </div>
-          ) : null}
+          <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} />
 
           {garment && garment.stale_reasons.length ? (
             <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
@@ -651,9 +652,8 @@ export function FieldHair({ character, onEditAppearance }: {
                 {garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}
               </span>
               <span className="ga-hint">{t('The previous hair stays in use until the new one is fitted.')}</span>
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => { void run({}) }}>
-                {t('Regenerate')}
-              </button>
+              <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
+                label={t('Regenerate')} stepLabels={STEP_LABELS} />
             </div>
           ) : null}
 
@@ -662,9 +662,8 @@ export function FieldHair({ character, onEditAppearance }: {
           {noHair ? (
             <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
               <span style={WARN_STYLE}>{t('No hair from this method yet')}</span>
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => { void run({}) }}>
-                {t('Regenerate')}
-              </button>
+              <RunButton feedback={feedback} slot="nohair" disabled={busy} onClick={() => onRun({}, 'nohair')}
+                label={t('Regenerate')} stepLabels={STEP_LABELS} />
             </div>
           ) : null}
 
@@ -679,15 +678,16 @@ export function FieldHair({ character, onEditAppearance }: {
           <div className="ga-split-col">
             <div className="ga-face-actions-row">
               <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Preview')}</span>
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
+              <RunButton
+                feedback={feedback}
+                slot="all"
                 disabled={busy || !garment}
                 title={t('Runs every step that is missing or out of date')}
-                onClick={() => { void run({}) }}
-              >
-                {garmentRunning(info) ? t('Generating…') : t('Run all')}
-              </button>
+                onClick={() => onRun({}, 'all')}
+                label={garment?.running_step === 'queued' ? t('Queued')
+                  : garmentRunning(info) ? t('Generating…') : t('Run all')}
+                stepLabels={STEP_LABELS}
+              />
             </div>
             {garment?.preview_url ? (
               <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={380}

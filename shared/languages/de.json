@@ -4347,6 +4347,11 @@
     "Open 3D tab": "Tab 3D öffnen",
     "The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).": "Der Grundkörper hat kein aufbewahrtes ungeriggtes Mesh — das Basismodell neu erzeugen („Neu generieren“ neben „Basismodell“).",
     "Collides with the base body's torso, arm and head capsules — “Garment collision” in the viewer compares": "Kollidiert mit den Rumpf-, Arm- und Kopfkapseln des Grundkörpers — „Kleidungskollision“ im Viewer vergleicht",
-    "No capsule set on the base model yet — the hair is shown as skinned": "Das Basismodell hat noch keinen Kapselsatz — die Haare werden wie geskinnt gezeigt"
+    "No capsule set on the base model yet — the hair is shown as skinned": "Das Basismodell hat noch keinen Kapselsatz — die Haare werden wie geskinnt gezeigt",
+    "Will be redone": "Wird neu gemacht",
+    "Queued behind {items}": "Wartet hinter {items}",
+    "Requested": "Angefordert",
+    "started": "gestartet",
+    "Another piece of this character is being generated — this run was not started": "Ein anderes Teil dieses Charakters wird gerade erzeugt — dieser Lauf wurde nicht gestartet"
   }
 }

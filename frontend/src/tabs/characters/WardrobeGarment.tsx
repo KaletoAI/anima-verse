@@ -15,23 +15,24 @@
  * incl. the pieces it is fitted over, worn pieces over each other), GET /characters/{n}/garments/{item} (the panel,
  * polled while a step runs — useGarment), POST
  * /characters/{n}/garments/{item}/run {step?, view?, force?} (409 while a
- * garment run of the character goes), GET + PUT /inventory/items/{item}
+ * garment run of the character goes — shown beside the clicked button,
+ * useGarmentRun), GET + PUT /inventory/items/{item}
  * (the flag; the PUT replaces the whole outfit_piece, so it is read first).
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, apiPut } from '../../lib/api'
+import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
-import { GarmentFailure, GarmentSteps } from './GarmentSteps'
+import { useClockSettings } from '../../lib/clockFormat'
+import { GarmentFailure, GarmentSteps, RunButton, RunStatusLine } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import { ROW, WARN_STYLE } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
-import { garmentRunning, useGarment } from './useGarment'
+import { garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type { GarmentItemInfo, PieceStatus } from './useGarment'
 
 /** The item flag's explanation (also the hint of the item editor). */
@@ -110,7 +111,10 @@ export function PieceStatusChip({ status }: { status: PieceStatus }) {
   let text = progress
   let color = 'rgba(255,255,255,0.25)'
   if (status.state === 'running') {
-    text = `${progress} ${t(STEP_LABELS[status.step || ''] || status.step || '')}`.trim()
+    // Waiting behind the character's other garment runs: "Queued", not "Generating…".
+    text = status.step === 'queued'
+      ? t('Queued')
+      : `${progress} ${t(STEP_LABELS[status.step || ''] || status.step || '')}`.trim()
     color = 'var(--accent, #6aa9ff)'
   } else if (status.painted) {
     text = `${t('Painted on')}: ${t(status.reason || '')}`
@@ -174,63 +178,45 @@ export function GarmentPiecePanel({ character, itemId, onStatus }: {
   const enc = encodeURIComponent(character)
   const url = character && itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}` : null
   const { info, startPoll } = useGarment<GarmentItemInfo & { steps?: ModelStep[] }>(url)
-  const [posting, setPosting] = useState(false)
+  const onError = useCallback((message: string) => { toast(t('Error') + ': ' + message, 'error') }, [t, toast])
+  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll, onError)
 
   useEffect(() => { if (info?.status) onStatus(itemId, info.status) }, [info, itemId, onStatus])
-
-  const run = useCallback(async (body: GarmentRunBody) => {
-    if (posting) return
-    setPosting(true)
-    try {
-      await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, body)
-      startPoll(300)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      startPoll()
-    } finally {
-      setPosting(false)
-    }
-  }, [enc, itemId, posting, startPoll, t, toast])
 
   if (!info) return <div className="ga-hint">{t('Loading…')}</div>
   if (!info.pipeline) {
     return <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Base body tab')}</div>
   }
   const garment = info.garment
-  const busy = posting || garmentRunning(info)
-  const onRun = (body: GarmentRunBody) => { void run(body) }
+  const busy = feedback.pending !== null || garmentRunning(info)
+  const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
   return (
     <div className="ga-form" style={{ padding: 8, borderRadius: 6, background: 'rgba(0,0,0,0.18)' }}>
+      <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} />
       <div style={ROW}>
         <PieceStatusChip status={info.status} />
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
+        <RunButton
+          feedback={feedback}
+          slot="all"
           disabled={busy || !garment}
           title={t('Runs every step that is missing or out of date')}
-          onClick={() => onRun({})}
-        >
-          {garmentRunning(info) ? t('Generating…') : t('Run all')}
-        </button>
+          onClick={() => onRun({}, 'all')}
+          label={garment?.running_step === 'queued' ? t('Queued')
+            : garmentRunning(info) ? t('Generating…') : t('Run all')}
+          stepLabels={STEP_LABELS}
+        />
       </div>
       {info.status.painted && !garmentRunning(info) ? (
         <div className="ga-hint" style={WARN_STYLE}>
           {t('Until it has an accepted fit, the outfit model paints this piece onto the body.')}
         </div>
       ) : null}
-      {garment?.running_step ? (
-        <div className="ga-hint">
-          {t('Running')}: {t(STEP_LABELS[garment.running_step] || garment.running_step)}
-          {garment.started_at ? ` · ${formatDateTime(garment.started_at, clockSettings())}` : ''}
-        </div>
-      ) : null}
       {garment && garment.stale_reasons.length ? (
         <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
           <span style={WARN_STYLE}>{garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}</span>
           <span className="ga-hint">{t('The previous mesh stays in use until the new one is fitted.')}</span>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => onRun({})}>
-            {t('Regenerate')}
-          </button>
+          <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
+            label={t('Regenerate')} stepLabels={STEP_LABELS} />
         </div>
       ) : null}
       <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
@@ -245,6 +231,7 @@ export function GarmentPiecePanel({ character, itemId, onStatus }: {
         onRun={onRun}
         lowFailedText="Distance tier failed — the full piece is used"
         compact
+        feedback={feedback}
       />
 
       <div className="ga-fieldset-title">{t('Preview')}</div>

@@ -3382,3 +3382,34 @@ a.ga-btn {
   background: var(--bg-secondary, #21262d);
 }
 .ga-pp-person-on { border-color: var(--accent, #6aa9ff); background: rgba(120, 170, 255, 0.12); }
+
+/* Garment run feedback (GarmentSteps: RunBadge, RunStatusLine). */
+.ga-run-badge {
+  display: inline-block;
+  font-size: 0.78em;
+  line-height: 1.4;
+  padding: 0 6px;
+  border: 1px solid var(--accent, #6aa9ff);
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.ga-run-badge-live {
+  animation: ga-run-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ga-run-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.ga-run-status {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--accent, #6aa9ff);
+  background: var(--bg-container, #161b22);
+}
