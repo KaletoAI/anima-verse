@@ -50,7 +50,10 @@ Hair made by HairDeck (``garment_hair.hair_method``; plan
 
 - ``hairdeck``: ``generate_hair`` on the profile picture, seed 42, into the
   job folder ``raw/{item}_{hsig}/`` (cached per ``hsig``, so a base or colour
-  change runs only the fit). A forced regenerate replaces the job with the
+  change runs only the fit). A character with facial hair
+  (``garment_beard.has_facial_hair``) sends a gated beard-free edit of the
+  picture instead (``garment_beard.beard_free_input``, cached in the job
+  folder; refused -> the picture itself, noted in the record). A forced regenerate replaces the job with the
   next seed after the highest one the record has seen (43, 44, …), so it
   gives a new result. A job whose ``info.json`` notes "no hair found"
   or "no person found" refuses with ``NO_HAIR_ERROR``;
@@ -448,10 +451,13 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
     files move in, so a crash never leaves an accepted record over half a
     job. ``_Refused`` (step ``hairdeck``, ``NO_HAIR_ERROR``) when ``info.json``
     notes no hair / no person; RuntimeError when the hair or proxy file is
-    missing from the result. Returns the job folder."""
+    missing from the result. A character with facial hair sends the
+    beard-free copy (``garment_beard.beard_free_input``); the record names
+    the input (``input``: ``beard_free`` / ``profile``) and notes it.
+    Returns the job folder."""
     import json as _json
     import shutil
-    from app.core import base_body
+    from app.core import base_body, garment_beard
     from app.core import garment_store as gs
     from app.core.model_refs import current_profile_image
     from app.core.timeutils import utc_now_iso
@@ -460,6 +466,10 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
     if image is None:
         raise base_body.MissingInput("No profile picture — HairDeck makes the hair from it")
     folder = gs.hairdeck_dir(character_name, item_id, hsig)
+    beard: Optional[Dict[str, Any]] = None
+    send = image
+    if garment_beard.has_facial_hair(character_name, profile=profile):
+        send, beard = garment_beard.beard_free_input(character_name, image, folder)
     seeds = sorted(set(_job_seeds(gs.read_record(folder / gs.HAIRDECK_RECORD))) | {int(seed)})
     folder.parent.mkdir(parents=True, exist_ok=True)
     staging = folder.parent / f".{folder.name}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -467,7 +477,7 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
     staging.mkdir()
     try:
         result = service.get_image_service().generate_hair(
-            str(image), str(staging), character_name=character_name, params={"seed": seed})
+            str(send), str(staging), character_name=character_name, params={"seed": seed})
         names = [str(f.get("name") or "") for f in result.get("files") or []]
         try:
             info = _json.loads((staging / "info.json").read_text(encoding="utf-8"))
@@ -475,7 +485,9 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
             info = {}
         notes = [str(n) for n in (info.get("notes") or [])] if isinstance(info, dict) else []
         record: Dict[str, Any] = {
-            "accepted": False, "attempt": attempt, "seed": seed, "seeds": seeds, "notes": notes,
+            "accepted": False, "attempt": attempt, "seed": seed, "seeds": seeds,
+            "notes": notes + ([garment_beard.note(beard)] if beard is not None else []),
+            "input": "beard_free" if send != image else "profile", "input_sha256": _sha(send),
             "error": "moving files",
             "files": names, "backend": result.get("backend"), "job_id": result.get("job_id"),
             "route": result.get("route"), "profile_image_sha256": _sha(image),
@@ -1450,7 +1462,9 @@ def _rgb_hex(value: Any) -> Optional[str]:
 
 def hairdeck_image_path(character_name: str, item_id: str, which: str) -> Optional[Path]:
     """The file behind one HairDeck tile of the CURRENT ``hsig``: ``input`` =
-    the current profile picture (the ``hsig`` is made from it), ``prep`` /
+    what HairDeck gets — the accepted beard-free copy of the profile picture
+    (``garment_beard.cached``) when there is one, else the current profile
+    picture (the ``hsig`` is made from it), ``prep`` /
     ``model_input`` = ``prep.png`` / ``model_input.png`` of the job folder.
     None when the file is not there. ValueError for an unknown ``which`` or
     an item that is no garment of the character."""
@@ -1461,11 +1475,20 @@ def hairdeck_image_path(character_name: str, item_id: str, which: str) -> Option
         raise ValueError(f"image must be one of {', '.join(HAIRDECK_IMAGES)}")
     _item(character_name, item_id)
     profile = get_character_profile(character_name) or {}
+    folder = gs.hairdeck_dir(character_name, item_id, gs.garment_hsig(character_name, item_id, profile=profile))
     if which == "input":
-        return current_profile_image(character_name, profile=profile)
-    path = gs.hairdeck_dir(character_name, item_id,
-                           gs.garment_hsig(character_name, item_id, profile=profile)) / f"{which}.png"
+        return _hairdeck_input(folder, current_profile_image(character_name, profile=profile))
+    path = folder / f"{which}.png"
     return path if path.is_file() else None
+
+
+def _hairdeck_input(folder: Path, source: Optional[Path]) -> Optional[Path]:
+    """What HairDeck gets for ``source`` (the profile picture) in the job
+    ``folder``: its accepted beard-free copy, else ``source``."""
+    from app.core import garment_beard
+    if source is None:
+        return None
+    return garment_beard.cached(folder, source) or source
 
 
 def hairdeck_panel(character_name: str, item_id: str, *,
@@ -1482,6 +1505,8 @@ def hairdeck_panel(character_name: str, item_id: str, *,
     - ``attempts``: the refused fit attempts of the job (gate records);
     - ``images``: ``input`` / ``prep`` / ``model_input`` -> ``{url, model,
       created_at}`` (tile meta for ``RefImage``) or None when absent;
+      ``input_source``: ``beard_free`` when ``input`` is the beard-free copy
+      of the profile picture (``garment_beard``), else ``profile``;
     - ``colour``: ``{target, source, auto}`` — ``target`` the manual
       ``#rrggbb`` or None, ``source`` ``"override"`` or ``"hairdeck"`` (R4:
       automatic = HairDeck's own vertex colours), ``auto`` HairDeck's own
@@ -1508,8 +1533,9 @@ def hairdeck_panel(character_name: str, item_id: str, *,
     folder = gs.hairdeck_dir(character_name, item_id, hsig)
     images: Dict[str, Optional[Dict[str, Any]]] = {}
     source = current_profile_image(character_name, profile=profile)
+    sent = _hairdeck_input(folder, source)
     for which in HAIRDECK_IMAGES:
-        path = source if which == "input" else folder / f"{which}.png"
+        path = sent if which == "input" else folder / f"{which}.png"
         stamp = _stamp(path) if path is not None else None
         if stamp is None:
             images[which] = None
@@ -1544,7 +1570,8 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "seeds_tried": len(_job_seeds(_hairdeck_record(character_name, item_id, hsig))),
             "backend": job["backend"], "created_at": job["created_at"], "error": job["error"],
             "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour,
-            "placement": placement}
+            "placement": placement,
+            "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:

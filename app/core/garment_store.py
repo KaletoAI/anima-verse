@@ -46,8 +46,10 @@ turns the profile picture into hair cards; its files live in ONE folder per
 ``hsig`` = md5[:12] over the profile picture's sha256, the ``extra_params`` of
 the backend the ``hair_mesh`` occasion is meant to run on and
 ``HAIRDECK_VERSION`` — no base, no colour: a base change or a colour change
-re-fits from the cached job. The HairDeck fsig is the edit-chain payload plus
-``method``, ``hsig``, the colour override (profile ``hair_colour``) and the
+re-fits from the cached job. A character with facial hair adds
+``garment_beard.hsig_inputs`` (HairDeck gets a beard-free copy of the picture,
+cached in the job folder as ``beard_free.png``). The HairDeck fsig is the
+edit-chain payload plus ``method``, ``hsig``, the colour override (profile ``hair_colour``) and the
 placement (profile ``hair_forward_m`` / ``hair_tilt_deg``); the
 edit-chain fsig carries no ``method`` key, so it stays what it always was.
 The fit is the same ``{item}_{fsig}.glb`` + record (its record says
@@ -308,15 +310,19 @@ def garment_hsig(character_name: str, item_id: str, *,
     """md5[:12] over ``{profile_image, extra_params, version}``: the sha256
     of the character's current profile picture ("" without one), the
     ``extra_params`` of the intended ``hair_mesh`` backend
-    (``hairdeck_backend_params``) and ``HAIRDECK_VERSION``. Names the HairDeck
-    job folder (``hairdeck_dir``). Neither the base nor the colour override is
-    in it: changing them re-fits, never re-runs HairDeck."""
-    from app.core import base_body
+    (``hairdeck_backend_params``) and ``HAIRDECK_VERSION`` — plus
+    ``beard_free`` for a character with facial hair
+    (``garment_beard.hsig_inputs``: HairDeck gets the picture with the beard
+    removed; absent otherwise, so such an hsig is unchanged). Names the
+    HairDeck job folder (``hairdeck_dir``). Neither the base nor the colour
+    override is in it: changing them re-fits, never re-runs HairDeck."""
+    from app.core import base_body, garment_beard
     from app.core.model_refs import current_profile_image
     profile = _profile_of(character_name, profile)
     payload = {"profile_image": base_body.file_sha256(current_profile_image(character_name, profile=profile)),
                "extra_params": hairdeck_backend_params(character_name),
-               "version": HAIRDECK_VERSION}
+               "version": HAIRDECK_VERSION,
+               **garment_beard.hsig_inputs(character_name, profile=profile)}
     digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"))
     return digest.hexdigest()[:12]
 

@@ -92,6 +92,8 @@ export interface HairDeckPanel {
   /** The refused fit attempts of the job (gate records with `metrics`). */
   attempts: GateRecord[]
   images: Record<'input' | 'prep' | 'model_input', HairDeckImage>
+  /** `beard_free` when the input tile is the profile picture with the beard removed (facial hair). */
+  input_source?: 'beard_free' | 'profile'
   colour: {
     /** The manual `#rrggbb`, null = automatic. */
     target: string | null

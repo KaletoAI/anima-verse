@@ -460,8 +460,10 @@ export function FieldHair({ character, onEditAppearance }: {
     <>
       <div className="ga-fieldset-title">{t('HairDeck')}</div>
       <div style={{ display: 'flex', gap: 6 }}>
-        {HAIRDECK_TILES.map(([key, label]) => {
+        {HAIRDECK_TILES.map(([key, tileLabel]) => {
           const img = hd.images[key]
+          // A character with facial hair sends HairDeck the picture with the beard removed.
+          const label = key === 'input' && hd.input_source === 'beard_free' ? 'Input (beard removed)' : tileLabel
           return (
             <div key={key} style={{ flex: 1, minWidth: 0 }}>
               <div className="ga-hint">{t(label)}</div>
