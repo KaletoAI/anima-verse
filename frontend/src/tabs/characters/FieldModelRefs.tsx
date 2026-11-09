@@ -135,6 +135,9 @@ export function FieldModelRefs({
   // reports our kinds idle again.
   const [busy, setBusy] = useState(false)
   const [faceDialogOpen, setFaceDialogOpen] = useState(false)
+  // The server's refusal of the last Generate (e.g. 409 "render the base
+  // body first"), shown under the images until the next attempt.
+  const [genError, setGenError] = useState('')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Poll generation: a tick whose generation is stale (stopped/restarted
   // meanwhile, or the component is gone) drops its result.
@@ -214,6 +217,7 @@ export function FieldModelRefs({
       // An explicit view ignores the auto toggles and replaces only that
       // image. The general Generate button still fires this tab's checked kinds.
       const wanted = view ? ['tpose'] : kindList.filter((k) => info.auto?.[k] !== false)
+      setGenError('')
       await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: wanted, view })
       toast(t('Generating…'))
       // A beat for the worker thread to register as running before the first
@@ -221,6 +225,7 @@ export function FieldModelRefs({
       startPoll(1000)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setGenError((e as Error).message)
       setBusy(false)
     }
   }, [busy, enc, kindList, info.auto, startPoll, t, toast])
@@ -328,6 +333,7 @@ export function FieldModelRefs({
 
   return (
     <div className="ga-form">
+      {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
       <div style={{ display: 'flex', gap: 8 }}>
         {kindList.map((kind) => {
           const ri = info[kind]

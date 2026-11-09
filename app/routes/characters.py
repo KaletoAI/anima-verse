@@ -1491,6 +1491,7 @@ async def generate_character_model_refs(character_name: str,
         if kinds is not None and kinds != ["tpose"]:
             raise HTTPException(status_code=422, detail="view requires kinds ['tpose']")
         kinds = ["tpose"]
+        _require_base_images(character_name, view)
         if view not in ("main", "face"):
             _, _, signature = current_outfit_state(character_name)
             if not find_ref_image(
@@ -1504,6 +1505,8 @@ async def generate_character_model_refs(character_name: str,
         if not kinds:
             raise HTTPException(status_code=422,
                                 detail=f"kinds must contain one of {list(REF_KINDS)}")
+        if view is None and "tpose" in kinds:
+            _require_base_images(character_name, None)
     dialog_keys = ("prompt", "backend", "loras", "negative_prompt")
     face_render = None
     if isinstance(body, dict) and any(k in body for k in dialog_keys):
@@ -1518,6 +1521,29 @@ async def generate_character_model_refs(character_name: str,
                                 detail="No profile picture. Set a profile picture, then render the face view")
     trigger_now(character_name, kinds=kinds, tpose_view=view, face_render=face_render)
     return {"status": "generating"}
+
+
+#: 409 of a pose render on the base-body pipeline without the base views.
+BASE_FIRST = "Render the base body first (Base body tab) — the outfit views are edits of it"
+
+
+def _require_base_images(character_name: str, view: Optional[str]) -> None:
+    """409 ``BASE_FIRST`` when a T-pose render of a base-body-pipeline
+    character would find no base view image of the CURRENT base signature
+    to edit (``base_body.generate_dressed_images`` would only log it and
+    return nothing). ``view`` None = every base view, "main" = the front;
+    the face view is no edit of the base body. Checked before any thread
+    starts; missing dressed images alone are fine (that is what the render
+    makes)."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    if view == "face" or not base_body.is_base_pipeline(character_name):
+        return
+    views = base_body.BASE_VIEWS if view is None else ("front" if view == "main" else view,)
+    bsig = base_body.base_signature(character_name)
+    if any(find_ref_image(character_name, "tpose" if v == "front" else f"tpose_{v}", bsig) is None
+           for v in views if v in base_body.BASE_VIEWS):
+        raise HTTPException(status_code=409, detail=BASE_FIRST)
 
 
 async def _face_dialog_render(body: Dict[str, Any]) -> Dict[str, Any]:
