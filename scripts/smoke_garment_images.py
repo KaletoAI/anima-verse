@@ -41,8 +41,9 @@ The recorder writes them by (step, view, attempt):
     (ok False, body_xor 0.0625), gates.second ok True; two render calls.
     Each call: bare_prompt, extra_negative, image_use_case "garment_edit",
     occasion "garment_view", apply_state_modifiers False, pieces {} items [],
-    character_loras False, postprocess False, override 160x160 (the source
-    size, already a multiple of 16), sidecar_extra.garment = {item_id H,
+    character_loras False, postprocess False, override 160x160 (the square
+    canvas: max(160, 160) = 160, already a multiple of 16),
+    sidecar_extra.garment = {item_id H,
     fsig F, step haired, view front, attempt n}; the reference is the
     base front flattened on grey (same file name, inside model_refs).
     A second run without force renders nothing (cached).
@@ -56,9 +57,9 @@ The recorder writes them by (step, view, attempt):
     Male -> "Only change his head: he now has"; unset gender -> "Only change
     their head: they now have". Ghost front ends with "the inner side of the
     hair is visible."; its negative has no step-term removal.
-[3] ghost/front: reference = the accepted haired front file itself (opaque,
-    so neutral_view_reference passes it through), override 160x160 = the
-    haired image's size; accepted at attempt 1, gates.first ok.
+[3] ghost/front: reference = a grey-square copy of the accepted haired
+    front file (same name; square already, so the pixels are the haired
+    image's), override 160x160; accepted at attempt 1, gates.first ok.
 [4] ghost/back after haired/back: GateRefused(step "ghost", view "back")
     with 2 records, both ok False with a "body left" reason; no ghost back
     final and no cutout back file exist; both attempt sidecars carry their
@@ -74,6 +75,28 @@ The recorder writes them by (step, view, attempt):
       "lanczos" with the reason.
     - the alpha of the result is opaque at the centre, transparent at a
       corner (the square pads the block by 7.5 % per side).
+[8] Square canvas (bug A of the 2026-11-09 end-to-end run: a narrow source
+    sent at its own size is re-framed by the edit model). NARROW base views =
+    the 160x160 base cropped to columns [32, 128) -> 96x160 RGBA (the whole
+    figure lies in x 64..96 and the head in 70..90, all inside). Square
+    frame: side = max(96, 160) = 160 (a multiple of 16), offset
+    ((160 - 96) // 2, (160 - 160) // 2) = (32, 0); a 100x90 source gives
+    side 112 (100 rounded up to 16) at offset (6, 11). fsig Q = "0000000000f8".
+    - haired/front: ONE render with override 160x160; the reference is
+      160x160 and pixel-equal to the full bald 160x160 image (grey padding
+      32 px each side, transparent pixels grey 128). The recorder returns
+      GOOD_HAIRED (160x160, the figure at canvas x 64..96) -> cropped at
+      (32, 0) to 96x160 = GOOD_HAIRED[:, 32:128]: body unchanged -> accepted
+      at attempt 1; the final is 96x160 and pixel-equal to that crop;
+      sidecar edit_canvas {side 160, offset [32, 0], crop [96, 160]}.
+      Old code: override 96x160 and the 160x160 render squeezed to 96 wide
+      -> the body gate refuses.
+    - ghost/front: the source is the accepted 96x160 haired final -> the
+      reference is GOOD_HAIRED again (pixel-equal), override 160x160. The
+      recorder returns GOOD_GHOST scaled 2x (320x320): scaled back to
+      160x160 (Lanczos), cropped at (32, 0) -> the attempt-1 file is
+      96x160. (Whether the gate takes it is not the point here: the Lanczos
+      ringing at the block edge moves the stub mask by a pixel.)
 [7] render_character_image default path unchanged: with a stub image service
     a default call runs postprocess_outfit_image once and publishes its
     output; postprocess=False skips it and publishes the backend bytes
@@ -202,10 +225,14 @@ def main() -> int:
 
         def recorder(character_name, *, output_stem, **kw):
             g = kw["sidecar_extra"]["garment"]
+            from PIL import Image
+            with Image.open(kw["reference_image"]) as ref_im:
+                ref_rgb = np.asarray(ref_im.convert("RGB"))
             calls.append({"stem": output_stem, **kw,
                           "reference_name": Path(kw["reference_image"]).name,
                           "reference_path": Path(kw["reference_image"]),
-                          "reference_exists": Path(kw["reference_image"]).is_file()})
+                          "reference_exists": Path(kw["reference_image"]).is_file(),
+                          "reference_rgb": ref_rgb})
             arr = plan[(g["step"], g["view"])][g["attempt"] - 1]
             out = Path(str(output_stem) + ".png")
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -293,7 +320,9 @@ def main() -> int:
         calls.clear()
         gfinal = gi.run_edit_step("Demo", hid, fsig, "ghost", "front")
         check("ghost accepted", gs.read_record(gfinal.with_suffix(".json")).get("accepted"), True)
-        check("ghost reference = haired file", calls[0]["reference_path"], final)
+        check("ghost reference = haired file on the square",
+              (calls[0]["reference_name"], np.array_equal(calls[0]["reference_rgb"], good_haired)),
+              (final.name, True))
         check("ghost override = haired size", (calls[0]["override_width"], calls[0]["override_height"]),
               (SIZE, SIZE))
         check("ghost prompt", calls[0]["bare_prompt"], p_g)
@@ -390,6 +419,50 @@ def main() -> int:
                   ("lanczos", True))
         finally:
             service.get_image_service = real_service
+
+        print("[8] square canvas for a narrow source")
+        for name in (f"tpose_{bsig}.png", f"tpose_back_{bsig}.png"):
+            (refs / name).write_bytes(png(np.ascontiguousarray(base_rgba[:, 32:128])))
+        check("square frame", gi.square_frame((96, 160)), (160, (32, 0)))
+        check("square frame rounds up", gi.square_frame((100, 90)), (112, (6, 11)))
+        q = "0000000000f8"
+        plan[("haired", "front")] = [good_haired, good_haired]
+        plan[("ghost", "front")] = [np.repeat(np.repeat(good_ghost, 2, axis=0), 2, axis=1)] * 2
+        calls.clear()
+        qfinal = None
+        try:
+            qfinal = gi.run_edit_step("Demo", hid, q, "haired", "front")
+        except gi.GateRefused as e:
+            check("narrow haired accepted", str(e), "accepted")
+        check("narrow: one render", len(calls), 1)
+        if calls:
+            check("narrow override square", (calls[0]["override_width"], calls[0]["override_height"]),
+                  (160, 160))
+            check("narrow reference square + centred",
+                  (calls[0]["reference_rgb"].shape, np.array_equal(calls[0]["reference_rgb"], figure(grey()))),
+                  ((160, 160, 3), True))
+        if qfinal is not None:
+            from PIL import Image
+            with Image.open(qfinal) as im:
+                q_rgb = np.asarray(im.convert("RGB"))
+            check("narrow final cropped back", (q_rgb.shape, np.array_equal(q_rgb, good_haired[:, 32:128])),
+                  ((160, 96, 3), True))
+            q_rec = gs.read_record(qfinal.with_suffix(".json"))
+            check("narrow accepted at 1", (q_rec.get("accepted"), q_rec.get("attempt")), (True, 1))
+            check("narrow edit_canvas", q_rec.get("edit_canvas"),
+                  {"side": 160, "offset": [32, 0], "crop": [96, 160]})
+            calls.clear()
+            try:
+                gi.run_edit_step("Demo", hid, q, "ghost", "front")
+            except gi.GateRefused:
+                pass
+            if calls:
+                check("narrow ghost reference", (calls[0]["override_width"], calls[0]["override_height"],
+                                                 np.array_equal(calls[0]["reference_rgb"], good_haired)),
+                      (160, 160, True))
+            g_try = gs.garment_path("Demo", hid, q, "image", step="ghost", view="front", attempt=1)
+            with Image.open(g_try) as im:
+                check("narrow ghost 2x render cropped back", im.size, (96, 160))
 
         print("[7] render_character_image default path")
         expression_regen.render_character_image = REAL_RENDER

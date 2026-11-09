@@ -8,10 +8,17 @@ gated by the garment kind's gate (``garment_gates``). The accepted attempt
 is copied to the step's final file; two refusals raise ``GateRefused`` with
 both gate records. The edit is an image EDIT of its source on the routed
 ``garment_view`` occasion: the base view (step ``haired``) or the accepted
-image of the step before (``ghost``), at the source's own size rounded up to
-16, use case ``garment_edit`` (empty style, the spike negative), no
-character LoRAs, and published unprocessed (``postprocess=False``) so the
-gates and the placement see the full frame.
+image of the step before (``ghost``), use case ``garment_edit`` (empty style,
+the spike negative), no character LoRAs, and published unprocessed
+(``postprocess=False``) so the gates and the placement see the full frame.
+
+The edit runs on a SQUARE canvas: the source is centred on neutral grey in a
+square of side ``max(w, h)`` rounded up to 16 and rendered at that square;
+the result is cropped back at the known offset to the source's size BEFORE
+it is gated and stored. Sent at its own narrow crop size (e.g. 656×1536) the
+edit model re-frames the figure by ~2 % and the body gate refuses a correct
+image (2026-11-09 end-to-end run: body XOR 0.111 narrow vs 0.005–0.007
+square).
 
 ``cut_out`` turns an accepted hair-only image into the generator input
 (R6): BiRefNet-DIS mask on the original colours, a square of side
@@ -25,6 +32,8 @@ Blocking — called from the garment run's worker thread, which holds
 """
 import io
 import shutil
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,7 +41,7 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_images")
 
-#: Edits render at the source size rounded up to this multiple.
+#: The square edit canvas has a side that is a multiple of this.
 SIZE_STEP = 16
 #: The generator wants at least this square (a 381² input crashed the worker).
 CUTOUT_MIN_SIDE = 1024
@@ -107,18 +116,59 @@ def _image_size(path: Path) -> Tuple[int, int]:
         return im.size
 
 
-def _to_png(path: Path, target: Path) -> Path:
-    """The rendered file as PNG at ``target`` (the renderer keeps the
-    backend's format when it does not post-process)."""
-    if path == target:
-        return target
+def square_frame(size: Tuple[int, int]) -> Tuple[int, Tuple[int, int]]:
+    """``(side, (dx, dy))`` of the square edit canvas for a source of
+    ``size``: side = ``max(w, h)`` rounded up to ``SIZE_STEP``, the source
+    centred at offset ``((side - w) // 2, (side - h) // 2)``."""
+    w, h = int(size[0]), int(size[1])
+    side = render_size((max(w, h), max(w, h)))[0]
+    return side, ((side - w) // 2, (side - h) // 2)
+
+
+@contextmanager
+def square_reference(path: Path, refs_dir: Path):
+    """The edit source centred on a neutral-grey square (``square_frame``);
+    yields ``(reference path, side, offset, source size)``.
+
+    Transparent pixels become the grey of ``model_refs.neutral_view_reference``
+    (an RGBA cut-out would otherwise reach the backend black). The copy keeps
+    the source's file name (the sidecar records the reference by name) and
+    lives in a private temp dir inside ``refs_dir``, where the reference
+    containment gate accepts it."""
+    from PIL import Image
+    from app.core.model_refs import VIEW_REFERENCE_BACKGROUND
+    with Image.open(path) as im:
+        rgba = im.convert("RGBA")
+    side, offset = square_frame(rgba.size)
+    canvas = Image.new("RGBA", (side, side), VIEW_REFERENCE_BACKGROUND + (255,))
+    canvas.alpha_composite(rgba, offset)
+    with tempfile.TemporaryDirectory(prefix=".viewref_", dir=refs_dir) as tmp:
+        out = Path(tmp) / Path(path).name
+        canvas.convert("RGB").save(out, format="PNG")
+        yield out, side, offset, rgba.size
+
+
+def _crop_back(path: Path, target: Path, side: int, offset: Tuple[int, int],
+               size: Tuple[int, int]) -> Path:
+    """The square render cut back to the source frame, as PNG at ``target``:
+    a render of another size is first scaled (pure scale) to the requested
+    ``side``², then the source's ``size`` is cropped at ``offset``. The
+    renderer's sidecar moves along."""
     from PIL import Image
     with Image.open(path) as im:
-        im.save(target, format="PNG")
-    path.unlink(missing_ok=True)
-    side = path.with_suffix(".json")
-    if side.is_file() and side != target.with_suffix(".json"):
-        side.replace(target.with_suffix(".json"))
+        rgb = im.convert("RGB")
+    if rgb.size != (side, side):
+        rgb = rgb.resize((side, side), Image.Resampling.LANCZOS)
+    dx, dy = offset
+    cropped = rgb.crop((dx, dy, dx + int(size[0]), dy + int(size[1])))
+    tmp = target.with_name(f".{target.name}.tmp")
+    cropped.save(tmp, format="PNG")
+    tmp.replace(target)
+    if path != target:
+        path.unlink(missing_ok=True)
+        side_file = path.with_suffix(".json")
+        if side_file.is_file() and side_file != target.with_suffix(".json"):
+            side_file.replace(target.with_suffix(".json"))
     return target
 
 
@@ -169,7 +219,6 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         if not _accepted(source):
             raise base_body.MissingInput(f"The {source_step} {view} image is missing — run that step first")
     prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile)
-    width, height = render_size(_image_size(source))
     refs_dir = get_model_refs_dir(character_name)
     final.parent.mkdir(parents=True, exist_ok=True)
 
@@ -186,7 +235,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     for attempt in range(1, ATTEMPTS + 1):
         target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
         stem = target.with_suffix("")
-        with neutral_view_reference(source, refs_dir) as reference:
+        with square_reference(source, refs_dir) as (reference, side, offset, source_size):
             path = expression_regen.render_character_image(
                 character_name,
                 output_stem=stem,
@@ -195,18 +244,20 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                 bare_prompt=prompt, extra_negative=negative,
                 image_use_case="garment_edit",
                 occasion="garment_view",
-                override_width=width, override_height=height,
+                override_width=side, override_height=side,
                 apply_state_modifiers=False,
                 back_view=view == "back",
                 reference_image=reference,
                 sidecar_extra={"garment": {"item_id": item_id, "fsig": fsig, "step": step,
-                                           "view": view, "attempt": attempt}},
+                                           "view": view, "attempt": attempt},
+                              "edit_canvas": {"side": side, "offset": list(offset),
+                                              "crop": list(source_size)}},
                 character_loras=False,
                 postprocess=False)
         if path is None:
             record: Dict[str, Any] = {"view": view, "ok": False, "reasons": ["render failed"]}
         else:
-            path = _to_png(Path(path), target)
+            path = _crop_back(Path(path), target, side, offset, source_size)
             record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask,
                                source_rgb=source_rgb, source_mask=source_mask,
                                edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size))
