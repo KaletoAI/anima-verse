@@ -996,6 +996,10 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                 info["job_id"] = meta.get("job_id", "")
                 info["rig_error"] = meta.get("rig_error", "")
                 info["face_num"] = meta.get("face_num")
+                # The base body the served file was built on (base-body
+                # pipeline; None for a whole-body model).
+                info["base_signature"] = meta.get("base_signature")
+                info["base_model_sha256"] = meta.get("base_model_sha256")
                 # Measured geometry, if this model has been through Blender.
                 # Read from the sidecar only — the info route is polled, and
                 # measuring costs a subprocess.

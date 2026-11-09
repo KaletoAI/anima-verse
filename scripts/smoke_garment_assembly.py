@@ -80,6 +80,20 @@ Expected, derived by hand from plan R11/R12 and the Task 7 brief:
     assembled/low/OSIG.*. GC: a stale signature aaaaaaaaaaaa (pieces
     {top: missing_item}) with model + assembled files is reported stale,
     _mesh_files lists its assembled files, purge_stale removes them.
+[12] Bug D of the 2026-11-09 end-to-end run (an outfit model on the OLD base
+    got the new hair). built_on_fit_base(bare sidecar, fit record): equal
+    base_model_sha256 -> True; the sha differs while base_signature agrees
+    -> False (the sha decides); sidecar with base_signature only -> compared
+    to the record's base_signature (True when equal, False when the record
+    has none); a sidecar with neither -> False. A bare model C =
+    "cccccccccccc" whose sidecar names base_model_sha256 "0"*64 (another
+    base than SHA of the fit record): served(full) = the bare path and NO
+    schedule; assemble -> {full: none, low: none}, no assembled file; the
+    real schedule refuses (False). A leftover assembled/C.glb -> served is
+    still bare, schedule(Demo, C) asked (to take it away) and assemble ->
+    full "removed". The sidecar back on SHA -> assemble -> full "assembled".
+    get_model3d_info(Demo).model carries the served file's base_signature
+    BSIG and base_model_sha256 SHA (OSIG's sidecar).
 """
 import hashlib
 import json
@@ -493,6 +507,40 @@ def main() -> int:
         gc.purge_stale("Demo", [stale])
         check("GC purge removed assembled", sorted(p.name for p in (mdir / "assembled").rglob(f"{stale}.*")), [])
         check("bare stays bare", [n for n in node_names(bare.read_bytes()) if n and n.startswith("garment_")], [])
+
+        print("[12] a bare model built on ANOTHER base gets no garment")
+        X, Y, B = "1" * 64, "2" * 64, "base0000aaaa"
+        old = "cccccccccccc"
+        old_bare = mdir / f"{old}.glb"
+        old_bare.write_bytes(body)
+        old_bare.with_suffix(".json").write_text(json.dumps({**bare_meta, "signature": old,
+                                                             "base_model_sha256": "0" * 64}))
+        SCHEDULED.clear()
+        check("older base: served bare", ga.served("Demo", old_bare, "full"), old_bare)
+        check("older base: no build asked", SCHEDULED, [])
+        check("older base: assemble builds nothing", ga.assemble("Demo", old),
+              {"ok": True, "tiers": {"full": "none", "low": "none"}})
+        check("older base: no assembled file", (mdir / "assembled" / f"{old}.glb").exists(), False)
+        check("older base: real schedule refuses", real_schedule("Demo", old), False)
+        leftover = mdir / "assembled" / f"{old}.glb"
+        leftover.write_bytes(b"left over from the old state")
+        check("leftover: served bare", ga.served("Demo", old_bare, "full"), old_bare)
+        check("leftover: removal asked", SCHEDULED, [("Demo", old)])
+        check("leftover removed", (ga.assemble("Demo", old)["tiers"]["full"], leftover.exists()),
+              ("removed", False))
+        old_bare.with_suffix(".json").write_text(json.dumps({**bare_meta, "signature": old}))
+        check("same base again: assembled", ga.assemble("Demo", old)["tiers"]["full"], "assembled")
+        info_model = model3d.get_model3d_info("Demo").get("model") or {}
+        check("model3d info names the base", (info_model.get("signature"), info_model.get("base_signature"),
+                                              info_model.get("base_model_sha256")), (osig, bsig, base_sha))
+        check("same sha", ga.built_on_fit_base({"base_model_sha256": X}, {"base_model_sha256": X}), True)
+        check("sha decides over signature", ga.built_on_fit_base(
+            {"base_model_sha256": X, "base_signature": B}, {"base_model_sha256": Y, "base_signature": B}), False)
+        check("signature without sha", ga.built_on_fit_base({"base_signature": B},
+                                                            {"base_model_sha256": X, "base_signature": B}), True)
+        check("signature, record without one", ga.built_on_fit_base({"base_signature": B},
+                                                                     {"base_model_sha256": X}), False)
+        check("no base identity", ga.built_on_fit_base({}, {"base_model_sha256": X}), False)
 
         sync_topics.changed_at = real_changed
         client.close()

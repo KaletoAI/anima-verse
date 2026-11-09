@@ -24,9 +24,14 @@ under ``model3d_publication`` only if the bare file is still the one it read
 assembly of its predecessor.
 
 Which garment: per equipped mesh piece the fit ``garment_store.accepted_fit``
-names on the CURRENT base model (current fsig, else the newest accepted fit).
-Off the base-body pipeline, or with no equipped mesh piece, nothing is wanted
-and the bare file is served unchanged.
+names on the CURRENT base model (current fsig, else the newest accepted fit)
+— and only when the bare model of the signature was built on that same base
+model (``built_on_fit_base``: the bare full sidecar's ``base_model_sha256``,
+else its ``base_signature``, equals the fit record's). An outfit model from
+an older base (served as stale until rebuilt) has another body under the
+hair: it is served bare, and no assembly is built for it. Off the base-body
+pipeline, or with no equipped mesh piece, nothing is wanted and the bare
+file is served unchanged.
 """
 import json
 import threading
@@ -104,10 +109,26 @@ def _file_sha256(path: Optional[Path]) -> str:
 
 # --- What is wanted -----------------------------------------------------------
 
-def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool:
+    """Whether a bare outfit model (its sidecar ``bare_meta``) was built on
+    the base model a fit (its ``record``) was fitted to: the sidecar's
+    ``base_model_sha256`` equals the record's, or — a sidecar without the
+    sha — its ``base_signature`` does. A sidecar with neither (a model from
+    before the pipeline) matches nothing."""
+    sha = str(bare_meta.get("base_model_sha256") or "")
+    if sha:
+        return sha == str(record.get("base_model_sha256") or "")
+    bsig = str(bare_meta.get("base_signature") or "")
+    return bool(bsig) and bsig == str(record.get("base_signature") or "")
+
+
+def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
+            bare_meta: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The garments to graft, sorted by item id: ``{item_id, kind, fsig, fit,
     low, record}`` per equipped mesh piece with an accepted fit on the current
-    base model. [] off the pipeline or without equipped mesh pieces."""
+    base model. [] off the pipeline or without equipped mesh pieces. With
+    ``bare_meta`` (the bare model's sidecar) only fits on the base model that
+    bare model was built on (``built_on_fit_base``)."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
@@ -129,11 +150,20 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None) -> Li
         parsed = garment_store.parse_name(fit[0]) if fit else None
         if not parsed:
             continue
+        if bare_meta is not None and not built_on_fit_base(bare_meta, fit[1]):
+            continue
         fsig = parsed[1]
         low = garment_store.garment_path(character_name, item_id, fsig, "low")
         out.append({"item_id": item_id, "kind": kind, "fsig": fsig, "fit": fit[0],
                     "low": low if low.is_file() else None, "record": fit[1]})
     return out
+
+
+def _wanted_for(character_name: str, directory: Path, signature: str) -> List[Dict[str, Any]]:
+    """``_wanted`` for the bare model of ``signature`` in ``directory``: its
+    FULL sidecar names the base it was built on (the low tier is derived
+    from the full file)."""
+    return _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")))
 
 
 def wanted_garments(character_name: str, *,
@@ -188,7 +218,7 @@ def served(character_name: str, path: Optional[Path], tier: str) -> Optional[Pat
         if is_base_signature(signature):
             return path  # the base body itself is never dressed
         assembled = assembled_path(directory, signature, tier)
-        wanted = _wanted(character_name)
+        wanted = _wanted_for(character_name, directory, signature)
         if not wanted:
             if assembled.exists():
                 schedule(character_name, signature)  # takes the leftover away
@@ -272,7 +302,7 @@ def assemble(character_name: str, signature: str, *,
             or signature in (".", ".."):
         raise ValueError("Invalid model signature")
     directory = model3d.get_model3d_dir(character_name)
-    wanted = _wanted(character_name)
+    wanted = _wanted_for(character_name, directory, signature)
     statuses: Dict[str, str] = {}
     errors: List[str] = []
     changed = False
@@ -324,7 +354,7 @@ def _input_key(character_name: str, signature: str) -> str:
     """What a build of ``signature`` would read now (both tiers' bare
     revisions + wanted garments) — the failure memo's key."""
     directory = _model3d().get_model3d_dir(character_name)
-    wanted = _wanted(character_name)
+    wanted = _wanted_for(character_name, directory, signature)
     return json.dumps([[bare_revision(bare_path(directory, signature, t)), _state(wanted, t)] for t in TIERS],
                       sort_keys=True)
 
@@ -356,7 +386,7 @@ def schedule(character_name: str, signature: Optional[str] = None) -> bool:
             return True
         key = (character_name, signature)
         directory = model3d.get_model3d_dir(character_name)
-        if not _wanted(character_name) and not any(
+        if not _wanted_for(character_name, directory, signature) and not any(
                 p.exists() for t in TIERS
                 for p in (assembled_path(directory, signature, t),
                           assembled_path(directory, signature, t).with_suffix(".json"))):
