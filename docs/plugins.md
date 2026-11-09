@@ -412,6 +412,12 @@ pieces touching a slot that covers a moving group (`motion_damping_slots`).
 
 max_deg is the whole-chain dynamic swing budget in degrees, applied independently to each root chain of an appendage. For links ordered root to tip, let span_j be the immutable bind length (joint to joint; twice the centroid lever for the final link) and R_j the sum of spans from link j to the tip. Each link receives share_j = R_j^2*span_j / sum_k(R_k^2*span_k) and a dynamic limit of max_deg*share_j. Equal spans yield 9:4:1 /14 for three links and 25:16:9:4:1 /55 for five. Shares come from bind geometry, never per frame, and govern soft swing saturation, the extreme-anchor guard and dynamic translation clamping. A one-link chain has share 1. Static sag_max_deg and spill_max_deg are unchanged.
 
+The same budget bounds the contact with the body's collision capsules: a driven link whose tip enters a capsule
+(arms, legs, head — never the capsules of the bones the chain hangs from) turns about its joint by at most
+max(max_deg, sag_max_deg) × its share to bring the tip out (`docs/schnittstellen-3d.md` "Collision capsules",
+Extension-bone contact). A group with `max_deg` and `sag_max_deg` both 0 (a rigid tip) does not collide; it rides
+its parent.
+
 `flatten`, `stretch`, `spill` and `translate` are finite in [0,1], default 0.
 `flatten_floor` is finite in [0,1]; omission inherits effective `squash_min`
 server-side, before attribute multipliers (an absolute character floor overrides them).

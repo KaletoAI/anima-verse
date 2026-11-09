@@ -1223,7 +1223,7 @@ try {
   const fieldJSX=fieldSource.match(/<Model3DViewer[\s\S]*?\/>/)[0];
   const compiledField=await transform(`return (${fieldJSX})`,{loader:'tsx',jsxFactory:'h'});
   const h=(tag,props,...children)=>({tag,props,children});
-  const viewerElement=new Function('h','Model3DViewer','st','model','viewerUrl','mixamo','clipUrl','bust','previewMotion','motionToolbar','rigless','statusPanel',compiledField.code)(h,'Model3DViewer',response,response.model,response.model.url,false,'','revision',response.motion,null,false,null);
+  const viewerElement=new Function('h','Model3DViewer','st','model','viewerUrl','mixamo','clipUrl','bust','previewMotion','motionToolbar','rigless','statusPanel','collisionPreview',compiledField.code)(h,'Model3DViewer',response,response.model,response.model.url,false,'','revision',response.motion,null,false,null,null);
   const adminMotion=viewerElement.props.motion;
   assert.equal(adminMotion,response.motion);
   const viewerSource=await readFile('frontend/src/tabs/characters/Model3DViewer.tsx','utf8');

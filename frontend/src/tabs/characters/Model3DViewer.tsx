@@ -468,6 +468,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const [garmentPushable, setGarmentPushable] = useState(false)
   const garmentPushRef = useRef<CollisionPayload | null>(null)
   garmentPushRef.current = garmentPushOn && collision?.capsules?.length ? collision : null
+  // Extension-bone tips kept outside the capsules (`setCollision` of the
+  // secondary motion, the same routine the 3D client runs) — on by default.
+  const [extensionPushOn, setExtensionPushOn] = useState(true)
+  const extensionPushRef = useRef<CollisionPayload | null>(null)
+  extensionPushRef.current = extensionPushOn && collision?.capsules?.length ? collision : null
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -1124,6 +1129,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let garmentCollision: GarmentCollision | null = null
         let garmentShown: CollisionPayload | null | undefined
         disposers.push(() => garmentCollision?.dispose())
+        let extensionShown: CollisionPayload | null | undefined
         setGarmentPushable(collidingGarmentMeshes(object).length > 0)
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
@@ -2127,6 +2133,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           displayedTilt = rateLimitPreviewTilt(displayedTilt, tiltRef.current, realDelta)
           applyPreviewTilt(previewRoot, displayedTilt.forward, displayedTilt.sideways)
           previewRoot.updateMatrixWorld(true)
+          if (extensionShown !== extensionPushRef.current) {
+            extensionShown = extensionPushRef.current
+            secondary?.setCollision(extensionShown)
+          }
           secondary?.update(realDelta)
           object.updateMatrixWorld(true)
           if (collisionShown !== collisionRef.current) {
@@ -2307,6 +2317,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               aria-pressed={garmentPushOn} onClick={() => setGarmentPushOn(on => !on)}
               title={t('Push garments out of the collision capsules (off = as skinned)')}>
               {t('Garment collision')}
+            </button>
+          ) : null}
+          {motion && Object.keys(motion.groups ?? {}).length > 0 && collision?.capsules?.length ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={extensionPushOn} onClick={() => setExtensionPushOn(on => !on)}
+              title={t('Keep extension-bone tips outside the collision capsules (off = free swing)')}>
+              {t('Extension collision')}
             </button>
           ) : null}
           {/* The front view is a MODE the owner holds (§ B1): pressed, the

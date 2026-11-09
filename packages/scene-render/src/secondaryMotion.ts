@@ -1,8 +1,40 @@
 /** Secondary motion in metres and real seconds; three's world is Y-up.
  * Gravity is (0,-9.81,0). No runtime three import: consumers inject it.
+ *
+ * CONTACT WITH THE BODY'S COLLISION CAPSULES (`setCollision`, contract
+ * `docs/schnittstellen-3d.md` "Collision capsules"). Every driven link that
+ * has a swing budget (`max_deg` or `sag_max_deg` > 0) has a TIP in its bone
+ * frame: the next joint of its chain, else its most protruding own vertex —
+ * of the bind vertices skinned > 50 % to it, the one reaching farthest along
+ * its centroid lever (none: twice the centroid lever). After the link's
+ * dynamics have produced its rendered frame, the garment push itself
+ * (`pushOutOfCapsules`) says whether the tip is inside a capsule and which way
+ * is out; the link is then ROTATED about its own joint, in the plane of its
+ * lever and that way out, by the smallest angle that puts the tip outside —
+ * the tip keeps its lever length, children ride the corrected frame. The
+ * turn is capped at the link's swing budget (max(`max_deg`, `sag_max_deg`) ×
+ * its motion share): a capsule driven through the middle of the tissue leaves
+ * the rest inside rather than folding the link away. The oscillator state is not touched —
+ * the contact is a constraint on the rendered frame, so it can neither inject
+ * energy nor stall the spring.
+ *  - ANCESTOR CAPSULES are excluded per chain: a capsule whose start joint
+ *    `a` is an ancestor of the chain root (or a bone in its `anchor_blend`)
+ *    carries the chain itself — a chest chain hanging from Spine2 is never
+ *    pushed out of the Hips/Spine/chest capsules it sits in, only out of the
+ *    arms, legs and head (Review Focus 2 of the collision plan).
+ *  - BIND RULE, as for garments: per tip and capsule the radius is capped at
+ *    the tip's distance to that capsule in the bind pose (bind-pose tip from
+ *    the bone's `boneInverse`, bind-pose capsule `BoundCapsule.bind`), so the
+ *    contact moves nothing in the bind pose.
+ *  - INERT: no driven link, no payload, or far LOD → no binding, no work.
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
+import { bindCollision } from './collision'
+import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
+import { inGarment } from './figure'
+import { pushOutOfCapsules } from './garmentCollision'
+import type { CollideCapsule } from './garmentCollision'
 type Three = typeof import('three')
 
 export interface MotionGroup {
@@ -57,8 +89,45 @@ export interface SecondaryMotionPayload {
 export interface SecondaryMotion {
   configure(payload?: SecondaryMotionPayload): void
   update(realDelta: number, options?: { frozen?: boolean; far?: boolean }): void
+  /** The body's `collision` payload the extension tips are kept outside of (module docstring); null = off. */
+  setCollision(payload?: CollisionPayload | null): void
+  /** Inspection (checks, debug overlays): every link with contacts — its tip in world space as last
+   *  rendered, its bone frame tip, and the ids of the capsules it is kept outside of. */
+  contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[] }[]
   reset(): void
   dispose(): void
+}
+
+/** Scan steps over the swing budget, then refinement iterations, of a tip's contact turn. */
+const CONTACT_SCAN = 12
+const CONTACT_REFINE = 14
+/** A tip moved less than this (metres) by the push counts as outside. */
+const COLLIDE_SLACK = 1e-6
+
+/**
+ * Which capsules a chain may collide with: every bound capsule whose start
+ * joint `a` is NOT one of `ancestors` (normalised names of the bones the
+ * chain hangs from — its root's ancestors and `anchor_blend` bones). Pure;
+ * payload order is kept.
+ */
+export function extensionCapsules<T extends { capsule: { a: string } }>(bound: readonly T[], ancestors: ReadonlySet<string>): T[] {
+  return bound.filter(entry => !ancestors.has(normBoneName(entry.capsule.a)))
+}
+
+/**
+ * The bind rule of one tip: per capsule the factor (0..1] its current radius
+ * is multiplied by — `min(1, d0 / r_bind)`, `d0` the tip's distance to the
+ * capsule's bind-pose axis. Pure; `tipBind` and the capsules in one frame.
+ */
+export function tipBindFactors(tipBind: Vec3, capsules: readonly { a: Vec3; b: Vec3; r: number }[]): number[] {
+  return capsules.map(c => {
+    if (!(c.r > 0)) return 1
+    const abx = c.b[0] - c.a[0], aby = c.b[1] - c.a[1], abz = c.b[2] - c.a[2]
+    const apx = tipBind[0] - c.a[0], apy = tipBind[1] - c.a[1], apz = tipBind[2] - c.a[2]
+    const len2 = abx * abx + aby * aby + abz * abz
+    const t = len2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby + apz * abz) / len2)) : 0
+    return Math.min(1, Math.hypot(apx - abx * t, apy - aby * t, apz - abz * t) / c.r)
+  })
 }
 
 /** Exact propagation around a linearly moving static-equilibrium target.
@@ -111,6 +180,9 @@ interface Bind {
   local: Matrix4
   centroid: Vector3
   mass: number
+  /** Bone-frame point of the bind vertex skinned > 50 % to the bone that reaches farthest along the
+   *  centroid lever (the tissue's most protruding point); zero when no vertex qualifies. */
+  reach: Vector3
   /** Bone-local axis the extension scale acts along: towards the next chain joint, else the centroid. */
   scaleAxis: Vector3
   centroidWorld: Vector3
@@ -168,6 +240,12 @@ interface Particle {
   straightenBlend: number
   straightenThreshold: number
   anchorRotation: Quaternion | null
+  /** The link's tip in its bone frame: the next chain joint, else its most protruding own vertex. */
+  tipLocal: Vector3
+  /** Normalised names of the bones the chain hangs from (its ancestor capsules are excluded). */
+  ancestors: Set<string>
+  /** The capsules this tip is kept outside of, with the bind-rule radius factor; empty = no contact. */
+  contacts: { bound: BoundCapsule; factor: number }[]
 }
 /** Maximum transverse compensation: strong flattening must not inflate the mesh. */
 const SPREAD_CAP = 1.6
@@ -184,7 +262,9 @@ export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: n
   }
   return result
 }
-const centroidCache = new WeakMap<Object3D, { centroid: Vector3; mass: number }[]>()
+const centroidCache = new WeakMap<Object3D, { centroid: Vector3; mass: number; reach: Vector3 }[]>()
+/** Skin weight above which a vertex counts as the bone's own for its contact tip. */
+const REACH_WEIGHT = 0.5
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x))
 /** Linear below half the limit, then C1 tanh saturation: monotonic and bounded. */
 export const softMotionAngle = (angle: number, limit: number) => {
@@ -215,6 +295,8 @@ export function createSecondaryMotion(
   if (!matching) {
     let delegate: SecondaryMotion | undefined
     let stopped = false
+    // Held, not bound: without a driven bone there is nothing to collide (inert).
+    let collision: CollisionPayload | null | undefined
     return {
       configure(next) {
         if (stopped) return
@@ -222,9 +304,18 @@ export function createSecondaryMotion(
         const requested = new Set(Object.values(next?.groups ?? {}).flatMap(g => g.bones.map(normBoneName)))
         let found = false
         if (requested.size) root.traverse(o => { if ((o as Bone).isBone && requested.has(normBoneName(o.name))) found = true })
-        if (found) delegate = createSecondaryMotion(three, root, next, template)
+        if (found) {
+          delegate = createSecondaryMotion(three, root, next, template)
+          if (collision) delegate.setCollision(collision)
+        }
       },
       update(dt, options) { delegate?.update(dt, options) },
+      setCollision(payload) {
+        if (stopped) return
+        collision = payload
+        delegate?.setCollision(payload)
+      },
+      contactTips() { return delegate?.contactTips() ?? [] },
       reset() { delegate?.reset() },
       dispose() { delegate?.dispose(); stopped = true },
     }
@@ -233,6 +324,8 @@ export function createSecondaryMotion(
   root.updateMatrixWorld(true)
   const gravity = new three.Vector3(0, -9.81, 0)
   const binds = new Map<Bone, Bind>()
+  /** Each bone's boneInverse from a BODY skin (bind frame of the collision capsules) — the bind rule's tip. */
+  const boneInverses = new Map<Bone, Matrix4>()
   const sums = new Map<Bone, { sum: Vector3; weight: number }>()
   const bindUp = new three.Vector3(0, 1, 0)
   const cached = template && centroidCache.get(template)
@@ -243,12 +336,14 @@ export function createSecondaryMotion(
     const indices = mesh.geometry.getAttribute('skinIndex')
     const weights = mesh.geometry.getAttribute('skinWeight')
     if (!pos || !indices || !weights) return
-    mesh.skeleton.bones.forEach(bone => {
+    const body = !inGarment(mesh)
+    mesh.skeleton.bones.forEach((bone, index) => {
+      if (body && !boneInverses.has(bone) && mesh.skeleton.boneInverses[index]) boneInverses.set(bone, mesh.skeleton.boneInverses[index])
       if (!binds.has(bone)) {
         const q = bone.getWorldQuaternion(new three.Quaternion()).invert()
         let depth = 0
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
-        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), mass: 0, scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
+        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), mass: 0, reach: new three.Vector3(), scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
           singleLateral: new three.Vector3(), centeringRotation: new three.Quaternion(), lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone(),
@@ -280,8 +375,33 @@ export function createSecondaryMotion(
       binds.get(bone)!.mass = acc.weight
     }
   }
-  if (cached) [...binds.values()].forEach((b, i) => { b.centroid.copy(cached[i].centroid); b.mass = cached[i].mass })
-  else if (template) centroidCache.set(template, [...binds.values()].map(b => ({ centroid: b.centroid.clone(), mass: b.mass })))
+  if (!cached) {
+    // Second pass, now that the centroids are known: each bone's most protruding own vertex (contact tip).
+    const best = new Map<Bone, number>()
+    root.traverse(o => {
+      const mesh = o as SkinnedMesh
+      if (!mesh.isSkinnedMesh) return
+      const pos = mesh.geometry.getAttribute('position')
+      const indices = mesh.geometry.getAttribute('skinIndex')
+      const weights = mesh.geometry.getAttribute('skinWeight')
+      if (!pos || !indices || !weights) return
+      const toBone = mesh.skeleton.boneInverses.map(inv => inv.clone().multiply(mesh.bindMatrix))
+      const vertex = new three.Vector3()
+      for (let i = 0; i < pos.count; i++) {
+        for (let j = 0; j < 4; j++) {
+          if (weights.getComponent(i, j) <= REACH_WEIGHT) continue
+          const index = indices.getComponent(i, j)
+          const bind = binds.get(mesh.skeleton.bones[index])
+          if (!bind || bind.mass <= 0) continue
+          vertex.fromBufferAttribute(pos, i).applyMatrix4(toBone[index])
+          const along = vertex.dot(bind.centroid)
+          if (along > (best.get(bind.bone) ?? -Infinity)) { best.set(bind.bone, along); bind.reach.copy(vertex) }
+        }
+      }
+    })
+  }
+  if (cached) [...binds.values()].forEach((b, i) => { b.centroid.copy(cached[i].centroid); b.mass = cached[i].mass; b.reach.copy(cached[i].reach) })
+  else if (template) centroidCache.set(template, [...binds.values()].map(b => ({ centroid: b.centroid.clone(), mass: b.mass, reach: b.reach.clone() })))
   for (const b of binds.values()) {
     b.centroidWorld.copy(b.centroid).applyMatrix4(b.bone.matrixWorld)
     // Capture the actual bind lever, including non-uniform model scale.
@@ -308,6 +428,33 @@ export function createSecondaryMotion(
   let rigids: Bind[] = []
   let far = false
   let disposed = false
+  let collisionPayload: CollisionPayload | null | undefined
+  let collision: CollisionBinding | null = null
+  /** Bind the capsules (lazily — only with a driven link) and give each moving tip its contacts. */
+  const prepareCollision = () => {
+    if (!collisionPayload || !particles.length) {
+      collision = null
+      for (const st of particles) st.contacts = []
+      return
+    }
+    collision ??= bindCollision(three, root, collisionPayload)
+    const bindTip = new three.Vector3()
+    for (const st of particles) {
+      st.contacts = []
+      const budget = Math.max(st.paramsTo.max_deg ?? 0, st.paramsTo.sag_max_deg ?? 0)
+      if (!collision || !(budget > 0)) continue
+      const bound = extensionCapsules(collision.capsules, st.ancestors)
+      const inverse = boneInverses.get(st.bind.bone)
+      let factors = bound.map(() => 1)
+      if (inverse) {
+        // The tip in the BIND frame of the capsules: bone frame → inverse(boneInverse).
+        bindTip.copy(st.tipLocal).applyMatrix4(new three.Matrix4().copy(inverse).invert())
+        factors = tipBindFactors([bindTip.x, bindTip.y, bindTip.z], bound.map(entry => entry.bind))
+      }
+      st.contacts = bound.map((entry, i) => ({ bound: entry, factor: factors[i] }))
+    }
+    if (!particles.some(st => st.contacts.length)) collision = null
+  }
   const restore = (b: Bind) => {
     b.bone.matrix.copy(b.local)
     b.bone.matrixAutoUpdate = b.auto
@@ -452,7 +599,8 @@ export function createSecondaryMotion(
           staticFrequency: params.freq_hz, staticFrequencyFrom: params.freq_hz, staticFrequencyTo: params.freq_hz,
           staticWeight: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
-          staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1 }
+          staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
+          tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [] }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
@@ -465,6 +613,18 @@ export function createSecondaryMotion(
           particle.straightenBlend = 0
         }
         particle.roots = roots
+        // Contact geometry (immutable bind data): the tip, and the bones the chain hangs from.
+        const child = (chain as Bind[]).find(c => c.bone.parent === bind.bone)
+        if (child) particle.tipLocal.setFromMatrixPosition(child.local)
+        else if (bind.reach.lengthSq() > 1e-12) particle.tipLocal.copy(bind.reach)
+        else particle.tipLocal.copy(bind.centroid).multiplyScalar(2)
+        let chainRoot = bind
+        for (let n = bind.bone.parent; n && members.has(n as Bone); n = n.parent) chainRoot = binds.get(n as Bone)!
+        particle.ancestors.clear()
+        for (let n = chainRoot.bone.parent; n; n = n.parent) if ((n as Bone).isBone) particle.ancestors.add(normBoneName(n.name))
+        for (const blend of [chainRoot.anchorBlend, bind.anchorBlend]) {
+          for (const e of blend ?? []) particle.ancestors.add(normBoneName(e.bind.bone.name))
+        }
         if (BLENDED_FIELDS.some(field => particle.paramsTo[field] !== params[field])) {
           particle.paramsFrom = { ...particle.params }
           // Preserve an interrupted static transition's frequency and weight.
@@ -519,6 +679,7 @@ export function createSecondaryMotion(
       return depth
     }
     particles = nextParticles.sort((a, b) => drivenDepth(a) - drivenDepth(b))
+    prepareCollision()
   }
   const reset = () => {
     for (const st of particles) { st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0) }
@@ -538,6 +699,78 @@ export function createSecondaryMotion(
   const delta = new three.Matrix4(), localBase = new three.Matrix4()
   const blendQ = new three.Quaternion(), deltaQ = new three.Quaternion(), firstQ = new three.Quaternion()
   const blendHead = new three.Vector3(), blendPos = new three.Vector3(), blendScale = new three.Vector3()
+  const contactLocal = new three.Matrix4(), contactInverse = new three.Matrix4(), contactQ = new three.Quaternion()
+  const tipAnchor = new three.Vector3(), tipWorld = new three.Vector3(), lever = new three.Vector3(), contactAxis = new three.Vector3()
+  /**
+   * Keep a link's tip outside its contact capsules (module docstring). The
+   * link's frame `T·R(dynamicQ·restQ)·S` (anchor frame) is evaluated at the
+   * tip; the garment push says how deep the tip is (`depthAt` = how far
+   * `pushOutOfCapsules` moves it) and which way out. The link turns about its
+   * joint (`T`'s origin) in the plane of its lever and that way out, by the
+   * SMALLEST angle in (0, limit] that puts the tip outside — a scan of
+   * `CONTACT_SCAN` steps, then bisection; when no angle gets it out (a capsule
+   * through the tissue's middle) the angle with the shallowest tip. A turn
+   * keeps the lever length, so a push along the lever turns nothing.
+   */
+  const keepTipOutside = (st: Particle, dynamic: Quaternion, rest: Quaternion, limit: number) => {
+    if (!(limit > 0)) return
+    const capsules: CollideCapsule[] = st.contacts.map(({ bound, factor }) =>
+      ({ a: bound.now.a, b: bound.now.b, r: bound.now.r * factor }))
+    contactLocal.makeRotationFromQuaternion(contactQ.copy(dynamic).multiply(rest))
+      .premultiply(translationMatrix).multiply(scale)
+    tipAnchor.copy(st.tipLocal).applyMatrix4(contactLocal)
+    tipWorld.copy(tipAnchor).applyMatrix4(anchor)
+    const pushed = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
+    const depth0 = Math.hypot(pushed[0] - tipWorld.x, pushed[1] - tipWorld.y, pushed[2] - tipWorld.z)
+    if (depth0 < COLLIDE_SLACK) return
+    // The way out, in the anchor frame: the pushed point minus the tip.
+    contactInverse.copy(anchor).invert()
+    lever.copy(tipAnchor).sub(shiftPart)
+    contactAxis.set(pushed[0], pushed[1], pushed[2]).applyMatrix4(contactInverse).sub(tipAnchor)
+    contactAxis.crossVectors(lever, contactAxis)
+    if (contactAxis.lengthSq() < 1e-20 || lever.lengthSq() < 1e-12) return
+    contactAxis.normalize()
+    const depthAt = (angle: number) => {
+      tipWorld.copy(lever).applyAxisAngle(contactAxis, angle).add(shiftPart).applyMatrix4(anchor)
+      const p = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
+      return Math.hypot(p[0] - tipWorld.x, p[1] - tipWorld.y, p[2] - tipWorld.z)
+    }
+    const step = limit / CONTACT_SCAN
+    let inside = 0, outside = -1, best = 0, bestDepth = depth0
+    for (let k = 1; k <= CONTACT_SCAN; k++) {
+      const depth = depthAt(k * step)
+      if (depth < COLLIDE_SLACK) { outside = k * step; break }
+      inside = k * step
+      if (depth < bestDepth) { best = k * step; bestDepth = depth }
+    }
+    let angle: number
+    if (outside > 0) {
+      for (let i = 0; i < CONTACT_REFINE; i++) {
+        const mid = (inside + outside) / 2
+        if (depthAt(mid) < COLLIDE_SLACK) outside = mid; else inside = mid
+      }
+      angle = outside
+    } else {
+      // Shallowest tip: ternary search around the best scan sample.
+      let lo = Math.max(0, best - step), hi = Math.min(limit, best + step)
+      for (let i = 0; i < CONTACT_REFINE; i++) {
+        const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3
+        if (depthAt(m1) <= depthAt(m2)) hi = m2; else lo = m1
+      }
+      angle = (lo + hi) / 2
+      const depth = depthAt(angle)
+      if (!(depth < depth0)) return
+      if (depth < COLLIDE_SLACK) {
+        // An outside window the scan stepped over: its near edge, by bisection from below.
+        let below = Math.max(0, best - step)
+        for (let i = 0; i < CONTACT_REFINE; i++) {
+          const mid = (below + angle) / 2
+          if (depthAt(mid) < COLLIDE_SLACK) angle = mid; else below = mid
+        }
+      }
+    }
+    dynamic.premultiply(contactQ.setFromAxisAngle(contactAxis, angle))
+  }
   /** Rest frame at the blend of the anchor bones' motions since bind: the bind
    *  head moved as linear skinning moved the tissue (sum of share x delta x head),
    *  the rotation is the normalised share-weighted sum of their delta rotations.
@@ -571,12 +804,30 @@ export function createSecondaryMotion(
   configure(payload)
   return {
     configure, reset,
+    setCollision(next) {
+      if (disposed) return
+      collisionPayload = next
+      collision = null
+      prepareCollision()
+    },
+    contactTips() {
+      const tip = new three.Vector3()
+      return particles.filter(st => st.contacts.length).map(st => {
+        tip.copy(st.tipLocal).applyMatrix4(st.bind.bone.matrixWorld)
+        return { bone: st.bind.bone.name, tip: [tip.x, tip.y, tip.z] as Vec3,
+          tipLocal: [st.tipLocal.x, st.tipLocal.y, st.tipLocal.z] as Vec3,
+          capsules: st.contacts.map(c => c.bound.capsule.id) }
+      })
+    },
     update(realDelta, options = {}) {
       if (disposed || !particles.length) return
       const dt = Number.isFinite(realDelta) ? Math.max(0, realDelta) : 0
       if (!!options.far !== far) { far = !!options.far; reset() }
       root.updateWorldMatrix(true, false)
       root.updateMatrixWorld(true)
+      // Capsules ride body joints no extension link drives: read them once, before the links.
+      const colliding = !!collision && !far
+      if (colliding) collision!.update()
       driven.clear()
       for (const st of particles) {
         st.paramsBlend = Math.min(1.5, st.paramsBlend + dt)
@@ -853,6 +1104,10 @@ export function createSecondaryMotion(
         }
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
+        if (colliding && st.contacts.length) {
+          keepTipOutside(st, dynamicQ, restQ,
+            Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
+        }
         b.bone.matrix.copy(blended ? localBase.copy(b.bone.parent!.matrixWorld).invert().multiply(anchor) : b.local)
           .multiply(translationMatrix)
           .multiply(rotationMatrix.makeRotationFromQuaternion(dynamicQ.multiply(restQ)))
@@ -889,7 +1144,7 @@ export function createSecondaryMotion(
     dispose() {
       for (const st of particles) restore(st.bind)
       for (const b of rigids) restore(b)
-      particles = []; rigids = []; binds.clear(); sums.clear(); byName.clear(); disposed = true
+      particles = []; rigids = []; binds.clear(); sums.clear(); byName.clear(); boneInverses.clear(); collision = null; disposed = true
     },
   }
 }

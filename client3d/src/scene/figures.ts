@@ -2100,6 +2100,9 @@ export class Figure {
       this.eyeLocal.set(eye[0] - h.x, eye[1] - h.y, eye[2] - h.z).applyQuaternion(q);
     }
     this.secondary = createSecondaryMotion(THREE, this.root, this.motion, model.template);
+    // Extension-bone tips kept outside the same capsules (CPU, a few tips) —
+    // the SAME routine the Game-Admin viewer runs; inert without a driven link.
+    this.secondary.setCollision(model.collision);
     this.secondaryRev = this.motion?.rev;
     // Garments pushed out of the body's capsules on the GPU — the SAME
     // routine the Game-Admin viewer runs. Null (inert) without a garment or

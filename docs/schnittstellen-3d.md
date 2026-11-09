@@ -12161,6 +12161,20 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   depth/distance materials with the same capsules. Without a garment mesh or capsules nothing is patched. The shader and the TypeScript `pushOutOfCapsules` are one rule
   (`scripts/smoke_garment_collision.mjs` executes the shader text); `scripts/check_garment_collision.mjs`
   measures the penetration of a garment through the body on the real clips before/after the push.
+- **Extension-bone contact** (`SecondaryMotion.setCollision(payload)`, `packages/scene-render/src/secondaryMotion.ts`;
+  both the 3D client's figures and the admin viewer — toggle "Extension collision", on by default). Every driven
+  link with a swing budget (`max_deg` or `sag_max_deg` > 0) has a TIP in its bone frame: the next joint of its
+  chain, else its most protruding own vertex (of the bind vertices skinned > 50 % to it, the one reaching farthest
+  along its centroid lever). After the link's dynamics, the tip is tested with `pushOutOfCapsules`; inside, the
+  link turns about its own joint, in the plane of its lever and the way out, by the SMALLEST angle that puts the tip
+  outside — at most the link's swing budget (max(`max_deg`, `sag_max_deg`) × its motion share), else to the
+  shallowest angle. The lever length is kept, children ride the corrected frame, the spring state is untouched.
+  ANCESTOR CAPSULES are excluded per chain: a capsule whose start joint `a` is an ancestor of the chain root (or a
+  bone of its `anchor_blend`) — a chest chain hanging from Spine2 collides with the arms, legs and head only, never
+  with the Hips/Spine/chest capsules that carry it. The BIND RULE holds as for garments (radius capped at the tip's
+  bind-pose distance). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
+  `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
+  tip offset from rest on the real clips, contact off/on).
 
 ### P2 runtime contract: secondary motion
 
