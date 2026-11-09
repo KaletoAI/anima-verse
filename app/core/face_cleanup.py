@@ -69,18 +69,22 @@ EYE_Y_TRIM_MM = 12.0            # paint farther than this from the eye line (bro
 EYE_REGION_MARGIN_MM = 10.0     # region ellipse: a = half_width + margin (the fade zone starts at 0.71 a, past the paint)
 EYE_REGION_ASPECT = 0.7         # region ellipse: b = aspect * half_width + margin
 EYE_DEPTH_WINDOW_MM = 25.0
-EYE_RING_OUTER = 1.8            # d^2 of the region ellipse where the lid-fit ring ends (it starts at 1.0)
-FIT_MIN_POINTS = 40
+FIT_MIN_POINTS = 60             # depth-map cells a ray must hit for a usable lid surface
+FIT_CELL_MM = 1.0               # the depth-map grid
+BASE_SIGMA_MM = 8.0             # the smooth base of the depth map (the head's curvature) — relief is measured against it
+CONE_SLOPE = 1.0                # the relief may rise at most this much per millimetre of lid plane (45 degrees)
+CONE_REACH_MM = 12.0            # how far the cone looks
+RELIEF_FLOOR_MM = 3.0           # a pit in the relief counts at most this deep
 RAY_START_MM = 60.0             # rays toward the head start this far in front of the lid plane
 OUTER_TOLERANCE_MM = 1.0        # a vertex this close under the first surface a ray meets is on the outer shell
-EYE_FREE_MM = 0.5               # lash-painted vertices proud of the fit up to this: untouched
-EYE_LIMIT_MM = 2.0              # lash-painted vertices proud of the fit after the cleanup: never more than this
-EYE_SLOPE = 0.06                # compression slope just above EYE_FREE_MM
-SKIN_FREE_MM = 2.0              # skin of the eye region (lids, the brow's foot): a natural lid bulge stays ...
-SKIN_LIMIT_MM = 4.0             # ... only what stands taller than a lid is pressed, to at most this
-SKIN_SLOPE = 0.25
+EYE_FREE_MM = 0.5               # visible vertices proud of the fit up to this: untouched
+EYE_LIMIT_MM = 1.0              # visible vertices proud of the fit after the cleanup: never more than this
+EYE_SLOPE = 0.08                # compression slope just above EYE_FREE_MM
+INSET_MM = 0.6                  # occluded (inner-wall / flap underside) vertices end at least this far BELOW the lid
+INSET_SLOPE = 0.1               # ... keeping their order: -INSET - slope * height
+FLIP_PASSES = 3                 # flatten faces the press turned over (fade zone), until none is left
 EYE_FADE = (0.5, 1.0)           # d^2 of the region ellipse over which the correction fades to nothing (no ledge)
-EYE_PASSES = 3                  # refit and press again: a pressed flap no longer shadows the ring the lid is fitted on
+EYE_PASSES = 2                  # refit and press again: a pressed flap no longer shadows the ring the lid is fitted on
 SMOOTH_PASSES = 3               # height smoothing of the pressed vertices (the collapsed flap is a crumpled sheet)
 
 # Mouth.
@@ -93,7 +97,7 @@ MOUTH_WINDOW_IPD = (0.6, 1.4)   # below the eye line, in interpupillary distance
 MOUTH_HALF_WIDTH_IPD = 0.6
 CHEEK_X_IPD = (0.35, 0.85)      # the skin reference: the cheeks, between the mouth and the eye line
 CHEEK_Y_MARGIN_MM = 10.0
-LIP_SATURATION_RATIO = 1.15     # target lips/skin saturation (photos and renders: 1.17-1.24; the soft mask lands above it)
+LIP_SATURATION_RATIO = 1.1      # target lips/skin saturation (photos and renders: 1.17-1.24; the soft mask lands above it)
 LIP_LUMINANCE_RATIO = 0.88      # target lip luminance / skin luminance
 LIP_DETAIL_LUMA_GAIN = 0.7      # texture detail inside the lips: luminance kept at this contrast ...
 LIP_DETAIL_CHROMA_GAIN = 0.35   # ... colour variation at this (the paint exaggerates both)
@@ -105,10 +109,6 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722])
 
 
 # --- helpers ----------------------------------------------------------------------------------------------------------
-
-def _design(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return np.stack([np.ones_like(a), a, b, a * a, a * b, b * b], 1)
-
 
 def _sample(texture: np.ndarray, uvs: np.ndarray) -> np.ndarray:
     """The 8-bit RGB texel under each vertex (nearest; glTF UV rows run top-down like the image)."""
@@ -135,13 +135,17 @@ def _compress(h_mm: np.ndarray, free: float, limit: float, slope: float) -> np.n
     return np.where(h_mm <= free, h_mm, free + span * np.tanh(slope * over / span))
 
 
-def _eye_compress(h_mm: np.ndarray, lash: Optional[np.ndarray] = None) -> np.ndarray:
-    """The lash tier (painted vertices and their mesh neighbours) is pressed to EYE_LIMIT_MM, the skin of the
-    region only from SKIN_FREE_MM to SKIN_LIMIT_MM; ``lash`` None = everything is lash."""
+def _eye_compress(h_mm: np.ndarray, visible: Optional[np.ndarray] = None) -> np.ndarray:
+    """Target height of every region vertex. VISIBLE vertices (the outer shell: lid skin, the flap's top side)
+    are pressed to at most EYE_LIMIT_MM; OCCLUDED ones that stand above -INSET_MM (the flap's underside, inner
+    walls under the flap) go BELOW the lid, INSET_MM under it and in their old order — so the pressed top sheet
+    always lies above them by at least EYE_FREE_MM + INSET_MM and nothing fights for the same depth. What lies
+    deeper than -INSET_MM already is never moved. ``visible`` None = everything is visible."""
     pressed = _compress(h_mm, EYE_FREE_MM, EYE_LIMIT_MM, EYE_SLOPE)
-    if lash is None:
+    if visible is None:
         return pressed
-    return np.where(lash, pressed, _compress(h_mm, SKIN_FREE_MM, SKIN_LIMIT_MM, SKIN_SLOPE))
+    sunk = -INSET_MM - INSET_SLOPE * np.maximum(h_mm, 0.0)
+    return np.where(visible, pressed, np.where(h_mm > -INSET_MM, sunk, h_mm))
 
 
 # --- eyes -------------------------------------------------------------------------------------------------------------
@@ -187,7 +191,7 @@ def _locate_eyes(P: np.ndarray, lum: np.ndarray, mm: float) -> Tuple[Optional[Li
         a_ = half_width + EYE_REGION_MARGIN_MM * mm
         b_ = EYE_REGION_ASPECT * half_width + EYE_REGION_MARGIN_MM * mm
         d2 = ((P[:, 0] - c[0]) / a_) ** 2 + ((P[:, 1] - c[1]) / b_) ** 2
-        footprint = (d2 >= 1.0) & (d2 < EYE_RING_OUTER) & head & (front * (P[:, 2] - centre[2]) > 0) & (lum >= DARK_LUMINANCE)
+        footprint = (d2 >= 1.0) & (d2 < 1.8) & head & (front * (P[:, 2] - centre[2]) > 0) & (lum >= DARK_LUMINANCE)
         if footprint.sum() >= EYE_MIN_VERTICES:
             c = c.copy()
             c[2] = np.percentile(P[footprint, 2], 75)
@@ -231,15 +235,44 @@ def _ray_heights(origin: np.ndarray, t1: np.ndarray, t2: np.ndarray, normal: np.
     return out
 
 
-class _LidFit:
-    """A smooth lid surface around one eye: a quadric height field over the orbit ring around the eye region
-    (lash paint excluded), in a frame whose normal points out of the head at the eye. The samples are the
-    OUTER surface — the first triangle a ray from outside meets above each ring vertex — never the vertices
-    themselves: 60-75 % of the vertices of these shells lie on inner walls behind the surface. Robust trimming
-    drops what a flap or a hole leaves in the ring."""
+def _cone_erosion(field: np.ndarray, slope: float, reach: int) -> np.ndarray:
+    """Grey erosion with a cone of the given slope (per cell): ``T[p] = min_q field[q] + slope * |p - q|`` over
+    all ``q`` within ``reach`` cells — one shifted minimum per offset."""
+    na, nb = field.shape
+    out = field.copy()
+    for di in range(-reach, reach + 1):
+        for dj in range(-reach, reach + 1):
+            dist = float(np.hypot(di, dj))
+            if dist == 0 or dist > reach:
+                continue
+            shifted = np.full_like(field, np.inf)
+            src_a = slice(max(0, -di), min(na, na - di))
+            dst_a = slice(max(0, di), min(na, na + di))
+            src_b = slice(max(0, -dj), min(nb, nb - dj))
+            dst_b = slice(max(0, dj), min(nb, nb + dj))
+            shifted[dst_a, dst_b] = field[src_a, src_b]
+            np.minimum(out, shifted + slope * dist, out=out)
+    return out
 
-    def __init__(self, P: np.ndarray, F: np.ndarray, ring: np.ndarray, eye: Dict[str, Any], head_centre: np.ndarray,
-                 front: int, mm: float):
+
+class _LidSurface:
+    """The lid WITHOUT its flaps, as a height field over the eye region.
+
+    Depth map first: on a FIT_CELL_MM grid in the lid plane (frame: normal radial from the head centre at the eye,
+    tangents from world up) a ray from outside measures the height of the first surface it meets — the visible
+    skin, flaps included, inner walls excluded (60-75 % of these shells' vertices lie on inner walls). The map is
+    split into a smooth base S (a wide Gaussian over the measured cells — the head's own curvature, temple and
+    nose fall-off) and the local relief R = D - S. The relief gets a SLOPE-LIMITED lower envelope (a grey erosion
+    with a cone: T(p) = min_q R(q) + CONE_SLOPE * |p - q|): nothing in the lid may rise steeper than CONE_SLOPE
+    from what lies next to it. That is exactly what a flap is — a visor jutting 10 mm out of the lid within 2-3 mm
+    of lid plane, a lash ridge rising 8 mm within a millimetre — whether it stands alone or hangs off the brow (an
+    OPENING kept the visor as part of the broad brow, a quadric spanned the socket like a drum skin and the pressed
+    flap stayed a ledge); the brow, the cheekbone and the recessed eye opening rise gently out of S and come back
+    as they are. The lid is S + T, lightly blurred against the grid's staircase."""
+
+    def __init__(self, P: np.ndarray, F: np.ndarray, region: np.ndarray, eye: Dict[str, Any],
+                 head_centre: np.ndarray, front: int, mm: float):
+        from scipy import ndimage
         c = eye["centre"]
         normal = np.array([0.5 * (c[0] - head_centre[0]), 0.0, front * max(abs(c[2] - head_centre[2]), 1e-6)])
         self.normal = normal / np.linalg.norm(normal)
@@ -248,72 +281,102 @@ class _LidFit:
         self.t2 = np.cross(self.normal, self.t1)
         self.origin = c.copy()
         self.faces = F[(np.linalg.norm(P[F[:, 0]] - c, axis=1) < 2 * RAY_START_MM * mm)]
-        a, b, _h = self.local(P[ring])
-        plane = np.stack([a, b], 1)
-        h = _ray_heights(self.origin, self.t1, self.t2, self.normal, plane, P, self.faces, RAY_START_MM * mm)
-        good = np.isfinite(h)
-        a, b, h = a[good], b[good], h[good]
-        keep = np.ones(len(h), bool)
-        coef = np.zeros(6)
-        mad = 0.0
-        for _ in range(6):
-            if keep.sum() < FIT_MIN_POINTS:
-                break
-            coef, *_ = np.linalg.lstsq(_design(a[keep], b[keep]), h[keep], rcond=None)
-            r = h - _design(a, b) @ coef
-            mad = float(np.median(np.abs(r[keep])) * 1.4826) + 1e-12
-            keep = np.abs(r) < 3 * mad
-        self.coef = coef
-        self.points = int(keep.sum())
-        self.mad = mad
-        self.ok = self.points >= FIT_MIN_POINTS
+        a, b, _h = self.local(P[region])
+        cell = FIT_CELL_MM * mm
+        margin = CONE_REACH_MM * mm
+        self.a0, self.b0, self.cell = a.min() - margin, b.min() - margin, cell
+        na = int(np.ceil((a.max() + margin - self.a0) / cell)) + 1
+        nb = int(np.ceil((b.max() + margin - self.b0) / cell)) + 1
+        ga, gb = np.meshgrid(self.a0 + np.arange(na) * cell, self.b0 + np.arange(nb) * cell, indexing="ij")
+        plane = np.stack([ga.reshape(-1), gb.reshape(-1)], 1)
+        depth = _ray_heights(self.origin, self.t1, self.t2, self.normal, plane, P, self.faces,
+                             RAY_START_MM * mm).reshape(na, nb)
+        hit = np.isfinite(depth)
+        self.cells, self.hits = int(depth.size), int(hit.sum())
+        self.ok = self.hits >= FIT_MIN_POINTS
+        if not self.ok:
+            self.visible = self.lid = np.zeros_like(depth)
+            return
+        if not hit.all():
+            # A cell without a hit (silhouette, a hole) takes the nearest measured height.
+            nearest = ndimage.distance_transform_edt(~hit, return_distances=False, return_indices=True)
+            depth = depth[tuple(nearest)]
+        sigma = BASE_SIGMA_MM / FIT_CELL_MM
+        base = (ndimage.gaussian_filter(np.where(hit, depth, 0.0), sigma)
+                / np.maximum(ndimage.gaussian_filter(hit.astype(np.float64), sigma), 1e-6))
+        # A cell without a hit never carves its neighbours; a pit (the eye opening, a gap into the shell) carves at
+        # most RELIEF_FLOOR_MM deep — the lid around a deep socket is not a flap.
+        relief = np.where(hit, np.maximum(depth - base, -RELIEF_FLOOR_MM * mm), np.inf)
+        # The slope is height per lid-plane length: per grid cell that is slope * cell (mesh units).
+        envelope = base + np.minimum(_cone_erosion(relief, CONE_SLOPE * cell, int(round(CONE_REACH_MM / FIT_CELL_MM))),
+                                     np.where(hit, depth - base, 0.0))
+        self.visible = depth
+        self.lid = ndimage.gaussian_filter(envelope, 1.0)
+        ra, rb, _ = self.local(P[region])
+        inside = np.zeros_like(hit)
+        inside[np.clip(((ra - self.a0) / cell).round().astype(int), 0, na - 1),
+               np.clip(((rb - self.b0) / cell).round().astype(int), 0, nb - 1)] = True
+        self.removed_mm = float((depth - envelope)[inside & hit].max() / mm) if (inside & hit).any() else 0.0
 
     def local(self, Q: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         R = Q - self.origin
         return R @ self.t1, R @ self.t2, R @ self.normal
 
+    def _grid(self, field: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        from scipy import ndimage
+        coords = np.stack([(a - self.a0) / self.cell, (b - self.b0) / self.cell])
+        return ndimage.map_coordinates(field, coords, order=1, mode="nearest")
+
     def height(self, Q: np.ndarray) -> np.ndarray:
-        """Signed height of each point above the fitted lid (along the lid normal)."""
+        """Signed height of each point above the lid without flaps (along the lid normal)."""
         a, b, h = self.local(Q)
-        return h - _design(a, b) @ self.coef
+        return h - self._grid(self.lid, a, b)
 
     def outer(self, P: np.ndarray, Q: np.ndarray, mm: float) -> np.ndarray:
-        """Which of the points ``Q`` lie on the outer shell (within OUTER_TOLERANCE_MM under the first surface
-        a ray from outside meets above them)."""
+        """Which of the points ``Q`` lie on the visible surface (within OUTER_TOLERANCE_MM under the first
+        surface a ray from outside meets above them)."""
         a, b, h = self.local(Q)
-        surface = _ray_heights(self.origin, self.t1, self.t2, self.normal, np.stack([a, b], 1), P, self.faces,
-                               RAY_START_MM * mm)
-        return np.isfinite(surface) & (surface - h < OUTER_TOLERANCE_MM * mm)
+        return self._grid(self.visible, a, b) - h < OUTER_TOLERANCE_MM * mm
 
     def place(self, Q: np.ndarray, h: np.ndarray) -> np.ndarray:
         """``Q`` pressed straight back along the front axis (x and y stay put, so the paint-based locator finds
-        the same eye afterwards) until its height above the fit is ``h`` (Newton steps on the tilted
-        quadric, the remainder along the normal)."""
+        the same eye afterwards) until its height above the lid is ``h``; steps are clamped to the initial gap,
+        the remainder goes exactly along the normal (height is linear along it)."""
         axis = np.array([0.0, 0.0, self.normal[2]])
         axis /= np.linalg.norm(axis)
         rate = float(axis @ self.normal)
         out = Q.copy()
-        for _ in range(6):
-            out = out - np.outer((self.height(out) - h) / rate, axis)
-        # The last few hundredths of a millimetre exactly, along the normal.
+        budget = np.abs(self.height(Q) - h) * 1.5 + 1e-12
+        for _ in range(8):
+            step = np.clip((self.height(out) - h) / rate, -budget, budget)
+            out = out - np.outer(step, axis)
         return out - np.outer(self.height(out) - h, self.normal)
 
 
-def _eye_region(P: np.ndarray, eye: Dict[str, Any], head: np.ndarray, dark: np.ndarray,
-                mm: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(region, ring, weight)``: the eye region (the paint plus a margin, what the cleanup may move), the orbit
-    ring around it the lid is fitted on (no lash paint) and the correction weight of every vertex (1 inside,
-    fading to 0 at the region border so the border never becomes a ledge)."""
+def _eye_region(P: np.ndarray, eye: Dict[str, Any], head: np.ndarray, mm: float) -> Tuple[np.ndarray, np.ndarray]:
+    """``(region, weight)``: the eye region (the paint plus a margin, what the cleanup may move) and the correction
+    weight of every vertex (1 inside, fading to 0 at the region border so the border never becomes a ledge)."""
     c, hw = eye["centre"], eye["half_width"]
     a = hw + EYE_REGION_MARGIN_MM * mm
     b = EYE_REGION_ASPECT * hw + EYE_REGION_MARGIN_MM * mm
     d2 = ((P[:, 0] - c[0]) / a) ** 2 + ((P[:, 1] - c[1]) / b) ** 2
     depth = np.abs(P[:, 2] - c[2]) < EYE_DEPTH_WINDOW_MM * mm
     region = (d2 < 1.0) & head & depth
-    ring = (d2 >= 1.0) & (d2 < EYE_RING_OUTER) & head & depth & ~dark
     t = np.clip((EYE_FADE[1] - d2) / (EYE_FADE[1] - EYE_FADE[0]), 0.0, 1.0)
     weight = t * t * (3 - 2 * t)
-    return region, ring, weight
+    return region, weight
+
+
+def _flipped(P0: np.ndarray, P1: np.ndarray, faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """``(turned, collapsed)``: faces whose normal turned over between ``P0`` and ``P1`` (dot < 0) while keeping
+    area, and faces pressed to under 5 % of their area (a flap's side walls — slivers without a visible side,
+    reported, not repaired)."""
+    n0 = np.cross(P0[faces[:, 1]] - P0[faces[:, 0]], P0[faces[:, 2]] - P0[faces[:, 0]])
+    n1 = np.cross(P1[faces[:, 1]] - P1[faces[:, 0]], P1[faces[:, 2]] - P1[faces[:, 0]])
+    a0 = np.linalg.norm(n0, axis=1)
+    a1 = np.linalg.norm(n1, axis=1)
+    collapsed = (a1 < 0.05 * a0) & (a0 > 0)
+    return ((n0 * n1).sum(1) < 0) & ~collapsed, collapsed
 
 
 def _adjacency(n: int, F: np.ndarray):
@@ -337,7 +400,7 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tup
     records = []
     adjacency = None
     for eye in eyes:
-        region, ring, weight = _eye_region(P, eye, head, dark, mm)
+        region, weight = _eye_region(P, eye, head, mm)
         record: Dict[str, Any] = {"side": eye["side"], "centre_mm": [round(float(v) / mm, 1) for v in eye["centre"]],
                                   "half_width_mm": round(float(eye["half_width"]) / mm, 1),
                                   "paint_vertices": eye["vertices"], "region_vertices": int(region.sum())}
@@ -345,30 +408,28 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tup
         w = weight[idx]
         if adjacency is None:
             adjacency = _adjacency(len(P), F)
-        # The lash tier: the painted vertices and their one-ring neighbours (the flap's root and rim).
-        lash_all = dark.astype(np.float64)
-        lash_all = (lash_all + adjacency @ lash_all) > 0
-        lash = lash_all[idx]
+        lash = ((dark.astype(np.float64) + adjacency @ dark.astype(np.float64)) > 0)[idx]
         record["lash_vertices"] = int(lash.sum())
+        region_faces = F[region[F].any(1)]
         moved_eye = np.zeros(len(idx), bool)
         passes = []
         for n in range(EYE_PASSES):
-            fit = _LidFit(out, F, ring, eye, frame["centre"], front, mm)
+            fit = _LidSurface(out, F, region, eye, frame["centre"], front, mm)
             if not fit.ok:
-                record.update(status="skipped", reason=f"lid fit has only {fit.points} outer points")
+                record.update(status="skipped", reason=f"only {fit.hits} depth cells hit over the eye")
                 break
             h = fit.height(out[idx]) / mm
+            outer = fit.outer(out, out[idx], mm)
             if n == 0:
-                outer = fit.outer(out, out[idx], mm)
                 record["before_mm"] = {"p90": round(float(np.percentile(h, 90)), 2), "max": round(float(h.max()), 2),
                                        "outer_p90": round(float(np.percentile(h[outer], 90)), 2) if outer.any() else None,
                                        "outer_max": round(float(h[outer].max()), 2) if outer.any() else None,
                                        "lash_outer_p90": round(float(np.percentile(h[outer & lash], 90)), 2) if (outer & lash).any() else None,
                                        "lash_outer_max": round(float(h[outer & lash].max()), 2) if (outer & lash).any() else None}
                 record["outer_vertices"] = int(outer.sum())
-            target = h - w * (h - _eye_compress(h, lash))
-            move = target < h - 1e-6
-            passes.append({"fit_points": fit.points, "fit_mad_mm": round(fit.mad / mm, 2),
+            target = h - w * (h - _eye_compress(h, outer))
+            move = np.abs(target - h) > 1e-6
+            passes.append({"cells": fit.cells, "hits": fit.hits, "removed_mm": round(fit.removed_mm, 2),
                            "max_mm": round(float(h.max()), 2), "moved": int(move.sum())})
             if not move.any():
                 break
@@ -381,17 +442,40 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tup
             records.append(record)
             continue
         if moved_eye.any():
-            # The collapsed flap is a crumpled sheet of interleaved layers: smooth its HEIGHT over the mesh
-            # neighbours (x and y stay put), never above the pressed target, then set the record's numbers.
+            # The pressed top sheet is a crumpled sheet: smooth its HEIGHT over the mesh neighbours (x and y stay
+            # put) among the pressed VISIBLE vertices only, never above the pressed target and never below
+            # EYE_FREE_MM (the sunk layer must stay underneath). Then flatten every face the press turned over
+            # (the fade zone can invert neighbours) until none is left, and set the record's numbers.
             local = adjacency[idx][:, idx]
-            degree = np.maximum(np.asarray(local.sum(1)).reshape(-1), 1.0)
             h = fit.height(out[idx]) / mm
+            visible_moved = moved_eye & (h > 0)
             cap = h.copy()
+            sub = local[visible_moved][:, visible_moved]
+            degree = np.maximum(np.asarray(sub.sum(1)).reshape(-1), 1.0)
+            hv = h[visible_moved]
             for _ in range(SMOOTH_PASSES):
-                mean = (local @ h) / degree
-                h = np.where(moved_eye, np.minimum(0.5 * h + 0.5 * mean, cap), h)
-            out[idx[moved_eye]] = out[idx[moved_eye]] - np.outer((fit.height(out[idx[moved_eye]]) / mm - h[moved_eye]) * mm, fit.normal)
+                mean = (sub @ hv) / degree
+                hv = np.maximum(np.minimum(0.5 * hv + 0.5 * mean, cap[visible_moved]), EYE_FREE_MM)
+            h[visible_moved] = hv
+            out[idx] = out[idx] - np.outer((fit.height(out[idx]) / mm - h) * mm, fit.normal)
+            flips = []
+            position = {v: k for k, v in enumerate(idx)}
+            for _ in range(FLIP_PASSES):
+                turned, _collapsed = _flipped(P, out, region_faces)
+                flips.append(int(turned.sum()))
+                if not turned.any():
+                    break
+                # Flatten each turned face DOWN to its lowest vertex (never up: a lifted vertex is a new ledge).
+                hb = fit.height(out[idx]) / mm
+                for face in region_faces[turned]:
+                    k = [position[v] for v in face if v in position]
+                    if k:
+                        hb[k] = hb[k].min()
+                        moved_eye[k] = True
+                out[idx] = out[idx] - np.outer((fit.height(out[idx]) / mm - hb) * mm, fit.normal)
             after = fit.height(out[idx]) / mm
+            turned, collapsed = _flipped(P, out, region_faces)
+            record["flipped_faces"] = {"after": int(turned.sum()), "collapsed": int(collapsed.sum()), "passes": flips}
             record["after_mm"] = {"p90": round(float(np.percentile(after, 90)), 2), "max": round(float(after.max()), 2),
                                   "weighted_max": round(float((after * w).max()), 2),
                                   "lash_weighted_max": round(float((after * w)[lash].max()), 2) if lash.any() else None}
@@ -448,13 +532,17 @@ def _locate_mouth(P: np.ndarray, colours: np.ndarray, eyes: List[Dict[str, Any]]
     if lips.sum() < LIP_MIN_VERTICES:
         return None, f"the lips are not more saturated than the cheeks ({int(lips.sum())} vertices) — nothing to neutralise"
     pts = P[lips]
-    c = np.median(pts, 0)
     x3, x97 = np.percentile(pts[:, 0], [3, 97])
     y3, y97 = np.percentile(pts[:, 1], [3, 97])
     width = x97 - x3
     if not (LIP_WIDTH_MM[0] * mm <= width <= LIP_WIDTH_MM[1] * mm):
         return None, f"lip paint {width / mm:.0f} mm wide is not a mouth"
-    return {"centre": c, "half_width": width / 2, "half_height": max((y97 - y3) / 2, 3 * mm), "vertices": int(lips.sum()),
+    # The mouth sits on the face's mid-line (between the eyes) and is symmetric about it — a one-sided paint
+    # cluster must not shift or narrow the region onto one half (review 2026-11-09: half the lips left crimson).
+    half_width = max(abs(x3 - mid_x), abs(x97 - mid_x))
+    half_height = max((y97 - y3) / 2, 3 * mm)
+    c = np.array([mid_x, (y3 + y97) / 2, float(np.median(pts[:, 2]))])
+    return {"centre": c, "half_width": half_width, "half_height": half_height, "vertices": int(lips.sum()),
             "skin_rgb": np.median(rgb[cheeks], 0), "skin_sat": skin_sat, "skin_red": skin_red,
             "skin_vertices": int(cheeks.sum())}, ""
 
@@ -514,13 +602,19 @@ def _neutralise_mouth(texture: np.ndarray, U: np.ndarray, F: np.ndarray, P: np.n
     if not len(faces):
         return None, {"status": "skipped", "reason": "mouth region has no triangles"}
     area = _triangle_mask(U, faces, width, height)
+    # Every face is rasterised into the mask wherever its UV triangle lies, so the lips are covered on every UV
+    # island they touch; the halves (by the face's 3D side of the mid-line) are measured separately.
+    centroid_x = P[faces].mean(1)[:, 0]
+    halves = {"left": _triangle_mask(U, faces[centroid_x >= c[0]], width, height),
+              "right": _triangle_mask(U, faces[centroid_x < c[0]], width, height)}
     rgb = texture[..., :3].astype(np.float64)
     lips_sel, before = _mouth_stats(rgb, area, mouth)
+    before["halves"] = {side: _mouth_stats(rgb, half, mouth)[1]["ratio"] if half.any() else None for side, half in halves.items()}
     record: Dict[str, Any] = {"centre_mm": [round(float(v) / mm, 1) for v in c], "paint_vertices": mouth["vertices"],
                               "area_texels": int(area.sum()), "lip_texels": before["lip_texels"],
                               "skin_rgb": [int(v) for v in mouth["skin_rgb"]], "skin_sat": round(mouth["skin_sat"], 3),
                               "lip_rgb_before": before["lip_rgb"], "ratio_before": before["ratio"],
-                              "ratio_reddest30_before": before["ratio_reddest30"],
+                              "ratio_reddest30_before": before["ratio_reddest30"], "halves_before": before["halves"],
                               "target_ratio": LIP_SATURATION_RATIO, "limit": LIP_RATIO_LIMIT}
     if before["lip_texels"] < 50 or before["ratio"] is None:
         record.update(status="skipped", reason="no saturated lip texels inside the mouth region")
@@ -552,9 +646,12 @@ def _neutralise_mouth(texture: np.ndarray, U: np.ndarray, F: np.ndarray, P: np.n
     _lips_after, after = _mouth_stats(np.round(out), area, mouth)
     # The gate is read on the SAME texels the before number used.
     sat_after = _saturation(np.round(out))
+    skin_sat = max(mouth["skin_sat"], 1e-6)
     record.update(status="applied", lip_rgb_after=[int(v) for v in out[lips_sel].mean(0)],
-                  ratio_after=round(float(np.mean(sat_after[lips_sel])) / max(mouth["skin_sat"], 1e-6), 2),
-                  ratio_reddest30_after=after["ratio_reddest30"], changed_texels=int((weight > 0.01).sum()))
+                  ratio_after=round(float(np.mean(sat_after[lips_sel])) / skin_sat, 2),
+                  ratio_reddest30_after=after["ratio_reddest30"], changed_texels=int((weight > 0.01).sum()),
+                  halves_after={side: (round(float(np.mean(sat_after[lips_sel & half])) / skin_sat, 2)
+                                       if (lips_sel & half).any() else None) for side, half in halves.items()})
     return result, record
 
 
@@ -727,20 +824,24 @@ def measure_face(glb: bytes) -> Dict[str, Any]:
     rows = []
     for eye in eyes:
         dark = lum < DARK_LUMINANCE
-        region, ring, weight = _eye_region(P, eye, frame["head"], dark, mm)
-        fit = _LidFit(P, F, ring, eye, frame["centre"], frame["front"], mm)
+        region, weight = _eye_region(P, eye, frame["head"], mm)
+        lash = ((dark.astype(np.float64) + _adjacency(len(P), F) @ dark.astype(np.float64)) > 0)[region]
+        fit = _LidSurface(P, F, region, eye, frame["centre"], frame["front"], mm)
         h = fit.height(P[region]) / mm if fit.ok else np.zeros(1)
         outer = fit.outer(P, P[region], mm) if fit.ok else np.ones(1, bool)
         ho = h[outer] if outer.any() else np.zeros(1)
-        lash = ((dark.astype(np.float64) + _adjacency(len(P), F) @ dark.astype(np.float64)) > 0)[region]
         hl = (h * weight[region])[lash & outer] if (lash & outer).any() else np.zeros(1)
+        hw_ = (h * weight[region])
         rows.append({"side": eye["side"], "centre_mm": [round(float(v) / mm, 1) for v in eye["centre"]],
                      "half_width_mm": round(float(eye["half_width"]) / mm, 1), "region_vertices": int(region.sum()),
-                     "outer_vertices": int(outer.sum()), "fit_points": fit.points, "fit_mad_mm": round(fit.mad / mm, 2),
+                     "outer_vertices": int(outer.sum()), "depth_cells_hit": fit.hits,
+                     "removed_mm": round(fit.removed_mm, 2) if fit.ok else None,
                      "p90_mm": round(float(np.percentile(h, 90)), 2), "max_mm": round(float(h.max()), 2),
                      "outer_p50_mm": round(float(np.percentile(ho, 50)), 2), "outer_p90_mm": round(float(np.percentile(ho, 90)), 2),
                      "outer_max_mm": round(float(ho.max()), 2), "over_limit": int((h > EYE_LIMIT_MM).sum()),
-                     "weighted_max_mm": round(float((h * weight[region]).max()), 2),
+                     "weighted_max_mm": round(float(hw_.max()), 2),
+                     "visible_weighted_max_mm": round(float(hw_[outer].max()), 2) if outer.any() else None,
+                     "visible_weighted_over_1mm": int((hw_[outer] > 1.0).sum()) if outer.any() else 0,
                      "lash_outer_weighted_p90_mm": round(float(np.percentile(hl, 90)), 2),
                      "lash_outer_weighted_max_mm": round(float(hl.max()), 2),
                      "outer_over_limit": int((ho > EYE_LIMIT_MM).sum()), "outer_over_5mm": int((ho > 5).sum())})
@@ -752,12 +853,13 @@ def measure_face(glb: bytes) -> Dict[str, Any]:
     _texture_after, mouth_record = _neutralise_mouth(texture, U, F, P, mouth, mm)
     out["mouth"] = {k: v for k, v in mouth_record.items()
                     if k in ("centre_mm", "paint_vertices", "lip_texels", "skin_rgb", "skin_sat", "lip_rgb_before",
-                             "ratio_before", "ratio_reddest30_before", "limit")}
+                             "ratio_before", "ratio_reddest30_before", "halves_before", "limit")}
     return out
 
 
 def enabled_for(character_name: str) -> bool:
-    """The per-character switch (``model3d_opts.face_cleanup``; default OFF while the visual gate is open)."""
+    """The per-character switch (``model3d_opts.face_cleanup``; default OFF while the visual gate is open —
+    the pressed flaps still leave rims of 1-4 mm and some turned faces, see the report of 2026-11-09)."""
     from app.core.model3d import get_model3d_options
     return bool(get_model3d_options(character_name).get("face_cleanup"))
 
@@ -770,7 +872,9 @@ def summary(record: Dict[str, Any]) -> str:
         before = max((float((e.get("before_mm") or {}).get("lash_outer_max") or 0) for e in eyes.get("eyes") or []), default=0.0)
         after = max((float((e.get("after_mm") or {}).get("lash_weighted_max") or 0) for e in eyes.get("eyes") or []), default=0.0)
         moved = sum(int(e.get("moved_vertices") or 0) for e in eyes.get("eyes") or [])
-        parts.append(f"lashes {before:.1f} → {after:.1f} mm proud ({moved} vertices)")
+        flips = max((int((e.get("flipped_faces") or {}).get("after") or 0) for e in eyes.get("eyes") or []), default=0)
+        parts.append(f"lashes {before:.1f} → {after:.1f} mm proud ({moved} vertices"
+                     + (f", {flips} turned faces left" if flips else "") + ")")
     elif eyes.get("status") == "skipped":
         parts.append("eyes: " + str(eyes.get("reason") or "skipped"))
     mouth = record.get("mouth") or {}

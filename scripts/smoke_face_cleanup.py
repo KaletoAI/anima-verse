@@ -22,13 +22,16 @@ Geometry defects, both inside the paint:
   never move).
 
 Hand-derived expectations:
-- the lid fit is a quadric over the orbit ring (d^2 1..1.8 of the 32 x 25.4 mm region ellipse, 32..43 mm from the
-  centre) of a sphere of 94 mm radius; on the ring it fits within 0.1 mm (MAD), inside it the missing fourth-order
-  term leaves the quadric up to ~0.9 mm UNDER the sphere, so the ridge reads 8 .. 9 mm proud BEFORE (8 mm pushed
-  plus that offset) and the opening ~ -3 mm;
-- AFTER: every lash-tier vertex stands at most EYE_LIMIT_MM = 2.0 mm proud (the compression maps 8 mm to
-  0.5 + 1.5 tanh(0.06 * 7.5 / 1.5) = 0.94 mm, the height smoothing toward the ridge's unmoved neighbours at ~0 mm
-  can only lower it), so a ridge vertex moved 6 .. 9.2 mm straight back (its measured 8 .. 9 mm minus what is left); the opening's vertices keep their exact bytes; vertices outside both eye regions keep their
+- the lid is the slope-limited lower envelope (CONE_SLOPE 1 mm/mm) of the relief of the ray-cast depth map over
+  the region; the sphere is smooth (its relief against the 8 mm Gaussian base is ~0), the 3 mm wide ridge is a
+  relief feature whose cells lie within 1.5 mm of its edge, so the envelope rises at most 1.5 mm into it and the
+  ridge reads 8 - 1.5 .. 8 mm (+ the grid's 1 mm blur) = 6 .. 8.6 mm proud BEFORE; the opening (-3 mm) is a pit
+  and never proud;
+- AFTER: every visible vertex stands at most EYE_LIMIT_MM = 1.0 mm proud of the envelope (the compression maps
+  8 mm to 0.5 + 0.5 tanh(0.08 * 7.5 / 0.5) = 0.92 mm, the height smoothing toward the ridge's unmoved neighbours
+  can only lower it to EYE_FREE_MM), so a ridge vertex moved 5 .. 9.5 mm straight back (its measured 6 .. 8.6 mm
+  minus what is left, up to the full 8 mm plus the blur where the envelope dips); at most 8 faces of the ridge's
+  side walls end turned over (regression guard); the opening's vertices keep their exact bytes; vertices outside both eye regions keep their
   exact positions; indices, UVs and the triangle count are unchanged; the result still passes ``validate_source``;
 - MOUTH: HSV saturation (max - min) / max — skin (200-130)/200 = 0.35, lips (197-50)/197 = 0.746 -> ratio 2.13
   before (> 1.3, applied);
@@ -215,8 +218,8 @@ def main():
     for r in rows:
         check(30 <= abs(r["centre_mm"][0]) <= 40 and 18 <= r["half_width_mm"] <= 26,
               f"{r['side']} eye centre x {r['centre_mm'][0]} mm, half width {r['half_width_mm']} mm (expected +-34.9, ~22)")
-        check(7.8 <= r["lash_outer_weighted_max_mm"] <= 9.2 and r["fit_mad_mm"] < 0.3,
-              f"{r['side']} ridge measures {r['lash_outer_weighted_max_mm']} mm proud before (expected 8 .. 9), fit MAD {r['fit_mad_mm']} mm")
+        check(6.0 <= r["lash_outer_weighted_max_mm"] <= 8.6 and r["depth_cells_hit"] >= 1000,
+              f"{r['side']} ridge measures {r['lash_outer_weighted_max_mm']} mm proud before (expected 6 .. 8.6), {r['depth_cells_hit']} depth cells")
     mouth = before.get("mouth") or {}
     check(mouth.get("ratio_before") is not None and 2.0 <= mouth["ratio_before"] <= 2.25,
           f"lips/skin saturation before {mouth.get('ratio_before')} (expected 2.13)")
@@ -237,8 +240,10 @@ def main():
     radial /= np.linalg.norm(radial, axis=1)[:, None]
     moved = np.linalg.norm(P1 - P0, axis=1) / MM
     back = -((P1 - P0) * radial).sum(1) / MM
-    check(np.all(back[ridge] >= 6.0) and np.all(back[ridge] <= 9.2),
-          f"ridge vertices pressed back 6 .. 9.2 mm (min {back[ridge].min():.2f}, max {back[ridge].max():.2f})")
+    check(np.all(back[ridge] >= 5.0) and np.all(back[ridge] <= 9.5),
+          f"ridge vertices pressed back 5 .. 9.5 mm (min {back[ridge].min():.2f}, max {back[ridge].max():.2f})")
+    turned = max(int((e.get("flipped_faces") or {}).get("after") or 0) for e in record["eyes"]["eyes"])
+    check(turned <= 8, f"turned faces left after the press: {turned} (regression guard, the ridge's side walls)")
     check(np.array_equal(P1[opening], P0[opening]), "eye-opening vertices (below the lid) keep their exact bytes")
     outside = np.ones(len(P0), bool)
     for cx in (EYE_X, -EYE_X):
