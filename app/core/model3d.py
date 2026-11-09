@@ -55,12 +55,15 @@ _publication_epochs: Dict[tuple, int] = {}
 # The garment assembly's delivery files (``garment_assembly``): the bare
 # model + grafted garments, derived, never a publication input of its own.
 ASSEMBLED_DIR = "assembled"
+# The base body's second model without its ``exposed_only`` extension groups
+# (``_auto_covered_variant``): what an outfit that hides them is built from.
+COVERED_DIR = "covered"
 
 
 def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
     """Only one signature's public files and private backups, never stages."""
     folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'), Path('unrigged'),
-               Path('low/raw'), Path('low/prerig'), Path('facefix'),
+               Path('low/raw'), Path('low/prerig'), Path('facefix'), Path(COVERED_DIR),
                Path(ASSEMBLED_DIR), Path(ASSEMBLED_DIR) / 'low')
     return {relative / p.name: p for relative in folders
             for p in (directory / relative).glob(f"{signature}.*") if p.is_file()}
@@ -568,14 +571,19 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     """Whether a stored outfit model is not built on the current base body
     (``base`` from ``_current_base``; None = off the pipeline, never stale):
     another base signature, another base model under the same signature,
-    or none recorded (a whole-body model from before the switch). The base
-    model itself is never stale here."""
+    or none recorded (a whole-body model from before the switch) — or built
+    from the other base model than its pieces call for now
+    (``base_body.variant_current``: a piece's ``exposed_detail`` changed).
+    The base model itself is never stale here."""
     if not base:
         return False
-    from app.core.base_body import built_on_current_base, is_base_signature
+    from app.core.base_body import built_on_current_base, is_base_signature, variant_current
     if is_base_signature(path.stem):
         return False
-    return not built_on_current_base(_read_sidecar(path), base)
+    meta = _read_sidecar(path)
+    if not built_on_current_base(meta, base):
+        return True
+    return bool(meta.get("character")) and not variant_current(meta["character"], meta)
 
 
 def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -979,10 +987,14 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # stand-in). It is still THE file on screen, so its details stay; the
         # flag tells the tab to ask for a rebuild. ``stale_reason``:
         # ``older_base`` / ``before_pipeline`` (no base recorded).
-        info["stale_base"] = _on_older_base(path, _current_base(character_name))
+        current_base = _current_base(character_name)
+        info["stale_base"] = _on_older_base(path, current_base)
         if info["stale_base"]:
-            info["stale_reason"] = ("older_base" if _read_sidecar(path).get("base_signature")
-                                    else "before_pipeline")
+            from app.core.base_body import built_on_current_base
+            stale_meta = _read_sidecar(path)
+            info["stale_reason"] = ("before_pipeline" if not stale_meta.get("base_signature")
+                                    else "older_base" if not built_on_current_base(stale_meta, current_base)
+                                    else "detail_changed")
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
@@ -1107,16 +1119,26 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                                      for b in get_image_service().list_face_retexture_backends()]
     if path:
         from app.core.face_retexture import snapshot_info
-        out["model"]["face_retexture"] = _read_sidecar(path).get("face_retexture")
-        snapshot = snapshot_info(path.parent, path.stem)
+        # On the base-body pipeline the face is the base body's (the face
+        # routes act on the base signature): status, revert and comparison
+        # come from the base model, not from the outfit painted onto it.
+        face_path = path
+        if _current_base(character_name):
+            from app.core.base_body import base_signature
+            base_path = path.parent / f"{base_signature(character_name, profile=profile)}.glb"
+            if base_path.is_file():
+                face_path = base_path
+                out["model"]["face_signature"] = base_path.stem
+        out["model"]["face_retexture"] = _read_sidecar(face_path).get("face_retexture")
+        snapshot = snapshot_info(face_path.parent, face_path.stem)
         out["model"]["face_retexture_snapshot"] = snapshot
         out["model"]["face_retexture_revert"] = (
             "snapshot" if snapshot["ok"] else "rerig" if (
-                not (path.parent / "rollback" / path.stem).exists()
+                not (face_path.parent / "rollback" / face_path.stem).exists()
                 and (out["model"]["face_retexture"] or {}).get("status") == "applied"
-                and (path.parent / "unrigged" / f"{path.stem}.glb").is_file()) else None)
-        if (path.parent / "facefix" / f"{path.stem}.png").is_file():
-            out["model"]["face_retexture_compare_url"] = f"/characters/{quote(character_name)}/model3d/face-retexture/compare?signature={path.stem}"
+                and (face_path.parent / "unrigged" / f"{face_path.stem}.glb").is_file()) else None)
+        if (face_path.parent / "facefix" / f"{face_path.stem}.png").is_file():
+            out["model"]["face_retexture_compare_url"] = f"/characters/{quote(character_name)}/model3d/face-retexture/compare?signature={face_path.stem}"
     with _lock:
         out["pending"] = character_name in _generating
         out["rerig_result"] = _rerig_results.get(character_name)
@@ -1157,7 +1179,7 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # (see _publish_signature); see drop_reference_cache below.
     # The garment assemblies are derived from the files being replaced too.
     for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME,
-                      out_dir / ASSEMBLED_DIR, out_dir / ASSEMBLED_DIR / LOW_TIER):
+                      out_dir / COVERED_DIR, out_dir / ASSEMBLED_DIR, out_dir / ASSEMBLED_DIR / LOW_TIER):
         if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix")):
             continue
         for old in directory.glob(f"{signature}.*"):
@@ -1251,7 +1273,118 @@ PART_OPS = ("attached_part", "attached_part_bone", "inset_part")
 
 def _auto_extension_rig(character_name: str, path: Path,
                         meta: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
-    """Build declared extensions from a clean source; failed gates preserve bytes."""
+    """Build declared extensions from a clean source; failed gates preserve bytes.
+
+    A base body (``meta["base"]``) then also refreshes its covered variant
+    (``_auto_covered_variant``) — a failure there is recorded in
+    ``meta["covered_variant"]`` and never fails the base."""
+    result = _extension_rig_once(character_name, path, meta, force=force)
+    if meta.get("base") and not meta.get("base_variant") and path.parent.name != LOW_TIER:
+        try:
+            if _auto_covered_variant(character_name, path, meta, force=force) and result.get("noop"):
+                # The base sidecar must record the new variant state.
+                result = {**result, "noop": False}
+        except Exception as exc:  # noqa: BLE001 — the base stays published
+            logger.warning("Model3D %s: covered variant failed: %s", character_name, exc)
+            meta["covered_variant"] = {"status": "failed", "reason": str(exc), "at": utc_now_iso()}
+            result = {**result, "noop": False}
+    return result
+
+
+def _extension_groups_for(meta: Dict[str, Any], groups):
+    """The extension groups a model of ``meta`` carries: a base body never
+    the anatomy parts (``PART_OPS``, they belong to the outfit models), the
+    covered variant of a base body — and an outfit built from it
+    (``base_variant: "covered"``) — never the ``exposed_only`` groups."""
+    if meta.get("base"):
+        groups = [g for g in groups if g["op"] not in PART_OPS]
+    if meta.get("base_variant") == "covered":
+        groups = [g for g in groups if not g.get("exposed_only")]
+    return groups
+
+
+def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any], *,
+                          force: bool = False) -> bool:
+    """Keep ``covered/<bsig>.glb``: the base body ``path`` built once more
+    from the SAME clean prerig source with every ``exposed_only`` extension
+    group left out. Every other group runs on the same source bytes with the
+    same declarations and overrides as the base, so its bones (a colour
+    apex included) are those of the base. Its sidecar: ``source_sha256``
+    (the prerig it was built from), ``extension_rig`` (its own state, which
+    an outfit built from it copies), ``blender``, ``rig``, ``groups_removed``.
+
+    Without any applicable ``exposed_only`` group (or for a non-humanoid
+    model) the variant is removed and ``meta["covered_variant"]`` dropped.
+    A current variant (same source bytes, same fingerprint) is kept unless
+    ``force``. Records ``meta["covered_variant"]`` ``{status: built|failed,
+    groups_removed, at, reason}``. Returns True when the variant or its
+    record changed."""
+    from app.core.extension_rig import (extension_rig_fingerprint, model_extension_overrides,
+                                       rig_groups_for)
+    from app.models.character import get_character_profile
+    target = path.parent / COVERED_DIR / path.name
+    profile = get_character_profile(character_name) or {}
+    declarations = _extension_groups_for(meta, rig_groups_for(
+        character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+    removed = sorted(g["id"] for g in declarations if g.get("exposed_only"))
+    before = meta.get("covered_variant")
+    if not removed or path.suffix.lower() != ".glb" or meta.get("rig") != "mixamo":
+        changed = target.exists() or before is not None
+        for old in (target, target.with_suffix(".json")):
+            old.unlink(missing_ok=True)
+        meta.pop("covered_variant", None)
+        return changed
+    source = path.parent / "prerig" / path.name
+    if not source.is_file():
+        for old in (target, target.with_suffix(".json")):
+            old.unlink(missing_ok=True)
+        meta["covered_variant"] = {"status": "failed", "groups_removed": removed,
+                                   "reason": "Clean prerig source is missing", "at": utc_now_iso()}
+        return True
+    source_bytes = source.read_bytes()
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    kept = [g for g in declarations if not g.get("exposed_only")]
+    fingerprint = extension_rig_fingerprint(kept, model_extension_overrides(profile, path.stem))
+    previous = _read_sidecar(target) if target.is_file() else {}
+    if (not force and previous.get("source_sha256") == source_sha
+            and (previous.get("extension_rig") or {}).get("fingerprint") == fingerprint
+            and (previous.get("extension_rig") or {}).get("status") != "failed"
+            and (before or {}).get("status") == "built"):
+        return False
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix=".covered-", dir=path.parent) as tmp:
+        work = Path(tmp) / path.name
+        (Path(tmp) / "prerig").mkdir()
+        work.write_bytes(source_bytes)
+        (Path(tmp) / "prerig" / path.name).write_bytes(source_bytes)
+        source_meta = _read_sidecar(source)
+        _publish_sidecar(Path(tmp) / "prerig" / path.name, source_meta)
+        covered_meta: Dict[str, Any] = {"rig": "mixamo", "base": True, "base_variant": "covered",
+                                        "blender": source_meta.get("blender") or {},
+                                        "mesh_variant": meta.get("mesh_variant") or ""}
+        result = _extension_rig_once(character_name, work, covered_meta, force=True)
+        state = covered_meta.get("extension_rig") or {}
+        if not result.get("ok") or state.get("status") == "failed":
+            for old in (target, target.with_suffix(".json")):
+                old.unlink(missing_ok=True)
+            meta["covered_variant"] = {"status": "failed", "groups_removed": removed,
+                                       "reason": result.get("error") or state.get("reason") or "Extension rig failed",
+                                       "at": utc_now_iso()}
+            return True
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _publish_model_bytes(target, work.read_bytes())
+        _publish_sidecar(target, {"rig": "mixamo", "source_sha256": source_sha,
+                                  "groups_removed": removed, "extension_rig": state,
+                                  "blender": covered_meta.get("blender") or {},
+                                  "created_at": utc_now_iso()})
+    meta["covered_variant"] = {"status": "built", "groups_removed": removed, "at": utc_now_iso()}
+    logger.info("Model3D %s: covered variant of %s without %s", character_name, path.stem, ", ".join(removed))
+    return True
+
+
+def _extension_rig_once(character_name: str, path: Path,
+                        meta: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
+    """The extension rig of ONE model file (``_auto_extension_rig``)."""
     import tempfile
     from app.blender import refine
     from app.core.extension_rig import (rig_groups_for, resolved_extension_groups,
@@ -1266,10 +1399,9 @@ def _auto_extension_rig(character_name: str, path: Path,
     declarations = rig_groups_for(character_name, profile=profile, mesh_variant=mesh_variant)
     # A base body gets every extension group BUT the anatomy parts: those
     # belong to the outfit models painted onto it (spec B.4), which inherit
-    # this rig with its jiggle/secondary bones.
-    base = bool(meta.get("base"))
-    if base:
-        declarations = [g for g in declarations if g["op"] not in PART_OPS]
+    # this rig with its jiggle/secondary bones. A covered variant (and an
+    # outfit built from it) leaves the exposed-only groups out as well.
+    declarations = _extension_groups_for(meta, declarations)
     overrides = model_extension_overrides(profile, path.stem)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
@@ -1286,9 +1418,9 @@ def _auto_extension_rig(character_name: str, path: Path,
     if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
-    groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem,
-                                                   mesh_variant=mesh_variant)
-              if g["enabled"] and not (base and g["op"] in PART_OPS)]
+    groups = [g for g in _extension_groups_for(meta, resolved_extension_groups(
+                  character_name, profile=profile, signature=path.stem, mesh_variant=mesh_variant))
+              if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "group_ops": {g["id"]: g["op"] for g in declarations},
              "group_params": {g["id"]: g["params"] for g in declarations if g["op"] in ("attached_part", "inset_part")},
@@ -1418,6 +1550,23 @@ def _auto_extension_rig(character_name: str, path: Path,
                 "extension_rig": state, "error": state["reason"]}
 
 
+def _extension_state_current(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
+    """Whether the stored extension state of ``path`` matches what
+    ``_extension_rig_once`` would build now (its no-op condition without a
+    force): attempted, not failed, same fingerprint."""
+    from app.core.extension_rig import (extension_rig_fingerprint, model_extension_overrides,
+                                       rig_groups_for)
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
+    declarations = _extension_groups_for(meta, rig_groups_for(
+        character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+    previous = meta.get("extension_rig") or {}
+    return bool(previous.get("attempted")
+                and previous.get("status") in ("applied", "not_found", "none_applicable")
+                and previous.get("fingerprint") == extension_rig_fingerprint(
+                    declarations, model_extension_overrides(profile, path.stem)))
+
+
 @_serial_model
 def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, *,
                           tier: str = FULL_TIER, force: bool = False) -> Dict[str, Any]:
@@ -1438,6 +1587,19 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
         path = low
     meta = _read_sidecar(path)
     meta.setdefault("rig", required_rig(character_name))
+    if tier == FULL_TIER and meta.get("source") == "base_body" and not meta.get("base"):
+        # An outfit on the base body is never rebuilt from its own geometry
+        # (a painted outfit hides the colour markers; the bones would move):
+        # a forced or outdated extension rig builds the outfit model anew.
+        from app.core import base_body
+        if base_body.is_base_pipeline(character_name) and (
+                force or not _extension_state_current(character_name, path, meta)):
+            result = base_body.build_outfit_model(character_name, path.stem)
+            result["noop"] = False
+            result["extension_rig"] = _read_sidecar(path).get("extension_rig") or {}
+            if result.get("ok"):
+                result["model_rev"] = model_revision(path)
+            return result
     original_bytes = path.read_bytes()
     original_meta = json.loads(json.dumps(meta))
     result = _auto_extension_rig(character_name, path, meta, force=force)
@@ -2236,6 +2398,36 @@ def _resume_entry(op, staged_call, character_name: str):
     return hub_ops.resume(op, staged_call, agent_name=character_name)
 
 
+def _ensure_covered_variant(character_name: str) -> None:
+    """Before an outfit model on the base body is built: a base whose
+    exposed-only extension groups apply gets its covered variant
+    (``_auto_covered_variant``) when it has none built from its current
+    prerig source — through ``rebuild_extension_rig`` on the base signature,
+    which publishes it with the base (an outfit run is staged on its own
+    signature and cannot write the base's files). Best effort: the outfit
+    falls back to the full base with a warning."""
+    if character_name in getattr(_staging, "directories", {}):
+        return
+    try:
+        from app.core import base_body
+        from app.core.extension_rig import exposed_only_slots, rig_groups_for
+        if not exposed_only_slots() or not base_body.is_base_pipeline(character_name):
+            return
+        bsig = base_body.base_signature(character_name)
+        directory = get_model3d_dir(character_name)
+        rigged, prerig = directory / f"{bsig}.glb", directory / "prerig" / f"{bsig}.glb"
+        covered = directory / COVERED_DIR / f"{bsig}.glb"
+        if not rigged.is_file() or not prerig.is_file():
+            return
+        if covered.is_file() and _read_sidecar(covered).get("source_sha256") == base_body.file_sha256(prerig):
+            return
+        if not any(g.get("exposed_only") for g in rig_groups_for(character_name, mesh_variant="")):
+            return
+        rebuild_extension_rig(character_name, bsig)
+    except Exception as exc:  # noqa: BLE001 — the outfit build reports the fallback
+        logger.warning("Model3D %s: covered variant not prepared: %s", character_name, exc)
+
+
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
@@ -2275,6 +2467,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     if base and not signature:
         raise ValueError("A base-body model needs its base signature")
     op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base))
+    if op is None and not base:
+        _ensure_covered_variant(character_name)
     if op is not None:
         return _resume_entry(op, lambda: _generate_for_current_outfit(
             character_name, signature=op.inputs["signature"], _op_ctx={"op": op}),
@@ -3377,77 +3571,89 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
     if op.abs("upscale/image.png").is_file():
         image = op.abs("upscale/image.png").read_bytes()
 
-    if not op.done("face"):
-        request = dict(controls)
-        if inputs.get('photo_mode', 'local') == 'hub':
-            photo = inputs['photo']
-            request.update(light_balance=photo['balance'], tone_match=photo['tone_match'], brightness=photo['brightness'], skin_recolor=photo.get('skin_recolor', 0.))
-        result = get_image_service().generate_face_retexture(
-            str(original_file), image, str(op.path("face", "x").parent),
-            request, (inputs.get("face_backend_glob") if inputs.get("face_before_rig") else inputs.get("backend_glob")) or "", character_name,
-            hub_stage=op.stage("face"))
-        if not result.get('ok'):
-            return {'ok': False, 'error': result.get('error') or 'Face retexture failed'}
-        op.complete("face", _op_rel(op, result, "path", "compare_path"))
-    result = _op_abs(op, op.result("face"), "path", "compare_path")
+    def attempt(face_stage: str, bake_stage: str, prefix: tuple, attempt_controls: Dict[str, Any]) -> Dict[str, Any]:
+        """One projection (hub stage ``face_stage``) and its bake
+        (``bake_stage``); the corrected source and mask go under ``prefix``
+        of the record ("" = ``source/`` and ``bake/``, what the rig reads)."""
+        if not op.done(face_stage):
+            request = dict(attempt_controls)
+            if inputs.get('photo_mode', 'local') == 'hub':
+                photo = inputs['photo']
+                request.update(light_balance=photo['balance'], tone_match=photo['tone_match'], brightness=photo['brightness'], skin_recolor=photo.get('skin_recolor', 0.))
+            result = get_image_service().generate_face_retexture(
+                str(original_file), image, str(op.path(face_stage, "x").parent),
+                request, (inputs.get("face_backend_glob") if inputs.get("face_before_rig") else inputs.get("backend_glob")) or "", character_name,
+                hub_stage=op.stage(face_stage))
+            if not result.get('ok'):
+                return {'ok': False, 'error': result.get('error') or 'Face retexture failed'}
+            op.complete(face_stage, _op_rel(op, result, "path", "compare_path"))
+        result = _op_abs(op, op.result(face_stage), "path", "compare_path")
 
-    if not op.done("bake"):
-        import numpy as np
-        # No size cap on the hub result: it only donates its face texture and
-        # may exceed the upload limit (skin recolour ships a second full
-        # atlas). Only the baked mesh below goes to the rig upload.
-        raw = Path(result['path']).read_bytes()
-        verdict = validate_face_source(raw)
-        before = validate_face_source(original_bytes, original=True)
-        if not verdict['ok'] or verdict['triangles'] != before['triangles']:
-            return {'ok': False, 'error': '; '.join(verdict['errors']) or 'Face retexture changed the triangle count'}
-        try:
-            replacement_masks = []
-            raw, baked = face_retexture.bake_face_texture(
-                original_bytes, raw, replacement_masks=replacement_masks)
-        except ValueError as exc:
-            return {'ok': False, 'error': str(exc)}
-        if len(raw) > face_retexture.MAX_BYTES:
-            return {'ok': False, 'error': 'Baked mesh exceeds the 64 MB rig upload limit'}
-        from app.core.face_photo_adjust import TONE_MATCH_UNSUPPORTED, SKIN_RECOLOR_UNSUPPORTED
-        photo_meta = dict(inputs.get('photo', {'balance': 0., 'brightness': 1.}))
-        # Old operations already contain locally adjusted bytes; never reapply them.
-        photo_meta.setdefault('tone_match', 0.)
-        if inputs.get('photo_mode', 'local') == 'hub':
-            photo_meta.update(result.get('photo_application') or {
-                'applied_on': 'none', 'reason': 'The running face backend did not confirm photo controls.'})
-        else:
-            photo_meta['applied_on'] = 'local'
-            if inputs.get('photo_reason'):
-                photo_meta['reason'] = inputs['photo_reason']
-        if inputs.get('photo_mode', 'local') == 'local':
-            photo_meta['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
-        face_meta = {'status': 'applied', 'at': utc_now_iso(), 'reference': inputs.get('reference', 'front'),
-                     'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
-                     'params': controls, 'photo': photo_meta,
-                     **({'tone_match': {'status': 'unsupported', 'reason': TONE_MATCH_UNSUPPORTED}}
-                        if inputs.get('photo_mode', 'local') == 'local' else {}),
-                     **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}), 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
-                     'result_url': result.get('result_url', ''),
-                     'route_meta': {k: result[k] for k in ROUTE_META_KEYS if k in result}}
-        if result.get('compare_path'):
-            comparison = Path(result['compare_path']).read_bytes()
-            from PIL import Image
-            import io
-            decoded = Image.open(io.BytesIO(comparison))
-            decoded.load()
-            if decoded.format != 'PNG':
-                return {'ok': False, 'error': 'Comparison image is not a PNG'}
-            op.path("source", f"{signature}.png").write_bytes(comparison)
-        # The corrected source, its sidecar and the replacement mask live in
-        # the record, not only in the stage: a restart during the rig job
-        # must not lose the correction.
-        op.path("source", f"{signature}.glb").write_bytes(raw)
-        op.path("source", f"{signature}.json").write_bytes(json.dumps(
-            {'face_retexture': face_meta, 'baked': baked}, indent=2, ensure_ascii=False).encode("utf-8"))
-        with op.path("bake", "mask.npy").open("wb") as handle:
-            np.save(handle, np.asarray(replacement_masks[0]) if replacement_masks else np.zeros((0, 0), dtype=bool))
-        op.complete("bake", {"face_meta": face_meta, "has_mask": bool(replacement_masks)})
+        if not op.done(bake_stage):
+            import numpy as np
+            # No size cap on the hub result: it only donates its face texture and
+            # may exceed the upload limit (skin recolour ships a second full
+            # atlas). Only the baked mesh below goes to the rig upload.
+            raw = Path(result['path']).read_bytes()
+            verdict = validate_face_source(raw)
+            before = validate_face_source(original_bytes, original=True)
+            if not verdict['ok'] or verdict['triangles'] != before['triangles']:
+                return {'ok': False, 'error': '; '.join(verdict['errors']) or 'Face retexture changed the triangle count'}
+            try:
+                replacement_masks = []
+                raw, baked = face_retexture.bake_face_texture(
+                    original_bytes, raw, replacement_masks=replacement_masks)
+            except ValueError as exc:
+                return {'ok': False, 'error': str(exc)}
+            if len(raw) > face_retexture.MAX_BYTES:
+                return {'ok': False, 'error': 'Baked mesh exceeds the 64 MB rig upload limit'}
+            from app.core.face_photo_adjust import TONE_MATCH_UNSUPPORTED, SKIN_RECOLOR_UNSUPPORTED
+            photo_meta = dict(inputs.get('photo', {'balance': 0., 'brightness': 1.}))
+            # Old operations already contain locally adjusted bytes; never reapply them.
+            photo_meta.setdefault('tone_match', 0.)
+            if inputs.get('photo_mode', 'local') == 'hub':
+                photo_meta.update(result.get('photo_application') or {
+                    'applied_on': 'none', 'reason': 'The running face backend did not confirm photo controls.'})
+            else:
+                photo_meta['applied_on'] = 'local'
+                if inputs.get('photo_reason'):
+                    photo_meta['reason'] = inputs['photo_reason']
+            if inputs.get('photo_mode', 'local') == 'local':
+                photo_meta['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
+            face_meta = {'status': 'applied', 'at': utc_now_iso(), 'reference': inputs.get('reference', 'front'),
+                         'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
+                         'params': attempt_controls, 'photo': photo_meta,
+                         **({'tone_match': {'status': 'unsupported', 'reason': TONE_MATCH_UNSUPPORTED}}
+                            if inputs.get('photo_mode', 'local') == 'local' else {}),
+                         **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}), 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
+                         'result_url': result.get('result_url', ''),
+                         'route_meta': {k: result[k] for k in ROUTE_META_KEYS if k in result}}
+            if result.get('compare_path'):
+                comparison = Path(result['compare_path']).read_bytes()
+                from PIL import Image
+                import io
+                decoded = Image.open(io.BytesIO(comparison))
+                decoded.load()
+                if decoded.format != 'PNG':
+                    return {'ok': False, 'error': 'Comparison image is not a PNG'}
+                op.path(*prefix, "source", f"{signature}.png").write_bytes(comparison)
+            # The corrected source, its sidecar and the replacement mask live in
+            # the record, not only in the stage: a restart during the rig job
+            # must not lose the correction.
+            op.path(*prefix, "source", f"{signature}.glb").write_bytes(raw)
+            op.path(*prefix, "source", f"{signature}.json").write_bytes(json.dumps(
+                {'face_retexture': face_meta, 'baked': baked}, indent=2, ensure_ascii=False).encode("utf-8"))
+            with op.path(*prefix, "bake", "mask.npy").open("wb") as handle:
+                np.save(handle, np.asarray(replacement_masks[0]) if replacement_masks else np.zeros((0, 0), dtype=bool))
+            op.complete(bake_stage, {"face_meta": face_meta, "has_mask": bool(replacement_masks)})
+        return {'ok': True}
+
+    first = attempt("face", "bake", (), controls)
+    if not first.get("ok"):
+        return first
+    if not op.done("face_gate"):
+        _dark_face_gate(character_name, op, attempt, controls, image)
+
     source = _restore_frozen_source(op, root, signature)
     if not op.abs(f"source/{signature}.png").is_file():
         source.with_suffix('.png').unlink(missing_ok=True)
@@ -3457,6 +3663,81 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
         with op.abs("bake/mask.npy").open("rb") as handle:
             mask = np.load(handle)
     return {"ok": True, "source": source, "mask": mask}
+
+
+DARK_FACE_WARNING = ("The face projection left dark texels in the face (a black eye socket?) — "
+                     "check the comparison image; a retry with another yaw did not fix it")
+
+
+def _dark_face_retry_yaw(character_name: str, signature: str, yaw: float) -> float:
+    """The one retry's yaw: ``DARK_RETRY_YAW`` degrees in the direction of
+    the rigged head's measured twist (``blender.head_twist.before.head`` of
+    the clean prerig source; positive without one), clamped to ±180."""
+    from app.core.face_retexture import DARK_RETRY_YAW
+    twist = ((_read_sidecar(get_model3d_dir(character_name) / "prerig" / f"{signature}.glb")
+              .get("blender") or {}).get("head_twist") or {}).get("before") or {}
+    head = twist.get("head")
+    sign = -1.0 if isinstance(head, (int, float)) and head < 0 else 1.0
+    return max(-180.0, min(180.0, float(yaw) + sign * DARK_RETRY_YAW))
+
+
+def _dark_face_gate(character_name: str, op, attempt, controls: Dict[str, Any], image: bytes) -> None:
+    """The "black eye" gate after the bake (``face_retexture.dark_face_gate``).
+
+    A failing bake logs a warning and runs ONE retry (hub stage
+    ``face_retry``, bake ``bake_retry``, files under ``retry/``) with the
+    yaw turned by ``_dark_face_retry_yaw``; the retry replaces the first
+    bake (``source/``, ``bake/mask.npy``, the ``bake`` result) only when it
+    is less dark. The record ``dark_gate`` (``ok``, the shares, ``retried``,
+    ``retry_yaw``, ``retry``, ``chosen``, ``warning`` when still failing)
+    goes into the chosen bake's ``face_meta`` and its source sidecar — the
+    model sidecar's ``face_retexture`` the 3D tab shows. Never fails the
+    correction; cancellation of the retry job propagates."""
+    from app.core import face_retexture
+    from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, HubJobLost, MediaGenerationDisabled
+    signature = op.inputs["signature"]
+    first = op.result("bake")
+    gate = face_retexture.dark_face_gate((first.get("face_meta") or {}).get("baked") or {}, image)
+    record: Dict[str, Any] = {**gate, "retried": False, "chosen": "first"}
+    chosen = first
+    if not gate.get("ok", True):
+        yaw = _dark_face_retry_yaw(character_name, signature, controls.get("yaw", 0))
+        logger.warning("Face retexture %s (%s): face coverage %.2f %% near-black vs photo %.2f %% — retrying with yaw %.1f",
+                       character_name, signature, 100 * gate["dark_share"], 100 * gate["photo_dark_share"], yaw)
+        record.update(retried=True, retry_yaw=yaw)
+        try:
+            retry = attempt("face_retry", "bake_retry", ("retry",), {**controls, "yaw": yaw})
+        except (GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, HubJobLost):
+            raise
+        except Exception as exc:  # noqa: BLE001 — the first bake stands
+            retry = {"ok": False, "error": str(exc) or type(exc).__name__}
+        if retry.get("ok"):
+            second = op.result("bake_retry")
+            retry_gate = face_retexture.dark_face_gate((second.get("face_meta") or {}).get("baked") or {}, image)
+            record["retry"] = retry_gate
+            if retry_gate.get("excess", 0) < gate.get("excess", 0):
+                chosen = second
+                record["chosen"] = "retry"
+                for suffix in (".glb", ".json", ".png"):
+                    target = op.path("source", f"{signature}{suffix}")
+                    if op.abs(f"retry/source/{signature}{suffix}").is_file():
+                        target.write_bytes(op.abs(f"retry/source/{signature}{suffix}").read_bytes())
+                    else:
+                        target.unlink(missing_ok=True)
+                op.path("bake", "mask.npy").write_bytes(op.abs("retry/bake/mask.npy").read_bytes())
+            record["ok"] = bool((retry_gate if record["chosen"] == "retry" else gate).get("ok"))
+        else:
+            record["retry_error"] = retry.get("error") or "Face retexture retry failed"
+        if not record["ok"]:
+            record["warning"] = DARK_FACE_WARNING
+            logger.warning("Face retexture %s (%s): %s", character_name, signature, DARK_FACE_WARNING)
+    face_meta = {**(chosen.get("face_meta") or {}), "dark_gate": record}
+    sidecar = op.abs(f"source/{signature}.json")
+    stored = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.is_file() else {}
+    sidecar.write_bytes(json.dumps({**stored, "face_retexture": face_meta}, indent=2,
+                                   ensure_ascii=False).encode("utf-8"))
+    op.complete("bake", {**chosen, "face_meta": face_meta})
+    op.complete("face_gate", record)
 
 
 def revert_face_retexture(character_name: str, signature: Optional[str] = None) -> Dict[str, Any]:
@@ -3499,6 +3780,22 @@ def _revert_face_retexture(character_name: str, signature: Optional[str] = None,
             'face_retexture': meta['face_retexture']}
 
 
+def after_base_face_change(character_name: str, signature: str) -> None:
+    """A face correction or its revert re-rigged the BASE body: its model
+    bytes changed, so every outfit model is stale (``base_model_sha256``)
+    and rebuilt on its next trigger; the worn garments refit onto the new
+    base (``garments.after_base_model``, as after a base model run). A
+    non-base signature does nothing. Never raises."""
+    try:
+        from app.core.base_body import is_base_signature
+        if not is_base_signature(signature):
+            return
+        from app.core import garments
+        garments.after_base_model(character_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Model3D %s: follow-up of the base face change failed: %s", character_name, exc)
+
+
 def trigger_face_retexture(character_name: str, signature: str, *,
                            backend_glob: str = '', params=None, photo=None, upscale: Optional[bool] = None, reference: str = "",
                            upscale_backend_glob: str = '') -> Dict[str, Any]:
@@ -3531,6 +3828,8 @@ def trigger_face_retexture(character_name: str, signature: str, *,
                                                backend_glob=backend_glob, params=controls, photo=photo,
                                                upscale=upscale, reference=reference, upscale_backend_glob=upscale_backend_glob,
                                                track_id=task_id)
+            if result.get('ok'):
+                after_base_face_change(character_name, signature)
         except Exception as exc:
             result = {'ok': False, 'error': str(exc)}
             logger.exception('Face retexture failed for %s', character_name)
@@ -3592,11 +3891,14 @@ def _register_hub_kinds() -> None:
     hub_ops.register_kind(_OP_MESH, resume=_op_thread_resume(_generate_for_current_outfit),
                           track_type="model3d_generation", reserve=_op_reserve,
                           optional_stage=lambda op, name: bool(op.inputs.get("face_before_rig"))
-                          and name in ("upscale", "face", "bake"))
+                          and name in ("upscale", "face", "bake", "face_retry"))
     hub_ops.register_kind(_OP_RERIG, resume=_op_thread_resume(_rerig_model, _rerig_results),
                           track_type="model3d_rerig", reserve=_op_reserve)
+    # The dark-face retry is optional: its lost collection is replayed as a
+    # failed retry, the first bake stands (``_dark_face_gate``).
     hub_ops.register_kind(_OP_FACE, resume=_op_thread_resume(_face_retexture_model, _face_retexture_results),
-                          track_type="model3d_face_retexture", reserve=_op_reserve)
+                          track_type="model3d_face_retexture", reserve=_op_reserve,
+                          optional_stage=lambda op, name: name == "face_retry")
 
 
 _register_hub_kinds()

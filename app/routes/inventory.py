@@ -1026,6 +1026,16 @@ def list_outfit_types_route() -> Dict[str, Any]:
     return {"outfit_types": list(CANONICAL_OUTFIT_TYPES)}
 
 
+@router.get("/exposed-detail-slots")
+def exposed_detail_slots_route() -> Dict[str, Any]:
+    """The clothing slots that hide a body detail of a package rig declaring
+    ``exposed_only`` — the item editor offers ``outfit_piece.exposed_detail``
+    ("shows the detail through") only for pieces touching one of them. Read
+    from the loaded packages, never a hardcoded list."""
+    from app.core.extension_rig import exposed_only_slots
+    return {"slots": exposed_only_slots()}
+
+
 @router.post("/characters/{character_name}/apply-equipped")
 async def apply_equipped_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Apply a piece combination directly to the profile.

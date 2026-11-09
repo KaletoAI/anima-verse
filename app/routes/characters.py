@@ -2316,12 +2316,22 @@ def rerig_character_model3d(
 
 
 def _face_retexture_signature(character_name: str, signature: str) -> str:
-    """Resolve a selected outfit key and reject path/glob input."""
+    """Resolve a selected outfit key and reject path/glob input.
+
+    On the base-body pipeline the face belongs to the base body: every
+    outfit model is painted onto it and has no unrigged source of its own,
+    so dialog, preview, start, revert and comparison act on the BASE
+    signature whatever was selected. A re-rigged base changes its model
+    bytes, which marks every outfit model stale (``base_model_sha256``) —
+    they are rebuilt on their next trigger."""
+    from app.core.base_body import base_signature, is_base_pipeline
     from app.core.face_retexture import safe_signature
     from app.core.model_refs import current_outfit_state
     if not get_character_dir(character_name).exists():
         raise HTTPException(404, "Character not found")
     try:
+        if is_base_pipeline(character_name):
+            return safe_signature(base_signature(character_name))
         return safe_signature(signature or current_outfit_state(character_name)[2])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -2477,6 +2487,9 @@ def revert_character_face_retexture(character_name: str, signature: str = "", la
     try:
         with _char_lock(character_name):
             result = revert_face_retexture(character_name, signature)
+        if result.get("ok"):
+            from app.core.model3d import after_base_face_change
+            after_base_face_change(character_name, signature)
         return _face_retexture_localize(result, lang)
     finally:
         with _lock:

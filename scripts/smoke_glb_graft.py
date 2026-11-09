@@ -26,7 +26,9 @@ After ``graft(name="garment_hair_hair_demo")``:
   see an assembled file).
 - ``garment_arrays(grafted)`` round-trips positions/uvs/normals/weights (+- 1e-6) and resolves every vertex's joints
   back to the same names; ``body_arrays`` of both files are identical (the garment node is not body).
-- A target without Spine2 raises KeyError naming ``mixamorig:Spine2``; a meshopt/draco-flagged target is refused;
+- A target without Spine2 raises KeyError naming ``mixamorig:Spine2``; joints the target lacks but no vertex
+  weights (> 0) map to index 0 with weight 0 (rows by hand in the code), a weighted one still raises KeyError;
+  a meshopt/draco-flagged target is refused;
   a WebP garment image adds ``EXT_texture_webp`` to ``extensionsUsed``; a second graft under the same name is
   refused.
 - ``static_arrays`` concatenates two primitives (indices of the second shifted by the first's vertex count 3).
@@ -234,6 +236,37 @@ def main():
         check(False, "graft: missing Spine2 raises KeyError")
     except KeyError as exc:
         check("mixamorig:Spine2" in str(exc), f"graft: KeyError names the missing joint ({exc})")
+    # A garment fitted on a base with extension bones the target lacks (the
+    # covered variant of a base body) keeps those joints in its list; only a
+    # joint with weight > 0 must exist. Joint list [Head, Spine2, ExtraTip,
+    # ExtraTip2]: vertex 0 names ExtraTip in slot 2 with weight 0, ExtraTip2
+    # is never referenced. By hand: JOINTS_0 rows 0/3 ([0, 1, 2, 0] / [1, 0, 0, 0])
+    # -> [6, 3, 0, 6] / [3, 6, 6, 6] (Head 6, Spine2 3, unused -> 0),
+    # WEIGHTS_0 row 0 unchanged (0.7, 0.3, 0, 0).
+    unused = garment()
+    unused.joint_names = [*unused.joint_names, "mixamorig:ExtraTip", "mixamorig:ExtraTip2"]
+    unused.joints = np.array([[0, 1, 2, 0], [0, 1, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
+    try:
+        loose = gm.graft(bare, unused, name=NAME, extras=EXTRAS)
+        pl = parse_glb(loose)
+        nl = next(n for n in pl["gltf"]["nodes"] if n.get("name") == NAME)
+        pr = pl["gltf"]["meshes"][nl["mesh"]]["primitives"][0]
+        JL = gm.accessor_array(pl, pr["attributes"]["JOINTS_0"]).astype(int)
+        WL = gm.accessor_array(pl, pr["attributes"]["WEIGHTS_0"])
+        check(JL[0].tolist() == [6, 3, 0, 6] and JL[3].tolist() == [3, 6, 6, 6]
+              and np.allclose(WL[0], [0.7, 0.3, 0, 0]),
+              f"graft: unweighted missing joints map to 0 with weight 0 ({JL[0].tolist()}, {WL[0].tolist()})")
+        check(validate_glb(loose, extension_names=ext)["ok"], "graft: file with unweighted extra joints validates")
+    except KeyError as exc:
+        check(False, f"graft: unweighted missing joints refused ({exc})")
+    weighted = garment()
+    weighted.joint_names = [*weighted.joint_names, "mixamorig:ExtraTip"]
+    weighted.joints = np.array([[0, 2, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
+    try:
+        gm.graft(bare, weighted, name=NAME, extras=EXTRAS)
+        check(False, "graft: a WEIGHTED missing joint raises KeyError")
+    except KeyError as exc:
+        check("mixamorig:ExtraTip" in str(exc), f"graft: KeyError names the weighted missing joint ({exc})")
     for flag in ("EXT_meshopt_compression", "KHR_draco_mesh_compression"):
         flagged, _ = body_fixture(extensions=[flag])
         try:

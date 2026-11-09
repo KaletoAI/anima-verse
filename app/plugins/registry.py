@@ -107,6 +107,10 @@ class RigSpec:
     freetext_clothing_gain: float = 1.0
     templates: Any = None
     controls: Optional[List[str]] = None
+    # Mesh detail that exists only while the slot is uncovered: the base body
+    # keeps a second model without these groups (``model3d/covered/``), and an
+    # outfit whose worn pieces cover the slot is built from that one.
+    exposed_only: bool = False
 
     @classmethod
     def parse(cls, raw, attributes=None):
@@ -239,6 +243,10 @@ class RigSpec:
             if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not math.isfinite(floor) or not 0 <= floor <= 1:
                 raise ValueError("rig.flatten_floor outside allowed range")
             spec.flatten_floor = float(floor)
+        exposed_only = raw.get("exposed_only", False)
+        if not isinstance(exposed_only, bool):
+            raise ValueError("rig.exposed_only must be a boolean")
+        spec.exposed_only = exposed_only
         return spec
 
 

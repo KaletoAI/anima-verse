@@ -412,6 +412,16 @@ def _clean_own_mesh(raw) -> bool:
     return raw is True
 
 
+def _clean_exposed_detail(raw) -> bool:
+    """``outfit_piece.exposed_detail``: a sheer piece — a body detail that
+    only exists while its slot is uncovered (a package rig declaring
+    ``exposed_only``) still shows through it, so an outfit model on the base
+    body keeps that detail although this piece covers the slot
+    (``base_body.outfit_variant``). Only a real ``true`` counts; never part
+    of a 2D key (``_render_relevant_fields``, outfit signature)."""
+    return raw is True
+
+
 def _clean_piece_lora(raw) -> Dict[str, Any]:
     """Normalize an outfit piece LoRA, at most one per piece.
 
@@ -601,6 +611,7 @@ def add_item(name: str,
             "outfit_types": _normalize_outfit_types(outfit_piece.get("outfit_types")),
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
             "own_mesh": _clean_own_mesh(outfit_piece.get("own_mesh")),
+            "exposed_detail": _clean_exposed_detail(outfit_piece.get("exposed_detail")),
         }
     if category == "garment" and garment:
         item["garment"] = _clean_garment(garment)
@@ -645,6 +656,22 @@ def _invalidate_renders_for_item(item_id: str) -> None:
         logger.debug("Render-Invalidierung fuer %s fehlgeschlagen: %s", item_id, e)
 
 
+def _exposed_detail_of(item: Optional[Dict[str, Any]]) -> bool:
+    return _clean_exposed_detail(((item or {}).get("outfit_piece") or {}).get("exposed_detail"))
+
+
+def _after_exposed_detail_change(item_id: str) -> None:
+    """``exposed_detail`` changes only the base-body OUTFIT MODELS of its
+    wearers (``base_body.after_piece_detail_change``), never a 2D render."""
+    try:
+        from app.core.motion_item_cache import invalidate
+        invalidate()
+        from app.core.base_body import after_piece_detail_change
+        after_piece_detail_change(item_id)
+    except Exception as e:  # noqa: BLE001 — a failed rebuild must not fail the save
+        logger.warning("Outfit rebuild after the exposed_detail change of %s failed: %s", item_id, e)
+
+
 def update_item(item_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a world or shared item; callers must be admin-only.
@@ -680,6 +707,7 @@ def update_item(item_id: str,
         # An outfit_piece update that does not name ``own_mesh`` (an older
         # client, a partial edit) keeps the stored flag.
         prev_own_mesh = _clean_own_mesh((item.get("outfit_piece") or {}).get("own_mesh"))
+        prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
         for key, value in updates.items():
             if key in allowed or _re_module.fullmatch(r"(?:name|description)_[a-z]{2,3}(?:-[A-Za-z0-9]+)*", key):
                 item[key] = value
@@ -704,6 +732,8 @@ def update_item(item_id: str,
                 "lora": _clean_piece_lora(op.get("lora")),
                 "own_mesh": (_clean_own_mesh(op.get("own_mesh")) if "own_mesh" in op
                              else prev_own_mesh),
+                "exposed_detail": (_clean_exposed_detail(op.get("exposed_detail")) if "exposed_detail" in op
+                                   else prev_exposed_detail),
             }
         else:
             item.pop("outfit_piece", None)
@@ -733,11 +763,14 @@ def update_item(item_id: str,
                 # The _shared flag is a runtime marker, not persisted data.
                 item.pop("_shared", None)
                 _before = _render_relevant_fields(item)
+                _detail_before = _exposed_detail_of(item)
                 shared[idx] = _apply_updates(item)
                 _save_shared_items(shared)
                 logger.info("Shared-Item aktualisiert: %s", item_id)
                 if _render_relevant_fields(shared[idx]) != _before:
                     _invalidate_renders_for_item(item_id)
+                if _exposed_detail_of(shared[idx]) != _detail_before:
+                    _after_exposed_detail_change(item_id)
                 return {**shared[idx], "_shared": True}
         return None
 
@@ -746,11 +779,14 @@ def update_item(item_id: str,
     for item in items:
         if item.get("id") == item_id:
             _before = _render_relevant_fields(item)
+            _detail_before = _exposed_detail_of(item)
             _apply_updates(item)
             _save_items(items)
             logger.info("Item aktualisiert: %s", item_id)
             if _render_relevant_fields(item) != _before:
                 _invalidate_renders_for_item(item_id)
+            if _exposed_detail_of(item) != _detail_before:
+                _after_exposed_detail_change(item_id)
             return item
     return None
 

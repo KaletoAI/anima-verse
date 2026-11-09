@@ -151,6 +151,39 @@ Expected, derived by hand from the brief:
     forced osig rebuild -> apply_script batches attached_part [part] then
     extension_bones [jiggle] (rebuilt once from the prerig copy, never on top
     of the base's bones), and the published image is still osig's atlas.
+[12] Exposed-only group (declarations [jiggle, tip pair_tip exposed_only,
+    covered_by [top]], exposed_only_slots -> [top]); a hand-made
+    covered/<bsig>.glb (seed 2.0, the base's [jiggle] state, source_sha256 =
+    sha256(prerig)):
+    (a) Demo wears dress (slot top, no exposed_detail) -> forced run: sidecar
+        base_variant covered, accessor bytes = the covered file's (seed 2.0),
+        image = osig's atlas, extension_rig fingerprint = jiggle_fp, NO
+        apply_script batch; retexture_proof face_texels_restored 0 with
+        face_texels_skipped "no face mask" (no face correction); current.
+    (b) update_item(dress, outfit_piece {..., exposed_detail: true}) -> stored
+        true, maybe_auto_generate_for_outfit asked for ["Demo"];
+        find_model3d(Demo, osig) None; outfit_info stale / DETAIL_CHANGED /
+        "detail_changed", model info stale_reason "detail_changed"; forced
+        run -> base_variant rigged, accessor bytes = the rigged base (seed
+        1.0), one batch extension_bones [jiggle, tip] (the copied [jiggle]
+        state no longer matches), atlas kept. A partial outfit_piece without
+        the key keeps true and asks nothing.
+    (c) rebuild_extension_rig(Demo, osig, force) (2.5) -> ok, noop False,
+        ONE worker call (build_outfit_model), base_variant rigged, batch
+        [jiggle, tip] from the prerig, atlas kept. Flag false -> asked again;
+        forced run -> covered.
+    (d) covered file deleted, _ensure_covered_variant stubbed off -> forced
+        run: base_variant rigged, covered_missing true, COVERED_MISSING in
+        view_warnings, and the model stays current (no rebuild loop).
+    (e) Forced run with the real _ensure_covered_variant: base extension rig
+        [jiggle, tip] (its state was [jiggle]), then the covered build
+        [jiggle]; covered sidecar source_sha256 = sha256(prerig),
+        groups_removed [tip], extension_rig groups [jiggle]; base sidecar
+        covered_variant.status built; outfit base_variant covered,
+        covered_missing false. A second rebuild_extension_rig(Demo, bsig):
+        no batch. outfit_cache_gc groups covered/<bsig>.glb with bsig.
+        The face routes resolve any selected signature to bsig
+        (_face_retexture_signature), model info face_signature = bsig.
 [9] DemoNoModel: model run -> ok False, error BASE_MODEL_MISSING, outfit
     status failed.
 [10] Not on the pipeline (DemoOld): its tpose pass renders with
@@ -493,6 +526,7 @@ def main() -> int:
             (model3d, "request_lod"): model3d.request_lod,
             (extension_rig, "rig_groups_for"): extension_rig.rig_groups_for,
             (extension_rig, "resolved_extension_groups"): extension_rig.resolved_extension_groups,
+            (extension_rig, "exposed_only_slots"): extension_rig.exposed_only_slots,
             (glb_delivery, "delivery_path"): glb_delivery.delivery_path,
             (character_module, "run_rembg"): character_module.run_rembg,
         }
@@ -828,6 +862,136 @@ def main() -> int:
             check("part batches", SCRIPT_CALLS, [("attached_part", ["part"]), ("extension_bones", ["jiggle"])])
             check("atlas kept through the rebuild", pixel(parts(model.read_bytes())[2]), colour_of(f"tpose_{osig}"))
             GROUPS["default"] = GROUPS["default"][1:]
+
+            # --- [12] covered variant ------------------------------------------------
+            print("[12] exposed-only group: covered variant vs exposed_detail")
+            tip = {"id": "tip", "op": "pair_tip", "params": {}, "chains": [], "depends_on": "",
+                   "exposed_only": True, "covered_by": ["top"]}
+            GROUPS["default"] = [GROUPS["default"][0], tip]
+            extension_rig.exposed_only_slots = lambda: ["top"]
+            covered_path = model_dir / "covered" / f"{bsig}.glb"
+            covered_path.parent.mkdir(exist_ok=True)
+            covered_bytes = make_glb(2.0, RIG, rig=True)
+            prerig_sha = hashlib.sha256((model_dir / "prerig" / f"{bsig}.glb").read_bytes()).hexdigest()
+            base_state = json.loads((model_dir / f"{bsig}.json").read_text())["extension_rig"]
+            covered_path.write_bytes(covered_bytes)
+            covered_path.with_suffix(".json").write_text(json.dumps({
+                "rig": "mixamo", "source_sha256": prerig_sha, "groups_removed": ["tip"],
+                "extension_rig": base_state, "blender": {"steps": ["normalize", "limb_weights"]},
+                "created_at": "2000-01-01T00:00:00+00:00"}))
+            # (a) dress covers top, exposed_detail unset -> covered variant:
+            # accessor bytes of the covered file (seed 2.0), the outfit atlas,
+            # its [jiggle] state copied (fingerprint = jiggle_fp) -> no batch.
+            SCRIPT_CALLS.clear()
+            result = model3d.generate_for_current_outfit("Demo", force=True)
+            meta12 = model3d._read_sidecar(model)
+            check("covered: ok", result.get("ok"), True)
+            check("covered: base_variant", meta12.get("base_variant"), "covered")
+            check("covered: accessor bytes of covered/<bsig>.glb", parts(model.read_bytes())[1],
+                  parts(covered_bytes)[1])
+            check("covered: atlas", pixel(parts(model.read_bytes())[2]), colour_of(f"tpose_{osig}"))
+            check("covered: copied state, no batch", (meta12["extension_rig"]["fingerprint"], SCRIPT_CALLS),
+                  (jiggle_fp, []))
+            check("covered: face texels skipped without a face correction",
+                  (meta12["retexture_proof"].get("face_texels_restored"),
+                   meta12["retexture_proof"].get("face_texels_skipped")), (0, "no face mask"))
+            check("covered: current", model3d.find_model3d("Demo", osig), model)
+            # (b) exposed_detail true (full outfit_piece, as the editor sends
+            # it) -> the wearer's rebuild is asked for; the stored model is
+            # stale (detail_changed); a rebuild uses the full base (seed 1.0)
+            # and rebuilds [jiggle, tip] from the prerig, atlas kept.
+            asked = []
+            auto_original = model3d.maybe_auto_generate_for_outfit
+            model3d.maybe_auto_generate_for_outfit = lambda name: asked.append(name) or True
+            try:
+                piece = {"slots": ["top"], "covers": [], "outfit_types": ["casual"], "exposed_detail": True}
+                updated = inventory.update_item(dress, {"outfit_piece": piece})
+                check("exposed_detail stored", updated["outfit_piece"].get("exposed_detail"), True)
+                check("rebuild asked for the wearer", asked, ["Demo"])
+                check("detail changed: not current", model3d.find_model3d("Demo", osig), None)
+                info12 = base_body.outfit_info("Demo")
+                check("detail changed: status", (info12["status"], info12["error"], info12["stale_reason"]),
+                      ("stale", base_body.DETAIL_CHANGED, "detail_changed"))
+                check("detail changed: model info", model3d.get_model3d_info("Demo")["model"].get("stale_reason"),
+                      "detail_changed")
+                SCRIPT_CALLS.clear()
+                result = model3d.generate_for_current_outfit("Demo", force=True)
+                meta12 = model3d._read_sidecar(model)
+                check("rigged: variant + bytes", (result.get("ok"), meta12.get("base_variant"),
+                                                  parts(model.read_bytes())[1]), (True, "rigged", parts(rigged)[1]))
+                check("rigged: tip rebuilt from the prerig", SCRIPT_CALLS, [("extension_bones", ["jiggle", "tip"])])
+                check("rigged: atlas kept", pixel(parts(model.read_bytes())[2]), colour_of(f"tpose_{osig}"))
+                # A partial update without the key keeps the flag; the same
+                # value asks for nothing.
+                asked.clear()
+                inventory.update_item(dress, {"outfit_piece": {"slots": ["top"], "covers": [], "outfit_types": ["casual"]}})
+                check("partial update keeps exposed_detail",
+                      inventory.get_item(dress)["outfit_piece"].get("exposed_detail"), True)
+                check("unchanged flag asks nothing", asked, [])
+                # (c) the forced extension rig of the OUTFIT (2.5) builds the
+                # outfit model anew (one worker call; rigged -> [jiggle, tip]
+                # from the prerig again), never from the outfit's own geometry.
+                SCRIPT_CALLS.clear()
+                calls_before = len(calls())
+                result = model3d.rebuild_extension_rig("Demo", osig, force=True)
+                meta12 = model3d._read_sidecar(model)
+                check("2.5: forced extension rig rebuilt the outfit",
+                      (result.get("ok"), result.get("noop"), len(calls()) - calls_before,
+                       meta12.get("base_variant"), SCRIPT_CALLS),
+                      (True, False, 1, "rigged", [("extension_bones", ["jiggle", "tip"])]))
+                check("2.5: atlas kept", pixel(parts(model.read_bytes())[2]), colour_of(f"tpose_{osig}"))
+                inventory.update_item(dress, {"outfit_piece": {**piece, "exposed_detail": False}})
+                check("flag off asks again", asked, ["Demo"])
+                result = model3d.generate_for_current_outfit("Demo", force=True)
+                check("flag off: covered again", (result.get("ok"), model3d._read_sidecar(model).get("base_variant")),
+                      (True, "covered"))
+            finally:
+                model3d.maybe_auto_generate_for_outfit = auto_original
+            # (d) covered variant gone and not rebuildable -> full base with the
+            # warning, covered_missing; that model stays current (no rebuild
+            # loop) until a newer covered variant exists.
+            covered_path.unlink()
+            covered_path.with_suffix(".json").unlink()
+            ensure_original = model3d._ensure_covered_variant
+            model3d._ensure_covered_variant = lambda name: None
+            try:
+                result = model3d.generate_for_current_outfit("Demo", force=True)
+            finally:
+                model3d._ensure_covered_variant = ensure_original
+            meta12 = model3d._read_sidecar(model)
+            check("fallback: rigged + warning", (result.get("ok"), meta12.get("base_variant"),
+                                                 meta12.get("covered_missing"),
+                                                 base_body.COVERED_MISSING in meta12.get("view_warnings", [])),
+                  (True, "rigged", True, True))
+            check("fallback: still current", model3d.find_model3d("Demo", osig), model)
+            # (e) the next outfit run prepares the covered variant through the
+            # base's extension rig: base [jiggle, tip] (its state was [jiggle]),
+            # then the covered build [jiggle]; the outfit copies its state.
+            SCRIPT_CALLS.clear()
+            result = model3d.generate_for_current_outfit("Demo", force=True)
+            meta12 = model3d._read_sidecar(model)
+            cmeta = model3d._read_sidecar(covered_path)
+            check("ensure: batches", SCRIPT_CALLS, [("extension_bones", ["jiggle", "tip"]),
+                                                     ("extension_bones", ["jiggle"])])
+            check("ensure: covered sidecar", (covered_path.is_file(), cmeta.get("source_sha256"),
+                                               cmeta.get("groups_removed"), cmeta["extension_rig"]["groups"]),
+                  (True, prerig_sha, ["tip"], ["jiggle"]))
+            check("ensure: base records the variant",
+                  model3d._read_sidecar(model_dir / f"{bsig}.glb").get("covered_variant", {}).get("status"), "built")
+            check("ensure: outfit on the covered variant", (result.get("ok"), meta12.get("base_variant"),
+                                                            meta12.get("covered_missing")), (True, "covered", False))
+            SCRIPT_CALLS.clear()
+            model3d.rebuild_extension_rig("Demo", bsig)
+            check("covered variant current -> no rebuild", SCRIPT_CALLS, [])
+            from app.core import outfit_cache_gc
+            gc_files = [f.relative_to(model_dir).as_posix() for f in outfit_cache_gc._mesh_files("Demo").get(bsig, [])]
+            check("GC groups covered/ with its base", f"covered/{bsig}.glb" in gc_files, True)
+            # Face (1.1): on the pipeline every face route acts on the base.
+            from app.routes.characters import _face_retexture_signature
+            check("face routes act on the base", _face_retexture_signature("Demo", osig), bsig)
+            check("model info face signature", model3d.get_model3d_info("Demo")["model"].get("face_signature"), bsig)
+            GROUPS["default"] = GROUPS["default"][:1]
+            extension_rig.exposed_only_slots = originals[(extension_rig, "exposed_only_slots")]
 
             # --- [9] no base model ---------------------------------------------------
             print("[9] base model missing")

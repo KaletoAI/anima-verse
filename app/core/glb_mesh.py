@@ -393,8 +393,8 @@ def _check_colors(g: GarmentMesh, n: int) -> Optional[np.ndarray]:
 
 def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -> bytes:
     """``target_glb`` + one skinned garment node ``name`` (see the module docstring). Raises ``KeyError`` naming a
-    garment joint the target skin lacks, ``ValueError`` for compressed geometry, a name already present or broken
-    garment arrays."""
+    WEIGHTED garment joint the target skin lacks (a listed joint without weight > 0 maps to target index 0 with
+    weight 0), ``ValueError`` for compressed geometry, a name already present or broken garment arrays."""
     from app.core.rig_contract import norm_bone_name
     if not name or not isinstance(extras, dict):
         raise ValueError("graft needs a node name and an extras dict")
@@ -413,12 +413,24 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -
     lookup: Dict[str, int] = {}
     for i, joint in enumerate(target_names):
         lookup.setdefault(norm_bone_name(joint), i)
+    # Only a joint that carries weight somewhere in the garment must exist in
+    # the target: a garment fitted on a skin with extra joints (e.g. a pack's
+    # tip group on the bare base) still lists them, unweighted. Such an unused
+    # joint is remapped to target index 0 and its influences get weight 0.
+    weighted = set(np.unique(J[W > 0]).tolist())
     remap = []
-    for joint in garment.joint_names:
+    unused = []
+    for index, joint in enumerate(garment.joint_names):
         key = norm_bone_name(str(joint))
-        if key not in lookup:
+        if key in lookup:
+            remap.append(lookup[key])
+        elif index in weighted:
             raise KeyError(f"Garment joint {joint} is missing from the target skin")
-        remap.append(lookup[key])
+        else:
+            remap.append(0)
+            unused.append(index)
+    if unused:
+        W = np.where(np.isin(J, unused), 0.0, W)
     J = np.asarray(remap, np.int64)[J]
     if J.max() > 0xFFFF:
         raise ValueError("Joint index exceeds 16 bits")

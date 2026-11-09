@@ -4173,6 +4173,12 @@
     "Wait for the running hair job": "Warte auf den laufenden Haar-Auftrag",
     "3D mesh": "3D-Mesh",
     "Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.": "Figuren mit Basiskörper-Pipeline bekommen dieses Teil als eigenes, angepasstes 3D-Mesh, statt es auf den Körper zu malen. Gilt für jede Trägerin und jeden Träger; 2D-Bilder bleiben unverändert.",
-    "Own 3D mesh (base-body characters)": "Eigenes 3D-Mesh (Basiskörper-Figuren)"
+    "Own 3D mesh (base-body characters)": "Eigenes 3D-Mesh (Basiskörper-Figuren)",
+    "Face applies to the base body; outfits are rebuilt.": "Das Gesicht gilt für den Grundkörper; Outfits werden neu gebaut.",
+    "Built for another body detail under the clothing — rebuild it": "Für ein anderes Körperdetail unter der Kleidung gebaut — neu bauen",
+    "The face projection left dark texels in the face (a black eye socket?) — check the comparison image; a retry with another yaw did not fix it": "Die Gesichtsprojektion hat dunkle Texel im Gesicht hinterlassen (eine schwarze Augenhöhle?) — Vergleichsbild prüfen; ein zweiter Versuch mit anderer Drehung hat es nicht behoben",
+    "Body shape under this piece": "Körperform unter diesem Teil",
+    "Base-body characters only. By default a body detail under this piece is left out of the 3D model; tick it for sheer pieces the detail shows through. Changing it rebuilds the wearers' outfit models; 2D images stay unchanged.": "Nur Figuren mit Basiskörper. Standardmäßig bleibt ein Körperdetail unter diesem Teil aus dem 3D-Modell weg; für durchscheinende Teile, durch die das Detail sichtbar ist, anhaken. Eine Änderung baut die Outfit-Modelle der Träger neu; 2D-Bilder bleiben unverändert.",
+    "Shows detail through (sheer)": "Detail scheint durch (durchsichtig)"
   }
 }

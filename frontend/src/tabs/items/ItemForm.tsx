@@ -29,6 +29,40 @@ function MotionDampingInput({ value, onCommit }: { value: number; onCommit: (val
     }} />
 }
 
+// The clothing slots that hide a body detail some package declares
+// "exposed_only" — read from the server, never hardcoded here.
+let exposedDetailSlots: Promise<string[]> | null = null
+function loadExposedDetailSlots(): Promise<string[]> {
+  exposedDetailSlots ??= apiGet<{ slots?: string[] }>('/inventory/exposed-detail-slots')
+    .then(r => r.slots ?? [])
+    .catch(() => { exposedDetailSlots = null; return [] })
+  return exposedDetailSlots
+}
+
+/** "Body shape under this piece": how the base body looks under a worn
+ *  piece in 3D. Holds the sheer switch now; further controls go here. */
+function BodyUnderPieceFields({ draft, onUpdate }: {
+  draft: DraftItem
+  onUpdate: <K extends keyof DraftItem>(key: K, value: DraftItem[K]) => void
+}) {
+  const { t } = useI18n()
+  const [slots, setSlots] = useState<string[]>([])
+  useEffect(() => { let live = true; loadExposedDetailSlots().then(s => { if (live) setSlots(s) }); return () => { live = false } }, [])
+  const covering = new Set([...draft.slots, ...draft.covers, ...draft.partially_covers])
+  const showsDetail = slots.some(slot => covering.has(slot))
+  if (!showsDetail) return null
+  return (
+    <Field label={t('Body shape under this piece')}
+      hint={t("Base-body characters only. By default a body detail under this piece is left out of the 3D model; tick it for sheer pieces the detail shows through. Changing it rebuilds the wearers' outfit models; 2D images stay unchanged.")}>
+      <label className="ga-form-check" style={{ marginTop: 6 }}>
+        <input type="checkbox" checked={draft.exposed_detail}
+          onChange={(e) => onUpdate('exposed_detail', e.target.checked)} />
+        {t('Shows detail through (sheer)')}
+      </label>
+    </Field>
+  )
+}
+
 interface TagPickerProps {
   options: string[]
   values: string[]
@@ -530,6 +564,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           onToggleListItem={onToggleListItem}
         />
       ) : null}
+      {isOutfit && <BodyUnderPieceFields draft={draft} onUpdate={onUpdate} />}
 
       <PassiveBonusesEditor rows={draft.bonus_rows} when={draft.bonus_when}
         onRows={rows => onUpdate('bonus_rows', rows)} onWhen={when => onUpdate('bonus_when', when)} />

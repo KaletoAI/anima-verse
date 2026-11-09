@@ -19,6 +19,9 @@ by +1 U) and fully transparent faces fail. Winding reversal and replacing a seco
 012 with a second 000 fail despite identical unordered triangle sets. With
 body corners (10,4),(12,4),(10,6), the four-pixel ring leaves (10,4) blue and
 (9,4) red: body coverage takes precedence only outside the face triangles.
+Every bake keeps its face_mask (= the replaced texels) and measures the
+near-black share of the undilated face coverage (15 texels; 1/15 with the
+transparent hub texel, whose base blue stays — luma 30.9 < 38.25).
 """
 import copy
 import io
@@ -241,8 +244,17 @@ def main():
         if transparent:
             expected[4,4,:3] = (10,20,200)
         assert np.array_equal(np.asarray(image), expected)
-        assert info == {'face_primitives': 1, 'face_triangles': 1,
-                        'texels_replaced': 38 if transparent else 39, 'dilate_px': 1}
+        from app.core.face_retexture import face_mask_array
+        mask = face_mask_array(info, 16, 16)
+        assert mask is not None and int(mask.sum()) == info['texels_replaced'], 'face_mask = the replaced texels'
+        assert np.array_equal(mask, np.any(np.asarray(image) != np.asarray(Image.open(io.BytesIO(png((10, 20, 200, 123))))), axis=2))
+        # Coverage = the undilated face triangle, rows y 4..8 of lengths
+        # 5,4,3,2,1 = 15 texels; the hub red (240,10,20) has luma 59.6, the
+        # base blue (10,20,200) left at the transparent (4,4) luma 30.9 <
+        # 38.25 -> 1 of 15 near-black.
+        assert {k: v for k, v in info.items() if k != 'face_mask'} == {
+            'face_primitives': 1, 'face_triangles': 1, 'texels_replaced': 38 if transparent else 39,
+            'dilate_px': 1, 'face_coverage_texels': 15, 'dark_share': round(1 / 15, 6) if transparent else 0.0}, info
         assert face_texture_preserved(baked, baked)
     baked, info = bake_face_texture(source, glb(*fixture(True)))
     assert info['dilate_px'] == 4

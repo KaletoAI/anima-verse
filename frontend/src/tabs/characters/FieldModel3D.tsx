@@ -105,7 +105,7 @@ interface Model3DInfo {
     landmark_fallback?: string[]
     clips?: Record<string, { stretch_p999: number; contact_err_max: number; tail_min_z: number; ik_unreachable: number }>
   }
-  face_retexture?: { photo?: { balance: number; skin_recolor?: number | { status: string; reason: string }; tone_match?: number; brightness: number; applied_on?: 'hub' | 'local' | 'none'; reason?: string }; reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture?: { photo?: { balance: number; skin_recolor?: number | { status: string; reason: string }; tone_match?: number; brightness: number; applied_on?: 'hub' | 'local' | 'none'; reason?: string }; reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; dark_gate?: { ok?: boolean; retried?: boolean; retry_yaw?: number; chosen?: string; dark_share?: number; photo_dark_share?: number; warning?: string }; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
@@ -119,7 +119,10 @@ interface Model3DInfo {
   /** Base-body pipeline: the served file was built on an older base body
    *  (or before the pipeline) — shown with all its details, plus a hint. */
   stale_base?: boolean
-  stale_reason?: 'older_base' | 'before_pipeline'
+  stale_reason?: 'older_base' | 'before_pipeline' | 'detail_changed'
+  /** Base-body pipeline: the face belongs to the base body — the face
+   *  dialog and its status act on this signature. */
+  face_signature?: string
   format?: string
   rig?: string
   rig_error?: string
@@ -401,7 +404,7 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }
 
-  const faceSignature = st.signature || ''
+  const faceSignature = st.model?.face_signature || st.signature || ''
   const hubPhotoControls = faceCheck?.photo_controls === 'hub'
   const photoPreviewKey = JSON.stringify([faceOpen, enc, faceSignature, faceReference, facePhoto, faceBackend, hubPhotoControls])
   const photoPreview = photoPreviewResult.key === photoPreviewKey ? photoPreviewResult : {}
@@ -981,7 +984,9 @@ export function FieldModel3D({ character }: { character: string }) {
             <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
               {model.stale_reason === 'before_pipeline'
                 ? t('Built before the base body pipeline — rebuild it')
-                : t('Built on an older base body — rebuild it')}
+                : model.stale_reason === 'detail_changed'
+                  ? t('Built for another body detail under the clothing — rebuild it')
+                  : t('Built on an older base body — rebuild it')}
             </div>
           ) : null}
           {model.match === 'nearest' ? (
@@ -1100,6 +1105,10 @@ export function FieldModel3D({ character }: { character: string }) {
             ? `${t('Reference upscaled')} · ${model.face_retexture.upscale.backend || ''} · ${model.face_retexture.upscale.in?.join('×')} → ${model.face_retexture.upscale.out?.join('×')}${model.face_retexture.upscale.cached ? ` · ${t('Cached')}` : ''}`
             : model.face_retexture.upscale.status === 'skipped' ? t('Reference upscale skipped — already large enough') : t('Reference upscale off')}
       </p> : null}
+      {model?.face_retexture?.dark_gate?.warning ? <p className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+        {t('The face projection left dark texels in the face (a black eye socket?) — check the comparison image; a retry with another yaw did not fix it')}
+        {typeof model.face_retexture.dark_gate.dark_share === 'number' ? ` · ${(model.face_retexture.dark_gate.dark_share * 100).toFixed(1)} %` : ''}
+      </p> : null}
       {model?.face_retexture?.face_texture_lost ? <p className="ga-hint" role="status">
         {t('The rigger changed the baked face texture — the face correction may be lost. Revert restores the previous model.')}
       </p> : null}
@@ -1112,6 +1121,7 @@ export function FieldModel3D({ character }: { character: string }) {
             <div className="ga-modal-header">{t('Face retexture')}</div>
             <div className="ga-modal-body ga-form">
               <p className="ga-hint">{t('Corrects the face texture from the original photo, then rebuilds the rig and derived meshes. Each run starts from the original unrigged mesh.')}</p>
+              {model?.face_signature ? <p className="ga-hint" role="status">{t('Face applies to the base body; outfits are rebuilt.')}</p> : null}
               <fieldset className="ga-fieldset">
                 <legend className="ga-fieldset-title">{t('Source check')}</legend>
                 <Field label={t('Reference image')}>

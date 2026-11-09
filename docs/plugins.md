@@ -385,6 +385,20 @@ null value only; it does not match `""` or the literal string `"none"`. Both
 operands use the same normalization; other scalars compare as trimmed lowercase
 strings.
 
+`exposed_only: true` (boolean, default false) marks a rig group whose detail
+exists only while its slot is uncovered. A base body (`model_pipeline:
+base_body`) then also gets a **covered variant** `model3d/covered/<bsig>.glb`,
+built from the same clean prerig source with every other group identical
+(same colour markers, same placement) and without the `exposed_only` groups.
+An outfit model is painted onto the covered variant when ANY worn piece covers
+a slot of the group's `covered_by` (its slots, `covers` or `partially_covers`)
+and does not set `outfit_piece.exposed_detail: true` (the item editor's "Shows
+detail through (sheer)", offered only for pieces touching such a slot —
+`GET /inventory/exposed-detail-slots`); otherwise onto the full base. The
+outfit sidecar records `base_variant` (`covered`/`rigged`); a piece whose flag
+changes makes its wearers' outfit models stale (`stale_reason:
+detail_changed`). 2D renders are unaffected. The core never names the group.
+
 max_deg is the whole-chain dynamic swing budget in degrees, applied independently to each root chain of an appendage. For links ordered root to tip, let span_j be the immutable bind length (joint to joint; twice the centroid lever for the final link) and R_j the sum of spans from link j to the tip. Each link receives share_j = R_j^2*span_j / sum_k(R_k^2*span_k) and a dynamic limit of max_deg*share_j. Equal spans yield 9:4:1 /14 for three links and 25:16:9:4:1 /55 for five. Shares come from bind geometry, never per frame, and govern soft swing saturation, the extreme-anchor guard and dynamic translation clamping. A one-link chain has share 1. Static sag_max_deg and spill_max_deg are unchanged.
 
 `flatten`, `stretch`, `spill` and `translate` are finite in [0,1], default 0.

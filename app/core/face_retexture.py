@@ -562,16 +562,110 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
         raise ValueError('Baked mesh exceeds the 64 MB rig upload limit')
     if replacement_masks is not None:
         replacement_masks.append(replaced)
-    recolor_meta = {}
+    import base64
+    import zlib
+    # The FACE-only mask is retained for later re-rigs (diffing against the
+    # old atlas would include every recoloured body texel) and for the
+    # outfit models painted onto a base body, which put these texels back
+    # (``base_body.restore_face_texels``) — so it is kept for every bake.
+    recolor_meta = {'face_mask': base64.b64encode(zlib.compress(np.packbits(replaced).tobytes())).decode('ascii')}
     if body_recolored:
-        # Retain the FACE-only mask for later re-rigs, where diffing against
-        # the old atlas would incorrectly include every recoloured body texel.
-        import base64
-        import zlib
-        recolor_meta = {'body_recolored': True, 'body_texels_recolored': body_texels_recolored,
-                        'face_mask': base64.b64encode(zlib.compress(np.packbits(replaced).tobytes())).decode('ascii')}
+        recolor_meta.update(body_recolored=True, body_texels_recolored=body_texels_recolored)
+    dark = int(np.count_nonzero(_near_black(composite[..., :3])[all_face_covered]))
+    covered_texels = int(all_face_covered.sum())
     return baked, {**recolor_meta, 'face_primitives': len(faces), 'face_triangles': sum(len(t) for _, t, _ in faces),
-                   'texels_replaced': int(replaced.sum()), 'dilate_px': dilate_px}
+                   'texels_replaced': int(replaced.sum()), 'dilate_px': dilate_px,
+                   'face_coverage_texels': covered_texels,
+                   'dark_share': round(dark / covered_texels, 6) if covered_texels else 0.0}
+
+
+# --- The "black eye" gate -----------------------------------------------------
+#
+# A face projection that leaves texels of the mesh's own eye cavity (black in
+# a UniForge albedo) shows as a black eye. Measured on the baked atlas inside
+# the face triangles' coverage (no dilation ring): the share of near-black
+# texels (Rec. 709 luma < DARK_LUMA = 15 % of 255), minus the same share in the
+# reference photo (its subject: not near-white after the flatten onto white,
+# eroded by 3 px to drop the cut-out edge). The photo term keeps a darker skin
+# tone or dark brows from failing the gate.
+#
+# Calibrated on Kira's two base runs (2026-11-09, same face view, same params
+# strength 1 / feather 0.18 / res 768 / yaw 0, read-only):
+#   good  base5c5f3624  1524 face triangles, 22 201 coverage texels, dark 1.12 %
+#   bad   base233fdd2a  1454 face triangles, 23 405 coverage texels, dark 2.87 %
+#                       (one eye socket left black)
+#   face_view.png       subject dark share 0.36 % (photo_dark_share of the
+#                       flattened photo)
+# -> excess 0.76 vs 2.51 percentage points; DARK_EXCESS_MAX 1.5 pp sits
+# between them (about the geometric mean, 1.38). The coverage here was
+# rebuilt from the stored face mask (triangles whose UV centroid lies in
+# it), the hub's face primitive itself is not retained. The texel mask of the stored
+# face_mask instead (dilation ring included) gave 4.85 % vs 6.39 % — too
+# close, the ring catches black atlas padding — so the gate uses the
+# coverage.
+DARK_LUMA = 0.15 * 255
+DARK_EXCESS_MAX = 0.015
+# The retry turns the projection camera by this many degrees (once).
+DARK_RETRY_YAW = 3.0
+
+
+def _near_black(rgb):
+    """Bool array: Rec. 709 luma of an (…, 3) uint8 array below ``DARK_LUMA``."""
+    import numpy as np
+    rgb = np.asarray(rgb, dtype=np.float32)
+    return (0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]) < DARK_LUMA
+
+
+def photo_dark_share(image: bytes) -> float:
+    """Near-black share (``_near_black``) of the reference photo's subject:
+    the pixels not near-white (any channel < 245 after the flatten onto
+    white), eroded by 3 px. 0 for an empty subject."""
+    import numpy as np
+    from PIL import ImageFilter
+    with Image.open(io.BytesIO(image)) as decoded:
+        rgb = decoded.convert('RGB')
+    px = np.asarray(rgb)
+    subject = Image.fromarray(((px < 245).any(axis=2) * 255).astype('uint8'))
+    subject = np.asarray(subject.filter(ImageFilter.MinFilter(7))) > 0
+    if not subject.any():
+        return 0.0
+    return float(_near_black(px)[subject].mean())
+
+
+def dark_face_gate(baked: dict, photo: bytes) -> dict:
+    """``{ok, dark_share, photo_dark_share, excess, limit}`` of one bake
+    (``bake_face_texture``'s meta) against its reference photo: fails when
+    the face coverage is ``DARK_EXCESS_MAX`` darker than the photo. A bake
+    without the measurement (older record) passes."""
+    share = baked.get('dark_share')
+    if share is None:
+        return {'ok': True, 'skipped': 'not measured'}
+    try:
+        reference = photo_dark_share(photo)
+    except (OSError, ValueError, Image.DecompressionBombError):
+        reference = 0.0
+    excess = float(share) - reference
+    return {'ok': excess <= DARK_EXCESS_MAX, 'dark_share': round(float(share), 6),
+            'photo_dark_share': round(reference, 6), 'excess': round(excess, 6), 'limit': DARK_EXCESS_MAX}
+
+
+def face_mask_array(bake_meta: dict, width: int, height: int):
+    """The stored face mask (``face_mask`` of a bake) as an (height, width)
+    bool array, or None when there is none or it does not have that size."""
+    import base64
+    import zlib
+    import numpy as np
+    raw = (bake_meta or {}).get('face_mask')
+    if not raw:
+        return None
+    try:
+        size = (width * height + 7) // 8
+        packed = zlib.decompressobj().decompress(base64.b64decode(raw, validate=True), size + 1)
+    except (ValueError, zlib.error):
+        return None
+    if len(packed) != size:
+        return None
+    return np.unpackbits(np.frombuffer(packed, dtype=np.uint8))[:width * height].reshape(height, width).astype(bool)
 
 
 def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,

@@ -841,6 +841,9 @@ BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
 DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
 OLDER_BASE = "Built on an older base body"
 BEFORE_PIPELINE = "Built before the base body pipeline"
+DETAIL_CHANGED = "Built for another body detail under the clothing"
+COVERED_MISSING = ("The base body has no current covered variant — the outfit was built from the full base; "
+                   "rebuild the base body's extension bones")
 
 
 def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
@@ -988,6 +991,72 @@ def built_on_current_base(meta: Dict[str, Any], base: Tuple[str, str]) -> bool:
     """Whether an outfit model's sidecar names the current base body."""
     return (meta.get("base_signature") == base[0]
             and meta.get("base_model_sha256") == base[1])
+
+
+def outfit_variant(character_name: str, pieces: Optional[Dict[str, str]], *,
+                   profile: Optional[Dict[str, Any]] = None) -> str:
+    """Which base model an outfit of ``pieces`` (``{clothing slot: item
+    id}``) is built from: ``"covered"`` (``model3d/covered/<bsig>.glb``,
+    without the ``exposed_only`` extension groups) when a worn piece hides
+    them (``extension_rig.hides_exposed_detail``: it covers their slot and
+    does not set ``outfit_piece.exposed_detail``), else ``"rigged"``."""
+    from app.core.extension_rig import exposed_only_slots, hides_exposed_detail, rig_groups_for
+    from app.core.motion_item_cache import item_snapshot
+    if not pieces:
+        return "rigged"
+    # Cheap first pass (this runs inside model lookups): without any piece
+    # hiding a slot of ANY package's exposed-only rig, no profile is read.
+    slots = exposed_only_slots()
+    items = item_snapshot()
+    if not slots or not hides_exposed_detail([{"exposed_only": True, "covered_by": slots}], pieces, items):
+        return "rigged"
+    profile = _profile_of(character_name, profile)
+    groups = rig_groups_for(character_name, profile=profile, mesh_variant="")
+    return "covered" if hides_exposed_detail(groups, pieces, items) else "rigged"
+
+
+def variant_current(character_name: str, meta: Dict[str, Any], *,
+                    profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a pipeline outfit model was built from the base model its
+    pieces call for now (``outfit_variant``). A sidecar without
+    ``base_variant`` was built from the full base (``"rigged"``); an
+    undressed combination always is. A build that wanted the covered variant
+    but found none (``covered_missing``) stays current until a covered
+    variant newer than it exists — no rebuild on every trigger while the
+    base has none."""
+    wanted = ("rigged" if meta.get("dressed") is False
+              else outfit_variant(character_name, meta.get("pieces") or {}, profile=profile))
+    built = meta.get("base_variant") or "rigged"
+    if built == wanted:
+        return True
+    if wanted == "covered" and meta.get("covered_missing") and meta.get("base_signature"):
+        from app.core.model3d import COVERED_DIR, _read_sidecar, get_model3d_dir
+        covered = get_model3d_dir(character_name) / COVERED_DIR / f"{meta['base_signature']}.glb"
+        made = _read_sidecar(covered).get("created_at") if covered.is_file() else None
+        return not (made and made > str(meta.get("created_at") or ""))
+    return False
+
+
+def after_piece_detail_change(item_id: str) -> List[str]:
+    """A piece's ``exposed_detail`` changed: every character on the pipeline
+    wearing it gets its outfit model rebuilt (``variant_current`` now calls
+    the stored one stale; ``model3d.maybe_auto_generate_for_outfit``). 2D
+    renders stay. Returns the characters whose rebuild was asked for."""
+    from app.core import model3d
+    from app.models.character import get_character_profile, list_available_characters
+    started = []
+    for name in list_available_characters():
+        try:
+            profile = get_character_profile(name) or {}
+            if item_id not in (profile.get("equipped_pieces") or {}).values():
+                continue
+            if not is_base_pipeline(name, profile=profile):
+                continue
+            model3d.maybe_auto_generate_for_outfit(name)
+            started.append(name)
+        except Exception as e:  # noqa: BLE001 — one character never blocks the rest
+            logger.warning("Outfit rebuild after a detail change failed for %s: %s", name, e)
+    return started
 
 
 def back_draft_prompt(character_name: str, *,
@@ -1544,6 +1613,48 @@ def replace_base_color(glb: bytes, image: bytes, mime: str) -> bytes:
             + struct.pack("<I4s", len(packed), b"BIN\0") + bytes(packed))
 
 
+def restore_face_texels(atlas: bytes, atlas_mime: str, base_image: bytes,
+                        base_meta: Dict[str, Any]) -> Tuple[bytes, str, Dict[str, Any]]:
+    """Put the base model's face back into a retextured outfit atlas.
+
+    The dressed front is an image edit, and the face may drift in it; the
+    worker would then paint that drift over the corrected face. Every texel
+    of the base's face mask (``face_retexture.baked.face_mask``, the texels
+    the face bake replaced) is copied from the base colour ``base_image``
+    into ``atlas`` (both decoded as RGBA). Returns ``(bytes, mime, record)``:
+    the atlas re-encoded as PNG when a texel changed (else the input
+    unchanged) and ``{"face_texels_restored": <texels that differed>,
+    "face_mask_texels": <mask size>}`` — or ``{"face_texels_restored": 0,
+    "face_texels_skipped": <reason>}`` without a usable mask (no face
+    correction, a mask of another size)."""
+    import io
+    import numpy as np
+    from PIL import Image
+    from app.core.face_retexture import face_mask_array
+    face = (base_meta.get("face_retexture") or {})
+    baked = face.get("baked") or {}
+    if face.get("status") != "applied" or not baked.get("face_mask"):
+        return atlas, atlas_mime, {"face_texels_restored": 0, "face_texels_skipped": "no face mask"}
+    with Image.open(io.BytesIO(base_image)) as decoded:
+        base_px = np.asarray(decoded.convert("RGBA"))
+    with Image.open(io.BytesIO(atlas)) as decoded:
+        atlas_px = np.asarray(decoded.convert("RGBA")).copy()
+    height, width = base_px.shape[:2]
+    mask = face_mask_array(baked, width, height)
+    if mask is None or atlas_px.shape != base_px.shape:
+        return atlas, atlas_mime, {"face_texels_restored": 0,
+                                   "face_texels_skipped": "face mask does not match the atlas size"}
+    differs = mask & np.any(atlas_px != base_px, axis=2)
+    count = int(differs.sum())
+    record = {"face_texels_restored": count, "face_mask_texels": int(mask.sum())}
+    if not count:
+        return atlas, atlas_mime, record
+    atlas_px[mask] = base_px[mask]
+    out = io.BytesIO()
+    Image.fromarray(atlas_px).save(out, "PNG")
+    return out.getvalue(), "image/png", record
+
+
 # --- The outfit model -------------------------------------------------------
 
 class OutfitError(RuntimeError):
@@ -1556,14 +1667,16 @@ _BASE_ONLY_META = ("base", "created_at", "signature", "source", "lod_error", "di
                    "rig_error", "source_image", "source_image_sha256", "view_images",
                    "view_images_sha256", "job_id", "source_filename", "pieces", "items",
                    "mesh_variant", "refined", "retexture_proof", "base_signature",
-                   "base_model_sha256", "dressed")
+                   "base_model_sha256", "dressed", "covered_variant", "base_variant")
 
 
 def _snapshot_base_model(character_name: str, bsig: str) -> Dict[str, Any]:
     """The current base model's files, read under the publication lock of
     the REAL model directory (the outfit run is staged on its own
     signature): rigged GLB + sidecar, the unrigged checkpoint, the clean
-    prerig source + sidecar when it exists."""
+    prerig source + sidecar when it exists, and the covered variant
+    (``model3d/covered/<bsig>.glb`` + sidecar) when it was built from THAT
+    prerig source (``source_sha256``) — else ``covered`` is None."""
     from app.core.keyed_lock import keyed_lock
     from app.core.model3d import _read_sidecar
     from app.models.character import get_character_dir
@@ -1577,9 +1690,15 @@ def _snapshot_base_model(character_name: str, bsig: str) -> Dict[str, Any]:
         if not unrigged.is_file():
             raise OutfitError("Base body model has no unrigged source — regenerate the base model")
         prerig = directory / "prerig" / f"{bsig}.glb"
+        prerig_bytes = prerig.read_bytes() if prerig.is_file() else None
+        covered_path = directory / "covered" / f"{bsig}.glb"
+        covered_meta = _read_sidecar(covered_path) if covered_path.is_file() else {}
+        covered = (covered_path.read_bytes() if prerig_bytes is not None and covered_meta.get("source_sha256")
+                   == hashlib.sha256(prerig_bytes).hexdigest() else None)
         return {"rigged": rigged.read_bytes(), "meta": meta, "unrigged": unrigged.read_bytes(),
-                "prerig": prerig.read_bytes() if prerig.is_file() else None,
-                "prerig_meta": _read_sidecar(prerig) if prerig.is_file() else {}}
+                "prerig": prerig_bytes,
+                "prerig_meta": _read_sidecar(prerig) if prerig.is_file() else {},
+                "covered": covered, "covered_meta": covered_meta if covered is not None else {}}
 
 
 def _guard_dressed_views(character_name: str, signature: str, bsig: str,
@@ -1666,14 +1785,22 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
     out with a warning; a turned front fails the build); the per-view
     record and the warnings go into the sidecar (``view_guard``,
     ``view_warnings``). The worker gets the unrigged geometry carrying the rigged base's CURRENT
-    base-colour image (same UV layout) and writes the dressed GLB; its base
-    colour goes into a copy of the rigged base GLB (and of its prerig
-    source). An undressed combination is the base copy without a worker
-    run. Then the usual post-steps: texture re-encode, the extension rig
-    (``model3d._auto_extension_rig`` — the copied base state makes it a
-    no-op unless this outfit's ``mesh_variant`` declares other groups, e.g.
-    anatomy parts; then every group is rebuilt once from the clean prerig
-    copy, never on top of the base's extension bones), measurement,
+    base-colour image (same UV layout) and writes the dressed GLB; the base's
+    face texels are put back into its atlas (``restore_face_texels``, proof
+    ``face_texels_restored``) and that atlas goes into a copy of the base
+    model the outfit calls for (``outfit_variant``): the rigged base, or its
+    covered variant ``model3d/covered/<bsig>.glb`` without the exposed-only
+    extension groups when a worn piece hides them (its own extension state
+    is copied; a missing or outdated variant falls back to the rigged base
+    with the warning ``COVERED_MISSING``). Sidecar ``base_variant``. An
+    undressed combination is the rigged base copy without a worker run.
+    Then the usual post-steps: texture re-encode, the extension rig
+    (``model3d._auto_extension_rig`` — the copied state makes it a no-op
+    unless this outfit's ``mesh_variant`` declares other groups, e.g.
+    anatomy parts; then every group is rebuilt once from the base's clean
+    prerig source WITH THE BASE COLOUR, so colour markers place the bones as
+    on the base, and the outfit colour is put back afterwards — never on top
+    of the base's extension bones), measurement,
     sidecar (``base_signature``, ``base_model_sha256``, ``retexture_proof``,
     ``source: "base_body"``), distance tier, and the eager garment assembly
     ``model3d/assembled/<signature>.glb`` (``_assemble_garments``; a failure
@@ -1737,7 +1864,20 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
                     front_meta = _ref_sidecar(dressed)
                     manifest = model3d._ref_manifest(dressed)
             proof: Optional[Dict[str, Any]] = None
-            outfit = base["rigged"]
+            # The base model this outfit is painted onto: the covered variant
+            # when a worn piece hides the exposed-only extension groups.
+            variant = (outfit_variant(character_name, manifest.get("pieces") or {}, profile=profile)
+                       if front_meta.get("dressed") is not False else "rigged")
+            source_model, source_state = base["rigged"], None
+            if variant == "covered":
+                if base["covered"] is not None:
+                    source_model = base["covered"]
+                    source_state = base["covered_meta"].get("extension_rig")
+                else:
+                    variant = "rigged"
+                    warnings = [*warnings, COVERED_MISSING]
+                    logger.warning("Outfit model %s (%s): %s", character_name, signature, COVERED_MISSING)
+            outfit = source_model
             if front_meta.get("dressed") is not False:
                 image, mime = base_color_image(base["rigged"])
                 worker_in = work / "base_in.glb"
@@ -1748,7 +1888,9 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
                 if not out_glb.is_file():
                     raise OutfitError("Body retexture worker wrote no GLB")
                 atlas, atlas_mime = base_color_image(out_glb.read_bytes())
-                outfit = replace_base_color(base["rigged"], atlas, atlas_mime)
+                atlas, atlas_mime, restored = restore_face_texels(atlas, atlas_mime, image, base["meta"])
+                proof = {**(proof or {}), **restored}
+                outfit = replace_base_color(source_model, atlas, atlas_mime)
             verdict = model3d._validator_for("mixamo", character_name)(outfit)
             if not verdict.get("ok"):
                 raise OutfitError("Retextured model is invalid: " + "; ".join(verdict.get("errors") or []))
@@ -1757,7 +1899,13 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
         model3d._purge_combination(out_dir, signature, keep_model=path)
         model3d._publish_model_bytes(path, outfit)
         meta = {k: v for k, v in deepcopy(base["meta"]).items() if k not in _BASE_ONLY_META}
+        if source_state is not None:
+            # The covered variant's own extension state (and the Blender
+            # record of its file): with it the extension rig below is a no-op.
+            meta["extension_rig"] = deepcopy(source_state)
+            meta["blender"] = deepcopy(base["covered_meta"].get("blender") or meta.get("blender") or {})
         meta.update({"created_at": utc_now_iso(), "source": "base_body", "signature": signature,
+                     "base_variant": variant, "covered_missing": COVERED_MISSING in warnings,
                      "character": character_name, "format": "glb", "rig": "mixamo",
                      "base_signature": bsig,
                      "base_model_sha256": hashlib.sha256(base["rigged"]).hexdigest(),
@@ -1768,17 +1916,27 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
                      "view_guard": guard, "view_warnings": warnings})
         meta.update(manifest)
         model3d._auto_retexture(character_name, path, meta)
+        colour = base_color_image(path.read_bytes())
+        prerig = out_dir / "prerig" / path.name
         if base["prerig"] is not None:
-            # The clean source of the extension rig carries the same texture
-            # as the model, so a rebuild from it keeps the outfit.
-            prerig = out_dir / "prerig" / path.name
+            # The extension rig (only when the copied state is not current,
+            # e.g. parts declared for this outfit) runs on the BASE's clean
+            # source with the base colour, so colour markers hidden by the
+            # painted outfit still place the bones exactly as on the base —
+            # never a geometry fallback under clothing; the outfit colour
+            # goes back on afterwards.
             prerig.parent.mkdir(parents=True, exist_ok=True)
-            source = base["prerig"]
-            if proof is not None or path.read_bytes() != base["rigged"]:
-                source = replace_base_color(source, *base_color_image(path.read_bytes()))
-            model3d._publish_model_bytes(prerig, source)
+            model3d._publish_model_bytes(prerig, base["prerig"])
             model3d._publish_sidecar(prerig, base["prerig_meta"])
         model3d._auto_extension_rig(character_name, path, meta)
+        if base_color_image(path.read_bytes()) != colour:
+            model3d._publish_model_bytes(path, replace_base_color(path.read_bytes(), *colour))
+        if base["prerig"] is not None:
+            # The clean source then carries the same texture as the model.
+            source = base["prerig"]
+            if base_color_image(source) != colour:
+                source = replace_base_color(source, *colour)
+            model3d._publish_model_bytes(prerig, source)
         model3d._attach_measurement(meta, path)
         meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
         model3d._publish_sidecar(path, meta)
@@ -1819,8 +1977,10 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     pipeline (default: the CURRENT outfit). ``status``: ``running`` (dressed
     images or model in progress), ``failed`` (the last run's error),
     ``stale`` (the stored model was built on an older base body — or before
-    the pipeline — and is rebuilt on the next trigger; ``error`` says so,
-    ``stale_reason`` ``older_base`` / ``before_pipeline``), ``ready``,
+    the pipeline, or from the other base variant than its pieces call for
+    now (``variant_current``) — and is rebuilt on the next trigger; ``error``
+    says so, ``stale_reason`` ``older_base`` / ``before_pipeline`` /
+    ``detail_changed``), ``ready``,
     ``missing``. ``warnings``: the stored model's view-guard warnings
     (dressed views left out because they turned around), then the dressed
     images' own (``dressed_warnings``). ``proof``: the
@@ -1846,10 +2006,13 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
         status, error = "missing", ""
     elif not built_on_current_base(meta, current):
         status, error = "stale", (OLDER_BASE if meta.get("base_signature") else BEFORE_PIPELINE)
+    elif not variant_current(character_name, meta):
+        status, error = "stale", DETAIL_CHANGED
     else:
         status, error = "ready", ""
     return {"signature": signature, "status": status, "error": error,
-            "stale_reason": (("older_base" if meta.get("base_signature") else "before_pipeline")
+            "stale_reason": (("before_pipeline" if not meta.get("base_signature")
+                              else "detail_changed" if error == DETAIL_CHANGED else "older_base")
                              if status == "stale" else None),
             "warnings": (list(meta.get("view_warnings") or []) if path else []) + dressed_warnings(
                 character_name, signature, base_sig),

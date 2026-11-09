@@ -208,11 +208,12 @@ def _ref_files(character_name: str) -> Dict[str, List[Path]]:
 
 def _mesh_files(character_name: str) -> Dict[str, List[Path]]:
     """signature → its mesh files (model + sidecar + texture), including the
-    reduced tiers (``low/``), the raw backups (``raw/``) and the garment
+    reduced tiers (``low/``), the raw backups (``raw/``), a base body's
+    covered variant (``covered/``) and the garment
     assemblies (``assembled/``, ``assembled/low/``) of the same signature —
     exactly what ``model3d._purge_combination`` removes."""
     from app.blender.refine import RAW_DIR_NAME
-    from app.core.model3d import ASSEMBLED_DIR, FULL_TIER, MODEL_EXTS, MODEL_TIERS
+    from app.core.model3d import ASSEMBLED_DIR, COVERED_DIR, FULL_TIER, MODEL_EXTS, MODEL_TIERS
     from app.models.character import get_character_dir
     out: Dict[str, List[Path]] = {}
     d = get_character_dir(character_name) / "model3d"
@@ -220,7 +221,7 @@ def _mesh_files(character_name: str) -> Dict[str, List[Path]]:
         return out
     keep = MODEL_EXTS + (".json", ".png", ".jpg", ".jpeg")
     subdirs = [d / t for t in MODEL_TIERS if t != FULL_TIER] + [d / "unrigged", d / "facefix", d / "facefix-ref", d / RAW_DIR_NAME, d / "prerig", d / "low" / "prerig", d / "low" / RAW_DIR_NAME,
-                                                               d / ASSEMBLED_DIR, d / ASSEMBLED_DIR / "low"]
+                                                               d / COVERED_DIR, d / ASSEMBLED_DIR, d / ASSEMBLED_DIR / "low"]
     for folder in [d] + subdirs:
         if not folder.is_dir():
             continue

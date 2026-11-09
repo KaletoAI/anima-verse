@@ -59,6 +59,8 @@ def rig_groups_for(character_name, profile=None, mesh_variant=None):
                     break
             if matches:
                 group = asdict(rig)
+                # The clothing slots that hide this group (``exposed_only``).
+                group["covered_by"] = list(slot.covered_by)
                 if part_on and rig.id in slot.mesh_part.rigs:
                     part = slot.mesh_part.rigs[rig.id]
                     if rig.op == "appendage_chain":
@@ -78,6 +80,45 @@ def rig_groups_for(character_name, profile=None, mesh_variant=None):
         ordered.extend(ready)
         groups = [g for g in groups if g not in ready]
     return ordered
+
+
+def exposed_only_slots():
+    """Clothing slots that cover a body slot carrying an ``exposed_only`` rig
+    in any loaded package, sorted — the pieces the item editor offers the
+    ``exposed_detail`` switch for. Never names a group or a slot itself."""
+    from app.plugins.registry import packages
+    return sorted({cover for package in packages() for slot in package.body_slots
+                   if any(rig.exposed_only for rig in slot.rigs) for cover in slot.covered_by})
+
+
+def piece_covering_slots(occupied, outfit_piece):
+    """Every clothing slot a worn piece covers: the slots it occupies (the
+    outfit's ``pieces`` mapping and its own ``slots``) plus ``covers`` and
+    ``partially_covers`` — a partial cover counts as covering here."""
+    piece = outfit_piece or {}
+    return (set(occupied) | set(piece.get("slots") or []) | set(piece.get("covers") or [])
+            | set(piece.get("partially_covers") or []))
+
+
+def hides_exposed_detail(groups, pieces, items):
+    """Whether an outfit hides its ``exposed_only`` groups.
+
+    ``groups``: the applicable declarations (``rig_groups_for``, each with
+    ``covered_by``); ``pieces``: the outfit's ``{clothing slot: item id}``;
+    ``items``: ``{item id: item}``. True when ANY worn piece covers a slot in
+    the ``covered_by`` of an ``exposed_only`` group (``piece_covering_slots``)
+    and does not set ``outfit_piece.exposed_detail``; False when nothing
+    covers such a slot or every covering piece shows the detail through."""
+    targets = {cover for group in groups if group.get("exposed_only")
+               for cover in group.get("covered_by") or []}
+    if not targets:
+        return False
+    for item_id in sorted(set((pieces or {}).values())):
+        piece = ((items or {}).get(item_id) or {}).get("outfit_piece") or {}
+        occupied = {slot for slot, worn in (pieces or {}).items() if worn == item_id}
+        if piece_covering_slots(occupied, piece) & targets and piece.get("exposed_detail") is not True:
+            return True
+    return False
 
 
 def extension_bone_names(character_name, profile=None):
