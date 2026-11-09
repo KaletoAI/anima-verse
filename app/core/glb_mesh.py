@@ -9,6 +9,12 @@ Node identity of a grafted garment (R12): node and mesh are named ``garment_<kin
 ``extras.garment = {kind, item_id, fsig}``, is skinned to skin 0 and copies the body mesh node's parent and local
 TRS. Joints are remapped by ``rig_contract.norm_bone_name`` onto the target's own skin order, never by index.
 
+Vertex colours (HairDeck card hair, plan 2026-11-09-hairdeck-hair): a garment may carry ``colors`` — linear RGBA in
+[0, 1] as glTF stores them. ``graft`` writes them as ``COLOR_0`` (UNSIGNED_BYTE normalized VEC4) and
+``garment_arrays`` reads them back, so the assembly keeps them; without ``colors`` a graft is byte-identical to the
+code before colours existed. ``card_arrays`` reads one named node of a HairDeck result (``hair_cards`` /
+``head_proxy``) in its scene space.
+
 Compressed geometry (``EXT_meshopt_compression`` / ``KHR_draco_mesh_compression``) is refused on every read and
 graft: the accessor reader would read compressed bytes as raw data.
 """
@@ -52,6 +58,7 @@ class GarmentMesh:
     image: bytes = b""
     mime: str = ""
     material: Dict[str, Any] = field(default_factory=dict)
+    colors: Optional[np.ndarray] = None   # (n, 4) linear RGBA in [0, 1] -> COLOR_0; None = no vertex colours
 
 
 def accessor_array(parsed: dict, index: int) -> np.ndarray:
@@ -134,6 +141,23 @@ def _vertex_attr(parsed: dict, primitive: dict, name: str, count: int, width: in
     return np.asarray(array, dtype)
 
 
+def _vertex_colors(parsed: dict, primitive: dict, count: int) -> Optional[np.ndarray]:
+    """``COLOR_0`` as (count, 4) float64 in [0, 1] (VEC3 gets alpha 1), None without one."""
+    index = primitive.get("attributes", {}).get("COLOR_0")
+    if index is None:
+        return None
+    accessor = parsed["gltf"]["accessors"][index]
+    array = accessor_array(parsed, index)
+    if accessor.get("componentType") != 5126 and not accessor.get("normalized"):
+        raise ValueError("COLOR_0 integer accessor is not normalized")
+    if array.shape not in ((count, 3), (count, 4)):
+        raise ValueError("COLOR_0 accessor has the wrong shape")
+    array = np.asarray(array, np.float64)
+    if array.shape[1] == 3:
+        array = np.hstack([array, np.ones((count, 1))])
+    return array
+
+
 def _primitive_image(parsed: dict, primitive: dict) -> Tuple[bytes, str, Dict[str, Any]]:
     """``(image bytes, mime, material dict)`` of a primitive's base colour; empty when it has none."""
     from app.core.model_validate import texture_image_index
@@ -207,7 +231,68 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX) -> Gar
                        joints=_vertex_attr(parsed, prim, "JOINTS_0", n, 4, np.int64),
                        weights=_vertex_attr(parsed, prim, "WEIGHTS_0", n, 4, np.float64),
                        joint_names=_skin_joint_names(gltf, node["skin"]) if "skin" in node else [],
-                       image=image, mime=mime, material=material)
+                       image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n))
+
+
+def _local_matrix(node: dict) -> np.ndarray:
+    """A node's local 4x4 transform (``matrix`` is column-major; else T * R * S)."""
+    if "matrix" in node:
+        return np.asarray(node["matrix"], np.float64).reshape(4, 4).T
+    x, y, z, w = (float(v) for v in node.get("rotation", (0, 0, 0, 1)))
+    rotation = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                         [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+    m = np.eye(4)
+    m[:3, :3] = rotation * np.asarray(node.get("scale", (1, 1, 1)), np.float64)[None, :]
+    m[:3, 3] = np.asarray(node.get("translation", (0, 0, 0)), np.float64)
+    return m
+
+
+def card_arrays(glb: bytes, *, node: str = "") -> Tuple[np.ndarray, np.ndarray, np.ndarray,
+                                                         Optional[np.ndarray], Dict[str, Any]]:
+    """``(positions, faces, uvs, colors | None, material)`` of ONE mesh node of a HairDeck result.
+
+    ``node`` names it (``hair_cards`` or ``head_proxy``); empty = the file's only mesh node. Positions are in scene
+    space: the node's transform and its parents' are applied. All primitives of its mesh are concatenated; uvs are
+    zeros without ``TEXCOORD_0``; colours are ``COLOR_0`` (linear RGBA in [0, 1]) — None when no primitive has one,
+    white for a primitive without one beside one that has. The material is that of the first primitive.
+    """
+    parsed = _parse(glb, "Card")
+    gltf = parsed["gltf"]
+    nodes = gltf.get("nodes") or []
+    picked = [i for i, n in enumerate(nodes) if "mesh" in n and (not node or n.get("name") == node)]
+    if len(picked) != 1:
+        raise ValueError(f"Expected exactly one mesh node {node!r}" if node else
+                         f"Expected exactly one mesh node, found {len(picked)}")
+    index = picked[0]
+    parent = {c: i for i, n in enumerate(nodes) for c in n.get("children") or []}
+    world, at, seen = np.eye(4), index, set()
+    while at is not None:
+        if at in seen:
+            raise ValueError("The node hierarchy has a cycle")
+        seen.add(at)
+        world = _local_matrix(nodes[at]) @ world
+        at = parent.get(at)
+    P, F, U, C, base, any_color = [], [], [], [], 0, False
+    material: Dict[str, Any] = {}
+    for k, prim in enumerate(gltf["meshes"][nodes[index]["mesh"]].get("primitives") or []):
+        pos = np.asarray(accessor_array(parsed, prim["attributes"]["POSITION"]), np.float64)
+        n = len(pos)
+        P.append(pos)
+        F.append(_triangles(parsed, prim, n) + base)
+        U.append(_vertex_attr(parsed, prim, "TEXCOORD_0", n, 2, np.float64))
+        colors = _vertex_colors(parsed, prim, n)
+        any_color = any_color or colors is not None
+        C.append(colors if colors is not None else np.ones((n, 4)))
+        base += n
+        if k == 0 and "material" in prim:
+            material = copy.deepcopy((gltf.get("materials") or [])[prim["material"]])
+    if not P:
+        raise ValueError("The mesh node has no primitive")
+    positions = np.concatenate(P)
+    positions = positions @ world[:3, :3].T + world[:3, 3]
+    return (positions, np.concatenate(F), np.concatenate(U),
+            np.concatenate(C) if any_color else None, material)
 
 
 def static_arrays(glb: bytes) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bytes, str, Dict[str, Any]]:
@@ -292,6 +377,20 @@ def _check_garment(g: GarmentMesh) -> Tuple[np.ndarray, ...]:
     return P, N, U, I, J, W / sums[:, None]
 
 
+def _check_colors(g: GarmentMesh, n: int) -> Optional[np.ndarray]:
+    """``colors`` as (n, 4) UNSIGNED_BYTE (clipped to [0, 1], RGB gets alpha 1), None without colours."""
+    if g.colors is None:
+        return None
+    C = np.asarray(g.colors, np.float64)
+    if C.ndim != 2 or C.shape[0] != n or C.shape[1] not in (3, 4):
+        raise ValueError("Garment colours must have shape (n, 3) or (n, 4)")
+    if not np.isfinite(C).all():
+        raise ValueError("Garment colours contain non-finite values")
+    if C.shape[1] == 3:
+        C = np.hstack([C, np.ones((n, 1))])
+    return np.round(np.clip(C, 0.0, 1.0) * 255).astype("u1")
+
+
 def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -> bytes:
     """``target_glb`` + one skinned garment node ``name`` (see the module docstring). Raises ``KeyError`` naming a
     garment joint the target skin lacks, ``ValueError`` for compressed geometry, a name already present or broken
@@ -308,6 +407,7 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -
     if any(n.get("name") == name for n in nodes) or any(m.get("name") == name for m in gltf.get("meshes") or []):
         raise ValueError(f"The target GLB already has a node or mesh named {name!r}")
     P, N, U, I, J, W = _check_garment(garment)
+    C = _check_colors(garment, len(P))
 
     target_names = _skin_joint_names(gltf, 0)
     lookup: Dict[str, int] = {}
@@ -337,9 +437,12 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -
         binary.extend(raw)
         return len(views) - 1
 
-    def add_accessor(array: np.ndarray, component: int, kind: str, target: int, minmax: bool = False) -> int:
+    def add_accessor(array: np.ndarray, component: int, kind: str, target: int, minmax: bool = False,
+                     normalized: bool = False) -> int:
         accessor = {"bufferView": add_view(array.tobytes(), target), "componentType": component,
                     "count": int(array.shape[0]), "type": kind}
+        if normalized:
+            accessor["normalized"] = True
         if minmax:
             accessor["min"] = [float(v) for v in array.min(0)]
             accessor["max"] = [float(v) for v in array.max(0)]
@@ -350,6 +453,8 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -
     if N is not None:
         attributes["NORMAL"] = add_accessor(N.astype("<f4"), 5126, "VEC3", _ARRAY_BUFFER)
     attributes["TEXCOORD_0"] = add_accessor(U.astype("<f4"), 5126, "VEC2", _ARRAY_BUFFER)
+    if C is not None:
+        attributes["COLOR_0"] = add_accessor(C, 5121, "VEC4", _ARRAY_BUFFER, normalized=True)
     attributes["JOINTS_0"] = add_accessor(J.astype("<u2"), 5123, "VEC4", _ARRAY_BUFFER)
     attributes["WEIGHTS_0"] = add_accessor(W.astype("<f4"), 5126, "VEC4", _ARRAY_BUFFER)
     indices = add_accessor(I.reshape(-1, 1).astype("<u4"), 5125, "SCALAR", _ELEMENT_ARRAY_BUFFER)
