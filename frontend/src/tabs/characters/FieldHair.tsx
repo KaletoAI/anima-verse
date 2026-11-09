@@ -133,7 +133,8 @@ function Swatch({ hex }: { hex: string }) {
   )
 }
 
-/** The HairDeck hair colour: HairDeck's own (automatic) or a manual one.
+/** The HairDeck hair colour: automatic (the profile's named hair colour, else
+ *  HairDeck's own) or a manual one; the last fit's colour distance (ΔE).
  *  Keyed by the server values, so the draft starts from them after a save. */
 function HairColour({ colour, busy, running, onApply }: {
   colour: HairDeckPanel['colour']
@@ -143,18 +144,31 @@ function HairColour({ colour, busy, running, onApply }: {
   onApply: (hex: string) => void
 }) {
   const { t } = useI18n()
-  const [draft, setDraft] = useState(colour.target || colour.auto || '#7f6248')
+  const [draft, setDraft] = useState(colour.target || colour.profile?.hex || colour.auto || '#7f6248')
+  const fitted = colour.fitted
   return (
     <>
       <div style={ROW}>
         <span className="ga-hint">{t('Automatic')}:</span>
+        {colour.profile ? <Swatch hex={colour.profile.hex} /> : null}
+        {colour.profile ? <span className="ga-hint">{`${t('Profile colour')} (${colour.profile.name})`}</span> : null}
         {colour.auto ? <Swatch hex={colour.auto} /> : null}
         <span className="ga-hint">{colour.auto ? t("HairDeck's own colours") : t('HairDeck has not run yet')}</span>
         <span className="ga-hint">·</span>
         <span className="ga-hint">{t('In use')}:</span>
         {colour.target ? <Swatch hex={colour.target} /> : null}
-        <span className="ga-hint">{colour.target ? `${t('Manual')} ${colour.target}` : t('Automatic')}</span>
+        <span className="ga-hint">
+          {colour.target ? `${t('Manual')} ${colour.target}`
+            : colour.profile ? `${t('Profile colour')} (${colour.profile.name})` : t('Automatic')}
+        </span>
       </div>
+      {fitted && fitted.delta_e_before != null ? (
+        <div className="ga-hint">
+          {t('Last fit')}: {fitted.source === 'profile' && !fitted.applied
+            ? `${t("HairDeck's own colours kept")} (ΔE ${fitted.delta_e_before})`
+            : `ΔE ${fitted.delta_e_before} → ${fitted.delta_e_after ?? '–'}`}
+        </div>
+      ) : null}
       <div style={ROW}>
         <input
           type="color"
@@ -504,7 +518,7 @@ export function FieldHair({ character, onEditAppearance }: {
 
       <div className="ga-fieldset-title">{t('Hair colour')}</div>
       <HairColour
-        key={`${hd.colour.target || ''}|${hd.colour.auto || ''}`}
+        key={`${hd.colour.target || ''}|${hd.colour.profile?.hex || ''}|${hd.colour.auto || ''}`}
         colour={hd.colour}
         busy={busy}
         running={garmentRunning(info)}

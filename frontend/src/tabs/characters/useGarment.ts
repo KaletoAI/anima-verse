@@ -97,12 +97,28 @@ export interface HairDeckPanel {
   colour: {
     /** The manual `#rrggbb`, null = automatic. */
     target: string | null
-    source: 'override' | 'hairdeck'
+    /** Automatic = the profile's named hair colour (`profile`), else HairDeck's own. */
+    source: 'override' | 'profile' | 'hairdeck'
     /** HairDeck's own hair colour (info.json), null when unknown. */
     auto: string | null
+    /** The profile's named hair colour (`garment_hair.profile_hair_colour`), null without one. */
+    profile?: { name: string; hex: string } | null
+    /** The newest HairDeck fit's colour record, null without a fit. */
+    fitted?: HairDeckFitColour | null
   }
   /** The placement correction after the head match (`garments.hairdeck_panel`). */
   placement: HairPlacement
+}
+
+/** The colour a HairDeck fit used (`garments._hairdeck_colour`): CIE76 ΔE of the hair's median to the target. */
+export interface HairDeckFitColour {
+  target: string | null
+  source: 'override' | 'profile' | 'hairdeck'
+  name?: string | null
+  /** False: the profile colour was within reach, HairDeck's own colours were kept. */
+  applied?: boolean
+  delta_e_before?: number | null
+  delta_e_after?: number | null
 }
 
 /** HairDeck placement: forward shift (metres, +z) and forward tilt (degrees). */
