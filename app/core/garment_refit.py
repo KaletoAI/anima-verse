@@ -14,6 +14,14 @@ outdated ``fit_version``, the fit step only:
   — HairDeck itself never runs again here (a run's fit step would ask for one
   more seed when none passes; the sweep refuses instead).
 
+Per body (plan 2026-11-10-outfit-body-mesh-mode, Task 2): then every fit on
+an OUTFIT BODY (``garments/bodies/<body id>/``) with an outdated
+``fit_version`` whose body is still stored unchanged (``body_sha256``) and
+whose fsig is the one the base model serves now is refitted on that body
+from the base fit (``garments.fit_on_body``) — after the base fits, so it
+derives from the refitted one. A refusal is recorded on that body
+(``garment_store.record_body_failure``); the old fit stays served.
+
 CPU only: no image, mesh or hub call. ``garments._publish_fit`` schedules the
 re-assembly of the current outfit model. A character whose garment chain runs
 (its run lock held, or its FIFO active) is retried later, never refitted
@@ -78,6 +86,74 @@ def outdated_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = No
     return out
 
 
+def outdated_body_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                       ) -> List[Tuple[str, str, str, str]]:
+    """``[(item_id, kind, fsig, body_id)]`` of the character's fits on outfit
+    bodies that the sweep refits: accepted on the body as it is stored now,
+    ``fit_version`` older or missing, made under the fsig of the fit the base
+    model serves now (``garment_store.accepted_fit``); by (item, fsig), then body."""
+    from app.core import base_body, garment_fit, garments, garment_store as gs
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None or not base[1]:
+        return []
+    out: List[Tuple[str, str, str, str]] = []
+    served: Dict[str, Optional[str]] = {}
+    for (item_id, fsig), files in sorted(gs.stored_groups(character_name).items()):
+        for fit in files:
+            body_id = gs.body_of(fit)
+            if not body_id or fit.suffix != ".glb" or fit != gs.garment_path(character_name, item_id, fsig, "fit",
+                                                                             body=body_id):
+                continue
+            record = gs.read_record(fit.with_suffix(".json"))
+            kind = str(record.get("kind") or "")
+            if record.get("accepted") is not True or kind not in garment_fit.FIT_VERSION \
+                    or record.get("fit_version") == garment_fit.FIT_VERSION[kind] \
+                    or not record.get("body_sha256") \
+                    or record.get("body_sha256") != garments.body_sha256(character_name, body_id):
+                continue
+            if item_id not in served:
+                hit = gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
+                parsed = gs.parse_name(hit[0]) if hit else None
+                served[item_id] = parsed[1] if parsed else None
+            if served[item_id] != fsig:
+                continue
+            out.append((item_id, kind, fsig, body_id))
+    return out
+
+
+def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -> List[str]:
+    """Refit ``outdated_body_fits`` (caller holds the run lock). Returns
+    ``"<item>@<body id>"`` per refitted fit."""
+    from app.core import garment_fit, garments, garment_store as gs
+    from app.core.keyed_lock import keyed_lock
+    done: List[str] = []
+    for item_id, kind, fsig, body_id in outdated_body_fits(character_name, profile=profile):
+        base_fit = gs.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile)
+        if base_fit is None:
+            continue
+        old = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit", body=body_id).with_suffix(".json"))
+        try:
+            # Serialised with the assembly builds' fits on the same body (``garments.body_fit``).
+            with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
+                garments.fit_on_body(character_name, item_id, body_id=body_id, base_fit=base_fit, profile=profile)
+        except Exception as e:  # noqa: BLE001 — recorded on that body, the old fit stays served
+            error = e.error if isinstance(e, garments._Refused) else (str(e) or type(e).__name__)
+            gs.record_body_failure(character_name, item_id, fsig, body_id, error=error,
+                                   body_sha=str(old.get("body_sha256") or ""),
+                                   base_fit_sha=garments._sha(base_fit[0]),
+                                   fit_version=garment_fit.FIT_VERSION[kind])
+            outcome = f"refused — {error}"
+        else:
+            done.append(f"{item_id}@{body_id}")
+            outcome = "ok"
+        logger.info("Garment refit %s/%s (%s, %s) on outfit body %s: fit_version %s -> %s: %s", character_name,
+                    item_id, kind, fsig, body_id, old.get("fit_version"), garment_fit.FIT_VERSION[kind], outcome)
+    return done
+
+
 def _busy(character_name: str) -> bool:
     """A garment chain of the character runs or waits in its FIFO."""
     from app.core import garments
@@ -114,9 +190,10 @@ def _refit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsi
 
 
 def refit_character(character_name: str) -> Optional[List[str]]:
-    """Refit the character's outdated fits (``outdated_fits``) under its
-    garment run lock. None when a chain runs (lock held / FIFO active) —
-    nothing was touched; else the item ids refitted."""
+    """Refit the character's outdated fits (``outdated_fits``, then
+    ``outdated_body_fits``) under its garment run lock. None when a chain
+    runs (lock held / FIFO active) — nothing was touched; else the item ids
+    refitted (``"<item>@<body id>"`` for a fit on an outfit body)."""
     from app.core import base_body, garment_fit, garments, garment_store as gs
     from app.models.character import get_character_profile
     lock = gs.char_lock(character_name)
@@ -152,6 +229,8 @@ def refit_character(character_name: str) -> Optional[List[str]]:
             logger.info("Garment refit %s/%s (%s, %s): fit_version %s -> %s: %s", character_name, item_id,
                         kind, fsig, old.get("fit_version"), garment_fit.FIT_VERSION[kind],
                         "ok" if result.get("ok") else f"refused — {result.get('error')}")
+        if base is not None and base[1]:
+            done += _refit_bodies(character_name, profile, base[1])
     finally:
         lock.release()
     return done

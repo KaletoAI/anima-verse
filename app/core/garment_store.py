@@ -25,6 +25,26 @@ Per owner, under ``characters/<name>/garments/``::
                                                       base_model_sha256, failed_at}
                                                       — automatic triggers skip it
 
+Fits per BODY (plan ``2026-11-10-outfit-body-mesh-mode.md``, Task 2): a fit
+is keyed by ``(item, fsig, body id)``. The body of the retexture mode is the
+base model — body id = the base signature — and its fits keep the paths
+above unchanged. An OUTFIT BODY of the mesh mode (``base_body.outfit_body_id``,
+``ob`` + 8 hex) has the per-body parts in a folder of its own, same names::
+
+    bodies/<body id>/{item}_{fsig}.glb + .json        the fit on that body
+    bodies/<body id>/low/{item}_{fsig}.glb            its distance tier
+    bodies/<body id>/layers/{item}_{fsig}_{lsig}.glb  a layered fit on that body
+    bodies/<body id>/layers/low/…                     its distance tier
+    bodies/<body id>/failed/{item}_{fsig}.json        the last refused fit there
+
+Images, the raw/prepared mesh and the HairDeck job stay shared (per fsig /
+hsig): a fit on a body is CPU work from them (``garments.fit_on_body``),
+never a hub job. Every fit record names its parents: ``item_id``, ``fsig``,
+``body_id``, ``body_sha256`` (the rigged body it was fitted to; on the base
+also ``base_model_sha256``), ``base_signature`` and — on an outfit body —
+``base_fit_sha256`` (the base fit it was derived from). ``stored_groups``
+lists the per-body files in the group of their ``(item, fsig)``.
+
 ``fsig`` = md5[:12] over the garment kind's own inputs (hair: description,
 behind-the-shoulders flag, pronouns; clothing — an own-mesh outfit piece,
 plan ``2026-11-09-base-body-phase5-mesh-items.md``: prompt fragment, slots,
@@ -95,6 +115,14 @@ PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepa
                              "layer": "layers", "layer_low": "layers/low"}
 #: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
 LAYER_PARTS: Tuple[str, ...] = ("layer", "layer_low")
+#: The parts kept per body (``garment_path(body=…)``); the rest is shared.
+BODY_PARTS: Tuple[str, ...] = ("fit", "low", "failed", "layer", "layer_low")
+#: Folder of the outfit bodies' fits under ``garments/``.
+BODIES_DIR = "bodies"
+#: An outfit body id (``base_body.OUTFIT_BODY_RE``).
+_BODY_RE = re.compile(r"ob[0-9a-f]{8}")
+#: A base signature (``base_body.BASE_SIG_RE``): the base body's fits live in ``garments/`` itself.
+_BASE_RE = re.compile(r"base[0-9a-f]{8}")
 
 _FSIG_RE = re.compile(r"[0-9a-f]{12}")
 _ITEM = r"(?P<item>[A-Za-z0-9][A-Za-z0-9_-]*)"
@@ -131,16 +159,46 @@ def garments_dir(character_name: str) -> Path:
     return path
 
 
+def is_body_id(body: Optional[str]) -> bool:
+    """Whether ``body`` names an OUTFIT body (its fits live in ``bodies/``)."""
+    return isinstance(body, str) and _BODY_RE.fullmatch(body) is not None
+
+
+def body_root(character_name: str, body: str = "") -> Path:
+    """The folder of a body's fits: ``garments/`` for the base body (``body``
+    "" or a base signature), ``garments/bodies/<body id>`` for an outfit
+    body. ValueError for anything else. Creates nothing."""
+    root = _root(character_name)
+    if not body or (isinstance(body, str) and _BASE_RE.fullmatch(body)):
+        return root
+    if not is_body_id(body):
+        raise ValueError(f"invalid body id {str(body)[:40]!r}")
+    return root / BODIES_DIR / body
+
+
+def body_of(path: Path) -> str:
+    """The outfit body id a stored garment file belongs to, "" for a file of
+    the base body (or any other)."""
+    for parent in Path(path).parents:
+        if parent.parent.name == BODIES_DIR and is_body_id(parent.name):
+            return parent.name
+    return ""
+
+
 def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
-                 step: str = "", view: str = "", attempt: int = 0, lsig: str = "") -> Path:
+                 step: str = "", view: str = "", attempt: int = 0, lsig: str = "", body: str = "") -> Path:
     """The file of one garment part (see the module docstring for the layout).
 
     ``part`` is ``image`` (needs an image ``step`` and a ``view``; ``attempt``
     > 0 names that attempt's file), ``raw``, ``prepared``, ``fit``, ``low``,
     ``failed`` (a JSON record, ``record_failure``), or ``layer`` /
-    ``layer_low`` (a layered fit, needs its ``lsig``).
-    ValueError for an invalid item id, fsig, lsig, part, step or view, and for
-    any path that would resolve outside ``garments/``. Creates nothing."""
+    ``layer_low`` (a layered fit, needs its ``lsig``). ``body`` (the
+    ``BODY_PARTS`` only; the others are shared and ignore it): "" or a base
+    signature = the base body, an outfit body id = that body's folder
+    (``body_root``).
+    ValueError for an invalid item id, fsig, lsig, body, part, step or view,
+    and for any path that would resolve outside ``garments/``. Creates
+    nothing."""
     from app.models.inventory import safe_item_id
     iid = safe_item_id(item_id)
     if not iid or iid != item_id:
@@ -150,6 +208,10 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
     if part not in PART_DIRS:
         raise ValueError(f"unknown garment part {part!r}")
     root = _root(character_name)
+    if part in BODY_PARTS:
+        base = body_root(character_name, body)
+    else:
+        base = root
     if part == "image":
         if step not in IMAGE_STEPS:
             raise ValueError(f"no image step {step!r}")
@@ -160,9 +222,9 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
     elif part in LAYER_PARTS:
         if not isinstance(lsig, str) or not _FSIG_RE.fullmatch(lsig):
             raise ValueError(f"invalid layer fingerprint {str(lsig)[:40]!r}")
-        path = root / PART_DIRS[part] / f"{iid}_{fsig}_{lsig}.glb"
+        path = base / PART_DIRS[part] / f"{iid}_{fsig}_{lsig}.glb"
     else:
-        folder = root / PART_DIRS[part] if PART_DIRS[part] else root
+        folder = base / PART_DIRS[part] if PART_DIRS[part] else base
         path = folder / f"{iid}_{fsig}.{'json' if part == 'failed' else 'glb'}"
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"garment path escapes {root}")
@@ -200,12 +262,20 @@ def parse_name(path: Path) -> Optional[Tuple[str, str]]:
 
 def stored_groups(character_name: str) -> Dict[Tuple[str, str], List[Path]]:
     """Every recognised garment file of the character, grouped by
-    ``(item_id, fsig)``. Files with any other name are not listed."""
+    ``(item_id, fsig)`` — the fits of every outfit body (``bodies/<body
+    id>/…``) in the group of their ``(item_id, fsig)`` too (``body_of``
+    tells them apart). Files with any other name are not listed."""
     root = _root(character_name)
     out: Dict[Tuple[str, str], List[Path]] = {}
     if not root.is_dir():
         return out
     folders = [root] + [root / sub for sub in sorted(set(PART_DIRS.values())) if sub]
+    bodies = root / BODIES_DIR
+    if bodies.is_dir():
+        body_subs = sorted({PART_DIRS[part] for part in BODY_PARTS})
+        for body in sorted(bodies.iterdir()):
+            if body.is_dir() and is_body_id(body.name):
+                folders += [body] + [body / sub for sub in body_subs if sub]
     for folder in folders:
         if not folder.is_dir():
             continue
@@ -460,6 +530,47 @@ def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, e
         return  # never mint the folders of a vanished character
     write_record(path, {"item_id": item_id, "fsig": fsig, "step": step, "error": error,
                         "base_model_sha256": base_model_sha, "failed_at": _iso(utc_now())})
+
+
+def record_body_failure(character_name: str, item_id: str, fsig: str, body: str, *, error: str,
+                        body_sha: str, base_fit_sha: str, fit_version: Any) -> None:
+    """Persist a refused (or failed) fit of ``(item_id, fsig)`` on the outfit
+    body ``body``: automatic fits on that body skip it while the body, the
+    base fit it was derived from and the fit algorithm are the same
+    (``body_failure``)."""
+    from app.core.timeutils import utc_now
+    from app.models.character import get_character_dir
+    if not get_character_dir(character_name).is_dir():
+        return  # never mint the folders of a vanished character
+    write_record(garment_path(character_name, item_id, fsig, "failed", body=body),
+                 {"item_id": item_id, "fsig": fsig, "step": "fit", "error": error, "body_id": body,
+                  "body_sha256": body_sha, "base_fit_sha256": base_fit_sha, "fit_version": fit_version,
+                  "failed_at": _iso(utc_now())})
+
+
+def body_failure(character_name: str, item_id: str, fsig: str, body: str, *, body_sha: str,
+                 base_fit_sha: str, fit_version: Any) -> Optional[Dict[str, Any]]:
+    """The persisted failure of a fit of ``(item_id, fsig)`` on the outfit
+    body ``body`` that still holds: recorded on the same body
+    (``body_sha``), from the same base fit (``base_fit_sha``) by the same fit
+    algorithm (``fit_version``). None otherwise."""
+    try:
+        record = read_record(garment_path(character_name, item_id, fsig, "failed", body=body))
+    except ValueError:
+        return None
+    if (not record.get("error") or record.get("body_sha256") != body_sha
+            or record.get("base_fit_sha256") != base_fit_sha or record.get("fit_version") != fit_version):
+        return None
+    return record
+
+
+def clear_failure_on_body(character_name: str, item_id: str, fsig: str, body: str) -> None:
+    """An accepted fit of ``(item_id, fsig)`` on the outfit body ``body``
+    drops its failure record there."""
+    try:
+        garment_path(character_name, item_id, fsig, "failed", body=body).unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
 
 
 def clear_failure(character_name: str, item_id: str, fsig: str) -> None:

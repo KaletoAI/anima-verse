@@ -599,7 +599,7 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     record: Dict[str, Any] = {
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
         "metrics": result.metrics, "gates": gates, "report": result.report,
-        "base_signature": bsig, "base_model_sha256": base_sha,
+        "base_signature": bsig, "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
@@ -609,23 +609,25 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
 
 
 def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, rigged: bytes,
-                 result: Any, record: Dict[str, Any]) -> Path:
-    """Graft an accepted fit onto the rigged base, write the fit GLB and its
-    ``record``, decimate the distance tier to ``low/`` and schedule the
-    assembly. Shared by both hair methods."""
+                 result: Any, record: Dict[str, Any], *, body: str = "", schedule: bool = True) -> Path:
+    """Graft an accepted fit onto the rigged base (``body``: the rigged outfit
+    body of that id), write the fit GLB and its ``record`` (to that body's
+    folder, ``garment_store.body_root``), decimate the distance tier to
+    ``low/`` and schedule the assembly (unless ``schedule`` is False: the
+    assembly build itself fits). Shared by both hair methods and every body."""
     from app.blender import refine
     from app.core import garment_fit, glb_mesh
     from app.core.garment_store import garment_path, write_record
     record["fit_version"] = garment_fit.FIT_VERSION[kind]
     blob = glb_mesh.graft(rigged, result.garment, name=f"garment_{kind}_{item_id}",
                           extras={"kind": kind, "item_id": item_id, "fsig": fsig})
-    fit = garment_path(character_name, item_id, fsig, "fit")
-    low = garment_path(character_name, item_id, fsig, "low")
+    fit = garment_path(character_name, item_id, fsig, "fit", body=body)
+    low = garment_path(character_name, item_id, fsig, "low", body=body)
     # A distance tier of the previous fit must never pair with the new one.
     low.unlink(missing_ok=True)
     _write_atomic(fit, blob)
     write_record(fit.with_suffix(".json"), record)
-    logger.info("Garment fit %s/%s (%s): accepted on %s, %s tris", character_name, item_id, fsig, bsig,
+    logger.info("Garment fit %s/%s (%s): accepted on %s, %s tris", character_name, item_id, fsig, body or bsig,
                 result.metrics.get("tris"))
 
     tris = len(glb_mesh.static_arrays(blob)[1])
@@ -640,8 +642,12 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
         logger.warning("Garment fit %s/%s: distance tier failed: %s", character_name, item_id, dec.get("error"))
         record["low"] = {"ok": False, "error": dec.get("error") or "decimation failed"}
     write_record(fit.with_suffix(".json"), record)
-    from app.core import garment_assembly
-    garment_assembly.schedule(character_name)
+    if body:
+        from app.core.garment_store import clear_failure_on_body
+        clear_failure_on_body(character_name, item_id, fsig, body)
+    if schedule:
+        from app.core import garment_assembly
+        garment_assembly.schedule(character_name)
     return fit
 
 
@@ -755,6 +761,7 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": HAIRDECK,
         "metrics": result.metrics, "gates": gates, "report": result.report,
         "base_signature": bsig, "base_model_sha256": hashlib.sha256(snapshot["rigged"]).hexdigest(),
+        "body_id": bsig, "body_sha256": hashlib.sha256(snapshot["rigged"]).hexdigest(),
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "hsig": hsig, "attempt": fit["gates"]["attempt"], "seed": seed, "colour": override,
@@ -835,6 +842,299 @@ def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, 
     logger.info("HairDeck fit %s/%s: seed %s chosen of %s", character_name, item_id, chosen,
                 [(seed, f["result"].metrics.get("max_push_m"), f["gates"]["ok"]) for seed, f in sorted(fits.items())])
     return _publish_hairdeck(character_name, item_id, kind, fsig, bsig, hsig, profile, snapshot, fits[chosen], fits)
+
+
+# --- Fits per body (plan 2026-11-10-outfit-body-mesh-mode, Task 2) -------------
+#
+# The chain's ``fit`` step fits onto the BASE model (the body of the retexture
+# mode, body id = the base signature). An outfit model of the mesh mode stands
+# on an OUTFIT BODY (``base_body.outfit_body_id``) whose geometry and head
+# differ: every own-mesh piece and the hair it carries get a fit of their own
+# on that body — key ``(item, fsig, body id)``, files under
+# ``garments/bodies/<body id>/`` (``garment_store.body_root``). Such a fit is
+# DERIVED from the fit served on the base model (``garment_store.accepted_fit``
+# — the piece is a mesh at all only when it has one, ``base_body.resolve_mesh_items``):
+# the same fsig, the same garment source (edit chain: the cached prepared mesh +
+# ghost front; HairDeck: the seed of the base fit), fitted by the same fit and
+# gates onto the body's rigged + unrigged GLB with the body's front view as the
+# framing (the body was meshed from it). CPU only — no image, mesh or hub job.
+#
+# Current on a body = accepted, made on that body's bytes (``body_sha256``), by
+# the current fit algorithm (``fit_version``) from the base fit served now
+# (``base_fit_sha256``) — ``body_fit_state``. A refused or failed fit is
+# recorded per body (``garment_store.record_body_failure``) and not retried
+# while those three keys hold; an older fit accepted on the same body keeps
+# being served meanwhile (R11). Who fits: the outfit model build on the body
+# (``base_body._build_on_outfit_body`` → ``garment_assembly.body_fit_warning``)
+# and lazily every assembly build (``garment_assembly._wanted`` with
+# ``build_layers``: hair worn later, a new base fit); the boot sweep
+# (``garment_refit``) refits an older ``fit_version`` on every stored body.
+
+def _snapshot_body(character_name: str, body_id: str) -> Dict[str, Any]:
+    """The stored outfit body ``body_id`` read under the publication lock of
+    the REAL model directory: ``{rigged, unrigged, meta, sha}`` (``sha`` of
+    the rigged bytes). ``MissingInput`` without a rigged body or its retained
+    unrigged source."""
+    from app.core import base_body
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model3d import _read_sidecar
+    path = base_body.outfit_body_path(character_name, body_id)
+    with keyed_lock("model3d_publication", str(path.parent)):
+        meta = _read_sidecar(path)
+        if (not path.is_file() or meta.get("rig") != "mixamo" or meta.get("rig_error")
+                or not isinstance(meta.get("outfit_body"), dict)):
+            raise base_body.MissingInput(base_body.OUTFIT_BODY_MISSING)
+        unrigged = path.parent / "unrigged" / path.name
+        if not unrigged.is_file():
+            raise base_body.MissingInput("The outfit body has no unrigged source — rebuild the outfit body")
+        rigged = path.read_bytes()
+        source = unrigged.read_bytes()
+    return {"rigged": rigged, "unrigged": source, "meta": meta, "sha": hashlib.sha256(rigged).hexdigest()}
+
+
+def body_sha256(character_name: str, body_id: str) -> str:
+    """Content identity of the stored rigged outfit body, "" without one."""
+    from app.core import base_body
+    try:
+        return base_body.file_sha256(base_body.outfit_body_path(character_name, body_id))
+    except ValueError:
+        return ""
+
+
+def body_fit_state(character_name: str, item_id: str, fsig: str, body_id: str, body_sha: str,
+                   base_fit_sha: str) -> str:
+    """``accepted`` (on the body ``body_sha``, by the current fit algorithm,
+    from the base fit ``base_fit_sha``), ``stale`` (made on other body
+    bytes, or by an older ``garment_fit.FIT_VERSION``), ``outdated``
+    (accepted on this body from another base fit) or ``missing``."""
+    from app.core.garment_fit import FIT_VERSION
+    from app.core.garment_store import garment_path, read_record
+    fit = garment_path(character_name, item_id, fsig, "fit", body=body_id)
+    record = read_record(fit.with_suffix(".json"))
+    if not fit.is_file() or record.get("accepted") is not True:
+        return "missing"
+    if not body_sha or record.get("body_id") != body_id or record.get("body_sha256") != body_sha:
+        return "stale"
+    if record.get("fit_version") != FIT_VERSION.get(str(record.get("kind"))):
+        return "stale"
+    if not base_fit_sha or record.get("base_fit_sha256") != base_fit_sha:
+        return "outdated"
+    return "accepted"
+
+
+def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tuple[Path, Dict[str, Any]],
+                profile: Optional[Dict[str, Any]] = None, schedule: bool = True) -> Path:
+    """Fit the garment of the base fit ``base_fit`` (``(fit GLB, record)``,
+    the fit served on the base model) onto the outfit body ``body_id`` and
+    publish it under ``(item, fsig, body id)`` (block above). ``_Refused``
+    when the gate refuses, ``MissingInput`` when a source is gone (the
+    prepared mesh / ghost front / HairDeck seed, the body or its front
+    view). Never runs a generator."""
+    from app.core import base_body, garment_fit, garment_set
+    from app.core import garment_images as gi
+    from app.core import garment_store as gs
+    from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
+    from app.core.timeutils import utc_now_iso
+    if not gs.is_body_id(body_id):
+        raise ValueError(f"not an outfit body id: {str(body_id)[:40]!r}")
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    path, base_record = base_fit
+    parsed = gs.parse_name(Path(path))
+    if not parsed or parsed[0] != item_id:
+        raise ValueError(f"{Path(path).name} is no fit of {item_id}")
+    fsig = parsed[1]
+    kind = str(base_record.get("kind") or "")
+    if kind not in garment_fit.FIT_VERSION:
+        raise ValueError(f"unknown garment kind {kind!r}")
+    base_fit_sha = _sha(Path(path))
+    body = _snapshot_body(character_name, body_id)
+    bsig = str(body["meta"]["outfit_body"].get("base_signature") or base_record.get("base_signature") or "")
+    record: Dict[str, Any] = {
+        "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
+        "body_id": body_id, "body_sha256": body["sha"], "base_signature": bsig,
+        "texture_signature": body["meta"]["outfit_body"].get("texture_signature"),
+        "base_fit_sha256": base_fit_sha}
+    if gs.fit_method(base_record) == gs.HAIRDECK:
+        from app.core import garment_hair
+        inputs = base_record.get("inputs") or {}
+        hsig = str(inputs.get("hsig") or "")
+        try:
+            seed = int(inputs.get("seed"))
+        except (TypeError, ValueError):
+            raise base_body.MissingInput("The base fit names no HairDeck seed — run the hair chain")
+        if _fit_hair_file(character_name, item_id, inputs) is None:
+            raise base_body.MissingInput("The HairDeck hair of the base fit is gone — run the hair chain")
+        fit = _fit_seed(character_name, item_id, hsig, seed, int(inputs.get("attempt") or 1), body["rigged"],
+                        profile)
+        if not fit["gates"]["ok"]:
+            raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(fit["gates"]["reasons"]),
+                           fit["gates"])
+        result = fit["result"]
+        override = garment_hair.hair_colour_override(profile)
+        length_class = garment_hair.hair_length_class(character_name, profile=profile)
+        record.update({
+            "method": gs.HAIRDECK, "metrics": result.metrics, "report": result.report,
+            "gates": {"ok": True, "reasons": [], "limits": _hairdeck_limits(length_class)},
+            "inputs": {**_kind_inputs(kind, character_name, profile, item_id), "hsig": hsig, "seed": seed,
+                       "attempt": fit["gates"]["attempt"], "colour": override,
+                       "placement": garment_hair.hair_placement(profile),
+                       "nohead_sha256": hashlib.sha256(fit["hair_bytes"]).hexdigest(),
+                       "proxy_sha256": hashlib.sha256(fit["proxy_bytes"]).hexdigest()},
+            "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile),
+                                       result.report.get("colour") or {}),
+            "length_class": length_class, "placement": _placement_summary(result.report.get("placement")),
+            "created_at": utc_now_iso()})
+    else:
+        prepared = gs.garment_path(character_name, item_id, fsig, "prepared")
+        if not _accepted(prepared):
+            raise base_body.MissingInput("The garment mesh is missing — run the mesh step first")
+        ghost = _image(character_name, item_id, fsig, "ghost", "front")
+        if not _accepted(ghost):
+            raise base_body.MissingInput("The ghost front image is missing — run the ghost step first")
+        # The framing of the view the body was meshed from (its own copy of the dressed front).
+        front = find_ref_image(character_name, base_body._kind("front"), body_id)
+        if front is None:
+            raise base_body.MissingInput("The outfit body's front view is missing — rebuild the outfit body")
+        prepared_bytes = prepared.read_bytes()
+        with neutral_view_reference(front, get_model_refs_dir(character_name)) as flat:
+            size = gi._image_size(flat)
+            body_mask = gi._mask(flat, size)
+        ghost_mask = gi._mask(ghost, size)
+        if kind == garment_set.CLOTHING:
+            from app.models.inventory import get_item
+            slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
+            result = garment_fit.fit_clothing(prepared_bytes, body["unrigged"], body["rigged"],
+                                              masks={"body": body_mask, "garment": ghost_mask}, slots=slots)
+            limits = garment_fit.CLOTHING_GATES
+        else:
+            result = garment_fit.fit_hair(prepared_bytes, body["unrigged"], body["rigged"], body_mask, ghost_mask)
+            limits = garment_fit.GATES
+        gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
+                 "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
+        if not result.ok:
+            raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(result.reasons),
+                           {**gates, "metrics": result.metrics})
+        record.update({
+            "metrics": result.metrics, "gates": gates, "report": result.report,
+            "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
+                       "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
+                       "ghost_front_sha256": _sha(ghost), "body_front_sha256": _sha(front)},
+            "created_at": utc_now_iso()})
+    return _publish_fit(character_name, item_id, kind, fsig, bsig, body["rigged"], result, record,
+                        body=body_id, schedule=schedule)
+
+
+def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
+             base_fit: Tuple[Path, Dict[str, Any]], profile: Optional[Dict[str, Any]] = None,
+             build: bool = False) -> Dict[str, Any]:
+    """What an outfit model on the outfit body ``body_id`` (made of the body
+    bytes ``body_sha``) carries of ``item_id`` whose base model is served
+    ``base_fit``: ``{fit, low, record, fsig, pending, error}``.
+
+    ``fit`` the body fit GLB to graft (None: nothing to graft), ``low`` its
+    distance tier or None, ``pending`` True when a fit is still to be made
+    (serving only reads: the assembly is then not current and a build is
+    asked for), ``error`` why nothing current is grafted. ``build`` (the
+    assembly build, never serving) fits a missing / stale / outdated one
+    first — serialised per body; a refusal or failure is recorded per body
+    and, like a persisted failure, leaves an older fit accepted on this body
+    served (R11) or nothing. Nothing is fitted on a body whose stored bytes
+    are no longer ``body_sha`` (the outfit model is stale; its rebuild copies
+    the new body)."""
+    from app.core import garment_fit, garment_store as gs
+    from app.core.keyed_lock import keyed_lock
+    path, base_record = base_fit
+    parsed = gs.parse_name(Path(path))
+    if not parsed or parsed[0] != item_id or not gs.is_body_id(body_id) or not body_sha:
+        return {"fit": None, "low": None, "record": {}, "fsig": "", "pending": False,
+                "error": "no fit to derive from"}
+    fsig = parsed[1]
+    fit_path = gs.garment_path(character_name, item_id, fsig, "fit", body=body_id)
+    version = garment_fit.FIT_VERSION.get(str(base_record.get("kind") or ""))
+
+    def current() -> Tuple[str, str, Optional[Dict[str, Any]]]:
+        base_fit_sha = _sha(Path(path))
+        state = body_fit_state(character_name, item_id, fsig, body_id, body_sha, base_fit_sha)
+        failure = (gs.body_failure(character_name, item_id, fsig, body_id, body_sha=body_sha,
+                                   base_fit_sha=base_fit_sha, fit_version=version)
+                   if state != "accepted" else None)
+        return state, base_fit_sha, failure
+
+    state, base_fit_sha, failure = current()
+    on_body = state != "accepted" and body_sha256(character_name, body_id) == body_sha
+    if state != "accepted" and failure is None and on_body and build:
+        with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
+            state, base_fit_sha, failure = current()
+            if state != "accepted" and failure is None:
+                try:
+                    fit_on_body(character_name, item_id, body_id=body_id, base_fit=base_fit, profile=profile,
+                                schedule=False)
+                except Exception as e:  # noqa: BLE001 — recorded per body, the assembly goes on
+                    error = e.error if isinstance(e, _Refused) else (str(e) or type(e).__name__)
+                    logger.warning("Garment fit %s/%s (%s) on outfit body %s failed: %s", character_name, item_id,
+                                   fsig, body_id, error)
+                    gs.record_body_failure(character_name, item_id, fsig, body_id, error=error, body_sha=body_sha,
+                                           base_fit_sha=base_fit_sha, fit_version=version)
+                state, base_fit_sha, failure = current()
+    record = gs.read_record(fit_path.with_suffix(".json"))
+    usable = (fit_path.is_file() and record.get("accepted") is True and record.get("body_id") == body_id
+              and record.get("body_sha256") == body_sha)
+    low = gs.garment_path(character_name, item_id, fsig, "low", body=body_id)
+    pending = state != "accepted" and failure is None and on_body and not build
+    error = "" if state == "accepted" else str((failure or {}).get("error") or "") or (
+        "not fitted on this outfit body yet" if pending or on_body else "the outfit body was rebuilt")
+    return {"fit": fit_path if usable else None, "low": low if usable and low.is_file() else None,
+            "record": record if usable else {}, "fsig": fsig, "pending": pending, "error": error}
+
+
+def body_fit_info(character_name: str, item_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The fit of ``item_id`` on the body the CURRENT outfit model stands on
+    (mesh mode): ``{body_id, status, error, fsig, created_at, metrics,
+    gates}`` — ``status`` ``body_fit_state`` (``failed`` for a recorded
+    refusal that holds, ``missing`` too without a base fit to derive from).
+    None in retexture mode, for an outfit model on the base body, or when the
+    current outfit model does not carry the item (neither its worn hair nor
+    one of its own-mesh pieces)."""
+    from app.core import base_body, garment_fit, garment_store as gs, model3d
+    from app.core.garment_assembly import effective_mesh_items
+    from app.core.model_refs import current_outfit_state
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None or base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+        return None
+    path = model3d.find_model3d(character_name, current_outfit_state(character_name)[2], include_stale=True)
+    meta = model3d._read_sidecar(path) if path is not None else {}
+    body_id = str(meta.get("body_id") or "")
+    if not gs.is_body_id(body_id):
+        return None
+    worn = profile.get("equipped_mesh_pieces")
+    hair = {str(v) for v in worn.values() if v} if isinstance(worn, dict) else set()
+    if item_id not in hair and item_id not in effective_mesh_items(meta):
+        return None
+    out: Dict[str, Any] = {"body_id": body_id, "status": "missing", "error": "", "fsig": None,
+                           "created_at": None, "metrics": {}, "gates": {}}
+    base_fit = gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile) if base[1] else None
+    parsed = gs.parse_name(base_fit[0]) if base_fit else None
+    if not parsed:
+        out["error"] = "no accepted fit on the base model to derive from"
+        return out
+    fsig = parsed[1]
+    body_sha = str(meta.get("body_sha256") or "")
+    base_fit_sha = _sha(base_fit[0])
+    record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit", body=body_id).with_suffix(".json"))
+    status = body_fit_state(character_name, item_id, fsig, body_id, body_sha, base_fit_sha)
+    failure = (gs.body_failure(character_name, item_id, fsig, body_id, body_sha=body_sha, base_fit_sha=base_fit_sha,
+                               fit_version=garment_fit.FIT_VERSION.get(str(base_fit[1].get("kind") or "")))
+               if status != "accepted" else None)
+    out.update(fsig=fsig, status="failed" if failure else status, error=str((failure or {}).get("error") or ""),
+               created_at=record.get("created_at"), metrics=record.get("metrics") or {},
+               gates=record.get("gates") or {})
+    return out
 
 
 # --- The run --------------------------------------------------------------------
@@ -1636,6 +1936,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     the placement correction).
     ``failed`` also reports the persisted failure of the current fsig after
     a restart (automatic triggers skip it until an explicit run).
+    ``body`` (mesh mode, plan 2026-11-10-outfit-body-mesh-mode Task 2): the
+    piece's fit on the outfit body the CURRENT outfit model stands on
+    (``body_fit_info``; ``body_id`` repeats its id), None on the base body —
+    ``steps.fit`` stays the chain's fit on the base model.
     ValueError for an invalid item."""
     from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version
@@ -1698,6 +2002,11 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             preview_url = _url(character_name, item_id, "model", content_version(preview))
         except OSError:
             preview_url = None
+    try:
+        body = body_fit_info(character_name, item_id, profile=profile)
+    except Exception:  # noqa: BLE001 — the tab still shows the base chain
+        logger.exception("Body fit info %s/%s failed", character_name, item_id)
+        body = None
     status = gs.status(character_name, item_id)
     failed = status["failed"]
     if failed is None and not status["running_step"] and fsig:
@@ -1712,7 +2021,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
             "steps": steps, "stale_reasons": stale,
             "running_step": status["running_step"], "started_at": status["started_at"],
-            "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig}
+            "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig,
+            "body": body, "body_id": body["body_id"] if body else None}
 
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:

@@ -39,6 +39,17 @@ garments: it is served bare, and no assembly is built for it. Off the
 base-body pipeline, or with nothing wanted, the bare file is served
 unchanged.
 
+An outfit model on an OUTFIT BODY (mesh mode, plan
+2026-11-10-outfit-body-mesh-mode, Task 2; bare sidecar ``body_id`` +
+``body_sha256``) carries per garment its fit ON THAT BODY
+(``garments.body_fit``: derived from the fit served on the base model, same
+fsig, keyed ``(item, fsig, body id)``) — never a fit of the base model or of
+another body (``built_on_fit_base``). ``served`` only reads: a body fit still
+to be made is listed ``pending`` (the assembly is not current, a build is
+asked for); the build (``assemble``) fits it first — CPU, no hub job. A fit
+refused on the body is recorded there and the garment left off (the outfit
+model's ``garment_warnings`` say so, ``body_fit_warning``).
+
 Own-mesh pieces of the signature worn over each other (plan
 2026-11-10-texture-body-reuse-and-layering, Task 2): an outer piece is
 grafted from its LAYERED fit over the inner pieces of the set
@@ -156,11 +167,17 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
     sha — its ``base_signature`` does. A sidecar with neither (a model from
     before the pipeline) matches nothing. A bare model on an OUTFIT BODY
     (sidecar ``body_id``, mesh mode) matches only a fit made on that body
-    (record ``body_id``, plan 2026-11-10-outfit-body-mesh-mode Task 2) — a
-    fit of the base model is never grafted onto it."""
+    (record ``body_id``) on the same body bytes (``body_sha256``; plan
+    2026-11-10-outfit-body-mesh-mode Task 2) — a fit of the base model or of
+    another body is never grafted onto it, and a fit on an outfit body never
+    onto a model of the base."""
     body = str(bare_meta.get("body_id") or "")
     if body:
-        return body == str(record.get("body_id") or "")
+        return (body == str(record.get("body_id") or "")
+                and bool(bare_meta.get("body_sha256"))
+                and str(bare_meta.get("body_sha256")) == str(record.get("body_sha256") or ""))
+    if record.get("base_fit_sha256") and not record.get("base_model_sha256"):
+        return False  # a fit on an outfit body
     sha = str(bare_meta.get("base_model_sha256") or "")
     if sha:
         return sha == str(record.get("base_model_sha256") or "")
@@ -179,7 +196,8 @@ def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
 
 
 def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
-            bare_meta: Optional[Dict[str, Any]] = None, build_layers: bool = False) -> List[Dict[str, Any]]:
+            bare_meta: Optional[Dict[str, Any]] = None, build_layers: bool = False,
+            left_off: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """The garments to graft, sorted by item id: ``{item_id, kind, fsig, fit,
     low, record}`` per garment with an accepted fit on the current base
     model — the hair of the profile's ``equipped_mesh_pieces``, and with
@@ -193,7 +211,13 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     fit over the inner pieces of the set, and it carries ``over: {lsig,
     items, pending, without}``; a layered fit not built yet serves the body
     fit with ``pending`` True. ``build_layers`` (the assembly build, never
-    serving) builds the missing ones first."""
+    serving) builds the missing ones first.
+
+    A bare model on an outfit body (``body_id``): per garment its fit on that
+    body (``garments.body_fit``) instead of the base fit; one still to be made
+    is listed with ``fit`` None and ``pending`` True (serving), made first
+    with ``build_layers``. ``left_off`` (a dict) collects item -> reason of the
+    garments with a base fit that this body does not carry."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
@@ -208,6 +232,8 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     base = base_body.current_base(character_name, profile=profile)
     if not base or not base[1]:
         return []
+    body_id = str((bare_meta or {}).get("body_id") or "")
+    on_body = bare_meta is not None and garment_store.is_body_id(body_id)
     out: List[Dict[str, Any]] = []
     for item_id in sorted(hair | clothing):
         item = get_item(item_id) or {}
@@ -228,18 +254,36 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
         parsed = garment_store.parse_name(fit[0]) if fit else None
         if not parsed:
             continue
+        if on_body:
+            from app.core import garments
+            entry = garments.body_fit(character_name, item_id, body_id=body_id,
+                                      body_sha=str(bare_meta.get("body_sha256") or ""), base_fit=fit,
+                                      profile=profile, build=build_layers)
+            if entry["pending"]:
+                out.append({"item_id": item_id, "kind": kind, "fsig": entry["fsig"], "fit": None, "low": None,
+                            "record": {}, "pending": True})
+                continue
+            if entry["fit"] is None or not built_on_fit_base(bare_meta, entry["record"]):
+                if left_off is not None:
+                    left_off[item_id] = entry["error"] or "not fitted on this outfit body"
+                continue
+            out.append({"item_id": item_id, "kind": kind, "fsig": entry["fsig"], "fit": entry["fit"],
+                        "low": entry["low"], "record": entry["record"]})
+            continue
         if bare_meta is not None and not built_on_fit_base(bare_meta, fit[1]):
             continue
         fsig = parsed[1]
         low = garment_store.garment_path(character_name, item_id, fsig, "low")
         out.append({"item_id": item_id, "kind": kind, "fsig": fsig, "fit": fit[0],
                     "low": low if low.is_file() else None, "record": fit[1]})
-    layered = [g for g in out if g["kind"] == CLOTHING]
+    layered = [g for g in out if g["kind"] == CLOTHING and g["fit"] is not None]
     if bare_meta is not None and len(layered) > 1:
         from app.core import garment_layers
         from app.core.base_body import mesh_items_intended
-        args = dict(base_sha=base[1], profile=profile, intended=mesh_items_intended(bare_meta),
-                    fits={g["item_id"]: (g["fit"], g["record"]) for g in layered})
+        args = dict(base_sha=str(bare_meta.get("body_sha256") or "") if on_body else base[1], profile=profile,
+                    intended=mesh_items_intended(bare_meta),
+                    fits={g["item_id"]: (g["fit"], g["record"]) for g in layered},
+                    **({"body": body_id} if on_body else {}))
         items = [g["item_id"] for g in layered]
         layers = (garment_layers.ensure if build_layers else garment_layers.plan)(character_name, items, **args)
         for g in layered:
@@ -258,6 +302,28 @@ def _wanted_for(character_name: str, directory: Path, signature: str, *,
     from the full file)."""
     return _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")),
                    build_layers=build_layers)
+
+
+def body_fit_warning(character_name: str, bare_meta: Dict[str, Any], *,
+                     profile: Optional[Dict[str, Any]] = None) -> str:
+    """The outfit model build on an outfit body (``bare_meta``: its sidecar,
+    ``body_id`` + ``body_sha256``, not published yet): fit every garment it
+    carries onto the body now (``_wanted`` with ``build_layers`` — CPU, no
+    hub job; the eager assembly then finds them) and return
+    ``base_body.NOT_FITTED_ON_BODY`` naming the garments left off with the
+    reason (a refused fit on that body), "" when none is. "" for a model on
+    the base body."""
+    from app.core import garment_store
+    from app.core.base_body import NOT_FITTED_ON_BODY
+    from app.models.inventory import get_item
+    if not garment_store.is_body_id(str(bare_meta.get("body_id") or "")):
+        return ""
+    left_off: Dict[str, str] = {}
+    _wanted(character_name, profile, bare_meta=bare_meta, build_layers=True, left_off=left_off)
+    if not left_off:
+        return ""
+    names = [f"{(get_item(i) or {}).get('name') or i} ({reason})" for i, reason in sorted(left_off.items())]
+    return NOT_FITTED_ON_BODY.format(items=", ".join(names))
 
 
 def wanted_garments(character_name: str, *,
@@ -280,6 +346,10 @@ def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, Any]]
     missing, ``pending`` (so the assembly is rebuilt once it exists)."""
     out: Dict[str, Dict[str, Any]] = {}
     for g in wanted:
+        if g["fit"] is None:
+            # A fit on an outfit body still to be made (``garments.body_fit``).
+            out[g["item_id"]] = {"kind": g["kind"], "fsig": g["fsig"], "sha256": "", "pending": True}
+            continue
         entry: Dict[str, Any] = {"kind": g["kind"], "fsig": g["fsig"], "sha256": _file_sha256(_source(g, tier))}
         over = g.get("over")
         if over:
@@ -369,6 +439,8 @@ def _build(character_name: str, directory: Path, bare: Path,
         raise ValueError(f"bare model {bare.name} is no rigged outfit model (rig {meta.get('rig')!r})")
     blob = data
     for garment in wanted:
+        if garment["fit"] is None:
+            continue  # never in a build (``_wanted`` with build_layers fits first)
         source = _source(garment, tier)
         mesh = glb_mesh.garment_arrays(source.read_bytes())
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}

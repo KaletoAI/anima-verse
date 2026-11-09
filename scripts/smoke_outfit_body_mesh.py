@@ -59,9 +59,13 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     ready; find_model3d(Demo, bA) is the body (an outfit body is never
     stale); find_model3d_serving(Demo) = (sigA, "exact").
 [3] B = A + dress (own mesh): tsig tA again -> 0 image jobs, 0 chain steps
-    on a body (no mesh, no rig), 0 worker runs; B's model names body bA; its
-    garment_warnings name NOT_FITTED_ON_BODY for "Dress"; no
-    assembled/<sigB>.glb although the dress has an accepted (base) fit.
+    on a body (no mesh, no rig), 0 worker runs; B's model names body bA; the
+    dress has an accepted (base) fit but no prepared mesh in this fixture, so
+    its fit on bA (Task 2, garments.body_fit) cannot be made: garment_warnings
+    name NOT_FITTED_ON_BODY for "Dress (The garment mesh is missing — run the
+    mesh step first)", the failure is recorded on bA
+    (garments/bodies/<bA>/failed/dress_<F>.json), no assembled/<sigB>.glb —
+    the base fit is never grafted onto the body.
 [4] C {dress}: empty dress text -> the base body: 0 image jobs, no mesh/rig
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
@@ -444,8 +448,11 @@ def main() -> int:
         check("B: same tsig, same body", (meta_b.get("texture_signature"), meta_b.get("body_id")), (t_a, b_a))
         fit = gs.accepted_fit("Demo", "dress", base_model_sha=base_body.base_model_sha256("Demo", b1))
         check("B: the dress has a (base) fit", bool(fit), True)
-        check("B: not fitted on this body", base_body.NOT_FITTED_ON_BODY.format(items="Dress")
+        check("B: not fitted on this body", base_body.NOT_FITTED_ON_BODY.format(
+            items="Dress (The garment mesh is missing — run the mesh step first)")
               in (meta_b.get("garment_warnings") or []), True)
+        check("B: failure recorded on the body",
+              gs.garment_path("Demo", "dress", gs.parse_name(fit[0])[1], "failed", body=b_a).is_file(), True)
         check("B: no assembly with a base fit", (mdir / "assembled" / f"{sig_b}.glb").exists(), False)
 
         # --- [4] empty dress text ---------------------------------------------------------

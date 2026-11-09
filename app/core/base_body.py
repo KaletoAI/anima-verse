@@ -3058,7 +3058,9 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
 # content sha256 of every dressed view of the tsig the body was meshed from —
 # its freshness); an outfit model on a body names ``outfit_body_mode: "mesh"``,
 # ``body_id``, ``body_sha256``, ``texture_signature`` and
-# ``base_signature``. Task 3's reachability GC walks these.
+# ``base_signature``. Task 3's reachability GC walks these. The own-mesh
+# garments and the hair on a body are fitted per body (Task 2,
+# ``garments.body_fit``: ``garments/bodies/<body id>/``).
 
 OUTFIT_BODY_MODES = ("retexture", "mesh")
 RETEXTURE_MODE, MESH_MODE = OUTFIT_BODY_MODES
@@ -3069,7 +3071,7 @@ OUTFIT_BODY_MISSING = "Outfit body missing — rebuild the outfit model"
 OUTFIT_BODY_OUTDATED = "The outfit body does not match the dressed views — rebuild the outfit model"
 BODY_MODE_CHANGED = "Built for the other outfit body mode"
 OUTFIT_BODY_CHANGED = "Built on an older outfit body"
-NOT_FITTED_ON_BODY = "Not fitted on this outfit body yet, served without: {items}"
+NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
 
 
 def is_outfit_body_signature(value: Optional[str]) -> bool:
@@ -3282,20 +3284,6 @@ def _snapshot_outfit_body(character_name: str, body_id: str) -> Dict[str, Any]:
                 "prerig_meta": _read_sidecar(prerig) if prerig.is_file() else {}}
 
 
-def _not_fitted_warning(character_name: str, manifest: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    """The warning of an outfit model on an outfit body that would carry
-    own-mesh pieces or hair: their fits are made on the base model, never
-    served on another body (the fits per body are Task 2). "" for none."""
-    from app.models.inventory import get_item
-    worn = profile.get("equipped_mesh_pieces")
-    wanted = set(_dict_of(manifest.get("mesh_items")).get("effective") or [])
-    wanted |= {str(v) for v in worn.values() if v} if isinstance(worn, dict) else set()
-    if not wanted:
-        return ""
-    names = sorted(str((get_item(i) or {}).get("name") or i) for i in wanted)
-    return NOT_FITTED_ON_BODY.format(items=", ".join(names))
-
-
 def _build_on_outfit_body(character_name: str, signature: str, *, bsig: str, base: Dict[str, Any], tsig: str,
                           variant: str, profile: Dict[str, Any]) -> Dict[str, Any]:
     """``build_outfit_model`` in mesh mode, inside the outfit's stage: the
@@ -3308,10 +3296,12 @@ def _build_on_outfit_body(character_name: str, signature: str, *, bsig: str, bas
     ``body_sha256``, ``texture_signature``, ``base_signature`` /
     ``base_model_sha256`` (the outfit model is stale on another base model,
     as in retexture mode — the body is reused then) and the outfit's
-    manifest. Own-mesh pieces and hair are NOT grafted: their fits are on the
-    base model (``garment_assembly.built_on_fit_base`` refuses a fit without
-    this ``body_id``), the model is served bare with ``NOT_FITTED_ON_BODY``
-    in ``garment_warnings``."""
+    manifest. The own-mesh pieces it carries and the worn hair are fitted
+    onto THIS body before the sidecar is published (plan Task 2:
+    ``garment_assembly.body_fit_warning`` → ``garments.body_fit``, CPU from
+    the cached garment sources, keyed ``(item, fsig, body id)``) and grafted
+    by the eager assembly; a garment refused on the body is left off and
+    named in ``garment_warnings`` (``NOT_FITTED_ON_BODY``)."""
     from app.core import model3d
     from app.core.extension_rig import extension_metadata
     from app.core.timeutils import utc_now_iso
@@ -3347,7 +3337,8 @@ def _build_on_outfit_body(character_name: str, signature: str, *, bsig: str, bas
                  "body_sha256": hashlib.sha256(body["rigged"]).hexdigest()})
     meta.update(manifest)
     warnings = [w for w in (_dict_of(manifest.get("mesh_items")).get("warnings") or []) if isinstance(w, str) and w]
-    not_fitted = _not_fitted_warning(character_name, manifest, profile)
+    from app.core.garment_assembly import body_fit_warning
+    not_fitted = body_fit_warning(character_name, meta, profile=profile)
     if not_fitted:
         warnings.append(not_fitted)
     if warnings:

@@ -132,6 +132,8 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
     warning's words: the persisted chain failure ``"<step> — <error>"``,
     else ``base_body.BASE_MODEL_MISSING`` without a base model, else
     ``base_body.NO_MESH_FIT``; None when not painted.
+    ``body`` — mesh mode only: ``{body_id, status, error}`` of the piece's
+    fit on the outfit body worn now (``garment_info["body"]``).
     ``over`` / ``without`` — the names of the worn pieces under this one with
     and without a fit (``worn_layers``' entry of the piece, ``layers``): the
     chip says "fitted over <inner>" / "without <inner>". Both keys are left
@@ -161,6 +163,9 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
         else:
             reason = base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING
     out = {"state": state, "step": running, "painted": painted, "reason": reason}
+    if isinstance(info.get("body"), dict):
+        # Mesh mode: the piece's fit on the outfit body worn now (garments.body_fit_info).
+        out["body"] = {k: info["body"].get(k) for k in ("body_id", "status", "error")}
     if layers and (layers.get("over") or layers.get("without")):
         out.update(over=list(layers.get("over") or []), without=list(layers.get("without") or []))
     return out

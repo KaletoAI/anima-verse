@@ -282,9 +282,9 @@ def main() -> int:
         BUILDS = []
         real_build = gl._build
 
-        def counting_build(name, item_id, entry, inner, base_sha):
+        def counting_build(name, item_id, entry, inner, base_sha, **kw):
             BUILDS.append((item_id, entry["lsig"]))
-            return real_build(name, item_id, entry, inner, base_sha)
+            return real_build(name, item_id, entry, inner, base_sha, **kw)
         gl._build = counting_build
         WARNINGS = []
         real_warning = gl.logger.warning
