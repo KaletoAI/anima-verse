@@ -42,7 +42,7 @@ import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 
-const TILE_HEIGHT = 134
+const TILE_HEIGHT = 128
 
 const EMPTY_TILE: CSSProperties = {
   width: '100%',
@@ -267,25 +267,30 @@ export function FieldBaseBody({ character }: { character: string }) {
         {model?.status === 'failed' && model.error ? (
           <div className="ga-hint" style={ERROR_STYLE}>{model.error}</div>
         ) : null}
-        {/* Left to right: the preview; steps, tilt and the collision sliders
-            beside it (a slider's capsules show while it moves); the face and
-            rig actions in the column after that. */}
+        {/* Left to right: the preview; the step checklist and tilt beside
+            it; then a column with the collision sliders on top (the viewer
+            shows the draft capsules while a slider moves) and the face and
+            rig actions below. */}
         <div className="ga-basebody-model">
           {model?.url ? (
             <div className="ga-model3d-fit">
               <Model3DViewer key={model.url} url={model.url} format="glb" height={480} previewTilt
                 freshness={model.freshness}
                 statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined}
-                motionToolbar={asideTools}
                 collision={collision} showCollision={!!collisionPreview} />
             </div>
           ) : null}
-          {st && model ? (
-            <ModelFaceActions character={character} st={st} face={model}
-              signature={info.signature} cleanup={info.face_cleanup ?? st.face_cleanup}
-              hasModel={!!model.url} canRerig={!!st.pipeline?.rerig_source}
-              rerigBlocked={t('The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).')}
-              onReload={reloadAll} onStarted={onModelRunStarted} />
+          {asideTools || (st && model) ? (
+            <div className="ga-basebody-side">
+              {asideTools}
+              {st && model ? (
+                <ModelFaceActions character={character} st={st} face={model}
+                  signature={info.signature} cleanup={info.face_cleanup ?? st.face_cleanup}
+                  hasModel={!!model.url} canRerig={!!st.pipeline?.rerig_source}
+                  rerigBlocked={t('The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).')}
+                  onReload={reloadAll} onStarted={onModelRunStarted} />
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

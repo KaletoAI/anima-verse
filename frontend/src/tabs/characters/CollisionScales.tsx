@@ -6,8 +6,9 @@
  * every stored model — on the base-body pipeline the base body's set first,
  * then the sets the outfit models inherit from it.
  *
- * Rendered compact in the viewer's side toolbar (Base body tab on the
- * pipeline, 3D tab off it), so the capsules move with the slider.
+ * Rendered compact next to the viewer — in the Base body tab on the
+ * pipeline (the column right of the checklist), in the 3D tab's side
+ * toolbar off it — so the capsules move with the slider.
  * While a slider moves, `onPreview` hands the caller a PREVIEW payload: the
  * shown set with each radius scaled by draft ÷ fitted scale, for the viewer's
  * capsule overlay. It is only that — the saved set is fitted by the server

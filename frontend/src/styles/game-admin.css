@@ -2958,8 +2958,8 @@ a.ga-btn {
 .ga-face-actions { display: flex; flex-direction: column; gap: 6px; }
 .ga-face-actions-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ga-face-actions-state { min-width: 0; }
-/* Base body tab: preview + toolbar, then the face/rig actions as a third
-   column (under the preview when the panel is narrow). */
+/* Base body tab: preview + checklist/tilt, then a column with the collision
+   sliders over the face/rig actions (under the preview when narrow). */
 /* The 3D tab's side panels (animations, extension bones, generation). */
 .ga-model3d-side { font-size: 13px; }
 .ga-model3d-side .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
@@ -2969,7 +2969,7 @@ a.ga-btn {
 .ga-model3d-actions-row { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: flex-start; }
 .ga-basebody-model { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
 .ga-basebody-model > .ga-model3d-fit { flex: 0 1 680px; min-width: 0; }
-.ga-basebody-model > .ga-face-actions { flex: 1 1 240px; min-width: 240px; max-width: 420px; }
+.ga-basebody-side { flex: 1 1 260px; min-width: 240px; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
 /* Collision sliders in the viewer's side toolbar: label · slider · value. */
 .ga-collision-grid { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 2px 6px; align-items: center; font-size: 11px; }
 .ga-collision-grid input[type="range"] { width: 100%; margin: 0; }
