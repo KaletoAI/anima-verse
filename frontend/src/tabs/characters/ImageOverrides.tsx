@@ -23,6 +23,8 @@ import { Field } from '@anima/player-ui'
  *  - Mesh backend match: a glob over img2mesh backends, position 0 of the
  *    character mesh chain its rig selects (mesh_humanoid / mesh_creature).
  *    Objects and buildings have no per-entity match; the rig stays world-only.
+ *  - Hair mesh backend match: a glob over img2hair backends (HairDeck),
+ *    position 0 of the hair_mesh chain (the Hair tab's HairDeck method).
  * Layout: images on the left, T-pose and 3D on the right (one column when
  * narrow).
  * Backed by /characters/{name}/outfit-imagegen (GET/PUT — the GET also names
@@ -38,11 +40,11 @@ import { Field } from '@anima/player-ui'
  * `PUT /characters/{name}/outfit-imagegen`, and that route takes the WHOLE
  * record — a body carrying only `loras` would blank the match patterns.
  * The buffer hands its patch to that route unchanged, so the patch has to BE
- * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, mesh_workflow, loras, tpose_loras}`
+ * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, mesh_workflow, hair_mesh_workflow, loras, tpose_loras}`
  * plus the five base-body step globs (`BASE_BODY_FIELDS`),
  * every time, with the edited value taken from the event (the state behind it
  * is one render old) and the other fields from the current render. One
- * keystroke here therefore counts as twelve pending fields in "Save (n)".
+ * keystroke here therefore counts as thirteen pending fields in "Save (n)".
  *
  * The "Add LoRA" choices are the one thing the SAVED values decide: the server
  * resolves them from the stored backend match, so a match still sitting in the
@@ -78,12 +80,13 @@ interface Override {
   tposeViewPattern: string
   profilePattern: string
   meshPattern: string
+  hairPattern: string
   baseBody: BaseBodyPatterns
   loras: Lora[]
   tposeLoras: Lora[]
 }
 
-const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', meshPattern: '', baseBody: EMPTY_BASE_BODY, loras: [], tposeLoras: [] }
+const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', meshPattern: '', hairPattern: '', baseBody: EMPTY_BASE_BODY, loras: [], tposeLoras: [] }
 
 /** GET /characters/{name}/outfit-imagegen. */
 interface StoredOverride {
@@ -92,6 +95,7 @@ interface StoredOverride {
   tpose_workflow?: string
   tpose_view_workflow?: string
   mesh_workflow?: string
+  hair_mesh_workflow?: string
   base_front_workflow?: string
   base_view_workflow?: string
   outfit_front_workflow?: string
@@ -105,6 +109,10 @@ interface StoredOverride {
   mesh_world_chain?: string[]
   /** Every enabled img2mesh backend name (match preview). */
   mesh_backends?: string[]
+  /** The hair_mesh world chain — what runs behind the hair match. */
+  hair_world_chain?: string[]
+  /** Every enabled img2hair backend name (match preview). */
+  hair_backends?: string[]
   /** Per image match field: the occasions it is position 0 of, each with its
    *  world chain (the character's own glob left out) — what runs when the
    *  field stays empty. An empty chain = cheapest backend of the right kind. */
@@ -124,6 +132,7 @@ function fromServer(ovr: StoredOverride): Override {
     tposeViewPattern: ovr.tpose_view_workflow || '',
     profilePattern: ovr.profile_workflow || '',
     meshPattern: ovr.mesh_workflow || '',
+    hairPattern: ovr.hair_mesh_workflow || '',
     baseBody: Object.fromEntries(BASE_BODY_FIELDS.map((f) => [f, ovr[f] || ''])) as BaseBodyPatterns,
     loras: Array.isArray(ovr.loras) ? ovr.loras : [],
     tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
@@ -145,6 +154,7 @@ function withDraft(stored: Override, draft: Record<string, unknown>): Override {
     tposeViewPattern: typeof draft.tpose_view_workflow === 'string' ? draft.tpose_view_workflow : stored.tposeViewPattern,
     profilePattern: typeof draft.profile_workflow === 'string' ? draft.profile_workflow : stored.profilePattern,
     meshPattern: typeof draft.mesh_workflow === 'string' ? draft.mesh_workflow : stored.meshPattern,
+    hairPattern: typeof draft.hair_mesh_workflow === 'string' ? draft.hair_mesh_workflow : stored.hairPattern,
     baseBody: Object.fromEntries(BASE_BODY_FIELDS.map((f) => [
       f, typeof draft[f] === 'string' ? (draft[f] as string) : stored.baseBody[f],
     ])) as BaseBodyPatterns,
@@ -162,7 +172,7 @@ export function ImageOverrides({
 }: {
   character: string
   /** Remember the whole override record — see the module note on why all
-   *  twelve keys travel together. */
+   *  thirteen keys travel together. */
   queueImagegen: (patch: Record<string, unknown>) => void
   /** The container's buffered record, laid over what the GET returned. */
   draft: Record<string, unknown>
@@ -178,6 +188,9 @@ export function ImageOverrides({
   const [tposeViewPattern, setTposeViewPattern] = useState('')
   const [profilePattern, setProfilePattern] = useState('')
   const [meshPattern, setMeshPattern] = useState('')
+  const [hairPattern, setHairPattern] = useState('')
+  const [hairBackends, setHairBackends] = useState<string[]>([])
+  const [hairWorldChain, setHairWorldChain] = useState<string[]>([])
   const [baseBodyPatterns, setBaseBodyPatterns] = useState<BaseBodyPatterns>(EMPTY_BASE_BODY)
   const [meshBackends, setMeshBackends] = useState<string[]>([])
   const [meshOccasion, setMeshOccasion] = useState('')
@@ -204,6 +217,7 @@ export function ImageOverrides({
     setTposeViewPattern(rec.tposeViewPattern)
     setProfilePattern(rec.profilePattern)
     setMeshPattern(rec.meshPattern)
+    setHairPattern(rec.hairPattern)
     setBaseBodyPatterns(rec.baseBody)
     setLoras(rec.loras)
     setTposeLoras(rec.tposeLoras)
@@ -250,6 +264,8 @@ export function ImageOverrides({
         setMeshBackends(ovr.mesh_backends || [])
         setMeshOccasion(ovr.mesh_occasion || '')
         setMeshWorldChain(ovr.mesh_world_chain || [])
+        setHairBackends(ovr.hair_backends || [])
+        setHairWorldChain(ovr.hair_world_chain || [])
         setMatchChains(ovr.match_chains || {})
         // Unsaved edits survive a trip to another sub-tab and back.
         show(withDraft(stored, draftRef.current))
@@ -299,6 +315,7 @@ export function ImageOverrides({
         const stored = fromServer(ovr)
         storedRef.current = stored
         setMeshWorldChain(ovr.mesh_world_chain || [])
+        setHairWorldChain(ovr.hair_world_chain || [])
         setMatchChains(ovr.match_chains || {})
         show(stored)
       } catch { /* keep what is on screen */ }
@@ -317,12 +334,13 @@ export function ImageOverrides({
         tpose_view_workflow: (next.tposeViewPattern ?? tposeViewPattern).trim(),
         profile_workflow: (next.profilePattern ?? profilePattern).trim(),
         mesh_workflow: (next.meshPattern ?? meshPattern).trim(),
+        hair_mesh_workflow: (next.hairPattern ?? hairPattern).trim(),
         ...Object.fromEntries(BASE_BODY_FIELDS.map((f) => [f, (next.baseBody ?? baseBodyPatterns)[f].trim()])),
         loras: next.loras ?? loras,
         tpose_loras: next.tposeLoras ?? tposeLoras,
       })
     },
-    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, meshPattern, baseBodyPatterns, loras, tposeLoras],
+    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, meshPattern, hairPattern, baseBodyPatterns, loras, tposeLoras],
   )
 
   const matching = useMemo(() => {
@@ -364,6 +382,14 @@ export function ImageOverrides({
     return meshBackends.filter((b) => re.test(b))
   }, [meshPattern, meshBackends])
 
+  // The hair match globs over img2hair backends (HairDeck).
+  const hairMatching = useMemo(() => {
+    const p = hairPattern.trim()
+    if (!p) return []
+    const re = globToRegex(p.replace(/^backend:/i, '').trim())
+    return hairBackends.filter((b) => re.test(b))
+  }, [hairPattern, hairBackends])
+
   /** A LoRA list edit: on screen and in the buffer in the same breath, so a
    *  picked-and-added LoRA is part of the sheet without a second click. */
   const editLoras = useCallback(
@@ -392,6 +418,7 @@ export function ImageOverrides({
     matches: string[]
     placeholder: string
     empty: string
+    hint?: string
   }
   const renderMatch = (match: MatchRow) => (
     <Field key={match.key} label={match.label}>
@@ -416,6 +443,7 @@ export function ImageOverrides({
           ))
         )}
       </div>
+      {match.hint ? <span className="ga-hint">{match.hint}</span> : null}
       </div>
     </Field>
   )
@@ -542,6 +570,9 @@ export function ImageOverrides({
   const meshEmpty = meshWorldChain.length
     ? t('Empty: world chain') + ' (' + meshWorldChain.join(' → ') + ')'
     : t('Empty: world chain')
+  const hairEmpty = hairWorldChain.length
+    ? t('Empty: world chain') + ' (' + hairWorldChain.join(' → ') + ')'
+    : t('Empty: world chain')
 
   return (
     <div className="ga-form">
@@ -563,6 +594,11 @@ export function ImageOverrides({
             {renderMatch({
               label: meshOccasion === 'mesh_creature' ? t('Mesh backend match, creature (glob)') : t('Mesh backend match, humanoid (glob)'),
               value: meshPattern, set: setMeshPattern, key: 'meshPattern', matches: meshMatching, placeholder: 'Trellis*', empty: meshEmpty,
+            })}
+            {renderMatch({
+              label: t('Hair mesh backend match (glob)'),
+              value: hairPattern, set: setHairPattern, key: 'hairPattern', matches: hairMatching, placeholder: 'HairDeck*', empty: hairEmpty,
+              hint: t('Hair cards from one image of the character (e.g. HairDeck).'),
             })}
           </div>
           {renderLoras({ title: t('T-pose LoRAs'), list: tposeLoras, edit: editTposeLoras, empty: t('Empty: use the normal LoRAs'), options: tposeLoraOptions, addValue: addTposeName, setAddValue: setAddTposeName })}

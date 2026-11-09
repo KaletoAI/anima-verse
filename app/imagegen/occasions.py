@@ -17,6 +17,8 @@ Per occasion:
   category            "render": every image/video backend except inpaint
                       (img2img is preferred when a reference is slotted);
                       "img2mesh": an unrigged image-to-mesh backend;
+                      "img2hair": hair cards from one character image
+                      (HairDeck) — never matched by an img2mesh occasion;
                       "mesh2rig": a standalone mesh-to-rig backend.
   rig                 Required delivery rig, never a backend property.
                       Rig occasions require a configured mesh2rig chain; an
@@ -178,6 +180,13 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
     "mesh_garment": _mesh("3D mesh — garment", "Hair and garment meshes", "none"),
+    # HairDeck (plan 2026-11-09-hairdeck-hair): hair cards straight from one
+    # character image — its own category so no img2mesh occasion ever picks it.
+    "hair_mesh": {**_mesh("3D mesh — hair cards", "Hair tab: HairDeck method", "none",
+                          {"character_scoped": True, "char_spec_field": "hair_mesh_workflow",
+                           "char_spec_fallback": ""}),
+                  "category": "img2hair", "requires_chain": False,
+                  "hint": "Hair cards from one image of the character (e.g. HairDeck)."},
     "pose_animation": {"label": "3D animation — pose clip", "media": "animation",
                        "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
                        "style_use_cases": [], "covers": "Poses tab: generate animation",

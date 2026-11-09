@@ -60,6 +60,7 @@ and metallic apart) is exposed via ``last_result_files`` (thread-local).
 """
 import base64
 import hashlib
+import json
 import os
 import re
 import threading
@@ -78,6 +79,10 @@ logger = get_logger("image_backends")
 # Purpose category of a mesh→mesh alias (mesh-shrink): it consumes a MESH, not
 # an image, and must never be matched by a normal img2mesh generation.
 MESH2MESH_CATEGORY = "mesh2mesh"
+
+# Purpose category of a hair alias (HairDeck): one character image in, hair
+# cards out. Kept apart from img2mesh so no mesh occasion ever picks it.
+HAIR_CATEGORY = "img2hair"
 
 # Hard size limit of a file sent in ``files`` (mesh-client-spec § 1). The
 # gateway answers 413 above it; refusing here keeps a doomed job out of the
@@ -198,6 +203,22 @@ class OpenAIMeshBackend(ImageBackend):
         # only where the alias declares the param (the single-view aliases
         # do not expose it).
         self.mesh_steps = int(os.environ.get(f"{env_prefix}MESH_STEPS", "") or 0)
+        # Extra alias params (config ``extra_params``, a JSON object) — read
+        # only by the img2hair category (HairDeck: input_steps, input_cfg, …),
+        # where every alias param beyond input_name and the seed comes from
+        # the backend entry, like mesh-unimate's. An unparsable value is
+        # ignored with a warning, never sent half.
+        self.extra_params: Dict[str, Any] = {}
+        raw_extra = (os.environ.get(f"{env_prefix}EXTRA_PARAMS", "") or "").strip()
+        if raw_extra:
+            try:
+                parsed = json.loads(raw_extra)
+                if isinstance(parsed, dict):
+                    self.extra_params = parsed
+                else:
+                    logger.warning("%s: extra_params is not a JSON object — ignored", name)
+            except ValueError as e:
+                logger.warning("%s: extra_params is not valid JSON (%s) — ignored", name, e)
         # Alias self-discovery (image slot names, file slot name, declared
         # param names); safe fallback without schema. A multi-view alias
         # declares SEVERAL image slots (input_image_front/_back/_left/_right);
@@ -580,6 +601,8 @@ class OpenAIMeshBackend(ImageBackend):
             return result
         if self.category == "mesh2rig":
             return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
+        if self.category == HAIR_CATEGORY:
+            return self._hair_alias_params(params)
         # input_name is ALWAYS set: it decides the delivered file names, and an
         # empty one makes the workflow reuse leftovers of a previous run. The
         # alias is the fallback so the files stay attributable.
@@ -650,6 +673,31 @@ class OpenAIMeshBackend(ImageBackend):
                 else:
                     logger.info("%s: %s=%s requested but the alias "
                                 "declares no %s — dropped", self.name, key, value, pname)
+        return alias_params
+
+    def _hair_alias_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The ``params`` block of an img2hair (HairDeck) job: ``input_name``
+        (always, like every mesh job), the backend entry's ``extra_params``
+        and the per-job ``seed`` — the last two only where the alias declares
+        the name (an unreadable schema sends them blind, the gateway ignores
+        unknown names). No image-to-mesh param (background removal, face
+        count, fingers) goes out: the hair alias has none of them."""
+        alias_params: Dict[str, Any] = {
+            "input_name": (str(params.get("mesh_name") or "").strip()
+                           or str(self.model or self.name or "hair").strip()),
+        }
+        for key, value in self.extra_params.items():
+            key = str(key).strip()
+            if key in ("input_name", "seed"):
+                continue
+            if self._declares(key.lower()):
+                alias_params[key] = value
+            else:
+                logger.info("%s: extra param %s is not declared by the alias — dropped",
+                            self.name, key)
+        seed = params.get("seed")
+        if seed is not None and not isinstance(seed, bool) and self._declares("seed"):
+            alias_params["seed"] = int(seed)
         return alias_params
 
     def _generate(self, prompt: str, negative_prompt: str,

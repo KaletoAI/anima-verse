@@ -954,6 +954,9 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         # Backend glob in front of the character mesh chain; empty = world chain.
         "mesh_workflow": override.get("mesh_workflow", "") or "",
         **_mesh_match_context(character_name),
+        # Backend glob in front of the hair_mesh chain (HairDeck); empty = world chain.
+        "hair_mesh_workflow": override.get("hair_mesh_workflow", "") or "",
+        **_hair_match_context(),
         "match_chains": _image_match_chains(),
         "model": override.get("model", "") or "",
         "loras": override.get("loras", []) or [],
@@ -984,6 +987,21 @@ def _mesh_match_context(character_name: str) -> Dict[str, Any]:
     return {"mesh_occasion": occasion,
             "mesh_world_chain": [str(x) for x in chain] if isinstance(chain, list) else [],
             "mesh_backends": names}
+
+
+def _hair_match_context() -> Dict[str, Any]:
+    """The hair match beside the mesh match: the hair_mesh world chain (shown
+    as the fallback) and every enabled img2hair backend name (match preview)."""
+    from app.core import config
+    from app.imagegen.backends.openai_mesh import HAIR_CATEGORY
+    from app.imagegen.service import get_image_service
+    rules = config.get("image_generation.routing", {}) or {}
+    chain = rules.get("hair_mesh") if isinstance(rules, dict) else None
+    names = [b.name for b in get_image_service().backends
+             if b.instance_enabled and getattr(b, "MEDIA_TYPE", "image") == "mesh"
+             and (getattr(b, "category", "") or "") == HAIR_CATEGORY]
+    return {"hair_world_chain": [str(x) for x in chain] if isinstance(chain, list) else [],
+            "hair_backends": names}
 
 
 def _image_match_chains() -> Dict[str, List[Dict[str, Any]]]:

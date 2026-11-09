@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
-from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
+from app.imagegen.backends.openai_mesh import (HAIR_CATEGORY, MESH2MESH_CATEGORY,
                                                MESH_UPLOAD_MAX_BYTES)
 from app.imagegen.base import (BackendBusyError, GenerationCancelled, HubJobLost,
                                MediaGenerationDisabled, media_generation_enabled)
@@ -107,6 +107,10 @@ _MESH_TOKEN_MAIN = "_00001_"
 # A LOD stage file: digits directly before the extension (spec § 3.2). The
 # number is the REQUESTED triangle count, not the delivered one.
 _MESH_LOD_STAGE_RE = re.compile(r"_(\d+)$")
+
+# A hair-job result name as stored on disk: a plain file name, nothing that
+# could step out of the output directory (generate_hair).
+_SAFE_RESULT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 # Extension for a delivered file whose NAME has none — the mime is the second
 # half of the same source (rule 2: name and mime always travel together).
@@ -1007,6 +1011,118 @@ class ImageService:
                 "backend": backend_name, "job_id": result["job_id"],
                 "result_sha256": model.get("sha256") or hashlib.sha256(model["blob"]).hexdigest(),
                 "result_url": model.get("url", ""), **route}
+
+    def list_hair_backends(self) -> List[ImageBackend]:
+        """Available img2hair backends (HairDeck) — the complement of
+        ``list_mesh_backends``: the two lists never overlap."""
+        return [b for b in self.list_available_backends(media="mesh")
+                if getattr(b, "category", "") == HAIR_CATEGORY]
+
+    def generate_hair(self, image_path: str, output_dir: str, *,
+                      backend_glob: str = "", character_name: str = "",
+                      params: Optional[Dict[str, Any]] = None,
+                      hub_stage=None) -> Dict[str, Any]:
+        """Hair cards from ONE character image on the ``hair_mesh`` occasion
+        (an img2hair backend, e.g. the HairDeck alias), on its backend channel.
+
+        ``params``: per-job values for the backend — ``seed`` (sent as the
+        alias param ``seed``) and optionally ``mesh_name`` (the subject prefix
+        of the unique ``input_name``; default ``<character>_hair``). Every
+        other alias param comes from the backend entry's ``extra_params``.
+
+        Every delivered file is written as ``<output_dir>/<gateway name>``;
+        a name that is not a plain file name is refused (ValueError) before
+        anything is written. Returns ``{"files": [{"name", "mime", "path"}],
+        "backend", "route", "job_id"}`` with the files in the gateway's order.
+
+        An explicit ``backend_glob`` never falls back. ``hub_stage``
+        (app/core/hub_ops.py): a job recorded before a restart is collected
+        and stored exactly like a fresh one, without a new submission."""
+        from app.imagegen.base import GatewayRejectedError
+        from app.imagegen.routing import resolve_spec, route_meta, run_routed
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            files, blobs = list(attached.get("files") or []), list(attached.get("blobs") or [])
+            if not blobs:
+                raise GatewayRejectedError("Hair job returned no files")
+            if len(files) != len(blobs):
+                raise GatewayRejectedError("Hair job results have incomplete metadata")
+            return self._store_hair_files([dict(f, blob=raw) for f, raw in zip(files, blobs)],
+                                          output_dir, attached.get("backend", ""),
+                                          dict(attached.get("route") or {}),
+                                          attached.get("job_id", ""))
+        if not Path(image_path).is_file():
+            raise FileNotFoundError(f"hair input image not found: {image_path}")
+        request: Dict[str, Any] = dict(params or {})
+        subject = str(request.pop("mesh_name", "") or "").strip() \
+            or (f"{character_name}_hair" if character_name else "hair")
+        request.update(source_image_path=str(image_path),
+                       mesh_name=_unique_mesh_name(subject))
+        if hub_stage is not None:
+            request["hub_stage"] = hub_stage
+        primary = None
+        if backend_glob.strip():
+            _, primary = resolve_spec("hair_mesh", backend_glob,
+                                      character=character_name, pool=self.pool)
+            if primary is None:
+                raise ValueError("Selected hair backend is unavailable — no automatic fallback")
+
+        def render(b):
+            def op(bb):
+                def generate():
+                    blobs = bb.generate("", "", dict(request),
+                                        log_meta={"agent_name": character_name, "media": "mesh"})
+                    if not blobs:
+                        raise GatewayRejectedError("Hair job returned no files")
+                    # Read on THIS (channel worker) thread: last_result_files is
+                    # thread-local, see generate_mesh.
+                    files = list(getattr(bb, "last_result_files", []) or [])
+                    if len(files) != len(blobs):
+                        raise GatewayRejectedError("Hair job results have incomplete metadata")
+                    return {"files": [dict(f, blob=raw) for f, raw in zip(files, blobs)],
+                            "job_id": getattr(bb, "last_job_id", "")}
+                return self.run_on_backend_channel(bb, generate, task_type="mesh_generation",
+                                                   agent_name=character_name)
+            return self.run_on_backend(b, op, character_name=character_name)
+
+        if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
+            (result, used), route = render(primary), None
+        else:
+            (result, used), route = run_routed("hair_mesh", render,
+                                               character=character_name, pool=self.pool,
+                                               on_route=self._hub_route_hook(hub_stage))
+        return self._store_hair_files(result["files"], output_dir, used.name,
+                                      route_meta(route), result.get("job_id", ""))
+
+    @staticmethod
+    def _store_hair_files(files: List[Dict[str, Any]], output_dir: str, backend_name: str,
+                          route: Dict[str, Any], job_id: str) -> Dict[str, Any]:
+        """Write every file of a hair job under its gateway name — shared by a
+        fresh run and a job collected after a restart. The names are checked
+        first (plain file name, no duplicates, resolved inside ``output_dir``)
+        so a hostile or broken name writes nothing at all."""
+        directory = Path(output_dir)
+        root = directory.resolve()
+        targets: List[Path] = []
+        for f in files:
+            name = str(f.get("name") or "")
+            if (not _SAFE_RESULT_NAME.fullmatch(name) or name in (".", "..")
+                    or Path(name).name != name):
+                raise ValueError(f"hair job delivered an unusable file name: {name!r}")
+            target = directory / name
+            if target.resolve().parent != root or target in targets:
+                raise ValueError(f"hair job delivered an unusable file name: {name!r}")
+            targets.append(target)
+        directory.mkdir(parents=True, exist_ok=True)
+        out: List[Dict[str, str]] = []
+        for f, target in zip(files, targets):
+            tmp = target.with_name(f".{target.name}.part")
+            tmp.write_bytes(f["blob"])
+            os.replace(tmp, target)
+            out.append({"name": target.name, "mime": str(f.get("mime") or ""),
+                        "path": str(target)})
+        return {"files": out, "backend": backend_name, "route": route, "job_id": job_id}
 
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
