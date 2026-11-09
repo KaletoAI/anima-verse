@@ -180,16 +180,18 @@ def _limits(inst, model: str, requested: int) -> Tuple[int, Any]:
     return limit, getattr(provider_obj, "quota", None)
 
 
-def _invoke(client, messages, quota, cancel_event) -> Dict[str, Any]:
-    """One request with the tool test's quota handling; returns response metadata."""
-    from app.core.model_suitability import _MAX_REMOTE_RATE_LIMITS, _wait_for_quota
+def _invoke(inst, client, messages, quota, cancel_event) -> Dict[str, Any]:
+    """One request with the tool test's quota handling and whole-key slot
+    (``model_suitability.provider_slot``); returns response metadata."""
+    from app.core.model_suitability import _MAX_REMOTE_RATE_LIMITS, _wait_for_quota, provider_slot
     from app.core.provider_quota import QuotaUnavailable, rate_limit_error
     remote_limits = 0
     while True:
         _wait_for_quota(quota, cancel_event)
-        started = time.monotonic()
         try:
-            resp = client.invoke(messages)
+            with provider_slot(inst, cancel_event):
+                started = time.monotonic()
+                resp = client.invoke(messages)
             break
         except Exception as exc:
             cause = rate_limit_error(exc) if quota is not None else None
@@ -651,7 +653,7 @@ def persist(model_full: str, summary: Dict[str, Any], results: Dict[str, List[Di
 
 def _caller(inst, client, model: str, requested: int, cancel_event):
     limit, quota = _limits(inst, model, requested)
-    return limit, (lambda messages: _invoke(client, messages, quota, cancel_event))
+    return limit, (lambda messages: _invoke(inst, client, messages, quota, cancel_event))
 
 
 def _judge_gate(provider: str, limit: int) -> threading.BoundedSemaphore:

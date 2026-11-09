@@ -33,6 +33,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from statistics import median
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -400,9 +401,11 @@ def iter_suitability_results(
             # A full provider request quota is waited out here, never scored:
             # the wait does not count as answer time and is no infra error.
             _wait_for_quota(quota, cancel_event)
-            t0 = time.monotonic()
             try:
-                resp = client_for(case["group"], budget).invoke(messages)
+                # The slot wait happens before t0: it is not answer time.
+                with provider_slot(inst, cancel_event):
+                    t0 = time.monotonic()
+                    resp = client_for(case["group"], budget).invoke(messages)
                 break
             except Exception as exc:
                 from app.core.provider_quota import QuotaUnavailable, rate_limit_error
@@ -656,6 +659,49 @@ _MAX_REMOTE_RATE_LIMITS = 5
 
 class _QuotaWaitCancelled(Exception):
     """The run was cancelled while a test request waited for the quota."""
+
+
+_SLOT_WAIT_SLICE_S = 1.0
+
+
+@contextmanager
+def provider_slot(inst, cancel_event: Optional[threading.Event] = None):
+    """Hold one of the provider's whole-key parallel slots for a test request.
+
+    ``max_parallel_llm`` caps every LLM request on one key, across models; play
+    traffic enforces it through the lanes (``LaneManager._provider_room``).
+    A model test used to cap only its OWN requests, so a test next to a
+    running chat on the same key sent one request too many — on a 1-parallel
+    key the provider answered 429, and the shared quota then held the game
+    back as well. The request therefore takes a lane of its model's pool in
+    the SAME process-wide manager, as background work (``Priority.LOW``), so
+    a live chat goes first. Providers without that cap are not touched: there
+    the lanes would only slow a test of a model the routing does not list
+    (an unknown pool has one lane). Cancel is checked between wait slices.
+    """
+    from app.core import llm_lanes
+    from app.core.llm_queue import Priority
+    provider = getattr(inst, "provider_name", "") or ""
+    if llm_lanes.configured_provider_cap(provider) <= 0:
+        yield
+        return
+    manager = llm_lanes.get_lane_manager()
+    pool = llm_lanes.pool_key_for(provider, getattr(inst, "model", "") or "")
+    arrived = manager.now()
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise _QuotaWaitCancelled()
+        try:
+            handle = manager.acquire_lane(pool, f"model_test:{pool}", Priority.LOW,
+                                          timeout=_SLOT_WAIT_SLICE_S, arrived=arrived,
+                                          label="model test")
+            break
+        except llm_lanes.LaneTimeout:
+            continue
+    try:
+        yield
+    finally:
+        handle.release()
 
 
 def _wait_for_quota(quota, cancel_event: Optional[threading.Event] = None,
