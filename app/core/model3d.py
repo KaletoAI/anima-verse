@@ -394,6 +394,9 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # fresh T-pose render of a new outfit combination succeeds.
             "auto_generate": bool(raw.get("auto_generate")),
             "face_before_rig": bool(raw.get("face_before_rig")),
+            # The face cleanup before the face retexture (app/core/face_cleanup.py) is on by default;
+            # only an explicit False is stored.
+            "face_cleanup": raw.get("face_cleanup") is not False,
             "face_photo": dict(raw.get("face_photo") or {}),
             "extension_rig_models": dict(raw.get("extension_rig_models") or {}),
             "extension_motion": dict(raw.get("extension_motion") or {}),
@@ -442,6 +445,13 @@ def set_model3d_options(character_name: str,
                 opts["auto_generate"] = True
             else:
                 opts.pop("auto_generate", None)
+        if "face_cleanup" in updates:
+            if type(updates["face_cleanup"]) is not bool:
+                raise ValueError("face_cleanup must be a boolean")
+            if updates["face_cleanup"]:
+                opts.pop("face_cleanup", None)
+            else:
+                opts["face_cleanup"] = False
         if "extension_rig" in updates:
             from app.core.face_retexture import safe_signature
             signature = safe_signature(updates.get("signature"))
@@ -2407,6 +2417,26 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
     if not check.get("ok"):
         return {"ok": False, "error": "; ".join(check.get("errors") or ["invalid unrigged source"]),
                 "errors": check.get("errors", []), "warnings": check.get("warnings", [])}
+    # The face cleanup (app/core/face_cleanup.py) runs HERE, on the validated mesher result, before it becomes
+    # the retained source: the face retexture is frozen from that file, the rig reads it and every re-rig
+    # starts over from it. Humanoid meshes only; a failure keeps the mesher's bytes and is recorded.
+    face_cleanup: Optional[Dict[str, Any]] = None
+    if rig == "mixamo":
+        from app.core import face_cleanup as _face_cleanup
+        if not _face_cleanup.enabled_for(character_name):
+            face_cleanup = {"status": "skipped", "reason": "disabled for this character", "at": utc_now_iso()}
+        else:
+            try:
+                blob, face_cleanup = _face_cleanup.clean_face(blob)
+                if face_cleanup.get("status") == "applied":
+                    verdict = validate_source(blob)
+                    if not verdict.get("ok"):
+                        raise ValueError("cleaned mesh fails validation: " + "; ".join(verdict.get("errors") or []))
+                logger.info("Face cleanup %s/%s: %s", character_name, signature, _face_cleanup.summary(face_cleanup))
+            except Exception as exc:  # noqa: BLE001 — never block a generation on the cleanup
+                blob = source.read_bytes()
+                face_cleanup = {"status": "failed", "error": str(exc), "at": utc_now_iso()}
+                logger.warning("Face cleanup %s/%s failed, keeping the mesher's file: %s", character_name, signature, exc)
     texture = None
     rig_error = ""
     if rig == "generic":
@@ -2434,6 +2464,8 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
         source_meta["single_view"] = True
     if result.get("job_id"):
         source_meta["job_id"] = result["job_id"]
+    if face_cleanup is not None:
+        source_meta["face_cleanup"] = face_cleanup
     _publish_sidecar(retained, source_meta)
     _publish_model_bytes(path, blob)
     meta = {**source_meta, "source": "generated", "character": character_name,
@@ -2954,6 +2986,9 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
         meta["base"] = True
     if face_status is not None:
         meta["face_retexture"] = face_status
+    face_cleanup = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb").get("face_cleanup")
+    if face_cleanup:
+        meta["face_cleanup"] = face_cleanup
     _auto_retexture(character_name, path, meta)
     _auto_normalize(character_name, path, meta)
     # Reads meta["base"]: a base body skips the anatomy-part batches.
@@ -3133,7 +3168,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
             "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view",
-            "base")}
+            "base", "face_cleanup")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),

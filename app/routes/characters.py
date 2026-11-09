@@ -2805,7 +2805,7 @@ def queue_character_extension_rigs(
 async def set_character_model3d_options(character_name: str, request: Request,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.
-    Body: {"auto_generate": bool, "face_before_rig": bool}; each is optional.
+    Body: {"auto_generate": bool, "face_before_rig": bool, "face_cleanup": bool}; each is optional.
     Auto-generation uses the cheapest backend after the new T-pose succeeds."""
     import asyncio
     body = await request.json()
@@ -2821,7 +2821,8 @@ def _set_character_model3d_options_sync(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
-            "auto_generate" in body or "face_before_rig" in body or "face_photo" in body or "extension_rig" in body):
+            "auto_generate" in body or "face_before_rig" in body or "face_cleanup" in body
+            or "face_photo" in body or "extension_rig" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
@@ -2833,6 +2834,10 @@ def _set_character_model3d_options_sync(character_name: str,
         updates["face_before_rig"] = body["face_before_rig"]
     if "auto_generate" in body:
         updates["auto_generate"] = bool(body["auto_generate"])
+    if "face_cleanup" in body:
+        if type(body["face_cleanup"]) is not bool:
+            raise HTTPException(400, "face_cleanup must be a boolean")
+        updates["face_cleanup"] = body["face_cleanup"]
     if "extension_rig" in body:
         if not isinstance(body.get("signature"), str):
             raise HTTPException(400, "extension_rig requires a model signature")

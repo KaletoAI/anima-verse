@@ -190,7 +190,7 @@ export interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
+  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_cleanup?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
     collision_scales?: Record<string, number> }
@@ -599,7 +599,7 @@ export function FieldModel3D({ character }: { character: string }) {
 
   // Independent per-character generation options.
   const setModelOption = useCallback(
-    async (key: 'auto_generate' | 'face_before_rig', value: boolean) => {
+    async (key: 'auto_generate' | 'face_before_rig' | 'face_cleanup', value: boolean) => {
       setSt((prev) => ({ ...prev, options: { ...(prev.options || {}), [key]: value } }))
       try {
         const d = await apiPost<{ options: Model3DStatus['options'] }>(

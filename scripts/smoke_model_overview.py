@@ -179,6 +179,7 @@ def main() -> int:
     check("rows", rows_of(steps), [
         ("hand_gate", "warning", "palms may face the camera — kept attempt 2 of 2 without a pass"),
         ("mesh", "done", "MV · 4 views"),
+        ("face_cleanup", "missing", "Not recorded (made before the step)"),
         ("face_retexture", "done", "FR · face view"),
         ("dark_gate", "done", "passed after a retry (retry kept) · 1.2 % dark vs photo 0.4 %"),
         ("rig", "done", "mixamo · RG"),
@@ -192,11 +193,11 @@ def main() -> int:
         ("measure", "done", "120,000 tris · 56 bones · h 1.70 m"),
     ])
     check("hand numbers", steps[0]["numbers"], {"score": 0.07, "limit": 0.05, "attempts": 2})
-    check("face numbers", steps[2]["numbers"]["texels_replaced"], 400.0)
-    check("normalize numbers", (steps[6]["numbers"]["height_before_m"], steps[6]["numbers"]["height_after_m"]),
+    check("face numbers", steps[3]["numbers"]["texels_replaced"], 400.0)
+    check("normalize numbers", (steps[7]["numbers"]["height_before_m"], steps[7]["numbers"]["height_after_m"]),
           (1.36, 1.7))
-    check("labels", [s["label"] for s in steps][:4],
-          ["Front view hand check", "Mesh", "Face retexture", "Black-eye check"])
+    check("labels", [s["label"] for s in steps][:5],
+          ["Front view hand check", "Mesh", "Face cleanup", "Face retexture", "Black-eye check"])
     failed = {**FIXTURE_A, "face_retexture": {"status": "failed", "error": "boom"}}
     face_rows = [r for r in rows_of(mo.base_model_steps(failed, front_meta=None)) if r[0] in ("face_retexture", "dark_gate")]
     check("face failed", face_rows, [("face_retexture", "failed", "boom")])

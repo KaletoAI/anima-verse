@@ -106,6 +106,17 @@ export function Model3DGeneration({ character }: { character: string }) {
       {pipeline ? <div className="ga-hint">{t('Outfit models are built from the base body automatically.')}</div> : null}
       <label className="ga-check-row"
         title={st.rig && st.rig !== 'mixamo' ? t('Humanoid models only.')
+          : t('Before the face retexture, lash flaps the mesher built from painted lashes are pressed back onto the lids and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>
+        <input
+          type="checkbox"
+          checked={st.options?.face_cleanup !== false}
+          disabled={!!st.rig && st.rig !== 'mixamo'}
+          onChange={(e) => setModelOption('face_cleanup', e.target.checked)}
+        />
+        <span>{t('Face cleanup before the face retexture (lashes, lips)')}</span>
+      </label>
+      <label className="ga-check-row"
+        title={st.rig && st.rig !== 'mixamo' ? t('Humanoid models only.')
           : pipeline ? t('The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.')
           : t('New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.')}>
         <input type="checkbox" checked={!!st.options?.face_before_rig}

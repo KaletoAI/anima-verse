@@ -10,7 +10,8 @@ a 3D model or an image, decided here on the server.
    ``numbers`` are the raw values (``{name: number | str}``).
 
    - ``base_model_steps``: the base model ``model3d/<bsig>.glb`` — hand check
-     of the front image, mesh, face retexture, black-eye check, rig, head
+     of the front image, mesh, face cleanup (lash flaps pressed, lips
+     neutralised — ``face_cleanup.py``), face retexture, black-eye check, rig, head
      twist, normalize, limb weights, extension rig, covered variant
      (``model3d/covered/<bsig>.glb``), collision capsules, texture
      re-encode, measurement.
@@ -313,6 +314,41 @@ def _mesh_step(meta: Dict[str, Any]) -> Dict[str, Any]:
     return step("mesh", "Mesh", DONE, detail, {"views": views or None})
 
 
+def _face_cleanup_step(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The face cleanup before the face retexture (``face_cleanup.py``): eyes and mouth in one row."""
+    record = _dict(meta.get("face_cleanup"))
+    if not record:
+        return step("face_cleanup", "Face cleanup", NOT_RECORDED, "Not recorded (made before the step)")
+    status = str(record.get("status") or "")
+    eyes, mouth = _dict(record.get("eyes")), _dict(record.get("mouth"))
+    rows = [e for e in (eyes.get("eyes") or []) if isinstance(e, dict)]
+    before = [_num(_dict(e.get("before_mm")).get("lash_outer_max")) for e in rows]
+    after = [_num(_dict(e.get("after_mm")).get("lash_weighted_max")) for e in rows]
+    before_max = max((v for v in before if v is not None), default=None)
+    after_max = max((v for v in after if v is not None), default=None)
+    numbers = {"eye_before_mm": before_max, "eye_after_mm": after_max, "eye_limit_mm": _num(eyes.get("limit_mm")),
+               "moved_vertices": sum(int(e.get("moved_vertices") or 0) for e in rows) or None,
+               "lip_ratio_before": _num(mouth.get("ratio_before")), "lip_ratio_after": _num(mouth.get("ratio_after")),
+               "lip_ratio_limit": _num(mouth.get("limit"))}
+    if status == "failed":
+        return step("face_cleanup", "Face cleanup", FAILED, str(record.get("error") or ""), numbers)
+    parts = []
+    if eyes.get("status") == "applied" and before_max is not None and after_max is not None:
+        parts.append(f"lashes {before_max:.1f} → {after_max:.1f} mm proud")
+    elif eyes.get("status") == "skipped":
+        parts.append("eyes: " + str(eyes.get("reason") or "skipped"))
+    if mouth.get("status") == "applied":
+        parts.append(f"lips/skin saturation {mouth.get('ratio_before')} → {mouth.get('ratio_after')}")
+    elif mouth.get("status") == "skipped":
+        parts.append("mouth: " + str(mouth.get("reason") or "skipped"))
+    if status == "applied":
+        over = ((after_max is not None and numbers["eye_limit_mm"] is not None and after_max > numbers["eye_limit_mm"])
+                or (numbers["lip_ratio_after"] is not None and numbers["lip_ratio_limit"] is not None
+                    and mouth.get("status") == "applied" and numbers["lip_ratio_after"] > numbers["lip_ratio_limit"]))
+        return step("face_cleanup", "Face cleanup", WARNING if over else DONE, " · ".join(parts), numbers)
+    return step("face_cleanup", "Face cleanup", SKIPPED, str(record.get("reason") or " · ".join(parts)), numbers)
+
+
 def _face_steps(face: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The face retexture row and — once recorded — the black-eye check."""
     if not face:
@@ -384,7 +420,8 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
     ``collision_current``: whether the stored capsule set still describes
     the file (None = unknown)."""
     blender = _dict(meta.get("blender"))
-    rows = [_hand_gate_step(front_meta), _mesh_step(meta), *_face_steps(_dict(meta.get("face_retexture"))),
+    rows = [_hand_gate_step(front_meta), _mesh_step(meta), _face_cleanup_step(meta),
+            *_face_steps(_dict(meta.get("face_retexture"))),
             _rig_step(meta)]
     for row in (_head_twist_step(blender), _normalize_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
