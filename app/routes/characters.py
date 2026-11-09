@@ -1866,9 +1866,10 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
 def get_character_garments(character_name: str,
                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's own-mesh overview (``garment_set.wardrobe``):
-    ``{pipeline, items: {item_id: {state, step, painted, reason}}, overlaps:
-    [{items, slots}]}`` — every own-mesh piece the character holds or
-    wears, and the worn pairs whose meshes take the same body slot."""
+    ``{pipeline, items: {item_id: {state, step, painted, reason, over,
+    without}}, overlaps: [{items, slots}]}`` — every own-mesh piece the
+    character holds or wears (a worn piece over others names them), and the
+    worn pieces that are over each other (layered in slot rank order)."""
     from app.core import garment_set
     _require_character(character_name)
     return garment_set.wardrobe(character_name)
@@ -1906,8 +1907,10 @@ def get_character_garment(character_name: str, item_id: str,
     painted_when_unfitted = bool(pipeline and worn and kind == garment_set.CLOTHING)
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "own_mesh": kind == garment_set.CLOTHING, "worn": bool(worn),
-               "status": garment_set.piece_status(info, worn=painted_when_unfitted,
-                                                  base_model_ready=bool(base and base[1])),
+               "status": garment_set.piece_status(
+                   info, worn=painted_when_unfitted, base_model_ready=bool(base and base[1]),
+                   layers=garment_set.worn_layers(character_name, profile=profile,
+                                                  base_model_sha=base[1] if base else "").get(item_id)),
                "garment": info, "limits": _garment_limits(kind)}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)

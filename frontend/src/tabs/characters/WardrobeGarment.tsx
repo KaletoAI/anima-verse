@@ -11,8 +11,8 @@
  * every step with its gate chips (limits from the server) and Regenerate,
  * the preview with its freshness badge and the step overview (ModelSteps).
  *
- * Backend: GET /characters/{n}/garments (overview: pipeline, row status,
- * overlapping worn pieces), GET /characters/{n}/garments/{item} (the panel,
+ * Backend: GET /characters/{n}/garments (overview: pipeline, row status
+ * incl. the pieces it is fitted over, worn pieces over each other), GET /characters/{n}/garments/{item} (the panel,
  * polled while a step runs — useGarment), POST
  * /characters/{n}/garments/{item}/run {step?, view?, force?} (409 while a
  * garment run of the character goes), GET + PUT /inventory/items/{item}
@@ -112,6 +112,9 @@ export function PieceStatusChip({ status }: { status: PieceStatus }) {
     color = 'var(--warning, #d29922)'
   } else if (status.state === 'fitted') {
     color = 'var(--success, #3fb950)'
+    // Layered over the worn pieces under it (garment_layers); one without a fit is painted on.
+    if (status.over?.length) text = t('Fitted over {items}').replace('{items}', status.over.join(', '))
+    if (status.without?.length) text += ` · ${t('without {items}').replace('{items}', status.without.join(', '))}`
   }
   return (
     <span style={{ ...CHIP, border: `1px solid ${color}` }} title={`${text} · ${progress}`}>{text}</span>

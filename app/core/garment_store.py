@@ -14,6 +14,12 @@ Per owner, under ``characters/<name>/garments/``::
                                                       garment grafted on; its record
                                                       holds gates + base_model_sha256
     low/{item}_{fsig}.glb                             the distance tier
+    layers/{item}_{fsig}_{lsig}.glb + .json           a LAYERED fit: the body fit pushed
+                                                      over the fitted inner pieces
+                                                      (``garment_layers``, plan 2026-11-10
+                                                      Task 2); ``lsig`` names the inner
+                                                      fits it was made over
+    layers/low/{item}_{fsig}_{lsig}.glb               its distance tier
     failed/{item}_{fsig}.json                         the last failed chain run of
                                                       this fsig {step, error,
                                                       base_model_sha256, failed_at}
@@ -81,7 +87,10 @@ GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
 IMAGE_STEPS: Tuple[str, ...] = ("haired", "worn", "ghost", "cutout")
 #: part -> sub-folder of ``garments/`` ("" = the folder itself).
 PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepared",
-                             "fit": "", "low": "low", "failed": "failed"}
+                             "fit": "", "low": "low", "failed": "failed",
+                             "layer": "layers", "layer_low": "layers/low"}
+#: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
+LAYER_PARTS: Tuple[str, ...] = ("layer", "layer_low")
 
 _FSIG_RE = re.compile(r"[0-9a-f]{12}")
 _ITEM = r"(?P<item>[A-Za-z0-9][A-Za-z0-9_-]*)"
@@ -90,6 +99,8 @@ _FSIG = r"(?P<fsig>[0-9a-f]{12})"
 _IMAGE_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[a-z]+_[a-z]+(?:\.try[0-9]+)?\.(?:png|json)")
 #: the mesh folders and the fit: {item}_{fsig}.{glb,json}
 _MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"\.(?:glb|json)")
+#: layers/ and layers/low/: {item}_{fsig}_{lsig}.{glb,json}
+_LAYER_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[0-9a-f]{12}\.(?:glb|json)")
 
 
 def _profile_of(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -117,14 +128,15 @@ def garments_dir(character_name: str) -> Path:
 
 
 def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
-                 step: str = "", view: str = "", attempt: int = 0) -> Path:
+                 step: str = "", view: str = "", attempt: int = 0, lsig: str = "") -> Path:
     """The file of one garment part (see the module docstring for the layout).
 
     ``part`` is ``image`` (needs an image ``step`` and a ``view``; ``attempt``
-    > 0 names that attempt's file), ``raw``, ``prepared``, ``fit``, ``low``
-    or ``failed`` (a JSON record, ``record_failure``).
-    ValueError for an invalid item id, fsig, part, step or view, and for any
-    path that would resolve outside ``garments/``. Creates nothing."""
+    > 0 names that attempt's file), ``raw``, ``prepared``, ``fit``, ``low``,
+    ``failed`` (a JSON record, ``record_failure``), or ``layer`` /
+    ``layer_low`` (a layered fit, needs its ``lsig``).
+    ValueError for an invalid item id, fsig, lsig, part, step or view, and for
+    any path that would resolve outside ``garments/``. Creates nothing."""
     from app.models.inventory import safe_item_id
     iid = safe_item_id(item_id)
     if not iid or iid != item_id:
@@ -141,6 +153,10 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
             raise ValueError(f"no garment view {view!r}")
         tail = f".try{int(attempt)}.png" if attempt else ".png"
         path = root / PART_DIRS[part] / f"{iid}_{fsig}_{step}_{view}{tail}"
+    elif part in LAYER_PARTS:
+        if not isinstance(lsig, str) or not _FSIG_RE.fullmatch(lsig):
+            raise ValueError(f"invalid layer fingerprint {str(lsig)[:40]!r}")
+        path = root / PART_DIRS[part] / f"{iid}_{fsig}_{lsig}.glb"
     else:
         folder = root / PART_DIRS[part] if PART_DIRS[part] else root
         path = folder / f"{iid}_{fsig}.{'json' if part == 'failed' else 'glb'}"
@@ -167,8 +183,13 @@ def hairdeck_dir(character_name: str, item_id: str, hsig: str) -> Path:
 
 
 def parse_name(path: Path) -> Optional[Tuple[str, str]]:
-    """``(item_id, fsig)`` of a stored garment file, None for any other name."""
-    pattern = _IMAGE_NAME_RE if path.parent.name == PART_DIRS["image"] else _MESH_NAME_RE
+    """``(item_id, fsig)`` of a stored garment file, None for any other name
+    (a layered fit belongs to the group of the body fit it was made from)."""
+    layers = PART_DIRS["layer"]
+    if path.parent.name == layers or (path.parent.name == "low" and path.parent.parent.name == layers):
+        pattern = _LAYER_NAME_RE
+    else:
+        pattern = _IMAGE_NAME_RE if path.parent.name == PART_DIRS["image"] else _MESH_NAME_RE
     match = pattern.fullmatch(path.name)
     return (match.group("item"), match.group("fsig")) if match else None
 

@@ -76,6 +76,17 @@ after the other, each request once.
 An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
 asks ``base_body.after_mesh_item_ready``: an outfit model that left it
 painted on (no fit then) is rebuilt without it.
+
+Pieces worn over each other (plan
+``docs/superpowers/plans/2026-11-10-texture-body-reuse-and-layering.md``,
+Task 2): the fit step of this chain always fits against the BODY alone, so the
+runs of one character's pieces need no order and an inner piece's refit never
+re-runs an outer piece's chain. The layer order and the outer piece's fit over
+the inner ones are derived from the accepted body fits by ``garment_layers``
+(``garment_set.layer_order``; keyed by the inner fits, CPU only, no hub job)
+when the assembly is built; a new inner fit (this module's ``_publish_fit``
+schedules the assembly) makes the outer piece's layered fit stale through its
+key.
 """
 import hashlib
 import os

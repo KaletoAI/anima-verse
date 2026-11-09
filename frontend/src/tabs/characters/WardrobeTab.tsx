@@ -6,7 +6,7 @@
  * Setters: POST /inventory/characters/{c}/{equip,unequip,apply-outfit-set},
  * GET/POST /characters/{c}/outfit-lock for the "keep this outfit" switch.
  * Own-mesh pieces (WardrobeGarment): GET /characters/{c}/garments for the
- * row toggles, chips and the overlap warning; one expandable chain panel.
+ * row toggles, chips and the layer-order warning; one expandable chain panel.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -329,9 +329,10 @@ export function WardrobeTab({ character }: { character: string }) {
         ) : null}
         {garments?.overlaps.map((o) => (
           <div key={o.items.join('|')} role="alert" style={{ fontSize: '0.8em', color: 'var(--warning, #d29922)' }}>
-            {t('{a} and {b} are both own meshes on {slots} — garments have no collision yet, they can intersect.')
-              .replace('{a}', itemName(o.items[0])).replace('{b}', itemName(o.items[1]))
-              .replace('{slots}', o.slots.map((s) => t(data.slot_labels[s] || s)).join(', '))}
+            {t('{items} cover each other on {slots} — layered in slot order, {inner} innermost.')
+              .replace('{items}', o.items.map(itemName).join(', '))
+              .replace('{slots}', o.slots.map((s) => t(data.slot_labels[s] || s)).join(', '))
+              .replace('{inner}', itemName(o.items[0]))}
           </div>
         ))}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>

@@ -38,6 +38,15 @@ older base (served as stale until rebuilt) has another body under the
 garments: it is served bare, and no assembly is built for it. Off the
 base-body pipeline, or with nothing wanted, the bare file is served
 unchanged.
+
+Own-mesh pieces of the signature worn over each other (plan
+2026-11-10-texture-body-reuse-and-layering, Task 2): an outer piece is
+grafted from its LAYERED fit over the inner pieces of the set
+(``garment_layers``; its sidecar entry adds ``over: <lsig>``). ``served``
+only reads: a layered fit not built yet serves the body fit, the entry says
+``pending`` and the build (``assemble``) makes the layered fit first — CPU
+work, no hub job. A changed inner fit changes the ``lsig``, so the assembly
+is no longer current and the outer piece is layered again.
 """
 import json
 import threading
@@ -164,14 +173,21 @@ def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
 
 
 def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
-            bare_meta: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+            bare_meta: Optional[Dict[str, Any]] = None, build_layers: bool = False) -> List[Dict[str, Any]]:
     """The garments to graft, sorted by item id: ``{item_id, kind, fsig, fit,
     low, record}`` per garment with an accepted fit on the current base
     model — the hair of the profile's ``equipped_mesh_pieces``, and with
     ``bare_meta`` (the bare model's sidecar) the signature's effective mesh
     set (``effective_mesh_items``), restricted to fits on the base model that
     bare model was built on (``built_on_fit_base``). [] off the pipeline or
-    with nothing wanted."""
+    with nothing wanted.
+
+    Own-mesh pieces worn over each other (plan 2026-11-10 Task 2,
+    ``garment_layers``): an outer piece's ``fit`` / ``low`` are its layered
+    fit over the inner pieces of the set, and it carries ``over: {lsig,
+    items, pending, without}``; a layered fit not built yet serves the body
+    fit with ``pending`` True. ``build_layers`` (the assembly build, never
+    serving) builds the missing ones first."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
@@ -212,14 +228,30 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
         low = garment_store.garment_path(character_name, item_id, fsig, "low")
         out.append({"item_id": item_id, "kind": kind, "fsig": fsig, "fit": fit[0],
                     "low": low if low.is_file() else None, "record": fit[1]})
+    layered = [g for g in out if g["kind"] == CLOTHING]
+    if bare_meta is not None and len(layered) > 1:
+        from app.core import garment_layers
+        from app.core.base_body import mesh_items_intended
+        args = dict(base_sha=base[1], profile=profile, intended=mesh_items_intended(bare_meta),
+                    fits={g["item_id"]: (g["fit"], g["record"]) for g in layered})
+        items = [g["item_id"] for g in layered]
+        layers = (garment_layers.ensure if build_layers else garment_layers.plan)(character_name, items, **args)
+        for g in layered:
+            entry = layers.get(g["item_id"])
+            if entry and entry["lsig"]:
+                g.update(fit=entry["source"], low=entry["low"],
+                         over={"lsig": entry["lsig"], "items": sorted(entry["inner"]),
+                               "pending": entry["pending"], "without": entry["without"]})
     return out
 
 
-def _wanted_for(character_name: str, directory: Path, signature: str) -> List[Dict[str, Any]]:
+def _wanted_for(character_name: str, directory: Path, signature: str, *,
+                build_layers: bool = False) -> List[Dict[str, Any]]:
     """``_wanted`` for the bare model of ``signature`` in ``directory``: its
     FULL sidecar names the base it was built on (the low tier is derived
     from the full file)."""
-    return _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")))
+    return _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")),
+                   build_layers=build_layers)
 
 
 def wanted_garments(character_name: str, *,
@@ -236,10 +268,20 @@ def _source(garment: Dict[str, Any], tier: str) -> Path:
     return garment["low"] if tier == LOW and garment["low"] is not None else garment["fit"]
 
 
-def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, str]]:
-    """The sidecar ``garments`` map an assembly of ``tier`` must carry."""
-    return {g["item_id"]: {"kind": g["kind"], "fsig": g["fsig"], "sha256": _file_sha256(_source(g, tier))}
-            for g in wanted}
+def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, Any]]:
+    """The sidecar ``garments`` map an assembly of ``tier`` must carry — a
+    layered piece adds ``over`` (its ``lsig``) and, while its layered fit is
+    missing, ``pending`` (so the assembly is rebuilt once it exists)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for g in wanted:
+        entry: Dict[str, Any] = {"kind": g["kind"], "fsig": g["fsig"], "sha256": _file_sha256(_source(g, tier))}
+        over = g.get("over")
+        if over:
+            entry["over"] = over["lsig"]
+            if over["pending"]:
+                entry["pending"] = True
+        out[g["item_id"]] = entry
+    return out
 
 
 def _current(assembled: Path, bare: Path, state: Dict[str, Any]) -> bool:
@@ -323,9 +365,10 @@ def _build(character_name: str, directory: Path, bare: Path,
     for garment in wanted:
         source = _source(garment, tier)
         mesh = glb_mesh.garment_arrays(source.read_bytes())
-        blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}",
-                              extras={"kind": garment["kind"], "item_id": garment["item_id"],
-                                      "fsig": garment["fsig"]})
+        extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}
+        if garment.get("over") and not garment["over"]["pending"]:
+            extras["over"] = garment["over"]["items"]
+        blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras)
     verdict = model3d._validator_for("mixamo", character_name)(blob)
     if not verdict.get("ok"):
         raise ValueError("assembled model failed validation: " + "; ".join(verdict.get("errors") or []))
@@ -358,7 +401,8 @@ def assemble(character_name: str, signature: str, *,
             or signature in (".", ".."):
         raise ValueError("Invalid model signature")
     directory = model3d.get_model3d_dir(character_name)
-    wanted = _wanted_for(character_name, directory, signature)
+    # The layered fits of pieces worn over each other are built here (CPU, no hub job), never while serving.
+    wanted = _wanted_for(character_name, directory, signature, build_layers=True)
     statuses: Dict[str, str] = {}
     errors: List[str] = []
     changed = False

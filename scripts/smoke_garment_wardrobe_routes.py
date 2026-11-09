@@ -48,8 +48,9 @@ Fixture (expected values derived by hand):
 [5] GET /characters/Demo/garments: pipeline True, items = the flagged pieces
     Demo holds [cape, coat, dress] (not shirt, not the hair); dress painted
     with reason "ghost — gate refused"; cape not worn -> painted False,
-    reason None; overlaps: the coat covers top, the dress is worn on top
-    -> [{items [coat, dress], slots [top]}]. Offline: pipeline False, dress
+    reason None; overlaps: the coat covers top, the dress is worn on top —
+    the coat is LAYERED over the dress (plan 2026-11-10 Task 2), only pieces
+    over each other warn -> []. Offline: pipeline False, dress
     painted False, overlaps []. Other: items {}.
 [6] garment_set.piece_status, pure: running wins ({running, step "mesh"});
     an accepted fit of the current fsig -> {fitted, painted False, reason
@@ -238,7 +239,7 @@ def main() -> int:
                   {"state": "images", "step": None, "painted": True, "reason": "ghost — gate refused"})
             check("cape row", items.get("cape"),
                   {"state": "missing", "step": None, "painted": False, "reason": None})
-            check("overlaps", body.get("overlaps"), [{"items": ["coat", "dress"], "slots": ["top"]}])
+            check("overlaps", body.get("overlaps"), [])
             body = client.get("/characters/Offline/garments").json()
             check("offline", (body.get("pipeline"), (body.get("items") or {}).get("dress", {}).get("painted"),
                               body.get("overlaps")), (False, False, []))

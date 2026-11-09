@@ -217,6 +217,11 @@ export interface PieceStatus {
   painted: boolean
   /** Why it is painted on (server text, the outfit warning's words). */
   reason: string | null
+  /** Names of the worn own-mesh pieces under this one that have a fit: it is fitted over them
+   *  (absent when nothing is worn under it). */
+  over?: string[]
+  /** Names of the worn own-mesh pieces under this one without a fit (painted on): fitted without them. */
+  without?: string[]
 }
 
 /** GET /characters/{n}/garments — the Wardrobe's own-mesh overview. */
@@ -224,8 +229,8 @@ export interface WardrobeGarments {
   pipeline: boolean
   /** Every own-mesh piece the character holds or wears. */
   items: Record<string, PieceStatus>
-  /** Worn own-mesh pieces whose meshes take the same body slot. */
-  overlaps: Array<{ items: [string, string]; slots: string[] }>
+  /** Worn own-mesh pieces that are over each other: layered in slot order (inner first). */
+  overlaps: Array<{ items: string[]; slots: string[] }>
 }
 
 /** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */
