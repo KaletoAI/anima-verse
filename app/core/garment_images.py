@@ -7,8 +7,9 @@ Task 4).
 gated by the garment kind's gate (``garment_gates``). The accepted attempt
 is copied to the step's final file; two refusals raise ``GateRefused`` with
 both gate records. The edit is an image EDIT of its source on the routed
-``garment_view`` occasion: the base view (step ``haired``) or the accepted
-image of the step before (``ghost``), use case ``garment_edit`` (empty style,
+``garment_view`` occasion: the base view (the kind's first step — hair
+``haired``, clothing ``worn``) or the accepted image of the step before
+(``ghost``), use case ``garment_edit`` (empty style,
 the spike negative), no character LoRAs, and published unprocessed
 (``postprocess=False``) so the gates and the placement see the full frame.
 
@@ -20,7 +21,10 @@ edit model re-frames the figure by ~2 % and the body gate refuses a correct
 image (2026-11-09 end-to-end run: body XOR 0.111 narrow vs 0.005–0.007
 square).
 
-``cut_out`` turns an accepted hair-only image into the generator input
+The kind's own module (``kind_module``: ``garment_hair``,
+``garment_clothing``) gives the edit steps, prompts and gates.
+
+``cut_out`` turns an accepted ghost image into the generator input
 (R6): BiRefNet-DIS mask on the original colours, a square of side
 ``1.15 × max(w, h)`` around the mask, routed upscale below 1024², Lanczos
 top-up to ≥ 1024²; a failed upscale falls back to Lanczos alone and says so
@@ -70,20 +74,33 @@ def render_size(size: Tuple[int, int]) -> Tuple[int, int]:
     return tuple(-(-int(v) // SIZE_STEP) * SIZE_STEP for v in size)  # type: ignore[return-value]
 
 
-def _kind_module(item_id: str):
+def kind_module(kind: str):
+    """The module of a garment kind's image chain (``EDIT_STEPS``,
+    ``edit_prompt``, ``gate``, ``SUBJECT`` and the pair hooks ``PAIR_STEP``,
+    ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``, ``front_hints``).
+    ValueError for a kind without one."""
+    if kind == "hair":
+        from app.core import garment_hair
+        return garment_hair
+    if kind == "clothing":
+        from app.core import garment_clothing
+        return garment_clothing
+    raise ValueError(f"no image chain for garment kind {kind!r}")
+
+
+def _item_kind(item_id: str) -> str:
     from app.core import garment_set
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
     if garment_set.garment_kind_of(item) == garment_set.CLOTHING:
-        kind = garment_set.CLOTHING
-    elif item.get("category") != "garment":
+        return garment_set.CLOTHING
+    if item.get("category") != "garment":
         raise ValueError(f"{item_id!r} is no garment item")
-    else:
-        kind = str((item.get("garment") or {}).get("kind") or "")
-    if kind == "hair":
-        from app.core import garment_hair
-        return garment_hair
-    raise ValueError(f"no image chain for garment kind {kind!r}")
+    return str((item.get("garment") or {}).get("kind") or "")
+
+
+def _kind_module(item_id: str):
+    return kind_module(_item_kind(item_id))
 
 
 def _rgb(path: Path, size: Optional[Tuple[int, int]] = None):
@@ -177,9 +194,11 @@ def _crop_back(path: Path, target: Path, side: int, offset: Tuple[int, int],
 
 
 def _drop_later(character_name: str, item_id: str, fsig: str, step: str, view: str) -> None:
-    """A new accepted image makes the later image steps of the view stale."""
-    from app.core.garment_store import IMAGE_STEPS, garment_path
-    for later in IMAGE_STEPS[IMAGE_STEPS.index(step) + 1:]:
+    """A new accepted image makes the later image steps of the view stale
+    (the steps of the item's kind, ``garment_store.image_steps``)."""
+    from app.core.garment_store import garment_path, image_steps
+    order = image_steps(_item_kind(item_id))
+    for later in order[order.index(step) + 1:]:
         path = garment_path(character_name, item_id, fsig, "image", step=later, view=view)
         path.unlink(missing_ok=True)
         path.with_suffix(".json").unlink(missing_ok=True)
@@ -202,7 +221,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     attempt's gate record; a reason it returns refuses that attempt like a
     gate reason does, so the check uses the attempts of this step.
     ``prompt_hints`` go to the kind's ``edit_prompt`` as keyword arguments
-    (hair: ``length_t``, see ``haired_length``).
+    (hair: ``length_t``, see ``haired_length``); ``item_id`` always does.
 
     Cached: an accepted final of this fsig is returned unless ``force``.
     ``base_body.MissingInput`` when the base view or the source step's
@@ -231,7 +250,8 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
         if not _accepted(source):
             raise base_body.MissingInput(f"The {source_step} {view} image is missing — run that step first")
-    prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile, **(prompt_hints or {}))
+    prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile, item_id=item_id,
+                                        **(prompt_hints or {}))
     refs_dir = get_model_refs_dir(character_name)
     final.parent.mkdir(parents=True, exist_ok=True)
 
@@ -322,7 +342,7 @@ def haired_length(character_name: str, item_id: str, fsig: str, view: str = "bac
 
 def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: bool = False) -> Path:
     """The generator input of one view, ``images/{item}_{fsig}_cutout_{view}.png``
-    (R6), from the accepted hair-only image (step ``ghost``).
+    (R6), from the accepted ghost image (hair-only / garment-only).
 
     RGBA: the BiRefNet-DIS mask as alpha on the original colours, cropped to a
     square of side ``int(1.15 × max(w, h))`` around the mask box (padding
@@ -339,7 +359,7 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     target = garment_path(character_name, item_id, fsig, "image", step="cutout", view=view)
     if not force and _accepted(target):
         return target
-    _kind_module(item_id)
+    kind = _kind_module(item_id)
     ghost = garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
     if not _accepted(ghost):
         raise base_body.MissingInput(f"The ghost {view} image is missing — run that step first")
@@ -349,7 +369,7 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     alpha = _mask_image(data, rgb.size)
     box = alpha.point(lambda v: 255 if v > CUTOUT_ALPHA_MIN else 0).getbbox()
     if box is None:
-        raise ValueError(f"No hair found in the ghost {view} image")
+        raise ValueError(f"No {kind.SUBJECT} found in the ghost {view} image")
     x0, y0, x1, y1 = box
     side = int(CUTOUT_PAD * max(x1 - x0, y1 - y0))
     cx, cy = (x0 + x1) // 2, (y0 + y1) // 2

@@ -359,7 +359,8 @@ def _negative(step: str, view: str, description: str) -> str:
 
 
 def edit_prompt(character_name: str, step: str, view: str, *,
-                profile: Optional[Dict[str, Any]] = None, length_t: Optional[float] = None) -> Tuple[str, str]:
+                profile: Optional[Dict[str, Any]] = None, length_t: Optional[float] = None,
+                item_id: Optional[str] = None) -> Tuple[str, str]:
     """``(prompt, extra negative)`` of one hair edit (spike wording).
 
     ``haired``: the base view with the character's hair added — pronouns from
@@ -375,7 +376,9 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     haired front leaves it out: its hair falls behind the shoulders, the
     length is not visible there, and on the clone (2026-11-09, Kira) the
     phrase turned it into a shoulder-length bob with the body outline moving
-    (XOR 0.0161..0.0261 in 4 of 4 attempts against 0.0125 without it)."""
+    (XOR 0.0161..0.0261 in 4 of 4 attempts against 0.0125 without it).
+    ``item_id`` is the kind protocol's (``garment_images``); hair reads the
+    profile, not the item."""
     if step not in EDIT_STEPS:
         raise ValueError(f"no hair edit step {step!r}")
     if view not in _GHOST:
@@ -411,6 +414,41 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
         ref = garment_gates.hair_ref(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_gate(base_rgb, base_mask, ref, edit_rgb, edit_mask, view=view)
     raise ValueError(f"no hair edit step {step!r}")
+
+
+# --- The pair hooks of the orchestration (``garments``) -----------------------
+
+#: What the messages call the thing in the images ("No hair found …").
+SUBJECT = "hair"
+#: The step whose front is gated against the accepted back.
+PAIR_STEP = "ghost"
+PAIR_REFUSED = "front and back hair end at different heights"
+
+
+def pair_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
+    """Front and back hair-only images end at the same height
+    (``garment_gates.bottoms_agree``)."""
+    from app.core.garment_gates import bottoms_agree
+    return bottoms_agree(front_gate, back_gate)
+
+
+def pair_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
+    """The refusal reason of a hair-only front attempt against the accepted
+    back (``garment_gates.bottoms_reason``)."""
+    from app.core.garment_gates import bottoms_reason
+    return bottoms_reason(front_gate, back_gate)
+
+
+def front_hints(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Optional[Dict[str, Any]]:
+    """The prompt hints of the hair-only FRONT edit: ``{"length_t": t}`` from
+    the accepted haired back (``garment_images.haired_length``); None for any
+    other step or view, or without a measurement (no length named)."""
+    from app.core import garment_images
+    if step != "ghost" or view != "front":
+        return None
+    measured = garment_images.haired_length(character_name, item_id, fsig, "back")
+    logger.info("Garment %s/%s hair length from the back view: %s", character_name, item_id, measured)
+    return {"length_t": measured["t"]} if measured else None
 
 
 def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:

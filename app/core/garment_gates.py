@@ -22,6 +22,10 @@ limits as fractions of the image height H — the spike ran at H = 1536):
 ``bottoms_reason`` words a disagreement as a refusal of a front attempt.
 ``hair_length`` measures where the hair of the haired BACK view ends against
 the figure (the front prompts get it as a length phrase).
+
+Clothing (an own-mesh outfit piece, plan
+``docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md``, Task 2)
+has its own two gates and its own pair check, see "Clothing" below.
 """
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -304,6 +308,306 @@ def bottoms_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Opt
             f"(front {front_gate.get('bottom')}, back {back_gate.get('bottom')})")
 
 
+# --- Clothing ---------------------------------------------------------------
+#
+# The clothing chain edits the bald, bare base view into ``worn`` (the figure
+# wearing only the piece) and that into ``ghost`` (the piece alone on an
+# invisible body). Every pixel number below is a fraction of the base figure
+# height Hb (``_zones`` of the base mask), every area a share of an area, so
+# the limits hold at any image size.
+#
+# Calibration (``~/claude-out/phase5-calib/calibrate.py`` on the S1 spike:
+# ``kleid/dress_front|back.png`` against the bald base views
+# ``bald/cur_apose_s41.png`` / ``bald/userback_a0f40bdb.png``, the ghosts
+# ``kleid/ghost_front_s51..s53.png`` + ``ghost_back.png``; 1536², BiRefNet-DIS
+# masks as ``garment_images._mask``; base figure y0 30 / 27, Hb 1452 / 1427):
+#
+# worn                    front     back      limit
+#   garment_share         0.701     0.7102    >= 0.01   (something was put on)
+#   outside_dRGB          5.26      4.30      < 8.0
+#   outside_xor           0.0074    0.0048    < 0.015
+#   head_garment          0.0       0.0       <= 0.05
+# refused on purpose: the worn front moved 3 px right (outside_xor 0.0366),
+# 6 px (dRGB 8.86, xor 0.0392, head 0.074), the other view's worn image
+# (xor 0.1314, head 0.381), the head 20 % darker (head_garment 0.869).
+#
+# ghost (front vs the worn front's garment region; back vs the worn back's)
+#                 top_dy     centre_dx  w_ratio  skin_left  outside  neck_fill
+#   s52 (taken)   +0.00069   +0.00034   0.998    0.00014    0.0010   0.542
+#   s51           -0.00413    0.0       1.004    0.0002     0.0005   0.774
+#   s53           -0.00482    0.0       1.004    0.00009    0.0003   0.802
+#   unseeded      -0.00207   +0.00069   1.088    0.00096    0.2478   0.594
+#   s52 + legs    +0.00069   -0.00413   1.207    0.2223     0.3065   0.542
+#   worn front    -0.146     +0.00069   1.580    0.4389     0.5829   0.998
+#   back (taken)  -0.0028    +0.00035   1.007    0.0        0.0002   (no neckline)
+#   limit       |..|<=0.0055 |..|<=0.007 [0.95,1.05] <=0.005 <=0.05  <=0.70
+# s51 and s53 are told from s52 by the neckline: the inside of the back
+# fills 77 % / 80 % of the worn neckline opening instead of 54 % (the
+# opening shrinks) — NECK_FILL_MAX lies between them. Their shoulders also
+# sit 6 and 7 px higher (top_dy -0.0041 / -0.0048 against +0.0007), but the
+# accepted BACK ghost moved 4 px (-0.0028), so top_dy keeps the hair gate's
+# 8 px (0.0055 Hb) instead of a cut between 4 and 6 px on one sample.
+# The front neckline is 31 px deep (0.0213 Hb), the back's 13 px (0.0091 Hb):
+# a neckline counts from NECKLINE_MIN_DEPTH, so only the front is checked.
+# ``outside`` leaves the neckline opening out (s52 shows the inside of the
+# back there: 0.0036 with it, 0.0010 without).
+#
+# hems_agree: the ghost bottoms against each view's own figure — front s52
+# (975 − 30) / 1452 = 0.65083, back (968 − 27) / 1427 = 0.65943, |Δ| 0.0086
+# <= HEM_AGREE 0.02 (≈ 3.4 cm on a 1.70 m figure).
+GARMENT_DRGB = 20.0         # a worn pixel this far from the base belongs to the garment
+GARMENT_OPEN = 2            # opening iterations @1536 (thin outline fringes go)
+GARMENT_CLOSE = 4           # closing iterations @1536
+GARMENT_MIN_COMPONENT = 0.002   # smallest kept part, share of the base body area
+GARMENT_MARGIN = 8          # px @1536 around the garment region that belong to its edge
+GARMENT_MIN = 0.01          # garment region / base body area, at least
+OUTSIDE_DRGB_MAX = 8.0      # mean |ΔRGB| on the figure outside the garment region
+OUTSIDE_XOR_MAX = 0.015     # outline change outside the garment region / base body area
+HEAD_ZONE = CHIN_ROW        # the head: base figure rows above y0 + 0.13·Hb
+HEAD_GARMENT_MAX = 0.05     # share of the head zone inside the garment region
+CLOTH_TOP_DY_MAX = 0.0055   # |top edge offset| / Hb (8 px at Hb 1452)
+CLOTH_CENTRE_DX_MAX = 0.007  # |centre offset| / Hb
+CLOTH_W_RATIO_MIN = 0.95
+CLOTH_W_RATIO_MAX = 1.05
+SKIN_FACE_ROWS = (0.04, 0.10)   # the skin sample: rows of the base head (y0 + t·Hb)
+SKIN_DRGB = 30.0            # a ghost pixel this close to the sampled skin is skin
+SKIN_LEFT_MAX = 0.005       # skin outside the garment region / garment area
+CLOTH_OUTSIDE_MAX = 0.05    # ghost pixels outside the garment region / garment area
+NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
+NECKLINE_BAND = 0.03        # ± this share of the garment width around its centre column
+NECK_FILL_MAX = 0.70        # share of the worn neckline opening the ghost may cover
+HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
+
+
+def garment_region(base_rgb, base_mask, worn_rgb, worn_mask) -> np.ndarray:
+    """The garment of a worn view: worn mask AND (|ΔRGB| to the base > 20 OR
+    outside the base mask), opened 2 and closed 4 iterations (scaled by
+    H / 1536, at least 1), parts below 0.2 % of the base body area dropped,
+    holes filled (a garment colour close to the skin leaves no gap)."""
+    from scipy import ndimage
+    _check(base_rgb, base_mask, worn_rgb, worn_mask)
+    m0, m1 = np.asarray(base_mask, dtype=bool), np.asarray(worn_mask, dtype=bool)
+    height = m0.shape[0]
+    region = m1 & ((_diff(base_rgb, worn_rgb) > GARMENT_DRGB) | ~m0)
+    region = ndimage.binary_closing(
+        ndimage.binary_opening(region, iterations=_iterations(GARMENT_OPEN, height)),
+        iterations=_iterations(GARMENT_CLOSE, height))
+    labels, count = ndimage.label(region)
+    if count:
+        sizes = np.bincount(labels.ravel())
+        keep = np.nonzero(sizes >= GARMENT_MIN_COMPONENT * max(int(m0.sum()), 1))[0]
+        region = np.isin(labels, keep[keep > 0])
+    return ndimage.binary_fill_holes(region)
+
+
+def _margin(region, height: int) -> np.ndarray:
+    from scipy import ndimage
+    return ndimage.binary_dilation(region, iterations=_iterations(GARMENT_MARGIN, height))
+
+
+def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str) -> Dict[str, Any]:
+    """Step 1 gate of clothing: the base view with the piece put on.
+
+    The garment region G = ``garment_region``; everything of the figure
+    outside G grown by 8 px @1536 (head, arms, hands, legs, feet for a dress)
+    must stay as it was: ``outside_dRGB`` = mean |ΔRGB| where both masks hold
+    there (< 8.0), ``outside_xor`` = (base XOR worn mask) there / base body
+    area (< 0.015 — a moved limb or a re-framed figure). ``head_garment`` =
+    share of the base head zone (rows above y0 + 0.13·Hb) inside G (<= 0.05:
+    a changed face joins G and must not pass as garment). ``garment_share`` =
+    G / base body area (>= 0.01: the edit put something on). ``garment_top``
+    / ``garment_bottom`` are G's rows. Limits and their calibration: see the
+    "Clothing" block above."""
+    _check(base_rgb, base_mask, worn_rgb, worn_mask)
+    m0, m1 = np.asarray(base_mask, dtype=bool), np.asarray(worn_mask, dtype=bool)
+    zones = _zones(m0)
+    if zones is None or zones[1] <= 0:
+        return {"view": view, "ok": False, "reasons": ["no figure in the base view"]}
+    y0, hb = zones
+    height = m0.shape[0]
+    region = garment_region(base_rgb, base_mask, worn_rgb, worn_mask)
+    area = int(m0.sum())
+    share = float(region.sum() / area)
+    grown = _margin(region, height)
+    outside = m0 & m1 & ~grown
+    d_out = _mean(_diff(base_rgb, worn_rgb)[outside])
+    xor = float(((m0 ^ m1) & ~grown).sum() / area)
+    head = np.zeros_like(m0)
+    head[:int(y0 + HEAD_ZONE * hb)] = True
+    head &= m0
+    head_garment = float((region & head).sum() / max(int(head.sum()), 1))
+    box = _bbox(region)
+    reasons = []
+    if not share >= GARMENT_MIN:
+        reasons.append(f"nothing put on: garment {_r(share, 4)} < {GARMENT_MIN}")
+    if not d_out < OUTSIDE_DRGB_MAX:
+        reasons.append(f"body outside the garment changed colour: {_r(d_out, 2)} >= {OUTSIDE_DRGB_MAX}")
+    if not xor < OUTSIDE_XOR_MAX:
+        reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {OUTSIDE_XOR_MAX}")
+    if head_garment > HEAD_GARMENT_MAX:
+        reasons.append(f"head changed: {_r(head_garment, 3)} of the head > {HEAD_GARMENT_MAX}")
+    return {"view": view, "garment_share": _r(share, 4), "outside_dRGB": _r(d_out, 2),
+            "outside_xor": _r(xor, 4), "head_garment": _r(head_garment, 4), "garment_bbox": box,
+            "garment_top": box[1] if box else None, "garment_bottom": box[3] if box else None,
+            "body_top": y0, "body_h": hb, "ok": not reasons, "reasons": reasons}
+
+
+def skin_colour(base_rgb, base_mask) -> Optional[np.ndarray]:
+    """The skin of the base view: the median RGB of the base head between
+    rows y0 + 0.04·Hb and y0 + 0.10·Hb, columns within half the head's
+    half-width of its centre (on the back the bald back of the head — the
+    same skin). None without a figure."""
+    m0 = np.asarray(base_mask, dtype=bool)
+    zones = _zones(m0)
+    if zones is None or zones[1] <= 0:
+        return None
+    y0, hb = zones
+    r0, r1 = int(y0 + SKIN_FACE_ROWS[0] * hb), max(int(y0 + SKIN_FACE_ROWS[1] * hb), int(y0 + SKIN_FACE_ROWS[0] * hb) + 1)
+    span = _span(m0, (r0 + r1) // 2)
+    if span is None:
+        return None
+    cx, hw = span
+    x0, x1 = int(cx - hw / 2), int(cx + hw / 2) + 1
+    pixels = np.asarray(base_rgb, dtype=np.float32)[r0:r1, x0:x1, :3][m0[r0:r1, x0:x1]]
+    return np.median(pixels, 0) if len(pixels) else None
+
+
+def neckline(region) -> Dict[str, Any]:
+    """The neckline of a garment region: ``depth`` = how far the region's
+    top edge dips at its centre (median first row of the columns within
+    ± 3 % of its width around the bbox centre, minus the region's top row,
+    in px) and ``notch`` = the opening as a mask — on every row from the top
+    down to the centre's first row, the pixels between the innermost region
+    pixels left and right of the centre."""
+    region = np.asarray(region, dtype=bool)
+    box = _bbox(region)
+    notch = np.zeros_like(region)
+    if box is None:
+        return {"depth": 0, "notch": notch}
+    x0, top, x1, _bottom = box
+    cx = (x0 + x1) / 2.0
+    band = max(1, int(round(NECKLINE_BAND * (x1 - x0))))
+    firsts = []
+    for x in range(int(cx) - band, int(cx) + band + 1):
+        rows = np.nonzero(region[:, x])[0]
+        if len(rows):
+            firsts.append(int(rows.min()))
+    if not firsts:
+        return {"depth": 0, "notch": notch}
+    centre_top = int(np.median(firsts))
+    for row in range(top, centre_top):
+        xs = np.nonzero(region[row])[0]
+        left, right = xs[xs < cx], xs[xs > cx]
+        if len(left) and len(right):
+            notch[row, left.max() + 1:right.min()] = True
+    return {"depth": centre_top - top, "notch": notch}
+
+
+def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask, *,
+                        view: str) -> Dict[str, Any]:
+    """Step 2 gate of clothing: the piece alone against the garment region of
+    the accepted worn view (``garment_region``).
+
+    ``top_dy`` / ``centre_dx`` (fractions of Hb) and ``w_ratio`` / ``h_ratio``
+    from the bounding boxes of the region and the ghost mask (|top_dy| <=
+    0.0055, |centre_dx| <= 0.007, w_ratio in [0.95, 1.05]); ``skin_left`` =
+    ghost pixels outside the region grown by 8 px @1536 whose mean |ΔRGB| to
+    the base's skin (``skin_colour``) is <= 30, over the region's area (<=
+    0.005: no head, arm, leg or foot left; a skin-coloured garment is not
+    counted inside its own region); ``outside`` = every ghost pixel out
+    there except in the neckline opening (the inside of the back shows
+    there), over the region's area (<= 0.05: no stand, hanger or wider
+    garment). When the region has a neckline (``neckline`` depth >= 0.012·Hb)
+    ``neck_fill`` = the share of its opening the ghost mask covers (<= 0.70:
+    the opening stays; the inside of the back is seen through it).
+    ``bottom`` (row) and ``hem_t`` = (bottom − y0) / Hb feed ``hems_agree``.
+    Calibration: the "Clothing" block above."""
+    _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
+    m0 = np.asarray(base_mask, dtype=bool)
+    region = np.asarray(garment_mask, dtype=bool)
+    ghost = np.asarray(ghost_mask, dtype=bool)
+    if region.shape != m0.shape:
+        raise ValueError("garment_mask differs in size from the base")
+    height = m0.shape[0]
+    zones = _zones(m0)
+    if zones is None or zones[1] <= 0:
+        return {"view": view, "ok": False, "reasons": ["no figure in the base view"]}
+    y0, hb = zones
+    a, b = _bbox(region), _bbox(ghost)
+    out: Dict[str, Any] = {"view": view, "H": height, "body_top": y0, "body_h": hb,
+                           "bbox_garment": a, "bbox_ghost": b}
+    if a is None:
+        return {**out, "ok": False, "reasons": ["no garment found in the worn view"]}
+    if b is None:
+        return {**out, "ok": False, "reasons": ["no garment in the ghost image"]}
+    top_dy = (b[1] - a[1]) / hb
+    centre_dx = (b[0] + b[2] - a[0] - a[2]) / 2.0 / hb
+    w_ratio = (b[2] - b[0]) / max(a[2] - a[0], 1)
+    h_ratio = (b[3] - b[1]) / max(a[3] - a[1], 1)
+    area = max(int(region.sum()), 1)
+    beyond = ghost & ~_margin(region, height)
+    skin = skin_colour(base_rgb, base_mask)
+    if skin is None:
+        skin_left = 0.0
+    else:
+        near = np.abs(np.asarray(ghost_rgb, dtype=np.float32)[..., :3] - skin).mean(2) <= SKIN_DRGB
+        skin_left = float((beyond & near).sum() / area)
+    neck = neckline(region)
+    depth = neck["depth"] / hb
+    has_neckline = depth >= NECKLINE_MIN_DEPTH and bool(neck["notch"].any())
+    # The inside of the back seen through the neckline is garment, not "more".
+    outside = float((beyond & ~neck["notch"]).sum() / area) if has_neckline else float(beyond.sum() / area)
+    neck_fill = float((ghost & neck["notch"]).sum() / neck["notch"].sum()) if has_neckline else None
+    iou = float((region & ghost).sum() / max((region | ghost).sum(), 1))
+    reasons = []
+    if abs(top_dy) > CLOTH_TOP_DY_MAX:
+        reasons.append(f"garment top moved: {_r(top_dy, 4)} Hb, limit {CLOTH_TOP_DY_MAX}")
+    if abs(centre_dx) > CLOTH_CENTRE_DX_MAX:
+        reasons.append(f"garment centre moved: {_r(centre_dx, 4)} Hb, limit {CLOTH_CENTRE_DX_MAX}")
+    if not CLOTH_W_RATIO_MIN <= w_ratio <= CLOTH_W_RATIO_MAX:
+        reasons.append(f"garment width changed: ratio {round(w_ratio, 3)} outside "
+                       f"[{CLOTH_W_RATIO_MIN}, {CLOTH_W_RATIO_MAX}]")
+    if skin_left > SKIN_LEFT_MAX:
+        reasons.append(f"skin left in the image: {_r(skin_left, 4)} > {SKIN_LEFT_MAX}")
+    if outside > CLOTH_OUTSIDE_MAX:
+        reasons.append(f"more than the garment in the image: {_r(outside, 4)} > {CLOTH_OUTSIDE_MAX}")
+    if neck_fill is not None and neck_fill > NECK_FILL_MAX:
+        reasons.append(f"neckline closed: {_r(neck_fill, 3)} of the opening covered > {NECK_FILL_MAX}")
+    return {**out, "top_dy": _r(top_dy, 5), "centre_dx": _r(centre_dx, 5), "w_ratio": round(w_ratio, 3),
+            "h_ratio": round(h_ratio, 3), "iou": round(iou, 3), "skin_left": _r(skin_left, 5),
+            "outside": _r(outside, 5), "neckline_depth": _r(depth, 4), "neck_fill": _r(neck_fill, 3),
+            "bottom": b[3], "hem_t": _r((b[3] - y0) / hb, 5),
+            "ok": not reasons, "reasons": reasons}
+
+
+def hems_gap(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[tuple]:
+    """``(|hem_t_front − hem_t_back|, HEM_AGREE)`` — both hems against their
+    own view's figure (fractions of Hb); None when a record lacks ``hem_t``."""
+    try:
+        gap = abs(float(front_gate["hem_t"]) - float(back_gate["hem_t"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return gap, HEM_AGREE
+
+
+def hems_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
+    """The front and back garment end at the same height of the figure:
+    |hem_t_front − hem_t_back| <= 0.02 (fractions of the body height Hb)."""
+    gap = hems_gap(front_gate, back_gate)
+    return gap is not None and gap[0] <= gap[1]
+
+
+def hems_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
+    """The refusal reason of a front ghost attempt whose hem is not where the
+    accepted back's is (``hems_agree``); None when they agree or the attempt
+    has no measured hem."""
+    gap = hems_gap(front_gate, back_gate)
+    if gap is None or gap[0] <= gap[1]:
+        return None
+    return (f"garment ends at another height than in the back view: |Δ| {_r(gap[0], 4)} Hb > {gap[1]} Hb "
+            f"(front {front_gate.get('hem_t')}, back {back_gate.get('hem_t')})")
+
+
 def gate_summary(records: Sequence[Dict[str, Any]]) -> str:
     """One line for a refusal: every attempt's reasons."""
     parts = []
@@ -312,13 +616,34 @@ def gate_summary(records: Sequence[Dict[str, Any]]) -> str:
     return " | ".join(parts)
 
 
-def limits() -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """The image-gate limits per step, for the Hair tab's chips — read from
-    the constants above so the UI never keeps its own copy. ``op``: ``lt`` /
-    ``le`` (value must stay below / at most), ``abs_le`` (|value| at most),
-    ``range`` (``value`` = [min, max]); ``per_height``: the limit is a
-    fraction of the record's image height ``H`` (pixel numbers); ``views``:
-    the views the limit is gated on (all when absent)."""
+def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """The image-gate limits per step of a garment ``kind`` (``hair`` or
+    ``clothing``), for the gate chips — read from the constants above so the
+    UI never keeps its own copy. ``op``: ``lt`` / ``le`` / ``ge`` (value must
+    stay below / at most / at least), ``abs_le`` (|value| at most), ``range``
+    (``value`` = [min, max]); ``per_height``: the limit is a fraction of the
+    record's image height ``H`` (pixel numbers; clothing records are already
+    fractions of the figure height); ``views``: the views the limit is gated
+    on (all when absent). ValueError for another kind."""
+    if kind == "clothing":
+        return {
+            "worn": {
+                "garment_share": {"op": "ge", "value": GARMENT_MIN},
+                "outside_dRGB": {"op": "lt", "value": OUTSIDE_DRGB_MAX},
+                "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX},
+                "head_garment": {"op": "le", "value": HEAD_GARMENT_MAX},
+            },
+            "ghost": {
+                "top_dy": {"op": "abs_le", "value": CLOTH_TOP_DY_MAX},
+                "centre_dx": {"op": "abs_le", "value": CLOTH_CENTRE_DX_MAX},
+                "w_ratio": {"op": "range", "value": [CLOTH_W_RATIO_MIN, CLOTH_W_RATIO_MAX]},
+                "skin_left": {"op": "le", "value": SKIN_LEFT_MAX},
+                "outside": {"op": "le", "value": CLOTH_OUTSIDE_MAX},
+                "neck_fill": {"op": "le", "value": NECK_FILL_MAX},
+            },
+        }
+    if kind != "hair":
+        raise ValueError(f"no image gates for garment kind {kind!r}")
     return {
         "haired": {
             "body_xor": {"op": "lt", "value": BODY_XOR_MAX},

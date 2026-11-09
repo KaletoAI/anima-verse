@@ -4,7 +4,9 @@ R11, R13; spec ``2026-11-08-base-body-outfits-design.md`` § C.4).
 
 Per owner, under ``characters/<name>/garments/``::
 
-    images/{item}_{fsig}_{step}_{view}.png  + .json   steps haired/ghost/cutout;
+    images/{item}_{fsig}_{step}_{view}.png  + .json   the image steps of the kind
+                                                      (hair: haired/ghost/cutout,
+                                                      clothing: worn/ghost/cutout);
     images/{item}_{fsig}_{step}_{view}.try{n}.png     the attempts of a step
     raw/{item}_{fsig}.glb                             generator output
     prepared/{item}_{fsig}.glb                        decimated
@@ -14,7 +16,9 @@ Per owner, under ``characters/<name>/garments/``::
     low/{item}_{fsig}.glb                             the distance tier
 
 ``fsig`` = md5[:12] over the garment kind's own inputs (hair: description,
-behind-the-shoulders flag, pronouns), ``GARMENT_VERSION[kind]``, the base
+behind-the-shoulders flag, pronouns; clothing — an own-mesh outfit piece,
+plan ``2026-11-09-base-body-phase5-mesh-items.md``: prompt fragment, slots,
+covers, partially covers, pronouns), ``GARMENT_VERSION[kind]``, the base
 signature and the content of the base front + back view. The base MODEL is not
 in it: a base model regenerated under the same base signature keeps images and
 mesh and only re-fits; the fit record's ``base_model_sha256`` decides that.
@@ -56,8 +60,9 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_store")
 
-GARMENT_VERSION: Dict[str, int] = {"hair": 1}
-GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": ("haired", "ghost", "cutout", "mesh", "fit")}
+GARMENT_VERSION: Dict[str, int] = {"hair": 1, "clothing": 1}
+GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": ("haired", "ghost", "cutout", "mesh", "fit"),
+                                             "clothing": ("worn", "ghost", "cutout", "mesh", "fit")}
 #: The steps of hair made by HairDeck (``steps_for``).
 HAIRDECK_STEPS: Tuple[str, ...] = ("hairdeck", "fit")
 #: Bumped when the HairDeck job's inputs change meaning (part of ``hsig``).
@@ -67,8 +72,9 @@ HAIRDECK_RECORD = "record.json"
 EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
-#: The steps that store images (the rest store meshes).
-IMAGE_STEPS: Tuple[str, ...] = ("haired", "ghost", "cutout")
+#: Every step of any kind that stores images (the rest store meshes); the
+#: order of one kind is ``image_steps``.
+IMAGE_STEPS: Tuple[str, ...] = ("haired", "worn", "ghost", "cutout")
 #: part -> sub-folder of ``garments/`` ("" = the folder itself).
 PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepared",
                              "fit": "", "low": "low"}
@@ -184,10 +190,28 @@ def stored_groups(character_name: str) -> Dict[Tuple[str, str], List[Path]]:
 
 # --- Fingerprint --------------------------------------------------------------
 
-def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+def image_steps(kind: str) -> Tuple[str, ...]:
+    """The image steps of ``kind`` in chain order (hair: haired, ghost,
+    cutout; clothing: worn, ghost, cutout). ValueError for an unknown kind."""
+    if kind not in GARMENT_STEPS:
+        raise ValueError(f"unknown garment kind {kind!r}")
+    return tuple(step for step in GARMENT_STEPS[kind] if step in IMAGE_STEPS)
+
+
+def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any],
+                 item_id: Optional[str] = None) -> Dict[str, Any]:
+    """The kind's own fingerprint inputs; clothing needs ``item_id`` (its
+    inputs are the item's)."""
     if kind == "hair":
         from app.core import garment_hair
         return garment_hair.fsig_inputs(character_name, profile=profile)
+    if kind == "clothing":
+        from app.core import garment_clothing
+        from app.models.inventory import get_item
+        item = get_item(item_id) if item_id else None
+        if not item:
+            raise ValueError(f"{str(item_id)[:80]!r} is no item")
+        return garment_clothing.fsig_inputs(character_name, item, profile=profile)
     raise ValueError(f"unknown garment kind {kind!r}")
 
 
@@ -285,7 +309,7 @@ def garment_fsig(character_name: str, item_id: str, *,
     bsig = base_body.base_signature(character_name, profile=profile)
     images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
               for view in GARMENT_VIEWS}
-    payload = {"kind": kind, **_kind_inputs(kind, character_name, profile),
+    payload = {"kind": kind, **_kind_inputs(kind, character_name, profile, item_id),
                "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": images}
     if kind_method(kind, character_name, profile) == HAIRDECK:
         from app.core import garment_hair

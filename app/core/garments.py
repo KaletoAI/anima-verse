@@ -4,7 +4,9 @@ its steps, fits it onto the base body and starts the assembly (plan
 R11, R13, R14, Task 8).
 
 Steps of a kind (``garment_store.GARMENT_STEPS``; hair: ``haired → ghost →
-cutout → mesh → fit``). Every step caches its accepted output on disk under
+cutout → mesh → fit``, clothing — an own-mesh outfit piece, plan
+``2026-11-09-base-body-phase5-mesh-items.md``: ``worn → ghost → cutout → mesh
+→ fit``). Every step caches its accepted output on disk under
 the garment fingerprint ``fsig`` (R13), so a run starts at the first step
 whose accepted output is missing — or at an explicit step. A step that
 produced new output makes every later step run again (``force`` propagates
@@ -12,16 +14,19 @@ downstream); one that was served from the cache does not.
 
 - image steps (``garment_images``): per view, the BACK first
   (``EDIT_VIEW_ORDER``): the back view sees how long the hair is, the front
-  only guesses it (its ends hang behind the body). Where the accepted haired
-  back's hair ends (``garment_images.haired_length``) goes into the hair-only
-  front prompt as a length phrase (``garment_hair.length_phrase``). ``ghost``
-  additionally needs both hair-only images to end at the same height
-  (``bottoms_agree``): a front attempt is gated against the accepted back
-  (``_bottom_check``), and a pair that still disagrees — a new back, or both
+  only guesses it (its ends hang behind the body). The kind's pair step
+  (``PAIR_STEP`` of its module, ``garment_images.kind_module``; both kinds:
+  ``ghost``) additionally needs front and back to agree (``pair_agree``:
+  hair — the hair ends at the same height, ``bottoms_agree``; clothing — the
+  hems, ``hems_agree``): a front attempt is gated against the accepted back
+  (``_pair_check``), and a pair that still disagrees — a new back, or both
   views from before — renders the front again against the back, with its own
-  attempts. A disagreeing pair never ends a run without a new attempt;
+  attempts. A disagreeing pair never ends a run without a new attempt. The
+  kind's ``front_hints`` give the front edit what the back shows (hair: where
+  the accepted haired back's hair ends, ``garment_images.haired_length``, as
+  a length phrase in the hair-only front prompt; clothing: nothing);
 - every image step checks after each view that the run's inputs (base views,
-  hair description: ``garment_fsig``) did not change meanwhile — a base view
+  the kind's description: ``garment_fsig``) did not change meanwhile — a base view
   regenerated during the run refuses with ``INPUTS_CHANGED_ERROR`` instead of
   gating images of the new base against images of the old one;
 - ``mesh`` (``garment_mesh.generate``): built from both cut-outs; a new
@@ -93,7 +98,7 @@ NO_HAIR_NOTES = ("no hair found", "no person found")
 NO_HAIR_ERROR = "HairDeck found no hair in the profile picture"
 #: The view order of the edit steps: the back first, it gives the front its length.
 EDIT_VIEW_ORDER: Tuple[str, ...] = ("back", "front")
-INPUTS_CHANGED_ERROR = ("The base views or the hair description changed during the run "
+INPUTS_CHANGED_ERROR = ("The base views or the garment's description changed during the run "
                         "— run the chain again to start from the new ones")
 
 
@@ -143,18 +148,22 @@ def _steps(steps: Union[None, str, Iterable[str]], order: Tuple[str, ...]) -> Op
     return wanted
 
 
-def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any], item_id: str) -> Dict[str, Any]:
     from app.core import garment_store
-    return garment_store._kind_inputs(kind, character_name, profile)
+    return garment_store._kind_inputs(kind, character_name, profile, item_id)
 
 
 def _refresh_description(character_name: str, item: Dict[str, Any], kind: str,
                          profile: Dict[str, Any]) -> None:
-    """R3: the item's ``prompt_fragment`` follows the derived description on
-    every run; a description that became empty ends the run."""
+    """R3, hair only: the item's ``prompt_fragment`` follows the derived
+    description on every run; a description that became empty ends the run.
+    Any other kind keeps its fragment — a clothing piece's is the user's."""
+    from app.core.garment_hair import HAIR_KIND
     from app.core.keyed_lock import keyed_lock
     from app.models import inventory
-    description = str(_kind_inputs(kind, character_name, profile).get("description") or "")
+    if kind != HAIR_KIND:
+        return
+    description = str(_kind_inputs(kind, character_name, profile, item["id"]).get("description") or "")
     if not description:
         raise ValueError("No hair set — fill in the hair in Appearance")
     if (item.get("prompt_fragment") or "") == description:
@@ -193,37 +202,36 @@ def _accepted_gate(path: Path) -> Optional[Dict[str, Any]]:
     return gate if isinstance(gate, dict) else None
 
 
-def _bottoms(character_name: str, item_id: str, fsig: str) -> Tuple[bool, Dict[str, Any]]:
-    """Whether the accepted hair-only images of both views end at the same
-    height (``garment_gates.bottoms_agree``), with both gate records."""
-    from app.core.garment_gates import bottoms_agree
-    gates = {view: _accepted_gate(_image(character_name, item_id, fsig, "ghost", view))
+def _kind_module(kind: str):
+    from app.core.garment_images import kind_module
+    return kind_module(kind)
+
+
+def _pair(character_name: str, item_id: str, kind: str, fsig: str) -> Tuple[bool, Dict[str, Any]]:
+    """Whether the accepted images of both views of the kind's pair step agree
+    (the kind module's ``pair_agree``: hair ends / hems at the same height),
+    with both gate records."""
+    module = _kind_module(kind)
+    gates = {view: _accepted_gate(_image(character_name, item_id, fsig, module.PAIR_STEP, view))
              for view in ("front", "back")}
     if not gates["front"] or not gates["back"]:
         return False, gates
-    return bottoms_agree(gates["front"], gates["back"]), gates
+    return module.pair_agree(gates["front"], gates["back"]), gates
 
 
-def _bottom_check(character_name: str, item_id: str, fsig: str):
-    """The pair check of a hair-only FRONT attempt: its bottom edge against
-    the accepted back's (``garment_gates.bottoms_reason``)."""
-    from app.core.garment_gates import bottoms_reason
-    back = _accepted_gate(_image(character_name, item_id, fsig, "ghost", "back")) or {}
-    return lambda record: bottoms_reason(record, back)
+def _pair_check(character_name: str, item_id: str, kind: str, fsig: str):
+    """The pair check of a FRONT attempt of the pair step: against the
+    accepted back's gate record (the kind module's ``pair_reason``)."""
+    module = _kind_module(kind)
+    back = _accepted_gate(_image(character_name, item_id, fsig, module.PAIR_STEP, "back")) or {}
+    return lambda record: module.pair_reason(record, back)
 
 
 def _front_hints(character_name: str, item_id: str, fsig: str, kind: str, step: str,
                  view: str) -> Optional[Dict[str, Any]]:
-    """The prompt hints of the hair-only FRONT edit: ``{"length_t": t}`` from
-    the accepted haired back (``garment_images.haired_length``); None for any
-    other step, view or kind, or without a measurement (no length named)."""
-    from app.core import garment_images
-    from app.core.garment_hair import HAIR_KIND
-    if step != "ghost" or view != "front" or kind != HAIR_KIND:
-        return None
-    measured = garment_images.haired_length(character_name, item_id, fsig, "back")
-    logger.info("Garment %s/%s hair length from the back view: %s", character_name, item_id, measured)
-    return {"length_t": measured["t"]} if measured else None
+    """The prompt hints of an edit from what the back shows (the kind
+    module's ``front_hints``; hair: the length for the hair-only front)."""
+    return _kind_module(kind).front_hints(character_name, item_id, fsig, step, view)
 
 
 def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str) -> None:
@@ -267,13 +275,13 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     return "accepted"
 
 
-def _done(character_name: str, item_id: str, fsig: str, step: str, base_model_sha: str,
+def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, base_model_sha: str,
           method: str = "edit_chain", hsig: str = "") -> bool:
     from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS
     if step in IMAGE_STEPS:
         if not all(_accepted(_image(character_name, item_id, fsig, step, v)) for v in GARMENT_VIEWS):
             return False
-        return step != "ghost" or _bottoms(character_name, item_id, fsig)[0]
+        return step != _kind_module(kind).PAIR_STEP or _pair(character_name, item_id, kind, fsig)[0]
     if step == "mesh":
         return _mesh_done(character_name, item_id, fsig)
     if step == "hairdeck":
@@ -437,7 +445,7 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
         raise base_body.MissingInput("The garment mesh is missing — run the mesh step first")
     ghost = _image(character_name, item_id, fsig, "ghost", "front")
     if not _accepted(ghost):
-        raise base_body.MissingInput("The hair-only front image is missing — run the ghost step first")
+        raise base_body.MissingInput("The ghost front image is missing — run the ghost step first")
     base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in GARMENT_VIEWS}
     if base_views["front"] is None:
         raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
@@ -461,7 +469,7 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
         "metrics": result.metrics, "gates": gates, "report": result.report,
         "base_signature": bsig, "base_model_sha256": base_sha,
-        "inputs": {**_kind_inputs(kind, character_name, profile),
+        "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                    "ghost_front_sha256": _sha(ghost)},
@@ -549,7 +557,7 @@ def _fit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig:
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": HAIRDECK,
         "metrics": result.metrics, "gates": gates, "report": result.report,
         "base_signature": bsig, "base_model_sha256": base_sha,
-        "inputs": {**_kind_inputs(kind, character_name, profile),
+        "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "hsig": hsig, "attempt": attempt, "seed": seed, "colour": override,
                    "placement": placement,
@@ -671,11 +679,12 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             hsig = gs.garment_hsig(character_name, item_id, profile=profile)
         if wanted is None:
             first = next((s for s in order
-                          if not _done(character_name, item_id, fsig, s, base_sha, method, hsig)), None)
+                          if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
             if first is None:
                 return {"ok": True, "fsig": fsig, "ran": []}
         else:
             first = min(wanted, key=order.index)
+        pair_step = _kind_module(kind).PAIR_STEP if method == gs.EDIT_CHAIN else None
         dirty = False  # an earlier step produced new output: every later step runs again
         for step in order[order.index(first):]:
             forced = force and step == first
@@ -692,7 +701,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                         garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                     else:
                         # The back is done (accepted) before the front starts.
-                        pair = _bottom_check(character_name, item_id, fsig) if step == "ghost" and v == "front" else None
+                        pair = (_pair_check(character_name, item_id, kind, fsig)
+                                if step == pair_step and v == "front" else None)
                         garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f,
                                                      pair_check=pair,
                                                      prompt_hints=_front_hints(character_name, item_id, fsig,
@@ -702,26 +712,27 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     # mesh behind that was built from the replaced image.
                     _drop_mesh(character_name, item_id, fsig)
                     _inputs_unchanged(character_name, item_id, fsig, step)
-                if step == "ghost" and not _bottoms(character_name, item_id, fsig)[0]:
-                    # The back shows the hair's length; the front renders
-                    # again against it (two attempts; GateRefused when both miss).
-                    garment_images.run_edit_step(character_name, item_id, fsig, "ghost", "front", force=True,
-                                                 pair_check=_bottom_check(character_name, item_id, fsig),
+                if step == pair_step and not _pair(character_name, item_id, kind, fsig)[0]:
+                    # The back is the reference (the hair's length, the
+                    # hem); the front renders again against it (two
+                    # attempts; GateRefused when both miss).
+                    garment_images.run_edit_step(character_name, item_id, fsig, step, "front", force=True,
+                                                 pair_check=_pair_check(character_name, item_id, kind, fsig),
                                                  prompt_hints=_front_hints(character_name, item_id, fsig,
-                                                                           kind, "ghost", "front"))
+                                                                           kind, step, "front"))
                     produced = True
                     _drop_mesh(character_name, item_id, fsig)
                     _inputs_unchanged(character_name, item_id, fsig, step)
-                    agree, gates = _bottoms(character_name, item_id, fsig)
+                    agree, gates = _pair(character_name, item_id, kind, fsig)
                     if not agree:
-                        raise _Refused("ghost", "front and back hair end at different heights", gates)
+                        raise _Refused(step, _kind_module(kind).PAIR_REFUSED, gates)
             elif step == "mesh":
                 f = forced or dirty
                 if f or not _mesh_done(character_name, item_id, fsig):
                     garment_mesh.generate(character_name, item_id, fsig, force=f)
                     produced = True
             elif step == "hairdeck":
-                if forced or not _done(character_name, item_id, fsig, step, base_sha, method, hsig):
+                if forced or not _done(character_name, item_id, kind, fsig, step, base_sha, method, hsig):
                     # A forced regenerate must give a NEW result: the next seed.
                     seed = (_next_seed(_hairdeck_record(character_name, item_id, hsig)) if forced
                             else HAIRDECK_FIRST_SEED)
@@ -1222,7 +1233,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     from app.models.character import get_character_profile
     _item_, kind = _item(character_name, item_id)
     profile = get_character_profile(character_name) or {}
-    inputs = _kind_inputs(kind, character_name, profile)
+    inputs = _kind_inputs(kind, character_name, profile, item_id)
     method, method_source = (garment_hair.hair_method_source(character_name, profile=profile)
                              if kind == garment_hair.HAIR_KIND else (gs.EDIT_CHAIN, "world"))
     try:
@@ -1276,7 +1287,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             preview_url = None
     status = gs.status(character_name, item_id)
     return {"item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
-            "hsig": hsig, "description": inputs.get("description") or "",
+            "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
             "steps": steps, "stale_reasons": stale,
             "running_step": status["running_step"], "started_at": status["started_at"],
             "failed": status["failed"], "preview_url": preview_url, "served_fsig": served_fsig}

@@ -40,7 +40,7 @@ never on the pipeline). ``Other`` owns a second hair garment.
     Demo -> (item, "hair"); Other's hair -> ValueError (the owner rule stays).
     garment_store._garment_kind(dress) and garment_mesh._kind(dress) ->
     "clothing", shoes -> ValueError. garment_images._kind_module(dress) ->
-    ValueError naming the kind "clothing" (no image chain until task 2),
+    the module garment_clothing (task 2 added the clothing image chain),
     shoes -> ValueError "is no garment item".
 """
 import json
@@ -208,7 +208,7 @@ def main() -> int:
         raises("_garment_kind shoes", lambda: garment_store._garment_kind(shoes), ValueError)
         check("mesh _kind dress", garment_mesh._kind(dress), "clothing")
         raises("mesh _kind shoes", lambda: garment_mesh._kind(shoes), ValueError)
-        raises("_kind_module dress", lambda: garment_images._kind_module(dress), ValueError, "'clothing'")
+        check("_kind_module dress", garment_images._kind_module(dress).__name__, "app.core.garment_clothing")
         raises("_kind_module shoes", lambda: garment_images._kind_module(shoes), ValueError,
                "is no garment item")
 
