@@ -99,7 +99,8 @@ Expected, derived by hand from the brief:
                   1 and centred on x 4.5 -> pixel (4,4) = the draft colour,
                   (0,0) transparent; bare_prompt = FIT_PROMPT, no
                   extra_negative, occasion outfit_back, use case outfit_fit,
-                  back_view, sidecar_extra {base_signature, dressed,
+                  rendered at the canvas size 8 x 8 (the base back's; front
+                  edit and draft at _tpose_size()), back_view, sidecar_extra {base_signature, dressed,
                   base_image_sha256 = sha256(tpose_back_<bsig>.png),
                   back_draft = the draft's name, back_draft_sha256}; the
                   stub images are opaque, so both gates skip -> attempt 1
@@ -614,6 +615,11 @@ def main() -> int:
             check("fit prompt", fit_r.get("bare_prompt"), FIT_PROMPT)
             check("occasions", [r.get("occasion") for r in dressed_renders],
                   ["outfit_front", "outfit_back_draft", "outfit_back"])
+            # The fit renders at the canvas size = the 8x8 base back (square
+            # T-pose aspect); front edit and draft at the T-pose size.
+            tsize = model_refs._tpose_size()
+            check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
+                  [tsize, tsize, (8, 8)])
             check("use cases", [r.get("image_use_case") for r in dressed_renders],
                   ["tpose", "tpose_back", "outfit_fit"])
             check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 3)

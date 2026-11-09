@@ -1005,10 +1005,12 @@ def fit_canvas(base, draft, size: Tuple[int, int]):
 
 @contextmanager
 def fit_references(base_back: Path, draft: Path, refs_dir: Path, size: Tuple[int, int]):
-    """``(base reference, draft reference)``: the ``fit_canvas`` pair of the
-    cut-outs, saved under their own names in a private ``.fitref_*`` dir
-    inside ``refs_dir`` (the reference containment gate accepts it; the fit's
-    sidecar records the references by name)."""
+    """``(base reference, draft reference, canvas size)``: the ``fit_canvas``
+    pair of the cut-outs, saved under their own names in a private
+    ``.fitref_*`` dir inside ``refs_dir`` (the reference containment gate
+    accepts it; the fit's sidecar records the references by name). The fit
+    renders at the canvas size — the base back's height — because the
+    retexture worker registers it pixel-wise against the base back."""
     import tempfile
     base_canvas, draft_canvas = fit_canvas(cut_out(base_back), cut_out(draft), size)
     with tempfile.TemporaryDirectory(prefix=".fitref_", dir=refs_dir, ignore_cleanup_errors=True) as tmp:
@@ -1017,7 +1019,7 @@ def fit_references(base_back: Path, draft: Path, refs_dir: Path, size: Tuple[int
         for out, image in ((base_out, base_canvas), (draft_out, draft_canvas)):
             out.parent.mkdir()
             image.save(out)
-        yield base_out, draft_out
+        yield base_out, draft_out, base_canvas.size
 
 
 def back_draft_path(character_name: str, signature: str) -> Optional[Path]:
@@ -1093,7 +1095,9 @@ def _dress_back(character_name: str, *, signature: str, bsig: str, pieces: Optio
     2. FIT (occasion ``outfit_back``, use case ``FIT_USE_CASE``): an edit of
        the cut-out base back (image 1) with the cut-out draft scaled onto it
        (image 2, ``fit_references``), prompt ``FIT_PROMPT`` and nothing else
-       (user decision 2026-11-09). The render comes back on black and gets
+       (user decision 2026-11-09), rendered at the canvas size (the base
+       back's height, not the T-pose default; the draft renders at the
+       dressed front's size). The render comes back on black and gets
        the mesh-input matte. Up to ``FIT_ATTEMPTS`` renders, each staged in a
        private ``.fitgate_*`` dir inside ``model_refs`` and checked by the
        head ``view_guard`` (a fit that turned into a front view) and
@@ -1129,7 +1133,7 @@ def _dress_back(character_name: str, *, signature: str, bsig: str, pieces: Optio
     final = refs_dir / f"tpose_back_{signature}"
     attempts: List[Tuple[Path, Dict[str, Any]]] = []
     with tempfile.TemporaryDirectory(prefix=".fitgate_", dir=refs_dir, ignore_cleanup_errors=True) as staging, \
-            fit_references(base_back, draft, refs_dir, size) as (base_reference, draft_reference):
+            fit_references(base_back, draft, refs_dir, size) as (base_reference, draft_reference, canvas):
         for n in range(1, FIT_ATTEMPTS + 1):
             stem = Path(staging) / f"attempt{n}" / final.name
             stem.parent.mkdir()
@@ -1138,7 +1142,8 @@ def _dress_back(character_name: str, *, signature: str, bsig: str, pieces: Optio
                     character_name, output_stem=stem, bare_prompt=FIT_PROMPT,
                     occasion="outfit_back", reference_image=base_reference,
                     extra_reference_images=[draft_reference], sidecar_extra=extra,
-                    **{**common, "image_use_case": FIT_USE_CASE})
+                    **{**common, "image_use_case": FIT_USE_CASE,
+                       "override_width": canvas[0], "override_height": canvas[1]})
             except Exception as e:  # noqa: BLE001 — keep what was rendered
                 if not attempts:
                     raise
