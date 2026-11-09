@@ -903,6 +903,8 @@ export function CharactersTab() {
           <div className="ga-loading">{t('Loading…')}</div>
         ) : (
           <>
+            {/* Toolbar + sub-tab bar stay pinned while the detail pane scrolls. */}
+            <div className="ga-detail-sticky">
             <DetailToolbar
               title={
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -1073,6 +1075,7 @@ export function CharactersTab() {
                 </button>
               ))}
             </nav>
+            </div>
 
             {subTab.startsWith('tab:') ? (
               (() => {

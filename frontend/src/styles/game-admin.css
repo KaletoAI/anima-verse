@@ -537,6 +537,22 @@ a.ga-btn {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
+/* A detail header that pins the toolbar AND the sub-tab bar below it
+   (Characters): the wrapper is the sticky element, the toolbar inside it
+   stays static so both move as one block. */
+.ga-detail-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg, #0d1117);
+}
+.ga-detail-sticky > .ga-detail-toolbar {
+  position: static;
+}
+.ga-detail-sticky > .ga-subtabs {
+  margin-bottom: 8px;
+}
+
 /* Edits that were never saved: Save stands out, a marker says why. */
 .ga-btn-dirty {
   box-shadow: 0 0 0 2px var(--warning, #d29922);
