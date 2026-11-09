@@ -428,16 +428,19 @@ def get_model_refs_dir(character_name: str) -> Path:
 
 def checked_reference_override(character_name: str, raw: str) -> str:
     """``raw`` as an absolute path when it names an existing file inside the
-    character's model_refs directory or its current profile, else "" (logged). The image service
-    takes a reference override only through this gate — the value arrives in
-    a JSON tool input, and a path outside would upload any server file to a
+    character's model_refs directory, its garment images
+    (``garments/images/`` — the ghost edit references the haired image) or
+    its current profile, else "" (logged). The image service takes a
+    reference override only through this gate — the value arrives in a JSON
+    tool input, and a path outside would upload any server file to a
     backend."""
     from app.models.character import get_character_dir
     try:
         root = get_character_dir(character_name).resolve()
         refs_dir = root / "model_refs"
+        garment_images = root / "garments" / "images"
         path = Path(raw).resolve()
-        if path.is_file() and (path.is_relative_to(refs_dir) or (
+        if path.is_file() and (path.is_relative_to(refs_dir) or path.is_relative_to(garment_images) or (
                 path.is_relative_to(root / "images") and path == current_profile_image(character_name))):
             return str(path)
     except (OSError, ValueError):

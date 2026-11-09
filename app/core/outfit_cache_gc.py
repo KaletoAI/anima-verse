@@ -44,6 +44,16 @@ pure hex): ``tpose[_<view>]_<bsig>`` refs and the ``<bsig>`` model group.
 Exactly the character's CURRENT base signature is valid; every other base
 entry is stale (a new profile image or body description made it obsolete).
 No manifest is read for them.
+
+**Garments** (``app/core/garment_store.py``) live in ``characters/<name>/garments/``
+and are grouped by ``(item, fsig)``; the report names such a group
+``garment:<item>_<fsig>``. Valid are the CURRENT-fsig files of every equipped
+garment item (a run in flight writes exactly those) and the group of the fit
+that is served instead while the current one is not accepted yet — the newest
+accepted fit on the current base model (``garment_store.accepted_fit``, R11).
+Every other recognised garment group is stale; a file whose name the store
+does not recognise is never judged. When the keep set cannot be computed, no
+garment group is judged at all.
 """
 
 import re
@@ -273,10 +283,48 @@ def _bytes_of(files: Iterable[Path]) -> int:
     return total
 
 
+GARMENT_KEY_PREFIX = "garment:"
+
+
+def _garment_key(item_id: str, fsig: str) -> str:
+    return f"{GARMENT_KEY_PREFIX}{item_id}_{fsig}"
+
+
+def _garment_files(character_name: str) -> Dict[str, List[Path]]:
+    """``garment:<item>_<fsig>`` → its files under ``garments/``."""
+    from app.core import garment_store
+    return {_garment_key(item, fsig): files
+            for (item, fsig), files in garment_store.stored_groups(character_name).items()}
+
+
+def _garment_keep(character_name: str) -> Optional[Set[str]]:
+    """The garment groups that stay: per equipped garment item the current
+    fsig and the fit served on the current base model. None when that cannot
+    be computed (then nothing is judged — never delete on a guess)."""
+    try:
+        from app.core import base_body, garment_store
+        from app.models.inventory import get_equipped_mesh_pieces, get_item
+        keep: Set[str] = set()
+        base = base_body.current_base(character_name)
+        for item_id in get_equipped_mesh_pieces(character_name).values():
+            if get_item(item_id) is None:
+                continue  # a deleted item keeps nothing
+            keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id)))
+            if base and base[1]:
+                fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1])
+                parsed = garment_store.parse_name(fit[0]) if fit else None
+                if parsed:
+                    keep.add(_garment_key(*parsed))
+        return keep
+    except Exception:
+        logger.exception("Cache GC %s: garment keep set unavailable", character_name)
+        return None
+
+
 def verify_cache(character_name: str) -> Dict[str, Any]:
     """Report on both caches:
 
-    ``{refs: {total, valid, stale, stale_bytes}, meshes: {…},
+    ``{refs: {total, valid, stale, stale_bytes}, meshes: {…}, garments: {…},
     stale_signatures: [...], protected: [sig]}``
 
     Signature counts, not file counts — one signature owns an image and its
@@ -338,8 +386,21 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
                 stale.append(signature)
         out[key] = {"total": len(groups), "valid": valid,
                     "stale": len(groups) - valid, "stale_bytes": stale_bytes}
-    logger.info("Cache GC %s: refs %s, meshes %s, %d stale signature(s)",
-                character_name, out["refs"], out["meshes"], len(stale))
+    garment_groups = _garment_files(character_name)
+    keep = _garment_keep(character_name) if garment_groups else set()
+    garment_stale_bytes = 0
+    garment_valid = 0
+    for gkey, files in garment_groups.items():
+        if keep is None or gkey in keep:
+            garment_valid += 1
+            continue
+        garment_stale_bytes += _bytes_of(files)
+        stale.append(gkey)
+    out["garments"] = {"total": len(garment_groups), "valid": garment_valid,
+                       "stale": len(garment_groups) - garment_valid,
+                       "stale_bytes": garment_stale_bytes}
+    logger.info("Cache GC %s: refs %s, meshes %s, garments %s, %d stale signature(s)",
+                character_name, out["refs"], out["meshes"], out["garments"], len(stale))
     return out
 
 
@@ -391,6 +452,24 @@ def purge_stale(character_name: str,
             continue
         for p in files:
             try:
+                size = p.stat().st_size
+                p.unlink()
+                deleted += 1
+                freed += size
+            except OSError as e:
+                logger.warning("Cache GC %s: %s not removed: %s",
+                               character_name, p.name, e)
+    from app.core.garment_store import garments_dir
+    garment_root = garments_dir(character_name).resolve(strict=False)
+    for gkey, files in _garment_files(character_name).items():
+        if gkey not in wanted or gkey not in allowed:
+            continue
+        for p in files:
+            try:
+                if not p.resolve().is_relative_to(garment_root):
+                    logger.warning("Cache GC %s: %s is outside garments/, not removed",
+                                   character_name, p)
+                    continue
                 size = p.stat().st_size
                 p.unlink()
                 deleted += 1

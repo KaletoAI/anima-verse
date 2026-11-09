@@ -16,7 +16,7 @@ every clause of the free-text appearance that mentions hair. The item's
 so the 2D body slot and the 3D item never diverge.
 """
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -88,6 +88,28 @@ def hair_behind_shoulders(character_name: str, *, profile: Optional[Dict[str, An
         return False
     from app.core.body_slots import slot_fragment
     return bool(slot_fragment(character_name, slot.id, profile=profile, mesh_input=True)[1])
+
+
+def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
+    """``(possessive, subject)`` for the edit prompts, from the profile gender:
+    female -> ("her", "she"), male -> ("his", "he"), anything else ->
+    ("their", "they")."""
+    gender = str((profile or {}).get("gender") or "").strip().lower()
+    if gender in ("female", "woman", "f"):
+        return "her", "she"
+    if gender in ("male", "man", "m"):
+        return "his", "he"
+    return "their", "they"
+
+
+def fsig_inputs(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What the hair kind contributes to the garment fingerprint
+    (``garment_store.garment_fsig``, R10): the derived description, whether
+    the hair falls behind the shoulders, and the pronouns the prompts use."""
+    profile = _profile_of(character_name, profile)
+    return {"description": hair_description(character_name, profile=profile),
+            "behind_shoulders": hair_behind_shoulders(character_name, profile=profile),
+            "pronouns": list(pronouns(profile))}
 
 
 def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
