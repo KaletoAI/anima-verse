@@ -12,12 +12,14 @@ a 3D model or an image, decided here on the server.
    - ``base_model_steps``: the base model ``model3d/<bsig>.glb`` — hand check
      of the front image, mesh, face retexture, black-eye check, rig, head
      twist, normalize, limb weights, extension rig, covered variant
-     (``model3d/covered/<bsig>.glb``), texture re-encode, measurement.
+     (``model3d/covered/<bsig>.glb``), collision capsules, texture
+     re-encode, measurement.
    - ``outfit_model_steps``: an outfit model on the base-body pipeline
      (sidecar ``source: "base_body"``) — base model used, base variant and
      the piece that decided it, every dressed view with its fit gate and
      view guard, the back refit, the body retexture proof, the restored face
-     texels, the extension rig (inherited from the base), the own-mesh
+     texels, the extension rig (inherited from the base), the collision
+     capsules (the base's set, ``collision.py``), the own-mesh
      pieces (own garment mesh / left painted on), the garments assembled
      onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it.
@@ -213,6 +215,39 @@ def _extension_step(state: Dict[str, Any], *, source: str = "") -> Dict[str, Any
     return step("extension_rig", "Extension rig", NOT_RECORDED, reason or "Not processed", numbers)
 
 
+def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None) -> Dict[str, Any]:
+    """The collision capsules (``collision.py``): count and radius per region;
+    ``current`` False = the record no longer describes the file."""
+    from app.core.collision import REGIONS, summary
+    label = "Collision capsules"
+    if (meta.get("rig") or "mixamo") != "mixamo":
+        return step("collision", label, SKIPPED, "Not a humanoid model")
+    record = _dict(meta.get("collision"))
+    if not record:
+        return step("collision", label, NOT_RECORDED, "Not computed")
+    if record.get("error"):
+        return step("collision", label, FAILED, str(record["error"]))
+    numbers = summary(record)
+    radii = _dict(numbers.get("radii"))
+    parts = [f"{numbers.get('count', 0)} capsules"]
+    for region in REGIONS:
+        low_high = radii.get(region)
+        if isinstance(low_high, list) and len(low_high) == 2:
+            low, high = low_high
+            parts.append(f"{region} {low:.1f} cm" if low == high else f"{region} {low:.1f}–{high:.1f} cm")
+    skipped = [x for x in (record.get("skipped") or []) if isinstance(x, dict)]
+    if skipped:
+        parts.append("skipped " + ", ".join(f"{x.get('id')} ({x.get('reason')})" for x in skipped))
+    if record.get("source") == "base":
+        parts.append("from the base model")
+    if current is False:
+        parts.append("outdated")
+    status = WARNING if skipped or current is False else DONE
+    return step("collision", label, status, " · ".join(parts),
+                {"count": numbers.get("count"), "skipped": numbers.get("skipped"),
+                 **{f"{region}_cm": radii[region][1] for region in REGIONS if region in radii}})
+
+
 def _texture_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     refined = _dict(meta.get("refined"))
     if not refined:
@@ -339,12 +374,15 @@ def _covered_step(record: Dict[str, Any], *, exists: bool, current: Optional[boo
 
 
 def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any]],
-                     covered_exists: bool = False, covered_current: Optional[bool] = None) -> List[Dict[str, Any]]:
+                     covered_exists: bool = False, covered_current: Optional[bool] = None,
+                     collision_current: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The steps of a base model (pure). ``meta``: its sidecar;
     ``front_meta``: the sidecar of the current base front image (its
     ``hand_gate``), None without one; ``covered_exists`` / ``covered_current``:
     whether ``model3d/covered/<bsig>.glb`` exists and was built from the
-    model's current clean prerig source (None = unknown)."""
+    model's current clean prerig source (None = unknown);
+    ``collision_current``: whether the stored capsule set still describes
+    the file (None = unknown)."""
     blender = _dict(meta.get("blender"))
     rows = [_hand_gate_step(front_meta), _mesh_step(meta), *_face_steps(_dict(meta.get("face_retexture"))),
             _rig_step(meta)]
@@ -352,6 +390,7 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _covered_step(_dict(meta.get("covered_variant")), exists=covered_exists, current=covered_current),
+                _collision_step(meta, current=collision_current),
                 _texture_step(meta), _measure_step(meta)):
         if row is not None:
             rows.append(row)
@@ -585,6 +624,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     else:
         source = ""
     rows.append(_extension_step(state, source=source))
+    rows.append(_collision_step(meta))
     mesh_row = _mesh_items_step(meta, item_names or {})
     if mesh_row is not None:
         rows.append(mesh_row)
@@ -733,8 +773,13 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
                 covered_current = hashlib.sha256(prerig.read_bytes()).hexdigest() == recorded
             except OSError:
                 covered_current = None
+    from app.core import collision
     steps = base_model_steps(meta, front_meta=_sidecar(front) if front else None,
-                             covered_exists=covered.is_file(), covered_current=covered_current)
+                             covered_exists=covered.is_file(), covered_current=covered_current,
+                             collision_current=(collision.is_current(meta.get("collision"),
+                                                                     collision.identity(path, meta)[1],
+                                                                     collision.character_scales(character_name))
+                                                if meta.get("collision") else None))
     return {"steps": steps,
             "freshness": base_model_freshness(meta, _base_view_shas(character_name, bsig))}
 

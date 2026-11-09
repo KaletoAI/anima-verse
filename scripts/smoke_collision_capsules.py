@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""Smoke: collision capsules — fitting, the stored record, inheritance and the model overview step
+(app/core/collision.py, model3d._auto_collision, model_overview).
+
+Usage:
+    ./.venv/bin/python scripts/smoke_collision_capsules.py
+
+Runs without the server, against a temp storage dir; no world DB, no Blender.
+
+FIXTURE — a synthetic skinned GLB (``make_body``): Mixamo joints (``mixamorig:`` prefix, flat hierarchy, node
+translation = bind position, inverse bind matrix = translation by its negative), one body mesh whose every
+vertex is weighted 1.0 to ONE joint:
+  legs   LeftUpLeg (0.1, 0.95, 0) → LeftLeg (0.1, 0.5, 0) → LeftFoot (0.1, 0.08, 0), right mirrored in x;
+         rings of radius 0.06 around UpLeg→Leg (weighted UpLeg) and Leg→Foot (weighted Leg);
+  arms   LeftArm (0.2, 1.45, 0) → LeftForeArm (0.5, 1.45, 0) → LeftHand (0.75, 1.45, 0), right mirrored;
+         rings of radius 0.04 around Arm→ForeArm (weighted Arm) and ForeArm→Hand (weighted ForeArm);
+  torso  Hips (0, 1.0, 0) → Spine1 (0, 1.2, 0) → Spine2 (0, 1.35, 0) → Neck (0, 1.5, 0); ELLIPSE rings
+         x = 0.12 cos θ, z = 0.10 sin θ around each segment, weighted to its start bone;
+  head   Head (0, 1.6, 0) → HeadTop_End (0, 1.8, 0); a capsule SURFACE of radius 0.09 (rings + the two
+         hemispheres), weighted Head — every vertex exactly 0.09 from the segment ("head sphere 0.09").
+Each ring: 720 evenly spaced θ at 9 stations t = 0.1..0.9 of the segment (all strictly inside, so the distance
+to the segment is the distance to the axis).
+
+Expected, derived by hand:
+[1] fit_capsules on the full body: 12 capsules, nothing skipped.
+    A uniform ring has ONE distance, so every quantile = its radius:
+      legs  0.060 + 6 mm = 0.066 (left/right thigh, left/right shin)
+      arms  0.040 + 6 mm = 0.046 (left/right upper arm, left/right forearm)
+      head  0.090 + 0    = 0.090
+    The ellipse ring: d(θ)² = b² + (a² − b²)·cos²θ, a = 0.12, b = 0.10. For θ uniform, P(cos²θ ≤ c) =
+    1 − (2/π)·arccos(√c), so the q-quantile is d_q = sqrt(b² + (a² − b²)·sin²(qπ/2)):
+      hips  q = 0.02: sin²(0.01π) = 0.000987 → sqrt(0.0100 + 0.0044·0.000987) = 0.10002 → 0.1000
+      spine q = 0.10: sin²(0.05π) = 0.024472 → sqrt(0.0100 + 0.0044·0.024472) = 0.10054 → 0.1005
+      chest q = 0.10: same → 0.1005
+    (p95 would give sqrt(0.0100 + 0.0044·0.99384) = 0.1199 — the table's torso quantile is what is checked.)
+    Tolerance 0.3 mm (discrete θ, 0.1-mm rounding). Joint names come back as in the model ("mixamorig:…").
+[2] Without HeadTop_End: 11 capsules, skipped = [head, reason "joint HeadTop_End missing"]. Without LeftFoot:
+    left_shin skipped "joint LeftFoot missing", everything else unchanged — no crash.
+[3] Region scale 1.2 everywhere → every radius × 1.2 (thigh 0.0792, upper arm 0.0552, hips 0.1200, spine
+    0.1206, head 0.1080, ±0.4 mm); {"leg": 1.2} alone → legs 0.0792, arms stay 0.046. validate_scales refuses
+    0.4, 1.6, "x", an unknown region; fills missing regions with 1.0.
+[4] A grafted garment node (``garment_dress_x``, a ring of radius 0.30 weighted LeftUpLeg) changes nothing:
+    left_thigh stays 0.066 (body_arrays skips garment nodes).
+[5] The stored record (``collision.ensure_path`` on <tmp>/model3d/<sig>.glb + sidecar, scales passed in):
+    own model → record {version 1, source own, sha256 = sha of the file, scales = defaults}, written into the
+    sidecar; a second call fits nothing (fit counter unchanged); new file bytes → refitted (counter +1).
+    Outfit (sidecar source "base_body", base_signature B, base_model_sha256 S) carrying the base record
+    (source own, sha256 S) → current, relabelled {source base, base_signature B}, NOT refitted.
+    The same outfit with base_model_sha256 S2 (built on another base) → refitted on its own file, record
+    sha256 S2 / source base (Review Focus 1: the set follows the base it was built on, never a stale copy).
+    Changed scales → refitted. rig "generic" → None, nothing written. A file that is not a GLB body →
+    record with ``error`` and no capsules, stored (not refitted on the next call).
+[6] model3d._auto_collision(…) = the post-rig step: called by _auto_extension_rig; a base model's meta gets
+    the record (source own); the result's ``noop`` stays the extension rig's answer (True here — a no-op
+    rebuild publishes no sidecar; the next ensure_path stores the set).
+[7] model_overview: base_model_steps / outfit_model_steps carry a "collision" row after extension_rig:
+      record with 12 capsules → done "12 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head
+      9.0 cm", numbers count 12; on the outfit "… · from the base model"; none → missing "Not computed";
+      error → failed with the error; a skipped capsule → warning "… · skipped head (joint HeadTop_End
+      missing)".
+"""
+import hashlib
+import json
+import math
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+FAILS = []
+
+
+def check(label, got, want):
+    ok = got == want
+    print(f"  {'ok ' if ok else 'FAIL'} {label}" + ("" if ok else f"\n       got:  {got!r}\n       want: {want!r}"))
+    if not ok:
+        FAILS.append(label)
+
+
+def near(label, got, want, tol):
+    ok = got is not None and abs(got - want) <= tol
+    print(f"  {'ok ' if ok else 'FAIL'} {label}: {got} ≈ {want} (±{tol})")
+    if not ok:
+        FAILS.append(label)
+
+
+JOINTS = {
+    "Hips": (0, 1.0, 0), "Spine1": (0, 1.2, 0), "Spine2": (0, 1.35, 0), "Neck": (0, 1.5, 0),
+    "Head": (0, 1.6, 0), "HeadTop_End": (0, 1.8, 0),
+    "LeftUpLeg": (0.1, 0.95, 0), "LeftLeg": (0.1, 0.5, 0), "LeftFoot": (0.1, 0.08, 0),
+    "RightUpLeg": (-0.1, 0.95, 0), "RightLeg": (-0.1, 0.5, 0), "RightFoot": (-0.1, 0.08, 0),
+    "LeftArm": (0.2, 1.45, 0), "LeftForeArm": (0.5, 1.45, 0), "LeftHand": (0.75, 1.45, 0),
+    "RightArm": (-0.2, 1.45, 0), "RightForeArm": (-0.5, 1.45, 0), "RightHand": (-0.75, 1.45, 0),
+}
+N_THETA, STATIONS = 720, np.linspace(0.1, 0.9, 9)
+
+
+def ring(a, b, rx, rz=None):
+    """Points around segment a→b: the axis is y (vertical segments) or x (arms)."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    th = np.arange(N_THETA) * 2 * np.pi / N_THETA
+    rz = rx if rz is None else rz
+    out = []
+    for t in STATIONS:
+        c = a + t * (b - a)
+        if abs(b[0] - a[0]) > abs(b[1] - a[1]):   # along x: circle in y/z
+            out.append(np.stack([np.full_like(th, c[0]), c[1] + rx * np.cos(th), c[2] + rz * np.sin(th)], 1))
+        else:                                     # along y: circle/ellipse in x/z
+            out.append(np.stack([c[0] + rx * np.cos(th), np.full_like(th, c[1]), c[2] + rz * np.sin(th)], 1))
+    return np.concatenate(out)
+
+
+def head_surface(a, b, r):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    pts = [ring(a, b, r)]
+    th = np.arange(72) * 2 * np.pi / 72
+    for phi in np.linspace(0.1, np.pi / 2, 10):      # hemispheres: below a, above b
+        s, c = math.sin(phi), math.cos(phi)
+        pts.append(np.stack([r * s * np.cos(th), a[1] - r * c + 0 * th, r * s * np.sin(th)], 1))
+        pts.append(np.stack([r * s * np.cos(th), b[1] + r * c + 0 * th, r * s * np.sin(th)], 1))
+    return np.concatenate(pts)
+
+
+def body_parts(joints):
+    parts = []
+    for side in ("Left", "Right"):
+        parts.append((f"{side}UpLeg", ring(JOINTS[f"{side}UpLeg"], JOINTS[f"{side}Leg"], 0.06)))
+        parts.append((f"{side}Leg", ring(JOINTS[f"{side}Leg"], JOINTS[f"{side}Foot"], 0.06)))
+        parts.append((f"{side}Arm", ring(JOINTS[f"{side}Arm"], JOINTS[f"{side}ForeArm"], 0.04)))
+        parts.append((f"{side}ForeArm", ring(JOINTS[f"{side}ForeArm"], JOINTS[f"{side}Hand"], 0.04)))
+    for a, b in (("Hips", "Spine1"), ("Spine1", "Spine2"), ("Spine2", "Neck")):
+        parts.append((a, ring(JOINTS[a], JOINTS[b], 0.12, 0.10)))
+    parts.append(("Head", head_surface(JOINTS["Head"], JOINTS["HeadTop_End"], 0.09)))
+    return [(j, p) for j, p in parts if j in joints]
+
+
+def make_body(*, drop=(), garment=False):
+    from app.core.glb_mesh import pack_glb
+    names = [n for n in JOINTS if n not in drop]
+    blob = bytearray()
+    accessors, views = [], []
+
+    def add(array, comp, typ, target=None):
+        data = np.ascontiguousarray(array).tobytes()
+        while len(blob) % 4:
+            blob.append(0)
+        view = {"buffer": 0, "byteOffset": len(blob), "byteLength": len(data)}
+        if target:
+            view["target"] = target
+        views.append(view)
+        blob.extend(data)
+        acc = {"bufferView": len(views) - 1, "componentType": comp, "count": len(array), "type": typ}
+        if typ == "VEC3" and comp == 5126:
+            acc["min"] = np.asarray(array).min(0).tolist()
+            acc["max"] = np.asarray(array).max(0).tolist()
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    def primitive(parts):
+        pos = np.concatenate([p for _, p in parts]).astype("<f4")
+        jnt = np.zeros((len(pos), 4), "<u2")
+        wgt = np.zeros((len(pos), 4), "<f4")
+        wgt[:, 0] = 1.0
+        offset = 0
+        for joint, p in parts:
+            jnt[offset:offset + len(p), 0] = names.index(joint)
+            offset += len(p)
+        idx = np.arange(len(pos), dtype="<u4")
+        idx = np.concatenate([idx, np.zeros(-len(idx) % 3, "<u4")])
+        return {"attributes": {"POSITION": add(pos, 5126, "VEC3", 34962), "JOINTS_0": add(jnt, 5123, "VEC4", 34962),
+                               "WEIGHTS_0": add(wgt, 5126, "VEC4", 34962)},
+                "indices": add(idx, 5125, "SCALAR", 34963)}
+
+    nodes = [{"name": f"mixamorig:{n}", "translation": list(map(float, JOINTS[n]))} for n in names]
+    ibm = np.stack([np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [-x, -y, -z, 1]], "<f4")
+                    for x, y, z in (JOINTS[n] for n in names)]).reshape(-1, 16)
+    skin = {"joints": list(range(len(names))), "inverseBindMatrices": add(ibm, 5126, "MAT4")}
+    meshes = [{"name": "Body", "primitives": [primitive(body_parts(names))]}]
+    nodes.append({"name": "Body", "mesh": 0, "skin": 0})
+    if garment:
+        meshes.append({"name": "garment_dress_x", "primitives": [primitive(
+            [("LeftUpLeg", ring(JOINTS["LeftUpLeg"], JOINTS["LeftLeg"], 0.30))])]})
+        nodes.append({"name": "garment_dress_x", "mesh": 1, "skin": 0, "extras": {"garment": {"kind": "dress"}}})
+    gltf = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": list(range(len(nodes)))}],
+            "nodes": nodes, "meshes": meshes, "skins": [skin], "accessors": accessors, "bufferViews": views,
+            "buffers": [{"byteLength": len(blob) + (-len(blob) % 4)}]}
+    return pack_glb(gltf, bytes(blob))
+
+
+def radii(payload):
+    return {c["id"]: c["r"] for c in payload["capsules"]}
+
+
+def main() -> int:
+    tmp = Path(tempfile.mkdtemp(prefix="smoke_collision_"))
+    os.environ["STORAGE_DIR"] = str(tmp / "world")
+    os.environ["INSTANCE_DIR"] = str(tmp / "instance")
+    from app.core import paths
+    paths.init(str(tmp / "world"))
+    from app.core import collision
+
+    body = make_body()
+    print("[1] fit on the synthetic body")
+    full = collision.fit_capsules(body, scales=None)
+    r = radii(full)
+    check("12 capsules, none skipped", (len(full["capsules"]), full["skipped"]), (12, []))
+    check("version", full["version"], 1)
+    for cid in ("left_thigh", "right_thigh", "left_shin", "right_shin"):
+        near(cid, r.get(cid), 0.066, 0.0003)
+    for cid in ("left_upper_arm", "right_upper_arm", "left_forearm", "right_forearm"):
+        near(cid, r.get(cid), 0.046, 0.0003)
+    near("hips (ellipse q0.02)", r.get("hips"), 0.10002, 0.0003)
+    near("spine (ellipse q0.10)", r.get("spine"), 0.10054, 0.0003)
+    near("chest (ellipse q0.10)", r.get("chest"), 0.10054, 0.0003)
+    near("head (capsule surface)", r.get("head"), 0.090, 0.0003)
+    thigh = next(c for c in full["capsules"] if c["id"] == "left_thigh")
+    check("joint names as in the model", (thigh["a"], thigh["b"], thigh["region"]),
+          ("mixamorig:LeftUpLeg", "mixamorig:LeftLeg", "leg"))
+
+    print("[2] missing joints are skipped and reported")
+    nohead = collision.fit_capsules(make_body(drop=("HeadTop_End",)))
+    check("11 capsules", len(nohead["capsules"]), 11)
+    check("head skipped", [(s["id"], s["reason"]) for s in nohead["skipped"]],
+          [("head", "joint HeadTop_End missing")])
+    nofoot = collision.fit_capsules(make_body(drop=("LeftFoot",)))
+    check("left_shin skipped", [(s["id"], s["reason"]) for s in nofoot["skipped"]],
+          [("left_shin", "joint LeftFoot missing")])
+    check("the rest unchanged", {k: v for k, v in radii(nofoot).items()},
+          {k: v for k, v in r.items() if k != "left_shin"})
+
+    print("[3] region scales")
+    scaled = radii(collision.fit_capsules(body, scales={k: 1.2 for k in collision.REGIONS}))
+    for cid, want in (("left_thigh", 0.0792), ("left_upper_arm", 0.0552), ("hips", 0.12002),
+                      ("spine", 0.12065), ("head", 0.108)):
+        near(f"{cid} × 1.2", scaled.get(cid), want, 0.0004)
+    legs = radii(collision.fit_capsules(body, scales={"leg": 1.2}))
+    near("leg only: thigh", legs.get("left_thigh"), 0.0792, 0.0004)
+    near("leg only: upper arm unchanged", legs.get("left_upper_arm"), 0.046, 0.0003)
+    for bad in ({"leg": 0.4}, {"arm": 1.6}, {"torso": "x"}, {"tail": 1.0}, [1.0]):
+        try:
+            collision.validate_scales(bad)
+            check(f"refused {bad!r}", "accepted", "ValueError")
+        except ValueError:
+            check(f"refused {bad!r}", "ValueError", "ValueError")
+    check("defaults filled", collision.validate_scales({"head": 0.8}),
+          {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 0.8})
+
+    print("[4] garment nodes are not body")
+    near("left_thigh with a garment", radii(collision.fit_capsules(make_body(garment=True))).get("left_thigh"),
+         0.066, 0.0003)
+
+    print("[5] the stored record")
+    calls = []
+    real_fit = collision.fit_capsules
+
+    def counting_fit(data, *, scales=None):
+        calls.append(len(data))
+        return real_fit(data, scales=scales)
+
+    collision.fit_capsules = counting_fit
+    d = tmp / "model3d"
+    d.mkdir()
+    own = d / "aaaaaaaaaaaa.glb"
+    own.write_bytes(body)
+    own.with_suffix(".json").write_text(json.dumps({"rig": "mixamo"}))
+    defaults = collision.default_scales()
+    rec = collision.ensure_path("Demo", own, scales=defaults)
+    sha = hashlib.sha256(body).hexdigest()
+    check("own record", (rec["version"], rec["source"], rec["sha256"], rec["scales"], len(rec["capsules"])),
+          (1, "own", sha, defaults, 12))
+    stored = json.loads(own.with_suffix(".json").read_text())
+    check("written into the sidecar, rest kept", (stored["collision"]["sha256"], stored["rig"]), (sha, "mixamo"))
+    check("fitted once", len(calls), 1)
+    collision.ensure_path("Demo", own, scales=defaults)
+    check("current: not refitted", len(calls), 1)
+    other = make_body(drop=("HeadTop_End",))
+    own.write_bytes(other)
+    rec = collision.ensure_path("Demo", own, scales=defaults)
+    check("new bytes: refitted", (len(calls), rec["sha256"], len(rec["capsules"])),
+          (2, hashlib.sha256(other).hexdigest(), 11))
+    rec = collision.ensure_path("Demo", own, scales={**defaults, "leg": 1.1})
+    check("changed scales: refitted", (len(calls), rec["scales"]["leg"]), (3, 1.1))
+
+    outfit = d / "bbbbbbbbbbbb.glb"
+    outfit.write_bytes(body + b"")
+    base_record = {**real_fit(body), "source": "own", "sha256": "S", "computed_at": "t"}
+    outfit.with_suffix(".json").write_text(json.dumps({
+        "rig": "mixamo", "source": "base_body", "base_signature": "baseB0000000", "base_model_sha256": "S",
+        "collision": base_record}))
+    n = len(calls)
+    rec = collision.ensure_path("Demo", outfit, scales=defaults)
+    check("inherited: relabelled, not refitted",
+          (rec["source"], rec["base_signature"], rec["sha256"], len(calls) - n), ("base", "baseB0000000", "S", 0))
+    check("inherited capsules = the base's", rec["capsules"], base_record["capsules"])
+    meta = json.loads(outfit.with_suffix(".json").read_text())
+    meta["base_model_sha256"] = "S2"
+    outfit.with_suffix(".json").write_text(json.dumps(meta))
+    rec = collision.ensure_path("Demo", outfit, scales=defaults)
+    check("built on another base: refitted under that base",
+          (rec["source"], rec["sha256"], len(calls) - n), ("base", "S2", 1))
+
+    generic = d / "cccccccccccc.glb"
+    generic.write_bytes(body)
+    generic.with_suffix(".json").write_text(json.dumps({"rig": "generic"}))
+    check("generic rig: none", collision.ensure_path("Demo", generic, scales=defaults), None)
+    check("generic rig: nothing written", "collision" in json.loads(generic.with_suffix(".json").read_text()), False)
+    broken = d / "dddddddddddd.glb"
+    broken.write_bytes(b"not a glb at all")
+    broken.with_suffix(".json").write_text(json.dumps({"rig": "mixamo"}))
+    rec = collision.ensure_path("Demo", broken, scales=defaults)
+    check("broken file: error record", (bool(rec.get("error")), rec["capsules"]), (True, []))
+    n = len(calls)
+    collision.ensure_path("Demo", broken, scales=defaults)
+    check("broken file: not refitted per poll", len(calls) - n, 0)
+    collision.fit_capsules = real_fit
+
+    print("[6] the post-rig step")
+    from app.core import model3d
+    called = []
+    real_refresh = collision.refresh
+    collision.refresh = lambda name, path, meta, **kw: called.append(path.name) or real_refresh(
+        name, path, meta, scales=defaults, **kw)
+    real_once = model3d._extension_rig_once
+    model3d._extension_rig_once = lambda name, path, meta, force=False: {"ok": True, "noop": True}
+    base_path = d / "base00000001.glb"
+    base_path.write_bytes(body)
+    base_meta = {"rig": "mixamo"}
+    result = model3d._auto_extension_rig("Demo", base_path, base_meta)
+    model3d._extension_rig_once = real_once
+    collision.refresh = real_refresh
+    check("_auto_extension_rig runs the collision step", called, ["base00000001.glb"])
+    check("record in the meta, noop unchanged",
+          ((base_meta.get("collision") or {}).get("source"), len((base_meta.get("collision") or {}).get("capsules") or []),
+           result.get("noop")), ("own", 12, True))
+
+    print("[7] model overview step")
+    from app.core import model_overview as mo
+    record = {**real_fit(body), "source": "own", "sha256": "x"}
+
+    def row(steps):
+        rows = [(s["status"], s["detail"], s["numbers"]) for s in steps if s["id"] == "collision"]
+        return rows[0] if rows else None
+
+    want = "12 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head 9.0 cm"
+    got = row(mo.base_model_steps({"rig": "mixamo", "collision": record}, front_meta=None))
+    check("base: done", got and got[:2], ("done", want))
+    check("base: count", got and got[2].get("count"), 12)
+    ids = [s["id"] for s in mo.base_model_steps({"rig": "mixamo", "collision": record}, front_meta=None)]
+    check("after the extension rig", ids.index("collision") == ids.index("extension_rig") + 1
+          or ids.index("collision") == ids.index("covered_variant") + 1, True)
+    got = row(mo.base_model_steps({"rig": "mixamo"}, front_meta=None))
+    check("none: missing", got and got[:2], ("missing", "Not computed"))
+    got = row(mo.base_model_steps({"rig": "mixamo", "collision": {**record, "capsules": [], "error": "boom"}},
+                                  front_meta=None))
+    check("error: failed", got and got[:2], ("failed", "boom"))
+    skipped = {**real_fit(make_body(drop=("HeadTop_End",))), "source": "own", "sha256": "x"}
+    got = row(mo.base_model_steps({"rig": "mixamo", "collision": skipped}, front_meta=None))
+    check("skipped: warning", got and got[:2],
+          ("warning", "11 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · skipped head "
+                      "(joint HeadTop_End missing)"))
+    outfit_meta = {"rig": "mixamo", "source": "base_body", "collision": {**record, "source": "base"}}
+    got = row(mo.outfit_model_steps(outfit_meta, base=None, base_meta=None, wanted_variant=None, deciders=[],
+                                    shown=[], dressed_records={}, garments=[], tiers=["full"]))
+    check("outfit: inherited", got and got[:2], ("done", want + " · from the base model"))
+
+    print("FAIL" if FAILS else "OK", f"({len(FAILS)} failures)" if FAILS else "")
+    return 1 if FAILS else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

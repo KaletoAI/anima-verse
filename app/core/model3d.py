@@ -1062,6 +1062,15 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         part = attached_part_info(info["extension_rig"])
         if part is not None:
             info["attached_part"] = part
+        # Collision capsules of the served body (spec 2026-11-08): fitted and
+        # stored once per file, None for a non-humanoid model.
+        try:
+            from app.core.collision import character_scales, ensure_path
+            info["collision"] = ensure_path(character_name, path,
+                                            scales=character_scales(character_name, profile=profile))
+        except Exception as exc:  # noqa: BLE001 — the info route never fails on it
+            logger.warning("Model3D %s: collision capsules unavailable: %s", character_name, exc)
+            info["collision"] = None
         info["model_rev"] = model_revision(path)
         info["tiers"] = available_tiers(path)
         low = tier_variant(path, LOW_TIER)
@@ -1295,7 +1304,26 @@ def _auto_extension_rig(character_name: str, path: Path,
             logger.warning("Model3D %s: covered variant failed: %s", character_name, exc)
             meta["covered_variant"] = {"status": "failed", "reason": str(exc), "at": utc_now_iso()}
             result = {**result, "noop": False}
+    # ``noop`` stays the extension rig's answer: a no-op rebuild publishes no
+    # sidecar, and the next ``collision.ensure_path`` stores the set then.
+    _auto_collision(character_name, path, meta)
     return result
+
+
+def _auto_collision(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
+    """The post-rig step after the extension rig: the collision capsules of
+    the full-tier model ``path`` into ``meta["collision"]``
+    (``collision.refresh``; the caller publishes the sidecar). An outfit on
+    the base body keeps the set of the base it was built on. Never fails the
+    model. Returns True when the record changed."""
+    if path.parent.name == LOW_TIER:
+        return False
+    from app.core import collision
+    try:
+        return collision.refresh(character_name, path, meta)
+    except Exception as exc:  # noqa: BLE001 — capsules never block a model
+        logger.warning("Model3D %s: collision capsules failed: %s", character_name, exc)
+        return False
 
 
 def _extension_groups_for(meta: Dict[str, Any], groups):

@@ -2227,7 +2227,8 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
     on the base, and the outfit colour is put back afterwards — never on top
     of the base's extension bones), measurement,
     sidecar (``base_signature``, ``base_model_sha256``, ``retexture_proof``,
-    ``source: "base_body"``), distance tier, and the eager garment assembly
+    ``source: "base_body"``; the base's ``collision`` capsule set is copied
+    with its meta and kept as the inherited set, ``collision.refresh``), distance tier, and the eager garment assembly
     ``model3d/assembled/<signature>.glb`` (``_assemble_garments``; a failure
     only adds ``garment_warnings`` to the sidecar). The dressed front's
     own-mesh record (``mesh_items``, ``mesh_token``) is copied into the

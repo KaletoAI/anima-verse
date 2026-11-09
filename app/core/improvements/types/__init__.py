@@ -1,6 +1,7 @@
 """Importing this package registers every built-in improvement type."""
 from app.core.improvements import registry
 
+from .collision_capsules import CollisionCapsules
 from .extension_rig_rebuild import ExtensionRigRebuild
 from .face_retexture import FaceRetexture
 from .fallback_rerender import FallbackRerender
@@ -14,6 +15,7 @@ from .surface_bake import SurfaceBake
 registry.register(FaceRetexture())
 registry.register(ExtensionRigRebuild())
 registry.register(RigWeightRepair())
+registry.register(CollisionCapsules())
 registry.register(ModelReplace())
 registry.register(FillMissing())
 registry.register(ImageRerender())
@@ -21,5 +23,5 @@ registry.register(SurfaceBake())
 registry.register(MeshFromTpose())
 registry.register(FallbackRerender())
 
-__all__ = ["FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "ImageRerender", "MeshFromTpose", "ModelReplace",
+__all__ = ["CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "ImageRerender", "MeshFromTpose", "ModelReplace",
            "RigWeightRepair", "SurfaceBake"]

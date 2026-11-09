@@ -1350,6 +1350,7 @@ def _resolve_character_model_snapshot(character_name: str):
                 "has_unrigged_source": info.get("has_unrigged_source", False),
                 "source": info.get("source", "generated"),
                 "extension_rig": info.get("extension_rig"),
+                "collision": info.get("collision"),
                 "motion": status["motion"],
                 "model_rev": info["model_rev"], "tiers": info["tiers"],
                 **{key: info[key] for key in ("url", "low_url", "texture_url") if key in info}}
@@ -2681,6 +2682,28 @@ def rebuild_character_model3d_extension_rig(
         return rebuild_extension_rig(character_name, signature, tier=tier, force=force)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/{character_name}/model3d/collision")
+def recompute_character_model3d_collision(
+        character_name: str, signature: str = "",
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Recompute the collision capsules of a stored model (default: the
+    served one) and store them in its sidecar. ``{ok, signature,
+    collision}``; ``collision`` is None for a model that gets none (not a
+    humanoid GLB)."""
+    from app.core import collision
+    from app.core.model3d import get_model3d_info
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    signature = signature or (get_model3d_info(character_name).get("model") or {}).get("signature", "")
+    if not signature:
+        raise HTTPException(404, "No model")
+    try:
+        record = collision.ensure(character_name, signature, force=True)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": bool(record) and not record.get("error"), "signature": signature, "collision": record}
 
 
 @router.post("/{character_name}/model3d/extension-rig/batch")

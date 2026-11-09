@@ -24,6 +24,8 @@ Expected values, derived by hand from the fixtures below:
       limb_weights     done "12 vertices repaired"
       extension_rig    done "g1, g2", groups 2
       covered_variant  warning "without g2 · built from another clean source"
+      collision        missing "Not computed" (no ``collision`` record; the
+                       rows of a record: scripts/smoke_collision_capsules.py)
       texture          done "2.0 MB saved" (2097152 bytes / 1048576)
       measure          done "120,000 tris · 56 bones · h 1.70 m"
     Variants: face failed "boom" -> one face row, failed, no dark_gate row;
@@ -48,6 +50,7 @@ Expected values, derived by hand from the fixtures below:
       rig              done "mixamo · RG · from the base model"
       extension_rig    done "g1 · inherited from the base model" (same
                        fingerprint and attempted_at as the base's)
+      collision        missing "Not computed"
       garment_hair1    warning "Bob · hairdeck · fsig f1 · older fit"
       garment_warnings warning "full: joint missing"
       measure          done; lod done "20,000 tris"
@@ -184,6 +187,7 @@ def main() -> int:
         ("limb_weights", "done", "12 vertices repaired"),
         ("extension_rig", "done", "g1, g2"),
         ("covered_variant", "warning", "without g2 · built from another clean source"),
+        ("collision", "missing", "Not computed"),
         ("texture", "done", "2.0 MB saved"),
         ("measure", "done", "120,000 tris · 56 bones · h 1.70 m"),
     ])
@@ -229,6 +233,7 @@ def main() -> int:
         ("face_texels", "done", "120 of 4,000 texels"),
         ("rig", "done", "mixamo · RG · from the base model"),
         ("extension_rig", "done", "g1 · inherited from the base model"),
+        ("collision", "missing", "Not computed"),
         ("garment_hair1", "warning", "Bob · hairdeck · fsig f1 · older fit"),
         ("garment_warnings", "warning", "full: joint missing"),
         ("measure", "done", "90,000 tris · 54 bones · h 1.70 m"),
@@ -236,7 +241,7 @@ def main() -> int:
     ])
     check("back numbers", {k: steps[3]["numbers"].get(k) for k in ("noise", "noise_limit", "fit_attempts")},
           {"noise": 1.9, "noise_limit": 1.75, "fit_attempts": 2})
-    check("hair label", steps[10]["label"], "Hair")
+    check("hair label", steps[11]["label"], "Hair")
     no_refit = {k: v for k, v in FIXTURE_B.items() if k != "back_refit"}
     no_refit["retexture_proof"] = {**FIXTURE_B["retexture_proof"], "views": {
         "back": {"dressed_alignment": {"unchanged_delta_e": 5.9}}}}
