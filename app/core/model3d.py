@@ -396,7 +396,18 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             "face_before_rig": bool(raw.get("face_before_rig")),
             "face_photo": dict(raw.get("face_photo") or {}),
             "extension_rig_models": dict(raw.get("extension_rig_models") or {}),
-            "extension_motion": dict(raw.get("extension_motion") or {})}
+            "extension_motion": dict(raw.get("extension_motion") or {}),
+            # Collision-capsule radius scale per region (collision.py), all
+            # four regions; an invalid stored map counts as the defaults.
+            "collision_scales": _collision_scales_option(raw.get("collision_scales"))}
+
+
+def _collision_scales_option(raw: Any) -> Dict[str, float]:
+    from app.core.collision import default_scales, validate_scales
+    try:
+        return validate_scales(raw)
+    except ValueError:
+        return default_scales()
 
 
 def set_model3d_options(character_name: str,
@@ -452,6 +463,16 @@ def set_model3d_options(character_name: str,
             else:
                 models.pop(signature, None)
             opts["extension_rig_models"] = models
+        if "collision_scales" in updates:
+            # Stored as deviations from 1.0 only; the capsule sets follow
+            # through collision.recompute_character (the caller runs it).
+            from app.core.collision import validate_scales
+            scales = {region: value for region, value in validate_scales(updates["collision_scales"]).items()
+                      if value != 1.0}
+            if scales:
+                opts["collision_scales"] = scales
+            else:
+                opts.pop("collision_scales", None)
         if "extension_motion" in updates:
             from app.core.extension_rig import validate_motion_overrides
             overrides = updates["extension_motion"]

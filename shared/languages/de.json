@@ -4292,6 +4292,17 @@
     "On the base-body pipeline every outfit model is built from the base body automatically — this option applies only off the pipeline.": "In der Grundkörper-Pipeline wird jedes Outfit-Modell automatisch aus dem Grundkörper gebaut — diese Option gilt nur außerhalb der Pipeline.",
     "Outfit models are built from the base body automatically.": "Outfit-Modelle werden automatisch aus dem Grundkörper gebaut.",
     "The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.": "Das Grundkörper-Modell bekommt die Gesichtskorrektur (Upscaler + Gesichts-Retexture) vor dem ersten Rig; Outfit-Modelle übernehmen das Gesicht von ihm.",
-    "Rebuild queued — it starts when the running model job ends": "Neubau vorgemerkt — er startet, sobald der laufende Modell-Job endet"
+    "Rebuild queued — it starts when the running model job ends": "Neubau vorgemerkt — er startet, sobald der laufende Modell-Job endet",
+    "Collision capsules": "Kollisionskapseln",
+    "Show collision capsules on the playing figure": "Kollisionskapseln an der abgespielten Figur zeigen",
+    "Arms": "Arme",
+    "Torso": "Rumpf",
+    "Saved — capsules of {n} model(s) could not be recomputed": "Gespeichert — die Kapseln von {n} Modell(en) konnten nicht neu berechnet werden",
+    "Saved — collision capsules recomputed": "Gespeichert — Kollisionskapseln neu berechnet",
+    "Fitting failed": "Anpassung fehlgeschlagen",
+    "{n} capsules": "{n} Kapseln",
+    "from the base model": "vom Grundkörper-Modell",
+    "Not computed yet — the capsules are fitted when the model is loaded.": "Noch nicht berechnet — die Kapseln werden beim Laden des Modells angepasst.",
+    "Radius per body region. Saving recomputes the capsules of every stored model of this character; outfit models on the base body inherit the base body's set. The viewer shows them with “Collision capsules”.": "Radius je Körperregion. Speichern berechnet die Kapseln aller gespeicherten Modelle dieses Characters neu; Outfit-Modelle auf dem Grundkörper übernehmen den Satz des Grundkörpers. Der Viewer zeigt sie mit „Kollisionskapseln“."
   }
 }

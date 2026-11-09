@@ -2751,6 +2751,35 @@ def recompute_character_model3d_collision(
     return {"ok": bool(record) and not record.get("error"), "signature": signature, "collision": record}
 
 
+@router.post("/{character_name}/model3d/collision/scales")
+async def set_character_collision_scales(character_name: str, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Per-character radius scale of the collision capsules, per region.
+    Body: ``{"scales": {"leg"|"arm"|"torso"|"head": 0.5..1.5}}`` (a missing
+    region = 1.0). Stores ``model3d_opts.collision_scales`` and recomputes
+    the capsule set of every stored model (base body first, then the
+    outfits' inherited sets): ``{options, scales, models}``."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_set_character_collision_scales_sync, character_name, body)
+
+
+def _set_character_collision_scales_sync(character_name: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_collision_scales``."""
+    from app.core import collision
+    from app.core.model3d import set_model3d_options
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    if not isinstance(body, dict) or set(body) != {"scales"}:
+        raise HTTPException(400, "collision scales required")
+    try:
+        collision.validate_scales(body["scales"])
+        options = set_model3d_options(character_name, {"collision_scales": body["scales"]})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"options": options, **collision.recompute_character(character_name)}
+
+
 @router.post("/{character_name}/model3d/extension-rig/batch")
 def queue_character_extension_rigs(
         character_name: str,

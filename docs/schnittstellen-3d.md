@@ -12139,6 +12139,13 @@ model meta when `model_sig` changes). `null` for a model that gets none.
 - A capsule that could not be fitted (missing joint, too few vertices) is listed in `skipped`, never in
   `capsules`; `error` = the fit failed, `capsules` is empty.
 - An outfit model on the base-body pipeline carries the set of the base body it was built on (`source "base"`).
+- Renderers read the capsules in the current frame through `bindCollision` / `capsuleNow` of
+  `packages/scene-render/src/collision.ts` — the endpoint rule exists once (check:
+  `scripts/smoke_collision_endpoints.mjs`); the admin viewer's "Collision capsules" toggle draws them with
+  `createCollisionOverlay`.
+- Region scales (`scales`, 0.5–1.5 per region) are a per-character override, `model3d_opts.collision_scales`, set
+  admin-only by `POST /characters/{name}/model3d/collision/scales` (`{"scales": {region: factor}}`), which
+  recomputes every stored model's set — the base body's first, then the outfits' inherited sets.
 
 ### P2 runtime contract: secondary motion
 

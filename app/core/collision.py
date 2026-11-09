@@ -385,6 +385,41 @@ def ensure(character_name: str, signature: str, *, force: bool = False) -> Optio
     return ensure_path(character_name, get_model3d_dir(character_name) / f"{signature}.glb", force=force)
 
 
+def recompute_character(character_name: str) -> Dict[str, Any]:
+    """After a region-scale change (``model3d_opts.collision_scales``): bring the capsule set of every stored
+    full-tier model of the character (``model3d/*.glb``; retired state forks, the distance tier and the covered
+    variant carry none) up to date with the character's scales. On the base-body pipeline the CURRENT base model
+    goes first — it owns the set — then every outfit model, whose inherited set is refitted under the base identity
+    (``refresh``: body nodes only = the base body it was built on). Only the sidecar key ``collision`` is written;
+    the model files, renders and every other sidecar key stay as they are.
+
+    Returns ``{"scales": {...}, "models": {signature: {"ok", "count", "skipped", "source"} | {"ok", "error"}}}``;
+    a model that gets no set (not a humanoid GLB) reports ``{"ok": True, "count": 0, "none": True}``."""
+    from app.core.model3d import _current_base, get_model3d_dir
+    from app.core.model_refs import is_state_fork
+    scales = character_scales(character_name)
+    current = _current_base(character_name)
+    directory = get_model3d_dir(character_name)
+    paths = sorted((path for path in directory.glob("*.glb") if not is_state_fork(path.stem)),
+                   key=lambda path: (not current or path.stem != current[0], path.stem))
+    models: Dict[str, Any] = {}
+    for path in paths:
+        try:
+            record = ensure_path(character_name, path, scales=scales)
+        except Exception as exc:  # noqa: BLE001 — one unreadable model does not stop the others
+            logger.warning("Collision capsules of %s (%s) not recomputed: %s", character_name, path.name, exc)
+            models[path.stem] = {"ok": False, "error": str(exc)}
+            continue
+        if record is None:
+            models[path.stem] = {"ok": True, "count": 0, "none": True}
+        elif record.get("error"):
+            models[path.stem] = {"ok": False, "error": str(record["error"])}
+        else:
+            models[path.stem] = {"ok": True, "count": len(record.get("capsules") or []),
+                                 "skipped": len(record.get("skipped") or []), "source": record.get("source")}
+    return {"scales": scales, "models": models}
+
+
 def summary(record: Any) -> Dict[str, Any]:
     """Display numbers of a record: ``{count, skipped, radii: {region: [min, max] cm}}``."""
     if not isinstance(record, dict):

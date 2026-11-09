@@ -19,8 +19,9 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   installSkinnedNormalCorrection, createSecondaryMotion, bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
-  standingHipsRef, clipHeightOffsetM } from '@anima/scene-render'
-import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm } from '@anima/scene-render'
+  standingHipsRef, clipHeightOffsetM, createCollisionOverlay } from '@anima/scene-render'
+import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
+  CollisionOverlay, CollisionPayload } from '@anima/scene-render'
 import { applyViewerTexture } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -279,7 +280,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox }:
+  onPolygonFaces, onDrawCancel, leafBbox, collision }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -434,7 +435,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  orientation fix (`rotation`), the same routine the 3D client hangs
      *  its pivot with (ruling R13) — and back, so the cut can be judged
      *  before a door is placed anywhere. Model mode only. */
-    leafBbox?: LeafBbox | null }) {
+    leafBbox?: LeafBbox | null
+    /** The model's collision capsules (`model.collision`, server
+     *  app/core/collision.py). With capsules the viewer offers "Collision
+     *  capsules": wireframes on the PLAYING figure, placed every frame by
+     *  `createCollisionOverlay` of @anima/scene-render (the endpoint rule the
+     *  garment push uses too). Refreshed live without reloading the model. */
+    collision?: CollisionPayload | null }) {
   const { t } = useI18n()
   const [takes, setTakes] = useState<string[]>([])
   const [take, setTake] = useState('')
@@ -451,6 +458,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   tiltRef.current = { forward: previewTilt ? tiltForward : 0, sideways: previewTilt ? tiltSideways : 0 }
   const motionRef = useRef(motion)
   motionRef.current = motion
+  const [collisionOn, setCollisionOn] = useState(false)
+  const collisionRef = useRef<CollisionPayload | null>(null)
+  collisionRef.current = collisionOn && collision?.capsules?.length ? collision : null
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -1095,6 +1105,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         }
         secondary ??= createSecondaryMotion(THREE, object, secondaryEnabled ? motionRef.current : undefined, object)
         disposers.push(() => secondary?.dispose())
+        // The capsule overlay lives in the SCENE root (world space) and is
+        // rebuilt whenever the shown payload changes (toggle, slider preview,
+        // a recomputed set) — never the model.
+        let collisionOverlay: CollisionOverlay | null = null
+        let collisionShown: CollisionPayload | null | undefined
+        disposers.push(() => collisionOverlay?.dispose())
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
 
@@ -2099,6 +2115,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           previewRoot.updateMatrixWorld(true)
           secondary?.update(realDelta)
           object.updateMatrixWorld(true)
+          if (collisionShown !== collisionRef.current) {
+            collisionOverlay?.dispose()
+            collisionShown = collisionRef.current
+            collisionOverlay = createCollisionOverlay(THREE, object, collisionShown)
+            if (collisionOverlay) scene.add(collisionOverlay.group)
+          }
+          collisionOverlay?.update()
           controls.update()
           renderer.render(scene, camera)
           raf = requestAnimationFrame(animate)
@@ -2242,7 +2265,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       {/* THE VIEW CONTROLS — one column at the top right, so no button has to
           know how many of its neighbours happen to be shown. */}
       {!loading && !error && (motion || onFrontalChange || keepCamera
-        || (leafBbox && hasLeaf)) ? (
+        || (leafBbox && hasLeaf) || collision?.capsules?.length) ? (
         <div style={{
           position: 'absolute', right: 6, top: 6, display: 'flex',
           flexDirection: 'column', alignItems: 'flex-end', gap: 4,
@@ -2251,6 +2274,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             <button type="button" className="ga-btn ga-btn-sm"
               aria-pressed={secondaryOn} onClick={() => setSecondaryOn(on => !on)}>
               {t('Secondary motion')}
+            </button>
+          ) : null}
+          {collision?.capsules?.length ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={collisionOn} onClick={() => setCollisionOn(on => !on)}
+              title={t('Show collision capsules on the playing figure')}>
+              {t('Collision capsules')}
             </button>
           ) : null}
           {/* The front view is a MODE the owner holds (§ B1): pressed, the

@@ -2,7 +2,8 @@ import { clearModel3DPanel, publishModel3DPanel, useModel3DPanel } from './model
 import { previewMotionSliders } from './motionFieldPreview'
 import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
-import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/scene-render'
+import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload } from '@anima/scene-render'
+import { CollisionScales } from './CollisionScales'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
  * produced either way: GENERATE it from the T-pose render (mesh backend) or
@@ -120,6 +121,9 @@ interface Model3DInfo {
   face_retexture_compare_url?: string
   model_rev?: string
   extension_rig?: ExtensionRigResult
+  /** The served body's collision capsules (app/core/collision.py); null for
+   *  a model that gets none. */
+  collision?: CollisionPayload | null
   filename?: string
   /** signature of the SERVED file (nearest match: another combination's) */
   signature?: string
@@ -188,7 +192,8 @@ export interface Model3DStatus {
   model?: Model3DInfo | null
   options?: { auto_generate?: boolean; face_before_rig?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
-    extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
+    extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
+    collision_scales?: Record<string, number> }
   extension_groups?: ExtensionRigDeclaration[]
   rig_backends?: MeshBackend[]
   upscale_backends?: MeshBackend[]
@@ -273,6 +278,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
   // Which resolution the viewer shows — a VIEW state, never sent anywhere.
   const [viewTier, setViewTier] = useState<'full' | 'low'>('full')
+  /** Slider preview of the collision scales (CollisionScales) — shown in the viewer instead of the stored set. */
+  const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
   // "Fetch by job ID": a mesh run that outlived our own poll is collected from
   // the gateway afterwards. jobErrors holds a failed model check, which the
   // admin may override with "Store anyway".
@@ -956,8 +963,14 @@ export function FieldModel3D({ character }: { character: string }) {
             embeddedTakes={model.rig === 'generic'}
             clipLoops={model.clips}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
+            collision={collisionPreview ?? model.collision}
           />
           </div>
+          {mixamo && model.format === 'glb' && model.collision !== undefined ? (
+            <CollisionScales character={character} collision={model.collision}
+              scales={st.options?.collision_scales} disabled={pending}
+              onPreview={setCollisionPreview} onSaved={load} />
+          ) : null}
           {hasRigMetrics && model.rig_metrics ? (
             <fieldset className="ga-fieldset">
               <legend>{t('Rig metrics')}</legend>
