@@ -40,6 +40,9 @@ piece_slots:
 body_slots:
   - id: hair
     face: true   # belongs into portrait/expression prompts
+    # The 3D figure on the base-body pipeline wears this hair as its own mesh:
+    # one "hair" garment item, derived from this slot (app/core/garment_hair.py).
+    mesh_item: hair
     attributes:
       color:
         type: select

@@ -376,47 +376,12 @@ def prompt_fragments(character_name: str,
 
     def _render(tpl: str, vals: Dict[str, str], lenient: bool = False,
                 optional: frozenset = frozenset()) -> str:
-        """Attribute placeholders are REQUIRED (missing value -> the whole
-        fragment drops) — unless ``lenient`` (the per-character
-        exposed_always flag): then empty attributes simply vanish from the
-        text ('exposed {size} part' -> 'exposed part'); ``optional``
-        names the attributes a template default stands in for, which vanish
-        the same way. Every OTHER
-        {placeholder} resolves OPTIONALLY from the character's state flags:
-        value-carrying flags (body_reaction="shivering") render their string,
-        unset/boolean flags render empty — whitespace artifacts squashed."""
-        if not tpl:
-            return ""
-        import re as _re
-        placeholders = _re.findall(r"\{(\w+)\}", tpl)
-        if not lenient and any(ph in vals and ph not in optional
-                               and not (vals.get(ph) or "").strip()
-                               for ph in placeholders):
-            return ""
-        merged = dict(vals)
-        for ph in placeholders:
-            if ph not in merged:
-                if ph == "height":
-                    # Height is a profile field in CENTIMETRES now (it used to
-                    # be a word in this very slot). Prompts want the word, so
-                    # the number is rendered as the phrase it always was.
-                    from app.core.height import height_phrase
-                    merged[ph] = height_phrase(profile, character_name)
-                    continue
-                v = "" if neutral_state else profile.get(ph)
-                merged[ph] = v.strip() if isinstance(v, str) else ""
-        try:
-            out = tpl.format(**merged)
-        except (KeyError, IndexError, ValueError):
-            return ""
-        out = _re.sub(r"\s{2,}", " ", out)
-        out = _re.sub(r"\s+,", ",", out)
-        return out.strip(" ,")
+        return _render_slot_text(tpl, vals, profile, character_name, neutral_state=neutral_state,
+                                 lenient=lenient, optional=optional)
 
     for spec in specs:
         slot_stored = stored.get(spec.id) or {}
-        vals = {attr: str(slot_stored.get(attr, "") or "")
-                for attr in spec.attributes}
+        vals = _slot_text_values(spec, profile)
         frag = _render(spec.prompt.get("always", ""), vals)
         if frag:
             general.append(frag)
@@ -446,17 +411,114 @@ def prompt_fragments(character_name: str,
             frag = _render(spec.prompt.get("covered", ""), vals)
             if frag:
                 general.append(frag)
-        # Mesh inputs only: a line picked by one attribute's value (the hair
-        # length decides whether there is hair to keep off the chest); a back
-        # view takes its own table, so front and back describe the same hair.
-        if mesh_input and spec.mesh_input_prompt and is_slot_exposed(spec, profile):
-            table = spec.mesh_input_prompt.get("back_values" if back_view else "values") or {}
-            key = spec.mesh_input_prompt["attribute"]
-            value = vals.get(key, "").strip() or (attribute_default(spec.attributes.get(key) or {}, profile) or "")
-            frag = _render(table.get(value.strip().lower(), ""), vals)
+        if mesh_input:
+            frag = _mesh_input_line(spec, vals, profile, character_name,
+                                    neutral_state=neutral_state, back_view=back_view)
             if frag:
                 exposed.append(frag)
     return {"general": general, "exposed": exposed}
+
+
+def _slot_text_values(spec, profile: Dict[str, Any]) -> Dict[str, str]:
+    """One slot's stored attribute values as text (unset -> "")."""
+    stored = profile.get("body_slots")
+    slot_stored = (stored.get(spec.id) if isinstance(stored, dict) else None) or {}
+    return {attr: str(slot_stored.get(attr, "") or "") for attr in spec.attributes}
+
+
+def _render_slot_text(tpl: str, vals: Dict[str, str], profile: Dict[str, Any],
+                      character_name: str, *, neutral_state: bool, lenient: bool = False,
+                      optional: frozenset = frozenset()) -> str:
+    """Render one slot fragment template.
+
+    Attribute placeholders are REQUIRED (missing value -> the whole fragment
+    drops) — unless ``lenient`` (the per-character exposed_always flag): then
+    empty attributes simply vanish from the text ('exposed {size} part' ->
+    'exposed part'); ``optional`` names the attributes a template default
+    stands in for, which vanish the same way. Every OTHER {placeholder}
+    resolves OPTIONALLY from the character's state flags: value-carrying
+    flags (body_reaction="shivering") render their string, unset/boolean
+    flags render empty — whitespace artifacts squashed. ``neutral_state``
+    renders every state flag empty."""
+    if not tpl:
+        return ""
+    import re as _re
+    placeholders = _re.findall(r"\{(\w+)\}", tpl)
+    if not lenient and any(ph in vals and ph not in optional
+                           and not (vals.get(ph) or "").strip()
+                           for ph in placeholders):
+        return ""
+    merged = dict(vals)
+    for ph in placeholders:
+        if ph not in merged:
+            if ph == "height":
+                # Height is a profile field in CENTIMETRES now (it used to
+                # be a word in this very slot). Prompts want the word, so
+                # the number is rendered as the phrase it always was.
+                from app.core.height import height_phrase
+                merged[ph] = height_phrase(profile, character_name)
+                continue
+            v = "" if neutral_state else profile.get(ph)
+            merged[ph] = v.strip() if isinstance(v, str) else ""
+    try:
+        out = tpl.format(**merged)
+    except (KeyError, IndexError, ValueError):
+        return ""
+    out = _re.sub(r"\s{2,}", " ", out)
+    out = _re.sub(r"\s+,", ",", out)
+    return out.strip(" ,")
+
+
+def _mesh_input_line(spec, vals: Dict[str, str], profile: Dict[str, Any], character_name: str, *,
+                     neutral_state: bool, back_view: bool) -> str:
+    """Mesh inputs only: a line picked by one attribute's value (the hair
+    length decides whether there is hair to keep off the chest); a back view
+    takes its own table, so front and back describe the same hair. "" while
+    the slot is covered or the value has no entry."""
+    if not (spec.mesh_input_prompt and is_slot_exposed(spec, profile)):
+        return ""
+    table = spec.mesh_input_prompt.get("back_values" if back_view else "values") or {}
+    key = spec.mesh_input_prompt["attribute"]
+    value = vals.get(key, "").strip() or (attribute_default(spec.attributes.get(key) or {}, profile) or "")
+    return _render_slot_text(table.get(value.strip().lower(), ""), vals, profile, character_name,
+                             neutral_state=neutral_state)
+
+
+def slot_fragment(character_name: str, slot_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None,
+                  mesh_input: bool = False) -> Tuple[str, str]:
+    """``(always text, mesh-input line or "")`` of ONE slot that applies to
+    the character — the composition ``prompt_fragments`` uses for that slot,
+    in the neutral state (a mesh item describes the figure, never a passing
+    state flag). The mesh-input line (front ``values`` table) comes only with
+    ``mesh_input``. ``("", "")`` for a slot that does not apply."""
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return "", ""
+    spec = next((s for s in slots_for_character(character_name, profile=profile) if s.id == slot_id), None)
+    if spec is None:
+        return "", ""
+    vals = _slot_text_values(spec, profile)
+    always = _render_slot_text(spec.prompt.get("always", ""), vals, profile, character_name, neutral_state=True)
+    line = (_mesh_input_line(spec, vals, profile, character_name, neutral_state=True, back_view=False)
+            if mesh_input else "")
+    return always, line
+
+
+def mesh_item_slots(character_name: str, *,
+                    profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``{kind: BodySlotSpec}`` of the slots that apply to the character and
+    declare ``mesh_item`` (the garment kind worn as its own mesh). The first
+    slot wins when two declare the same kind."""
+    out: Dict[str, Any] = {}
+    for spec in slots_for_character(character_name, profile=profile):
+        kind = getattr(spec, "mesh_item", "") or ""
+        if kind and kind not in out:
+            out[kind] = spec
+    return out
 
 
 def exposed_slot_loras(character_name: str,

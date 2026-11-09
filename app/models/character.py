@@ -266,6 +266,7 @@ _STATE_TYPED_COLS = (
 # Further runtime keys — stored in character_state.meta (JSON blob) instead
 # of profile_json. Inject/extract analogous to _STATE_COLS.
 _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
+                    "equipped_mesh_pieces",  # mesh-only garments, e.g. hair (never 2D)
                     "active_conditions", "status_effects", "activity_cooldowns",
                     "outfit_intent",        # intent container (May 2026)
                     "current_activity_detail",

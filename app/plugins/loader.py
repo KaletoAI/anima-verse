@@ -272,6 +272,10 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             for key, table in tables.items():
                 if table is not None:
                     mesh_input_prompt[key] = {str(k).strip().lower(): v.strip() for k, v in table.items()}
+        mesh_item = bdef.get("mesh_item", "")
+        if not isinstance(mesh_item, str):
+            logger.warning("Package %s slot %s: mesh_item dropped: must be a string", pkg.id, bdef["id"])
+            mesh_item = ""
         pkg.body_slots.append(BodySlotSpec(
             id=str(bdef["id"]).strip(),
             package_id=pkg.id,
@@ -290,6 +294,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             rigs=rigs,
             mesh_part=mesh_part,
             mesh_input_prompt=mesh_input_prompt,
+            mesh_item=mesh_item.strip(),
         ))
     # piece_slots entries: plain string OR {id, label}
     for pdef in meta.get("piece_slots") or []:

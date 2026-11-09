@@ -30,7 +30,10 @@ from app.core.paths import get_storage_dir
 
 VALID_ITEM_CATEGORIES = (
     "tool", "key", "consumable", "evidence", "gift", "quest", "decoration",
-    "outfit_piece", "spell", "document")
+    "outfit_piece", "spell", "document",
+    # A mesh-only item worn through ``equipped_mesh_pieces`` (hair as its own
+    # mesh, app/core/garment_hair.py) — never an outfit piece, never in 2D.
+    "garment")
 VALID_RARITIES = ("common", "rare", "unique")
 VALID_OBTAIN_METHODS = ("found", "given", "crafted", "purchased", "quest_reward", "manual")
 
@@ -424,6 +427,18 @@ def _clean_piece_lora(raw) -> Dict[str, Any]:
     return {"name": nm, "strength": st, "workflow": wf}
 
 
+def _clean_garment(raw) -> Dict[str, str]:
+    """The ``garment`` field of a garment item: ``{kind, slot, body_slot}``
+    as stripped strings. ValueError without a kind or a slot — the slot is
+    the mesh-item slot (a body slot's ``mesh_item``) the item is worn in."""
+    if not isinstance(raw, dict):
+        raise ValueError("garment must be an object with 'kind' and 'slot'")
+    out = {key: str(raw.get(key) or "").strip() for key in ("kind", "slot", "body_slot")}
+    if not out["kind"] or not out["slot"]:
+        raise ValueError("garment needs a non-empty 'kind' and 'slot'")
+    return out
+
+
 def _slugify_item_id(text: str) -> str:
     """Convert a display name into a lowercase item_ ID using [a-z0-9_].
 
@@ -494,12 +509,15 @@ def add_item(name: str,
     owner: str = "",
     pages_source: str = "",
     portable: bool = True,
-    extra_fields: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    extra_fields: Optional[Dict[str, Any]] = None,
+    garment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Create an item with an optional explicit ID and localized extra fields.
 
     Empty IDs are derived from the name with a unique numeric suffix.
     Reading metadata lives in item meta; extra_fields accepts only localized
     name/description keys, so it cannot override the identity or core fields.
+    ``garment`` (``{kind, slot, body_slot}``) is stored on a ``garment``
+    item only, like ``outfit_piece`` on an outfit piece.
     """
     if category not in VALID_ITEM_CATEGORIES:
         category = "tool"
@@ -575,6 +593,8 @@ def add_item(name: str,
             "outfit_types": _normalize_outfit_types(outfit_piece.get("outfit_types")),
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
         }
+    if category == "garment" and garment:
+        item["garment"] = _clean_garment(garment)
 
     items.append(item)
     _save_items(items)
@@ -596,6 +616,10 @@ def _render_relevant_fields(item: Optional[Dict[str, Any]]) -> tuple:
     (``visible_equipped_pieces``), so its old cache entries are never served
     again anyway.
     """
+    if (item or {}).get("category") == "garment":
+        # A garment never reaches an outfit prompt or signature (it is worn
+        # through ``equipped_mesh_pieces``): its text changes no 2D render.
+        return ("garment",)
     op = (item or {}).get("outfit_piece") or {}
     return ((item or {}).get("prompt_fragment") or "",
             tuple(str(s) for s in (op.get("partially_covers") or [])))
@@ -638,7 +662,7 @@ def update_item(item_id: str,
         "category", "image", "image_prompt",
         "rarity", "stackable", "max_stack", "properties",
         "transferable", "consumable", "reveals_secret",
-        "prompt_fragment", "outfit_piece", "effects",
+        "prompt_fragment", "outfit_piece", "effects", "garment",
         # Tracker: while carried, the carrier sees the target's location in the prompt.
         "tracks_character",
     } | spell_only
@@ -669,6 +693,10 @@ def update_item(item_id: str,
             }
         else:
             item.pop("outfit_piece", None)
+        if item.get("category") == "garment" and "garment" in item:
+            item["garment"] = _clean_garment(item["garment"])
+        elif item.get("category") != "garment":
+            item.pop("garment", None)
         # Same guard as outfit_piece: an edit (or the create route's
         # extras pass-through) must not smuggle spell fields onto a
         # non-spell item.
@@ -2161,6 +2189,8 @@ def equip_item(character_name: str, item_id: str,
         return {"status": "error", "reason": "item_not_found"}
     if item.get("category") == "outfit_piece":
         return {"status": "error", "reason": "use_equip_piece_for_outfit_piece"}
+    if item.get("category") == "garment":
+        return {"status": "error", "reason": "use_equip_mesh_piece_for_garment"}
 
     profile = get_character_profile(character_name)
     state = _get_equipped(profile)
@@ -2192,6 +2222,90 @@ def unequip_item(character_name: str, item_id: str,
     _notify_outfit_changed(character_name, source or "unequip_item",
                            action="unequip", item_ids=[item_id], stored=stored)
     return {"status": "ok"}
+
+
+# ============================================================
+# 4a. MESH-ONLY GARMENTS (equipped_mesh_pieces)
+# ============================================================
+#
+# A garment item (hair as its own mesh) is worn in a mesh-item slot declared
+# by a species package (body-slot key ``mesh_item``). Its map is separate from
+# ``equipped_pieces`` on purpose (plan 2026-11-09-base-body-phase4-hair R2):
+# that one feeds the outfit signature, every 2D prompt, the outfit presets and
+# the LLM's unequip skill — none of which may see the garment. So these two
+# mutations do NOT go through ``_notify_outfit_changed``: nothing a 2D render
+# or an outfit listing depends on changes. They only ask the 3D assembly to
+# rebuild the served model.
+
+
+def get_equipped_mesh_pieces(character_name: str) -> Dict[str, str]:
+    """Map mesh-item slots to the garment item ids worn in them."""
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name)
+    raw = profile.get("equipped_mesh_pieces")
+    return {str(k): str(v) for k, v in raw.items() if k and v} if isinstance(raw, dict) else {}
+
+
+def _schedule_garment_assembly(character_name: str) -> None:
+    try:
+        from app.core import garment_assembly
+        garment_assembly.schedule(character_name)
+    except Exception as e:  # noqa: BLE001 — a failed schedule must not undo the stored state
+        logger.warning("garment assembly schedule for %s failed: %s", character_name, e)
+
+
+def equip_mesh_piece(character_name: str, item_id: str) -> bool:
+    """Wear a ``garment`` item in its mesh-item slot (``garment.slot``).
+
+    ValueError when the item does not exist, is no garment, belongs to
+    another character, or its slot is not among the character's
+    ``body_slots.mesh_item_slots``. Returns the save result (True without a
+    save when it is already worn there)."""
+    from app.core.body_slots import mesh_item_slots
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    item = get_item(item_id)
+    if not item:
+        raise ValueError(f"Item {item_id!r} not found")
+    if item.get("category") != "garment":
+        raise ValueError(f"Item {item_id!r} is not a garment")
+    owner = (item.get("owner") or "").strip()
+    if owner and owner != character_name:
+        raise ValueError(f"Garment {item_id!r} belongs to {owner}")
+    slot = str((item.get("garment") or {}).get("slot") or "").strip()
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if not slot or slot not in mesh_item_slots(character_name, profile=profile):
+            raise ValueError(f"Garment slot {slot!r} does not exist for {character_name}")
+        worn = dict(profile.get("equipped_mesh_pieces") or {})
+        if worn.get(slot) == item_id:
+            return True
+        worn[slot] = item_id
+        profile["equipped_mesh_pieces"] = worn
+        stored = bool(save_character_profile(character_name, profile))
+    logger.info("equip_mesh_piece [%s]: slot=%s item=%s", character_name, slot, item_id)
+    if stored:
+        _schedule_garment_assembly(character_name)
+    return stored
+
+
+def unequip_mesh_piece(character_name: str, slot: str) -> bool:
+    """Take the garment out of a mesh-item slot. The item itself stays.
+    Returns the save result (True without a save when the slot is empty)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        worn = dict(profile.get("equipped_mesh_pieces") or {})
+        if slot not in worn:
+            return True
+        removed = worn.pop(slot)
+        profile["equipped_mesh_pieces"] = worn
+        stored = bool(save_character_profile(character_name, profile))
+    logger.info("unequip_mesh_piece [%s]: slot=%s item=%s", character_name, slot, removed)
+    if stored:
+        _schedule_garment_assembly(character_name)
+    return stored
 
 
 # ============================================================

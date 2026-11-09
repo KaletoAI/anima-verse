@@ -331,6 +331,11 @@ class BodySlotSpec:
     # {"attribute": <name>, "values": {<option>: <fragment>},
     #  "back_values": {...} (optional, back views)}; empty = none.
     mesh_input_prompt: Dict[str, Any] = field(default_factory=dict)
+    # Mesh-only item slot: the garment kind (e.g. "hair") whose own mesh this
+    # body slot describes. The item is worn through ``equipped_mesh_pieces``,
+    # never ``equipped_pieces``, so no 2D prompt or outfit signature sees it
+    # (app/core/garment_hair.py). "" = none.
+    mesh_item: str = ""
 
 
 @dataclass
