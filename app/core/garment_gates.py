@@ -397,6 +397,37 @@ CLOTH_OUTSIDE_MAX = 0.05    # ghost pixels outside the garment region / garment 
 NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
 NECKLINE_BAND = 0.03        # ± this share of the garment width around its centre column
 HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
+# The worn BACK against the accepted worn FRONT (``back_follows_front``; the
+# back is drafted from that front, ``garment_images``). Measured 2026-11-09 on
+# the live "Black Blazer" (Kira) — the single-edit back turned the BODY toward
+# the camera under a back-of-head: lapels, buttons, flap pockets and the open
+# V with the chest in it, on the back view. Neckline depth of the worn
+# garment region (``neckline`` / Hb):
+#   worn front (accepted)            0.1182   hem_t 0.9315
+#   worn back attempt 1 (front copy) 0.1124   hem_t 0.9576   (refused for colour)
+#   worn back attempt 2 (front copy) 0.0926   hem_t 0.9491   (ACCEPTED then)
+#   S1 dress, a real back            0.0091   (front 0.0213, the calibration block above)
+# Both front copies reach 0.78-0.95 of the front's depth; a real back of the
+# same pieces stays near zero. A back opening counts from 0.04 Hb (≈ 7 cm on
+# a 1.70 m figure — a deep scoop, never a collar line) and is refused when it
+# reaches half the front's depth: the back then shows the FRONT opening. A
+# garment whose back is cut as deep as its front (a deep V front and back)
+# is refused by this — known limit, Regenerate does not help there.
+# First real draft + fit run (clone, Kira, the same blazer, 2026-11-09; front
+# neckline 0.1113, cloth hem 0.4834): fit 1 copied the front again (neckline
+# 0.0857 -> refused here), fit 2 a real blazer back (0.0007). NO hem rule on
+# the worn images: a fit re-shades the skin below the hem, so the worn region
+# of the correct back ended at hem_t 0.568 while its dark cloth ends at 0.4845
+# (front 0.4834) — the garment hems are compared on the ghosts (``hems_agree``).
+# The fit re-renders the whole figure, so its outline outside the garment
+# moves more than an edit's (direct edits 0.004-0.018): fit 1 0.0259, fit 2
+# 0.0334, three quarters of it in the legs (rows below 0.5 Hb); the torso
+# band 0.30-0.50 Hb only 0.0035 / 0.0052. A fitted back is gated at
+# FIT_OUTSIDE_XOR_MAX (a re-framed or turned figure moves far more), the
+# edited views keep OUTSIDE_XOR_MAX.
+BACK_OPENING_MIN = 0.04     # back neckline depth / Hb from which the back has an opening
+BACK_OPENING_SHARE = 0.5    # ... refused when it reaches this share of the front's depth
+FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED view (drafted back)
 
 
 def garment_region(base_rgb, base_mask, worn_rgb, worn_mask) -> np.ndarray:
@@ -426,7 +457,7 @@ def _margin(region, height: int) -> np.ndarray:
 
 
 def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
-              occupied: Iterable[str] = ()) -> Dict[str, Any]:
+              occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX) -> Dict[str, Any]:
     """Step 1 gate of clothing: the base view with the piece put on.
 
     The garment region G = ``garment_region``; everything of the figure
@@ -439,8 +470,11 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     gated only when the piece does not occupy the head (``occupied``, from
     its slots via ``occupied_zones``; ``head_gated`` says which). ``garment_share`` =
     G / base body area (>= 0.01: the edit put something on). ``garment_top``
-    / ``garment_bottom`` are G's rows. Limits and their calibration: see the
-    "Clothing" block above."""
+    / ``garment_bottom`` are G's rows; ``neckline_depth`` (G's ``neckline``
+    / Hb) and ``hem_t`` are reported for ``back_follows_front``. ``xor_max``:
+    the outline limit (a fitted back: ``FIT_OUTSIDE_XOR_MAX``, recorded as
+    ``outside_xor_max`` when it differs). Limits and their calibration: see
+    the "Clothing" block above."""
     _check(base_rgb, base_mask, worn_rgb, worn_mask)
     m0, m1 = np.asarray(base_mask, dtype=bool), np.asarray(worn_mask, dtype=bool)
     zones = _zones(m0)
@@ -465,16 +499,44 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
         reasons.append(f"nothing put on: garment {_r(share, 4)} < {GARMENT_MIN}")
     if not d_out < OUTSIDE_DRGB_MAX:
         reasons.append(f"body outside the garment changed colour: {_r(d_out, 2)} >= {OUTSIDE_DRGB_MAX}")
-    if not xor < OUTSIDE_XOR_MAX:
-        reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {OUTSIDE_XOR_MAX}")
+    if not xor < xor_max:
+        reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {xor_max}")
     head_gated = "head" not in set(occupied or ())
     if head_gated and head_garment > HEAD_GARMENT_MAX:
         reasons.append(f"head changed: {_r(head_garment, 3)} of the head > {HEAD_GARMENT_MAX}")
+    depth = neckline(region)["depth"] / hb if box else None
     return {"view": view, "garment_share": _r(share, 4), "outside_dRGB": _r(d_out, 2),
             "outside_xor": _r(xor, 4), "head_garment": _r(head_garment, 4), "head_gated": head_gated,
             "garment_bbox": box,
             "garment_top": box[1] if box else None, "garment_bottom": box[3] if box else None,
+            "neckline_depth": _r(depth, 4) if depth is not None else None,
+            "hem_t": _r((box[3] - y0) / hb, 5) if box else None,
+            **({"outside_xor_max": xor_max} if xor_max != OUTSIDE_XOR_MAX else {}),
             "body_top": y0, "body_h": hb, "ok": not reasons, "reasons": reasons}
+
+
+def back_follows_front(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> List[str]:
+    """The refusal reasons of a worn BACK attempt against the accepted worn
+    FRONT's gate record (both ``worn_gate``; [] = it follows the front):
+
+    the back shows the front opening: the front has an opening
+    (``neckline_depth`` >= ``BACK_OPENING_MIN``) and the back's reaches
+    ``BACK_OPENING_MIN`` and ``BACK_OPENING_SHARE`` of the front's depth —
+    lapels / a V turned onto the back view. The hem is not compared here
+    (see the calibration block: the worn region of a fit runs past the
+    cloth); the ghosts compare it.
+
+    A record without the numbers (an older front) checks nothing."""
+    reasons: List[str] = []
+    try:
+        front, back = float(front_gate["neckline_depth"]), float(back_gate["neckline_depth"])
+    except (KeyError, TypeError, ValueError):
+        front = back = None
+    if (front is not None and back is not None and front >= BACK_OPENING_MIN
+            and back >= BACK_OPENING_MIN and back >= BACK_OPENING_SHARE * front):
+        reasons.append(f"back shows the front opening: neckline {_r(back, 4)} Hb deep, front {_r(front, 4)} Hb "
+                       f"(limit {BACK_OPENING_SHARE} x front from {BACK_OPENING_MIN} Hb)")
+    return reasons
 
 
 def skin_colour(base_rgb, base_mask) -> Optional[np.ndarray]:
@@ -654,7 +716,9 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
             "worn": {
                 "garment_share": {"op": "ge", "value": GARMENT_MIN},
                 "outside_dRGB": {"op": "lt", "value": OUTSIDE_DRGB_MAX},
-                "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX},
+                # The back is fitted (``FIT_OUTSIDE_XOR_MAX``, its record's
+                # ``outside_xor_max``); its reasons name the refusal.
+                "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX, "views": ["front"]},
                 # Not gated for a piece worn on one of ``free_slots`` (SLOT_ZONES).
                 "head_garment": {"op": "le", "value": HEAD_GARMENT_MAX,
                                  "free_slots": sorted(s for s, z in SLOT_ZONES.items() if "head" in z)},

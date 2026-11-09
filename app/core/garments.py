@@ -14,7 +14,9 @@ downstream); one that was served from the cache does not.
 
 - image steps (``garment_images``): per view, the BACK first
   (``EDIT_VIEW_ORDER``): the back view sees how long the hair is, the front
-  only guesses it (its ends hang behind the body). The kind's pair step
+  only guesses it (its ends hang behind the body) — unless the kind's step
+  names its own order (``EDIT_STEPS[step]["views"]``; clothing ``worn``: the
+  front first, the back is drafted from it). The kind's pair step
   (``PAIR_STEP`` of its module, ``garment_images.kind_module``; both kinds:
   ``ghost``) additionally needs front and back to agree (``pair_agree``:
   hair — the hair ends at the same height, ``bottoms_agree``; clothing — the
@@ -928,16 +930,18 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             gs.start(character_name, item_id, step)
             produced = False
             if step in gs.IMAGE_STEPS:
-                views = gs.GARMENT_VIEWS if step == "cutout" else EDIT_VIEW_ORDER
-                renders = [v for v in views
-                           if (forced and (view is None or v == view))
-                           or not _accepted(_image(character_name, item_id, fsig, step, v))]
-                for v in renders:
+                views = (gs.GARMENT_VIEWS if step == "cutout"
+                         else _kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
+                for v in views:
                     f = forced and (view is None or v == view)
+                    # Checked per view: a new front of a drafted step (clothing
+                    # ``worn``) drops the back it was drafted from.
+                    if not f and _accepted(_image(character_name, item_id, fsig, step, v)):
+                        continue
                     if step == "cutout":
                         garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                     else:
-                        # The back is done (accepted) before the front starts.
+                        # The pair step's back is accepted before its front starts.
                         pair = (_pair_check(character_name, item_id, kind, fsig)
                                 if step == pair_step and v == "front" else None)
                         garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f,

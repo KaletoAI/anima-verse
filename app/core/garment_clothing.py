@@ -13,7 +13,14 @@ The image chain of the S1 spike (``claude-out/s1-base-body/src/dress_edit.py``),
 shortened and said positively (Qwen2.1-Turbo ignores negatives):
 
 - ``worn``: an edit of the bald, bare base view — the figure now wears only
-  the piece (its ``prompt_fragment``, owned by the user, never derived);
+  the piece (its ``prompt_fragment``, owned by the user, never derived). The
+  FRONT first; the BACK in the outfit's two steps (``base_body`` draft + fit,
+  shared through ``garment_images``): a DRAFT from the accepted worn front
+  (``draft_prompt``: the base back prompt wearing only the piece), then the
+  FIT of the draft onto the base back. A single edit of the back view turned
+  the body toward the camera (S1 spike; live "Black Blazer" 2026-11-09:
+  lapels, buttons and the open V on a back view under a back-of-head), and
+  ``back_reasons`` refuses a back that does not follow its front;
 - ``ghost``: an edit of the accepted worn image — the piece alone, as if on
   an invisible body, the inside visible at the openings.
 
@@ -28,10 +35,20 @@ KIND = "clothing"
 SUBJECT = "garment"
 
 #: The edit steps and what each edits (no character LoRAs, like hair).
-EDIT_STEPS: Dict[str, Dict[str, str]] = {"worn": {"source": "base"},
+#: ``views``: the render order of a step's views (default
+#: ``garments.EDIT_VIEW_ORDER``, the back first); ``back: "draft"``: the
+#: back is drafted from the step's accepted front and fitted onto the base
+#: back (``garment_images.run_edit_step``) — so the front renders first.
+EDIT_STEPS: Dict[str, Dict[str, Any]] = {"worn": {"source": "base", "views": ("front", "back"),
+                                                  "back": "draft"},
                                          "ghost": {"source": "worn"}}
 
 WORN = "Keep the image exactly as it is. Only change their clothing: they now wear only {fragment}."
+#: The body text of the worn back's draft (``base_body.draft_prompt``): the
+#: piece alone in the text, the same fragment as the front — the reference
+#: (the accepted worn front) shows how it looks.
+DRAFT = ("wearing only {fragment}, the same garment as on the person in the reference image, with the same "
+         "length, cut and colour")
 GHOST = ("The same {noun} alone, as if worn by an invisible person (ghost mannequin): no head, no arms, no "
          "hands, no legs, no feet, no skin; where the neck opening, sleeves and hem are, the inside of the "
          "garment is visible. Same position, size and framing, plain grey background.")
@@ -105,42 +122,74 @@ def edit_prompt(character_name: str, step: str, view: str, *,
                 profile: Optional[Dict[str, Any]] = None, item_id: Optional[str] = None) -> Tuple[str, str]:
     """``(prompt, extra negative)`` of one clothing edit.
 
-    ``worn`` (the base view): "Keep the image exactly as it is. Only change
-    their clothing: they now wear only {prompt_fragment}." — the back opened
-    by ``base_body.DRESS_VIEW["back"]``. ``ghost`` (the worn image): the
-    piece alone (``GHOST`` with the item's name as the noun), both views
-    alike. ValueError for an unknown step or view, a missing item, or a piece
-    without a prompt fragment."""
-    from app.core.base_body import DRESS_VIEW
+    ``worn`` FRONT (the base view): "Keep the image exactly as it is. Only
+    change their clothing: they now wear only {prompt_fragment}." — the worn
+    BACK is no edit (``draft_prompt``, then ``base_body.FIT_PROMPT``).
+    ``ghost`` (the worn image): the piece alone (``GHOST`` with the item's
+    name as the noun), both views alike. ValueError for an unknown step or
+    view, the worn back, a missing item, or a piece without a prompt
+    fragment."""
     if step not in EDIT_STEPS:
         raise ValueError(f"no clothing edit step {step!r}")
     if view not in ("front", "back"):
         raise ValueError(f"no clothing edit view {view!r}")
+    if step == "worn" and view == "back":
+        raise ValueError("the worn back is drafted from the worn front — draft_prompt, then the fit")
     item = _item_of(item_id)
-    text = fragment(item)
-    if not text:
-        raise ValueError(f"{item.get('name') or item.get('id')} has no prompt fragment — fill it in under Items")
+    text = _fragment_of(item)
     if step == "worn":
-        prompt = WORN.format(fragment=text)
-        if view == "back":
-            prompt = f"{DRESS_VIEW['back']} {prompt}"
-        return prompt, _worn_negative(text)
+        return WORN.format(fragment=text), _worn_negative(text)
     negative = ", ".join(t for t in (_worn_negative(text), *GHOST_NEGATIVE) if t)
     return GHOST.format(noun=garment_noun(item)), negative
 
 
+def _fragment_of(item: Dict[str, Any]) -> str:
+    text = fragment(item)
+    if not text:
+        raise ValueError(f"{item.get('name') or item.get('id')} has no prompt fragment — fill it in under Items")
+    return text
+
+
+def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, Any]] = None,
+                 item_id: Optional[str] = None) -> Tuple[str, str]:
+    """``(prompt, negative)`` of the DRAFT of the worn back
+    (``base_body.draft_prompt`` with ``DRAFT`` as the body text — the base
+    back prompt, the bald head, wearing only the piece); negative: the
+    draft's + the worn negative (the garment words the fragment does not
+    name). ValueError for another step, a missing item or no fragment."""
+    from app.core import base_body
+    if EDIT_STEPS.get(step, {}).get("back") != "draft":
+        raise ValueError(f"the clothing step {step!r} has no drafted back")
+    text = _fragment_of(_item_of(item_id))
+    prompt, negative = base_body.draft_prompt(character_name, "back", profile=_profile_of(character_name, profile),
+                                              outfit_text=DRAFT.format(fragment=text))
+    return prompt, ", ".join(p for p in (negative, _worn_negative(text)) if p)
+
+
+def back_reasons(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> list:
+    """The reasons a worn back attempt does not follow the accepted worn
+    front (``garment_gates.back_follows_front``: the front opening on the
+    back)."""
+    from app.core.garment_gates import back_follows_front
+    return back_follows_front(front_gate, back_gate)
+
+
 def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
-         edit_rgb, edit_mask, item_id: Optional[str] = None) -> Dict[str, Any]:
+         edit_rgb, edit_mask, item_id: Optional[str] = None, fitted: bool = False) -> Dict[str, Any]:
     """The gate record of one attempt (``garment_gates``): ``worn`` against
     the base view — the zones the piece is worn on (its slots,
     ``garment_gates.occupied_zones``: a hat frees the head) are not checked;
+    a ``fitted`` view (the drafted back) has the outline limit
+    ``garment_gates.FIT_OUTSIDE_XOR_MAX``;
     ``ghost`` against the garment region of the accepted worn image
     (``source``). All arrays share the base view's size."""
     from app.core import garment_gates
     if step == "worn":
         slots = ((_item_of(item_id).get("outfit_piece") or {}).get("slots") or []) if item_id else []
         return garment_gates.worn_gate(base_rgb, base_mask, edit_rgb, edit_mask, view=view,
-                                       occupied=garment_gates.occupied_zones(slots))
+                                       occupied=garment_gates.occupied_zones(slots),
+                                       xor_max=(garment_gates.FIT_OUTSIDE_XOR_MAX if fitted
+                                                else garment_gates.OUTSIDE_XOR_MAX))
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view)

@@ -70,7 +70,7 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
         (90, 60, 40): |ΔRGB| 103.3 > 20 -> G = the head, everything else
         unchanged -> outside 0, head_garment 1.0.
 
-[1] Store: GARMENT_VERSION["clothing"] 1; steps_for("clothing", "edit_chain")
+[1] Store: GARMENT_VERSION["clothing"] 2 (the drafted worn back); steps_for("clothing", "edit_chain")
     = (worn, ghost, cutout, mesh, fit); image_steps("clothing") = (worn,
     ghost, cutout), image_steps("hair") = (haired, ghost, cutout); a "worn"
     image path is images/D_F_worn_front.png. fsig_inputs of D =
@@ -82,7 +82,8 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
 [2] Prompts (exact):
     worn front = "Keep the image exactly as it is. Only change their clothing:
       they now wear only a knee-length green linen dress with short sleeves."
-    worn back  = base_body.DRESS_VIEW["back"] + " " + worn front
+    worn back  = no edit prompt: ValueError "drafted from the worn front"
+      (the draft + fit back: scripts/smoke_garment_clothing_back.py)
     ghost (both views) = "The same green dress alone, as if worn by an
       invisible person (ghost mannequin): no head, no arms, no hands, no legs,
       no feet, no skin; where the neck opening, sleeves and hem are, the
@@ -114,10 +115,11 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
     are gone after the forced re-render (``_drop_later`` follows the clothing
     order). cut_out on an all-grey accepted ghost -> ValueError "No garment
     found in the ghost front image".
-[6] Chain run (garments.run_garment, back first):
-    A: back ghost GHOST(733), every front ghost GHOST(759) -> renders worn b1,
-       worn f1, ghost b1, ghost f1, ghost f2 (both fronts refused with the
-       hems reason against the back) -> {ok False, step ghost, gates.view
+[6] Chain run (garments.run_garment; worn: the front first, its back drafted
+    from it — "worn bd" = the draft, "worn b1" = the fit; ghost: the back first):
+    A: back ghost GHOST(733), every front ghost GHOST(759) -> renders worn f1,
+       worn bd, worn b1, ghost b1, ghost f1, ghost f2 (both fronts refused with
+       the hems reason against the back) -> {ok False, step ghost, gates.view
        front}; the item's prompt_fragment is untouched (no description
        refresh for clothing).
     B: run again, the front GHOST(733) -> one render ghost f1, ok True, ran
@@ -220,10 +222,14 @@ SHORT, MATCHING = ghost(733), ghost(769)
 
 
 def rembg_stub(data, model="u2net", **kwargs):
+    """The mask (``only_mask``) or the RGBA cut-out (the fit's ``cut_out``)."""
     from PIL import Image
     with Image.open(io.BytesIO(data)) as im:
-        arr = np.asarray(im.convert("RGB")).astype(np.int16)
-    return png((mask_of(arr) * 255).astype(np.uint8))
+        rgb = np.asarray(im.convert("RGB"))
+    mask = (mask_of(rgb.astype(np.int16)) * 255).astype(np.uint8)
+    if kwargs.get("only_mask"):
+        return png(mask)
+    return png(np.dstack([rgb, mask]))
 
 
 def raises(label, fn, exc, text=""):
@@ -349,7 +355,7 @@ def main() -> int:
             return 1
 
         print("[1] store")
-        check("version", gs.GARMENT_VERSION.get("clothing"), 1)
+        check("version", gs.GARMENT_VERSION.get("clothing"), 2)
         check("steps", gs.steps_for("clothing", gs.EDIT_CHAIN), ("worn", "ghost", "cutout", "mesh", "fit"))
         check("image steps", (gs.image_steps("clothing"), gs.image_steps("hair")),
               (("worn", "ghost", "cutout"), ("haired", "ghost", "cutout")))
@@ -368,11 +374,10 @@ def main() -> int:
         check("fsig back", gs.garment_fsig("Demo", did), fsig)
 
         print("[2] prompts")
-        from app.core.base_body import DRESS_VIEW
         check("worn front", garment_clothing.edit_prompt("Demo", "worn", "front", item_id=did),
               (WORN_FRONT, WORN_NEG))
-        check("worn back", garment_clothing.edit_prompt("Demo", "worn", "back", item_id=did),
-              (f"{DRESS_VIEW['back']} {WORN_FRONT}", WORN_NEG))
+        raises("worn back is no edit", lambda: garment_clothing.edit_prompt("Demo", "worn", "back", item_id=did),
+               ValueError, "drafted from the worn front")
         check("ghost front", garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=did),
               (GHOST_PROMPT, GHOST_NEG))
         check("ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=did)[0], GHOST_PROMPT)
@@ -406,19 +411,23 @@ def main() -> int:
 
         def recorder(character_name, *, output_stem, **kw):
             g = kw["sidecar_extra"]["garment"]
-            key = f"{g['step']} {g['view'][0]}{g['attempt']}"
+            key = f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}"
             renders.append(key)
             prompts[key] = kw
-            queue = plan.get((g["step"], g["view"])) or []
+            queue = [] if g.get("stage") == "draft" else plan.get((g["step"], g["view"])) or []
             arr = queue.pop(0) if queue else (WORN if g["step"] == "worn" else GHOST)
             side = kw["override_width"]
             out_canvas = np.full((kw["override_height"], side, 3), 128, dtype=np.uint8)
             dy, dx = (out_canvas.shape[0] - arr.shape[0]) // 2, (side - arr.shape[1]) // 2
-            out_canvas[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
+            if g.get("stage") == "draft":
+                out_canvas = arr  # the draft: a fresh render, its own frame
+            else:
+                out_canvas[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
             out = Path(str(output_stem) + ".png")
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(png(out_canvas))
-            out.with_suffix(".json").write_text(json.dumps({"seed": 1000 + g["attempt"], **kw["sidecar_extra"]}))
+            out.with_suffix(".json").write_text(json.dumps({"seed": 1000 + g.get("attempt", 0),
+                                                            **kw["sidecar_extra"]}))
             return out
 
         expression_regen.render_character_image = recorder
@@ -467,12 +476,12 @@ def main() -> int:
         plan[("ghost", "back")] = [SHORT]
         plan[("ghost", "front")] = [GHOST, GHOST, GHOST]
         res = garments.run_garment("Demo", did)
-        check("A renders", renders, ["worn b1", "worn f1", "ghost b1", "ghost f1", "ghost f2"])
+        check("A renders", renders, ["worn f1", "worn bd", "worn b1", "ghost b1", "ghost f1", "ghost f2"])
         gates = res.get("gates") or {}
         check("A refused at ghost front", (res.get("ok"), res.get("step"), gates.get("view")),
               (False, "ghost", "front"))
         check("A reasons", [a.get("reasons") for a in gates.get("attempts") or []], [[HEM_REASON], [HEM_REASON]])
-        check("A back prompt", prompts["worn b1"]["bare_prompt"], f"{DRESS_VIEW['back']} {WORN_FRONT}")
+        check("A back fit prompt", prompts["worn b1"]["bare_prompt"], base_body.FIT_PROMPT)
         check("A ghost prompt", prompts["ghost f1"]["bare_prompt"], GHOST_PROMPT)
         check("A fragment untouched", inventory.get_item(did).get("prompt_fragment"), FRAGMENT)
         del renders[:]

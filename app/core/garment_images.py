@@ -24,6 +24,23 @@ square).
 The kind's own module (``kind_module``: ``garment_hair``,
 ``garment_clothing``) gives the edit steps, prompts and gates.
 
+A step whose back is DRAFTED (``EDIT_STEPS[step]["back"] == "draft"``:
+clothing ``worn``) does not edit the base back. It takes the outfit's two
+steps (``base_body.render_draft`` / ``render_fit``, the occasions
+``outfit_back_draft`` / ``outfit_back``): a draft rendered fresh from the
+step's accepted FRONT (``kind.draft_prompt``), stored as
+``images/{item}_{fsig}_{step}draft_back.png``, then up to ``ATTEMPTS`` fits
+of the cut-out draft onto the cut-out base back (``base_body.FIT_PROMPT``),
+both on neutral grey in a square canvas, published unprocessed and cropped
+back onto the base back's frame. Each fit is gated like an edit (the kind's
+gate against the base back: a poor registration = changed outline/colour
+outside the garment refuses it and the next fit renders from the same
+draft; the fit's outline limit is the looser ``FIT_OUTSIDE_XOR_MAX`` — a fit
+re-renders the whole figure) plus ``kind.back_reasons`` against the accepted
+front's record (the front opening on the back). The accepted back records
+the front it follows (``front_sha256``); a new accepted front drops the back
+and everything after it.
+
 ``cut_out`` turns an accepted ghost image into the generator input
 (R6): BiRefNet-DIS mask on the original colours, a square of side
 ``1.15 × max(w, h)`` around the mask, routed upscale below 1024², Lanczos
@@ -169,17 +186,18 @@ def square_reference(path: Path, refs_dir: Path):
         yield out, side, offset, rgba.size
 
 
-def _crop_back(path: Path, target: Path, side: int, offset: Tuple[int, int],
+def _crop_back(path: Path, target: Path, side, offset: Tuple[int, int],
                size: Tuple[int, int]) -> Path:
     """The square render cut back to the source frame, as PNG at ``target``:
     a render of another size is first scaled (pure scale) to the requested
-    ``side``², then the source's ``size`` is cropped at ``offset``. The
-    renderer's sidecar moves along."""
+    ``side``² (or ``side`` = ``(w, h)``, the fit canvas), then the source's
+    ``size`` is cropped at ``offset``. The renderer's sidecar moves along."""
     from PIL import Image
+    canvas = tuple(side) if isinstance(side, (tuple, list)) else (side, side)
     with Image.open(path) as im:
         rgb = im.convert("RGB")
-    if rgb.size != (side, side):
-        rgb = rgb.resize((side, side), Image.Resampling.LANCZOS)
+    if rgb.size != canvas:
+        rgb = rgb.resize(canvas, Image.Resampling.LANCZOS)
     dx, dy = offset
     cropped = rgb.crop((dx, dy, dx + int(size[0]), dy + int(size[1])))
     tmp = target.with_name(f".{target.name}.tmp")
@@ -193,15 +211,73 @@ def _crop_back(path: Path, target: Path, side: int, offset: Tuple[int, int],
     return target
 
 
-def _drop_later(character_name: str, item_id: str, fsig: str, step: str, view: str) -> None:
+def _drop_later(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
+                inclusive: bool = False) -> None:
     """A new accepted image makes the later image steps of the view stale
-    (the steps of the item's kind, ``garment_store.image_steps``)."""
+    (the steps of the item's kind, ``garment_store.image_steps``);
+    ``inclusive``: the step itself too."""
     from app.core.garment_store import garment_path, image_steps
     order = image_steps(_item_kind(item_id))
-    for later in order[order.index(step) + 1:]:
+    for later in order[order.index(step) + (0 if inclusive else 1):]:
         path = garment_path(character_name, item_id, fsig, "image", step=later, view=view)
         path.unlink(missing_ok=True)
         path.with_suffix(".json").unlink(missing_ok=True)
+
+
+def _drafted(kind, step: str) -> bool:
+    """Whether the kind's ``step`` drafts its back from its front."""
+    return (getattr(kind, "EDIT_STEPS", {}).get(step) or {}).get("back") == "draft"
+
+
+def draft_path(character_name: str, item_id: str, fsig: str, step: str) -> Path:
+    """The draft of a drafted back: ``images/{item}_{fsig}_{step}draft_back.png``
+    (a stored garment name, swept with its fsig group)."""
+    from app.core.garment_store import garment_path
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view="back")
+    return final.with_name(f"{item_id}_{fsig}_{step}draft_back.png")
+
+
+def accepted_record(path: Path) -> Optional[Dict[str, Any]]:
+    """The gate record of the accepted attempt of a final image (``gates``
+    by ordinal, ``attempt``), None when it is not accepted."""
+    from app.core.garment_store import read_record
+    if not _accepted(path):
+        return None
+    record = read_record(path.with_suffix(".json"))
+    gates = record.get("gates") or {}
+    try:
+        return gates.get(_ORDINALS[int(record.get("attempt") or 1) - 1])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+def _follows_front(character_name: str, item_id: str, fsig: str, step: str, back: Path) -> bool:
+    """A drafted back counts only while it was made from the CURRENT
+    accepted front (``front_sha256`` of its record)."""
+    from app.core.base_body import file_sha256
+    from app.core.garment_store import garment_path, read_record
+    front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
+    sha = read_record(back.with_suffix(".json")).get("front_sha256")
+    return bool(sha) and _accepted(front) and sha == file_sha256(front)
+
+
+def _publish(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, target: Path,
+             final: Path, records: List[Dict[str, Any]], attempt: int,
+             extra: Optional[Dict[str, Any]] = None) -> Path:
+    """Copy an accepted attempt onto the step's final file with its record
+    (every attempt's gate by ordinal); the later steps of the view go stale,
+    and a new front of a drafted step drops the back it was drafted from."""
+    from app.core.garment_store import read_record, write_record
+    shutil.copyfile(target, final)
+    sidecar = read_record(target.with_suffix(".json"))
+    sidecar.pop("gate", None)
+    write_record(final.with_suffix(".json"), {
+        **sidecar, **(extra or {}), "accepted": True, "attempt": attempt,
+        "gates": {_ORDINALS[n]: r for n, r in enumerate(records)}})
+    _drop_later(character_name, item_id, fsig, step, view)
+    if view == "front" and _drafted(kind, step):
+        _drop_later(character_name, item_id, fsig, step, "back", inclusive=True)
+    return final
 
 
 def _accepted(path: Path) -> bool:
@@ -233,9 +309,11 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     from app.models.character import get_character_profile
 
     final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
-    if not force and _accepted(final):
-        return final
     kind = _kind_module(item_id)
+    drafted = view == "back" and _drafted(kind, step)
+    if not force and _accepted(final) and (
+            not drafted or _follows_front(character_name, item_id, fsig, step, final)):
+        return final
     if step not in kind.EDIT_STEPS:
         raise ValueError(f"no edit step {step!r}")
     profile = get_character_profile(character_name) or {}
@@ -243,6 +321,11 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     base = find_ref_image(character_name, base_body._kind(view), bsig)
     if base is None:
         raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+    refs_dir = get_model_refs_dir(character_name)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    if drafted:
+        return _drafted_back(character_name, item_id, fsig, step, kind, profile=profile, base=base,
+                             refs_dir=refs_dir, final=final, pair_check=pair_check)
     source_step = kind.EDIT_STEPS[step]["source"]
     if source_step == "base":
         source = base
@@ -252,8 +335,6 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             raise base_body.MissingInput(f"The {source_step} {view} image is missing — run that step first")
     prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile, item_id=item_id,
                                         **(prompt_hints or {}))
-    refs_dir = get_model_refs_dir(character_name)
-    final.parent.mkdir(parents=True, exist_ok=True)
 
     with neutral_view_reference(base, refs_dir) as flat_base:
         base_size = _image_size(flat_base)
@@ -306,15 +387,85 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         logger.info("Garment %s %s %s attempt %d: %s %s", character_name, step, view, attempt,
                     "accepted" if record["ok"] else "refused", record.get("reasons") or "")
         if record["ok"]:
-            shutil.copyfile(target, final)
-            sidecar = read_record(target.with_suffix(".json"))
-            sidecar.pop("gate", None)
-            write_record(final.with_suffix(".json"), {
-                **sidecar, "accepted": True, "attempt": attempt,
-                "gates": {_ORDINALS[n]: r for n, r in enumerate(records)}})
-            _drop_later(character_name, item_id, fsig, step, view)
-            return final
+            return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt)
     raise GateRefused(step, view, records)
+
+
+def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind, *,
+                  profile: Dict[str, Any], base: Path, refs_dir: Path, final: Path,
+                  pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None) -> Path:
+    """The back of a drafted step (module docstring): one DRAFT from the
+    accepted front, then up to ``ATTEMPTS`` FITs of it onto the base back,
+    each gated (the kind's gate against the base back + ``kind.back_reasons``
+    against the front's accepted record). ``MissingInput`` without an
+    accepted front, ``RuntimeError`` when the draft renders nothing,
+    ``GateRefused`` after the fits."""
+    from app.core import base_body
+    from app.core.base_body import file_sha256
+    from app.core.garment_store import garment_path, read_record, write_record
+    from app.core.model_refs import VIEW_REFERENCE_BACKGROUND, _tpose_size, neutral_view_reference
+    front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
+    front_gate = accepted_record(front)
+    if front_gate is None:
+        raise base_body.MissingInput(f"The {step} front image is missing — the back is drafted from it")
+    front_sha = file_sha256(front)
+    meta = {"item_id": item_id, "fsig": fsig, "step": step, "view": "back"}
+    with neutral_view_reference(base, refs_dir) as flat_base:
+        base_size = _image_size(flat_base)
+        base_rgb = _rgb(flat_base)
+        base_mask = _mask(flat_base, base_size)
+
+    # The render arguments of the outfit's draft and fit, nothing worn on
+    # the profile (the text names the piece, the reference shows it).
+    mesh_profile = {**profile, "equipped_pieces": {}, "equipped_items": []}
+    common = base_body._dress_common("back", pieces={}, items=[], profile=mesh_profile, size=_tpose_size())
+    draft_stem = draft_path(character_name, item_id, fsig, step).with_suffix("")
+    draft = base_body.render_draft(
+        character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir,
+        prompt=kind.draft_prompt(character_name, step, profile=profile, item_id=item_id),
+        profile=profile, common=common,
+        sidecar_extra={"garment": {**meta, "stage": "draft"}, "front_sha256": front_sha})
+    if draft is None:
+        raise RuntimeError(f"The {step} back draft rendered nothing")
+    draft = Path(draft)
+    follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft)}
+
+    records: List[Dict[str, Any]] = []
+    with base_body.fit_references(base, draft, refs_dir, (1, 1), background=VIEW_REFERENCE_BACKGROUND) \
+            as (base_reference, draft_reference, canvas):
+        offset = ((canvas[0] - base_size[0]) // 2, 0)
+        for attempt in range(1, ATTEMPTS + 1):
+            target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
+            path = base_body.render_fit(
+                character_name, "back", stem=target.with_suffix(""), base_reference=base_reference,
+                draft_reference=draft_reference, canvas=canvas, common=common, postprocess=False,
+                extra={"garment": {**meta, "attempt": attempt, "stage": "fit"}, **follow,
+                       "edit_canvas": {"side": list(canvas), "offset": list(offset), "crop": list(base_size)}})
+            if path is None:
+                record: Dict[str, Any] = {"view": "back", "ok": False, "reasons": ["render failed"]}
+            else:
+                path = _crop_back(Path(path), target, canvas, offset, base_size)
+                record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask,
+                                   source_rgb=None, source_mask=None,
+                                   edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
+                                   item_id=item_id, fitted=True)
+                extra_reasons = list(kind.back_reasons(front_gate, record))
+                reason = pair_check(record) if pair_check is not None else None
+                if reason:
+                    extra_reasons.append(reason)
+                if extra_reasons:
+                    record = {**record, "ok": False, "reasons": [*(record.get("reasons") or []), *extra_reasons]}
+            record["attempt"] = attempt
+            records.append(record)
+            if path is not None:
+                sidecar = read_record(target.with_suffix(".json"))
+                write_record(target.with_suffix(".json"), {**sidecar, "gate": record})
+            logger.info("Garment %s %s back (draft + fit) attempt %d: %s %s", character_name, step, attempt,
+                        "accepted" if record["ok"] else "refused", record.get("reasons") or "")
+            if record["ok"]:
+                return _publish(character_name, item_id, fsig, step, "back", kind, target, final, records,
+                                attempt, follow)
+    raise GateRefused(step, "back", records)
 
 
 def haired_length(character_name: str, item_id: str, fsig: str, view: str = "back") -> Optional[Dict[str, Any]]:

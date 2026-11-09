@@ -72,7 +72,9 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_store")
 
-GARMENT_VERSION: Dict[str, int] = {"hair": 1, "clothing": 1}
+#: clothing 2: the worn back is drafted from the worn front and fitted onto
+#: the base back (``garment_images``) instead of one edit of the base back.
+GARMENT_VERSION: Dict[str, int] = {"hair": 1, "clothing": 2}
 GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": ("haired", "ghost", "cutout", "mesh", "fit"),
                                              "clothing": ("worn", "ghost", "cutout", "mesh", "fit")}
 #: The steps of hair made by HairDeck (``steps_for``).

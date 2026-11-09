@@ -1290,15 +1290,16 @@ def _draft_view(view: str) -> str:
     return view
 
 
-def draft_prompt(character_name: str, view: str, *,
-                 profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+def draft_prompt(character_name: str, view: str, *, profile: Optional[Dict[str, Any]] = None,
+                 outfit_text: str = DRAFT_OUTFIT_TEXT) -> Tuple[str, str]:
     """``(prompt, negative)`` of the DRAFT of a two-step view (back, left,
     right): the base view prompt with the body text ``BODY_TEXT`` replaced
-    by ``DRAFT_OUTFIT_TEXT``; the bald head stays (hair is its own mesh).
-    Negative: ``DRAFT_NEGATIVE`` + the slots' ``base_body_negative`` texts.
-    Its character block is ``draft_character``."""
+    by ``outfit_text`` (an outfit: ``DRAFT_OUTFIT_TEXT``; an own-mesh piece's
+    worn back: ``garment_clothing.DRAFT``); the bald head stays (hair is its
+    own mesh). Negative: ``DRAFT_NEGATIVE`` + the slots'
+    ``base_body_negative`` texts. Its character block is ``draft_character``."""
     profile = _profile_of(character_name, profile)
-    return (_view_prompt(_draft_view(view), DRAFT_OUTFIT_TEXT),
+    return (_view_prompt(_draft_view(view), outfit_text),
             base_negative(character_name, profile=profile, head=DRAFT_NEGATIVE))
 
 
@@ -1352,15 +1353,26 @@ def fit_canvas(base, draft, size: Tuple[int, int]):
 
 
 @contextmanager
-def fit_references(base_back: Path, draft: Path, refs_dir: Path, size: Tuple[int, int]):
+def fit_references(base_back: Path, draft: Path, refs_dir: Path, size: Tuple[int, int], *,
+                   background: Optional[Tuple[int, int, int]] = None):
     """``(base reference, draft reference, canvas size)``: the ``fit_canvas``
     pair of the cut-outs, saved under their own names in a private
     ``.fitref_*`` dir inside ``refs_dir`` (the reference containment gate
     accepts it; the fit's sidecar records the references by name). The fit
     renders at the canvas size — the base back's height — because the
-    retexture worker registers it pixel-wise against the base back."""
+    retexture worker registers it pixel-wise against the base back.
+    ``background``: both canvases flattened onto that colour (the garment
+    chain keeps its images on neutral grey); None = transparent, as the
+    outfit fit was measured."""
     import tempfile
+    from PIL import Image
     base_canvas, draft_canvas = fit_canvas(cut_out(base_back), cut_out(draft), size)
+    if background is not None:
+        def flat(image):
+            out = Image.new("RGBA", image.size, tuple(background) + (255,))
+            out.alpha_composite(image)
+            return out.convert("RGB")
+        base_canvas, draft_canvas = flat(base_canvas), flat(draft_canvas)
     with tempfile.TemporaryDirectory(prefix=".fitref_", dir=refs_dir, ignore_cleanup_errors=True) as tmp:
         base_out = Path(tmp) / "base" / f"{base_back.stem}.png"
         draft_out = Path(tmp) / "draft" / f"{draft.stem}.png"
@@ -1445,21 +1457,57 @@ def _dress_common(view: str, *, pieces: Optional[Dict[str, str]], items: Optiona
                 mesh_input_profile=profile, back_view=view == "back", character_loras=True)
 
 
-def _fit_attempt(character_name: str, view: str, *, stem: Path, base_reference: Path,
-                 draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
-                 common: Dict[str, Any], base_views: Dict[str, Optional[Path]]
-                 ) -> Optional[Tuple[Path, Dict[str, Any]]]:
-    """One FIT render of a two-step view into ``stem`` and its gate result
-    ``{"ok", "guard", "noise"}`` (head ``view_guard`` against the base views,
-    ``base_body_gates.noise_gate`` against the base view) — None when the
-    render returned nothing. Render errors propagate."""
-    from app.core import base_body_gates, expression_regen
-    path = expression_regen.render_character_image(
+def render_draft(character_name: str, view: str, *, stem: Path, front: Path, refs_dir: Path,
+                 prompt: Tuple[str, str], profile: Dict[str, Any], common: Dict[str, Any],
+                 sidecar_extra: Dict[str, Any]) -> Optional[Path]:
+    """The DRAFT render of a two-step view into ``stem``: a fresh render
+    with ``front`` (on neutral grey) as the only reference, ``prompt`` =
+    ``(text, negative)`` (``draft_prompt``), character block
+    ``draft_character``, occasion ``DRESS_OCCASIONS[view][0]``, the render
+    arguments ``common`` (``_dress_common``). None when the render returned
+    nothing; render errors propagate. Shared by the outfit's dressed views
+    (``_dress_view``) and an own-mesh piece's worn back
+    (``garment_images``)."""
+    from app.core import expression_regen
+    from app.core.model_refs import neutral_view_reference
+    text, negative = prompt
+    with neutral_view_reference(front, refs_dir) as reference:
+        return expression_regen.render_character_image(
+            character_name, output_stem=stem, bare_prompt=text, extra_negative=negative,
+            style_character=draft_character(character_name, view, profile=profile),
+            occasion=DRESS_OCCASIONS[view][0], reference_image=reference,
+            sidecar_extra=sidecar_extra, **common)
+
+
+def render_fit(character_name: str, view: str, *, stem: Path, base_reference: Path,
+               draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
+               common: Dict[str, Any], postprocess: bool = True) -> Optional[Path]:
+    """One FIT render of a two-step view into ``stem``: ``FIT_PROMPT`` on
+    the base reference (image 1) with the draft reference (image 2), use
+    case ``FIT_USE_CASE``, occasion ``DRESS_OCCASIONS[view][1]``, at the
+    canvas size. ``postprocess=False`` keeps the backend's full frame (the
+    garment chain crops it back onto the base view). None when the render
+    returned nothing; render errors propagate."""
+    from app.core import expression_regen
+    return expression_regen.render_character_image(
         character_name, output_stem=stem, bare_prompt=FIT_PROMPT,
         occasion=DRESS_OCCASIONS[view][1], reference_image=base_reference,
         extra_reference_images=[draft_reference], sidecar_extra=extra,
         **{**common, "image_use_case": FIT_USE_CASE,
-           "override_width": canvas[0], "override_height": canvas[1]})
+           "override_width": canvas[0], "override_height": canvas[1], "postprocess": postprocess})
+
+
+def _fit_attempt(character_name: str, view: str, *, stem: Path, base_reference: Path,
+                 draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
+                 common: Dict[str, Any], base_views: Dict[str, Optional[Path]]
+                 ) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """One FIT render of a two-step view into ``stem`` (``render_fit``) and
+    its gate result ``{"ok", "guard", "noise"}`` (head ``view_guard`` against
+    the base views, ``base_body_gates.noise_gate`` against the base view) —
+    None when the render returned nothing. Render errors propagate."""
+    from app.core import base_body_gates
+    path = render_fit(character_name, view, stem=stem, base_reference=base_reference,
+                      draft_reference=draft_reference, canvas=canvas, extra=extra, common=common)
     if path is None:
         return None
     guard = view_guard(view, path, base_views)
@@ -1512,23 +1560,17 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
        every attempt's numbers in its sidecar (``fit_gate``, with
        ``warning`` when none passed)."""
     import tempfile
-    from app.core import base_body_gates, expression_regen
-    from app.core.model_refs import neutral_view_reference
+    from app.core import base_body_gates
     kind = _kind(view)
     drafts = refs_dir / DRAFT_DIR
     drafts.mkdir(exist_ok=True)
-    draft_text, draft_negative = draft_prompt(character_name, view, profile=profile)
     common = _dress_common(view, pieces=pieces, items=items, profile=profile, size=size)
-    with neutral_view_reference(front, refs_dir) as reference:
-        draft = expression_regen.render_character_image(
-            character_name, output_stem=drafts / f"{kind}_{signature}",
-            bare_prompt=draft_text, extra_negative=draft_negative,
-            style_character=draft_character(character_name, view, profile=profile),
-            occasion=DRESS_OCCASIONS[view][0], reference_image=reference,
-            sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
-                           "front_sha256": file_sha256(front),
-                           **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})},
-            **common)
+    draft = render_draft(
+        character_name, view, stem=drafts / f"{kind}_{signature}", front=front, refs_dir=refs_dir,
+        prompt=draft_prompt(character_name, view, profile=profile), profile=profile, common=common,
+        sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
+                       "front_sha256": file_sha256(front),
+                       **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
     if draft is None:
         raise OutfitError(f"Dressed {view} draft failed")
     base_view = base_views[view]
