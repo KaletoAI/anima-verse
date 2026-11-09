@@ -1589,7 +1589,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     the CURRENT method; HairDeck adds ``hsig``), why the served fit is not
     the current one (``stale_reasons``), the run status and the preview URL.
     ``served_fsig`` None = no hair is served (e.g. the selected method has no
-    accepted fit yet). HairDeck hair adds the stale reasons
+    accepted fit yet). Every kind may report ``fit_algorithm_updated`` (the
+    served fit predates ``garment_fit.FIT_VERSION``; the boot sweep
+    ``garment_refit`` refits it). HairDeck hair adds the stale reasons
     ``hairdeck_changed`` (another profile picture or HairDeck setting than
     the served fit's job), ``colour_changed`` (another colour override) and
     ``placement_changed`` (another manual forward/tilt, or a fit from before
@@ -1641,6 +1643,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                 stale.append("base_changed")
             elif record.get("base_model_sha256") != base[1]:
                 stale.append("base_model_changed")
+            from app.core.garment_fit import FIT_VERSION
+            if record.get("fit_version") != FIT_VERSION.get(str(record.get("kind"))):
+                stale.append("fit_algorithm_updated")
             if method == gs.HAIRDECK and gs.fit_method(record) == gs.HAIRDECK:
                 if used.get("hsig") != hsig:
                     stale.append("hairdeck_changed")

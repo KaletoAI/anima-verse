@@ -726,6 +726,15 @@ async def lifespan(app: FastAPI):
     except Exception as _we:
         logger.warning("Alias embedding warm-up not started: %s", _we)
 
+    # Garment fits made by an older fit algorithm (garment_fit.FIT_VERSION)
+    # are refitted in the background, one character at a time, CPU only —
+    # asset maintenance, so a world freeze does not hold it back.
+    try:
+        from app.core.garment_refit import start_sweep
+        start_sweep()
+    except Exception as _gre:
+        logger.warning("Garment refit sweep not started: %s", _gre)
+
     # Hub jobs that outlived the previous process (docs/hub-job-resume.md):
     # AFTER every handler is registered, BEFORE the AgentLoop and the queue
     # workers start — the resumer takes the guards of the operations it

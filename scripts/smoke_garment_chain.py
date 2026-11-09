@@ -88,7 +88,8 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
     a second start_garment -> False; released, the run finds nothing to do
     and the "queued" mark ends without a failure.
 [5b] The fit record of [5] carries fit_version = garment_fit.FIT_VERSION["hair"].
-    Rewritten without it: _fit_state "stale"; after_base_model queues the
+    Rewritten without it: _fit_state "stale", garment_info stale_reasons
+    ["fit_algorithm_updated"] (inputs, base and base model unchanged); after_base_model queues the
     item and the run re-fits ONLY: 0 renders, 0 mesh calls, 1 decimation
     (the low tier of the new fit; the prepared mesh stays cached); the new
     record accepted, fit_version current, base sha unchanged; "accepted"
@@ -590,6 +591,7 @@ def main() -> int:
         old = {k: v for k, v in rec5.items() if k != "fit_version"}
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), old)
         check("stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
+        check("stale reason", garments.garment_info("Demo", hid)["stale_reasons"], ["fit_algorithm_updated"])
         before = counts()
         check("after_base_model starts", garments.after_base_model("Demo"), True)
         check("idle", garments.wait_idle(120), True)

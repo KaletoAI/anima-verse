@@ -50,6 +50,7 @@ const STALE_LABELS: Record<string, string> = {
   description_changed: 'Piece description changed',
   base_changed: 'Base body changed',
   base_model_changed: 'Base model changed',
+  fit_algorithm_updated: 'Fit algorithm updated',
 }
 
 const STATE_LABELS: Record<PieceStatus['state'], string> = {

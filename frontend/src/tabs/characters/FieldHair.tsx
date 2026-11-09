@@ -73,6 +73,7 @@ const STALE_LABELS: Record<string, string> = {
   description_changed: 'Hair description changed',
   base_changed: 'Base body changed',
   base_model_changed: 'Base model changed',
+  fit_algorithm_updated: 'Fit algorithm updated',
   hairdeck_changed: 'Profile picture or HairDeck settings changed',
   colour_changed: 'Hair colour changed',
   placement_changed: 'Hair placement changed',
