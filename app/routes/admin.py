@@ -282,7 +282,7 @@ def _build_models_html() -> str:
                 <label>Temperature<input id="rpTemp" type="number" min="0" max="2" step="0.05" value="0.8"></label>
                 <label>Top P<input id="rpTopP" type="number" min="0.01" max="1" step="0.01" placeholder="not sent"></label>
                 <label>Repetition penalty<input id="rpPenalty" type="number" min="0" max="1.5" step="0.01" placeholder="not sent"></label>
-                <label>Max tokens<input id="rpMaxTokens" type="number" min="0" max="200000" step="1" value="700"></label>
+                <label title="0 = no limit sent (provider default), as the chat entries usually run. A reply cut off at a limit counts as a defect.">Max tokens (0 = provider default)<input id="rpMaxTokens" type="number" min="0" max="200000" step="1" value="0"></label>
                 <label>Thinking budget<select id="rpThinking"><option value="0">Off</option><option value="300">300</option><option value="600">600</option><option value="900">900</option><option value="1200">1200</option><option value="1500">1500</option><option value="2000">2000</option><option value="3000">3000</option></select></label>
             </fieldset>
             <fieldset class="rp-card"><legend>Judge</legend>

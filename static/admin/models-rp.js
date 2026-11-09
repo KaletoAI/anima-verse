@@ -68,7 +68,7 @@ function rpSettingsText(settings) {
     return ['temp ' + rpNum(settings.temperature, 2),
         settings.top_p != null ? 'top_p ' + settings.top_p : '',
         settings.repetition_penalty != null ? 'penalty ' + settings.repetition_penalty : '',
-        'max ' + (settings.max_tokens || 'unlimited'),
+        'max ' + (settings.max_tokens || 'provider default'),
         settings.thinking_budget ? 'thinking ' + settings.thinking_budget : 'thinking off',
         judge].filter(Boolean).join(' · ');
 }
@@ -155,7 +155,7 @@ function rpPrefill() {
     rpCombobox.reload();
     if (typeof chosen.temperature === 'number') document.getElementById('rpTemp').value = chosen.temperature;
     document.getElementById('rpPenalty').value = chosen.repetition_penalty ?? '';
-    document.getElementById('rpMaxTokens').value = chosen.max_tokens ?? 700;
+    document.getElementById('rpMaxTokens').value = chosen.max_tokens || 0;  // no cap stays no cap
     document.getElementById('rpChatTemplate').value = chosen.chat_template || '';
     const budget = chosen.thinking === 'on' && chosen.thinking_budget > 0 ? chosen.thinking_budget : 0;
     const select = document.getElementById('rpThinking');

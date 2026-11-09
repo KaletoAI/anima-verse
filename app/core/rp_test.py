@@ -114,7 +114,7 @@ def validate_rp_settings(settings: Any) -> Dict[str, Any]:
     """Validate and copy explicit RP test parameters; never consult routing."""
     from copy import deepcopy
     from app.core.llm_router import parse_extra_params
-    defaults = {"temperature": 0.8, "top_p": None, "repetition_penalty": None, "max_tokens": 700,
+    defaults = {"temperature": 0.8, "top_p": None, "repetition_penalty": None, "max_tokens": 0,
                 "chat_template": "", "thinking_budget": 0, "extra_params": {}, "judge": None}
     if not isinstance(settings, dict) or settings.keys() - defaults.keys():
         raise ValueError("settings must be an object with known keys only")
@@ -125,6 +125,8 @@ def validate_rp_settings(settings: Any) -> Dict[str, Any]:
         raise ValueError("top_p must be null or a number from 0.01 to 1")
     if result["repetition_penalty"] is not None and not _number(result["repetition_penalty"], 0, 1.5):
         raise ValueError("repetition_penalty must be null or a number from 0 to 1.5")
+    # 0 = no cap sent (the provider default) — how the in-game chat entries
+    # run; a test-only cap would score its own cut-offs as "truncated".
     tokens = result["max_tokens"]
     if not isinstance(tokens, int) or isinstance(tokens, bool) or not 0 <= tokens <= 200000:
         raise ValueError("max_tokens must be an integer from 0 to 200000")
