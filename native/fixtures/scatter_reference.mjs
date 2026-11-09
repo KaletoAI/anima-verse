@@ -49,8 +49,8 @@ const ROOT = path.join(__dirname, '../../')
 const CAMERA = { pos: [40, 30, 110], fwd: [1, 0, 0.5], vfov_deg: 45, aspect: 16 / 9 }
 /** The prop GLBs of the fixture (tracked demo-world files, read in place). */
 const PROP_FILES = {
-  '/assets/props/broadleaf/model.glb?tier=full': 'worlds/demo/props/broadleaf-df5830/model_1792265756.glb',
-  '/assets/props/broadleaf/model.glb?tier=low': 'worlds/demo/props/broadleaf-df5830/model_1792265757.glb',
+  '/assets/props/broadleaf/model.glb?tier=full': 'native/fixtures/assets/props/broadleaf_full.glb',
+  '/assets/props/broadleaf/model.glb?tier=low': 'native/fixtures/assets/props/broadleaf_low.glb',
 }
 const TUFT_HEIGHT_M = 0.8   // ground.ts TUFT_HEIGHT_M
 const SWAY_MAX_M = 0.5      // ground.ts SWAY_MAX_M

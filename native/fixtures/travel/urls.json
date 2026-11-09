@@ -1,5 +1,5 @@
 {
   "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
-  "/assets/props/broadleaf/model.glb?tier=full": "repo:worlds/demo/props/broadleaf-df5830/model_1792265756.glb",
-  "/assets/props/broadleaf/model.glb?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb"
+  "/assets/props/broadleaf/model.glb?tier=full": "repo:native/fixtures/assets/props/broadleaf_full.glb",
+  "/assets/props/broadleaf/model.glb?tier=low": "repo:native/fixtures/assets/props/broadleaf_low.glb"
 }

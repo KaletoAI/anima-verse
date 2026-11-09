@@ -2,8 +2,8 @@
  "generated_by": "native/fixtures/rest_reference.mjs (packages/scene-render/src/clipRetarget.ts on three r185)",
  "models": [
   {
-   "name": "Minerva McGonagall",
-   "file": "worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb",
+   "name": "Ada Wren",
+   "file": "native/fixtures/assets/figures/ada_wren.glb",
    "corrected_bones": 51,
    "stance_bones": [],
    "samples": [
@@ -931,7 +931,7 @@
   },
   {
    "name": "Johanna Falk",
-   "file": "worlds/demo/characters/Johanna Falk/model3d/b852a46d5ffc.glb",
+   "file": "native/fixtures/assets/figures/johanna_falk.glb",
    "corrected_bones": 51,
    "stance_bones": [
     "leftfoot",
@@ -1867,8 +1867,8 @@
    ]
   },
   {
-   "name": "Rubeus Hagrid",
-   "file": "worlds/demo/characters/Rubeus Hagrid/model3d/a4595b432ee3.glb",
+   "name": "Bram Holt",
+   "file": "native/fixtures/assets/figures/bram_holt.glb",
    "corrected_bones": 51,
    "stance_bones": [
     "leftfoot",

@@ -532,7 +532,7 @@ pip install -e .
 ```bash
 chmod 755 start.sh        # first time only
 
-./start.sh                  # storage: ./worlds/demo (the default)
+./start.sh                  # storage: ./worlds/demo (the default; created empty if missing)
 ./start.sh --world NAME     # open or create worlds/NAME — e.g. --world demo
 ./start.sh --storage /path  # use an arbitrary storage directory
 ./start.sh --with-3d        # also start the 3D client as a second process
@@ -649,65 +649,16 @@ clip library and reference rig, language files, and the world-dev prompt specifi
 tracked in git. Model binaries fetched by `fetch_models.sh` live under `models/` (gitignored), as do
 `voices/`, `exports/` and `storage/`.
 
-The repository ships a pre-populated `demo/` world as a starter; `worlds/demo/` **is** tracked in
-git. Pass `--world <new-name>` to begin from a clean slate — the directory is created on first
-start.
-
-### The bundled world: Hogwarts arrival
-
-An unofficial, German-language fan interpretation of film Hogwarts: **Hogsmeade station** with a
-stationary Hogwarts Express, the **Black Lake** with two landing places, and the **castle grounds**
-with towers, an open courtyard, a stone gate and Hagrid's furnished hut. From the northern arcade,
-the furnished castle route connects **Eingangshalle → Verbindungsgalerie → Turmhalle → Große Halle**;
-the Great Hall contains four long house tables with benches.
-The four rooms share their masonry footprint and **29 real glazed window openings** with the
-exterior model; window reveals no longer sit in front of solid wall blocks.
-Seven connected locations sit in a metre-based landscape with water, shallows, woodland, hills and
-a dry west-shore walking route. This is a hand-authored world, not an S/M/L-sized generation.
-The entire castle footprint rests on a level plateau with gentle approach paths; the gate approach
-stays outside the castle grounds. Outdoor street lamps have grounded plinths and iron masts.
-Image-generation subjects, appearance fields and style hints are English; names, narrative and
-dialogue remain German.
-
-```bash
-./start.sh --world demo --with-3d
-```
-
-On first start, log in with the random bootstrap-admin password printed by the server and change
-it under **`/admin/users` → Change my password**. Under **Edit → Assigned characters**, grant your
-account access to **Johanna Falk** (or all four characters), then select Johanna in the player as the adult visitor
-avatar starting at the station. Hagrid, McGonagall and stationmistress Elspeth Rowan have German
-profiles, soul sections, portraits, owned clothing and personal belongings. The initial simulation
-is **paused**, at 16:40 on the first day of the school year; resume it when ready. For an unobscured
-overview, an administrator can enable
-**Menu → Administration → Show all locations (admin)** in the 3D client.
-In the overview, select the castle and choose **Hineinsehen** to reveal its furnished rooms. The
-courtyard, arcades and remaining castle exterior stay visible. While walking, the castle stays
-closed from outside; its interior cutaway opens only inside an enclosed room, not on the grounds.
-
-The world database, portraits and **23 textured environment/furniture models** ship in
-`worlds/demo/`; viewing them needs no generation backend. The matching original castle-wall
-surface ships as `shared/surface_textures/hogwarts_sandstone_1792403224.jpg`, tiled over four metres.
-These are self-created models and textures, not extracted film/game assets or an official architectural survey. Characters use the
-client's existing standard figure rendering, not bespoke Hogwarts rigs. Other castle towers remain
-exterior architecture; train and boats are decorative, not transport.
-Chat and autonomous simulation still need your configured backends.
+The bundled demo world is being rebuilt: the previous one was removed on 2026-11-09, so a fresh
+clone ships no world. Pass `--world <name>` to begin from a clean slate — the directory is created
+on first start (a plain `./start.sh` creates an empty `worlds/demo`).
 
 **Game-Admin → Setup → Packages → Enabled packages** selects the packages used by each world.
 `packages.enabled` in the world's `config.json` is a comma-separated allowlist of exact package
-IDs; empty means **no packages**. The demo enables only the public packages it uses.
+IDs; empty means **no packages**.
 Packages and their dependencies must each be explicitly enabled. Other installed packages contribute
 no skills, character fields, prompts or startup hooks. Changes take effect on the next server start,
 not a skill reload; installation itself does not activate a package.
-
-Rebuild sources are included under `worlds/demo/source/`: run `castle_assets.py` and
-`arrival_assets.py` with Blender 4.2 (`--background --factory-startup --python <script> -- --output
-<asset-directory>`), then use `python worlds/demo/source/build_world.py --help` for the API import.
-Import only into a **separate, empty, paused world**, with media generation disabled, using that
-server's explicit origin and private credentials file. The importer refuses nonempty worlds and does not resume partial builds.
-For a rebuild, copy the `packages` section from `worlds/demo/config.json` into the empty target
-world's `config.json` **before starting its server**; the importer preserves and verifies this
-public package selection.
 
 ---
 

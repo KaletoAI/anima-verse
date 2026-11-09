@@ -58,6 +58,11 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 def main() -> int:
     world = Path(sys.argv[1] if len(sys.argv) > 1 else "worlds/demo")
+    if len(sys.argv) <= 1 and not (world / "world.db").is_file():
+        # Default world absent (the demo was removed on 2026-11-09 to be
+        # rebuilt): name a world explicitly to run this check.
+        print("SKIP: worlds/demo does not exist — pass a world directory")
+        return 0
     if not world.is_dir():
         print(f"[skip] no world directory at {world}")
         return 0

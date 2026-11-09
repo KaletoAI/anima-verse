@@ -40,8 +40,9 @@ stays empty. **Inside Docker, localhost is the container itself.** Use the host 
 or a configured `host.docker.internal` hostname for a backend on the Docker host.
 
 The image ships the curated **demo world** (`worlds/demo`, including its
-`world.db` with characters, locations and rooms) so the deployment has content
-immediately.
+`world.db` with characters, locations and rooms) once it exists: the previous demo
+was removed on 2026-11-09 and is being rebuilt. Until then the container starts
+with an empty `demo` world.
 
 ---
 
@@ -257,7 +258,7 @@ State lives in named Docker volumes, not in the image:
 | Volume | Mount | Contents |
 |---|---|---|
 | `anima_instance` | `/app/instance` | Installation-wide server config and secrets; survives rebuilds and restarts. |
-| `anima_worlds` | `/app/worlds` | World data: characters, state, `config.json`, images. Seeded from the baked demo on first start. |
+| `anima_worlds` | `/app/worlds` | World data: characters, state, `config.json`, images. Seeded from the baked `worlds/` on first start (empty until the rebuilt demo lands). |
 | `anima_models` | `/app/models` | `u2net` (background removal) + `bge-small` (pose embeddings). |
 | `anima_logs` | `/app/logs` | `main.log`, `llm_calls.jsonl`, `image_prompts.jsonl`. |
 

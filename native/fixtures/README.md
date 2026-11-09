@@ -43,20 +43,22 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
 `shared/models/clips/idle.fbx`, `shared/models/clips/walk.fbx` (tracked clip library),
-`worlds/demo/props/broadleaf-df5830/model_1792265756.glb` (full) and `…/model_1792265757.glb`
-(low) — the tracked demo world's Broadleaf tree, the scatter prop of `terrain.json`,
-`worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb` (tracked demo-world
-character model), `shared/models/rig/reference.fbx` (served as `/assets/animation-rig`) and,
-for the rest-correction comparison only, the demo bakes of Johanna Falk and Rubeus Hagrid.
+`native/fixtures/assets/props/broadleaf_full.glb` (full) and `…/broadleaf_low.glb`
+(low) — a Broadleaf tree, the scatter prop of `terrain.json`,
+`native/fixtures/assets/figures/ada_wren.glb` (+ `ada_wren_low.glb`, a character model),
+`shared/models/rig/reference.fbx` (served as `/assets/animation-rig`) and, for the
+rest-correction comparison only, `figures/johanna_falk.glb` and `figures/bram_holt.glb`.
+The `assets/` files were baked in the former demo world (removed 2026-11-09) and moved here
+unchanged, so the reference numbers below still hold.
 
 The directory carries a `.gdignore`, so the Godot editor never imports the GLBs
 (the compressed one would fail: `EXT_meshopt_compression` is required).
 
 ## GLB provenance
 
-- `building_original.glb` = `worlds/demo/locations/60820fd3/model3d/building_1792077236.glb`
-  (tracked demo world), 184 176 bytes, sha256 `380f6ce1…a847a30f`.
-- `building_meshopt.glb` = `worlds/demo/.cache/meshopt/380f6ce15ecfc5770183e4ee5d3ee00db8c031477b83453c470aa4d1e847a30f.glb`,
+- `building_original.glb` = a building model of the former demo world
+  (`locations/60820fd3/model3d/building_1792077236.glb`), 184 176 bytes, sha256 `380f6ce1…a847a30f`.
+- `building_meshopt.glb` = that world's `.cache/meshopt/380f6ce15ecfc5770183e4ee5d3ee00db8c031477b83453c470aa4d1e847a30f.glb`,
   147 740 bytes — the delivery cache names its entries by the SHA-256 of the source
   (`app/core/glb_delivery.py`), so this IS the copy the server sends for the file
   above, written by `app/blender/scripts/meshopt.py`. Copied read-only.
@@ -412,7 +414,7 @@ priority is a unit test, `FigureRuntimeRulesTests`).
 
 ### Tiers (`CheckTiers`, npcs.ts `tickFigureTiers` with main.ts' 25/35 m)
 
-Ada's model3d answer carries `low_url` (the tracked low bake of the same Minerva GLB). Her wish starts **full**
+Ada's model3d answer carries `low_url` (the tracked low bake of the same Ada GLB). Her wish starts **full**
 (`tierWanted.get(name) ?? 'full'`); per tick: distance < 25 → full, > 35 → low, else the last wish. The camera on
 her +x side at 30, 24, 30, 36, 30, 24, 36 m → **full, full, full, low, low, full, low**. The first low loads the
 low edition (one download of the `tier=low` URL, no model3d request — the tier reuses the answer it has), the way
@@ -447,7 +449,7 @@ The ORACLE of the rest-pose correction is now `shared/test-vectors/retarget.json
 `native/Core/Figures/RestCorrections.cs` on plain pose data. `rest_reference.json` stays as an IMPORTER
 cross-check only — it proves what no vector can: that Godot's FBX/glTF importers hand that math the same clip
 values and rests as three's loaders, and that the Godot adapter's sole sampling off the skinned mesh
-(`RestAdapter.SolesOf`, the input of `footStance`) finds what three's `restSolesOf` finds (Hagrid's foot stance).
+(`RestAdapter.SolesOf`, the input of `footStance`) finds what three's `restSolesOf` finds (Bram's foot stance).
 The values are the browser's own output:
 
     node native/fixtures/rest_reference.mjs      # from the repo root; needs npm install
@@ -460,9 +462,9 @@ an importer, a clip or one of the rigs changes, and commit the JSON.
 
 | model | corrected bones | stance rule | why it is in |
 |---|---|---|---|
-| Minerva McGonagall | 51 (all but the hips) | none | the `--check` figure (Ada) |
+| Ada Wren | 51 (all but the hips) | none | the `--check` figure (Ada) |
 | Johanna Falk | 51 | **leg** (both legs, upleg → toebase) | `legStance` on real rests |
-| Rubeus Hagrid | 51 | **foot** (both feet + toebase) | the mesh-sole sampling feeding `footStance` |
+| Bram Holt | 51 | **foot** (both feet + toebase) | the mesh-sole sampling feeding `footStance` |
 
 `CheckRestReference` demands, per model, the same corrected-bone count and stance set, and per sample and bone:
 Godot's clip value within 0.5° of three's (measured 0°) and the corrected rotation within 0.5° (measured max
@@ -1683,7 +1685,7 @@ and `Root` → `mixamorig:Spine1 (0,0,0)` → `mixamorig:Spine2 (0,1,0)` → `B 
   (0, (2 − sin 20°)/2, (1 + cos 20°)/2) = (0, 0.828990, 0.969846).
 - **M9** with `SecondaryManual` off, three engine frames step the modifier at least twice (Skeleton3D runs it after
   the mixer in its deferred update).
-- **M8** information only: the tracked demo figure with an extension group (`worlds/demo`, 54 joints), one group over
+- **M8** information only: a demo-world figure with an extension group (54 joints), one group over
   its non-Mixamo joints with the shipped declaration's parameters, a 1 s walk at 1.4 m/s and a 1 s stop at 60 fps: the
   particles built, the corrected surfaces and the largest stock-normal error its extension binds reach.
 

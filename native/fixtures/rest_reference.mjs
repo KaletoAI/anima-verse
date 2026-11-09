@@ -9,8 +9,8 @@
  *   donor rest   shared/models/rig/reference.fbx          (= /assets/animation-rig)
  *   targets      three tracked demo-world bakes (images stripped before parsing —
  *                node has no image decoder; geometry, skin and skeleton untouched):
- *                Minerva McGonagall (the --check figure; no stance rule fires),
- *                Johanna Falk (the LEG stance fires), Rubeus Hagrid (the FOOT stance fires)
+ *                Ada Wren (the --check figure; no stance rule fires),
+ *                Johanna Falk (the LEG stance fires), Bram Holt (the FOOT stance fires)
  *   clips        shared/models/clips/idle.fbx, shared/models/clips/walk.fbx
  *
  * Output: native/fixtures/rest_reference.json — per target model: which bones
@@ -36,9 +36,9 @@ const ROOT = path.join(__dirname, '../../')
 const BONES = ['Hips', 'Spine', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'LeftArm', 'RightArm', 'RightForeArm',
   'RightHand', 'RightHandIndex2', 'LeftUpLeg', 'LeftLeg', 'RightLeg', 'LeftFoot', 'RightToeBase']
 const MODELS = [
-  { name: 'Minerva McGonagall', file: 'worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb' },
-  { name: 'Johanna Falk', file: 'worlds/demo/characters/Johanna Falk/model3d/b852a46d5ffc.glb' },
-  { name: 'Rubeus Hagrid', file: 'worlds/demo/characters/Rubeus Hagrid/model3d/a4595b432ee3.glb' },
+  { name: 'Ada Wren', file: 'native/fixtures/assets/figures/ada_wren.glb' },
+  { name: 'Johanna Falk', file: 'native/fixtures/assets/figures/johanna_falk.glb' },
+  { name: 'Bram Holt', file: 'native/fixtures/assets/figures/bram_holt.glb' },
 ]
 const SAMPLES = [{ clip: 'idle', file: 'shared/models/clips/idle.fbx', times: [0, 5] },
                  { clip: 'walk', file: 'shared/models/clips/walk.fbx', times: [0, 0.4] }]

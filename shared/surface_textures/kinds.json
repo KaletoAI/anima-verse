@@ -114,10 +114,6 @@
     "name": "Sidewalk",
     "description": "grey concrete sidewalk paving bricks in a stretcher pattern, seen straight from above"
   },
-  "hogwarts_sandstone": {
-    "name": "Castle Sandstone",
-    "description": "Seamless warm Scottish sandstone masonry with staggered ashlar blocks, recessed dark mortar and subtle natural grain; straight-on orthographic surface, no timber, no windows, no perspective."
-  },
   "plaster_infill": {
     "name": "Lime Plaster Infill",
     "description": "whitewashed lime plaster wall, slightly uneven, seen straight on"

@@ -43,7 +43,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #               no movement, sleep or party (review 2026-09-20, DS-2).
 #               Private pack symlinks and plugins/installed/ are excluded by
 #               the root .dockerignore.
-#   worlds/   — worlds including the bundled demo world (worlds/demo/world.db)
+#   worlds/   — the bundled demo world (worlds/demo/world.db) once rebuilt; until
+#               then only worlds/.gitkeep, and WORLD=demo starts an empty world
 COPY app/ ./app/
 COPY static/ ./static/
 COPY shared/ ./shared/

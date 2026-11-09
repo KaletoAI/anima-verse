@@ -45,8 +45,8 @@ Built from `Dockerfile` (two stages, `python:3.13-slim`): the Python dependencie
 - `plugins/` — the skill packages. Without them the server boots but no character has any skill:
   no movement, no sleep, no party. The private NSFW pack symlinks and `plugins/installed/` are
   excluded,
-- `worlds/` — including the baked demo world (`worlds/demo/world.db`; the queue DB, WAL sidecars
-  and `secrets.json` are excluded).
+- `worlds/` — the baked demo world once rebuilt (`worlds/demo/world.db`; the queue DB, WAL sidecars
+  and `secrets.json` are excluded); empty since the old demo was removed on 2026-11-09.
 
 `fetch_models.sh` runs during the build (non-fatal — without build-time internet the models
 lazy-download on first use). The container listens on **8000**, published on **8100** by

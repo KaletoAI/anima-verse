@@ -66,6 +66,9 @@ RUNTIME_PREFIXES = (
     "client3d/dist/", "plugins/installed/", "node_modules/",
     # gitignored instance layer; per-character cache dirs inside a world
     "instance/", ".cache/",
+    # the default world start.sh creates; untracked since the old demo was
+    # removed on 2026-11-09, tracked again once the rebuilt demo lands
+    "worlds/demo",
 )
 # Bare file names that are not repository paths (they live inside a world).
 NOT_REPO_FILES = {"world.db", "task_queue.db", "config.json", "secrets.json",

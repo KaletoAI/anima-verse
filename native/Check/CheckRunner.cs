@@ -808,8 +808,8 @@ public static class CheckRunner
     /// <c>native/fixtures/rest_reference.json</c> (written by <c>native/fixtures/rest_reference.mjs</c> on three's
     /// loaders) proves what no vector can — that Godot's FBX/glTF importers hand the Core math the same clip values and
     /// rests as three's, and that the Godot adapter's mesh-sole sampling (<see cref="RestAdapter.SolesOf"/>) finds the
-    /// soles three's <c>restSolesOf</c> finds. Three tracked demo rigs: Minerva (= Ada; no stance rule), Johanna (leg
-    /// stance), Hagrid (torso + foot stance). Per model: corrected-bone count and stance bones; per clip/time/bone the
+    /// soles three's <c>restSolesOf</c> finds. Three fixture rigs (native/fixtures/assets/figures): Ada (no stance rule), Johanna (leg
+    /// stance), Bram (torso + foot stance). Per model: corrected-bone count and stance bones; per clip/time/bone the
     /// clip value and the corrected rotation within 0.5°; for Ada the pose read back off her skeleton.
     /// </summary>
     private static string CheckRestReference(FigureManager mgr, Figure ada, FixtureSource source)
@@ -874,11 +874,11 @@ public static class CheckRunner
             finally { root.Free(); }
         }
 
-        // End to end on Ada (Minerva): evaluate the bound clip, read the skeleton.
-        var minerva = refDoc.RootElement.GetProperty("models").EnumerateArray().First(m => m.GetProperty("name").GetString() == "Minerva McGonagall");
+        // End to end on Ada: evaluate the bound clip, read the skeleton.
+        var ada = refDoc.RootElement.GetProperty("models").EnumerateArray().First(m => m.GetProperty("name").GetString() == "Ada Wren");
         var player = ada.Player!;
         var skelA = ada.Skeleton!;
-        foreach (var sample in minerva.GetProperty("samples").EnumerateArray())
+        foreach (var sample in ada.GetProperty("samples").EnumerateArray())
         {
             var role = SampleKind(sample);
             double t = sample.GetProperty("time").GetDouble();

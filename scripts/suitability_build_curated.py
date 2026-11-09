@@ -155,8 +155,8 @@ def build():
         from app.routes.chat import _analyze_chat_image
         from app.core.config_schema import field_default
         for ident, task, image in [
-            ('vision_analysis', 'image_analysis', 'worlds/demo/props/bench-c8540c/source.png'),
-            ('vision_recognition', 'image_recognition', 'worlds/demo/props/lantern-8f652b/source.png'),
+            ('vision_analysis', 'image_analysis', 'shared/test-vectors/suitability/bench.png'),
+            ('vision_recognition', 'image_recognition', 'shared/test-vectors/suitability/lantern.png'),
         ]:
             messages = []
             def submit(**kwargs):

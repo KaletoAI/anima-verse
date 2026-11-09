@@ -92,6 +92,7 @@ PATH_ALLOW = {
     "task_queue.db": "per-world runtime DB",
     "secrets.json": "per-world, gitignored",
     "suitability_cases.json": "per-world test output, gitignored",
+    "worlds/demo/": "default world start.sh creates; empty since 2026-11-09",
 }
 
 FAILURES = []

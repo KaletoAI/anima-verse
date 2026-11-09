@@ -107,6 +107,7 @@ plugins/installed/
 # Worlds (each world is a separate storage directory)
 .config-history/
 worlds/*
+!worlds/.gitkeep
 !worlds/demo/
 
 # World-specific start scripts (only start-demo.sh is tracked)
