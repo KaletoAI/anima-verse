@@ -19,18 +19,22 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 
 [1] Recorder in place of ``expression_regen.render_character_image`` (writes an
     8x8 RGBA PNG, transparent but for one opaque pixel, to ``<stem>.png``).
-    generate_base_images("Demo") makes 4 calls, in BASE_VIEWS order:
+    generate_base_images("Demo") makes 7 calls: the 4 view renders below,
+    in BASE_VIEWS order, plus a smooth edit after front, left and right
+    (sidecar_extra "smoothed"; the pass itself is scripts/
+    smoke_base_body_smooth.py). The checks below are on the 4 view renders:
       front: occasion "tpose", image_use_case "tpose", reference_image None
              (the profile image is slotted by render_character_image's
              profile_only payload, as for every tpose render), stem
-             model_refs/tpose_<bsig>;
+             tpose_<bsig> in a staging dir INSIDE model_refs (the smooth
+             edit writes model_refs/tpose_<bsig>);
       back:  occasion "tpose_view", use case "tpose_back"
              (TPOSE_VIEW_USE_CASES), back_view True, stem tpose_back_<bsig>,
              reference_image NAMED tpose_<bsig>.png (neutral_view_reference
              keeps the file name) but NOT the front file itself: a grey
              copy, whose transparent corner pixel reads (128, 128, 128);
       left/right: use case "tpose_side", stems tpose_left_<bsig> /
-             tpose_right_<bsig>.
+             tpose_right_<bsig> (staged like the front).
     Every call: bare_prompt/extra_negative = base_prompt(view) (prompt,
     negative), NO negative_prompt (it would REPLACE the use-case negative),
     equipped {} / [], apply_state_modifiers False, size _tpose_size() =
@@ -40,7 +44,8 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     and find_ref_image(Demo, "tpose_left", bsig) the left file; the return
     value maps all 4 views to their paths; status: nothing running or failed.
     A second call without force renders nothing and returns {}.
-    view="left", force=True renders ONLY left (1 call, reference = front name).
+    view="left", force=True renders ONLY left (2 calls: left + its smooth
+    edit, the render's reference = front name).
     view="back" without force (cached) renders nothing.
 [2] Refusals: an unknown view, DemoFox (animal) and DemoBare (no profile
     image) raise ValueError without a render. DemoFail: front returns None ->
@@ -55,18 +60,21 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [4] The real render_character_image with a FAKE image service (records the
     JSON payload, writes the "generated" file into the images dir) and a
     recording postprocess_outfit_image:
+      7 payloads (4 renders + 3 smooth edits), in call order;
       front payload: prompt == base_prompt(front)[0] (bare), image_use_case
       "tpose", occasion "tpose", negative_prompt_extra == BASE_NEGATIVE, no
       "negative_prompt" key, profile_only True, no reference_image_override,
       clothed False (no fabric clause in the use-case style);
       back payload: use case "tpose_back", occasion "tpose_view",
       reference_image_override ends with "/tpose_<bsig>.png";
-      postprocess called with mesh_input=True for both (BiRefNet matte path);
-      the sidecar tpose_<bsig>.json records base_signature bsig, the bare
-      prompt, mesh_variant (a mesh-input key) and equipped_pieces {}.
+      postprocess called with mesh_input=True for all 7 (BiRefNet matte
+      path); the sidecar tpose_<bsig>.json (the smooth edit's) records
+      base_signature bsig, smoothed True, the prompt SMOOTH_PROMPT,
+      mesh_variant (a mesh-input key) and equipped_pieces {}.
       LoRAs: the fixture is live (exposed_slot_loras(Demo) names
       slot-lora-x), yet every base payload carries exactly
-      [{"name": "pose-lora", "strength": 0.6}] — tpose_loras replaces loras
+      [{"name": "pose-lora", "strength": 0.6}] (the smooth edits too) —
+      tpose_loras replaces loras
       on the mesh-input occasions, as on today's tpose render; no slot LoRA;
       no "loras_explicit" (stored LoRAs go through the library gate's
       filter, not its hard assert). A bare_prompt render WITHOUT
@@ -82,7 +90,7 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     bsig; POST .../pipeline {enabled: true} for DemoFox -> 400 and the profile
     is unchanged; for Demo -> 200 {pipeline: true}; POST .../images
     {view: "left", force: true} -> 202 {started: true} and, once the worker
-    is done, exactly one render (left); {view: "sideways"} -> 422; DemoFox
+    is done, exactly the left render and its smooth edit; {view: "sideways"} -> 422; DemoFox
     images -> 400; DemoBare images -> 409; GET .../images/front -> 200 with
     the PNG; unknown character -> 404.
 """
@@ -198,11 +206,15 @@ def main() -> int:
         try:
             print("[1] four views through the recorder")
             out = base_body.generate_base_images("Demo")
-            check("call count", len(CALLS), 4)
+            check("call count (4 renders + 3 smooth edits)", len(CALLS), 7)
+            CALLS[:] = [c for c in CALLS if not c["sidecar_extra"].get("smoothed")]
+            check("view render count", len(CALLS), 4)
             views = ["front", "back", "left", "right"]
             stems = [f"tpose_{bsig}", f"tpose_back_{bsig}", f"tpose_left_{bsig}", f"tpose_right_{bsig}"]
             check("stems", [c["stem"].name for c in CALLS], stems)
-            check("stem dir", {c["stem"].parent for c in CALLS}, {refs})
+            check("stem dir (front/left/right staged inside it)",
+                  [c["stem"].parent == refs or c["stem"].parent.parent == refs for c in CALLS], [True] * 4)
+            check("only back unstaged", [c["stem"].parent == refs for c in CALLS], [False, True, False, False])
             check("occasions", [c["occasion"] for c in CALLS], ["tpose", "tpose_view", "tpose_view", "tpose_view"])
             check("use cases", [c["image_use_case"] for c in CALLS], ["tpose", "tpose_back", "tpose_side", "tpose_side"])
             check("front reference", CALLS[0]["ref"], None)
@@ -231,7 +243,7 @@ def main() -> int:
             check("cached call result", base_body.generate_base_images("Demo"), {})
             check("cached call renders nothing", len(CALLS), 0)
             out = base_body.generate_base_images("Demo", view="left", force=True)
-            check("single view calls", [c["stem"].name for c in CALLS], [f"tpose_left_{bsig}"])
+            check("single view calls", [c["stem"].name for c in CALLS], [f"tpose_left_{bsig}"] * 2)
             check("single view reference", CALLS[0]["ref"].name, f"tpose_{bsig}.png")
             check("single view result", list(out), ["left"])
             CALLS.clear()
@@ -319,8 +331,8 @@ def main() -> int:
             del payloads[payload_count:], mattes[payload_count:]
         finally:
             service_mod.get_image_service, character_mod.postprocess_outfit_image = real_service, real_post
-        check("4 payloads", len(payloads), 4)
-        front, back = payloads[0], payloads[1]
+        check("7 payloads", len(payloads), 7)
+        front, back = payloads[0], payloads[2]
         check("front prompt bare", front["prompt"], base_body.base_prompt("Demo", "front")[0])
         check("front use case/occasion", (front["image_use_case"], front["occasion"]), ("tpose", "tpose"))
         check("front extra negative", front.get("negative_prompt_extra"), base_body.BASE_NEGATIVE)
@@ -330,16 +342,17 @@ def main() -> int:
         check("front clothed", front["clothed"], False)
         check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("tpose_back", "tpose_view"))
         check("back reference override", back["reference_image_override"].endswith(f"/tpose_{bsig}.png"), True)
-        check("matte path", mattes, [True] * 4)
+        check("matte path", mattes, [True] * 7)
         meta = json.loads((refs / f"tpose_{bsig}.json").read_text())
         check("sidecar base_signature", meta.get("base_signature"), bsig)
-        check("sidecar prompt", meta.get("prompt"), base_body.base_prompt("Demo", "front")[0])
+        check("sidecar smoothed", meta.get("smoothed"), True)
+        check("sidecar prompt", meta.get("prompt"), base_body.SMOOTH_PROMPT)
         check("sidecar mesh_variant key", "mesh_variant" in meta, True)
         check("sidecar equipped", meta.get("equipped_pieces"), {})
         check("real path result", sorted(out), sorted(views))
         from app.core.body_slots import exposed_slot_loras
         check("slot LoRA fixture live", [l["name"] for l in exposed_slot_loras("Demo")], ["slot-lora-x"])
-        check("base payload LoRAs", [p.get("loras") for p in payloads], [[POSE_LORA]] * 4)
+        check("base payload LoRAs", [p.get("loras") for p in payloads], [[POSE_LORA]] * 7)
         check("no explicit LoRA flag", any("loras_explicit" in p for p in payloads), False)
         check("plain bare_prompt carries no LoRAs", "loras" in plain, False)
 
@@ -389,7 +402,7 @@ def main() -> int:
                 while time.monotonic() < deadline and (
                         len(CALLS) < 1 or base_body.base_info("Demo")["status"]["left"]["running"]):
                     time.sleep(0.05)
-                check("worker rendered left only", [c["stem"].name for c in CALLS], [f"tpose_left_{bsig}"])
+                check("worker rendered left only", [c["stem"].name for c in CALLS], [f"tpose_left_{bsig}"] * 2)
                 check("bad view", client.post("/characters/Demo/base-body/images",
                                               json={"view": "sideways"}).status_code, 422)
                 check("animal images", client.post("/characters/DemoFox/base-body/images", json={}).status_code, 400)
