@@ -2241,6 +2241,9 @@ class ImageService:
             # undressed ones included. Anything a caller passes has to be
             # picked up here.
             "clothed": ctx.get("clothed", True),
+            # The character block of a style with a `{character}` slot (the
+            # base-body views); None = no block (config.fill_character_slot).
+            "style_character": ctx.get("style_character"),
             # The dialog's pose-check override (True/False); absent = the
             # occasion's routing switch decides (app/imagegen/pose_check.py).
             "pose_check": ctx.get("pose_check"),
@@ -2427,9 +2430,15 @@ class ImageService:
         # "clothed": the caller that BUILT the outfit text says whether any
         # fabric is on the figure — it is the only place that knows. Absent
         # (every path that never asked) keeps the style's fabric clause.
+        # "style_character": the caller's character block for the style's
+        # `{character}` slot (None = the caller sent none).
+        _style_character = input_data.get("style_character")
+        if _style_character is not None:
+            _style_character = str(_style_character)
         _ucp = _cfg_mod.get_use_case_prompts(
             _uc_name, _uc_img_model,
-            clothed=bool(input_data.get("clothed", True)))
+            clothed=bool(input_data.get("clothed", True)),
+            character=_style_character)
         prompt_style = _ucp.get("prompt_style", "")
         negative_prompt = resolve_negative_prompt(input_data, _ucp.get("prompt_negative", ""))
 
@@ -2633,7 +2642,8 @@ class ImageService:
                 enhanced_prompt = prompt_text
                 prompt_without_style = prompt_text
                 if prompt_style:
-                    enhanced_prompt = f"{prompt_style} {enhanced_prompt}"
+                    enhanced_prompt = _cfg_mod.join_style_prompt(
+                        prompt_style, enhanced_prompt, _style_character)
                 logger.info("Auto-enhance disabled (prompt enriched by the caller)")
 
                 # Canonical metadata for re-creation also on the auto_enhance=False

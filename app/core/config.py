@@ -640,6 +640,51 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
+    # The base-body views (app/core/base_body.py, occasions base_front /
+    # base_view / outfit_back_draft). Their own use cases so the whole-body
+    # T-pose path (animals, characters not on the pipeline) keeps "tpose*".
+    # Character details come FIRST (user directive 2026-11-09): the
+    # ``{character}`` slot right after the subject clause takes the caller's
+    # character block (``style_character``, filled in get_use_case_prompts),
+    # and the base prompt (pose, bald head, body text) follows the style
+    # after a comma. No feet/margin clause: the user's shortened front works
+    # better without it. Negatives as their T-pose counterparts.
+    "base_front": {
+        "keywords": {
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+    },
+    "base_back": {
+        "keywords": {
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE_BACK,
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_negative": _NEG_TPOSE_BACK,
+            "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+    },
+    "base_side": {
+        "keywords": {
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE_SIDE,
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_negative": _NEG_TPOSE_SIDE,
+            "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+    },
     # Garment edits of the base-body views (Hair tab, base-body phase 4). The
     # step prompt carries the whole instruction and the framing comes from the
     # reference view, so the style stays empty; the negative is the spike's
@@ -782,9 +827,46 @@ def image_model_to_family(image_model: str) -> str:
 #: exactly as written — an admin who edits the text keeps what they typed.
 FABRIC_CLAUSE = " and fabric"
 
+#: Where a style takes the caller's CHARACTER BLOCK (the base-body views:
+#: "sfw, no clothing, <appearance>" right after the subject clause, user
+#: directive 2026-11-09 — character details first).
+CHARACTER_SLOT = "{character}"
+
+
+def fill_character_slot(style: str, character: Optional[str]) -> str:
+    """``style`` with the character block in its ``{character}`` slot, the
+    neighbouring comma separators kept clean.
+
+    ``character=None`` (a caller without a block): a style without the slot
+    comes back unchanged, a slot is removed with its separator. A block for a
+    style WITHOUT the slot (an admin override that dropped it) opens the
+    style, so it still comes first and is never lost."""
+    if character is None:
+        if CHARACTER_SLOT not in style:
+            return style
+        character = ""
+    character = character.strip().strip(",").strip()
+    if CHARACTER_SLOT not in style:
+        return ", ".join(p for p in (character, style) if p)
+    pieces = [piece.strip().strip(",").strip() for piece in style.split(CHARACTER_SLOT)]
+    joined: List[str] = [pieces[0]]
+    for piece in pieces[1:]:
+        joined.extend((character, piece))
+    return ", ".join(p for p in joined if p)
+
+
+def join_style_prompt(style: str, prompt: str, character: Optional[str] = None) -> str:
+    """The final prompt of a caller-built render: the resolved style, then
+    the prompt. A render with a character block (``character`` not None)
+    reads as ONE comma list — the style's subject, the block, the rest of the
+    style, the prompt; every other render keeps the historic single space."""
+    if character is None:
+        return f"{style} {prompt}"
+    return ", ".join(p for p in (style.strip().rstrip(",").strip(), prompt.strip().lstrip(",").strip()) if p)
+
 
 def get_use_case_prompts(use_case: str, image_model: str = "",
-                         clothed: bool = True) -> dict:
+                         clothed: bool = True, character: Optional[str] = None) -> dict:
     """Resolves style / negative / instruction for a use case + target style.
 
     Priority per field: admin override (config) -> built-in default
@@ -796,6 +878,9 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
     THE one place every style passes through, so no caller can leak a raw
     placeholder into a prompt; the default keeps the clause for every path
     that does not know the character's state.
+
+    ``character`` fills the style's ``{character}`` slot
+    (``fill_character_slot``); None removes the slot.
 
     Profile portraits are identity references for later renders, so the
     basic rules below are added to every profile style, custom ones too:
@@ -812,6 +897,7 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
         override = get(f"image_generation.use_cases.{uc}.styles.{family}.{f}", "")
         text = (override or "").strip() or (builtin.get(f, "") or "")
         out[f] = text.replace("{fabric}", fabric)
+    out["prompt_style"] = fill_character_slot(out["prompt_style"], character)
     if uc == "profile":
         # Basic rules of an identity reference; first, so they outweigh the style.
         # Even, shadow-free face light (2026-10-15): the portrait is the

@@ -20,21 +20,24 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [1] Recorder in place of ``expression_regen.render_character_image`` (writes an
     8x8 RGBA PNG, transparent but for one opaque pixel, to ``<stem>.png``).
     generate_base_images("Demo") makes 4 calls, in BASE_VIEWS order:
-      front: occasion "base_front", image_use_case "tpose", reference_image None
+      front: occasion "base_front", image_use_case "base_front", reference_image None
              (the profile image is slotted by render_character_image's
              profile_only payload, as for every tpose render), stem
              model_refs/.handgate_<random>/attempt1/tpose_<bsig> (the hand
              gate's staging dir; the recorder's 8x8 image has no figure to
              measure, so attempt 1 passes and lands on model_refs/tpose_<bsig>);
-      back:  occasion "base_view", use case "tpose_back"
-             (TPOSE_VIEW_USE_CASES), back_view True, stem tpose_back_<bsig>,
+      back:  occasion "base_view", use case "base_back"
+             (base_body.BASE_USE_CASES — the base views' own use cases, the
+             whole-body T-pose path keeps tpose*), back_view True, stem
+             tpose_back_<bsig>,
              reference_image NAMED tpose_<bsig>.png (neutral_view_reference
              keeps the file name) but NOT the front file itself: a grey
              copy, whose transparent corner pixel reads (128, 128, 128);
-      left/right: use case "tpose_side", stems tpose_left_<bsig> /
+      left/right: use case "base_side", stems tpose_left_<bsig> /
              tpose_right_<bsig>.
     Every call: bare_prompt/extra_negative = base_prompt(view) (prompt,
-    negative), NO negative_prompt (it would REPLACE the use-case negative),
+    negative), style_character = base_character(view) (the block for the
+    style's {character} slot), NO negative_prompt (it would REPLACE the use-case negative),
     equipped {} / [], apply_state_modifiers False, size _tpose_size() =
     (1024, 1024) (no config override), sidecar_extra {"base_signature": bsig}.
     While the front renders, base_info status front.running is True.
@@ -58,10 +61,12 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     JSON payload, writes the "generated" file into the images dir) and a
     recording postprocess_outfit_image:
       front payload: prompt == base_prompt(front)[0] (bare), image_use_case
-      "tpose", occasion "base_front", negative_prompt_extra == BASE_NEGATIVE, no
+      "base_front", occasion "base_front", style_character ==
+      base_character(front), negative_prompt_extra == BASE_NEGATIVE, no
       "negative_prompt" key, profile_only True, no reference_image_override,
       clothed False (no fabric clause in the use-case style);
-      back payload: use case "tpose_back", occasion "base_view",
+      back payload: use case "base_back", occasion "base_view",
+      style_character == base_character(back),
       reference_image_override ends with "/tpose_<bsig>.png";
       postprocess called with mesh_input=True for both (BiRefNet matte path —
       base_front/base_view are mesh-input occasions like tpose/tpose_view);
@@ -74,12 +79,14 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
       no "loras_explicit" (stored LoRAs go through the library gate's
       filter, not its hard assert). A bare_prompt render WITHOUT
       character_loras (occasion tpose, like the face view) carries no
-      "loras" key — unchanged behaviour for other callers.
+      "loras" key and no "style_character" key — unchanged behaviour for
+      other callers.
 [5] Service: resolve_negative_prompt({"negative_prompt_extra": X}, UC) is
     "UC, X"; with an explicit negative N it is "N, X"; without extra it is UC.
-    _parse_input keeps "negative_prompt_extra" (the whitelist). For the real
-    tpose use case the merged negative starts with config._NEG_TPOSE and ends
-    with BASE_NEGATIVE.
+    _parse_input keeps "negative_prompt_extra" and "style_character" (the
+    whitelist; a payload without the key parses to None). For the base_front
+    use case the merged negative starts with config._NEG_TPOSE (the same
+    shipped negative as tpose) and ends with BASE_NEGATIVE.
 [6] Routes (characters router on a bare FastAPI app, real sessions):
     player GET /characters/Demo/base-body -> 403; admin -> 200 with signature
     bsig; POST .../pipeline {enabled: true} for DemoFox -> 400 and the profile
@@ -211,7 +218,8 @@ def main() -> int:
             check("view stem dir", {c["stem"].parent for c in CALLS[1:]}, {refs})
             check("staging gone", [p.name for p in refs.iterdir() if p.is_dir()], [])
             check("occasions", [c["occasion"] for c in CALLS], ["base_front", "base_view", "base_view", "base_view"])
-            check("use cases", [c["image_use_case"] for c in CALLS], ["tpose", "tpose_back", "tpose_side", "tpose_side"])
+            check("use cases", [c["image_use_case"] for c in CALLS],
+                  ["base_front", "base_back", "base_side", "base_side"])
             check("front reference", CALLS[0]["ref"], None)
             check("view reference names", [c["ref"].name for c in CALLS[1:]], [f"tpose_{bsig}.png"] * 3)
             check("view reference is a copy", any(c["ref"] == refs / f"tpose_{bsig}.png" for c in CALLS[1:]), False)
@@ -221,6 +229,8 @@ def main() -> int:
                 prompt, negative = base_body.base_prompt("Demo", view)
                 check(f"{view} bare_prompt", call["bare_prompt"], prompt)
                 check(f"{view} extra_negative", call["extra_negative"], negative)
+                check(f"{view} style_character", call.get("style_character"),
+                      base_body.base_character("Demo", view))
                 check(f"{view} no replacing negative", call.get("negative_prompt", ""), "")
                 check(f"{view} equipped", (call["equipped_pieces"], call["equipped_items"]), ({}, []))
                 check(f"{view} no state modifiers", call["apply_state_modifiers"], False)
@@ -329,13 +339,15 @@ def main() -> int:
         check("4 payloads", len(payloads), 4)
         front, back = payloads[0], payloads[1]
         check("front prompt bare", front["prompt"], base_body.base_prompt("Demo", "front")[0])
-        check("front use case/occasion", (front["image_use_case"], front["occasion"]), ("tpose", "base_front"))
+        check("front use case/occasion", (front["image_use_case"], front["occasion"]), ("base_front", "base_front"))
+        check("front style_character", front.get("style_character"), base_body.base_character("Demo", "front"))
         check("front extra negative", front.get("negative_prompt_extra"), base_body.BASE_NEGATIVE)
         check("front no replacing negative", "negative_prompt" in front, False)
         check("front profile_only", front["profile_only"], True)
         check("front no reference override", "reference_image_override" in front, False)
         check("front clothed", front["clothed"], False)
-        check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("tpose_back", "base_view"))
+        check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("base_back", "base_view"))
+        check("back style_character", back.get("style_character"), base_body.base_character("Demo", "back"))
         check("back reference override", back["reference_image_override"].endswith(f"/tpose_{bsig}.png"), True)
         check("matte path", mattes, [True] * 4)
         meta = json.loads((refs / f"tpose_{bsig}.json").read_text())
@@ -349,6 +361,7 @@ def main() -> int:
         check("base payload LoRAs", [p.get("loras") for p in payloads], [[POSE_LORA]] * 4)
         check("no explicit LoRA flag", any("loras_explicit" in p for p in payloads), False)
         check("plain bare_prompt carries no LoRAs", "loras" in plain, False)
+        check("plain bare_prompt carries no character block", "style_character" in plain, False)
 
         print("[5] service negative merge")
         from app.imagegen.service import ImageService, resolve_negative_prompt
@@ -358,7 +371,12 @@ def main() -> int:
         check("no extra", resolve_negative_prompt({}, "UC"), "UC")
         parsed = ImageService._parse_input(ImageService.__new__(ImageService), json.dumps(front))
         check("whitelist keeps extra", parsed.get("negative_prompt_extra"), base_body.BASE_NEGATIVE)
-        uc = config.get_use_case_prompts("tpose", "", clothed=False)["prompt_negative"]
+        check("whitelist keeps style_character", parsed.get("style_character"),
+              base_body.base_character("Demo", "front"))
+        check("no key parses to None",
+              ImageService._parse_input(ImageService.__new__(ImageService), json.dumps(plain)).get(
+                  "style_character", "(dropped)"), None)
+        uc = config.get_use_case_prompts("base_front", "", clothed=False)["prompt_negative"]
         merged = resolve_negative_prompt(parsed, uc)
         check("tpose negative kept", merged.startswith(config._NEG_TPOSE), True)
         check("base negative appended", merged.endswith(base_body.BASE_NEGATIVE), True)

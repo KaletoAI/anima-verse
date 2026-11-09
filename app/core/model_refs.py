@@ -115,6 +115,17 @@ TPOSE_PROMPT_DEFAULT = (
     "proportion to the body, legs clearly apart with open space visible "
     "between them, " + TPOSE_FRONT_HAIR_CLAUSE
 )
+# The base body's front pose (app/core/base_body.py; the old whole-body path
+# keeps TPOSE_PROMPT_DEFAULT). The user's shortened front (2026-11-09) drops
+# "palms facing the thighs" — the base front's hand gate re-renders a front
+# whose palms face the camera — and the hair clause: the figure is bald.
+BASE_FRONT_POSE_PROMPT = (
+    "standing upright facing the camera, A-pose, arms straight and angled "
+    "about 45 degrees down and away from the body, not touching the body, "
+    "all five fingers straight, relaxed and slightly apart, each finger "
+    "clearly separated and visible, hands in natural proportion to the body, "
+    "legs clearly apart with open space visible between them"
+)
 
 # Animals use a strict profile, not a three-quarter view, to keep the mesh
 # axis aligned. Facing LEFT makes the main image the left view for a

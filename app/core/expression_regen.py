@@ -827,7 +827,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            sidecar_extra: Optional[Dict[str, Any]] = None,
                            character_loras: bool = False,
                            postprocess: bool = True,
-                           extra_reference_images: Optional[List[Path]] = None) -> Optional[Path]:
+                           extra_reference_images: Optional[List[Path]] = None,
+                           style_character: Optional[str] = None) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -843,6 +844,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
     model_refs directory AFTER ``reference_image`` (image 2, 3, …); a routed
     backend without enough reference slots is not applicable and the
     routing moves on (``service.generate_from_input``).
+    ``style_character`` is the character block for the use-case style's
+    ``{character}`` slot (``config.fill_character_slot``; the base-body
+    views) — the final prompt then reads style, block, rest of the style,
+    prompt as one comma list. None = no block, the historic join.
     ``postprocess=False`` publishes the backend's file as delivered: no
     background removal, no side trim — a garment edit keeps the full frame
     of its source (``garment_images``), the gates compare it pixel for pixel.
@@ -1109,6 +1114,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
         # the character and slot LoRAs already shaped the base.
         payload["loras"] = list(expression_set_loras)
     payload["image_use_case"] = image_use_case
+    if style_character is not None:
+        payload["style_character"] = style_character
     # Fabric only exists in the picture when something is actually worn —
     # pieces or the free-text wardrobe, both of which land in outfit_desc.
     # An undressed character would otherwise be rendered against a style
