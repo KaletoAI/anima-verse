@@ -4122,6 +4122,18 @@
     "Top offset": "Versatz oben",
     "Upscaled": "Hochskaliert",
     "Wear hair": "Haare tragen",
-    "Width ratio": "Breitenverhältnis"
+    "Width ratio": "Breitenverhältnis",
+    "Base body pipeline": "Grundkörper-Pipeline",
+    "Base body — front (glob)": "Grundkörper — Vorderansicht (Glob)",
+    "Base body — back/side views (glob)": "Grundkörper — Rück-/Seitenansichten (Glob)",
+    "Outfit — front edit (glob)": "Outfit — Bearbeitung vorne (Glob)",
+    "Outfit — back draft (glob)": "Outfit — Entwurf der Rückansicht (Glob)",
+    "Outfit — back fitted onto the base (glob)": "Outfit — Rückansicht auf den Grundkörper angepasst (Glob)",
+    "Empty: T-pose match, then the render match, then this step's chain": "Leer: T-Pose-Muster, dann das Render-Muster, dann die Kette dieses Schritts",
+    "Empty: T-pose views match, then this step's chain": "Leer: Muster für T-Pose-Ansichten, dann die Kette dieses Schritts",
+    "Identity comes from the profile picture; an accurate (non-turbo) model is recommended.": "Die Identität kommt aus dem Profilbild; ein genaues Modell (kein Turbo) wird empfohlen.",
+    "Rendered fresh from the dressed front; only its clothing is used.": "Neu gerendert aus der angezogenen Vorderansicht; nur die Kleidung wird verwendet.",
+    "Edit of the base back view with the draft as second reference. Grainy results are caught by a noise check and re-rendered.": "Bearbeitung der Grundkörper-Rückansicht mit dem Entwurf als zweiter Referenz. Körnige Ergebnisse erkennt eine Rauschprüfung und rendert sie neu.",
+    "Back draft": "Entwurf Rückansicht"
   }
 }

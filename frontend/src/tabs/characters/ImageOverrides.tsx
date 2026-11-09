@@ -38,10 +38,11 @@ import { Field } from '@anima/player-ui'
  * `PUT /characters/{name}/outfit-imagegen`, and that route takes the WHOLE
  * record — a body carrying only `loras` would blank the match patterns.
  * The buffer hands its patch to that route unchanged, so the patch has to BE
- * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, mesh_workflow, loras, tpose_loras}`,
+ * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, mesh_workflow, loras, tpose_loras}`
+ * plus the five base-body step globs (`BASE_BODY_FIELDS`),
  * every time, with the edited value taken from the event (the state behind it
  * is one render old) and the other fields from the current render. One
- * keystroke here therefore counts as seven pending fields in "Save (n)".
+ * keystroke here therefore counts as twelve pending fields in "Save (n)".
  *
  * The "Add LoRA" choices are the one thing the SAVED values decide: the server
  * resolves them from the stored backend match, so a match still sitting in the
@@ -55,6 +56,21 @@ interface Lora {
   strength: number
 }
 
+/** Per-character globs of the base-body pipeline steps — the
+ *  `char_spec_field` of the occasions base_front … outfit_back
+ *  (app/imagegen/occasions.py). Empty = the step's fallback field
+ *  (T-pose match / T-pose views match), then the step's chain. */
+const BASE_BODY_FIELDS = [
+  'base_front_workflow',
+  'base_view_workflow',
+  'outfit_front_workflow',
+  'outfit_back_draft_workflow',
+  'outfit_back_workflow',
+] as const
+type BaseBodyField = (typeof BASE_BODY_FIELDS)[number]
+type BaseBodyPatterns = Record<BaseBodyField, string>
+const EMPTY_BASE_BODY = Object.fromEntries(BASE_BODY_FIELDS.map((f) => [f, ''])) as BaseBodyPatterns
+
 /** The override record as this panel holds it. */
 interface Override {
   pattern: string
@@ -62,11 +78,12 @@ interface Override {
   tposeViewPattern: string
   profilePattern: string
   meshPattern: string
+  baseBody: BaseBodyPatterns
   loras: Lora[]
   tposeLoras: Lora[]
 }
 
-const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', meshPattern: '', loras: [], tposeLoras: [] }
+const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', meshPattern: '', baseBody: EMPTY_BASE_BODY, loras: [], tposeLoras: [] }
 
 /** GET /characters/{name}/outfit-imagegen. */
 interface StoredOverride {
@@ -75,6 +92,11 @@ interface StoredOverride {
   tpose_workflow?: string
   tpose_view_workflow?: string
   mesh_workflow?: string
+  base_front_workflow?: string
+  base_view_workflow?: string
+  outfit_front_workflow?: string
+  outfit_back_draft_workflow?: string
+  outfit_back_workflow?: string
   loras?: Lora[]
   tpose_loras?: Lora[]
   /** The mesh occasion this character's rig selects. */
@@ -102,6 +124,7 @@ function fromServer(ovr: StoredOverride): Override {
     tposeViewPattern: ovr.tpose_view_workflow || '',
     profilePattern: ovr.profile_workflow || '',
     meshPattern: ovr.mesh_workflow || '',
+    baseBody: Object.fromEntries(BASE_BODY_FIELDS.map((f) => [f, ovr[f] || ''])) as BaseBodyPatterns,
     loras: Array.isArray(ovr.loras) ? ovr.loras : [],
     tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
   }
@@ -122,6 +145,9 @@ function withDraft(stored: Override, draft: Record<string, unknown>): Override {
     tposeViewPattern: typeof draft.tpose_view_workflow === 'string' ? draft.tpose_view_workflow : stored.tposeViewPattern,
     profilePattern: typeof draft.profile_workflow === 'string' ? draft.profile_workflow : stored.profilePattern,
     meshPattern: typeof draft.mesh_workflow === 'string' ? draft.mesh_workflow : stored.meshPattern,
+    baseBody: Object.fromEntries(BASE_BODY_FIELDS.map((f) => [
+      f, typeof draft[f] === 'string' ? (draft[f] as string) : stored.baseBody[f],
+    ])) as BaseBodyPatterns,
     loras: Array.isArray(draft.loras) ? (draft.loras as Lora[]) : stored.loras,
     tposeLoras: Array.isArray(draft.tpose_loras) ? (draft.tpose_loras as Lora[]) : stored.tposeLoras,
   }
@@ -135,8 +161,8 @@ export function ImageOverrides({
   savedSignal,
 }: {
   character: string
-  /** Remember the whole override record — see the module note on why all seven
-   *  keys travel together. */
+  /** Remember the whole override record — see the module note on why all
+   *  twelve keys travel together. */
   queueImagegen: (patch: Record<string, unknown>) => void
   /** The container's buffered record, laid over what the GET returned. */
   draft: Record<string, unknown>
@@ -152,6 +178,7 @@ export function ImageOverrides({
   const [tposeViewPattern, setTposeViewPattern] = useState('')
   const [profilePattern, setProfilePattern] = useState('')
   const [meshPattern, setMeshPattern] = useState('')
+  const [baseBodyPatterns, setBaseBodyPatterns] = useState<BaseBodyPatterns>(EMPTY_BASE_BODY)
   const [meshBackends, setMeshBackends] = useState<string[]>([])
   const [meshOccasion, setMeshOccasion] = useState('')
   const [meshWorldChain, setMeshWorldChain] = useState<string[]>([])
@@ -177,6 +204,7 @@ export function ImageOverrides({
     setTposeViewPattern(rec.tposeViewPattern)
     setProfilePattern(rec.profilePattern)
     setMeshPattern(rec.meshPattern)
+    setBaseBodyPatterns(rec.baseBody)
     setLoras(rec.loras)
     setTposeLoras(rec.tposeLoras)
   }, [])
@@ -289,11 +317,12 @@ export function ImageOverrides({
         tpose_view_workflow: (next.tposeViewPattern ?? tposeViewPattern).trim(),
         profile_workflow: (next.profilePattern ?? profilePattern).trim(),
         mesh_workflow: (next.meshPattern ?? meshPattern).trim(),
+        ...Object.fromEntries(BASE_BODY_FIELDS.map((f) => [f, (next.baseBody ?? baseBodyPatterns)[f].trim()])),
         loras: next.loras ?? loras,
         tpose_loras: next.tposeLoras ?? tposeLoras,
       })
     },
-    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, meshPattern, loras, tposeLoras],
+    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, meshPattern, baseBodyPatterns, loras, tposeLoras],
   )
 
   const matching = useMemo(() => {
@@ -479,6 +508,37 @@ export function ImageOverrides({
     return base + ' — ' + rows.map((r) => r.label + ': ' + chainText(r.chain)).join(' · ')
   }
 
+  /** A base-body step glob: on screen and in the buffer in one breath. */
+  const editBaseBody = (field: BaseBodyField, value: string) => {
+    const next = { ...baseBodyPatterns, [field]: value }
+    setBaseBodyPatterns(next)
+    queueRecord({ baseBody: next })
+  }
+  const viewsFallback = t('Empty: T-pose views match, then this step\'s chain')
+  const baseBodyRows: Array<{ field: BaseBodyField; label: string; empty: string; hint?: string }> = [
+    {
+      field: 'base_front_workflow', label: t('Base body — front (glob)'),
+      empty: t('Empty: T-pose match, then the render match, then this step\'s chain'),
+      hint: t('Identity comes from the profile picture; an accurate (non-turbo) model is recommended.'),
+    },
+    { field: 'base_view_workflow', label: t('Base body — back/side views (glob)'), empty: viewsFallback },
+    { field: 'outfit_front_workflow', label: t('Outfit — front edit (glob)'), empty: viewsFallback },
+    {
+      field: 'outfit_back_draft_workflow', label: t('Outfit — back draft (glob)'), empty: viewsFallback,
+      hint: t('Rendered fresh from the dressed front; only its clothing is used.'),
+    },
+    {
+      field: 'outfit_back_workflow', label: t('Outfit — back fitted onto the base (glob)'), empty: viewsFallback,
+      hint: t('Edit of the base back view with the draft as second reference. Grainy results are caught by a noise check and re-rendered.'),
+    },
+  ]
+  const globMatches = (glob: string) => {
+    const p = glob.trim()
+    if (!p) return []
+    const re = globToRegex(p.replace(/^backend:/i, '').trim())
+    return backends.filter((b) => re.test(b))
+  }
+
   const meshEmpty = meshWorldChain.length
     ? t('Empty: world chain') + ' (' + meshWorldChain.join(' → ') + ')'
     : t('Empty: world chain')
@@ -506,6 +566,35 @@ export function ImageOverrides({
             })}
           </div>
           {renderLoras({ title: t('T-pose LoRAs'), list: tposeLoras, edit: editTposeLoras, empty: t('Empty: use the normal LoRAs'), options: tposeLoraOptions, addValue: addTposeName, setAddValue: setAddTposeName })}
+          <div className="ga-fieldset">
+            <div className="ga-fieldset-title">{t('Base body pipeline')}</div>
+            {baseBodyRows.map((row) => {
+              const value = baseBodyPatterns[row.field]
+              const matches = globMatches(value)
+              return (
+                <Field key={row.field} label={row.label}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', minWidth: 0 }}>
+                    <input
+                      className="ga-input"
+                      value={value}
+                      placeholder="Qwen*"
+                      onChange={(e) => editBaseBody(row.field, e.target.value)}
+                    />
+                    <div className="ga-img-matches">
+                      {!value.trim() ? (
+                        <span className="ga-sched-muted">{emptyWithChain(row.empty, row.field)}</span>
+                      ) : matches.length === 0 ? (
+                        <span className="ga-img-nomatch">{t('no match')}</span>
+                      ) : (
+                        matches.map((name) => <span key={name} className="ga-img-match-chip">{name}</span>)
+                      )}
+                    </div>
+                    {row.hint ? <span className="ga-hint">{row.hint}</span> : null}
+                  </div>
+                </Field>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>

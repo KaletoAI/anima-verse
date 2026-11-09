@@ -35,6 +35,8 @@ interface RefInfo {
   /** Sidecar `model`, else `service`; absent on older renders. */
   model?: string
   backend?: string
+  /** A base-body dressed back kept although its fit checks failed. */
+  warning?: string
 }
 
 /** What the backend is doing to ONE kind right now (system-time stamps). */
@@ -66,6 +68,11 @@ interface RefsInfo {
   // `info` the stored render (null = not rendered yet). They have no own
   // status lane; they ride with `tpose`.
   views?: Record<string, { enabled: boolean; info?: RefInfo | null }>
+  /** On the base-body pipeline only the front and the back are dressed: the
+   *  views carry the back (always on, no toggle) and the face view. */
+  pipeline?: boolean
+  /** Base-body pipeline: the back draft the dressed back was fitted from. */
+  back_draft?: RefInfo | null
   auto?: { tpose?: boolean; pose?: boolean }
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
@@ -109,6 +116,8 @@ function renderFingerprint(d: RefsInfo | null | undefined, kinds: RefKind[]): st
   return JSON.stringify([
     d?.signature || '',
     d?.face_view?.created_at || '',
+    d?.back_draft?.filename || '',
+    d?.back_draft?.created_at || '',
     kinds.map((k) => [d?.[k]?.filename || '', d?.[k]?.created_at || '']),
     VIEW_ORDER.map((v) => [
       d?.views?.[v]?.info?.filename || '',
@@ -330,6 +339,10 @@ export function FieldModelRefs({
   // The backend reports the available views for this character body form.
   const hasViews = kindList.includes('tpose') && !!info.views &&
     Object.keys(info.views).length > 0
+  // On the base-body pipeline the dressed back is always rendered: only the
+  // face view keeps its toggle.
+  const toggleViews = VIEW_ORDER.filter(
+    (view) => view in (info.views || {}) && (!info.pipeline || view === 'face'))
 
   return (
     <div className="ga-form">
@@ -392,6 +405,9 @@ export function FieldModelRefs({
                             {info.face_view?.stale ? <span title={t('The profile picture changed — regenerate')}> · {t('stale')}</span> : null}
                             {info.face_view?.rendering ? <span> · {t('Generating…')}</span> : null}
                           </div> : null}
+                          {vi?.warning ? (
+                            <div className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>{vi.warning}</div>
+                          ) : null}
                           {vi ? (
                             <RefImage
                               key={`${view}-${bust}`}
@@ -432,6 +448,27 @@ export function FieldModelRefs({
                       )
                     },
                   )}
+                  {info.pipeline && info.views?.back ? (
+                    // The back's draft (rendered from the dressed front; only
+                    // its clothing is fitted onto the base back). Regenerating
+                    // the back renders draft and fit anew.
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="ga-hint">{t('Back draft')}</div>
+                      {info.back_draft ? (
+                        <RefImage
+                          key={`back-draft-${bust}`}
+                          src={`/characters/${enc}/model-refs/tpose_back_draft?v=${bust}`}
+                          height={110}
+                          radius={6}
+                          compact
+                          label={t('Back draft')}
+                          meta={info.back_draft}
+                        />
+                      ) : (
+                        <div className="ga-hint">{t('No render yet')}</div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -477,7 +514,7 @@ export function FieldModelRefs({
           </label>
         ))}
         {hasViews
-          ? VIEW_ORDER.filter((view) => view in (info.views || {})).map((view) => (
+          ? toggleViews.map((view) => (
               <label
                 key={view}
                 style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
