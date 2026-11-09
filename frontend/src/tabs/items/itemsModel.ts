@@ -19,6 +19,8 @@ export interface OutfitPieceMeta {
   covers?: string[]
   motion_damping?: number
   partially_covers?: string[]
+  // Own fitted 3D mesh on base-body characters (every wearer); never a 2D key.
+  own_mesh?: boolean
 }
 
 export interface ItemProperties {
@@ -98,6 +100,7 @@ export interface DraftItem {
   covers: string[]
   motion_damping: number
   partially_covers: string[]
+  own_mesh: boolean
   effects: string
   apply_condition: string
   condition_duration: number
@@ -234,6 +237,7 @@ export const EMPTY_DRAFT: DraftItem = {
   covers: [],
   motion_damping: 1,
   partially_covers: [],
+  own_mesh: false,
   effects: '',
   apply_condition: '',
   condition_duration: 2,
@@ -272,6 +276,7 @@ export function itemToDraft(it: Item): DraftItem {
     covers: [...(op.covers || [])],
     motion_damping: op.motion_damping ?? 1,
     partially_covers: [...(op.partially_covers || [])],
+    own_mesh: op.own_mesh === true,
     effects: effectsToText(it.effects),
     ...extractConditionFromEffects(it.effects),
     extras,
@@ -311,6 +316,7 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
       covers: d.covers,
       motion_damping: d.motion_damping,
       partially_covers: d.partially_covers,
+      own_mesh: d.own_mesh,
     }
   }
   // "Effect on consume / cast" section: consumables AND spells write

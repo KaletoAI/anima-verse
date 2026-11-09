@@ -512,6 +512,14 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         <MotionDampingInput value={draft.motion_damping}
           onCommit={value => onUpdate('motion_damping', value)} />
       </Field>}
+      {isOutfit && <Field label={t('3D mesh')}
+        hint={t('Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.')}>
+        <label className="ga-form-check" style={{ marginTop: 6 }}>
+          <input type="checkbox" checked={draft.own_mesh}
+            onChange={(e) => onUpdate('own_mesh', e.target.checked)} />
+          {t('Own 3D mesh (base-body characters)')}
+        </label>
+      </Field>}
       {isOutfit ? (
         <OutfitPieceFields
           outfitTypes={draft.outfit_types}

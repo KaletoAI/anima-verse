@@ -213,8 +213,14 @@ def steps_for(kind: str, method: str) -> Tuple[str, ...]:
 
 
 def _garment_kind(item_id: str) -> str:
+    """The garment kind of an item: ``garment.kind`` of a garment item, or
+    ``clothing`` for an own-mesh outfit piece (``garment_set``). Ownership is
+    checked by the caller (``garments._item``)."""
+    from app.core import garment_set
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
+    if garment_set.garment_kind_of(item) == garment_set.CLOTHING:
+        return garment_set.CLOTHING
     kind = str((item.get("garment") or {}).get("kind") or "")
     if item.get("category") != "garment" or kind not in GARMENT_VERSION:
         raise ValueError(f"{item_id!r} is no garment item of a known kind")

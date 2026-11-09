@@ -404,6 +404,14 @@ def _normalize_outfit_types(raw) -> List[str]:
     return normalize_outfit_types(raw)
 
 
+def _clean_own_mesh(raw) -> bool:
+    """``outfit_piece.own_mesh``: the piece becomes its own fitted garment
+    mesh on base-body characters (``app/core/garment_set.py``). Only a real
+    ``true`` counts. Never part of a 2D key (``_render_relevant_fields``,
+    outfit signature): a flip changes no 2D render."""
+    return raw is True
+
+
 def _clean_piece_lora(raw) -> Dict[str, Any]:
     """Normalize an outfit piece LoRA, at most one per piece.
 
@@ -592,6 +600,7 @@ def add_item(name: str,
             # the coherence rule can rely on them.
             "outfit_types": _normalize_outfit_types(outfit_piece.get("outfit_types")),
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
+            "own_mesh": _clean_own_mesh(outfit_piece.get("own_mesh")),
         }
     if category == "garment" and garment:
         item["garment"] = _clean_garment(garment)
@@ -668,6 +677,9 @@ def update_item(item_id: str,
     } | spell_only
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
+        # An outfit_piece update that does not name ``own_mesh`` (an older
+        # client, a partial edit) keeps the stored flag.
+        prev_own_mesh = _clean_own_mesh((item.get("outfit_piece") or {}).get("own_mesh"))
         for key, value in updates.items():
             if key in allowed or _re_module.fullmatch(r"(?:name|description)_[a-z]{2,3}(?:-[A-Za-z0-9]+)*", key):
                 item[key] = value
@@ -690,6 +702,8 @@ def update_item(item_id: str,
                 # able to smuggle a tag past the rule.
                 "outfit_types": _normalize_outfit_types(op.get("outfit_types")),
                 "lora": _clean_piece_lora(op.get("lora")),
+                "own_mesh": (_clean_own_mesh(op.get("own_mesh")) if "own_mesh" in op
+                             else prev_own_mesh),
             }
         else:
             item.pop("outfit_piece", None)

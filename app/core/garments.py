@@ -92,11 +92,19 @@ class _Refused(Exception):
 # --- Item and kind ------------------------------------------------------------
 
 def _item(character_name: str, item_id: str) -> Tuple[Dict[str, Any], str]:
-    """``(item, kind)`` of a garment item OWNED by the character; ValueError
-    for anything else."""
+    """``(item, kind)`` of a garment item of the character; ValueError for
+    anything else. A hair garment must be OWNED by the character
+    (``item.owner``); an own-mesh outfit piece (kind ``clothing``,
+    ``garment_set``) must be HELD or worn by it — the flag is on the item,
+    every wearer gets a fit of their own."""
+    from app.core import garment_set
     from app.core.garment_store import GARMENT_VERSION
     from app.models.inventory import get_item
     item = get_item(item_id) if isinstance(item_id, str) and item_id else None
+    if item and garment_set.garment_kind_of(item) == garment_set.CLOTHING:
+        if not garment_set.holds(character_name, item_id):
+            raise ValueError(f"{item_id} is not a garment of {character_name}")
+        return item, garment_set.CLOTHING
     if not item or item.get("category") != "garment":
         raise ValueError(f"{str(item_id)[:80]!r} is no garment item")
     kind = str((item.get("garment") or {}).get("kind") or "")

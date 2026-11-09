@@ -4170,6 +4170,9 @@
     "The edit chain renders the hair views and builds a mesh from them.": "Die Bearbeitungskette rendert die Haaransichten und baut daraus ein Mesh.",
     "Makes hair cards from the profile picture and fits them onto the base model.": "Erzeugt Haarkarten aus dem Profilbild und passt sie an das Basismodell an.",
     "No hair from this method yet": "Noch kein Haar aus dieser Methode",
-    "Wait for the running hair job": "Warte auf den laufenden Haar-Auftrag"
+    "Wait for the running hair job": "Warte auf den laufenden Haar-Auftrag",
+    "3D mesh": "3D-Mesh",
+    "Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.": "Figuren mit Basiskörper-Pipeline bekommen dieses Teil als eigenes, angepasstes 3D-Mesh, statt es auf den Körper zu malen. Gilt für jede Trägerin und jeden Träger; 2D-Bilder bleiben unverändert.",
+    "Own 3D mesh (base-body characters)": "Eigenes 3D-Mesh (Basiskörper-Figuren)"
   }
 }

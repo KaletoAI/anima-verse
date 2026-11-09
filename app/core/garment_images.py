@@ -71,11 +71,15 @@ def render_size(size: Tuple[int, int]) -> Tuple[int, int]:
 
 
 def _kind_module(item_id: str):
+    from app.core import garment_set
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
-    kind = str((item.get("garment") or {}).get("kind") or "")
-    if item.get("category") != "garment":
+    if garment_set.garment_kind_of(item) == garment_set.CLOTHING:
+        kind = garment_set.CLOTHING
+    elif item.get("category") != "garment":
         raise ValueError(f"{item_id!r} is no garment item")
+    else:
+        kind = str((item.get("garment") or {}).get("kind") or "")
     if kind == "hair":
         from app.core import garment_hair
         return garment_hair
