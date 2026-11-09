@@ -3,7 +3,8 @@
 docs/superpowers/plans/2026-11-09-hairdeck-hair.md, Task 4):
 garment_hair.hair_method, garment_store.steps_for / garment_hsig / the
 method-aware fsig and accepted_fit, garments' ``hairdeck`` step, its fit with
-the seed-43 retry, and the serving after a method switch.
+the seed-43 retry, the choice among the stored seeds, and the serving after a
+method switch.
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_hairdeck_chain.py
@@ -72,11 +73,13 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     Running totals (generate_hair, fit): after [4] (3, 3), after a (5, 5).
     b. extra_params {"input_steps": 33}, both fits refuse (totals (7, 7)):
     {ok False, step "fit"}, gates.attempts = [(1, 42, False), (2, 43, False)], the error
-    names both attempts; no fit file under the current fsig; the job record
-    keeps both fit_attempts; status failed.step "fit", running_step None.
-    c. A plain re-run of b: the cached seed-43 job is attempt 2, so the
-    refusal does not run HairDeck again (generate_hair count unchanged),
-    one more fit call, refused with 1 attempt (totals (7, 8)).
+    says "fit refused for every stored HairDeck seed (42, 43)"; no fit file
+    under the current fsig; the job record keeps both fit_attempts; status
+    failed.step "fit", running_step None.
+    c. A plain re-run of b: both stored seeds (42, 43) are fitted again (2
+    fit calls, both refused) and, with HAIRDECK_ATTEMPTS = 2 seeds stored,
+    HairDeck is NOT asked for a third (generate_hair unchanged): refused
+    with 2 attempts (totals (7, 9)).
 [6] Review Focus 3 — serving after a switch (no generation call anywhere
     in [6]: generate_hair and fit counts unchanged). A synthetic accepted
     edit-chain fit E = garments/H_<edit fsig>.glb (record without
@@ -97,6 +100,24 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     and E_old. purge_stale(those + E + [5a]) skips 2 (E, [5a]) and removes
     the three; the four HairDeck job folders stay; switching to edit_chain
     serves E and back serves [5a], no generation call.
+[8] Coordinator ruling 2026-11-09 — every stored seed is weighed. Back on
+    the [5a] hsig (extra_params {"input_steps": 32}): the job folder stores
+    seeds [42, 43]; the [5a] fit chose 43 (42 was refused then). The stub
+    now answers per seed: 42 -> max_push_m 0.05, 43 -> 0.08 (both pass the
+    0.12 gate). run_garment(steps "fit", force) -> ok, ran ["fit"], NO
+    generate_hair call, 2 fit calls (one per stored seed, ascending: the
+    seed-42 then the seed-43 bytes); the [5a] fit record now names seed 42
+    (inputs.seed 42, attempt 1 = 42's position, nohead_sha256 = sha of the
+    seed-42 file, max_push_m 0.05) and lists seeds [(42, True, 0.05), (43,
+    True, 0.08)]; refused_attempts []; the job record keeps seed 43 (the
+    newest run) and fitted_seeds the same two; garment_info's fit step is
+    "accepted" (freshness follows the fit's own seed file). hairdeck_panel:
+    seed 42, job_seed 43, seeds_tried 2. A tie (both 0.07) -> the lower
+    seed, 42, again 2 fit calls. Seed 43 better (42 -> 0.09, 43 -> 0.03) ->
+    43. Bound: a folder with the files of seeds 40..45 (the 4 seed-file
+    kinds each) pruned with keep_also 41 keeps 41 + the newest four (42..45)
+    and returns [40]; _stored_seeds of the [5a] folder = [42, 43] (info.json
+    / prep.png carry no seed).
 """
 import hashlib
 import importlib.util
@@ -177,7 +198,7 @@ def main() -> int:
 
         # --- stubs -------------------------------------------------------------
         HAIR_CALLS, FIT_CALLS, SCHEDULED = [], [], []
-        mode = {"notes": ["input_alpha"], "fit_ok": []}
+        mode = {"notes": ["input_alpha"], "fit_ok": [], "push": {}}
         backend = SimpleNamespace(name="HairDeck", MEDIA_TYPE="mesh", category="img2hair", instance_enabled=True,
                                   effective_cost=0, extra_params={"input_steps": 30})
 
@@ -208,7 +229,9 @@ def main() -> int:
         def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None):
             import smoke_garment_fit as fx
             FIT_CALLS.append({"nohead": nohead_glb, "proxy": proxy_glb, "colour_target": colour_target})
-            ok = mode["fit_ok"].pop(0) if mode["fit_ok"] else True
+            seed = int(bytes(nohead_glb).split(b"_seed")[1].split(b"_")[0])
+            push = mode["push"].get(seed)
+            ok = True if push is not None else (mode["fit_ok"].pop(0) if mode["fit_ok"] else True)
             body = glb_mesh.body_arrays(rigged_base_glb)
             P, F = fx.cap(0.19, np.array([0.0, 1.58, 0.0]), n_el=9, nlon=24)
             names, J, W = garment_fit.hair_weights(P, body)
@@ -216,7 +239,8 @@ def main() -> int:
                 positions=P, normals=garment_fit.vertex_normals(P, F), uvs=np.zeros((len(P), 2)),
                 indices=np.asarray(F, np.int64).reshape(-1, 3), joints=J, weights=W, joint_names=names,
                 material={"doubleSided": True}, colors=np.tile([0.3, 0.2, 0.1, 1.0], (len(P), 1)))
-            m = {"max_push_m": 0.01 if ok else 0.2, "moved_share": 0.3, "icp_resid_p95_m": 0.004}
+            m = {"max_push_m": push if push is not None else (0.01 if ok else 0.2), "moved_share": 0.3,
+                 "icp_resid_p95_m": 0.004}
             gate_ok, reasons = garment_hairdeck.gate(m)
             return garment_fit.FitResult(garment=garment, metrics=m, ok=gate_ok, reasons=reasons, report={})
 
@@ -422,18 +446,19 @@ def main() -> int:
         check("b: refused", (res.get("ok"), res.get("step")), (False, "fit"))
         check("b: attempts", [(a.get("attempt"), a.get("seed"), a.get("ok")) for a in attempts],
               [(1, 42, False), (2, 43, False)])
-        check("b: error names both", "both HairDeck attempts" in (res.get("error") or ""), True)
+        check("b: error names both", "every stored HairDeck seed (42, 43)" in (res.get("error") or ""), True)
         check("b: calls", counts(), (7, 7))
         check("b: no fit", gs.garment_path("Demo", hid, f5b, "fit").is_file(), False)
         rec = gs.read_record(gs.hairdeck_dir("Demo", hid, h5b) / "record.json")
         check("b: job record attempts", len(rec.get("fit_attempts") or []), 2)
         st = gs.status("Demo", hid)
         check("b: status", ((st["failed"] or {}).get("step"), st["running_step"]), ("fit", None))
-        mode["fit_ok"] = [False]
+        mode["fit_ok"] = [False, False]
         res = garments.run_garment("Demo", hid)
-        check("c: cached attempt 2 refuses without HairDeck",
-              (res.get("ok"), res.get("step"), len((res.get("gates") or {}).get("attempts") or []), counts()),
-              (False, "fit", 1, (7, 8)))
+        check("c: both stored seeds refuse without HairDeck",
+              (res.get("ok"), res.get("step"), [(a.get("attempt"), a.get("seed"))
+                                                for a in (res.get("gates") or {}).get("attempts") or []], counts()),
+              (False, "fit", [(1, 42), (2, 43)], (7, 9)))
 
         # --- [6] method switch ----------------------------------------------------
         print("[6] method switch serves that method's fit, no generation")
@@ -494,6 +519,48 @@ def main() -> int:
         set_profile(hair_method="hairdeck")
         check("and back to [5a]", served(), f"{hid}_{f5a}.glb")
         check("no generation in [7]", counts(), before)
+
+        # --- [8] every stored seed is weighed --------------------------------------
+        print("[8] re-fit picks the best stored seed without HairDeck")
+        backend.extra_params = {"input_steps": 32}
+        check("[5a] hsig again", (gs.garment_hsig("Demo", hid), gs.garment_fsig("Demo", hid)), (h5a, f5a))
+        folder = gs.hairdeck_dir("Demo", hid, h5a)
+        check("stored seeds", garments._stored_seeds("Demo", hid, h5a), [42, 43])
+        check("[5a] chose 43", fit_record(f5a)["inputs"].get("seed"), 43)
+        for push, want in (({42: 0.05, 43: 0.08}, 42), ({42: 0.07, 43: 0.07}, 42), ({42: 0.09, 43: 0.03}, 43)):
+            mode["push"] = push
+            before = counts()
+            n0 = len(FIT_CALLS)
+            res = garments.run_garment("Demo", hid, steps="fit", force=True)
+            check(f"{push}: ok", (res.get("ok"), res.get("ran")), (True, ["fit"]))
+            check(f"{push}: no HairDeck, one fit per seed", counts(), (before[0], before[1] + 2))
+            check(f"{push}: fitted in seed order", [c["nohead"].split(b"-")[0] for c in FIT_CALLS[n0:]],
+                  [b"hair_seed42_nohead.glb", b"hair_seed43_nohead.glb"])
+            r = fit_record(f5a)
+            check(f"{push}: fit record", (r["inputs"].get("seed"), r["inputs"].get("attempt"),
+                                          r["inputs"].get("nohead_sha256"), r["metrics"].get("max_push_m"),
+                                          [(x["seed"], x["ok"], x["max_push_m"]) for x in r.get("seeds") or []],
+                                          r.get("refused_attempts")),
+                  (want, [42, 43].index(want) + 1, sha(folder / f"hair_seed{want}_nohead.glb"), push[want],
+                   [(42, True, push[42]), (43, True, push[43])], []))
+            job = gs.read_record(folder / "record.json")
+            check(f"{push}: job record", (job.get("seed"), [x["seed"] for x in job.get("fitted_seeds") or []]),
+                  (43, [42, 43]))
+            info = garments.garment_info("Demo", hid)
+            check(f"{push}: fit fresh", (info["steps"]["fit"]["status"], info["served_fsig"]), ("accepted", f5a))
+            panel = garments.hairdeck_panel("Demo", hid)
+            check(f"{push}: panel", (panel["seed"], panel["job_seed"], panel["seeds_tried"]), (want, 43, 2))
+        mode["push"] = {}
+        bound = Path(tmp) / "prune"
+        bound.mkdir()
+        for s_ in range(40, 46):
+            for pat in ("hair_seed{s}_nohead.glb", "hair_seed{s}.glb", "chains_seed{s}.json", "cards_seed{s}.json"):
+                (bound / pat.format(s=s_)).write_bytes(b"x")
+        (bound / "info.json").write_text("{}")
+        check("prune returns", garments._prune_seeds(bound, 41), [40])
+        check("prune keeps", sorted({int(p.name.split("seed")[1].split("_")[0].split(".")[0])
+                                     for p in bound.iterdir() if "seed" in p.name}), [41, 42, 43, 44, 45])
+        check("prune leaves info.json", (bound / "info.json").is_file(), True)
 
     print()
     if FAILS:

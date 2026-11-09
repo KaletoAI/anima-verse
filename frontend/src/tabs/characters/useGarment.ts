@@ -79,7 +79,12 @@ export interface HairDeckPanel {
   /** accepted · refused (no hair found / a file missing) · missing (not run) */
   status: 'accepted' | 'refused' | 'missing'
   attempt: number | null
+  /** The seed the fit chose (else the newest HairDeck run's seed). */
   seed: number | null
+  /** The newest HairDeck run's seed. */
+  job_seed: number | null
+  /** How many seeds HairDeck has made for this hsig. */
+  seeds_tried: number
   backend: string | null
   created_at: string | null
   error: string | null

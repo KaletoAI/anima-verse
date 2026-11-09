@@ -481,6 +481,7 @@ export function FieldHair({ character, onEditAppearance }: {
           {t(HAIRDECK_STATUS[hd.status] || hd.status)}
           {hd.attempt ? ` · ${t('Attempt')} ${hd.attempt}` : ''}
           {hd.seed != null ? ` · ${t('Seed')} ${hd.seed}` : ''}
+          {hd.seed != null && hd.seeds_tried > 0 ? ` (${t('of {n} tried').replace('{n}', String(hd.seeds_tried))})` : ''}
           {hd.backend ? ` · ${hd.backend}` : ''}
           {hd.created_at ? ` · ${formatDateTime(hd.created_at, clockSettings())}` : ''}
         </span>

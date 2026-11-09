@@ -69,13 +69,15 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
 [8] Fix round 1 — a forced regenerate gives a NEW result: two POST run
     {step "hairdeck", force true} send seeds 43 and 44 (the next seed after
     the highest the job record has seen: 42 -> 43 -> 44) to generate_hair;
-    each re-fits (the job's hair changed): counts (1, 2) -> (2, 3) -> (3, 4).
+    each re-fits ONLY the new seed — a regenerate's own seed is fitted first
+    and published when it passes (ruling 2026-11-09): counts (1, 2) ->
+    (2, 3) -> (3, 4).
     The hsig stays the same (it does not depend on the seed), the job
     record says seed 44, seeds [42, 43, 44]; the fsig stays F1 and the
     served fit is the F1 fit whose record has inputs.seed 44 and
     inputs.nohead_sha256 = sha256 of the job's hair_seed44_nohead.glb (the
     stub wrote "hair_seed44_nohead.glb-call3"); garment fit "accepted",
-    hairdeck panel seed 44.
+    hairdeck panel seed 44, job_seed 44, seeds_tried 3.
 [9] Placement (user test 2026-11-09, finding 5): the panel shows
     hairdeck.placement {forward_m None, tilt_deg None, default_forward_m
     0.006 (garment_hairdeck.DEFAULT_FORWARD_M), limits {0.03, 15.0}} and the
@@ -85,10 +87,14 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     stored. {forward_m 0.004, tilt_deg "3"} -> 200 {0.004, 3.0}, profile
     hair_forward_m 0.004 / hair_tilt_deg 3.0; fsig F3 (neither F1 nor F2),
     hsig unchanged, fit "missing", stale ["placement_changed"], F1 served.
-    POST run {} -> one more fit, no HairDeck call, called with forward_m
-    0.004 / tilt_deg 3.0; the served F3 record holds inputs.placement
-    {0.004, 3.0} and placement.tilt_source "manual"; stale []. Reset {null,
-    null} -> {None, None}, both keys stored as "", fsig F1 again (accepted).
+    POST run {} -> no HairDeck call, one fit per stored seed (42, 43, 44 ->
+    3 fits, ruling 2026-11-09), the last called with forward_m 0.004 /
+    tilt_deg 3.0; the served F3 record holds inputs.placement {0.004, 3.0}
+    and placement.tilt_source "manual"; stale []. All three pass with the
+    stub's push 0.01 -> the tie goes to the lower seed: F3's inputs.seed 42,
+    panel seed 42, job_seed 44, seeds_tried 3. Reset {null, null} -> {None,
+    None}, both keys stored as "", fsig F1 again — still "accepted": the F1
+    fit (seed 44) stays fresh, its own seed file is unchanged.
 """
 import hashlib
 import json
@@ -433,6 +439,8 @@ def main() -> int:
                    (rec.get("inputs") or {}).get("nohead_sha256")),
                   (hsig_before, f1, f1, "accepted", 44, f"hair_demo_{f1}.glb", 44,
                    hashlib.sha256(b"hair_seed44_nohead.glb-call3").hexdigest()))
+            check("panel seeds tried", ((h.get("hairdeck") or {}).get("seeds_tried"),
+                                        (h.get("hairdeck") or {}).get("job_seed")), (3, 44))
 
             # --- [9] placement: forward / tilt re-fit without HairDeck --------------
             print("[9] placement re-fits from the cached job")
@@ -463,7 +471,8 @@ def main() -> int:
             r = client.post("/characters/Demo/garments/hair_demo/run", json={})
             check("run 202", r.status_code, 202)
             wait_idle()
-            check("no HairDeck call, one fit", counts(), (before[0], before[1] + 1))
+            # Every stored seed (42, 43, 44) is fitted; all pass with the same push -> the lower seed, 42.
+            check("no HairDeck call, one fit per stored seed", counts(), (before[0], before[1] + 3))
             check("fit got the placement", (FIT_CALLS[-1]["forward_m"], FIT_CALLS[-1]["tilt_deg"]), (0.004, 3.0))
             h = hair()
             g = h.get("garment") or {}
@@ -474,6 +483,9 @@ def main() -> int:
                                              (rec.get("inputs") or {}).get("placement"),
                                              (rec.get("placement") or {}).get("tilt_source")),
                   ("accepted", [], f3, {"forward_m": 0.004, "tilt_deg": 3.0}, "manual"))
+            hd = h.get("hairdeck") or {}
+            check("tie -> lower seed", ((rec.get("inputs") or {}).get("seed"), hd.get("seed"), hd.get("job_seed"),
+                                        hd.get("seeds_tried")), (42, 42, 44, 3))
             r = client.post("/characters/Demo/hair/placement", json={"forward_m": None, "tilt_deg": None})
             check("placement reset", (r.status_code, r.json()), (200, {"forward_m": None, "tilt_deg": None}))
             check("reset stored as empty", (profile().get("hair_forward_m"), profile().get("hair_tilt_deg")), ("", ""))
