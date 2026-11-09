@@ -394,9 +394,9 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # fresh T-pose render of a new outfit combination succeeds.
             "auto_generate": bool(raw.get("auto_generate")),
             "face_before_rig": bool(raw.get("face_before_rig")),
-            # The face cleanup before the face retexture (app/core/face_cleanup.py) is on by default;
-            # only an explicit False is stored.
-            "face_cleanup": raw.get("face_cleanup") is not False,
+            # The face cleanup before the face retexture (app/core/face_cleanup.py): OFF by default until its
+            # result passes the visual gate (review 2026-11-09, torn shards at the eye); only True is stored.
+            "face_cleanup": bool(raw.get("face_cleanup")),
             "face_photo": dict(raw.get("face_photo") or {}),
             "extension_rig_models": dict(raw.get("extension_rig_models") or {}),
             "extension_motion": dict(raw.get("extension_motion") or {}),
@@ -449,9 +449,9 @@ def set_model3d_options(character_name: str,
             if type(updates["face_cleanup"]) is not bool:
                 raise ValueError("face_cleanup must be a boolean")
             if updates["face_cleanup"]:
-                opts.pop("face_cleanup", None)
+                opts["face_cleanup"] = True
             else:
-                opts["face_cleanup"] = False
+                opts.pop("face_cleanup", None)
         if "extension_rig" in updates:
             from app.core.face_retexture import safe_signature
             signature = safe_signature(updates.get("signature"))

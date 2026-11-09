@@ -757,9 +757,9 @@ def measure_face(glb: bytes) -> Dict[str, Any]:
 
 
 def enabled_for(character_name: str) -> bool:
-    """The per-character switch (``model3d_opts.face_cleanup``, default on)."""
+    """The per-character switch (``model3d_opts.face_cleanup``; default OFF while the visual gate is open)."""
     from app.core.model3d import get_model3d_options
-    return bool(get_model3d_options(character_name).get("face_cleanup", True))
+    return bool(get_model3d_options(character_name).get("face_cleanup"))
 
 
 def summary(record: Dict[str, Any]) -> str:

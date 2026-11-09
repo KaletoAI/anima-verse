@@ -109,7 +109,7 @@ export function Model3DGeneration({ character }: { character: string }) {
           : t('Before the face retexture, lash flaps the mesher built from painted lashes are pressed back onto the lids and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>
         <input
           type="checkbox"
-          checked={st.options?.face_cleanup !== false}
+          checked={!!st.options?.face_cleanup}
           disabled={!!st.rig && st.rig !== 'mixamo'}
           onChange={(e) => setModelOption('face_cleanup', e.target.checked)}
         />
