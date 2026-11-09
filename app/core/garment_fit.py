@@ -23,6 +23,14 @@ bone below it); weights by inverse distance from the 8 nearest rigged body verti
 and a skirt that blends its leg weights toward Hips down to the hem. Its placement constants are FRACTIONS OF THE
 BODY HEIGHT (the spike worked in units of a 1.0-high body = 1.70 m, so at that height they are the spike's numbers);
 ``k`` is the height ratio rigged / unrigged (the whole body is the carrier; A- and T-pose share the height).
+
+The clothing transfer is SKINNED (``transfer_skinned``, 2026-11-09 sleeve fix): the rigged body IS the unrigged body
+posed by linear blend skinning (measured on the e2e base: per-bone rigid fits residual p50 0.6 mm, the whole body as
+LBS p99 9 mm, dual quaternions worse), so the garment is carried by the same motion — one rigid transform per bone
+recovered from the body correspondence, blended with the skin weights of the body under each garment vertex. The
+nearest-donor local-Kabsch transfer (``transfer``, still the hair path) tore a sleeve around the 70-degree A -> T
+rotation of the upper arm (adjacent vertices with different donors landed centimetres apart: sleeve area x1.9) and
+its 25 smoothing passes folded the tear into the puffed shoulder cap (15 % of the sleeve triangles flipped).
 """
 from __future__ import annotations
 
@@ -95,6 +103,34 @@ CLOTHING_IDW_EPS_M = 1e-4
 #: A body vertex donates weights to a garment vertex whose neighbours carry only extension bones when at least this
 #: share of its weight sits on rig-contract bones.
 CONTRACT_DONOR_MIN = 0.5
+# Skinned transfer (clothing): a bone gets its own rigid transform from its RIGID CORE — the body vertices carrying
+# at least ``BONE_CORE_WEIGHT`` of their weight on it — when that core has ``BONE_CORE_MIN`` vertices (measured on
+# the e2e base: every core fits to < 1 mm median, the upper arm's deltoid to 13.6 mm at p99); a blend-only bone (Spine,
+# Spine1, the Shoulders, Neck, Thumb1 on the mixamo rig) folds into the bone its vertices co-weight most. Core
+# vertices farther than ``BONE_CORE_OUTLIER_M`` from their first fit are UV-twin mismatches and are dropped for a
+# second fit. The garment's transfer weights are inverse-distance blends of the body weights of the
+# ``TRANSFER_IDW_K`` nearest eligible body vertices.
+BONE_CORE_WEIGHT = 0.8
+BONE_CORE_MIN = 20
+BONE_CORE_OUTLIER_M = 0.05
+TRANSFER_IDW_K = 8
+# Donor PARTS of the skinned transfer: each arm chain (folded weight on Arm/ForeArm/Hand of one side > this) against
+# the rest of the body. A garment vertex takes the weights of the part whose skin is NEAREST to it, blended by inverse
+# distance within that part only. In the A-pose the sleeve's underside hangs 1-3 cm from BOTH the inner arm and the
+# torso side; an inverse-distance blend over the 8 nearest body vertices of all parts there is a noisy mix of the two
+# (adjacent sleeve vertices with arm weight 0 and 1, 3 mm apart on a double-walled garment) and the 70-degree A -> T
+# motion tears such neighbours apart. Measured on the e2e dress (sleeve edges whose two faces fold against each
+# other, left/right): mixed blend 86/153 flipped triangles; nearest part 16/13 fold edges; a distance RAMP between
+# the parts instead (2.5 / 5 / 10 / 20 / 40 mm wide) 27/19, 31/17, 49/21, 65/36, 97/108 — intermediate weights
+# across a 70-degree joint collapse toward the pivot and the sleeve underside fans out (dual quaternions did not
+# help: 42/25 at 5 mm, 275/282 at 40 mm). So: the nearest part, no ramp.
+TRANSFER_PART_ARM_MIN = 0.5
+# Web relaxation: triangles stretched beyond this area ratio by the transfer (the fabric that bridged the closed armpit
+# of the A-pose and spans the open one in T-pose) have their vertices Laplacian-relaxed for this many passes, the
+# rest of the garment fixed, so the stretch spreads over the band instead of alternating slits and folds (renders
+# 2026-11-09: 0 passes leaves a sharp pleat under each sleeve, 10 and 25 look alike).
+STRETCH_RELAX_RATIO = 3.0
+STRETCH_RELAX_PASSES = 10
 # Skirt (spike ``SKIRT_KEEP_TOP`` / ``SKIRT_KEEP_HEM``): below crotch + ``SKIRT_ZONE_M`` a garment vertex keeps a share
 # of its leg weights — ``SKIRT_KEEP_TOP`` from the crotch up, falling linearly to ``SKIRT_KEEP_HEM`` at the hem — and
 # the rest goes to Hips. Crotch = the lowest rigged vertex within ``CROTCH_HALF_X_M`` of the centre line with Hips
@@ -606,6 +642,228 @@ def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int
     return X, report
 
 
+# --- skinned transfer (clothing) ------------------------------------------------------------------------------------------
+
+@dataclass
+class BoneTransforms:
+    """One rigid transform per skin joint, ``k * unrigged -> rigged`` (metres): ``X = R[b] @ x + t[b]``.
+
+    ``has[b]`` says the joint carries enough body weight for its own transform; ``fold[b]`` is the joint whose
+    transform a joint without one uses (itself when ``has``). ``report`` holds the body's own LBS residual.
+    """
+    R: np.ndarray                      # (nj, 3, 3)
+    t: np.ndarray                      # (nj, 3)
+    has: np.ndarray                    # (nj,) bool
+    fold: np.ndarray                   # (nj,) int
+    report: Dict[str, Any] = field(default_factory=dict)
+
+    def fold_weights(self, W: np.ndarray) -> np.ndarray:
+        """Dense weights ``(n, nj)`` with every weight moved onto a joint that has a transform."""
+        out = np.zeros_like(W)
+        for j in range(W.shape[1]):
+            out[:, self.fold[j]] += W[:, j]
+        return out
+
+    def apply(self, Xk: np.ndarray, W: np.ndarray) -> np.ndarray:
+        """Linear blend skinning of points ``Xk`` (already scaled by ``k``) with folded dense weights ``W``."""
+        out = np.zeros_like(Xk)
+        for j in np.nonzero(self.has)[0]:
+            w = W[:, j]
+            rows = np.nonzero(w)[0]
+            if len(rows):
+                out[rows] += w[rows, None] * (Xk[rows] @ self.R[j].T + self.t[j])
+        return out
+
+def _kabsch(P: np.ndarray, Q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Rigid ``Q ~ R P + t`` (least squares, det +1) -> ``(R, t)``."""
+    a, b = P.mean(0), Q.mean(0)
+    U, _, Vt = np.linalg.svd((P - a).T @ (Q - b))
+    d = np.sign(np.linalg.det(Vt.T @ U.T)) or 1.0
+    R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
+    return R, b - R @ a
+
+
+def bone_transforms(body_unrigged: BodyMesh, body_rigged: BodyMesh, corr: np.ndarray, k: float, *,
+                    core_weight: float = BONE_CORE_WEIGHT, core_min: int = BONE_CORE_MIN) -> BoneTransforms:
+    """Recover the pose change unrigged -> rigged as one rigid transform per bone.
+
+    The rigged body is the unrigged body posed by linear blend skinning with its own weights. Each bone with a
+    rigid core (``core_min`` body vertices with >= ``core_weight`` of their weight on it) gets the Kabsch fit of
+    that core, ``k * unrigged -> rigged``, refit once without vertices farther than ``BONE_CORE_OUTLIER_M`` from
+    the first fit (UV-twin mismatches). A bone without a core — a blend-only bone — folds into the bone its
+    vertices co-weight most (a joint least-squares over all bones puts arbitrary affine motion on such bones:
+    measured p99 44 mm against 9 mm for the folds). The report carries the residual of the whole body skinned by
+    the result (p50 / p99, metres) and the folds.
+    """
+    Pb, Pr = body_unrigged.positions, body_rigged.positions
+    W = dense_weights(body_rigged)[corr]
+    W = W / np.maximum(W.sum(1, keepdims=True), 1e-12)
+    nj = W.shape[1]
+    A = Pb * float(k)
+    B = Pr[corr]
+    R = np.tile(np.eye(3), (nj, 1, 1))
+    t = np.zeros((nj, 3))
+    has = np.zeros(nj, bool)
+    for j in range(nj):
+        core = np.nonzero(W[:, j] >= core_weight)[0]
+        if len(core) < core_min:
+            continue
+        R[j], t[j] = _kabsch(A[core], B[core])
+        keep = np.linalg.norm(A[core] @ R[j].T + t[j] - B[core], axis=1) <= BONE_CORE_OUTLIER_M
+        if keep.sum() >= max(core_min, 4) and not keep.all():
+            R[j], t[j] = _kabsch(A[core[keep]], B[core[keep]])
+        has[j] = True
+    if not has.any():
+        raise ValueError("No bone of the rigged body has a rigid core")
+    total = W.sum(0)
+    fold = np.arange(nj)
+    for j in np.nonzero(~has)[0]:
+        rows = W[:, j] > 0
+        co = W[rows].sum(0) if rows.any() else np.zeros(nj)
+        co[~has] = -1.0
+        fold[j] = int(co.argmax()) if co.max() > 0 else int(np.where(has, total, -1.0).argmax())
+    out = BoneTransforms(R=R, t=t, has=has, fold=fold)
+    res = np.linalg.norm(out.apply(A, out.fold_weights(W)) - B, axis=1)
+    out.report = {
+        "bones": int(has.sum()),
+        "folded": {body_rigged.joint_names[j]: body_rigged.joint_names[fold[j]] for j in np.nonzero(~has)[0]
+                   if total[j] > 0},
+        "body_lbs_res_p50_m": float(np.median(res)),
+        "body_lbs_res_p99_m": float(np.percentile(res, 99)),
+    }
+    return out
+
+
+def relax_stretched(X: np.ndarray, X0: np.ndarray, faces, adjacency, *, ratio: float = STRETCH_RELAX_RATIO,
+                    passes: int = STRETCH_RELAX_PASSES) -> int:
+    """Laplacian-relax (in place) the vertices of triangles whose area grew beyond ``ratio`` times their area in
+    ``X0``, every other vertex fixed -> the number of relaxed vertices."""
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    if passes <= 0 or len(F) == 0:
+        return 0
+    a0, a1 = triangle_areas(X0, F), triangle_areas(X, F)
+    stretched = a1 > ratio * np.maximum(a0, 1e-12)
+    free = np.zeros(len(X), bool)
+    free[F[stretched].ravel()] = True
+    if not free.any():
+        return 0
+    A, deg = adjacency
+    for _ in range(passes):
+        mean = (A @ X) / deg
+        X[free] = 0.5 * X[free] + 0.5 * mean[free]
+    return int(free.sum())
+
+
+def _donor_parts(Wb: np.ndarray, joint_names) -> np.ndarray:
+    """Part per body vertex from its (folded) weights: 0 = the rest of the body, 1 = the left arm chain, 2 = the
+    right (Arm / ForeArm / Hand bones of that side carry more than ``TRANSFER_PART_ARM_MIN``)."""
+    from app.core.rig_contract import norm_bone_name
+    parts = np.zeros(len(Wb), np.int64)
+    for part, side in ((1, "left"), (2, "right")):
+        cols = [i for i, n in enumerate(joint_names)
+                if norm_bone_name(n).startswith(side) and any(t in norm_bone_name(n) for t in ("arm", "hand"))]
+        if cols:
+            parts[Wb[:, cols].sum(1) > TRANSFER_PART_ARM_MIN] = part
+    return parts
+
+
+def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: float, split_y: float,
+                     idw_k: int = TRANSFER_IDW_K, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
+                     margin_m: float = SDF_MARGIN_M,
+                     rigged_iterations: int = RIGGED_ITERATIONS) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
+    skinning -> ``(X, report)``.
+
+    1. ``bone_transforms``: one rigid transform per bone, ``k * unrigged -> rigged``.
+    2. Each garment vertex takes the inverse-distance blend (``idw_k`` nearest, ``w = 1 / max(d, 1e-4 / k)``) of the
+       body weights of the ELIGIBLE unrigged body vertices around it — the same rule as ``transfer``: at or above
+       ``split_y`` only forearm/hand donors are excluded (a sleeve rides the upper arm through the A -> T motion),
+       below it every arm/shoulder bone (a skirt next to a hanging hand stays on the hips). The blend is taken within
+       ONE PART (``_donor_parts``: each arm chain, the rest) — the part whose skin is nearest to the garment vertex —
+       so a sleeve hanging next to the torso is a sleeve and not a noisy mix of arm and torso.
+    3. Linear blend skinning of ``k * Q`` with those weights (the body itself is skinned that way). A vertex far
+       from the skin keeps its distance to the bone it rides (a rigid motion), the blend zone of a joint deforms like
+       the skin under it — no tear between neighbours with different donors, nothing to smooth over. The fabric
+       that bridged the closed armpit of the A-pose spans the open one in T-pose; ``relax_stretched`` spreads that
+       stretch over its band.
+    4. The clearance pass on the rigged body (SDF in metres, ``rigged_iterations`` iterations, smoothed in the
+       first ``RIGGED_SMOOTH_UNTIL``), as in ``transfer``.
+    """
+    from scipy.spatial import cKDTree
+    from app.core.rig_contract import norm_bone_name
+    Q = np.asarray(Q, np.float64)
+    Pb, Pr = body_unrigged.positions, body_rigged.positions
+    adjacency = _adjacency(faces, len(Q))
+    corr, uv_dist = uv_correspondence(body_unrigged, body_rigged)
+    bones = bone_transforms(body_unrigged, body_rigged, corr, k)
+    Wb = bones.fold_weights(dense_weights(body_rigged)[corr])
+    Wb /= np.maximum(Wb.sum(1, keepdims=True), 1e-12)
+
+    def eligible(tokens) -> np.ndarray:
+        cols = [i for i, n in enumerate(body_rigged.joint_names) if any(t in norm_bone_name(n) for t in tokens)]
+        ok = Wb[:, cols].sum(1) < 0.2 if cols else np.ones(len(Pb), bool)
+        candidates = np.nonzero(ok)[0]
+        if len(candidates) == 0:
+            raise ValueError("No body vertex is eligible for the garment transfer")
+        return candidates
+
+    parts = _donor_parts(Wb, body_rigged.joint_names)
+
+    def blend(candidates, rows) -> np.ndarray:
+        """Inverse-distance weights of the garment rows over the ``candidates`` of their nearest part."""
+        best_d = np.full(len(rows), np.inf)
+        out = np.zeros((len(rows), Wb.shape[1]))
+        found = False
+        for part in range(3):
+            cand = candidates[parts[candidates] == part]
+            if len(cand) == 0:
+                continue
+            found = True
+            kk = min(idw_k, len(cand))
+            dist, nn = cKDTree(Pb[cand]).query(Q[rows], k=kk)
+            dist, nn = dist.reshape(len(rows), -1), nn.reshape(len(rows), -1)
+            w = 1.0 / np.maximum(dist, CLOTHING_IDW_EPS_M / k)
+            w /= w.sum(1, keepdims=True)
+            nearer = dist[:, 0] < best_d
+            out[nearer] = np.einsum("nk,nkj->nj", w[nearer], Wb[cand[nn[nearer]]])
+            best_d[nearer] = dist[nearer, 0]
+        if not found:
+            raise ValueError("No body vertex is eligible for the garment transfer")
+        return out
+    upper = Q[:, 1] >= split_y
+    Wg = np.zeros((len(Q), Wb.shape[1]))
+    if (~upper).any():
+        Wg[~upper] = blend(eligible(_ARM_TOKENS), np.nonzero(~upper)[0])
+    if upper.any():
+        Wg[upper] = blend(eligible(_LOWER_ARM_TOKENS), np.nonzero(upper)[0])
+    X = bones.apply(Q * float(k), Wg)
+    relaxed = relax_stretched(X, Q * float(k), faces, adjacency)
+
+    lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
+    sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
+    Xd = np.zeros_like(X)
+    for it in range(rigged_iterations):
+        Y = X + Xd
+        Xd = Xd + np.clip(clear_m - sdf.sample(Y), 0, None)[:, None] * _unit(sdf.grad(Y))
+        if it < RIGGED_SMOOTH_UNTIL:
+            Xd = _smooth(Xd, adjacency, SMOOTH_PASSES)
+    X = X + Xd
+    d = sdf.sample(X)
+    arm_cols = [i for i, n in enumerate(body_rigged.joint_names) if "arm" in norm_bone_name(n)]
+    report = {
+        "method": "skinned",
+        "scale_k": float(k),
+        "uv_dist_p99": float(np.percentile(uv_dist, 99)),
+        **bones.report,
+        "sleeve_share": float((Wg[:, arm_cols].sum(1) > 0.5).mean()) if arm_cols and len(Wg) else 0.0,
+        "relaxed_vertices": int(relaxed),
+        "rigged_push_max_m": float(np.linalg.norm(Xd, axis=1).max()) if len(Xd) else 0.0,
+        "rigged_clearance_p1_m": float(np.percentile(d, 1)),
+        "rigged_inside_share": float((d < 0).mean()),
+    }
+    return X, report
+
+
 # --- weights ---------------------------------------------------------------------------------------------------------------
 
 def chin_height(body_rigged: BodyMesh) -> float:
@@ -1015,9 +1273,10 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
     ``k`` = rigged height / unrigged height. Placement by the shared framing, depth by the torso band
     (``align_band_depth``), push-out to ``CLEAR_M`` without the crown spread (6 smoothing passes in the first 6 of 8
-    iterations), the transfer with the waist at the garment top minus ``CLOTHING_WAIST_DROP`` of the body height
-    (sleeves ride the arms above it), ``clothing_weights`` (skirt when ``is_skirt``), the gate ``CLOTHING_GATES``.
-    The output joints are the contract bones the weights use, in skin order.
+    iterations), the skinned transfer (``transfer_skinned``) with the waist at the garment top minus
+    ``CLOTHING_WAIST_DROP`` of the body height (sleeves ride the arms above it), ``clothing_weights`` (skirt when
+    ``is_skirt``), the gate ``CLOTHING_GATES``. The output joints are the contract bones the weights use, in skin
+    order.
     """
     body_mask, garment_mask = _mask(masks["body"]), _mask(masks["garment"])
     if body_mask.shape != garment_mask.shape:
@@ -1040,7 +1299,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
     Qp, disp = push_out(Q, Fk, sdf, clear=CLEAR_M / k)
     split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
-    X, transfer_report = transfer(Qp, body_u, body_r, faces=Fk, split_y=split_y)
+    X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y)
     skirt = is_skirt(X, body_r, slots)
     J, W = clothing_weights(X, body_r, skirt=skirt)
     used = np.unique(J[W > 0])

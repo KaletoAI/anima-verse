@@ -32,12 +32,13 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
         y 0.47 (the hem)                        -> keep 0     -> Hips 1
     The mirrored point (-0.17, 0.66, 0) -> RightUpLeg 0.25, Hips 0.75. skirt=False: y 0.87 -> LeftUpLeg 1.
 [2] Sleeves. A point 1 cm above the left upper arm (0.28, 1.39, 0) -> LeftArm 1; above the forearm
-    (0.57, 1.385, 0) -> LeftForeArm 1. ``transfer`` with ``split_y`` below the sleeve (only forearm/hand excluded):
-    a sleeve tube r 0.06 m around the A-pose upper arm (40..75 % of its length, 2 cm clear of it) lands on the T-pose
-    arm: every vertex within 5 mm of the same tube around the rigged arm, weights LeftArm 1. (From 40 %: at 30 % the
-    ring's inner side, centre (0.207, 1.283) - 0.06 * (0.707, 0.707) = (0.165, 1.241), is 0.015 from the torso, nearer
-    than the arm, and rides the torso — the armpit; at 40 % it is 0.034 away.) With the hair rule
-    (``split_y=None``: every arm bone excluded) it rides the torso instead and misses by > 3 cm.
+    (0.57, 1.385, 0) -> LeftForeArm 1. ``transfer_skinned`` (the clothing path) and ``transfer`` (the hair path) with
+    ``split_y`` below the sleeve (only forearm/hand excluded): a sleeve tube r 0.06 m around the A-pose upper arm
+    (40..75 % of its length, 2 cm clear of it) lands on the T-pose arm: every vertex within 5 mm of the same tube
+    around the rigged arm, weights LeftArm 1. (From 40 %: at 30 % the ring's inner side, centre (0.207, 1.283) - 0.06 *
+    (0.707, 0.707) = (0.165, 1.241), is 0.015 from the torso, nearer than the arm, and rides the torso — the armpit;
+    at 40 % it is 0.034 away.) With the hair rule (``split_y=None``: every arm bone excluded) ``transfer`` rides the
+    torso instead and misses by > 3 cm.
 [3] No extension bone. In front of the LeftBreast-only patch (0.05, 1.30, 0.16): all 8 nearest body vertices carry
     only the extension bone -> the weights come from the nearest vertices with >= 0.5 contract weight -> Spine2 1.
     In front of the right patch (-0.05, 1.30, 0.16): RightBreast 0.6 + Spine2 0.4 restricted to Spine2 0.4,
@@ -56,6 +57,30 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
     Slots ["top"] -> no skirt. Two trouser tubes (r 0.075 around each leg: nothing within 0.02 of the centre
     line) -> no skirt even with slot "bottom". Masks of different sizes are refused.
 [6] Mesh step: ``garment_mesh.target_tris`` = 25000 for hair (unchanged ``TARGET_TRIS``), 60000 for clothing.
+[7] Shoulder blend (the sleeve fix of 2026-11-09, ``transfer_skinned`` / ``bone_transforms``). Own fixture: a torso
+    tube r 0.10 around x = -0.16 (y 1.00..1.60, Spine2 1) and a left upper arm r 0.04 along +x from (0, 1.30, 0) to
+    (0.30, 1.30, 0), rings every 1 cm, whose skin weight is a BLEND over the first 6 cm: LeftArm w = clip(x / 0.06,
+    0, 1), the rest Spine2 — the real deltoid in miniature. The unrigged body is that body posed by linear blend
+    skinning (arm turned 45 degrees down about the shoulder (0, 1.30, 0) with those weights), minus (0, 0.05, 0),
+    over 1.7; both heights are the torso's 0.60 -> k = 1.700. The sleeve is a tube r 0.06 around the T-pose arm
+    from x 0.04 to 0.24 (rings 1 cm, 48 around), posed into the A-pose source with the skin weight of its own x.
+    By hand: ``bone_transforms`` fits LeftArm from the rings x >= 0.05 (w >= 0.8, exactly rotated) and Spine2 from
+    the torso plus the rings x <= 0.01 (Spine2 >= 0.8) -> both exact up to the 32 vertices of ring x = 0.01, which
+    moved 0.167 of the arm motion (0.167 x 2 sin(22.5 deg) x 0.041 = 5.2 mm) and are the body's re-skinning
+    residual at p99 (< 6 mm; p50 < 1 mm); the donor part of every sleeve vertex is the arm (its skin 2 cm away, the torso >= 2.6 cm);
+    its transfer weight is an inverse-distance mean over arm rings within +-1 cm of its x, i.e. w(x) +- 0.01 / 0.06
+    = +- 0.167, and w is 1 for x >= 0.10, so
+      - the RIGID part (design x >= 0.12) lands exactly: every vertex within 1 mm of its design, radius about the
+        arm axis 0.060 +- 0.001;
+      - the BLEND part (x < 0.12) is off by at most 0.167 x |rot - id| <= 0.167 x 2 sin(22.5 deg) x 0.117 (the
+        farthest blend vertex from the pivot) = 15 mm;
+      - no edge of the sleeve has its two faces fold against each other (the weights are monotone along the arm).
+    The nearest-donor transfer of 0b532d33 (``transfer``, still the hair path) on the same fixture is off by
+    16.4 mm in the blend part (its 25 smoothing passes of the position delta pull the first rings up: the x = 0.04
+    ring centre rises 5.0 mm, the skinned one 1.7 mm) — the smoke demonstrates that it misses the 15 mm bound.
+    Real numbers (``~/claude-out/sleeves/report.md``): on the e2e dress the old transfer left 591 of 3975 left-sleeve
+    triangles flipped against the A-pose mesh and the cap 32 mm above the skin (A-pose 21 mm); skinned: cap max
+    20.5 mm, 16 fold edges of 784, all in the armpit band.
 """
 import math
 import sys
@@ -227,9 +252,12 @@ def test_sleeves(unrig, rig):
     check(abs(weight_of(D, names, 1, "LeftForeArm") - 1) < 1e-3, "[2] point above the forearm -> LeftForeArm 1")
     P, F = sleeve()
     Q = (a_pose(P, 1) - T) / 1.7
-    X, report = gf.transfer(Q, unrig, rig, faces=F, split_y=Q[:, 1].min() - 1.0)
+    X, report = gf.transfer_skinned(Q, unrig, rig, faces=F, k=1.7, split_y=Q[:, 1].min() - 1.0)
     err = np.abs(X - P).max()
-    check(err <= 0.005, f"[2] sleeve follows the arm A -> T within 5 mm (max err {err:.4f}; {report})")
+    check(err <= 0.005, f"[2] skinned: sleeve follows the arm A -> T within 5 mm (max err {err:.4f}; {report})")
+    Xt, report_t = gf.transfer(Q, unrig, rig, faces=F, split_y=Q[:, 1].min() - 1.0)
+    err_t = np.abs(Xt - P).max()
+    check(err_t <= 0.005, f"[2] hair-path transfer: sleeve within 5 mm too (max err {err_t:.4f})")
     Ds = dense(*gf.clothing_weights(X, rig, skirt=False), names)
     check(np.all(Ds[:, names.index("mixamorig:LeftArm")] > 0.999), "[2] every sleeve vertex weighted LeftArm 1")
     Xh, _ = gf.transfer(Q, unrig, rig, faces=F)
@@ -339,6 +367,92 @@ def test_fit_clothing(unrig, rig):
         check(True, "[5] masks of different sizes refused (no shared framing)")
 
 
+# --- [7] shoulder blend --------------------------------------------------------------------------------------------
+
+BLEND_PIVOT = np.array([0.0, 1.30, 0.0])
+BLEND_M = 0.06
+
+
+def _turn45(P):
+    th = -math.pi / 4
+    c, s = math.cos(th), math.sin(th)
+    d = P - BLEND_PIVOT
+    return BLEND_PIVOT + np.stack([d[:, 0] * c - d[:, 1] * s, d[:, 0] * s + d[:, 1] * c, d[:, 2]], 1)
+
+
+def _pose(P, w):
+    """Linear blend skinning of ``P`` between the turned arm (weight ``w``) and rest, into the unrigged frame."""
+    return (w[:, None] * _turn45(P) + (1 - w)[:, None] * P - T) / 1.7
+
+
+def shoulder_bodies():
+    from app.core.glb_mesh import BodyMesh
+    Pt, Ft = tube((-0.16, 1.00, 0), (-0.16, 1.60, 0), 0.10, nlon=64)
+    Pa, Fa = tube((0.0, 1.30, 0), (0.30, 1.30, 0), 0.04, nlon=32)
+    P = np.concatenate([Pt, Pa])
+    F = np.concatenate([Ft, Fa + len(Pt)])
+    w = np.concatenate([np.zeros(len(Pt)), np.clip(Pa[:, 0] / BLEND_M, 0, 1)])
+    names = ["mixamorig:Spine2", "mixamorig:LeftArm"]
+    Jn = np.zeros((len(P), 4), np.int64)
+    Wn = np.zeros((len(P), 4))
+    Jn[:, 0], Wn[:, 0] = 1, w
+    Jn[:, 1], Wn[:, 1] = 0, 1 - w
+    n = len(P)
+    uv = np.stack([(np.arange(n) + 0.5) / n, np.full(n, 0.5)], 1)
+    rig = BodyMesh(positions=P, faces=F, uvs=uv, joints=Jn, weights=Wn, joint_names=names)
+    unrig = BodyMesh(positions=_pose(P, w), faces=F, uvs=uv, joints=np.zeros((n, 4), np.int64),
+                     weights=np.zeros((n, 4)), joint_names=[])
+    return unrig, rig
+
+
+def fold_edges(F, P0, P1):
+    """Edges whose two faces agree in orientation in ``P0`` but not in ``P1`` (or the reverse)."""
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    E.sort(1)
+    keys = E[:, 0] * (E.max() + 1) + E[:, 1]
+    order = np.argsort(keys, kind="stable")
+    ks = keys[order]
+    same = ks[1:] == ks[:-1]
+    f = np.repeat(np.arange(len(F)), 3)[order]
+    a, b = f[:-1][same], f[1:][same]
+
+    def nrm(P):
+        N = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+        return N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-14)
+    N0, N1 = nrm(P0), nrm(P1)
+    return int((((N0[a] * N0[b]).sum(1) > 0) != ((N1[a] * N1[b]).sum(1) > 0)).sum())
+
+
+def test_shoulder_blend():
+    from app.core import garment_fit as gf
+    unrig, rig = shoulder_bodies()
+    check(abs(np.ptp(rig.positions[:, 1]) / np.ptp(unrig.positions[:, 1]) - 1.7) < 1e-9, "[7] fixture k = 1.700")
+    P, F = tube((0.04, 1.30, 0), (0.24, 1.30, 0), 0.06, nlon=48, caps=False)
+    Q = _pose(P, np.clip(P[:, 0] / BLEND_M, 0, 1))
+    X, report = gf.transfer_skinned(Q, unrig, rig, faces=F, k=1.7, split_y=Q[:, 1].min() - 1.0)
+    err = np.linalg.norm(X - P, axis=1)
+    rigid = P[:, 0] >= 0.12
+    radius = np.linalg.norm((X - BLEND_PIVOT)[:, 1:], axis=1)
+    check(err[rigid].max() <= 0.001, f"[7] rigid part of the sleeve lands exactly (max err {err[rigid].max()*1000:.2f} mm)")
+    check(abs(radius[rigid] - 0.06).max() <= 0.001,
+          f"[7] rigid part radius 0.060 +- 0.001 (got {radius[rigid].min():.4f}..{radius[rigid].max():.4f})")
+    check(err[~rigid].max() <= 0.015, f"[7] blend part within the 15 mm bound (max err {err[~rigid].max()*1000:.1f} mm)")
+    folds = fold_edges(F, Q, X)
+    check(folds == 0, f"[7] no folded sleeve edge ({folds})")
+    check(report.get("method") == "skinned" and report.get("bones") == 2 and report.get("body_lbs_res_p50_m", 1) < 0.001
+          and report.get("body_lbs_res_p99_m", 1) < 0.006,
+          f"[7] both bones fitted, the body re-skinned to p50 < 1 mm, p99 < 6 mm "
+          f"({ {k: round(report.get(k, -1), 5) for k in ('bones', 'body_lbs_res_p50_m', 'body_lbs_res_p99_m')} })")
+    first = np.abs(P[:, 0] - 0.04) < 1e-6
+    rise = X[first, 1].mean() - 1.30
+    Xo, _ = gf.transfer(Q, unrig, rig, faces=F, split_y=Q[:, 1].min() - 1.0)
+    err_o = np.linalg.norm(Xo - P, axis=1)
+    rise_o = Xo[first, 1].mean() - 1.30
+    check(err_o[~rigid].max() > 0.015,
+          f"[7] the 0b532d33 transfer misses the bound on the same fixture (max err {err_o[~rigid].max()*1000:.1f} mm, "
+          f"first ring rises {rise_o*1000:.1f} mm vs {rise*1000:.1f} mm skinned)")
+
+
 # --- [6] mesh step target ----------------------------------------------------------------------------------------
 
 def test_mesh_target():
@@ -355,6 +469,7 @@ def main():
     test_gates()
     test_fit_clothing(unrig, rig)
     test_mesh_target()
+    test_shoulder_blend()
     if FAILS:
         print(f"\n{len(FAILS)} FAILED")
         sys.exit(1)
