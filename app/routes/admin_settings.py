@@ -1856,10 +1856,13 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
     last ten minutes. Saved results live in the model table, not here."""
     from app.core.model_suitability import list_jobs
     from app.core.model_capabilities import current_suitability
+    from app.core.model_capabilities import current_rp_result
     jobs = []
     for j in list_jobs():
         s = j.get("summary") or {}
-        if j.get("status") == "done" and not current_suitability(s):
+        kind = j.get("kind", "tools")
+        current = current_suitability(s) if kind == "tools" else current_rp_result(s)
+        if j.get("status") == "done" and not current:
             continue
         ago = j.get("finished_ago_s")
         if j.get("status") not in ("queued", "running", "interrupted") and (ago is None or ago > 600):
@@ -1876,10 +1879,116 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "settings": j.get("settings", {}),
             "concurrency": j.get("concurrency"),
             "finished_ago_s": ago,
-            "score": s.get("score", ""),
+            "score": s.get("score", "") if kind == "tools" else s.get("overall"),
             "verdict": s.get("verdict") or "",
+            "kind": kind,
         })
     return {"jobs": jobs}
+
+
+# ── Roleplay test (same queue, kind "rp" / "rp_judge") ─────────────────
+
+@router.get("/settings/llm-rp-test/cases")
+def llm_rp_test_cases(user=Depends(require_admin)):
+    """The RP test cases: count, label, focus, runs and turns."""
+    from app.core.rp_test import cases_info
+    return cases_info()
+
+
+@router.post("/settings/llm-rp-test/start")
+async def llm_rp_test_start(request: Request, user=Depends(require_admin)):
+    """Queue an RP test (kind "rp") or a re-judge of the stored answers
+    (kind "rp_judge"); poll .../llm-rp-test/status for the report."""
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "body must be valid JSON") from exc
+    return await asyncio.to_thread(_llm_rp_test_start_sync, body)
+
+
+def _llm_rp_test_start_sync(body: Any):
+    from app.core.model_suitability import enqueue_test
+    if not isinstance(body, dict) or body.keys() - {"provider", "model", "settings", "concurrency", "rejudge"}:
+        raise HTTPException(400, "body must be an object with known keys only")
+    provider, model = body.get("provider"), body.get("model")
+    if not isinstance(provider, str) or not provider.strip() or not isinstance(model, str) or not model.strip():
+        raise HTTPException(400, "provider and model required")
+    concurrency = body.get("concurrency", 3)
+    if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
+        raise HTTPException(400, "concurrency must be a positive integer")
+    model_full = f"{provider.strip()}::{model.strip()}"
+    kind = "rp_judge" if body.get("rejudge") is True else "rp"
+    settings = body.get("settings")
+    if isinstance(settings, dict) and isinstance(settings.get("judge"), dict):
+        judge = settings["judge"]
+        if f"{judge.get('provider', '')}::{judge.get('model', '')}".lower() == model_full.lower():
+            raise HTTPException(400, "The judge must be a different model than the one under test")
+    from app.core.model_suitability import list_jobs
+    # A test and a re-judge of the same model wait in DIFFERENT provider queues;
+    # running both would let the older answers overwrite the newer ones.
+    if any(j.get("kind") in ("rp", "rp_judge") and j["model"].lower() == model_full.lower()
+           and j.get("status") in ("queued", "running") for j in list_jobs()):
+        raise HTTPException(409, "A roleplay test or re-judge of this model is already queued or running")
+    try:
+        return enqueue_test(model_full, settings=settings, concurrency=concurrency, kind=kind)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/settings/llm-rp-test/status")
+def llm_rp_test_status(job_id: str = "", prompts: int = 1, user=Depends(require_admin)):
+    """A queued/running/finished RP job, or a saved report ("saved:<model>")
+    with its raw answers from the local sidecar and the earlier runs.
+    ``prompts=0`` leaves out the case prompts (the page polls; it keeps them).
+    The JSON is encoded here, in the worker thread, not on the event loop."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(_llm_rp_test_status(job_id, bool(prompts)))
+
+
+def _llm_rp_test_status(job_id: str, prompts: bool) -> Dict[str, Any]:
+    from copy import deepcopy
+    from app.core.model_capabilities import get_all_rp_results, get_rp_history, get_rp_outputs
+    from app.core.model_suitability import get_job
+    if not job_id:
+        raise HTTPException(400, "job_id required")
+    if job_id.startswith("saved:"):
+        model = job_id[6:]
+        record = get_all_rp_results().get(model.lower())
+        if not record:
+            raise HTTPException(404, "No RP result for this model")
+        job = {"job_id": job_id, "model": record.get("model", model), "status": "done", "kind": "rp",
+               "summary": deepcopy(record)}
+    else:
+        job = get_job(job_id)
+        if job is None:
+            raise HTTPException(404, "Test job not found")
+    summary = job.get("summary") or {}
+    if job.get("status") == "done" and summary.get("diagnostic_run_id"):
+        raw = get_rp_outputs(job["model"], summary["diagnostic_run_id"])
+        job["answers"] = raw.get("results", {}) if raw.get("run_id") == summary["diagnostic_run_id"] else {}
+    job["history"] = [{k: item.get(k) for k in ("date", "overall", "verdict", "settings", "judge", "rejudged")}
+                      for item in get_rp_history(job.get("model", ""))][-5:]
+    from app.core.rp_test import load_rp_cases
+    data = load_rp_cases()
+    job["fixture_matches"] = summary.get("fixture_version") in (None, data["fixture_version"])
+    if prompts:
+        job["case_prompts"] = {c["id"]: {"system": c["messages"][0]["content"],
+                                     "character": c["character"], "player": c["player"],
+                                     "messages": c["messages"][1:], "facts": c.get("facts", []),
+                                     "checks": c["checks"]} for c in data["cases"]}
+    return job
+
+
+@router.post("/settings/llm-rp-test/delete")
+async def llm_rp_test_delete(request: Request, user=Depends(require_admin)):
+    from app.core.model_capabilities import delete_rp_result
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "body must be valid JSON") from exc
+    if not isinstance(body, dict) or not isinstance(body.get("model"), str) or not body["model"]:
+        raise HTTPException(400, "model required")
+    return {"deleted": await asyncio.to_thread(delete_rp_result, body["model"])}
 
 
 @router.post("/settings/llm-suitability-test/resume")

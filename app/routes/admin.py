@@ -8,6 +8,7 @@ from app.core.model_capabilities import (
     get_all_capabilities,
     get_model_capabilities,
     get_all_suitability,
+    get_all_rp_results,
     prefill_from_provider,
     save_model_capability,
     delete_model_capability)
@@ -54,6 +55,7 @@ def model_capabilities_data() -> Dict[str, Any]:
     pm = get_provider_manager()
     all_caps = get_all_capabilities()
     suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
+    rp_all = get_all_rp_results()  # same key, a table of its own
     routing = config.get("llm_routing", [])
     routing_entries = [
         {"index": index, "provider": entry["provider"], "model": entry["model"],
@@ -85,7 +87,9 @@ def model_capabilities_data() -> Dict[str, Any]:
             # merged in — that claim is self-reported metadata, not something
             # anybody tested or documented here. Otherwise every vision model
             # would look documented and the short list would be pointless.
-            has_result = has_capability_info(caps) or caps.get("uncensored") is not None or bool(sd)
+            rp = rp_all.get(f"{prov_name}::{name}".lower())
+            has_result = (has_capability_info(caps) or caps.get("uncensored") is not None
+                          or bool(sd) or bool(rp))
             # A vision answer in the last test beats the provider's claim
             # (DX10-02 lists qwen3.5-9b-heretic-v2-nvfp4 as text-only, yet it
             # answers images); a stored Yes/No beats both.
@@ -114,31 +118,34 @@ def model_capabilities_data() -> Dict[str, Any]:
                 "has_custom_entry": has_custom,
                 "has_result": has_result,
                 "listed": True,
+                "rp_result": _rp_row(rp),
             })
             seen_names.add(name.lower())
 
     # A saved test result whose provider is disabled or offline is not in the
     # live lists above, yet it is a result — list it from the saved record.
     listed_keys = {f"{m['provider']}::{m['name']}".lower() for m in models}
-    for key, sd in suit_all.items():
+    for key, sd in [*suit_all.items(), *((k, None) for k in rp_all if k not in suit_all)]:
         if key in listed_keys:
             continue
-        full = str(((sd or {}).get("tested_suitability") or {}).get("model") or key)
+        rp = rp_all.get(key)
+        full = str(((sd or {}).get("tested_suitability") or {}).get("model") or (rp or {}).get("model") or key)
         prov_name, _, name = full.partition("::")
         if not name:
             continue
         caps = dict(get_model_capabilities(full))
-        vision_result = (sd.get("tested_suitability") or {}).get("vision")
+        vision_result = ((sd or {}).get("tested_suitability") or {}).get("vision")
         vision_rate = vision_result.get("rate") if isinstance(vision_result, dict) else None
         reported = {}
         if caps.get("vision") is None and vision_rate:
             caps["vision"] = True
             reported["vision"] = "test"
-        caps.update(sd)
+        caps.update(sd or {})
         models.append({
             "provider": prov_name, "name": name, "size_gb": 0, "parameter_size": "",
             "family": "", "quantization": "", "capabilities": caps, "reported": reported,
             "has_custom_entry": True, "has_result": True, "listed": False,
+            "rp_result": _rp_row(rp),
         })
         seen_names.add(name.lower())
 
@@ -180,6 +187,21 @@ def model_capabilities_data() -> Dict[str, Any]:
         "routing_entries": routing_entries,
         "suitability_group_tasks": group_tasks,
         "default_tool_instruction": default_instruction,
+    }
+
+
+def _rp_row(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """What the model table shows of an RP result (the report loads the rest)."""
+    if not record:
+        return None
+    return {key: record.get(key) for key in ("model", "date", "overall", "verdict", "caps", "length",
+                                             "speed", "replies", "rejudged")} | {
+        "dimensions": {name: {"score": d.get("score"), "n": d.get("n")}
+                       for name, d in (record.get("dimensions") or {}).items()},
+        "judge": {k: (record.get("judge") or {}).get(k) for k in ("provider", "model")}
+                 | {"calibrated": bool(((record.get("judge") or {}).get("calibration") or {}).get("ok"))},
+        "settings": {k: (record.get("settings") or {}).get(k)
+                     for k in ("temperature", "top_p", "repetition_penalty", "max_tokens", "thinking_budget")},
     }
 
 
@@ -234,6 +256,75 @@ def _build_models_html() -> str:
 </div>
 
 <div class="content">
+    <nav class="models-tabs" role="tablist" aria-label="Model tests">
+        <button type="button" role="tab" id="tabBtnTools" aria-controls="tabTools" aria-selected="true" onclick="modelsTab('tools')">Tools &amp; Helpers</button>
+        <button type="button" role="tab" id="tabBtnRp" aria-controls="tabRp" aria-selected="false" onclick="modelsTab('rp')">Roleplay</button>
+    </nav>
+    <details class="models-box" id="suitQueueBox">
+        <summary>Queue — <span id="suitQueueSummary">Queue empty</span><span id="suitInterruptedNotice" class="suit-interrupted-notice" hidden></span></summary>
+        <div id="suitQueue"></div>
+    </details>
+    <div id="tabRp" class="tab-panel" role="tabpanel" aria-labelledby="tabBtnRp" hidden>
+    <section class="models-box rp-setup" id="rpBox">
+        <h2>Roleplay test</h2>
+        <p class="info-text">Plays the game's real chat prompt (1:1, in person) with a small demo cast and checks what went wrong in play before:
+        repetition loops, flat prose, a character that drops its personality, logic slips (absent people, night, things in hand, facts from the history)
+        and discipline (tool syntax, leaked reasoning, speaking for the player, length). Code measures what code can measure; a separate judge model
+        answers yes/no questions per case and must first pass calibration anchors. Results are kept apart from the tool test.</p>
+        <div id="rpCases" class="rp-chips">Loading test cases…</div>
+        <div class="rp-grid">
+            <fieldset class="rp-card"><legend>Model under test</legend>
+                <label>Provider<select id="rpProvider" onchange="rpLoadModels()"><option value="">Provider…</option></select></label>
+                <label>Model<span id="rpModelPicker"></span></label>
+                <label>Prefill from LLM entry<select id="rpPrefill" onchange="rpPrefill()"><option value="">Choose an entry…</option></select></label>
+            </fieldset>
+            <fieldset class="rp-card"><legend>Sampling</legend>
+                <label>Temperature<input id="rpTemp" type="number" min="0" max="2" step="0.05" value="0.8"></label>
+                <label>Top P<input id="rpTopP" type="number" min="0.01" max="1" step="0.01" placeholder="not sent"></label>
+                <label>Repetition penalty<input id="rpPenalty" type="number" min="0" max="1.5" step="0.01" placeholder="not sent"></label>
+                <label>Max tokens<input id="rpMaxTokens" type="number" min="0" max="200000" step="1" value="700"></label>
+                <label>Thinking budget<select id="rpThinking"><option value="0">Off</option><option value="300">300</option><option value="600">600</option><option value="900">900</option><option value="1200">1200</option><option value="1500">1500</option><option value="2000">2000</option><option value="3000">3000</option></select></label>
+            </fieldset>
+            <fieldset class="rp-card"><legend>Judge</legend>
+                <label>Provider<select id="rpJudgeProvider" onchange="rpLoadJudgeModels()"><option value="">Provider…</option></select></label>
+                <label>Model<span id="rpJudgeModelPicker"></span></label>
+                <p class="info-text">A strong instruction model, never the model under test. Runs at temperature 0 without thinking.</p>
+            </fieldset>
+            <fieldset class="rp-card"><legend>Advanced</legend>
+                <label>Chat template<textarea id="rpChatTemplate" rows="1" placeholder="Provider default (Jinja, only if the model has none)"></textarea></label>
+                <label>Extra params (JSON)<textarea id="rpExtraParams" rows="2" oninput="rpValidateExtra()">{}</textarea></label>
+                <span id="rpExtraError" role="alert"></span>
+                <label>Parallel requests<input id="rpConcurrency" type="number" min="1" step="1" value="3"></label>
+            </fieldset>
+        </div>
+        <div class="suit-actions"><button class="btn btn-primary" id="rpStartBtn" onclick="rpStart()">Start roleplay test</button>
+        <span id="rpStatus" role="status"></span></div>
+    </section>
+    <section class="models-box" id="rpResults">
+        <div id="rpReport" class="rp-report" hidden></div>
+        <h2>Roleplay results</h2>
+        <p class="info-text">Click a row for the full report. Scores are 0–100; a model is suited at an overall score of 70 with every dimension at 55 or more.</p>
+        <table class="rp-table">
+            <thead><tr>
+                <th class="sortable" onclick="rpSort('provider')">Provider<span class="sort-arrow" id="rpArrow-provider"></span></th>
+                <th class="sortable" onclick="rpSort('name')">Model<span class="sort-arrow" id="rpArrow-name"></span></th>
+                <th class="sortable" onclick="rpSort('overall')">Overall<span class="sort-arrow" id="rpArrow-overall"></span></th>
+                <th class="sortable" onclick="rpSort('repetition')">Repetition<span class="sort-arrow" id="rpArrow-repetition"></span></th>
+                <th class="sortable" onclick="rpSort('prose')">Prose<span class="sort-arrow" id="rpArrow-prose"></span></th>
+                <th class="sortable" onclick="rpSort('character')">Character<span class="sort-arrow" id="rpArrow-character"></span></th>
+                <th class="sortable" onclick="rpSort('logic')">Logic<span class="sort-arrow" id="rpArrow-logic"></span></th>
+                <th class="sortable" onclick="rpSort('discipline')">Discipline<span class="sort-arrow" id="rpArrow-discipline"></span></th>
+                <th class="sortable" onclick="rpSort('words')" title="Median words per reply">Words<span class="sort-arrow" id="rpArrow-words"></span></th>
+                <th class="sortable" onclick="rpSort('latency')" title="Median seconds per reply">Latency<span class="sort-arrow" id="rpArrow-latency"></span></th>
+                <th>Judge</th>
+                <th>Settings</th>
+                <th class="sortable" onclick="rpSort('date')">Date<span class="sort-arrow" id="rpArrow-date"></span></th>
+            </tr></thead>
+            <tbody id="rpBody"></tbody>
+        </table>
+    </section>
+    </div>
+    <div id="tabTools" class="tab-panel" role="tabpanel" aria-labelledby="tabBtnTools">
     <section class="models-box" id="suitBox">
         <h2>Test setup</h2>
         <p class="info-text">Tests tools, helpers, vision and speed with curated and reviewed game prompts. Tests run in the background, FIFO per provider; different providers run in parallel.</p>
@@ -266,10 +357,6 @@ def _build_models_html() -> str:
         <div class="suit-actions"><button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Start test</button>
         <span id="suitStatus" role="status"></span></div>
     </section>
-    <details class="models-box" id="suitQueueBox">
-        <summary>Queue — <span id="suitQueueSummary">Queue empty</span><span id="suitInterruptedNotice" class="suit-interrupted-notice" hidden></span></summary>
-        <div id="suitQueue"></div>
-    </details>
     <section class="models-box" id="suitResults">
     <h2>Results</h2>
     <div id="suitDetail" hidden>
@@ -326,10 +413,12 @@ def _build_models_html() -> str:
     </div>
 
     </section>
+    </div>
 </div>
 
 <script src="/static/admin/model-combobox.js"></script>
 <script src="/static/admin/models.js"></script>
+<script src="/static/admin/models-rp.js"></script>
 <div id="suitApplyDialog" class="suit-apply-dialog" role="dialog" aria-modal="true" aria-label="Apply to game" hidden></div>
 </body>
 </html>'''

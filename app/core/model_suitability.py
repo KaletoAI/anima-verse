@@ -890,7 +890,30 @@ _JOBS_LOCK = threading.RLock()
 _ACTIVE_PROVIDERS: set[str] = set()
 _QUEUE_LOADED = False
 _PERSISTED_STATUSES = ("queued", "running", "interrupted")
-_QUEUE_FIELDS = ("job_id", "model", "provider", "settings", "concurrency", "status", "enqueued_at")
+_QUEUE_FIELDS = ("job_id", "model", "provider", "settings", "concurrency", "status", "enqueued_at", "kind")
+# Test kinds sharing this queue: validate(settings) and iterate(model, ...).
+# "rp" / "rp_judge" live in app.core.rp_test (imported lazily — it imports this module).
+JOB_KINDS = ("tools", "rp", "rp_judge")
+
+
+def _runner(kind: str):
+    """(validate, iterate) of a job kind."""
+    if kind == "tools":
+        return validate_settings, iter_suitability_results
+    from app.core import rp_test
+    if kind == "rp":
+        return rp_test.validate_rp_settings, rp_test.iter_rp_results
+    if kind == "rp_judge":
+        return rp_test.validate_rp_judge_settings, rp_test.iter_rp_judge
+    raise ValueError(f"unknown test kind {kind!r}")
+
+
+def job_provider(kind: str, model_full: str, settings: dict) -> str:
+    """The provider whose FIFO a job waits in: the judge's for a re-judge
+    (it is the only provider such a job calls), the tested model's otherwise."""
+    if kind == "rp_judge":
+        return settings["judge"]["provider"]
+    return model_full.partition("::")[0]
 
 
 def _persist_queue() -> None:
@@ -923,10 +946,16 @@ def _load_queue() -> None:
         try:
             if not isinstance(entry, dict):
                 raise ValueError("job must be an object")
-            job = {key: entry[key] for key in _QUEUE_FIELDS}
+            job = {key: entry[key] for key in _QUEUE_FIELDS if key != "kind"}
+            # Entries written before the RP test existed carry no kind: tools.
+            job["kind"] = entry.get("kind", "tools")
+            if job["kind"] not in JOB_KINDS:
+                raise ValueError("unknown test kind")
+            validate, _ = _runner(job["kind"])
+            job["settings"] = validate(job["settings"])
             if (any(not isinstance(job[k], str) or not job[k] for k in
                     ("job_id", "model", "provider", "enqueued_at"))
-                    or job["provider"] != job["model"].partition("::")[0]
+                    or job["provider"] != job_provider(job["kind"], job["model"], job["settings"])
                     or job["status"] not in _PERSISTED_STATUSES
                     or type(job["concurrency"]) is not int or job["concurrency"] < 1
                     or job["job_id"] in _JOBS):
@@ -934,7 +963,6 @@ def _load_queue() -> None:
             from app.core.timeutils import parse_iso
             if parse_iso(job["enqueued_at"]) is None:
                 raise ValueError("invalid enqueued_at")
-            job["settings"] = validate_settings(job["settings"])
             job.update(status="interrupted", total=0, done=0, checks=[], summary=None,
                        error=None, _request=(job["settings"], job["concurrency"]),
                        _cancel=threading.Event())
@@ -1002,9 +1030,10 @@ def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
 
 def _run_job(job: Dict[str, Any]) -> None:
     try:
-        for ev in iter_suitability_results(job["model"], settings=job["settings"],
-                                          cancel_event=job["_cancel"],
-                                          concurrency=job["concurrency"]):
+        _, iterate = _runner(job.get("kind", "tools"))
+        for ev in iterate(job["model"], settings=job["settings"],
+                          cancel_event=job["_cancel"],
+                          concurrency=job["concurrency"]):
             with _JOBS_LOCK:
                 if job["_cancel"].is_set():
                     continue
@@ -1066,20 +1095,23 @@ def _worker(provider: str) -> None:
 
 
 def enqueue_test(model_full: str, *, settings: dict,
-                 concurrency: int = 3) -> Dict[str, Any]:
+                 concurrency: int = 3, kind: str = "tools") -> Dict[str, Any]:
     """Queue a frozen explicit request, FIFO within each provider."""
     from copy import deepcopy
     from uuid import uuid4
-    settings = validate_settings(settings)
-    provider = model_full.partition("::")[0]
+    if kind not in JOB_KINDS:
+        raise ValueError(f"unknown test kind {kind!r}")
+    validate, _ = _runner(kind)
+    settings = validate(settings)
+    provider = job_provider(kind, model_full, settings)
     request = deepcopy((settings, concurrency))
     with _JOBS_LOCK:
         _load_queue()
         for job in _JOBS.values():
             if (job["model"] == model_full and job["status"] in _PERSISTED_STATUSES
-                    and job["_request"] == request):
+                    and job.get("kind", "tools") == kind and job["_request"] == request):
                 return _snapshot(job)
-        job = {"job_id": uuid4().hex, "model": model_full, "provider": provider,
+        job = {"job_id": uuid4().hex, "model": model_full, "provider": provider, "kind": kind,
                "status": "queued", "total": 0, "done": 0, "checks": [],
                "summary": None, "error": None, "settings": settings,
                "concurrency": concurrency, "enqueued_at": utc_now().isoformat(),

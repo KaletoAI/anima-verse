@@ -230,6 +230,91 @@ def save_raw_outputs(model_full: str, outputs: Dict[str, Any]) -> None:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+# --- Roleplay test results ----------------------------------------------------
+# A table of its own (rp_results), apart from the tool/helper suitability: the
+# two tests answer different questions about a model and are run with
+# different settings. Keyed the same way ("provider::model", lowercased).
+
+
+def current_rp_result(result: Dict[str, Any]) -> bool:
+    """Scorer generation rp-1 or later."""
+    prefix, _, number = str((result or {}).get("scorer_version", "")).rpartition("-")
+    return prefix == "rp" and number.isdigit() and int(number) >= 1
+
+
+def get_all_rp_results() -> Dict[str, Any]:
+    """Current RP results (key = 'provider::model' lowercased), read fresh
+    under the lock — the table is small and written by background jobs."""
+    with _write_lock:
+        results = _load_full_file().get("rp_results", {}) or {}
+    return {key: value for key, value in results.items() if current_rp_result(value)}
+
+
+def save_rp_result(model_full: str, result: Dict[str, Any]) -> None:
+    """Store the RP result; the previous one moves to rp_results_history."""
+    with _write_lock:
+        data = _load_full_file()
+        key = (model_full or "").lower()
+        previous = data.setdefault("rp_results", {}).get(key)
+        if previous is not None:
+            data.setdefault("rp_results_history", {}).setdefault(key, []).append(previous)
+        data["rp_results"][key] = deepcopy(result)
+        _save_full_file(data)
+
+
+def delete_rp_result(model_full: str) -> bool:
+    """Remove a model's RP result, its history and its raw answers."""
+    with _write_lock:
+        data = _load_full_file()
+        key = (model_full or "").lower()
+        found = data.get("rp_results", {}).pop(key, None) is not None
+        data.get("rp_results_history", {}).pop(key, None)
+        _save_full_file(data)
+        raw = _load_outputs_file()
+        raw.get("rp_outputs", {}).pop(key, None)
+        raw.get("rp_history", {}).pop(key, None)
+        if _outputs_path().exists():
+            with open(_outputs_path(), "w", encoding="utf-8") as f:
+                json.dump(raw, f, indent=2, ensure_ascii=False)
+        return found
+
+
+def get_rp_history(model_full: str) -> list:
+    """Earlier RP results of this model, oldest first."""
+    with _write_lock:
+        return list(_load_full_file().get("rp_results_history", {}).get((model_full or "").lower(), []))
+
+
+def save_rp_outputs(model_full: str, outputs: Dict[str, Any]) -> None:
+    """Raw answers + judge answers of one RP run, local sidecar only."""
+    outputs = dict(outputs)
+    outputs["run_id"] = uuid4().hex
+    with _write_lock:
+        data = _load_outputs_file()
+        key = (model_full or "").lower()
+        previous = data.setdefault("rp_outputs", {}).get(key)
+        if previous is not None:
+            # Keep the last three superseded runs only — every run carries all answers.
+            history = data.setdefault("rp_history", {}).setdefault(key, [])
+            history.append(previous)
+            del history[:-3]
+        data["rp_outputs"][key] = outputs
+        _outputs_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(_outputs_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def get_rp_outputs(model_full: str, run_id: str = "") -> Dict[str, Any]:
+    with _write_lock:
+        data = _load_outputs_file()
+        key = (model_full or "").lower()
+        latest = data.get("rp_outputs", {}).get(key, {})
+        if not run_id or latest.get("run_id") == run_id:
+            return latest
+        return next((item for item in reversed(data.get("rp_history", {}).get(key, []))
+                     if item.get("run_id") == run_id), {})
+
+
 def get_model_capabilities(model_name: str) -> Dict[str, Any]:
     """Resolves the capabilities for a model via substring match.
 

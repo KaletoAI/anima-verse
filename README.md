@@ -116,6 +116,11 @@ stops acting autonomously).
 - **Model capabilities** (`/admin/models`): tool-calling, vision, JSON strictness, model class and
   more per model — stored once for all worlds in `shared/config/model_capabilities.json`.
   Unfinished tests persist in instance-wide `suitability_queue.json`; after a restart, resume or discard interrupted tests in the Queue header.
+  Two tabs: **Tools & Helpers** (tool calls, helper tasks, vision, speed) and **Roleplay** — the game's
+  real chat prompt against a demo cast, scored 0–100 on repetition, prose, character fidelity, logic and
+  discipline; code metrics plus a calibrated judge model you pick, with a per-case report.
+  Results of the two tests are stored separately (`rp_results` beside the tool results); the RP cases
+  are rebuilt from the live templates with `scripts/rp_test_build_cases.py`.
 - **Built-in text embeddings** (`fastembed` / ONNX, CPU — no external endpoint needed) used for pose
   matching; `auto` / `internal` / `external`, configurable in the admin UI. The default built-in model
   is English-only — a world played in another language should pick the multilingual

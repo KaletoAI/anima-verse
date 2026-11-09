@@ -129,6 +129,12 @@ into "what does the room need" and "what does the library already have";
 | `npc_action.md` | `npc_action` | `npc_actions` (`TASK`) | One NPC action turn |
 | `npc_scene.md` | `npc_scene` | `npc_scenes` (`TASK`) | The director picks who talks to whom in a room |
 
+### Model test (`/admin/models`)
+
+| Template | Task | Caller | Purpose |
+|---|---|---|---|
+| `rp_judge.md` | — (the judge model chosen in the Roleplay test setup, not routed) | `rp_test.judge_prompt` | Yes/no questions about one roleplay answer of the model under test |
+
 ## Top-level chat composites
 
 ### The chat prompt has TWO parts, and the order is a cache contract

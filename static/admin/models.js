@@ -39,6 +39,24 @@ function filterTable() {
     renderAll();
 }
 
+// ── Tabs: "Tools & Helpers" | "Roleplay" — the queue above them is shared ──
+function modelsTab(name, remember = true) {
+    const tab = name === 'rp' ? 'rp' : 'tools';
+    [['tools', 'tabTools', 'tabBtnTools'], ['rp', 'tabRp', 'tabBtnRp']].forEach(([key, panel, button]) => {
+        document.getElementById(panel).hidden = key !== tab;
+        document.getElementById(button).setAttribute('aria-selected', String(key === tab));
+    });
+    if (!remember) return;
+    try { localStorage.setItem('models-tab', tab); } catch (e) { /* Storage may be unavailable. */ }
+    if (location.hash !== '#' + (tab === 'rp' ? 'roleplay' : 'tools')) history.replaceState(null, '', '#' + (tab === 'rp' ? 'roleplay' : 'tools'));
+}
+function modelsTabInit() {
+    let saved = null;
+    try { saved = localStorage.getItem('models-tab'); } catch (e) { /* Storage may be unavailable. */ }
+    const hash = location.hash.replace('#', '');
+    modelsTab(hash === 'roleplay' ? 'rp' : hash === 'tools' ? 'tools' : saved || 'tools', false);
+}
+
 function sortBy(field) {
     if (sortField === field) {
         // Same column: ascending -> descending -> unsorted.
@@ -112,6 +130,8 @@ function renderAll() {
 
     renderModels(filtered);
     renderUnmatched(unmatchedEntries);
+    // The Roleplay tab lists the same models (models-rp.js, loaded after this file).
+    if (typeof rpRenderTable === 'function') rpRenderTable(search, provFilter);
     const withResult = allModels.filter(m => m.has_result).length;
     document.getElementById('countLabel').textContent =
         filtered.length + ' / ' + allModels.length + ' models · ' + withResult + ' with result';
@@ -480,6 +500,7 @@ let suitJobsTimer = null;
 let suitQueuePreference = null;
 
 async function suitInit() {
+    modelsTabInit();
     document.getElementById('suitModelPicker').innerHTML = ModelCombobox.render({id: 'suitModel'});
     suitCombobox = ModelCombobox.attach('suitModel', {loadModels: suitFetchModels, onChange: () => {}});
     try { suitQueuePreference = localStorage.getItem('suit-queue-open'); } catch (e) { /* Storage may be unavailable. */ }
@@ -543,6 +564,9 @@ function suitQueueSummary(jobs) {
         return provider + ': ' + ([running ? running + ' running' : '', waiting ? waiting + ' waiting' : ''].filter(Boolean).join(', ') || 'idle');
     }).join(' · ');
 }
+function suitKindLabel(kind) {
+    return {tools: 'Tools', rp: 'Roleplay', rp_judge: 'RP re-judge'}[kind] || kind;
+}
 function suitSettingsText(settings) {
     if (!settings) return 'Settings not recorded (older test)';
     const temps = settings.temperature || {};
@@ -566,13 +590,17 @@ async function suitJobsRefresh() {
         suitQueueDefaultOpen = jobs.some(j => ['queued', 'running'].includes(j.status));
         if (suitQueuePreference === null) queue.open = suitQueueDefaultOpen;
         document.getElementById('suitQueue').innerHTML = Array.from(suitQueueGroups(jobs), ([provider, group]) =>
-            '<h3>' + esc(provider) + '</h3>' + group.map(j =>
-                '<div class="suit-job"><button type="button" class="btn" onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')">'
+            '<h3>' + esc(provider) + '</h3>' + group.map(j => {
+                const kind = j.kind || 'tools';
+                const rp = kind !== 'tools' && typeof rpSettingsText === 'function';
+                return '<div class="suit-job"><span class="kind-badge kind-' + esc(kind) + '">' + esc(suitKindLabel(kind)) + '</span> '
+                + '<button type="button" class="btn" onclick="' + (rp ? 'rpSelectJob' : 'suitSelectJob') + '(\'' + escJs(j.job_id) + '\')">'
                 + esc(j.model) + '</button> · ' + (j.status === 'interrupted' ? '<span class="suit-interrupted">Interrupted</span>' : esc(j.status)) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?') + (j.phase ? ' · ' + esc(j.phase) : '')
                 + (j.status === 'queued' ? ' · position ' + esc(j.position) : '')
-                + '<div class="info-text">' + esc(suitSettingsText(j.settings)) + '</div>'
+                + '<div class="info-text">' + esc(rp ? rpSettingsText(j.settings) : suitSettingsText(j.settings)) + '</div>'
                 + (['queued', 'running', 'interrupted'].includes(j.status) ? '<button type="button" class="btn" onclick="suitCancel(\''
-                    + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>').join('')).join('');
+                    + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>';
+            }).join('')).join('');
     } catch (error) {
         document.getElementById('suitQueueSummary').textContent = 'Could not load queue';
     }

@@ -166,8 +166,11 @@ SYSTEM_TODAY = re.compile(r"\b(?:date|datetime)\.today\(\)")
 #   app/core/model_suitability.py:477 — a model-test record dates the
 #       MEASUREMENT; capabilities are shared across worlds and describe the
 #       model plus its hardware, not a game day.
+#   app/core/rp_test.py — the roleplay model test, same reason (its record
+#       sits next to the tool test's in model_capabilities.json).
 WHITELIST_E_CLOCK = {
     "app/core/model_suitability.py",
+    "app/core/rp_test.py",
 }
 
 
