@@ -20,6 +20,8 @@ limits as fractions of the image height H — the spike ran at H = 1536):
 
 ``bottoms_agree`` compares the bottom edges of the front and back hair;
 ``bottoms_reason`` words a disagreement as a refusal of a front attempt.
+``hair_length`` measures where the hair of the haired BACK view ends against
+the figure (the front prompts get it as a length phrase).
 """
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -238,6 +240,38 @@ def ghost_gate(bald_rgb, bald_mask, hair_ref_mask, ghost_rgb, ghost_mask, *, vie
             "body_left_px": body_left_px, "body_left": round(body_left, 5), "chin_row": chin,
             "bottom": round(b[3] / height, 5), "hair_h": round((b[3] - b[1]) / height, 5),
             "ok": not reasons, "reasons": reasons}
+
+
+#: The haired view's hair is measured above this share of the figure height
+#: (``hair_length``): far below the longest hair the prompts describe.
+HAIR_LENGTH_ZONE = 0.50
+
+
+def hair_length(bald_rgb, bald_mask, haired_rgb, haired_mask) -> Optional[Dict[str, Any]]:
+    """Where the hair of a haired view ends, against the base figure:
+    ``{"bottom": row, "t": (row − y0) / Hb}`` or None (no figure, no hair).
+
+    Hair = haired mask AND (|ΔRGB| > 20 OR outside the base mask) above
+    ``y0 + 0.5·Hb``, opened ``HAIR_REF_OPEN`` iterations (scaled by H / 1536,
+    as ``hair_ref``); the LARGEST component is the hair mass that hangs from
+    the head, its lowest row the bottom. Meant for the BACK view, where the
+    whole length is visible; the front hides the ends behind the body."""
+    from scipy import ndimage
+    _check(bald_rgb, bald_mask, haired_rgb, haired_mask)
+    m0, m1 = np.asarray(bald_mask, dtype=bool), np.asarray(haired_mask, dtype=bool)
+    zones = _zones(m0)
+    if zones is None or zones[1] <= 0:
+        return None
+    y0, hb = zones
+    hair = m1 & ((_diff(bald_rgb, haired_rgb) > HAIR_REF_DRGB) | ~m0)
+    hair[int(y0 + HAIR_LENGTH_ZONE * hb):] = False
+    hair = ndimage.binary_opening(hair, iterations=_iterations(HAIR_REF_OPEN, m0.shape[0]))
+    labels, count = ndimage.label(hair)
+    if not count:
+        return None
+    largest = int(np.argmax(np.bincount(labels.ravel())[1:])) + 1
+    bottom = int(np.nonzero((labels == largest).any(1))[0].max())
+    return {"bottom": bottom, "t": round((bottom - y0) / hb, 4)}
 
 
 def bottoms_gap(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[tuple]:

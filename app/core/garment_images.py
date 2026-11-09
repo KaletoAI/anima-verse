@@ -192,7 +192,8 @@ def _accepted(path: Path) -> bool:
 
 def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
                   force: bool = False,
-                  pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None) -> Path:
+                  pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+                  prompt_hints: Optional[Dict[str, Any]] = None) -> Path:
     """Render, gate and store one edit step of one view; returns the final
     image ``images/{item}_{fsig}_{step}_{view}.png``.
 
@@ -200,6 +201,8 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     the hair-only front against the accepted back's bottom edge) gets every
     attempt's gate record; a reason it returns refuses that attempt like a
     gate reason does, so the check uses the attempts of this step.
+    ``prompt_hints`` go to the kind's ``edit_prompt`` as keyword arguments
+    (hair: ``length_t``, see ``haired_length``).
 
     Cached: an accepted final of this fsig is returned unless ``force``.
     ``base_body.MissingInput`` when the base view or the source step's
@@ -228,7 +231,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
         if not _accepted(source):
             raise base_body.MissingInput(f"The {source_step} {view} image is missing — run that step first")
-    prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile)
+    prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile, **(prompt_hints or {}))
     refs_dir = get_model_refs_dir(character_name)
     final.parent.mkdir(parents=True, exist_ok=True)
 
@@ -291,6 +294,30 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             _drop_later(character_name, item_id, fsig, step, view)
             return final
     raise GateRefused(step, view, records)
+
+
+def haired_length(character_name: str, item_id: str, fsig: str, view: str = "back") -> Optional[Dict[str, Any]]:
+    """Where the hair of the accepted ``haired`` image of ``view`` ends
+    against the base figure (``garment_gates.hair_length``: ``{bottom, t}``),
+    on the same masks as the gates; None when the image or the base view is
+    missing or no hair is found."""
+    from app.core import base_body
+    from app.core.garment_gates import hair_length
+    from app.core.garment_store import garment_path
+    from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
+    from app.models.character import get_character_profile
+    haired = garment_path(character_name, item_id, fsig, "image", step="haired", view=view)
+    if not _accepted(haired):
+        return None
+    profile = get_character_profile(character_name) or {}
+    base = find_ref_image(character_name, base_body._kind(view),
+                          base_body.base_signature(character_name, profile=profile))
+    if base is None:
+        return None
+    with neutral_view_reference(base, get_model_refs_dir(character_name)) as flat_base:
+        size = _image_size(flat_base)
+        base_rgb, base_mask = _rgb(flat_base), _mask(flat_base, size)
+    return hair_length(base_rgb, base_mask, _rgb(haired, size), _mask(haired, size))
 
 
 def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: bool = False) -> Path:

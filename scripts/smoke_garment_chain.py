@@ -92,9 +92,10 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
     fit record base_signature B2.
 [7] Hair colour changed (B2 unchanged, F3 != F2) and BODY_GHOST on the back
     for both attempts: run_garment -> {ok False, step "ghost"}, 2 (haired) +
-    1 (ghost front) + 2 (ghost back) renders, NO mesh call; status
+    2 (ghost back) renders — the back renders first (garments.EDIT_VIEW_ORDER),
+    so the ghost front never starts — NO mesh call; status
     failed.step "ghost"; garment_info: fsig F3, ghost back accepted False
-    with 2 attempts, served_fsig F2 (the fallback), stale_reasons
+    with 2 attempts, no ghost front url, served_fsig F2 (the fallback), stale_reasons
     ["description_changed"], preview_url names the F2 fit's content version;
     base_info(Demo)["hair"] = {item_id H, status "failed"}.
 [8] Outfit model (undressed outfit OSIG, base copy): generate_for_current_
@@ -609,7 +610,7 @@ def main() -> int:
         mode["ghost_back_bad"] = False
         after = counts()
         check("refused at ghost", (res.get("ok"), res.get("step")), (False, "ghost"))
-        check("renders, no mesh", (after[0] - before[0], after[1] - before[1]), (5, 0))
+        check("renders, no mesh", (after[0] - before[0], after[1] - before[1]), (4, 0))
         check("status failed ghost", (gs.status("Demo", hid)["failed"] or {}).get("step"), "ghost")
         check("item description refreshed", inventory.get_item(hid).get("prompt_fragment"),
               garment_hair.hair_description("Demo"))
@@ -617,7 +618,7 @@ def main() -> int:
         check("info fsig", info.get("fsig"), f3)
         gb = ((info.get("steps") or {}).get("ghost") or {}).get("back") or {}
         check("ghost back refused, 2 attempts", (gb.get("accepted"), len(gb.get("attempts") or [])), (False, 2))
-        check("ghost front url", bool(((info["steps"]["ghost"]).get("front") or {}).get("url")), True)
+        check("no ghost front url", bool(((info["steps"]["ghost"]).get("front") or {}).get("url")), False)
         check("served fsig", info.get("served_fsig"), f2)
         check("stale reasons", info.get("stale_reasons"), ["description_changed"])
         from app.core.http_files import content_version

@@ -293,6 +293,41 @@ _GHOST = {
              "no body, no arms. The hair keeps its worn, three-dimensional shape as if on an invisible head (ghost "
              "mannequin product photo of a wig)."),
 }
+# Where the hair ends, as a share t of the base figure height below its top
+# (garment_gates.hair_length, measured on the haired BACK view): upper band
+# edges and the phrase. Landmarks of the 8-head canon the gates use (chin
+# 0.125 ~ CHIN_ROW 0.13, shoulder line SHOULDER_ROW 0.19), shoulder blades
+# ~0.27, middle of the back ~0.33, waist ~0.40; each edge lies between two of
+# them. {p} = possessive ("her"; "the" in the hair-only prompt). Wording
+# tuned on the clone (2026-11-09, Kira, back end t 0.233, front bottoms vs
+# back 0.2474 H, limit ±0.011 H): no phrase 0.305..0.337 (0/3), "just below
+# the shoulders" 0.216..0.226 (0/2), "at the middle of the shoulder blades"
+# 0.279..0.314 (0/2), "at the top of the shoulder blades" 0.213..0.243 (1/4).
+LENGTH_BANDS: Tuple[Tuple[float, str], ...] = (
+    (0.16, "at {p} chin"),
+    (0.205, "at {p} shoulders"),
+    (0.25, "at the top of {p} shoulder blades"),
+    (0.30, "at the middle of {p} shoulder blades"),
+    (0.36, "at the middle of {p} back"),
+    (0.44, "at {p} waist"),
+)
+LENGTH_BELOW = "below {p} waist"
+# The length sentence of the hair-only FRONT prompt (the front hides the
+# ends behind the body; without it the edit invents the length).
+_GHOST_LENGTH = "The hair ends {where}."
+
+
+def length_phrase(t: Optional[float], possessive: str = "the") -> str:
+    """``"just below her shoulders"`` for a hair end at ``t`` (``LENGTH_BANDS``);
+    "" without a measurement."""
+    if t is None:
+        return ""
+    for edge, phrase in LENGTH_BANDS:
+        if t < edge:
+            return phrase.format(p=possessive)
+    return LENGTH_BELOW.format(p=possessive)
+
+
 # The step terms of the spike's negatives; the shared part (spike NEG) is the
 # negative of the use case ``garment_edit`` and is prepended by the service.
 _STEP_NEGATIVE = {
@@ -324,7 +359,7 @@ def _negative(step: str, view: str, description: str) -> str:
 
 
 def edit_prompt(character_name: str, step: str, view: str, *,
-                profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+                profile: Optional[Dict[str, Any]] = None, length_t: Optional[float] = None) -> Tuple[str, str]:
     """``(prompt, extra negative)`` of one hair edit (spike wording).
 
     ``haired``: the base view with the character's hair added — pronouns from
@@ -332,7 +367,15 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     sentence that puts the hair behind the shoulders only when
     ``hair_behind_shoulders``. ``ghost``: the hair alone on an invisible
     head. The negative is the step's own terms minus every hair-style term the
-    description names; the use case ``garment_edit`` adds the shared part."""
+    description names; the use case ``garment_edit`` adds the shared part.
+
+    ``length_t`` (where the hair of the accepted haired BACK view ends,
+    ``garment_gates.hair_length``) gives the hair-only FRONT prompt the length
+    the front cannot show: "The hair ends just below the shoulders." The
+    haired front leaves it out: its hair falls behind the shoulders, the
+    length is not visible there, and on the clone (2026-11-09, Kira) the
+    phrase turned it into a shoulder-length bob with the body outline moving
+    (XOR 0.0161..0.0261 in 4 of 4 attempts against 0.0125 without it)."""
     if step not in EDIT_STEPS:
         raise ValueError(f"no hair edit step {step!r}")
     if view not in _GHOST:
@@ -340,7 +383,11 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     profile = _profile_of(character_name, profile)
     description = hair_description(character_name, profile=profile)
     if step == "ghost":
-        return _GHOST[view], _negative(step, view, description)
+        where = length_phrase(length_t if view == "front" else None)
+        if not where:
+            return _GHOST[view], _negative(step, view, description)
+        keep, rest = _GHOST[view].split(". ", 1)
+        return f"{keep}. {_GHOST_LENGTH.format(where=where)} {rest}", _negative(step, view, description)
     if not description:
         raise ValueError("No hair set — fill in the hair in Appearance")
     possessive, subject = pronouns(profile)
