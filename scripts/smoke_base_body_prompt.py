@@ -147,7 +147,7 @@ BALD = ("completely bald, smooth clean-shaven head with no hair at all, the bare
         "head fully visible, the ears fully visible, natural eyebrows")
 BALD_BACK = ("completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of "
              "the head fully visible, the ears fully visible")
-BODY = "a smooth, featureless mannequin-like body without anatomical detail, no clothing"
+BODY = "a smooth, featureless mannequin-like body without anatomical detail, sfw, no clothing"
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
 APPEARANCE_BACK = "female, 30 years old, olive skin, average height, athletic build"
 HAIR_NEG = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "

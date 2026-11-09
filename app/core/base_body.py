@@ -9,8 +9,7 @@ painted onto that body later (spec
 
 This module holds the description, the view prompts with their negative, the
 base signature that keys every stored base image and model, the rendering of
-the four views (``generate_base_images``, front and side views evened out
-by an edit with ``smooth_prompt``), the rigged base model built from
+the four views (``generate_base_images``), the rigged base model built from
 them (``generate_base_model``), the per-character pipeline switch
 (``set_pipeline``) and the UI info (``base_info``).
 
@@ -60,7 +59,7 @@ FULL_FRAMING = ("full body shot from the top of the head to the soles of the fee
                 "frame with empty margin above the head and below the feet")
 BALD_HEAD = ("completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of "
              "the head fully visible, the ears fully visible, natural eyebrows")
-BODY_TEXT = "a smooth, featureless mannequin-like body without anatomical detail, no clothing"
+BODY_TEXT = "a smooth, featureless mannequin-like body without anatomical detail, sfw, no clothing"
 
 HAIR_NEGATIVE = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "
                  "stubble on the scalp, hair on the shoulders, hair on the back")
@@ -68,18 +67,6 @@ BODY_NEGATIVE = "clothing, underwear, jewellery, detailed anatomy"
 POSE_NEGATIVE = ("hands touching body, fists, curled fingers, fused fingers, mitten hands, cropped feet, "
                  "feet cut off, cropped legs, close-up, portrait crop")
 BASE_NEGATIVE = ", ".join((HAIR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
-
-# The smooth pass: an EDIT of a finished view that evens out chest and groin.
-# Neither negatives nor positive wording reach that on the edit backend (A/B
-# with identical seeds 2026-11-09: identical images); this follow-up edit did,
-# with face, pose and framing kept (claude-out/base-body-e2e/negab, 2/2 seeds).
-SMOOTH_PROMPT = ("Keep the image exactly as it is: the same person, same face, same body shape, same pose, same "
-                 "framing, same lighting and background. Only change the surface of the chest and the groin: make "
-                 "them smooth and even like a store display mannequin or a plastic doll, one continuous skin "
-                 "surface of the same colour as the surrounding skin.")
-# The views that get it: the side views show the chest in profile, the back
-# shows neither.
-SMOOTH_VIEWS = ("front", "left", "right")
 
 _HAIR_RE = re.compile(r"\bhair", re.IGNORECASE)
 # The shape of ``base_signature`` — never an outfit signature (pure hex).
@@ -183,21 +170,10 @@ def base_prompt(character_name: str, view: str, *,
     return prompt, base_negative(character_name, profile=profile)
 
 
-def smooth_prompt(view: str) -> str:
-    """The edit prompt of the smooth pass of one of ``SMOOTH_VIEWS``:
-    ``SMOOTH_PROMPT``, opened for a side view by its ``DRESS_VIEW`` sentence
-    — without it, side edits of the dressed pass came out turned toward the
-    camera, and this pass edits the same images the same way."""
-    if view not in SMOOTH_VIEWS:
-        raise ValueError(f"no smooth pass for the base-body view {view!r}")
-    view_sentence = DRESS_VIEW.get(view)
-    return f"{view_sentence} {SMOOTH_PROMPT}" if view_sentence else SMOOTH_PROMPT
-
-
 def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
     """``"base" + 8 hex`` over everything that shapes the base body: the four
-    view prompts and negatives, the smooth-pass prompts, the current profile
-    image (file name and size) and ``BASE_BODY_VERSION``."""
+    view prompts and negatives, the current profile image (file name and
+    size) and ``BASE_BODY_VERSION``."""
     profile = _profile_of(character_name, profile)
     from app.core.model_refs import current_profile_image
     image = current_profile_image(character_name, profile=profile)
@@ -208,7 +184,6 @@ def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     payload = {
         "version": BASE_BODY_VERSION,
         "views": {view: list(base_prompt(character_name, view, profile=profile)) for view in BASE_VIEWS},
-        "smooth": {view: smooth_prompt(view) for view in SMOOTH_VIEWS},
         "profile_image": image_id,
     }
     digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -325,26 +300,6 @@ def check_renderable(character_name: str, *, view: Optional[str] = None,
     return profile
 
 
-def _publish_raw(raw: Path, final_stem: Path) -> Path:
-    """Move an unsmoothed render (image + sidecar) from its private staging
-    dir to the view's stem in ``model_refs`` — what a failed smooth pass
-    keeps. A stored image of the stem with another extension goes, like
-    ``render_character_image`` drops it; so does a sidecar the raw render
-    has none for (it would describe the image this one replaces)."""
-    import shutil
-    target = final_stem.parent / f"{final_stem.name}{raw.suffix}"
-    for old in final_stem.parent.glob(f"{final_stem.name}.*"):
-        if old.suffix.lower() != ".json" and old != target:
-            old.unlink()
-    shutil.move(str(raw), str(target))
-    sidecar = raw.with_suffix(".json")
-    if sidecar.is_file():
-        shutil.move(str(sidecar), str(target.with_suffix(".json")))
-    else:
-        target.with_suffix(".json").unlink(missing_ok=True)
-    return target
-
-
 def generate_base_images(character_name: str, *, view: Optional[str] = None,
                          force: bool = False) -> Dict[str, Optional[str]]:
     """Render the base-body views. Blocking — call from a worker thread.
@@ -357,18 +312,6 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
     ``base_signature``. The mesh-input matte applies because the occasion
     is a mesh-input one (``render_character_image``).
 
-    Smooth pass (``SMOOTH_VIEWS``: front, left, right): the view is rendered
-    into a private staging dir inside ``model_refs`` first, then EDITED with
-    ``smooth_prompt(view)`` — reference = that raw render on grey, occasion
-    ``tpose_view``, the view's own use case (the style stays the view's),
-    the base negative appended — straight onto the view's stem, sidecar
-    ``smoothed: true``. The smoothed front is the stored front the other
-    views are edited from. The raw render is dropped with its staging dir:
-    nothing reads it, and a name beside the stored refs would be parsed by
-    the cache GC and the outfit scans as a signature of its own. A smooth
-    pass that fails keeps the raw render as the view (moved into place) and
-    records a warning on the view's status — it never fails the run.
-
     Cached per base signature: a view that exists is skipped unless
     ``force``. ``view`` renders that one view only (a non-front view needs
     the front). The prompts carry no use-case style — the image service
@@ -377,7 +320,6 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
 
     Returns ``{view: path | None}`` for every view it rendered (None =
     failed); a front that fails stops the run — the views need it."""
-    import tempfile
     from app.core import expression_regen
     from app.core.model_refs import (TPOSE_VIEW_USE_CASES, _tpose_size, find_ref_image,
                                      get_model_refs_dir, neutral_view_reference)
@@ -399,62 +341,34 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
         mesh_profile["equipped_items"] = []
         results: Dict[str, Optional[str]] = {}
 
-        def draw(v: str, stem: Path, prompt: str, negative: str, occasion: str,
-                 reference: Optional[Path], sidecar: Dict[str, Any]) -> Optional[Path]:
-            return expression_regen.render_character_image(
-                character_name,
-                output_stem=stem,
-                equipped_pieces={}, equipped_items=[],
-                pose_prompt="", expression_prompt="",
-                bare_prompt=prompt, extra_negative=negative,
-                image_use_case="tpose" if v == "front" else TPOSE_VIEW_USE_CASES[v],
-                occasion=occasion,
-                override_width=width, override_height=height,
-                apply_state_modifiers=False,
-                mesh_input_profile=mesh_profile,
-                back_view=v == "back",
-                reference_image=reference,
-                sidecar_extra={"base_signature": bsig, **sidecar},
-                # The character's identity/pose LoRAs as on its tpose
-                # render (tpose_loras, else loras); no slot LoRAs.
-                character_loras=True)
-
-        def smooth(v: str, raw: Path, final: Path, negative: str) -> Tuple[Path, Optional[str]]:
-            """``(stored path, warning)`` — the smoothed view, or the raw
-            render moved into place with the reason the edit failed."""
-            try:
-                with neutral_view_reference(raw, refs_dir) as reference:
-                    path = draw(v, final, smooth_prompt(v), negative, "tpose_view", reference,
-                                {"smoothed": True})
-                if path:
-                    return path, None
-                reason = "edit failed"
-            except Exception as e:  # noqa: BLE001 — a failed smooth keeps the raw view
-                reason = str(e) or type(e).__name__
-            logger.warning("Base body %s %s (%s): smoothing failed, unsmoothed image kept: %s",
-                           character_name, v, bsig, reason)
-            return _publish_raw(raw, final), f"Smoothing failed, the unsmoothed image is kept: {reason}"
-
         def render(v: str, reference: Optional[Path]) -> Optional[Path]:
             prompt, negative = base_prompt(character_name, v, profile=profile)
-            occasion = "tpose" if v == "front" else "tpose_view"
-            final = refs_dir / f"{_kind(v)}_{bsig}"
-            warning = None
             reserve_views(character_name, (v,))
             try:
-                if v in SMOOTH_VIEWS:
-                    with tempfile.TemporaryDirectory(prefix=".smooth_", dir=refs_dir) as staging:
-                        raw = draw(v, Path(staging) / final.name, prompt, negative, occasion, reference, {})
-                        path, warning = smooth(v, raw, final, negative) if raw else (None, None)
-                else:
-                    path = draw(v, final, prompt, negative, occasion, reference, {})
+                path = expression_regen.render_character_image(
+                    character_name,
+                    output_stem=refs_dir / f"{_kind(v)}_{bsig}",
+                    equipped_pieces={}, equipped_items=[],
+                    pose_prompt="", expression_prompt="",
+                    bare_prompt=prompt, extra_negative=negative,
+                    image_use_case="tpose" if v == "front" else TPOSE_VIEW_USE_CASES[v],
+                    occasion="tpose" if v == "front" else "tpose_view",
+                    override_width=width, override_height=height,
+                    apply_state_modifiers=False,
+                    mesh_input_profile=mesh_profile,
+                    back_view=v == "back",
+                    reference_image=reference,
+                    sidecar_extra={"base_signature": bsig},
+                    # The character's identity/pose LoRAs as on its tpose
+                    # render (tpose_loras, else loras); no slot LoRAs.
+                    character_loras=True)
                 error = None if path else "render failed"
             except Exception as e:  # noqa: BLE001 — one view never kills the run
                 path, error = None, str(e) or type(e).__name__
                 logger.warning("Base body %s %s (%s) failed: %s", character_name, v, bsig, e)
             finally:
                 release_views(character_name, (v,))
-            _record(character_name, v, error or warning)
+            _record(character_name, v, error)
             results[v] = str(path) if path else None
             return path
 
