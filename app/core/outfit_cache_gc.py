@@ -89,6 +89,8 @@ REF_PREFIXES = ("tpose_animal_", "tpose_front_", "tpose_right_", "tpose_back_", 
 _MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?|base[0-9a-f]{8}")
 #: The shape of a base-body signature (``base_body.base_signature``).
 _BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
+#: The shape of an outfit body id (``base_body.outfit_body_id``).
+_OUTFIT_BODY_RE = re.compile(r"ob[0-9a-f]{8}")
 
 
 def reachable_signatures(character_name: str) -> Set[str]:
@@ -464,6 +466,12 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
         stale_bytes = 0
         for signature, files in groups.items():
             if signature and signature == worn:
+                valid += 1
+                continue
+            if _OUTFIT_BODY_RE.fullmatch(signature):
+                # An outfit body (base_body mesh mode): kept — it is judged by
+                # the reachability walk of its parent record (plan
+                # 2026-11-10-outfit-body-mesh-mode Task 3), never by a manifest.
                 valid += 1
                 continue
             if _BASE_SIG_RE.fullmatch(signature):

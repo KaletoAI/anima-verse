@@ -24,7 +24,15 @@ a 3D model or an image, decided here on the server.
      capsules (the base's set, ``collision.py``), the own-mesh
      pieces (own garment mesh / left painted on), the garments assembled
      onto it, measurement and distance mesh. A model of the old
-     path gets no list: the 3D tab keeps its own overview for it.
+     path gets no list: the 3D tab keeps its own overview for it. On an
+     OUTFIT BODY (``outfit_body_mode: "mesh"``) the painted-body, back-refit,
+     retexture-proof and face-texel rows give way to one ``outfit_body`` row
+     (body id, texture signature).
+   - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` of the
+     mesh mode — parent record (texture signature, views meshed), mesh, face
+     cleanup, face retexture, black-eye check, rig, head twist, normalize,
+     limb weights, extension rig, collision capsules, texture re-encode,
+     measurement (``outfit_body_overview`` reads it).
 
 2. FRESHNESS — ``{state, reason}`` beside every image and 3D preview of the
    character tabs: ``current`` / ``stale`` (made from inputs that changed
@@ -78,7 +86,10 @@ MESH_ITEM_READY = "An own-mesh piece painted on here has its garment mesh now"
 MODEL_STALE_REASONS = {"older_base": "Built on an older base body",
                        "before_pipeline": "Built before the base body pipeline",
                        "detail_changed": "Built for another body detail under the clothing",
-                       "mesh_item_ready": MESH_ITEM_READY}
+                       "mesh_item_ready": MESH_ITEM_READY,
+                       # base_body.BODY_MODE_CHANGED / OUTFIT_BODY_CHANGED
+                       "body_mode": "Built for the other outfit body mode",
+                       "outfit_body": "Built on an older outfit body"}
 # garments.garment_info ``stale_reasons`` -> phrase (the Hair tab's labels).
 HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "base_changed": "Base body changed",
@@ -128,7 +139,7 @@ def _dict(value: Any) -> Dict[str, Any]:
 
 # --- Steps shared by both model kinds ----------------------------------------
 
-def _rig_step(meta: Dict[str, Any], *, inherited: bool = False) -> Dict[str, Any]:
+def _rig_step(meta: Dict[str, Any], *, inherited: bool = False, source: str = "the base model") -> Dict[str, Any]:
     error = str(meta.get("rig_error") or "")
     rig = meta.get("rig") or ""
     backend = str(meta.get("rig_backend") or "")
@@ -138,7 +149,7 @@ def _rig_step(meta: Dict[str, Any], *, inherited: bool = False) -> Dict[str, Any
         return step("rig", "Rig", NOT_RECORDED, "No rig")
     detail = f"{rig} · {backend}" if backend else rig
     if inherited:
-        detail += " · from the base model"
+        detail += f" · from {source}"
     return step("rig", "Rig", DONE, detail)
 
 
@@ -267,6 +278,8 @@ def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None) -> 
         parts.append("skipped " + ", ".join(f"{x.get('id')} ({x.get('reason')})" for x in skipped))
     if record.get("source") == "base":
         parts.append("from the base model")
+    elif record.get("source") == "body":
+        parts.append("from the outfit body")
     if current is False:
         parts.append("outdated")
     status = WARNING if skipped or current is False else DONE
@@ -509,6 +522,53 @@ def _painted_body_step(meta: Dict[str, Any], shared: Optional[int]) -> Optional[
                 {"texture_signature": tsig, "shared": shared})
 
 
+def _outfit_body_step(meta: Dict[str, Any], body_meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The outfit body a mesh-mode outfit model is a copy of (sidecar
+    ``body_id``, ``texture_signature``): WARNING when the body file is gone
+    (``body_meta`` None). A body rebuilt since is the model's stale reason
+    ``outfit_body`` (``base_body.outfit_body_stale``), not this row."""
+    body_id = str(meta.get("body_id") or "")
+    numbers = {"body_id": body_id or None, "texture_signature": meta.get("texture_signature")}
+    if body_meta is None:
+        return step("outfit_body", "Outfit body", WARNING, f"{body_id} · file missing" if body_id else
+                    "Not recorded", numbers)
+    parts = [body_id, str(meta.get("texture_signature") or ""), "meshed from the dressed views"]
+    return step("outfit_body", "Outfit body", DONE, " · ".join(p for p in parts if p), numbers)
+
+
+def _body_parent_step(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The parent record of an outfit body (``base_body.prepare_outfit_body``)."""
+    record = _dict(meta.get("outfit_body"))
+    if not record:
+        return step("outfit_body", "Outfit body", NOT_RECORDED, "No parent record")
+    used = [v for v in (record.get("used_views") or []) if isinstance(v, str)]
+    warnings = [w for w in (record.get("view_warnings") or []) if isinstance(w, str)]
+    detail = " · ".join(filter(None, [str(record.get("texture_signature") or ""),
+                                      str(record.get("base_signature") or ""),
+                                      ("views " + ", ".join(used)) if used else ""] + warnings))
+    return step("outfit_body", "Outfit body", WARNING if warnings else DONE, detail,
+                {"texture_signature": record.get("texture_signature"), "views": len(used) or None})
+
+
+def outfit_body_steps(meta: Dict[str, Any], *,
+                      collision_current: Optional[bool] = None) -> List[Dict[str, Any]]:
+    """The steps of an outfit body of the mesh mode (pure): its parent
+    record, then the old path's chain as on the base model — mesh, face
+    cleanup, face retexture (+ black-eye check), rig, head twist, posture,
+    normalize, limb weights, extension rig, collision capsules, texture
+    re-encode, measurement. ``meta``: its sidecar."""
+    blender = _dict(meta.get("blender"))
+    rows = [_body_parent_step(meta), _mesh_step(meta), _face_cleanup_step(meta),
+            *_face_steps(_dict(meta.get("face_retexture"))), _rig_step(meta)]
+    for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
+                _limb_weights_step(blender, str(meta.get("rig") or "")),
+                _extension_step(_dict(meta.get("extension_rig"))),
+                _collision_step(meta, current=collision_current), _texture_step(meta), _measure_step(meta)):
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
 def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]],
                        guard: Dict[str, Any], delta_e: Optional[float]) -> Dict[str, Any]:
     label = {"front": "Dressed front", "back": "Dressed back", "left": "Dressed left",
@@ -660,7 +720,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        garments: List[Dict[str, Any]], tiers: List[str], low_tris: Any = None,
                        refit_limit: float = 4.0, covered_missing_text: str = "",
                        item_names: Optional[Dict[str, str]] = None,
-                       texture_shared: Optional[int] = None) -> List[Dict[str, Any]]:
+                       texture_shared: Optional[int] = None,
+                       body_meta: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit model on the base-body pipeline (pure).
     ``meta``: its sidecar; ``base``: the current ``(bsig, base model
     sha256)``; ``base_meta``: the sidecar of the base model it names (None
@@ -671,7 +732,10 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     at (front, back, sides), None when the file is gone; ``garments``: see
     ``_garment_steps``; ``tiers`` / ``low_tris``: the distance mesh;
     ``item_names``: item id -> name for the own-mesh pieces row;
-    ``texture_shared``: how many stored outfit models use its painted body."""
+    ``texture_shared``: how many stored outfit models use its painted body;
+    ``body_meta``: the sidecar of the outfit body it names (mesh mode; None
+    when gone or in retexture mode)."""
+    on_body = meta.get("outfit_body_mode") == "mesh"
     proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
     used = {"front"} | set(_dict(meta.get("view_images")))
@@ -679,7 +743,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     rows = [_base_used_step(meta, base),
             _variant_step(meta, wanted=wanted_variant, deciders=deciders, shown=shown,
                           covered_missing_text=covered_missing_text)]
-    painted = _painted_body_step(meta, texture_shared)
+    painted = _outfit_body_step(meta, body_meta) if on_body else _painted_body_step(meta, texture_shared)
     if painted is not None:
         rows.append(painted)
     deltas = {v: _num(_dict(_dict(_dict(proof.get("views")).get(v)).get("dressed_alignment")).get("unchanged_delta_e"))
@@ -688,17 +752,23 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
         for v in views:
             rows.append(_dressed_view_step(v, used=v in used, record=dressed_records.get(v),
                                            guard=_dict(guards.get(v)), delta_e=deltas.get(v)))
-        refit = _refit_step(meta, deltas.get("back"), refit_limit, "back" in used)
+        refit = None if on_body else _refit_step(meta, deltas.get("back"), refit_limit, "back" in used)
         if refit is not None:
             rows.append(refit)
-    rows.append(_retexture_step(meta, refit_limit))
-    face = _face_texels_step(meta)
-    if face is not None:
-        rows.append(face)
-    rows.append(_rig_step(meta, inherited=True))
+    if not on_body:
+        rows.append(_retexture_step(meta, refit_limit))
+        face = _face_texels_step(meta)
+        if face is not None:
+            rows.append(face)
+    rows.append(_rig_step(meta, inherited=True, source="the outfit body" if on_body else "the base model"))
     state = _dict(meta.get("extension_rig"))
-    base_state = _dict((base_meta or {}).get("extension_rig"))
-    if meta.get("base_variant") == "covered":
+    base_state = _dict(((body_meta if on_body else base_meta) or {}).get("extension_rig"))
+    if on_body and state and base_state and state.get("fingerprint") == base_state.get("fingerprint") \
+            and state.get("attempted_at") == base_state.get("attempted_at"):
+        source = "inherited from the outfit body"
+    elif on_body:
+        source = "rebuilt for this outfit" if state else ""
+    elif meta.get("base_variant") == "covered":
         source = "from the covered variant"
     elif state and base_state and state.get("fingerprint") == base_state.get("fingerprint") \
             and state.get("attempted_at") == base_state.get("attempted_at"):
@@ -868,6 +938,23 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
             "freshness": base_model_freshness(meta, _base_view_shas(character_name, bsig))}
 
 
+def outfit_body_overview(character_name: str, body_id: str) -> Optional[Dict[str, Any]]:
+    """``{steps}`` of the stored outfit body ``body_id`` (mesh mode), None
+    without one. Never raises on a bad id (None)."""
+    from app.core import base_body
+    if not base_body.is_outfit_body_signature(body_id):
+        return None
+    path = base_body.outfit_body_path(character_name, body_id)
+    if not path.is_file():
+        return None
+    meta = _sidecar(path)
+    from app.core import collision
+    current = (collision.is_current(meta.get("collision"), collision.identity(path, meta)[1],
+                                    collision.character_scales(character_name))
+               if meta.get("collision") else None)
+    return {"steps": outfit_body_steps(meta, collision_current=current)}
+
+
 def annotate_base_info(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
     """``base_body.base_info`` + ``model.steps`` / ``model.freshness`` and a
     ``freshness`` in every ``image_meta`` entry. Never raises."""
@@ -948,6 +1035,10 @@ def outfit_model_overview(character_name: str,
     base = base_body.current_base(character_name)
     bsig = str(meta.get("base_signature") or "")
     base_meta = _sidecar(_base_model_path(character_name, bsig)) if bsig else None
+    body_meta = None
+    if meta.get("outfit_body_mode") == "mesh" and base_body.is_outfit_body_signature(meta.get("body_id")):
+        body_path = base_body.outfit_body_path(character_name, str(meta["body_id"]))
+        body_meta = _sidecar(body_path) if body_path.is_file() else None
     wanted, deciders, shown = _piece_decision(character_name, _dict(meta.get("pieces")))
     refs = get_model_refs_dir(character_name)
     names = {"front": meta.get("source_image"), **_dict(meta.get("view_images"))}
@@ -971,7 +1062,8 @@ def outfit_model_overview(character_name: str,
                                            for i in base_body.mesh_items_intended(meta)},
                                texture_shared=(len(base_body.texture_users(character_name).get(
                                    str(meta.get("texture_signature")), [])) if meta.get("texture_signature")
-                                   else None))
+                                   else None),
+                               body_meta=body_meta)
     return steps, dressed_newer(str(meta.get("created_at") or ""), records)
 
 

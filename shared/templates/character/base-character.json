@@ -174,6 +174,37 @@
       "visible_when": { "feature": "humanoid" }
     },
     {
+      "id": "outfit_body",
+      "label": "Outfit body",
+      "label_de": "Outfit-Körper",
+      "column": 28,
+      "row": 1,
+      "fields": [
+        {
+          "key": "outfit_body_mode",
+          "type": "select",
+          "label": "Body under own-mesh garments",
+          "label_de": "Körper unter eigenen Kleidungs-Meshes",
+          "options": [
+            {
+              "value": "retexture",
+              "label": "Base body with the pieces painted on",
+              "label_de": "Grundkörper mit aufgemalten Teilen"
+            },
+            {
+              "value": "mesh",
+              "label": "Own mesh from the dressed views",
+              "label_de": "Eigenes Mesh aus den bekleideten Ansichten"
+            }
+          ],
+          "default": "retexture",
+          "hint": "Base-body pipeline only. Own mesh: every combination of painted pieces gets its own meshed and rigged outfit body (mesh + rig jobs, once per combination); own-mesh garments are fitted onto it.",
+          "hint_de": "Nur in der Grundkörper-Pipeline. Eigenes Mesh: jede Kombination aufgemalter Teile bekommt einen eigenen gemeshten und geriggten Outfit-Körper (Mesh- und Rig-Job, einmal pro Kombination); eigene Kleidungs-Meshes werden darauf angepasst."
+        }
+      ],
+      "visible_when": { "feature": "humanoid" }
+    },
+    {
       "id": "hair",
       "label": "Hair",
       "label_de": "Haare",

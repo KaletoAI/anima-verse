@@ -609,11 +609,14 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     (``base_body.variant_current``: a piece's ``exposed_detail`` changed),
     or left an own-mesh piece painted on that has its garment mesh now
     (``base_body.mesh_items_ready``). The base model itself is never stale
-    here."""
+    here, nor is an outfit body (``base_body.outfit_body_id``); an outfit
+    model built for the other outfit body mode, or on an outfit body that
+    was rebuilt since, is (``base_body.outfit_body_stale``)."""
     if not base:
         return False
-    from app.core.base_body import built_on_current_base, is_base_signature, mesh_items_ready, variant_current
-    if is_base_signature(path.stem):
+    from app.core.base_body import (built_on_current_base, is_base_signature, is_outfit_body_signature,
+                                    mesh_items_ready, outfit_body_stale, variant_current)
+    if is_base_signature(path.stem) or is_outfit_body_signature(path.stem):
         return False
     meta = _read_sidecar(path)
     if not built_on_current_base(meta, base):
@@ -621,6 +624,7 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     if not meta.get("character"):
         return False
     return (not variant_current(meta["character"], meta)
+            or bool(outfit_body_stale(meta["character"], meta))
             or bool(mesh_items_ready(meta["character"], meta, base_sha=base[1])))
 
 
@@ -664,9 +668,10 @@ def request_lod(character_name: str, model_path: Path) -> bool:
     A better low-poly version made elsewhere can replace it at any time.
     """
     meta = _read_sidecar(model_path)
-    # A base body is copied per outfit, never shown at range: no low tier.
+    # A base body (and an outfit body) is copied per outfit, never shown at
+    # range: no low tier.
     if (not _auto_lod_enabled() or model_path.suffix.lower() != ".glb"
-            or meta.get("rig") == "none" or meta.get("base")):
+            or meta.get("rig") == "none" or meta.get("base") or meta.get("outfit_body")):
         return False
     if character_name in getattr(_staging, "directories", {}):
         result = build_lod(character_name, model_path.stem, ratio=_auto_lod_ratio())
@@ -1025,16 +1030,17 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # stand-in). It is still THE file on screen, so its details stay; the
         # flag tells the tab to ask for a rebuild. ``stale_reason``:
         # ``older_base`` / ``before_pipeline`` (no base recorded) /
-        # ``detail_changed`` / ``mesh_item_ready``.
+        # ``detail_changed`` / ``body_mode`` / ``outfit_body`` /
+        # ``mesh_item_ready``.
         current_base = _current_base(character_name)
         info["stale_base"] = _on_older_base(path, current_base)
         if info["stale_base"]:
-            from app.core.base_body import built_on_current_base, variant_current
+            from app.core.base_body import built_on_current_base, outfit_body_stale, variant_current
             stale_meta = _read_sidecar(path)
             info["stale_reason"] = ("before_pipeline" if not stale_meta.get("base_signature")
                                     else "older_base" if not built_on_current_base(stale_meta, current_base)
                                     else "detail_changed" if not variant_current(character_name, stale_meta)
-                                    else "mesh_item_ready")
+                                    else outfit_body_stale(character_name, stale_meta) or "mesh_item_ready")
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
@@ -1370,11 +1376,12 @@ def _auto_collision(character_name: str, path: Path, meta: Dict[str, Any]) -> bo
 
 
 def _extension_groups_for(meta: Dict[str, Any], groups):
-    """The extension groups a model of ``meta`` carries: a base body never
+    """The extension groups a model of ``meta`` carries: a base body — and
+    an outfit body (``meta["outfit_body"]``) — never
     the anatomy parts (``PART_OPS``, they belong to the outfit models), the
     covered variant of a base body — and an outfit built from it
     (``base_variant: "covered"``) — never the ``exposed_only`` groups."""
-    if meta.get("base"):
+    if meta.get("base") or meta.get("outfit_body"):
         groups = [g for g in groups if g["op"] not in PART_OPS]
     if meta.get("base_variant") == "covered":
         groups = [g for g in groups if not g.get("exposed_only")]
@@ -1683,7 +1690,7 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
     result = _auto_extension_rig(character_name, path, meta, force=force)
     if not result.get("noop"):
         _publish_sidecar(path, meta)
-    if (result.get("ok") and tier == FULL_TIER and not meta.get("base")
+    if (result.get("ok") and tier == FULL_TIER and not meta.get("base") and not meta.get("outfit_body")
             and (meta.get("extension_rig") or {}).get("status") in ("applied", "none_applicable")):
         low = tier_variant(path, LOW_TIER)
         low_meta = _read_sidecar(low) if low else {}
@@ -2516,13 +2523,16 @@ def _op_subject(character_name: str, signature: str) -> str:
     return f"model3d:{character_name}:{signature}"
 
 
-def _op_match(character_name: str, signature: Optional[str], *, base: Optional[bool] = None):
+def _op_match(character_name: str, signature: Optional[str], *, base: Optional[bool] = None,
+              body: Optional[bool] = None):
     """``base`` (mesh records only): True/False match only base-body /
-    outfit records — an outfit run never resumes a base one, nor back."""
+    outfit records — an outfit run never resumes a base one, nor back.
+    ``body`` likewise for outfit-body records (manifest ``outfit_body``)."""
     def match(inputs: Dict[str, Any]) -> bool:
         return (inputs.get("character") == character_name
                 and (signature is None or inputs.get("signature") == signature)
-                and (base is None or bool(inputs.get("base")) == base))
+                and (base is None or bool(inputs.get("base")) == base)
+                and (body is None or ("outfit_body" in (inputs.get("manifest") or {})) == body))
     return match
 
 
@@ -2591,9 +2601,20 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 signature: Optional[str] = None,
                                 face_num: Any = None,
                                 texture_size: Any = None,
-                                base: bool = False) -> Dict[str, Any]:
+                                base: bool = False,
+                                outfit_body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Generates the mesh for the currently worn outfit — or a given
     combination — from its T-pose render.
+
+    ``outfit_body`` (with ``signature`` = an outfit body id,
+    ``base_body.prepare_outfit_body``) builds an OUTFIT BODY of the mesh
+    mode instead: the sidecar manifest to freeze (``{"outfit_body": <parent
+    record>, "base_variant": …}``) replaces the outfit manifest, every
+    stored view of the body id goes in (like the base), the anatomy-part
+    batches and the distance tier are skipped (``outfit_body`` in the
+    sidecar). Before an outfit run in mesh mode the outfit's body is made
+    sure of first (``prepare_outfit_body``, outside this function's stage);
+    its failure is this run's result.
 
     ``base=True`` (with ``signature`` = the base signature,
     ``base_body.generate_base_model``) builds the base body instead: every
@@ -2623,8 +2644,18 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     from app.core import hub_ops
     if base and not signature:
         raise ValueError("A base-body model needs its base signature")
-    op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base))
-    if op is None and not base:
+    if outfit_body is not None:
+        from app.core.base_body import is_outfit_body_signature
+        if base or not is_outfit_body_signature(signature):
+            raise ValueError("An outfit body needs its body id")
+    else:
+        from app.core.base_body import prepare_outfit_body
+        prepared = None if base else prepare_outfit_body(character_name, signature, force=force)
+        if prepared is not None and not prepared.get("ok"):
+            return prepared
+    op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base,
+                                               body=outfit_body is not None))
+    if op is None and not base and outfit_body is None:
         _ensure_covered_variant(character_name)
     if op is not None:
         return _resume_entry(op, lambda: _generate_for_current_outfit(
@@ -2633,7 +2664,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     return hub_ops.run_new(lambda ctx: _generate_for_current_outfit(
         character_name, force=force, backend_glob=backend_glob,
         prefer_cheapest=prefer_cheapest, signature=signature, face_num=face_num,
-        texture_size=texture_size, base=base, _op_ctx=ctx))
+        texture_size=texture_size, base=base, outfit_body=outfit_body, _op_ctx=ctx))
 
 
 @_serial_model
@@ -2644,6 +2675,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                                  face_num: Any = None,
                                  texture_size: Any = None,
                                  base: bool = False,
+                                 outfit_body: Optional[Dict[str, Any]] = None,
                                  _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The staged half of ``generate_for_current_outfit``: preprocessing and
     the record (fresh run), then the stages — or the stages alone when
@@ -2672,7 +2704,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 character_name, signature, cached.name)
                     return {"ok": True, "cached": True, "path": str(cached)}
 
-            if not base:
+            if not base and outfit_body is None:
                 from app.core.base_body import build_outfit_model, is_base_pipeline
                 if is_base_pipeline(character_name):
                     # Base-body pipeline: the outfit model is the rigged base
@@ -2706,9 +2738,9 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             # passed on — a view that failed to render must not block the mesh.
             from app.core.model_refs import enabled_tpose_views, is_humanoid
             view_images = {}
-            if base:
-                # The base body always sends every view it has rendered,
-                # independent of the outfit view toggles.
+            if base or outfit_body is not None:
+                # The base body (and an outfit body) always sends every view
+                # it has, independent of the outfit view toggles.
                 from app.core.base_body import BASE_VIEWS
                 wanted_views = [v for v in BASE_VIEWS if v != "front"]
             else:
@@ -2731,7 +2763,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             try:
                 task_id = get_task_queue().track_start(
                     "model3d_generation",
-                    f"{'Base-body 3D model' if base else '3D model'}: {character_name}",
+                    f"{'Base-body 3D model' if base else 'Outfit-body 3D model' if outfit_body else '3D model'}: "
+                    f"{character_name}",
                     agent_name=character_name, start_running=True)
             except Exception:
                 task_id = ""
@@ -2792,11 +2825,13 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
                 "view_images": {v: Path(p).name for v, p in view_images.items()},
                 "view_images_sha256": {v: hashlib.sha256(blob).hexdigest() for v, blob in view_bytes.items()},
-                # A base body stands for no outfit: no piece manifest.
-                "manifest": {} if base else _ref_manifest(src),
+                # A base body stands for no outfit: no piece manifest; an
+                # outfit body carries its parent record instead.
+                "manifest": {} if base else dict(outfit_body) if outfit_body is not None else _ref_manifest(src),
                 **({"base": True} if base else {}),
                 **face_inputs,
-            }, label=f"{'Base-body 3D model' if base else '3D model'}: {character_name}", track_id=task_id)
+            }, label=f"{'Base-body 3D model' if base else 'Outfit-body 3D model' if outfit_body else '3D model'}: "
+                     f"{character_name}", track_id=task_id)
             if _op_ctx is not None:
                 _op_ctx["op"] = op
             op.path("inputs", src.name).write_bytes(source_bytes)
@@ -3188,7 +3223,9 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
             "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view",
-            "base", "face_cleanup")}
+            "base", "face_cleanup",
+            # An outfit body's parent record (base_body.prepare_outfit_body) survives every re-rig.
+            "outfit_body", "base_variant")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
@@ -3231,8 +3268,8 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         _attach_measurement(meta, path)
         _publish_sidecar(path, meta)
         try:
-            if meta.get("base"):
-                pass  # A base body has no distance tier.
+            if meta.get("base") or meta.get("outfit_body"):
+                pass  # A base body (and an outfit body) has no distance tier.
             elif low or (face_meta and _auto_lod_enabled()):
                 result = build_lod(character_name, signature, ratio=low_meta.get("lod_ratio") or _auto_lod_ratio())
                 if not result.get("ok"):

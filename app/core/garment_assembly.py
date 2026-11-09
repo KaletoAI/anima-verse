@@ -154,7 +154,13 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
     the base model a fit (its ``record``) was fitted to: the sidecar's
     ``base_model_sha256`` equals the record's, or — a sidecar without the
     sha — its ``base_signature`` does. A sidecar with neither (a model from
-    before the pipeline) matches nothing."""
+    before the pipeline) matches nothing. A bare model on an OUTFIT BODY
+    (sidecar ``body_id``, mesh mode) matches only a fit made on that body
+    (record ``body_id``, plan 2026-11-10-outfit-body-mesh-mode Task 2) — a
+    fit of the base model is never grafted onto it."""
+    body = str(bare_meta.get("body_id") or "")
+    if body:
+        return body == str(record.get("body_id") or "")
     sha = str(bare_meta.get("base_model_sha256") or "")
     if sha:
         return sha == str(record.get("base_model_sha256") or "")
