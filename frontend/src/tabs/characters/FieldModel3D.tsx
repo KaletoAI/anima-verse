@@ -14,6 +14,12 @@ import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/sce
  * POST .../model3d/fetch-job (collect a finished gateway job by its id),
  * POST .../model3d/upload, POST .../model3d/rig, GET .../model3d/file (bytes),
  * DELETE .../model3d.
+ *
+ * Base-body pipeline (`st.pipeline`, server app/core/model3d_pipeline.py):
+ * the outfit model is painted onto the rigged base body, so "Generate" is
+ * "Rebuild from base body" (no mesh-backend dialog), re-rig acts on the base
+ * body, and upload / "Fetch by job ID" / the upload rig label are not
+ * offered (the server refuses them too).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -196,6 +202,17 @@ export interface Model3DStatus {
   animation_sets?: string[]
   animation_set_derived?: string
   pending?: boolean
+  /** Base-body pipeline state; null/absent off the pipeline. */
+  pipeline?: {
+    base_signature: string
+    /** status of the current base model: ready | running | failed | unrigged; null = none */
+    base_model?: string | null
+    /** the base model's unrigged source is retained — what a re-rig needs */
+    rerig_source: boolean
+    /** every dressed view of the current outfit matches the current base */
+    dressed_current: boolean
+    rebuilding: boolean
+  } | null
   /** Local Blender install — decides whether measuring is offered at all. */
   blender?: { enabled?: boolean; executable?: string; version?: string; usable?: boolean }
 }
@@ -393,10 +410,26 @@ export function FieldModel3D({ character }: { character: string }) {
     [busy, enc, startPoll, t, toast],
   )
 
+  // Base-body pipeline: no backend dialog — the server dresses stale views
+  // first, then builds the outfit model anew from the current base body.
+  const rebuildFromBase = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/generate`, {})
+      toast(d?.status === 'already_running'
+        ? t('A 3D model generation is already running for this character') : t('Rebuilding from the base body…'))
+      startPoll()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setBusy(false)
+    }
+  }, [busy, enc, startPoll, t, toast])
+
   const rerig = async () => {
     if (busy || st.pending) return
     const context = previewContextRef.current
-    const q = new URLSearchParams({ signature: st.model?.signature || '' })
+    const q = new URLSearchParams({ signature: st.pipeline?.base_signature || st.model?.signature || '' })
     if (rerigBackend) q.set('backend', rerigBackend)
     setBusy(true)
     try {
@@ -784,6 +817,9 @@ export function FieldModel3D({ character }: { character: string }) {
   }, [confirmDelete, enc, load, t, toast])
 
   const model = st.model
+  const pipeline = st.pipeline || null
+  const baseReady = pipeline?.base_model === 'ready'
+  const canRerig = pipeline ? pipeline.rerig_source : !!model?.has_unrigged_source
   // A nearest match is another combination's model served as stand-in —
   // there is nothing stored for THIS outfit to replace or delete.
   const owned = !!model && model.match !== 'nearest'
@@ -1069,7 +1105,7 @@ export function FieldModel3D({ character }: { character: string }) {
           {/* Upload rig declarations decide whether shared clips apply.
               (owned: the update writes the CURRENT combination's sidecar —
               a nearest stand-in has none.) */}
-          {owned && model.source === 'upload' ? (
+          {owned && model.source === 'upload' && !pipeline ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Rig')}</span>
               <select
@@ -1088,14 +1124,18 @@ export function FieldModel3D({ character }: { character: string }) {
         <div className="ga-hint">
           {pending
             ? t('Generating the 3D model — this takes a few minutes.')
-            : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
+            : pipeline
+              ? t('No 3D model for this outfit yet — it is built from the base body (Rebuild from base body).')
+              : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
         </div>
       )}
       {!st.pending && st.rerig_result ? <div className="ga-hint" role="status">
         {st.rerig_result.ok ? t('Re-rig completed') : `${t('Re-rig failed')}: ${st.rerig_result.error || t('Error')}`}
       </div> : null}
       {model ? <div className="ga-hint">
-        {t('Mesh backend')}: {model.mesh_backend || t('Unknown')} · {t('Rig backend')}: {model.rig_backend || t('Unknown')}
+        {pipeline
+          ? `${t('Built from the base body')} · ${pipeline.base_signature}`
+          : <>{t('Mesh backend')}: {model.mesh_backend || t('Unknown')} · {t('Rig backend')}: {model.rig_backend || t('Unknown')}</>}
       </div> : null}
       {!st.pending && st.face_retexture_result ? <div className="ga-hint" role="status">
         {st.face_retexture_result.ok ? t('Face retexture completed') : `${t('Face retexture failed')}: ${st.face_retexture_result.error || t('Error')}`}
@@ -1268,11 +1308,13 @@ export function FieldModel3D({ character }: { character: string }) {
         </div>, document.body) : null}
       {rerigOpen ? createPortal(
         <div className="ga-modal-backdrop" onClick={() => { if (!busy) setRerigOpen(false) }}>
-          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Re-rig from mesh')}
+          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={pipeline ? t('Re-rig base body') : t('Re-rig from mesh')}
             style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
-            <div className="ga-modal-header">{t('Re-rig from mesh')}</div>
+            <div className="ga-modal-header">{pipeline ? t('Re-rig base body') : t('Re-rig from mesh')}</div>
             <div className="ga-modal-body ga-form">
-              <p className="ga-hint">{t('Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.')}</p>
+              <p className="ga-hint">{pipeline
+                ? t('Re-rigs the base body from its retained mesh. Every outfit model is painted onto the base body, so each one is rebuilt on its next trigger.')
+                : t('Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.')}</p>
               <label>{t('Rigger')}
                 <select className="ga-input" value={rerigBackend} disabled={busy} onChange={e => setRerigBackend(e.target.value)}>
                   <option value="">{t('Auto (routing)')}</option>
@@ -1282,30 +1324,45 @@ export function FieldModel3D({ character }: { character: string }) {
             </div>
             <div className="ga-modal-footer">
               <button type="button" className="ga-btn" disabled={busy} onClick={() => setRerigOpen(false)}>{t('Cancel')}</button>
-              <button type="button" className="ga-btn ga-btn-primary" disabled={pending} onClick={rerig}>{t('Re-rig from mesh')}</button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={pending} onClick={rerig}>{pipeline ? t('Re-rig base body') : t('Re-rig from mesh')}</button>
             </div>
           </div>
         </div>, document.body) : null}
       <div role="group" aria-label={t('Model')}>
         <div className="ga-form-section-label">{t('Model')}</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={pending || !st.has_input}
-            onClick={openDialog}
-            title={!st.has_input ? t('No pose render for the current outfit — generate it first') : undefined}
-          >
-            {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
-          </button>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={pending}
-            onClick={() => fileRef.current?.click()}
-          >
-            {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
-          </button>
+          {pipeline ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={pending || !baseReady}
+              onClick={rebuildFromBase}
+              title={!baseReady ? t('Generate the rigged base model first (Base body tab)')
+                : t('Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.')}
+            >
+              {pending ? t('Generating…') : t('Rebuild from base body')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={pending || !st.has_input}
+              onClick={openDialog}
+              title={!st.has_input ? t('No pose render for the current outfit — generate it first') : undefined}
+            >
+              {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
+            </button>
+          )}
+          {!pipeline ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={pending}
+              onClick={() => fileRef.current?.click()}
+            >
+              {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
+            </button>
+          ) : null}
           {model ? (
             <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file?download=true`} download>
               {t('Download')}
@@ -1337,10 +1394,12 @@ export function FieldModel3D({ character }: { character: string }) {
           {model?.face_retexture_revert ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
             onClick={() => setRevertFaceOpen(true)}>{t('Revert face retexture…')}</button> : null}
           <button type="button" className="ga-btn ga-btn-sm"
-            disabled={pending || !model?.has_unrigged_source}
-            title={!model?.has_unrigged_source ? t('No retained unrigged mesh source. Generate a new model to enable re-rigging.') : undefined}
+            disabled={pending || !canRerig}
+            title={!canRerig ? (pipeline ? t('The base body has no retained unrigged mesh. Generate the base model again (Base body tab).')
+              : t('No retained unrigged mesh source. Generate a new model to enable re-rigging.'))
+              : pipeline ? t('Re-rigs the base body; every outfit model is rebuilt from it.') : undefined}
             onClick={() => { setRerigBackend(''); setRerigOpen(true) }}>
-            {t('Re-rig from mesh…')}
+            {pipeline ? t('Re-rig base body…') : t('Re-rig from mesh…')}
           </button>
           {/* Only for a GLB this outfit owns — it rewrites the stored file. */}
           {owned && canMeasure && model?.format === 'glb' ? (
@@ -1365,7 +1424,8 @@ export function FieldModel3D({ character }: { character: string }) {
               {model.tiers?.includes('low') ? t('Rebuild distance mesh') : t('Build distance mesh')}
             </button>
           ) : null}
-          {model && !model.has_unrigged_source ? <span className="ga-hint">{t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}</span> : null}
+          {pipeline ? (!pipeline.rerig_source ? <span className="ga-hint">{t('The base body has no retained unrigged mesh. Generate the base model again (Base body tab).')}</span> : null)
+            : model && !model.has_unrigged_source ? <span className="ga-hint">{t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}</span> : null}
         </div>
       </div>
       <div role="group" aria-label={t('Inspect')}>
@@ -1386,6 +1446,9 @@ export function FieldModel3D({ character }: { character: string }) {
       <details>
         <summary className="ga-form-section-label" style={{ cursor: 'pointer' }}>{t('Advanced')}</summary>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+          {/* A gateway mesh job is an img2mesh result — the pipeline builds
+              its outfit models from the base body instead. */}
+          {!pipeline ? (
           <button
             type="button"
             className={`ga-btn ga-btn-sm${jobOpen ? ' ga-btn-primary' : ''}`}
@@ -1396,13 +1459,16 @@ export function FieldModel3D({ character }: { character: string }) {
           >
             {t('Fetch by job ID…')}
           </button>
+          ) : null}
           {/* Pre-warm the whole wardrobe: one T-pose render + mesh per saved
               outfit, without dressing the character. */}
           <button
             type="button"
             className="ga-btn ga-btn-sm"
             onClick={() => setBatchOpen(true)}
-            title={t('Renders the pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
+            title={pipeline
+              ? t('Dresses the base body views and builds the outfit model for every saved outfit — the character keeps wearing what it wears.')
+              : t('Renders the pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
           >
             ⚙ {t('All outfits…')}
           </button>
@@ -1411,7 +1477,7 @@ export function FieldModel3D({ character }: { character: string }) {
             onClick={queueExtensions}>{t('Rebuild extension bones for all models')}</button>
           ) : null}
         </div>
-      {jobOpen ? (
+      {jobOpen && !pipeline ? (
         <div className="ga-form" style={{ gap: 6 }}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <input

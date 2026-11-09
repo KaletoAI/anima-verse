@@ -1672,11 +1672,26 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
 
 
 def rebuild_character_extension_rigs(character_name: str) -> Dict[str, Any]:
-    """Rebuild every stored full model of one character for the Improvements queue."""
+    """Rebuild every stored full model of one character for the Improvements queue.
+
+    Base-body pipeline: the CURRENT base model goes first — every outfit
+    model is built from it, so an outfit rebuilt before it would be stale
+    the moment the base changes. A base model of an older base signature
+    and an outfit model that is stale anyway (``find_model3d`` does not
+    find it; rebuilt on its next trigger) are skipped, not failed."""
+    from app.core.base_body import is_base_signature
     from app.core.model_refs import is_state_fork
-    results = {path.stem: rebuild_extension_rig(character_name, path.stem, force=True)
-               for path in sorted(get_model3d_dir(character_name).glob("*.glb"))
-               if not is_state_fork(path.stem)}
+    current = _current_base(character_name)
+    paths = sorted((path for path in get_model3d_dir(character_name).glob("*.glb")
+                    if not is_state_fork(path.stem)),
+                   key=lambda path: (not current or path.stem != current[0], path.stem))
+    results = {}
+    for path in paths:
+        if current and (is_base_signature(path.stem) and path.stem != current[0]
+                        or find_model3d(character_name, path.stem) is None):
+            results[path.stem] = {"ok": True, "skipped": "stale"}
+            continue
+        results[path.stem] = rebuild_extension_rig(character_name, path.stem, force=True)
     return {"ok": all(result.get("ok") for result in results.values()), "models": results}
 
 
@@ -3161,6 +3176,10 @@ def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = ""
             with _char_lock(character_name):
                 result = rerig_model(character_name, signature, backend_glob=backend_glob,
                                      track_id=task_id)
+            if result.get("ok"):
+                # A re-rigged BASE body (the 3D tab on the base-body pipeline)
+                # makes every outfit model stale; no-op for an outfit model.
+                after_base_face_change(character_name, signature)
         except Exception as exc:
             result = {"ok": False, "error": str(exc)}
             logger.exception("Re-rig failed for %s", character_name)

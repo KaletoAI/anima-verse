@@ -13,9 +13,10 @@
  * are listed as warnings under the status.
  *
  * A changed base body does NOT rebuild outfit models by itself; such a model
- * reports `stale` (or was built before the character joined the pipeline), and "Rebuild outfit model" starts the regular generation
- * of the current outfit (POST /characters/{n}/model3d/generate?force=1 — the
- * route FieldModel3D uses; on the pipeline it builds via the base body).
+ * reports `stale` (or was built before the character joined the pipeline), and "Rebuild outfit model" starts the rebuild
+ * of the current outfit (POST /characters/{n}/model3d/generate — the route
+ * FieldModel3D's "Rebuild from base body" uses: stale dressed views first,
+ * then the outfit model anew from the current base body).
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'

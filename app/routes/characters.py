@@ -2181,7 +2181,8 @@ def get_character_model3d(character_name: str, request: Request, preview_states:
     ({signature, has_input, model, pending}) + the character's animation set
     (explicit or derived), so the preview can offer the matching clips.
     ``model`` carries ``freshness`` and — for an outfit model on the
-    base-body pipeline — its ``steps`` (``model_overview.annotate_model3d_info``)."""
+    base-body pipeline — its ``steps`` (``model_overview.annotate_model3d_info``);
+    ``pipeline`` is ``model3d_pipeline.pipeline_state`` (None off it)."""
     from app.core.animation_sets import derive_set, resolve_sets
     from app.core.model3d import get_model3d_info
     selected = None
@@ -2189,7 +2190,10 @@ def get_character_model3d(character_name: str, request: Request, preview_states:
         require_admin(request)
         selected = [] if preview_states == "none" else [value.strip() for value in preview_states.split(",") if value.strip()]
     from app.core.model_overview import annotate_model3d_info
+    from app.core.model3d_pipeline import annotate as annotate_pipeline
     info = annotate_model3d_info(character_name, get_model3d_info(character_name, preview_states=selected))
+    # ``pipeline``: what the tab's actions mean on the base-body pipeline.
+    info = annotate_pipeline(character_name, info)
     chain = resolve_sets(character_name)
     info["animation_set"] = chain[0] if chain else ""
     info["animation_sets"] = chain          # explicit first, then derived
@@ -2205,6 +2209,8 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
       * ``file``=<name>.glb — humanoid: 52-joint Mixamo rig + embedded texture.
       * ``file``=<name>.fbx + ``texture``=<name>.png — generic FBX + basecolor.
     ``force=1`` stores despite validation errors; ``rig`` overrides the label.
+    409 on the base-body pipeline (``model3d_pipeline.refusal``): its outfit
+    model is built from the base body.
     """
     try:
         from app.core.model_validate import validate_fbx, validate_glb
@@ -2222,6 +2228,10 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
                                 detail="Format not supported (GLB or FBX + PNG)")
         if not get_character_dir(character_name).exists():
             raise HTTPException(status_code=404, detail="Character not found")
+        from app.core.model3d_pipeline import refusal
+        refused = refusal(character_name, "Uploading a model")
+        if refused:
+            raise HTTPException(status_code=409, detail=refused)
 
         contents = await read_upload_capped(
             file, max_bytes=MODEL_UPLOAD_MAX_BYTES, what="Character model")
@@ -2264,7 +2274,8 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
 
 @router.post("/{character_name}/model3d/rig")
 async def set_character_model3d_rig(character_name: str, request: Request) -> Dict[str, Any]:
-    """Updates the rig of the current outfit's model (mixamo|generic)."""
+    """Updates the rig of the current outfit's model (mixamo|generic).
+    409 on the base-body pipeline (its outfit models carry the base's rig)."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_set_character_model3d_rig_sync,
@@ -2276,6 +2287,10 @@ def _set_character_model3d_rig_sync(character_name: str,
     """The blocking body of ``set_character_model3d_rig`` — runs in the
     threadpool."""
     from app.core.model3d import set_model3d_rig
+    from app.core.model3d_pipeline import refusal
+    refused = refusal(character_name, "Changing the rig label")
+    if refused:
+        raise HTTPException(status_code=409, detail=refused)
     rig = str(body.get("rig") or "").strip().lower()
     if rig not in MODEL_RIG_VALUES:
         raise HTTPException(status_code=400,
@@ -2371,11 +2386,25 @@ def generate_character_model3d(character_name: str, force: bool = False,
     occasion chain of the image routing);
     ``face_num``/``texture_size`` override the backend defaults for THIS run
     (0 = default; texture size reaches the gateway once its alias declares
-    the param). Cached per combination — ``force=1`` re-generates."""
+    the param). Cached per combination — ``force=1`` re-generates.
+
+    Base-body pipeline: "Rebuild from base body"
+    (``model3d_pipeline.rebuild_from_base``) — stale dressed views first,
+    then the outfit model built anew from the current base, whatever
+    ``force`` says. A ``backend``/``face_num``/``texture_size`` is a 400
+    (no mesh backend applies), a missing rigged base model a 409."""
     from app.core.model3d import trigger_generation
     from app.core.model_refs import find_ref_image
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
+    from app.core import model3d_pipeline
+    if model3d_pipeline.pipeline_state(character_name) is not None:
+        if (backend or "").strip() or face_num or texture_size:
+            raise HTTPException(status_code=400, detail=model3d_pipeline.NO_BACKEND)
+        try:
+            return model3d_pipeline.rebuild_from_base(character_name)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc.args[0])) from exc
     if not find_ref_image(character_name, "tpose"):
         raise HTTPException(
             status_code=409,
@@ -2395,13 +2424,24 @@ def generate_character_model3d(character_name: str, force: bool = False,
 def rerig_character_model3d(
         character_name: str, signature: str = "", backend: str = "",
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Start a tracked rig-only rebuild of the served or selected source."""
+    """Start a tracked rig-only rebuild of the served or selected source.
+
+    Base-body pipeline: the BASE body is re-rigged whatever ``signature``
+    says — an outfit model has no unrigged source of its own; the re-rigged
+    base marks every outfit model stale (rebuilt on its next trigger)."""
     from app.core.model3d import (find_model3d_serving, get_model3d_dir,
                                   required_rig, trigger_rerig)
     from app.imagegen.occasions import backend_fits
     from app.imagegen.routing import describe_backend
     if not get_character_dir(character_name).exists():
         raise HTTPException(404, "Character not found")
+    from app.core.model3d_pipeline import pipeline_state
+    pipeline = pipeline_state(character_name)
+    if pipeline is not None:
+        signature = pipeline["base_signature"]
+        if not pipeline["rerig_source"]:
+            raise HTTPException(409, "The base body has no retained unrigged mesh. "
+                                     "Generate the base model again (Base body tab).")
     if not signature:
         served = find_model3d_serving(character_name)[0]
         signature = served.stem if served else ""
@@ -2635,10 +2675,15 @@ def fetch_character_model3d_job(character_name: str, job: str = "",
     current outfit — for a generation that outlived our own poll.
     A job that is not finished yet answers
     ``{"status": "queued"|"running", "progress"}`` and changes nothing;
-    ``force=1`` stores a result that fails the model check."""
+    ``force=1`` stores a result that fails the model check. 409 on the
+    base-body pipeline (``model3d_pipeline.refusal``)."""
     from app.core.model3d import fetch_job_for_current_outfit, normalize_job_id
+    from app.core.model3d_pipeline import refusal
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
+    refused = refusal(character_name, "Fetching a mesh job")
+    if refused:
+        raise HTTPException(status_code=409, detail=refused)
     job_id = normalize_job_id(job)
     if not job_id:
         raise HTTPException(status_code=400, detail="Not a job id")

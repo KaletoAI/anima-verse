@@ -4275,6 +4275,21 @@
     "Hide steps": "Schritte ausblenden",
     "Mesh steps": "Mesh-Schritte",
     "no accepted fit on the current base model": "keine akzeptierte Anpassung auf dem aktuellen Grundmodell",
-    "Base body model missing — generate it in the 3D tab": "Grundkörper-Modell fehlt — im 3D-Tab erzeugen"
+    "Base body model missing — generate it in the 3D tab": "Grundkörper-Modell fehlt — im 3D-Tab erzeugen",
+    "Rebuilding from the base body…": "Wird aus dem Grundkörper neu gebaut…",
+    "No 3D model for this outfit yet — it is built from the base body (Rebuild from base body).": "Noch kein 3D-Modell für dieses Outfit — es wird aus dem Grundkörper gebaut (Aus Grundkörper neu bauen).",
+    "Built from the base body": "Aus dem Grundkörper gebaut",
+    "Re-rig base body": "Grundkörper neu riggen",
+    "Re-rig base body…": "Grundkörper neu riggen…",
+    "Re-rigs the base body from its retained mesh. Every outfit model is painted onto the base body, so each one is rebuilt on its next trigger.": "Riggt den Grundkörper aus seinem aufbewahrten Mesh neu. Jedes Outfit-Modell wird auf den Grundkörper gemalt und deshalb beim nächsten Anlass neu gebaut.",
+    "Generate the rigged base model first (Base body tab)": "Zuerst das geriggte Grundmodell erzeugen (Tab Grundkörper)",
+    "Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.": "Baut das Outfit-Modell aus dem aktuellen Grundkörper neu. Angezogene Ansichten, die nicht mehr zum Grundkörper passen, werden zuerst gerendert; kein Mesh-Backend beteiligt.",
+    "Rebuild from base body": "Aus Grundkörper neu bauen",
+    "The base body has no retained unrigged mesh. Generate the base model again (Base body tab).": "Der Grundkörper hat kein aufbewahrtes ungeriggtes Mesh. Das Grundmodell neu erzeugen (Tab Grundkörper).",
+    "Re-rigs the base body; every outfit model is rebuilt from it.": "Riggt den Grundkörper neu; jedes Outfit-Modell wird daraus neu gebaut.",
+    "Dresses the base body views and builds the outfit model for every saved outfit — the character keeps wearing what it wears.": "Zieht die Grundkörper-Ansichten an und baut das Outfit-Modell für jedes gespeicherte Outfit — der Charakter behält an, was er trägt.",
+    "On the base-body pipeline every outfit model is built from the base body automatically — this option applies only off the pipeline.": "In der Grundkörper-Pipeline wird jedes Outfit-Modell automatisch aus dem Grundkörper gebaut — diese Option gilt nur außerhalb der Pipeline.",
+    "Outfit models are built from the base body automatically.": "Outfit-Modelle werden automatisch aus dem Grundkörper gebaut.",
+    "The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.": "Das Grundkörper-Modell bekommt die Gesichtskorrektur (Upscaler + Gesichts-Retexture) vor dem ersten Rig; Outfit-Modelle übernehmen das Gesicht von ihm."
   }
 }
