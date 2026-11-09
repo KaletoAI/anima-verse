@@ -362,7 +362,7 @@ def main() -> int:
 
         service.get_image_service = lambda: FakeService()
 
-        def decimate_to(path_in, target_tris, out):
+        def decimate_to(path_in, target_tris, out, merge_vertices=False):
             from app.core import glb_mesh
             data = Path(path_in).read_bytes()
             tris = len(glb_mesh.static_arrays(data)[1])
