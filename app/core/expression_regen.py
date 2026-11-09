@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from types import MappingProxyType
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 import uuid
 
 from app.imagegen.routing import ROUTE_META_KEYS
@@ -826,7 +826,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            extra_negative: str = "",
                            sidecar_extra: Optional[Dict[str, Any]] = None,
                            character_loras: bool = False,
-                           postprocess: bool = True) -> Optional[Path]:
+                           postprocess: bool = True,
+                           extra_reference_images: Optional[List[Path]] = None) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -838,6 +839,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``character_loras`` lets a ``bare_prompt`` render carry the character's
     own LoRAs (``outfit_imagegen.loras``, replaced by ``tpose_loras`` on the
     mesh-input occasions, mesh-part filtered) — never slot LoRAs.
+    ``extra_reference_images`` slot further images of the character's
+    model_refs directory AFTER ``reference_image`` (image 2, 3, …); a routed
+    backend without enough reference slots is not applicable and the
+    routing moves on (``service.generate_from_input``).
     ``postprocess=False`` publishes the backend's file as delivered: no
     background removal, no side trim — a garment edit keeps the full frame
     of its source (``garment_images``), the gates compare it pixel for pixel.
@@ -862,7 +867,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
             equipped_items = equipped_items or []
 
     _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
-    _mesh_input = _occasion in ("tpose", "tpose_view")
+    from app.imagegen.occasions import MESH_INPUT_OCCASIONS
+    _mesh_input = _occasion in MESH_INPUT_OCCASIONS
 
     # Outfit text via the central renderer (plan §4). equipped_pieces/items
     # are passed in so set previews work (override against the profile state).
@@ -1006,7 +1012,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
             # uses "expression" and keeps the normal character LoRAs.
             _tpose_loras = _char_override.get("tpose_loras")
             if (isinstance(_tpose_loras, list) and _tpose_loras
-                    and _occasion in ("tpose", "tpose_view")):
+                    and _mesh_input):
                 loras_override = _tpose_loras
     except Exception as _err:
         logger.debug("Reading the outfit imagegen override failed: %s", _err)
@@ -1046,6 +1052,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
     }
     if reference_image is not None:
         payload["reference_image_override"] = str(reference_image)
+    if extra_reference_images:
+        payload["extra_reference_images"] = [str(p) for p in extra_reference_images]
 
     if outfit_w:
         payload["override_width"] = outfit_w

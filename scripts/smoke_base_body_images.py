@@ -20,13 +20,13 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [1] Recorder in place of ``expression_regen.render_character_image`` (writes an
     8x8 RGBA PNG, transparent but for one opaque pixel, to ``<stem>.png``).
     generate_base_images("Demo") makes 4 calls, in BASE_VIEWS order:
-      front: occasion "tpose", image_use_case "tpose", reference_image None
+      front: occasion "base_front", image_use_case "tpose", reference_image None
              (the profile image is slotted by render_character_image's
              profile_only payload, as for every tpose render), stem
              model_refs/.handgate_<random>/attempt1/tpose_<bsig> (the hand
              gate's staging dir; the recorder's 8x8 image has no figure to
              measure, so attempt 1 passes and lands on model_refs/tpose_<bsig>);
-      back:  occasion "tpose_view", use case "tpose_back"
+      back:  occasion "base_view", use case "tpose_back"
              (TPOSE_VIEW_USE_CASES), back_view True, stem tpose_back_<bsig>,
              reference_image NAMED tpose_<bsig>.png (neutral_view_reference
              keeps the file name) but NOT the front file itself: a grey
@@ -58,12 +58,13 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     JSON payload, writes the "generated" file into the images dir) and a
     recording postprocess_outfit_image:
       front payload: prompt == base_prompt(front)[0] (bare), image_use_case
-      "tpose", occasion "tpose", negative_prompt_extra == BASE_NEGATIVE, no
+      "tpose", occasion "base_front", negative_prompt_extra == BASE_NEGATIVE, no
       "negative_prompt" key, profile_only True, no reference_image_override,
       clothed False (no fabric clause in the use-case style);
-      back payload: use case "tpose_back", occasion "tpose_view",
+      back payload: use case "tpose_back", occasion "base_view",
       reference_image_override ends with "/tpose_<bsig>.png";
-      postprocess called with mesh_input=True for both (BiRefNet matte path);
+      postprocess called with mesh_input=True for both (BiRefNet matte path —
+      base_front/base_view are mesh-input occasions like tpose/tpose_view);
       the sidecar tpose_<bsig>.json records base_signature bsig, the bare
       prompt, mesh_variant (a mesh-input key) and equipped_pieces {}.
       LoRAs: the fixture is live (exposed_slot_loras(Demo) names
@@ -209,7 +210,7 @@ def main() -> int:
                   ("attempt1", refs, True))
             check("view stem dir", {c["stem"].parent for c in CALLS[1:]}, {refs})
             check("staging gone", [p.name for p in refs.iterdir() if p.is_dir()], [])
-            check("occasions", [c["occasion"] for c in CALLS], ["tpose", "tpose_view", "tpose_view", "tpose_view"])
+            check("occasions", [c["occasion"] for c in CALLS], ["base_front", "base_view", "base_view", "base_view"])
             check("use cases", [c["image_use_case"] for c in CALLS], ["tpose", "tpose_back", "tpose_side", "tpose_side"])
             check("front reference", CALLS[0]["ref"], None)
             check("view reference names", [c["ref"].name for c in CALLS[1:]], [f"tpose_{bsig}.png"] * 3)
@@ -328,13 +329,13 @@ def main() -> int:
         check("4 payloads", len(payloads), 4)
         front, back = payloads[0], payloads[1]
         check("front prompt bare", front["prompt"], base_body.base_prompt("Demo", "front")[0])
-        check("front use case/occasion", (front["image_use_case"], front["occasion"]), ("tpose", "tpose"))
+        check("front use case/occasion", (front["image_use_case"], front["occasion"]), ("tpose", "base_front"))
         check("front extra negative", front.get("negative_prompt_extra"), base_body.BASE_NEGATIVE)
         check("front no replacing negative", "negative_prompt" in front, False)
         check("front profile_only", front["profile_only"], True)
         check("front no reference override", "reference_image_override" in front, False)
         check("front clothed", front["clothed"], False)
-        check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("tpose_back", "tpose_view"))
+        check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("tpose_back", "base_view"))
         check("back reference override", back["reference_image_override"].endswith(f"/tpose_{bsig}.png"), True)
         check("matte path", mattes, [True] * 4)
         meta = json.loads((refs / f"tpose_{bsig}.json").read_text())

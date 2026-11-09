@@ -948,6 +948,9 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         # normal render match.
         "tpose_workflow": override.get("tpose_workflow", "") or "",
         "tpose_view_workflow": override.get("tpose_view_workflow", "") or "",
+        # Base-body pipeline steps (occasions base_front … outfit_back);
+        # empty = the occasion's fallback field, then its chain.
+        **{field: override.get(field, "") or "" for field in character_ops.BASE_BODY_MATCH_FIELDS},
         # Backend glob in front of the character mesh chain; empty = world chain.
         "mesh_workflow": override.get("mesh_workflow", "") or "",
         **_mesh_match_context(character_name),
@@ -1491,7 +1494,9 @@ async def generate_character_model_refs(character_name: str,
         if kinds is not None and kinds != ["tpose"]:
             raise HTTPException(status_code=422, detail="view requires kinds ['tpose']")
         kinds = ["tpose"]
+        _require_dressable_view(character_name, view, base_ready=False)
         _require_base_images(character_name, view)
+        _require_dressable_view(character_name, view, base_ready=True)
         if view not in ("main", "face"):
             _, _, signature = current_outfit_state(character_name)
             if not find_ref_image(
@@ -1525,6 +1530,27 @@ async def generate_character_model_refs(character_name: str,
 
 #: 409 of a pose render on the base-body pipeline without the base views.
 BASE_FIRST = "Render the base body first (Base body tab) — the outfit views are edits of it"
+
+
+def _require_dressable_view(character_name: str, view: str, *, base_ready: bool) -> None:
+    """409 for a single-view render a base-body-pipeline character cannot
+    make: a side view (only the front and back are dressed —
+    ``base_body.SIDE_VIEW_NOT_DRESSED``; checked first) or, once the base
+    views are known to exist (``base_ready``), the back before a dressed
+    front of the current base exists (``DRESSED_FRONT_FIRST`` — its draft is
+    made from it)."""
+    from app.core import base_body
+    if view in ("main", "face") or not base_body.is_base_pipeline(character_name):
+        return
+    if not base_ready:
+        if view not in base_body.DRESSED_VIEWS:
+            raise HTTPException(status_code=409, detail=base_body.SIDE_VIEW_NOT_DRESSED)
+        return
+    from app.core.model_refs import current_outfit_state
+    signature = current_outfit_state(character_name)[2]
+    if base_body.dressed_image(character_name, "front", signature,
+                               base_body.base_signature(character_name)) is None:
+        raise HTTPException(status_code=409, detail=base_body.DRESSED_FRONT_FIRST)
 
 
 def _require_base_images(character_name: str, view: Optional[str]) -> None:
@@ -1629,15 +1655,26 @@ def _set_character_model_refs_views_sync(character_name: str,
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
     """Serves the reference render of the CURRENT outfit combination; 404
     when absent. ``kind`` is ``tpose``/``pose`` or one of the extra T-pose
-    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``/``face_view``). ETag so a
+    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``/``face_view``), or
+    ``tpose_back_draft`` (the base-body back draft). ETag so a
     re-render of the same combination (or an outfit switch) is picked up
     instead of a stale cached image."""
     from fastapi.responses import Response
     from app.core.model_refs import REF_KINDS, VIEW_KINDS, find_ref_image
+    if kind == "tpose_back_draft":
+        # The base-body back draft of the current outfit (a model_refs
+        # subdirectory, not a ref kind of its own).
+        from app.core.base_body import back_draft_path
+        from app.core.model_refs import current_outfit_state
+        path = back_draft_path(character_name, current_outfit_state(character_name)[2])
+        if not path:
+            return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+        media_type, _ = mimetypes.guess_type(str(path))
+        return etag_file_response(path, request, media_type or "application/octet-stream")
     if kind not in REF_KINDS and kind not in VIEW_KINDS and kind != "face_view":
         raise HTTPException(
             status_code=400,
-            detail=f"kind must be one of {', '.join(REF_KINDS + VIEW_KINDS + ('face_view',))}")
+            detail=f"kind must be one of {', '.join(REF_KINDS + VIEW_KINDS + ('face_view', 'tpose_back_draft'))}")
     path = find_ref_image(character_name, kind)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})

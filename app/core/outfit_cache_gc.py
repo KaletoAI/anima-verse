@@ -185,14 +185,18 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
 
 
 def _ref_files(character_name: str) -> Dict[str, List[Path]]:
-    """signature → its reference files (image + sidecar), by file name."""
+    """signature → its reference files (image + sidecar), by file name —
+    the base-body back drafts (``model_refs/drafts/``) go with the
+    signature of their outfit."""
+    from app.core.base_body import DRAFT_DIR
     from app.core.model_refs import _IMAGE_EXTS
     from app.models.character import get_character_dir
     out: Dict[str, List[Path]] = {}
     d = get_character_dir(character_name) / "model_refs"
     if not d.exists():
         return out
-    for p in sorted(d.iterdir()):
+    drafts = d / DRAFT_DIR
+    for p in sorted(d.iterdir()) + (sorted(drafts.iterdir()) if drafts.is_dir() else []):
         if not p.is_file() or p.suffix.lower() not in _IMAGE_EXTS + (".json",):
             continue
         for prefix in REF_PREFIXES:

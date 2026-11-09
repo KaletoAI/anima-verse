@@ -298,6 +298,29 @@ def _unique_mesh_name(base: str) -> str:
     return f"{stem}-r{uuid.uuid4().hex[:6]}"
 
 
+def slot_extra_references(slots: Dict[str, str], extra: List[str], backend: Any,
+                          character_name: str) -> Dict[str, str]:
+    """``slots`` with every ``extra`` image appended as the next
+    ``input_reference_image_<n>``. Each passes the reference containment
+    gate (``model_refs.checked_reference_override``); without the
+    character's own reference in slot 1, or with a path the gate refuses, a
+    ValueError. A backend without a slot for every image is not applicable
+    (``BackendNotApplicableError`` — the routing moves on): an input is never
+    dropped silently."""
+    from app.core.model_refs import checked_reference_override
+    checked = [checked_reference_override(character_name, str(x)) for x in extra if x]
+    slots = dict(slots or {})
+    if not all(checked) or not slots:
+        raise ValueError("Extra reference images need the character's own reference "
+                         "and files inside its model_refs")
+    if int(getattr(backend, "ref_slot_count", 0) or 0) < len(slots) + len(checked):
+        from app.imagegen.base import BackendNotApplicableError
+        raise BackendNotApplicableError(backend, f"needs {len(slots) + len(checked)} reference slots")
+    for path in checked:
+        slots[f"input_reference_image_{len(slots) + 1}"] = path
+    return slots
+
+
 @dataclass
 class GenerationResult:
     """One finished string-path generation (``ImageService.generate_on_backend``).
@@ -2088,6 +2111,8 @@ class ImageService:
             # inside that character's model_refs directory — see the
             # reference loop in generate_from_input.
             "reference_image_override": ctx.get("reference_image_override", ""),
+            # Further model_refs images slotted after it (image 2, 3, …).
+            "extra_reference_images": ctx.get("extra_reference_images") or [],
             "record_provenance": bool(ctx.get("record_provenance", False)),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
             "gallery_character": ctx.get("gallery_character", ""),
@@ -2597,6 +2622,13 @@ class ImageService:
             else:
                 logger.info("No person detected -> no reference images")
                 face_refs = {"reference_images": {}, "has_reference_slots": False}
+
+            # Further images of the rendered character slotted AFTER its own
+            # reference (the base-body back fit: image 2 = the draft).
+            if input_data.get("extra_reference_images"):
+                params["reference_images"] = slot_extra_references(
+                    params.get("reference_images") or {}, input_data["extra_reference_images"],
+                    backend, character_name)
 
             # Certification is valid only when the explicit, frozen reference
             # actually conditions THIS attempt, including routed re-runs.

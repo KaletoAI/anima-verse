@@ -119,7 +119,7 @@ def stub(character_name, *, output_stem, **kw):
     from app.core import base_body
     CALLS.append({"stem": output_stem, "occasion": kw.get("occasion"), "ref": kw.get("reference_image")})
     path = output_stem.with_suffix(".png")
-    if kw.get("occasion") != "tpose":
+    if kw.get("occasion") != "base_front":
         tiny_png(path)
         return path
     item = QUEUE.pop(0)
@@ -128,7 +128,7 @@ def stub(character_name, *, output_stem, **kw):
     if item is None:
         return None
     save_rgba(fig(item), path)
-    seed = sum(1 for c in CALLS if c["occasion"] == "tpose")
+    seed = sum(1 for c in CALLS if c["occasion"] == "base_front")
     path.with_suffix(".json").write_text(json.dumps({"base_signature": base_body.base_signature(character_name),
                                                      "seed": seed}))
     return path
@@ -220,8 +220,8 @@ def main() -> int:
             QUEUE[:] = queue
             CALLS.clear()
             out = base_body.generate_base_images("Demo", **kw)
-            fronts = [c for c in CALLS if c["occasion"] == "tpose"]
-            views = [c for c in CALLS if c["occasion"] != "tpose"]
+            fronts = [c for c in CALLS if c["occasion"] == "base_front"]
+            views = [c for c in CALLS if c["occasion"] != "base_front"]
             return out, fronts, views
 
         def sidecar():

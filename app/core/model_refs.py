@@ -639,7 +639,8 @@ def invalidate_refs_for_item(character_name: str, item_id: str) -> Set[str]:
     refs_dir = get_model_refs_dir(character_name)
     if not refs_dir.exists():
         return out
-    for sidecar in sorted(refs_dir.glob("*.json")):
+    # The base-body back drafts (base_body.DRAFT_DIR) record their outfit too.
+    for sidecar in sorted(refs_dir.glob("*.json")) + sorted((refs_dir / "drafts").glob("*.json")):
         if sidecar.stem == "face_view":
             continue
         manifest = read_manifest(sidecar)
@@ -717,6 +718,10 @@ def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:
     info: Dict[str, Any] = {"filename": path.name, "created_at": "",
                             "prompt": meta.get("prompt", ""), "backend": meta.get("service", "")}
     info.update(image_tile_meta(path, meta))
+    # A base-body dressed back kept although its fit checks failed.
+    warning = (meta.get("fit_gate") or {}).get("warning") if isinstance(meta.get("fit_gate"), dict) else None
+    if warning:
+        info["warning"] = warning
     return info
 
 
@@ -728,7 +733,12 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     ``{"enabled": bool, "info": <info|None>}``: the
     UI needs every view to render its checkbox, the switched-off ones
     included. Mesh views ride with "tpose"; the profile-based face view has
-    its own status lane and the outfit-independent ``face_view`` payload."""
+    its own status lane and the outfit-independent ``face_view`` payload.
+
+    A humanoid on the base-body pipeline (``pipeline: true``) has only the
+    dressed back as an extra outfit view (``base_body.DRESSED_VIEWS``; always
+    enabled, no toggle) and ``back_draft``: the info of the back's draft
+    (served as kind ``tpose_back_draft``), None when there is none."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -739,12 +749,18 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         out[kind] = _ref_info(path)
     views: Dict[str, Any] = {}
     enabled = set(enabled_tpose_views(character_name))
+    from app.core import base_body
+    pipeline = base_body.is_base_pipeline(character_name)
+    out["pipeline"] = pipeline
     for view in tpose_views_for_character(character_name):
-        if view == "face":
+        if view == "face" or (pipeline and view not in base_body.DRESSED_VIEWS):
             continue
         path = (find_ref_image(character_name, f"tpose_{view}", signature)
                 if signature else None)
-        views[view] = {"enabled": view in enabled, "info": _ref_info(path)}
+        views[view] = {"enabled": pipeline or view in enabled, "info": _ref_info(path)}
+    if pipeline:
+        draft = base_body.back_draft_path(character_name, signature) if signature else None
+        out["back_draft"] = _ref_info(draft)
     if is_humanoid(character_name):
         face = face_view_info(character_name)
         out["face_view"] = face
@@ -826,9 +842,9 @@ def generate_model_ref_images(character_name: str,
     regenerates another view. Without a cached main it raises ValueError.
 
     A humanoid on the base-body pipeline gets its "tpose" kind from
-    ``base_body.generate_dressed_images`` instead: edits of the four
-    base-body views into the same files (``tpose_view`` "main" = front,
-    a view = that view alone; no main needed for a view)."""
+    ``base_body.generate_dressed_images`` instead: the dressed front and
+    back into the same files (``tpose_view`` "main" = front, "back" = the
+    back alone; a side view is a ValueError there)."""
     from app.core.expression_regen import render_character_image
     from app.core.expression_pose_maps import default_pose_prompt
 
@@ -877,8 +893,9 @@ def generate_model_ref_images(character_name: str,
     if "tpose" in kinds and humanoid and tpose_view is None and get_view_kinds(character_name).get("face"):
         # Independent lane: queued GPU work or a face failure cannot delay the T-pose.
         _start_face_view(character_name, force=False)
-    # Base-body pipeline: the outfit's mesh inputs are edits of the base-body
-    # views (all four, independent of the view toggles), not fresh renders.
+    # Base-body pipeline: the outfit's mesh inputs are the dressed front and
+    # back made from the base-body views (independent of the view toggles),
+    # not fresh renders.
     # The default-pose ref ("pose") keeps its own path below.
     base_results: Dict[str, Optional[str]] = {}
     if "tpose" in kinds and humanoid:

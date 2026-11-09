@@ -85,6 +85,17 @@ hair long brunette, character_appearance "wears a red scarf". Fixture package
     signature. A male profile with length "long": the description ends
     ", pale spot, long tail" (slot order marking, spot, tail; spot applies to
     males and has no placeholder) — the female one has no "spot".
+[11] Back DRAFT prompt (user decision 2026-11-09): the back prompt of [3]
+    with the body text replaced — BODY and the ``base_body_prompt`` texts
+    go, the outfit sentence OUTFIT = "wearing exactly the same outfit as the
+    person in the reference image, the same garments, lengths, cut, colours
+    and shoes" takes BODY's place, the bald head stays:
+        draft = POSE_BACK, FULL, BALD_BACK, OUTFIT, APPEARANCE_BACK
+    For the long-tail profile of [10] the same text (its "long tail" is a
+    base_body_prompt fragment), so neither "tail" nor "mannequin" appears.
+    Negative = HAIR_NEG + ", detailed anatomy, " + POSE_NEG (BASE without
+    "clothing, underwear, jewellery") + ", visible marking" (the slots'
+    base_body_negative stays).
 """
 import json
 import os
@@ -302,6 +313,17 @@ def main() -> int:
         male_tail = dict(long_tail, gender="male")
         check("male: spot then tail",
               base_body.base_appearance(name, profile=male_tail).endswith(", pale spot, long tail"), True)
+
+        print("[11] back draft")
+        outfit = ("wearing exactly the same outfit as the person in the reference image, the same garments, "
+                  "lengths, cut, colours and shoes")
+        draft_want = ", ".join([POSE_BACK, FULL, BALD_BACK, outfit, APPEARANCE_BACK])
+        prompt, negative = base_body.back_draft_prompt(name, profile=stored)
+        check("draft prompt", prompt, draft_want)
+        check("draft negative", negative, HAIR_NEG + ", detailed anatomy, " + POSE_NEG + ", visible marking")
+        prompt, _ = base_body.back_draft_prompt(name, profile=long_tail)
+        check("draft drops base_body_prompt", prompt, draft_want)
+        check("no tail, no mannequin", ("tail" in prompt, "mannequin" in prompt), (False, False))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

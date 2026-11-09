@@ -76,26 +76,50 @@ Expected, derived by hand from the brief:
     the left|right edge of the frame; keep it a side profile view, do not
     turn the figure toward the camera. Keep …". Same negative.
 [3] Chain (Demo on the pipeline, wearing dress): _run_generation(Demo,
-    "tpose") (the debounce timer body) -> four render calls, one per view
-    in BASE_VIEWS order: reference_image name = tpose[_<v>]_<bsig>.png (the
-    base view, on grey: pixel (0,0) = (128,128,128), pixel (4,4) =
-    BASE_PX[v]); bare_prompt starts with VIEW[v] + " " (front: nothing) +
-    "Keep the image exactly as it is" and contains the dress fragment; occasion "tpose_view"; use case tpose /
-    tpose_back / tpose_side / tpose_side; character_loras True; sidecar_extra
-    {base_signature: bsig, dressed: true, base_image_sha256: sha256 of that
-    base view file}; extra_negative = [2]'s negative;
-    back_view only for back. Then the auto hook (auto_generate is OFF)
+    "tpose") (the debounce timer body) -> THREE render calls (user decision
+    2026-11-09: only front and back are dressed, the back in two steps):
+      front edit  stem tpose_<osig> in model_refs, reference tpose_<bsig>.png
+                  on grey (pixel (0,0) = (128,128,128), (4,4) = BASE_PX
+                  front), prompt starts "Keep the image exactly as it is" and
+                  names the dress, occasion outfit_front, use case tpose,
+                  sidecar_extra {base_signature, dressed: true,
+                  base_image_sha256 = sha256(tpose_<bsig>.png)};
+      back draft  stem tpose_back_<osig> in model_refs/drafts, reference = the
+                  dressed front tpose_<osig>.png (opaque stub -> handed as is,
+                  pixel = colour_of("tpose_<osig>")), bare_prompt and
+                  extra_negative = back_draft_prompt(Demo), occasion
+                  outfit_back_draft, use case tpose_back, back_view;
+      back fit    stem tpose_back_<osig> in the staging dir attempt1,
+                  the CUT-OUT pair (user decision 2026-11-09): reference
+                  tpose_back_<bsig>.png keeps its own matte (pixel (0,0)
+                  transparent -> RGB (0,0,0), (4,4) BASE_PX back), the extra
+                  reference = the draft (dir "draft") matted by the run_rembg
+                  stub (one call, model birefnet-dis; 2 px transparent
+                  border), its 4x4 figure scaled to the base figure's height
+                  1 and centred on x 4.5 -> pixel (4,4) = the draft colour,
+                  (0,0) transparent; bare_prompt = FIT_PROMPT, no
+                  extra_negative, occasion outfit_back, use case outfit_fit,
+                  back_view, sidecar_extra {base_signature, dressed,
+                  base_image_sha256 = sha256(tpose_back_<bsig>.png),
+                  back_draft = the draft's name, back_draft_sha256}; the
+                  stub images are opaque, so both gates skip -> attempt 1
+                  kept (fit_gate ok, chosen 1, no warning), no staging dir
+                  left in model_refs.
+    No left/right edits. The front edit carries [2]'s negative; character_loras
+    True. find_ref_image(tpose_back, osig) = the stored fit (the draft lives
+    in drafts/, invisible to it). Then the auto hook (auto_generate is OFF)
     starts the model: one worker call whose --glb has the UNRIGGED accessor
-    bytes and the RIGGED image; four --view pairs whose dressed files equal
-    the dressed refs and registration files equal the base images. The
-    published model3d/<osig>.glb: nodes/skins/accessors JSON = the rigged
-    base's, accessor bytes = the rigged base's (seed 1.0), image = the 16x16
-    atlas of colour_of("tpose_<osig>"); sidecar base_signature bsig,
-    base_model_sha256 = sha256(rigged), retexture_proof = the fake proof, source "base_body", pieces {top:
-    dress}; prerig/<osig>.glb image = the atlas; apply_script never called
-    (the copied [jiggle] state is current -> no-op); request_lod once for
-    <osig>.glb. base_info(Demo)["outfit"]: signature osig, status "ready",
-    proof the fake proof.
+    bytes and the RIGGED image; two --view pairs (front, back) whose dressed
+    files equal the dressed refs and registration files equal the base
+    images. The published model3d/<osig>.glb: nodes/skins/accessors JSON =
+    the rigged base's, accessor bytes = the rigged base's (seed 1.0), image
+    = the 16x16 atlas of colour_of("tpose_<osig>"); sidecar base_signature
+    bsig, base_model_sha256 = sha256(rigged), retexture_proof = the fake
+    proof, source "base_body", pieces {top: dress}; prerig/<osig>.glb image
+    = the atlas; apply_script never called (the copied [jiggle] state is
+    current -> no-op); request_lod once for <osig>.glb.
+    base_info(Demo)["outfit"]: signature osig, status "ready", proof the
+    fake proof.
 [4] Base changes (new profile image -> bsig2 != bsig): find_model3d(Demo,
     osig) None, with include_stale the path; find_model3d_serving ->
     (path, "stale"); outfit status "stale", error "Built on an older base
@@ -113,12 +137,12 @@ Expected, derived by hand from the brief:
     retexture worker not configured", file unchanged.
 [6] Outfit changes while a run is running (mode slow): a forced run for
     osig starts and waits in the worker; Demo then puts on the scarf (sig2),
-    its tpose pass renders four new edits and the hook finds the run busy
+    its tpose pass renders front edit, back draft and back fit anew and the hook finds the run busy
     (follow-up marked). Released: osig's model carries colour_of(
     "tpose_<osig>"), the follow-up builds <sig2>.glb with colour_of(
     "tpose_<sig2>") — two models, each with its own atlas.
-[7] Undressed (nothing worn, osig0): the tpose pass copies the four base
-    images (no render call; bytes equal; sidecar dressed false,
+[7] Undressed (nothing worn, osig0): the tpose pass copies the base front
+    and back (no side copies; no render call; bytes equal; sidecar dressed false,
     base_signature bsig); the model run calls NO worker; <osig0>.glb image =
     the RIGGED image, retexture_proof null, base_signature bsig.
 [8] Parts for this outfit (declarations [part attached_part, jiggle]):
@@ -139,17 +163,29 @@ Expected, derived by hand from the brief:
     ``base_body.view_guard`` replaced by a script — the measurement itself
     is scripts/smoke_base_body_view_guard.py). The stub renders are opaque,
     so in [3]..[10] the real guard skips every view (no matte).
-    (a) back fails once, left fails twice: two re-renders, in BASE_VIEWS
-        order tpose_back_<osig> then tpose_left_<osig> (each once); the
-        worker gets views front, back, right; result ok; sidecar view_guard:
-        back ok + rerendered + first.ok False, left ok False + rerendered,
-        front/right ok without "rerendered"; view_warnings = ["left view:
-        the dressed image does not keep its view (its head looks most like
-        the front base view); left out of the outfit model"]; outfit_info
-        status ready, warnings = that list.
+    (a) back fails once (the build's check): the back is re-rendered once —
+        draft (drafts/) + fit attempt 1, whose gate check now passes; the
+        worker gets front and back; sidecar view_guard has only front and
+        back: back ok + rerendered + first.ok False, front ok without
+        "rerendered"; no view_warnings.
+    (a') back fails four times: the build's check, both fit attempts of the
+        re-render (draft + attempt1 + attempt2 renders) and the re-check.
+        The fit keeps attempt 1 (no guard pass, noise unmeasurable -> the
+        first) with fit_gate {ok False, chosen 1, 2 attempts, warning
+        "Dressed back may be turned toward the camera (back check failed
+        after 2 attempts)"}; the build leaves the back out (worker views
+        [front]) with the view warning "back view: the dressed image does not
+        keep its view (its head looks most like the front base view); left
+        out of the outfit model"; outfit_info status ready, warnings = [that
+        view warning, the fit warning].
     (b) front fails twice: one re-render (tpose_<osig>); result ok False,
         error starts "front view: the dressed image does not keep its view";
         no worker call; model bytes unchanged; status failed.
+    (c) noise gate scripted per fit attempt (generate_dressed_images view
+        "back", force): scores [2.4, 1.2] -> draft + attempt1 + attempt2,
+        fit_gate {ok True, chosen 2}, no dressed warning; [2.4, 1.9] ->
+        chosen 2 (the lower score), ok False, warning "Dressed back may be
+        grainy (back check failed after 2 attempts)" = dressed_warnings.
 """
 import hashlib
 import io
@@ -276,7 +312,7 @@ Path(a[a.index("--proof") + 1]).write_text(json.dumps(
 '''
 
 PROOF_KEYS = {"garment_share_visible": 0.42, "filled_share": 0.07}
-RENDERS, SCRIPT_CALLS, LOD_CALLS, TRIGGERS = [], [], [], []
+RENDERS, SCRIPT_CALLS, LOD_CALLS, TRIGGERS, REMBG = [], [], [], [], []
 GROUPS = {"default": [{"id": "jiggle", "op": "jiggle", "params": {}, "chains": [], "depends_on": ""}]}
 VIEW = {
     "back": ("This is a back view seen directly from behind, the figure faces away from the camera; keep it a "
@@ -286,6 +322,8 @@ VIEW = {
     "right": ("This is a strict right side profile view, the whole body in profile facing the right edge of the "
               "frame; keep it a side profile view, do not turn the figure toward the camera."),
 }
+# The whole fit prompt (user decision 2026-11-09).
+FIT_PROMPT = "edit the first image with the clothes from the second image"
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
 
 
@@ -309,9 +347,10 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
-        from app.core import base_body, expression_regen, extension_rig, glb_delivery, model3d, model_refs
+        from app.core import base_body, base_body_gates, expression_regen, extension_rig, glb_delivery, model3d, model_refs
         from app.blender import refine
         from app.models import inventory
+        import app.models.character as character_module
         from app.models.character import (get_character_dir, get_character_images_dir,
                                           get_character_profile, save_character_profile)
 
@@ -453,13 +492,34 @@ def main() -> int:
             (extension_rig, "rig_groups_for"): extension_rig.rig_groups_for,
             (extension_rig, "resolved_extension_groups"): extension_rig.resolved_extension_groups,
             (glb_delivery, "delivery_path"): glb_delivery.delivery_path,
+            (character_module, "run_rembg"): character_module.run_rembg,
         }
+
+        def rembg(data, model="u2net", **kw):
+            """The matte stub: the 8x8 image with a 2 px transparent border."""
+            from PIL import Image
+            REMBG.append(model)
+            with Image.open(io.BytesIO(data)) as im:
+                rgba = im.convert("RGBA")
+            for x in range(8):
+                for y in range(8):
+                    if min(x, y) < 2 or max(x, y) > 5:
+                        rgba.putpixel((x, y), (0, 0, 0, 0))
+            out = io.BytesIO()
+            rgba.save(out, "PNG")
+            return out.getvalue()
 
         def render(character_name, *, output_stem, equipped_pieces, equipped_items, **kw):
             from PIL import Image
             ref = kw.get("reference_image")
-            entry = {"character": character_name, "stem": Path(output_stem).name, **kw,
+            extras = kw.get("extra_reference_images") or []
+            entry = {"character": character_name, "stem": Path(output_stem).name,
+                     "dir": Path(output_stem).parent.name, **kw,
                      "reference_name": ref.name if ref else None,
+                     "extra_names": [Path(x).name for x in extras],
+                     "extra_parents": [Path(x).parent.name for x in extras],
+                     "extra_px": [(pixel(Path(x).read_bytes(), (0, 0)), pixel(Path(x).read_bytes()))
+                                  for x in extras],
                      "reference_px": (pixel(Path(ref).read_bytes(), (0, 0)), pixel(Path(ref).read_bytes()))
                      if ref else None}
             RENDERS.append(entry)
@@ -477,6 +537,7 @@ def main() -> int:
             return {"applied": True, "data": {}}
 
         expression_regen.render_character_image = render
+        character_module.run_rembg = rembg
         refine.apply_script = apply_script
         model3d._auto_retexture = lambda *a, **k: None
         model3d._attach_measurement = lambda *a, **k: None
@@ -523,27 +584,62 @@ def main() -> int:
             model_refs._run_generation("Demo", "tpose")
             wait_idle("Demo")
             dressed_renders = [r for r in RENDERS if r["character"] == "Demo"]
-            check("four edits", [r["stem"] for r in dressed_renders],
-                  [f"tpose_{osig}", f"tpose_back_{osig}", f"tpose_left_{osig}", f"tpose_right_{osig}"])
-            want_refs = [f"tpose_{bsig}.png", f"tpose_back_{bsig}.png", f"tpose_left_{bsig}.png",
-                         f"tpose_right_{bsig}.png"]
-            check("references = base views", [r["reference_name"] for r in dressed_renders], want_refs)
-            check("references on grey", [r["reference_px"] for r in dressed_renders],
-                  [((128, 128, 128), BASE_PX[v]) for v in base_body.BASE_VIEWS])
-            check("prompts", [(r["bare_prompt"].startswith(
-                (VIEW[v] + " " if v in VIEW else "") + "Keep the image exactly as it is"),
-                               "a fitted red cotton dress with white sneakers" in r["bare_prompt"])
-                              for v, r in zip(base_body.BASE_VIEWS, dressed_renders)], [(True, True)] * 4)
-            check("occasions", [r["occasion"] for r in dressed_renders], ["tpose_view"] * 4)
-            check("use cases", [r["image_use_case"] for r in dressed_renders],
-                  ["tpose", "tpose_back", "tpose_side", "tpose_side"])
-            check("character loras", [r["character_loras"] for r in dressed_renders], [True] * 4)
-            check("sidecar extra", [r["sidecar_extra"] for r in dressed_renders],
-                  [{"base_signature": bsig, "dressed": True,
-                    "base_image_sha256": hashlib.sha256((refs / name).read_bytes()).hexdigest()}
-                   for name in want_refs])
-            check("extra negative", {r["extra_negative"] for r in dressed_renders}, {negative})
-            check("back view flag", [r["back_view"] for r in dressed_renders], [False, True, False, False])
+            check("front edit, back draft, back fit", [(r["stem"], r["dir"]) for r in dressed_renders],
+                  [(f"tpose_{osig}", "model_refs"), (f"tpose_back_{osig}", "drafts"),
+                   (f"tpose_back_{osig}", "attempt1")])
+            front_r, draft_r, fit_r = (dressed_renders + [{}] * 3)[:3]
+            check("references", [r.get("reference_name") for r in dressed_renders],
+                  [f"tpose_{bsig}.png", f"tpose_{osig}.png", f"tpose_back_{bsig}.png"])
+            # Front edit: the base front on grey. Draft: the dressed front, opaque
+            # in this stub, handed as stored. Fit: the base back keeps its own
+            # matte (corner transparent -> black in RGB, (4,4) its pixel).
+            check("references on grey / as delivered / cut out", [r.get("reference_px") for r in dressed_renders],
+                  [((128, 128, 128), BASE_PX["front"]),
+                   (colour_of(f"tpose_{osig}"), colour_of(f"tpose_{osig}")),
+                   ((0, 0, 0), BASE_PX["back"])])
+            # The opaque draft gets the matte stub (figure = the 4x4 centre)
+            # once, is scaled to the base figure's height 1 (the pixel (4,4)
+            # alone) and centred on its centre x 4.5 -> pasted at (4, 4).
+            check("fit second reference = the cut-out draft",
+                  (fit_r.get("extra_names"), fit_r.get("extra_parents"), fit_r.get("extra_px"), REMBG),
+                  ([f"tpose_back_{osig}.png"], ["draft"], [((0, 0, 0), colour_of(f"tpose_back_{osig}"))],
+                   ["birefnet-dis"]))
+            check("only the fit has a second reference",
+                  [bool(r.get("extra_reference_images")) for r in dressed_renders], [False, False, True])
+            check("front prompt", (front_r.get("bare_prompt", "").startswith("Keep the image exactly as it is"),
+                                   "a fitted red cotton dress with white sneakers" in front_r.get("bare_prompt", "")),
+                  (True, True))
+            check("draft prompt", draft_r.get("bare_prompt"), base_body.back_draft_prompt("Demo")[0])
+            check("draft extra negative", draft_r.get("extra_negative"), base_body.back_draft_prompt("Demo")[1])
+            check("fit prompt", fit_r.get("bare_prompt"), FIT_PROMPT)
+            check("occasions", [r.get("occasion") for r in dressed_renders],
+                  ["outfit_front", "outfit_back_draft", "outfit_back"])
+            check("use cases", [r.get("image_use_case") for r in dressed_renders],
+                  ["tpose", "tpose_back", "outfit_fit"])
+            check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 3)
+            front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
+            back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()
+            draft_file = refs / "drafts" / f"tpose_back_{osig}.png"
+            check("front sidecar extra", front_r.get("sidecar_extra"),
+                  {"base_signature": bsig, "dressed": True, "base_image_sha256": front_sha})
+            check("fit sidecar extra", fit_r.get("sidecar_extra"),
+                  {"base_signature": bsig, "dressed": True, "base_image_sha256": back_sha,
+                   "back_draft": draft_file.name,
+                   "back_draft_sha256": hashlib.sha256(draft_file.read_bytes()).hexdigest()
+                   if draft_file.is_file() else None})
+            check("extra negatives", (front_r.get("extra_negative"), fit_r.get("extra_negative")),
+                  (negative, None))
+            check("back view flag", [r.get("back_view") for r in dressed_renders], [None, True, True])
+            check("draft stored beside the refs", (draft_file.is_file(),
+                                                   model_refs.find_ref_image("Demo", "tpose_back", osig)),
+                  (True, refs / f"tpose_back_{osig}.png"))
+            stored_back = json.loads((refs / f"tpose_back_{osig}.json").read_text())
+            check("fit gate record", ((stored_back.get("fit_gate") or {}).get("ok"),
+                                      (stored_back.get("fit_gate") or {}).get("chosen"),
+                                      (stored_back.get("fit_gate") or {}).get("warning")), (True, 1, None))
+            check("no side edits", [model_refs.find_ref_image("Demo", f"tpose_{v}", osig) for v in ("left", "right")],
+                  [None, None])
+            check("no staging left", sorted(p.name for p in refs.iterdir() if p.name.startswith(".")), [])
             runs = calls()
             check("one worker call", len(runs), 1)
             first = runs[0] if runs else None
@@ -552,8 +648,8 @@ def main() -> int:
                 check("worker geometry = unrigged", acc, parts(unrigged)[1])
                 check("worker image = rigged image", img, RIG)
                 argv = json.loads((first / "argv.json").read_text())
-                check("worker views", sorted(argv["views"]), sorted(base_body.BASE_VIEWS))
-                for v in base_body.BASE_VIEWS:
+                check("worker views = front, back", sorted(argv["views"]), ["back", "front"])
+                for v in base_body.DRESSED_VIEWS:
                     kind = "tpose" if v == "front" else f"tpose_{v}"
                     check(f"{v} dressed input", (first / f"{v}_dressed.png").read_bytes(),
                           (refs / f"{kind}_{osig}.png").read_bytes())
@@ -693,7 +789,9 @@ def main() -> int:
             model_refs._run_generation("Demo", "tpose")
             wait_idle("Demo")
             check("no render for undressed", len(RENDERS), n_renders)
-            for v in base_body.BASE_VIEWS:
+            check("no side copies", [(refs / f"tpose_{v}_{osig0}.png").exists() for v in ("left", "right")],
+                  [False, False])
+            for v in base_body.DRESSED_VIEWS:
                 kind = "tpose" if v == "front" else f"tpose_{v}"
                 copy = refs / f"{kind}_{osig0}.png"
                 check(f"{v} copied", copy.is_file() and copy.read_bytes() == (refs / f"{kind}_{bsig}.png").read_bytes(),
@@ -777,30 +875,52 @@ def main() -> int:
 
             base_body.view_guard = scripted
             try:
-                fails.update({"back": 1, "left": 2})
+                fails.update({"back": 1})
                 n_renders, n_calls = len(RENDERS), len(calls())
                 result = model3d.generate_for_current_outfit("Demo", force=True)
                 check("guarded run ok", result.get("ok"), True)
-                check("re-rendered once each", [r["stem"] for r in RENDERS[n_renders:]],
-                      [f"tpose_back_{osig}", f"tpose_left_{osig}"])
+                check("back re-rendered once: draft + fit", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
+                      [(f"tpose_back_{osig}", "drafts"), (f"tpose_back_{osig}", "attempt1")])
                 runs = calls()[n_calls:]
                 check("one worker call", len(runs), 1)
                 if runs:
                     views = json.loads((runs[0] / "argv.json").read_text())["views"]
-                    check("left left out", sorted(views), ["back", "front", "right"])
+                    check("worker views", sorted(views), ["back", "front"])
                 meta = model3d._read_sidecar(model)
                 guard = meta.get("view_guard") or {}
                 check("guard back", (guard.get("back", {}).get("ok"), guard.get("back", {}).get("rerendered"),
                                      (guard.get("back", {}).get("first") or {}).get("ok")), (True, True, False))
-                check("guard left", (guard.get("left", {}).get("ok"), guard.get("left", {}).get("rerendered")),
-                      (False, True))
-                check("guard front/right", [(guard.get(v, {}).get("ok"), "rerendered" in guard.get(v, {}))
-                                            for v in ("front", "right")], [(True, False)] * 2)
-                warning = ("left view: the dressed image does not keep its view (its head looks most like the "
+                check("guard front", (guard.get("front", {}).get("ok"), "rerendered" in guard.get("front", {})),
+                      (True, False))
+                check("guard only dressed views", sorted(guard), ["back", "front"])
+                check("no warnings", meta.get("view_warnings"), [])
+
+                # The back stays turned: build check, both fit attempts of the
+                # re-render and the re-check fail (4 calls) -> the fit keeps
+                # attempt 1 with the gate warning, the build leaves the back out.
+                fails.clear()
+                fails.update({"back": 4})
+                n_renders, n_calls = len(RENDERS), len(calls())
+                result = model3d.generate_for_current_outfit("Demo", force=True)
+                check("turned back: run ok", result.get("ok"), True)
+                check("draft + two fit attempts", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
+                      [(f"tpose_back_{osig}", "drafts"), (f"tpose_back_{osig}", "attempt1"),
+                       (f"tpose_back_{osig}", "attempt2")])
+                runs = calls()[n_calls:]
+                if runs:
+                    views = json.loads((runs[0] / "argv.json").read_text())["views"]
+                    check("back left out", sorted(views), ["front"])
+                gate = json.loads((refs / f"tpose_back_{osig}.json").read_text()).get("fit_gate") or {}
+                fit_warning = "Dressed back may be turned toward the camera (back check failed after 2 attempts)"
+                check("fit gate kept attempt 1 with a warning",
+                      (gate.get("ok"), gate.get("chosen"), len(gate.get("attempts") or []), gate.get("warning")),
+                      (False, 1, 2, fit_warning))
+                warning = ("back view: the dressed image does not keep its view (its head looks most like the "
                            "front base view); left out of the outfit model")
+                meta = model3d._read_sidecar(model)
                 check("sidecar warnings", meta.get("view_warnings"), [warning])
                 info = base_body.base_info("Demo")["outfit"]
-                check("outfit info warnings", (info["status"], info["warnings"]), ("ready", [warning]))
+                check("outfit info warnings", (info["status"], info["warnings"]), ("ready", [warning, fit_warning]))
 
                 fails.clear()
                 fails.update({"front": 2})
@@ -813,6 +933,37 @@ def main() -> int:
                 check("no worker call", len(calls()), n_calls)
                 check("model untouched", model.read_bytes() == before, True)
                 check("status failed", base_body.outfit_info("Demo")["status"], "failed")
+
+                # (c) the noise gate: scripted scores per fit attempt.
+                fails.clear()
+                scores = []
+                real_noise = base_body_gates.noise_gate
+
+                def scripted_noise(path, reference):
+                    score = scores.pop(0)
+                    return {"ok": score <= 1.75, "score": score, "limit": 1.75}
+                base_body_gates.noise_gate = scripted_noise
+                try:
+                    state = model_refs.current_outfit_state("Demo")
+                    for label, plan, want_chosen, want_ok, want_warning in (
+                            ("grainy once", [2.4, 1.2], 2, True, None),
+                            ("grainy twice", [2.4, 1.9], 2, False,
+                             "Dressed back may be grainy (back check failed after 2 attempts)")):
+                        scores[:] = plan
+                        n_renders = len(RENDERS)
+                        base_body.generate_dressed_images("Demo", pieces=state[0], items=state[1],
+                                                          signature=osig, force=True, view="back")
+                        check(f"{label}: draft + two fits", [r["dir"] for r in RENDERS[n_renders:]],
+                              ["drafts", "attempt1", "attempt2"])
+                        gate = json.loads((refs / f"tpose_back_{osig}.json").read_text()).get("fit_gate") or {}
+                        check(f"{label}: gate", (gate.get("ok"), gate.get("chosen"),
+                                                 [a["noise"]["score"] for a in gate.get("attempts") or []],
+                                                 gate.get("warning")),
+                              (want_ok, want_chosen, plan, want_warning))
+                        check(f"{label}: dressed warnings", base_body.dressed_warnings("Demo", osig, bsig),
+                              [want_warning] if want_warning else [])
+                finally:
+                    base_body_gates.noise_gate = real_noise
             finally:
                 base_body.view_guard = real_guard
         finally:

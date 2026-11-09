@@ -33,9 +33,18 @@ front, a view = that view; face is no edit of the base body":
     ("tpose",), tpose_view "main"); view back -> 409 BASE_FIRST; no view ->
     409 BASE_FIRST (back/left/right missing).
 [5] All four base views written: no view -> 200; view back without a
-    dressed main -> the route's existing 409 "Generate the main T-pose
-    render first" (unchanged: dressed images are what the render makes).
+    dressed front -> 409 DRESSED_FRONT_FIRST "Render the dressed front
+    first — the back draft is made from it" (2026-11-09: the back is a draft
+    from the dressed front fitted onto the base back).
 [6] Plain (off the pipeline), no base images: view main -> 200.
+[7] Side views (2026-11-09: only front and back are dressed): Demo view
+    left -> 409 SIDE_VIEW_NOT_DRESSED "On the base-body pipeline only the
+    front and the back are dressed — the side views belong to the base body
+    (Base body tab)", view right the same, no trigger; with a dressed front
+    of the current outfit (tpose_<osig>.png, sidecar base_signature BSIG,
+    base_image_sha256 = sha256 of tpose_BSIG.png) view back -> 200, trigger
+    (Demo, ("tpose",), "back"). Plain view left -> never the side-view 409
+    (it is off the pipeline).
 """
 import json
 import os
@@ -149,12 +158,30 @@ def main() -> int:
             check("all views", post("Demo", {"kinds": ["tpose"]})[0], 200)
             check("all triggered", TRIGGERS, [("Demo", ("tpose",), None)])
             TRIGGERS.clear()
-            check("back without dressed main", post("Demo", {"kinds": ["tpose"], "view": "back"}),
-                  (409, "Generate the main T-pose render first"))
+            check("back without dressed front", post("Demo", {"kinds": ["tpose"], "view": "back"}),
+                  (409, "Render the dressed front first — the back draft is made from it"))
 
             print("[6] off the pipeline")
             check("Plain main", post("Plain", {"kinds": ["tpose"], "view": "main"})[0], 200)
             check("Plain triggered", TRIGGERS, [("Plain", ("tpose",), "main")])
+            TRIGGERS.clear()
+
+            print("[7] side views")
+            side = ("On the base-body pipeline only the front and the back are dressed — the side views "
+                    "belong to the base body (Base body tab)")
+            check("left", post("Demo", {"kinds": ["tpose"], "view": "left"}), (409, side))
+            check("right", post("Demo", {"kinds": ["tpose"], "view": "right"}), (409, side))
+            check("no side trigger", TRIGGERS, [])
+            import hashlib
+            osig = model_refs.current_outfit_state("Demo")[2]
+            (refs / f"tpose_{osig}.png").write_bytes(b"\x89PNG-dressed")
+            (refs / f"tpose_{osig}.json").write_text(json.dumps({
+                "base_signature": bsig, "dressed": True,
+                "base_image_sha256": hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()}))
+            check("back with dressed front", post("Demo", {"kinds": ["tpose"], "view": "back"})[0], 200)
+            check("back triggered", TRIGGERS, [("Demo", ("tpose",), "back")])
+            check("Plain left not the side 409", post("Plain", {"kinds": ["tpose"], "view": "left"})[1] != side,
+                  True)
 
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))
