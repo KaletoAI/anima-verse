@@ -42,10 +42,13 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     raw/H_<hsig>/ holds the 7 job files + record.json {accepted True,
     attempt 1, seed 42, notes ["input_alpha"], error None}; ONE fit call
     with the seed-42 hair and proxy bytes and colour_target None (R4: no
-    override = HairDeck's own colours); the fit garments/H_<fsig>.glb has
-    the node "garment_hair_H"; its record says method "hairdeck",
-    inputs.hsig = hsig, inputs.seed 42, colour {target None, source
-    "hairdeck"}; the fsig differs from the edit-chain fsig; prepared/ holds
+    override), colour_profile = Demo's "blonde" #d3b497 = (211, 180, 151) /
+    255 and length_class "medium" (the hair slot's length); the fit
+    garments/H_<fsig>.glb has the node "garment_hair_H"; its record says
+    method "hairdeck", inputs.hsig = hsig, inputs.seed 42, colour {target
+    "#d3b497", source "profile", name "blonde", applied True, ΔE 20.0 -> 0.0
+    (the stub echoes a recolour whenever a colour was asked for)}; the fsig
+    differs from the edit-chain fsig; prepared/ holds
     nothing. garment_info: method "hairdeck" (source "character"), steps
     ["hairdeck", "fit"], hairdeck status "accepted", fit "accepted",
     served_fsig = fsig. A second run: ran [], no call.
@@ -55,7 +58,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     = the new sha, fsig and hsig unchanged. R2 — hair_colour "#FF8000":
     hsig unchanged, fsig changes; run_garment -> ran ["fit"], generate_hair
     still 1, colour_target (255/255, 128/255, 0/255) = (1.0, 0.50196,
-    0.0); record colour {target "#ff8000", source "override"}. Back to "":
+    0.0); record colour {target "#ff8000", source "override", name None,
+    applied True, ΔE 20.0 -> 0.0}. Back to "":
     fsig = the [3] fsig again (accepted, nothing to run).
 [4] Review Focus 1 — extra_params {"input_steps": 31} (new hsig) and a job
     whose info.json notes ["no hair found"]: {ok False, step "hairdeck",
@@ -118,6 +122,26 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     kinds each) pruned with keep_also 41 keeps 41 + the newest four (42..45)
     and returns [40]; _stored_seeds of the [5a] folder = [42, 43] (info.json
     / prep.png carry no seed).
+[9] HairDeck fixes 2026-11-09 — length class and named colour. Demo (hair
+    slot medium / blonde): hair_length_class "medium", profile_hair_colour
+    {blonde, #d3b497}. From the appearance alone (hair slot empty): "brown
+    eyes and black hair" -> (None, "black": the colour word nearest before
+    "hair"); "short dark brown hair, a full beard" -> ("short", "dark
+    brown"); "long hair" -> ("long", None). length_phrase(0.12, "the"):
+    "at the chin" without a class and for "medium" (band t < 0.16), "above
+    the ears and at the nape of the neck" for "short", "close to the scalp,
+    well above the ears" for "very short"; t None -> "".
+    The stub's moved_share 0.93 (Kai's seed 43), push 0.01. Hair slot short
+    / brunette: description changes -> fsig new, hsig the [8] one;
+    run_garment -> ok, ran ["fit"], no HairDeck call, 2 fit calls (seeds 42,
+    43) with length_class "short" and colour_profile (92, 59, 38) / 255;
+    both pass (0.93 <= 0.97) -> tie -> seed 42; record length_class "short",
+    gates.limits.moved_share ["max", 0.97], colour {"#5c3b26", profile,
+    brunette, applied, 20.0 -> 0.0}; hairdeck_panel colour {target None,
+    source "profile", profile {brunette, #5c3b26}, fitted = that record
+    colour}. Hair slot medium / brunette: both seeds refused ("moved_share
+    0.93 > 0.9"), 2 seeds stored -> no HairDeck call: {ok False, step
+    "fit"}, fit calls +2.
 """
 import hashlib
 import importlib.util
@@ -137,6 +161,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import numpy as np  # noqa: E402
 
 FAILS = []
+#: sRGB 0..1 of the named colours (garment_hair.HAIR_COLOURS), rounded like the checks.
+BLONDE = (round(211 / 255, 5), round(180 / 255, 5), round(151 / 255, 5))
+BRUNETTE = (round(92 / 255, 5), round(59 / 255, 5), round(38 / 255, 5))
 PIN_COMMIT = "0522ef42"
 JOB_FILES = ("hair_seed{s}_nohead.glb", "hair_seed{s}.glb", "chains_seed{s}.json", "cards_seed{s}.json",
              "info.json", "prep.png", "model_input.png")
@@ -198,7 +225,7 @@ def main() -> int:
 
         # --- stubs -------------------------------------------------------------
         HAIR_CALLS, FIT_CALLS, SCHEDULED = [], [], []
-        mode = {"notes": ["input_alpha"], "fit_ok": [], "push": {}}
+        mode = {"notes": ["input_alpha"], "fit_ok": [], "push": {}, "moved": None}
         backend = SimpleNamespace(name="HairDeck", MEDIA_TYPE="mesh", category="img2hair", instance_enabled=True,
                                   effective_cost=0, extra_params={"input_steps": 30})
 
@@ -226,9 +253,11 @@ def main() -> int:
 
         service.get_image_service = lambda: FakeService()
 
-        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None):
+        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None,
+                     colour_profile=None, length_class=None):
             import smoke_garment_fit as fx
-            FIT_CALLS.append({"nohead": nohead_glb, "proxy": proxy_glb, "colour_target": colour_target})
+            FIT_CALLS.append({"nohead": nohead_glb, "proxy": proxy_glb, "colour_target": colour_target,
+                              "colour_profile": colour_profile, "length_class": length_class})
             seed = int(bytes(nohead_glb).split(b"_seed")[1].split(b"_")[0])
             push = mode["push"].get(seed)
             ok = True if push is not None else (mode["fit_ok"].pop(0) if mode["fit_ok"] else True)
@@ -239,10 +268,14 @@ def main() -> int:
                 positions=P, normals=garment_fit.vertex_normals(P, F), uvs=np.zeros((len(P), 2)),
                 indices=np.asarray(F, np.int64).reshape(-1, 3), joints=J, weights=W, joint_names=names,
                 material={"doubleSided": True}, colors=np.tile([0.3, 0.2, 0.1, 1.0], (len(P), 1)))
-            m = {"max_push_m": push if push is not None else (0.01 if ok else 0.2), "moved_share": 0.3,
-                 "icp_resid_p95_m": 0.004}
-            gate_ok, reasons = garment_hairdeck.gate(m)
-            return garment_fit.FitResult(garment=garment, metrics=m, ok=gate_ok, reasons=reasons, report={})
+            m = {"max_push_m": push if push is not None else (0.01 if ok else 0.2),
+                 "moved_share": mode["moved"] if mode["moved"] is not None else 0.3, "icp_resid_p95_m": 0.004}
+            gate_ok, reasons = garment_hairdeck.gate(m, length_class)
+            # The real fit's colour report, echoed: a recolour happened whenever a colour was asked for.
+            colour = ({"applied": True, "delta_e_before": 20.0, "delta_e_after": 0.0}
+                      if colour_target or colour_profile else {})
+            return garment_fit.FitResult(garment=garment, metrics=m, ok=gate_ok, reasons=reasons,
+                                         report={"colour": colour})
 
         garment_hairdeck.fit_hairdeck = fit_stub
 
@@ -365,12 +398,15 @@ def main() -> int:
               {"accepted": True, "attempt": 1, "seed": 42, "notes": ["input_alpha"], "error": None})
         check("fit inputs", (FIT_CALLS[0]["nohead"], FIT_CALLS[0]["proxy"], FIT_CALLS[0]["colour_target"]),
               (b"hair_seed42_nohead.glb-call1", b"hair_seed42.glb-call1", None))
+        check("fit profile colour / class", (tuple(round(c, 5) for c in FIT_CALLS[0]["colour_profile"] or ()),
+                                             FIT_CALLS[0]["length_class"]), (BLONDE, "medium"))
         fit = gs.garment_path("Demo", hid, f_hd, "fit")
         check("fit node", "garment_hair_" + hid in cx.node_names(fit.read_bytes()), True)
         r = fit_record(f_hd)
         check("fit record", (r.get("accepted"), r.get("method"), r["inputs"].get("hsig"), r["inputs"].get("seed"),
                              r.get("colour")),
-              (True, "hairdeck", h1, 42, {"target": None, "source": "hairdeck"}))
+              (True, "hairdeck", h1, 42, {"target": "#d3b497", "source": "profile", "name": "blonde",
+                                          "applied": True, "delta_e_before": 20.0, "delta_e_after": 0.0}))
         prepared = gs._root("Demo") / "prepared"
         check("prepared unused", sorted(p.name for p in prepared.iterdir()) if prepared.is_dir() else [], [])
         info = garments.garment_info("Demo", hid)
@@ -396,7 +432,9 @@ def main() -> int:
         res = garments.run_garment("Demo", hid)
         check("colour run", (res.get("ok"), res.get("ran"), counts()), (True, ["fit"], (1, 3)))
         check("colour target", tuple(round(c, 5) for c in FIT_CALLS[-1]["colour_target"]), (1.0, 0.50196, 0.0))
-        check("colour record", fit_record(f_col).get("colour"), {"target": "#ff8000", "source": "override"})
+        check("colour record", fit_record(f_col).get("colour"),
+              {"target": "#ff8000", "source": "override", "name": None, "applied": True, "delta_e_before": 20.0,
+               "delta_e_after": 0.0})
         set_profile(hair_colour="")
         check("colour reset -> old fsig", gs.garment_fsig("Demo", hid), f_hd)
 
@@ -561,6 +599,50 @@ def main() -> int:
         check("prune keeps", sorted({int(p.name.split("seed")[1].split("_")[0].split(".")[0])
                                      for p in bound.iterdir() if "seed" in p.name}), [41, 42, 43, 44, 45])
         check("prune leaves info.json", (bound / "info.json").is_file(), True)
+
+        # --- [9] length class and named colour -----------------------------------
+        print("[9] length class gates + profile colour")
+        demo = get_character_profile("Demo")
+        check("class / colour of Demo", (garment_hair.hair_length_class("Demo", profile=demo),
+                                         garment_hair.profile_hair_colour("Demo", profile=demo)),
+              ("medium", {"name": "blonde", "hex": "#d3b497"}))
+        for appearance, want in (("brown eyes and black hair", (None, "black")),
+                                 ("short dark brown hair, a full beard", ("short", "dark brown")),
+                                 ("long hair", ("long", None))):
+            free = {**demo, "body_slots": {**demo["body_slots"], "hair": {}}, "character_appearance": appearance}
+            check(f"from appearance {appearance!r}", (garment_hair.hair_length_class("Demo", profile=free),
+                                                      garment_hair.hair_colour_name("Demo", profile=free)), want)
+        check("length phrases", [garment_hair.length_phrase(0.12, "the", c) for c in (None, "medium", "short",
+                                                                                       "very short")]
+              + [garment_hair.length_phrase(None, "the", "short")],
+              ["at the chin", "at the chin", "above the ears and at the nape of the neck",
+               "close to the scalp, well above the ears", ""])
+        mode["push"], mode["moved"] = {}, 0.93
+        set_profile(body_slots={**demo["body_slots"], "hair": {"length": "short", "color": "brunette"}})
+        f9 = gs.garment_fsig("Demo", hid)
+        check("short: hsig kept, fsig new", (gs.garment_hsig("Demo", hid), f9 != f5a), (h5a, True))
+        before = counts()
+        n0 = len(FIT_CALLS)
+        res = garments.run_garment("Demo", hid)
+        check("short: ok, fit only", (res.get("ok"), res.get("ran"), counts()), (True, ["fit"], (before[0], before[1] + 2)))
+        check("short: fit calls", [(c["length_class"], tuple(round(v, 5) for v in c["colour_profile"] or ()))
+                                   for c in FIT_CALLS[n0:]], [("short", BRUNETTE)] * 2)
+        r = fit_record(f9)
+        check("short: record", (r["inputs"].get("seed"), r.get("length_class"), r["gates"]["limits"]["moved_share"],
+                                r["metrics"].get("moved_share"), r.get("colour")),
+              (42, "short", ["max", 0.97], 0.93, {"target": "#5c3b26", "source": "profile", "name": "brunette",
+                                                  "applied": True, "delta_e_before": 20.0, "delta_e_after": 0.0}))
+        panel = garments.hairdeck_panel("Demo", hid)
+        check("short: panel colour", {k: panel["colour"].get(k) for k in ("target", "source", "profile", "fitted")},
+              {"target": None, "source": "profile", "profile": {"name": "brunette", "hex": "#5c3b26"},
+               "fitted": r.get("colour")})
+        set_profile(body_slots={**demo["body_slots"], "hair": {"length": "medium", "color": "brunette"}})
+        before = counts()
+        res = garments.run_garment("Demo", hid)
+        check("medium: refused on moved_share, no HairDeck call",
+              (res.get("ok"), res.get("step"), "moved_share 0.93 > 0.9" in (res.get("error") or ""), counts()),
+              (False, "fit", True, (before[0], before[1] + 2)))
+        mode["moved"] = None
 
     print()
     if FAILS:

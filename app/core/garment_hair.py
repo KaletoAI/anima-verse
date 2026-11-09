@@ -239,6 +239,69 @@ def set_hair_placement(character_name: str, forward_m: Any, tilt_deg: Any) -> bo
         return bool(save_character_profile(character_name, profile)) if changed else True
 
 
+# --- Length class and named colour of the hair ---------------------------------
+
+#: Hair length classes, shortest first (the human pack's hair ``length`` options). Short hair lies on the scalp:
+#: the HairDeck fit gates it differently (``garment_hairdeck.gates_for``) and the edit chain's length sentence
+#: names no chin for it (``length_phrase``).
+LENGTH_CLASSES: Tuple[str, ...] = ("very short", "short", "medium", "long", "very long")
+SHORT_LENGTH_CLASSES: Tuple[str, ...] = ("very short", "short")
+_LENGTH_CLASS_WORD = re.compile(r"\b(very short|very long|short|medium|long)\b", re.IGNORECASE)
+#: Named hair colours -> sRGB the hair's MEDIAN vertex colour is matched to (``garment_hairdeck._transfer_colours``):
+#: a shaded-hair median, darker than the highlights. "blonde" is the colour the user picked for Kira's medium
+#: blonde (2026-11-09); "brunette" a medium brown (Kai's HairDeck median (58, 50, 43) is ΔE 17 from it — the
+#: near-black of finding 1.3b). The human pack's options plus common free-text words; longest phrases match first.
+HAIR_COLOURS: Dict[str, str] = {
+    "platinum blonde": "#e2d8c3", "strawberry blonde": "#c98d62", "dirty blonde": "#a68a62",
+    "light brown": "#7d5a3e", "dark brown": "#3d2a1e",
+    "blonde": "#d3b497", "blond": "#d3b497", "brunette": "#5c3b26", "brown": "#5c3b26", "chestnut": "#61392a",
+    "black": "#231f1d", "red": "#8f3a1f", "ginger": "#a5532b", "copper": "#9e5530", "auburn": "#6d2f20",
+    "gray": "#8b8986", "grey": "#8b8986", "silver": "#b9b8b5", "white": "#e5e2dc", "pink": "#d68aa6",
+    "blue": "#3b5b9b", "green": "#3b7a4b", "purple": "#6b3b8b",
+}
+_COLOUR_WORD = re.compile(r"\b(" + "|".join(re.escape(name) for name in sorted(HAIR_COLOURS, key=len, reverse=True))
+                          + r")\b")
+_HAIR_AT = re.compile(r"\bhair\b")
+#: How many words before "hair" a colour word may stand ("short dark brunette hair").
+_COLOUR_REACH_WORDS = 4
+
+
+def hair_length_class(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The hair's length class (``LENGTH_CLASSES``) or None: the value of the attribute the hair slot declares
+    for its mesh-input line (the human pack: ``length``) when it is a class, else the first class word of
+    ``hair_description`` ("short brunette hair" -> "short")."""
+    profile = _profile_of(character_name, profile)
+    slot = _hair_slot(character_name, profile)
+    if slot is not None and getattr(slot, "mesh_input_prompt", None):
+        from app.core.body_slots import slot_values
+        key = slot.mesh_input_prompt.get("attribute")
+        value = str((slot_values(character_name, profile=profile).get(slot.id) or {}).get(key) or "")
+        if " ".join(value.lower().split()) in LENGTH_CLASSES:
+            return " ".join(value.lower().split())
+    match = _LENGTH_CLASS_WORD.search(hair_description(character_name, profile=profile))
+    return " ".join(match.group(1).lower().split()) if match else None
+
+
+def hair_colour_name(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The named hair colour of ``hair_description`` (a ``HAIR_COLOURS`` key) or None: per clause, the colour
+    word nearest before a "hair" within ``_COLOUR_REACH_WORDS`` words ("brown eyes and black hair" -> black);
+    the first clause with one wins."""
+    for clause in hair_description(character_name, profile=profile).lower().split(","):
+        for hair in _HAIR_AT.finditer(clause):
+            window = " ".join(clause[:hair.start()].split()[-_COLOUR_REACH_WORDS:])
+            found = list(_COLOUR_WORD.finditer(window))
+            if found:
+                return found[-1].group(1)
+    return None
+
+
+def profile_hair_colour(character_name: str, *,
+                        profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, str]]:
+    """``{name, hex}`` of the profile's named hair colour (``hair_colour_name``), None without one."""
+    name = hair_colour_name(character_name, profile=profile)
+    return {"name": name, "hex": HAIR_COLOURS[name]} if name else None
+
+
 def colour_target(hex_colour: str) -> Optional[Tuple[float, float, float]]:
     """``"#rrggbb"`` -> sRGB 0..1 (``garment_hairdeck.fit_hairdeck``'s
     ``colour_target``); ``""`` -> None (keep HairDeck's colours)."""
@@ -312,16 +375,26 @@ LENGTH_BANDS: Tuple[Tuple[float, str], ...] = (
     (0.44, "at {p} waist"),
 )
 LENGTH_BELOW = "below {p} waist"
+# Short hair by its length class, whatever ``t`` says: its back end sits at
+# the nape, the chin's height (Kai 2026-11-09: t 0.12 -> "at the chin", and
+# the hair-only front became a chin-length bob, width +18 %).
+SHORT_LENGTH_PHRASES: Dict[str, str] = {
+    "very short": "close to {p} scalp, well above {p} ears",
+    "short": "above {p} ears and at the nape of {p} neck",
+}
 # The length sentence of the hair-only FRONT prompt (the front hides the
 # ends behind the body; without it the edit invents the length).
 _GHOST_LENGTH = "The hair ends {where}."
 
 
-def length_phrase(t: Optional[float], possessive: str = "the") -> str:
+def length_phrase(t: Optional[float], possessive: str = "the", length_class: Optional[str] = None) -> str:
     """``"just below her shoulders"`` for a hair end at ``t`` (``LENGTH_BANDS``);
-    "" without a measurement."""
+    "" without a measurement. A short ``length_class`` (``SHORT_LENGTH_PHRASES``)
+    names its own end instead of a band."""
     if t is None:
         return ""
+    if length_class in SHORT_LENGTH_PHRASES:
+        return SHORT_LENGTH_PHRASES[length_class].format(p=possessive)
     for edge, phrase in LENGTH_BANDS:
         if t < edge:
             return phrase.format(p=possessive)
@@ -386,7 +459,8 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     profile = _profile_of(character_name, profile)
     description = hair_description(character_name, profile=profile)
     if step == "ghost":
-        where = length_phrase(length_t if view == "front" else None)
+        where = length_phrase(length_t if view == "front" else None,
+                              length_class=hair_length_class(character_name, profile=profile))
         if not where:
             return _GHOST[view], _negative(step, view, description)
         keep, rest = _GHOST[view].split(". ", 1)

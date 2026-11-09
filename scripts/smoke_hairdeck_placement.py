@@ -75,6 +75,59 @@ measured on Kira's record (``hair_kira_3f3e184afa64.json``) and on her base ``ba
     metrics forward_m 0.006 / tilt_deg 0; the head match itself is unchanged (icp_scale 2.0 +- 0.01). The shell's
     lowest ring stays at y 0.8 + 2 * 0.41 = 1.62 (a shift along z moves no y): hairline_unadjusted_y ==
     hairline_placed_y == 1.62 +- 1e-4. A manual tilt 15.5 or forward 0.031 is a ValueError (bounds 15 / 0.03).
+    landmark_source "none" (no face, nothing rejected).
+[8] Landmark plausibility (Kai 2026-11-09, base634402e5 with the beard modelled: the auto tilt 13.3 deg pulled the
+    hairline 2-3 cm below his brow). Eye line = chin + 0.5 * (crown - chin); brow 8-13 cm below the crown and above
+    the eye line, nose tip below it.
+    a) Kai's recorded reading: chin 1.58058, crown 1.86, nose 1.61308, brow 1.68363 -> eye 1.58058 + 0.13971 =
+       1.72029; gap 1.86 - 1.68363 = 0.17637 -> "brow 17.6 cm below the crown (plausible 8-13 cm)" and
+       "brow 1.684 not above the eye line 1.720"; the nose 1.613 is below it -> exactly these two doubts.
+       Kira's reading (base20d5701a: chin 1.4504, crown 1.70, nose 1.5029, brow 1.60648): eye 1.5752, gap 0.09352,
+       brow above, nose below -> no doubt. The [2] profile (chin 1.46, crown 1.70, nose 1.5325, brow 1.611: eye
+       1.58, gap 0.089) and the [7a] one (chin 1.45: eye 1.575, nose 1.5025, brow 1.606, gap 0.094) -> no doubt,
+       placement_landmarks source "profile" with the same landmarks.
+    b) A bearded profile shaped like Kai's (chin 1.58, crown 1.86; x = 0): (1.581, 0.080) beard, (1.613, 0.137)
+       lower lip, (1.633, 0.131) mouth, (1.683, 0.172) nose tip, (1.733, 0.151) nasion, (1.743, 0.155) brow
+       ridge, (1.768, 0.148) forehead, (1.788, 0.147), (1.833, 0.115), (1.858, 0.067); box points
+       (+-0.097, 1.75, 0.055), (0, 1.75, -0.06) -> cx 0, cz (0.172 - 0.06) / 2 = 0.056, depth 0.232; the profile
+       keeps z > 0.056 (the box points drop out). Bins from 1.58: 1.613 -> 6 (centre 1.6125), 1.633 -> 10
+       (1.6325), 1.683 -> 20 (1.6825), 1.733 -> 30 (1.7325), 1.743 -> 32 (1.7425), 1.768 -> 37 (1.7675).
+       Nose candidates: centre <= 1.72 and z >= 0.056 + 0.3 * 0.232 = 0.1256: bins 6, 10, 20.
+       bin 6: band (1.6125, 1.73625] = {10: 0.131, 20: 0.172, 30: 0.151} -> nasion 10, dip 0.006; brow = largest z
+         at y >= 1.635 = 1.683 (0.172), 0.041 above the nasion -> valid, dip 0.006.
+       bin 10: band min 0.151 > 0.131 -> no dip.
+       bin 20: band (1.6825, 1.77125] = {30: 0.151, 32: 0.155, 37: 0.148} -> nasion 37, dip 0.024; brow = largest
+         z at y >= 1.77 = 1.788 (0.147) < 0.148 + 0.003 -> invalid (the forehead slopes back below the nasion).
+       -> the reading nose 1.6125, nasion 1.6325, brow 1.683 (Kai's misreading); gap 0.177 -> "17.7 cm", brow
+       1.683 <= eye 1.72 -> two doubts. Source "proportions": brow 1.58 + 0.6 * 0.28 = 1.748, floor (nasion)
+       1.58 + 0.4 * 0.28 = 1.692, crown 1.86; target 1.748 + 0.25 * 0.112 = 1.776 (the misreading's: 1.683 +
+       0.25 * 0.177 = 1.72725).
+    c) _place_and_push on b with an arc around Kai's pivot p = (0, 1.7555, 0.0448) (radius 0.095, phi 20..90
+       deg, plane x = 0) and a push stand-in that moves nothing: front strip z > 0.056 + 0.25 * 0.232 = 0.114;
+       the phi = 20 point (z 0.0448 + 0.0893 + 0.006 = 0.140) is the lowest -> hairline(t) = 1.7555 + 0.095
+       sin(20 - t). t = 0: 1.787992 > 1.776 -> sin(20 - t) = (1.776 - 1.7555) / 0.095 = 0.215789 -> 20 - t =
+       12.4615 -> t = 7.538 +- 0.02 "solved", one round (the pushed hairline is the placed one), landmark_source
+       "proportions", hairline_floor_y 1.692, landmarks_rejected.landmarks.brow_y 1.683. The misreading's target
+       1.72725 would have needed sin(20 - t) = -0.29737, t = 37.3 deg -> "clamped" at 15.
+[9] moved_share per length class: gates_for(None / "medium" / "long") keep 0.90 (Kira medium: 0.65-0.69),
+    "short" 0.97, "very short" 1.0, the other two gates unchanged. Kai's metrics {max_push_m 0.0162, moved_share
+    0.93, icp_resid_p95_m 0.0074} (seed 43 of the bearded run): refused without a class ("moved_share 0.93 >
+    0.9"), passed as "short". _push_passes on 100 displacements, 93 of 0.01 m (> MOVED_EPS_M) and 7 of 0: share
+    0.93 -> False by default, True with gates_for("short"). The [6] fixture's inner layer (moved_share 1, see
+    smoke_garment_hairdeck_fit) is still refused as "short" (1 > 0.97), with the short limit in the reason.
+[10] Colour (CIELAB D65, CIE76). White (1, 1, 1) -> (100, 0, 0) (the matrix rows sum to the white point).
+    Kai's HairDeck median linear (0.0431, 0.0314, 0.0235): Y = 0.2126729 * 0.0431 + 0.7151522 * 0.0314 +
+    0.072175 * 0.0235 = 0.033318 -> L = 116 cbrt(Y) - 16 = 21.33; X / 0.95047 = 0.034977, Z / 1.08883 = 0.024713
+    -> a = 500 (0.32700 - 0.32178) = 2.61, b = 200 (0.32178 - 0.29130) = 6.10. "brunette" #5c3b26: linear
+    (0.107032, 0.043734, 0.019384) (+- 1e-5) -> Y 0.055442, X/Xn 0.066581, Z/Zn 0.023607 -> (28.23, 12.00, 18.89).
+    ΔE = sqrt(6.90^2 + 9.39^2 + 12.79^2) = 17.30 (+- 0.05).
+    _transfer_colours on three vertices at Kai's median Lab with L -5 / 0 / +5: delta_e_before 17.30, applied,
+    the new median = brunette (delta_e_after <= 0.05), the L offsets -5 / 0 / +5 kept (+- 0.05), alpha untouched.
+    A target 3 L units from the median (ΔE 3 <= AUTO_RECOLOUR_MIN_DE 5): not applied, colours unchanged.
+    The whole fit on the [6] fixture (COLOR_0 0.25 grey -> L 116 cbrt(0.25) - 16 = 57.08, a = b = 0) with
+    colour_profile brunette: report colour method "lab_transfer", delta_e_before sqrt(28.85^2 + 12^2 + 18.89^2)
+    = 36.51 (+- 0.05), every hair colour = brunette linear (+- 1e-3), metrics colour_delta_e <= 0.05; with a
+    colour_target too, the target wins (method "gain").
 """
 import math
 import sys
@@ -261,6 +314,112 @@ def main() -> int:
                 check(False, f"{kwargs} refused")
             except ValueError:
                 check(True, f"{kwargs} -> ValueError")
+        check(pl["landmark_source"] == "none" and pl["landmarks_rejected"] is None, "no face: landmark_source none")
+
+        # [8]
+        print("[8] landmark plausibility")
+        kai = {"nose_tip_y": 1.61308, "nasion_y": 1.63308, "brow_y": 1.68363, "crown_y": 1.86}
+        doubts = gh.landmark_doubts(kai, 1.58058, 1.86)
+        check(doubts == ["brow 17.6 cm below the crown (plausible 8-13 cm)", "brow 1.684 not above the eye line 1.720"],
+              f"Kai's reading: two doubts {doubts}")
+        kira = {"nose_tip_y": 1.5029, "nasion_y": 1.5329, "brow_y": 1.60648, "crown_y": 1.70}
+        check(gh.landmark_doubts(kira, 1.4504, 1.70) == [], "Kira's reading: plausible")
+        lm2, src2, rej2 = gh.placement_landmarks(P, head_v, CHIN, CROWN)
+        check(src2 == "profile" and rej2 is None and lm2 == lm, "[2] profile: source profile, same landmarks")
+        lm7b, src7, _ = gh.placement_landmarks(P7, np.ones(len(P7), bool), 1.45, 1.70)
+        check(src7 == "profile" and lm7b == lm7, "[7a] profile: source profile")
+        beard = [(1.581, 0.080), (1.613, 0.137), (1.633, 0.131), (1.683, 0.172), (1.733, 0.151), (1.743, 0.155),
+                 (1.768, 0.148), (1.788, 0.147), (1.833, 0.115), (1.858, 0.067)]
+        P8 = np.array([(0.0, y, z) for y, z in beard] + [(-0.097, 1.75, 0.055), (0.097, 1.75, 0.055),
+                                                           (0.0, 1.75, -0.06)])
+        hv8 = np.ones(len(P8), bool)
+        read = gh.head_landmarks(P8, hv8, 1.58, 1.86)
+        print("   ", read)
+        check(read is not None and near(read["nose_tip_y"], 1.6125, 1e-6) and near(read["nasion_y"], 1.6325, 1e-6)
+              and near(read["brow_y"], 1.683, 1e-6), "bearded profile misread: nose 1.6125, nasion 1.6325, brow 1.683")
+        lm8, src8, rej8 = gh.placement_landmarks(P8, hv8, 1.58, 1.86)
+        print("   ", lm8, src8, rej8)
+        check(src8 == "proportions" and near(lm8["brow_y"], 1.748, 1e-6) and near(lm8["nasion_y"], 1.692, 1e-6)
+              and near(lm8["crown_y"], 1.86, 1e-9), "fallback: proportions, brow 1.748, floor 1.692")
+        check(rej8 is not None and rej8["landmarks"] == read
+              and rej8["doubts"] == ["brow 17.7 cm below the crown (plausible 8-13 cm)",
+                                     "brow 1.683 not above the eye line 1.720"], f"rejected reading kept: {rej8}")
+        check(near(gh.hairline_target(lm8["brow_y"], lm8["crown_y"]), 1.776, 1e-6)
+              and near(gh.hairline_target(read["brow_y"], read["crown_y"]), 1.72725, 1e-6),
+              "targets: 1.776 (fallback) vs 1.72725 (misreading)")
+        pivot8 = np.array([0.0, 1.7555, 0.0448])
+        phi = np.radians(np.arange(20, 91, 1.0))
+        H8 = pivot8 + np.column_stack([np.zeros_like(phi), 0.095 * np.sin(phi), 0.095 * np.cos(phi)])
+        try:
+            gh._push = lambda Q, F, U, body: {"Qp": np.asarray(Q), "disp": np.zeros((len(Q), 3))}
+            _, pl8 = gh._place_and_push(H8, pivot8, np.zeros((0, 3), np.int64), None,
+                                        SimpleNamespace(positions=P8), hv8, 1.58, 1.86, None, None)
+        finally:
+            gh._push = real_push
+        print("   ", {k: v for k, v in pl8.items() if k not in ("landmarks", "landmarks_rejected")})
+        check(near(pl8["tilt_deg"], 7.538, 0.02) and pl8["tilt_solve"] == "solved" and pl8["rounds"] == 1,
+              f"bearded head: tilt 7.538 solved in one round ({pl8['tilt_deg']}, {pl8['tilt_solve']})")
+        check(pl8["landmark_source"] == "proportions" and near(pl8["hairline_floor_y"], 1.692, 1e-6)
+              and near(pl8["hairline_target_y"], 1.776, 1e-5)
+              and near((pl8["landmarks_rejected"] or {}).get("landmarks", {}).get("brow_y"), 1.683, 1e-6),
+              "report: proportions, floor 1.692, target 1.776, rejected brow 1.683")
+        check(near(pl8["hairline_pushed_y"], 1.776, 2e-4), f"hairline at the target ({pl8['hairline_pushed_y']})")
+        t_old, how_old = gh.solve_tilt(H8, pivot8, 0.006, gh._head_box(P8, hv8), 1.72725, 1.6325)
+        check((t_old, how_old) == (15.0, "clamped"), f"the misreading's target clamps at 15 ({t_old}, {how_old})")
+
+        # [9]
+        print("[9] moved_share per length class")
+        for cls, want in ((None, 0.90), ("medium", 0.90), ("long", 0.90), ("short", 0.97), ("very short", 1.0)):
+            g = gh.gates_for(cls)
+            check(g["moved_share"][1] == want and g["max_push_m"] == gh.GATES["max_push_m"]
+                  and g["icp_resid_p95_m"] == gh.GATES["icp_resid_p95_m"], f"{cls}: moved_share <= {want}")
+        m9 = {"max_push_m": 0.0162, "moved_share": 0.93, "icp_resid_p95_m": 0.0074}
+        ok9, why9 = gh.gate(m9)
+        check(not ok9 and len(why9) == 1 and why9[0].startswith("moved_share 0.93 > 0.9"), f"no class: refused {why9}")
+        check(gh.gate(m9, "short") == (True, []), "short: Kai's 0.93 passes")
+        disp = np.zeros((100, 3))
+        disp[:93, 0] = 0.01
+        check(not gh._push_passes({"disp": disp}) and gh._push_passes({"disp": disp}, gh.gates_for("short")),
+              "_push_passes: 0.93 refused by default, passed as short")
+        inner_nohead, inner_proxy = fx.hair_glbs(inner=True)
+        r9 = gh.fit_hairdeck(inner_nohead, inner_proxy, body_glb, colour_target=None, length_class="short",
+                             **fx.NO_PLACEMENT)
+        check(not r9.ok and r9.metrics["moved_share"] == 1 and any(r.startswith("moved_share 1 > 0.97")
+                                                                     for r in r9.reasons),
+              f"inner layer still refused as short: {r9.reasons}")
+
+        # [10]
+        print("[10] colour transfer")
+        check(np.allclose(gh.linear_to_lab([1.0, 1.0, 1.0]), [100, 0, 0], atol=1e-3), "white -> (100, 0, 0)")
+        kai_lab = gh.linear_to_lab([0.0431, 0.0314, 0.0235])
+        brunette = (0x5c / 255, 0x3b / 255, 0x26 / 255)
+        br_lab = gh.linear_to_lab(gh.srgb_to_linear(brunette))
+        check(np.allclose(kai_lab, [21.33, 2.61, 6.10], atol=0.02), f"Kai's median Lab {kai_lab}")
+        check(np.allclose(gh.srgb_to_linear(brunette), [0.107032, 0.043734, 0.019384], atol=1e-5)
+              and np.allclose(br_lab, [28.23, 12.00, 18.89], atol=0.02), f"brunette Lab {br_lab}")
+        check(near(gh.delta_e(kai_lab, br_lab), 17.30, 0.05), f"ΔE 17.30 ({gh.delta_e(kai_lab, br_lab):.3f})")
+        lab3 = kai_lab + np.array([[-5.0, 0, 0], [0, 0, 0], [5.0, 0, 0]])
+        C3 = np.column_stack([gh.lab_to_linear(lab3), np.full(3, 0.5)])
+        out3, info3 = gh._transfer_colours(C3, brunette)
+        new3 = gh.linear_to_lab(out3[:, :3])
+        check(info3["applied"] and near(info3["delta_e_before"], 17.30, 0.05) and info3["delta_e_after"] <= 0.05,
+              f"applied, ΔE 17.30 -> {info3['delta_e_after']}")
+        check(np.allclose(new3[1], br_lab, atol=0.05) and np.allclose(new3[:, 0] - new3[1, 0], [-5, 0, 5], atol=0.05)
+              and np.allclose(out3[:, 3], 0.5), f"median on brunette, L offsets kept: {new3[:, 0] - new3[1, 0]}")
+        near3 = gh.lab_to_linear(lab3[1] + [3.0, 0, 0])
+        out3b, info3b = gh._transfer_colours(C3, tuple(np.where(near3 <= 0.0031308, near3 * 12.92,
+                                                                1.055 * near3 ** (1 / 2.4) - 0.055)))
+        check(not info3b["applied"] and near(info3b["delta_e_before"], 3.0, 0.02) and np.array_equal(out3b, C3),
+              f"within ΔE 5: kept ({info3b['delta_e_before']})")
+        r10 = gh.fit_hairdeck(nohead, proxy, body_glb, colour_target=None, colour_profile=brunette, **fx.NO_PLACEMENT)
+        c10 = r10.report["colour"]
+        hair_cols = r10.garment.colors[:r10.report["vertices"]["hair"], :3]
+        check(c10["method"] == "lab_transfer" and near(c10["delta_e_before"], 36.51, 0.05)
+              and r10.metrics["colour_delta_e"] <= 0.05, f"fit: lab_transfer, ΔE 36.51 -> {r10.metrics['colour_delta_e']}")
+        check(np.allclose(hair_cols, [0.107032, 0.043734, 0.019384], atol=1e-3), "every hair colour = brunette linear")
+        r10b = gh.fit_hairdeck(nohead, proxy, body_glb, colour_target=(1.0, 0.5, 0.0), colour_profile=brunette,
+                               **fx.NO_PLACEMENT)
+        check(r10b.report["colour"]["method"] == "gain", "a manual target wins over the profile colour")
 
     print("ALL OK" if not FAILS else "FAILED: " + ", ".join(FAILS))
     return 1 if FAILS else 0

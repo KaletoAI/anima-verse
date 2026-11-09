@@ -650,15 +650,17 @@ def _placement_summary(placement: Any) -> Optional[Dict[str, Any]]:
     came from) and the hairline it reached against its target. None without a report section."""
     if not isinstance(placement, dict):
         return None
-    keys = ("forward_m", "forward_source", "tilt_deg", "tilt_source", "tilt_solve", "hairline_target_y")
+    keys = ("forward_m", "forward_source", "tilt_deg", "tilt_source", "tilt_solve", "hairline_target_y",
+            "landmark_source")
     return {**{k: placement.get(k) for k in keys}, "hairline_y": placement.get("hairline_pushed_y")}
 
 
 def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: int, rigged: bytes,
               profile: Dict[str, Any]) -> Dict[str, Any]:
     """Fit one stored HairDeck seed of ``hsig`` onto ``rigged`` (colour = the
-    profile's override, else HairDeck's own; placement = the profile's manual
-    forward/tilt, else automatic) without publishing anything:
+    profile's override, else the profile's named hair colour, else HairDeck's
+    own; gates = those of the hair's length class; placement = the profile's
+    manual forward/tilt, else automatic) without publishing anything:
     ``{seed, result, hair_bytes, proxy_bytes, gates}`` — ``gates`` the
     verdict ``{attempt, seed, ok, reasons, limits, metrics}`` (``attempt`` =
     the seed's position among the stored seeds, 1-based)."""
@@ -669,13 +671,39 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
         raise RuntimeError(f"HairDeck seed {seed} has no hair/proxy file")
     hair_bytes, proxy_bytes = hair.read_bytes(), proxy.read_bytes()
     override = garment_hair.hair_colour_override(profile)
+    named = garment_hair.profile_hair_colour(character_name, profile=profile)
+    length_class = garment_hair.hair_length_class(character_name, profile=profile)
     result = garment_hairdeck.fit_hairdeck(hair_bytes, proxy_bytes, rigged,
                                            colour_target=garment_hair.colour_target(override),
+                                           colour_profile=garment_hair.colour_target(named["hex"]) if named else None,
+                                           length_class=length_class,
                                            **garment_hair.hair_placement(profile))
     gates = {"attempt": attempt, "seed": seed, "ok": bool(result.ok), "reasons": list(result.reasons),
-             "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in garment_hairdeck.GATES.items()},
-             "metrics": result.metrics}
+             "limits": _hairdeck_limits(length_class), "metrics": result.metrics}
     return {"seed": seed, "result": result, "hair_bytes": hair_bytes, "proxy_bytes": proxy_bytes, "gates": gates}
+
+
+def _hairdeck_limits(length_class: Optional[str]) -> Dict[str, List[Any]]:
+    """``{key: [kind, limit]}`` of the HairDeck gates of a hair length class."""
+    from app.core import garment_hairdeck
+    return {key: [kind_, limit] for key, (kind_, limit, _label) in garment_hairdeck.gates_for(length_class).items()}
+
+
+def _hairdeck_colour(override: str, named: Optional[Dict[str, str]], colour_report: Dict[str, Any]
+                     ) -> Dict[str, Any]:
+    """The fit record's ``colour``: ``{target, source, name, applied, delta_e_before, delta_e_after}`` —
+    ``source`` ``"override"`` (the manual colour), ``"profile"`` (the profile's named colour, transferred unless
+    HairDeck's own lay within ``AUTO_RECOLOUR_MIN_DE`` of it: ``applied`` False) or ``"hairdeck"``."""
+    if override:
+        out: Dict[str, Any] = {"target": override, "source": "override", "name": None, "applied": True}
+    elif named:
+        out = {"target": named["hex"], "source": "profile", "name": named["name"],
+               "applied": bool(colour_report.get("applied"))}
+    else:
+        return {"target": None, "source": "hairdeck", "name": None, "applied": False,
+                "delta_e_before": None, "delta_e_after": None}
+    return {**out, "delta_e_before": colour_report.get("delta_e_before"),
+            "delta_e_after": colour_report.get("delta_e_after")}
 
 
 def _push_of(fit: Dict[str, Any]) -> float:
@@ -709,7 +737,7 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
     (``inputs.seed``) and every seed's verdict of this fit step (``seeds``);
     the job record keeps the verdicts too (``fitted_seeds``, ``fit_attempts``
     = the refused ones)."""
-    from app.core import base_body, garment_hair, garment_hairdeck
+    from app.core import base_body, garment_hair
     from app.core import garment_store as gs
     from app.core.garment_store import GARMENT_VIEWS, HAIRDECK
     from app.core.model_refs import find_ref_image
@@ -720,9 +748,9 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
                     {**gs.read_record(folder / gs.HAIRDECK_RECORD), "fitted_seeds": _seed_summary(fits),
                      "fit_attempts": _refused_gates(fits)})
     override = garment_hair.hair_colour_override(profile)
+    length_class = garment_hair.hair_length_class(character_name, profile=profile)
     base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in GARMENT_VIEWS}
-    gates = {"ok": True, "reasons": [],
-             "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in garment_hairdeck.GATES.items()}}
+    gates = {"ok": True, "reasons": [], "limits": _hairdeck_limits(length_class)}
     record: Dict[str, Any] = {
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": HAIRDECK,
         "metrics": result.metrics, "gates": gates, "report": result.report,
@@ -733,7 +761,9 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
                    "placement": garment_hair.hair_placement(profile),
                    "nohead_sha256": hashlib.sha256(fit["hair_bytes"]).hexdigest(),
                    "proxy_sha256": hashlib.sha256(fit["proxy_bytes"]).hexdigest()},
-        "colour": {"target": override or None, "source": "override" if override else "hairdeck"},
+        "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile),
+                                   result.report.get("colour") or {}),
+        "length_class": length_class,
         "placement": _placement_summary(result.report.get("placement")),
         "seeds": _seed_summary(fits),
         "refused_attempts": _refused_gates(fits),
@@ -1516,10 +1546,15 @@ def hairdeck_panel(character_name: str, item_id: str, *,
       created_at}`` (tile meta for ``RefImage``) or None when absent;
       ``input_source``: ``beard_free`` when ``input`` is the beard-free copy
       of the profile picture (``garment_beard``), else ``profile``;
-    - ``colour``: ``{target, source, auto}`` — ``target`` the manual
-      ``#rrggbb`` or None, ``source`` ``"override"`` or ``"hairdeck"`` (R4:
-      automatic = HairDeck's own vertex colours), ``auto`` HairDeck's own
-      hair colour from the job's ``info.json`` as ``#rrggbb`` (None without);
+    - ``colour``: ``{target, source, auto, profile, fitted}`` — ``target``
+      the manual ``#rrggbb`` or None, ``source`` ``"override"``,
+      ``"profile"`` (automatic: the profile's named hair colour,
+      ``garment_hair.profile_hair_colour``) or ``"hairdeck"`` (automatic
+      without a named colour: HairDeck's own vertex colours), ``auto``
+      HairDeck's own hair colour from the job's ``info.json`` as ``#rrggbb``
+      (None without), ``profile`` ``{name, hex}`` of the named colour (None
+      without), ``fitted`` the newest HairDeck fit's record ``colour``
+      (``_hairdeck_colour``; None without a fit);
     - ``placement``: ``{forward_m, tilt_deg, default_forward_m, limits,
       fitted}`` — the manual values (None = automatic,
       ``garment_hair.hair_placement``), the automatic forward shift, the
@@ -1557,9 +1592,12 @@ def hairdeck_panel(character_name: str, item_id: str, *,
     except (OSError, ValueError):
         info = {}
     override = garment_hair.hair_colour_override(profile)
-    colour = {"target": override or None, "source": "override" if override else "hairdeck",
-              "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None}
+    named = garment_hair.profile_hair_colour(character_name, profile=profile)
     newest = _newest_fit(character_name, item_id, gs.HAIRDECK)
+    colour = {"target": override or None,
+              "source": "override" if override else ("profile" if named else "hairdeck"),
+              "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None,
+              "profile": named, "fitted": newest[1].get("colour") if newest else None}
     placement = {**garment_hair.hair_placement(profile),
                  "default_forward_m": garment_hairdeck.DEFAULT_FORWARD_M,
                  "limits": {"forward_m": garment_hairdeck.FORWARD_LIMIT_M,

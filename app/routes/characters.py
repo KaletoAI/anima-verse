@@ -1927,7 +1927,8 @@ def get_character_hair(character_name: str,
     ``garments.garment_info`` (None without an item), ``collision`` always
     False in this phase (R15), ``limits`` the gate limits per step for the
     tab's chips (``garment_gates.limits`` + mesh + fit + ``hairdeck_fit``,
-    from the gate constants themselves). ``method`` / ``method_source``
+    from the gate constants themselves; ``hairdeck_fit`` those of the hair's
+    length class, ``garment_hairdeck.gates_for``). ``method`` / ``method_source``
     (``"character"`` | ``"world"``) the hair method in effect, ``world_method``
     the world default; ``hairdeck`` the HairDeck section of the current
     ``hsig`` (``garments.hairdeck_panel``) and ``other`` the last result of
@@ -1960,7 +1961,9 @@ def get_character_hair(character_name: str,
                                                                                          profile=profile)),
                 "item_id": item_id, "equipped": equipped, "garment": info, "collision": False,
                 "limits": {**_garment_limits("hair"),
-                           "hairdeck_fit": _gate_limits(garment_hairdeck.GATES)},
+                           "hairdeck_fit": _gate_limits(garment_hairdeck.gates_for(
+                               garment_hair.hair_length_class(character_name, profile=profile)
+                               if humanoid else None))},
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.world_hair_method(),
                 "hairdeck": hairdeck, "other": other}
@@ -1995,9 +1998,10 @@ def set_character_hair_method(character_name: str, body: HairMethodRequest,
 def set_character_hair_colour(character_name: str, body: HairColourRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Set the manual HairDeck hair colour (``"#rrggbb"``) or ``""`` for
-    automatic (HairDeck's own colours). 400 on an invalid value. Only the fit
-    fingerprint changes: the next run re-fits from the cached HairDeck job,
-    without a HairDeck call (no run starts here)."""
+    automatic (the profile's named hair colour, else HairDeck's own colours:
+    ``source`` ``"profile"`` / ``"hairdeck"``). 400 on an invalid value. Only
+    the fit fingerprint changes: the next run re-fits from the cached
+    HairDeck job, without a HairDeck call (no run starts here)."""
     from app.core import garment_hair
     _require_character(character_name)
     try:
@@ -2007,8 +2011,10 @@ def set_character_hair_colour(character_name: str, body: HairColourRequest,
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
     from app.models.character import get_character_profile
-    override = garment_hair.hair_colour_override(get_character_profile(character_name) or {})
-    return {"target": override or None, "source": "override" if override else "hairdeck"}
+    stored = get_character_profile(character_name) or {}
+    override = garment_hair.hair_colour_override(stored)
+    named = garment_hair.profile_hair_colour(character_name, profile=stored)
+    return {"target": override or None, "source": "override" if override else ("profile" if named else "hairdeck")}
 
 
 @router.post("/{character_name}/hair/placement")

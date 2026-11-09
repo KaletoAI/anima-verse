@@ -40,12 +40,17 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     key hair_colour stays absent.
 [5] POST /hair (creates + wears "hair_demo", starts the REAL chain): ran
     hairdeck + fit -> generate_hair 1 call (seed 42), fit 1 call with
-    colour_target None. GET: garment.method "hairdeck", served_fsig = the
+    colour_target None, colour_profile = the profile's "blonde" #d3b497 =
+    (211/255, 180/255, 151/255), length_class "medium" (hair slot length).
+    GET: garment.method "hairdeck", served_fsig = the
     current fsig F1, garment.fit accepted; hairdeck.status "accepted",
     attempt 1, seed 42, notes ["input_alpha"], attempts []; images input /
     prep / model_input all with a url, prep.model "HairDeck"; colour
-    {target None, source "hairdeck", auto "#7f6248"} (0.49804·255 = 127.0 ->
-    7f, 0.38431·255 = 98.0 -> 62, 0.28235·255 = 72.0 -> 48). Image route:
+    {target None, source "profile", auto "#7f6248", profile {name "blonde",
+    hex "#d3b497"}, fitted = the fit record's colour {target "#d3b497",
+    source "profile", name "blonde", applied True, ΔE 20.0 -> 0.0 (the stub's
+    echo)}} (auto: 0.49804·255 = 127.0 -> 7f, 0.38431·255 = 98.0 -> 62,
+    0.28235·255 = 72.0 -> 48). Image route:
     prep -> the job's prep.png bytes "prep.png-call1", input -> the profile
     picture's bytes, "bogus" -> 400, a traversal name -> 400/404 without the
     planted secret. other None (no edit-chain fit).
@@ -54,8 +59,9 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     "missing", stale_reasons ["colour_changed"], served_fsig still F1.
     POST run {} -> re-fits WITHOUT a HairDeck call: generate_hair still 1,
     fit 2 with colour_target (1.0, 128/255, 0.0); GET: fit accepted, fit
-    colour {target "#ff8000", source "override"}, stale_reasons [],
-    served_fsig F2. Colour "" -> {target None, source "hairdeck"}; fsig = F1
+    colour {target "#ff8000", source "override", name None, applied True,
+    ΔE 20.0 -> 0.0}, stale_reasons [], served_fsig F2. Colour "" ->
+    {target None, source "profile"} (Demo's hair is "blonde"); fsig = F1
     again, fit accepted (nothing to run: counts stay (1, 2)).
 [7] Method "edit_chain" (no edit-chain fit exists): GET garment.method
     "edit_chain", the five edit-chain steps, served_fsig None, preview_url
@@ -82,7 +88,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     hairdeck.placement {forward_m None, tilt_deg None, default_forward_m
     0.006 (garment_hairdeck.DEFAULT_FORWARD_M), limits {0.03, 15.0}} and the
     newest fit's placement as the stub reported it (auto: forward 0.006
-    default, tilt 2.5 auto, hairline 1.636 against 1.635). forward "abc",
+    default, tilt 2.5 auto, hairline 1.636 against 1.635, landmark_source
+    "profile"). forward "abc",
     0.031 (> 0.03), tilt 15.5 (> 15), true, "nan" -> 400 each, nothing
     stored. {forward_m 0.004, tilt_deg "3"} -> 200 {0.004, 3.0}, profile
     hair_forward_m 0.004 / hair_tilt_deg 3.0; fsig F3 (neither F1 nor F2),
@@ -184,9 +191,11 @@ def main() -> int:
 
         service.get_image_service = lambda: FakeService()
 
-        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None):
+        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None,
+                     colour_profile=None, length_class=None):
             import smoke_garment_fit as fx
-            FIT_CALLS.append({"colour_target": colour_target, "forward_m": forward_m, "tilt_deg": tilt_deg})
+            FIT_CALLS.append({"colour_target": colour_target, "forward_m": forward_m, "tilt_deg": tilt_deg,
+                              "colour_profile": colour_profile, "length_class": length_class})
             body = glb_mesh.body_arrays(rigged_base_glb)
             P, F = fx.cap(0.19, np.array([0.0, 1.58, 0.0]), n_el=9, nlon=24)
             names, J, W = garment_fit.hair_weights(P, body)
@@ -195,16 +204,19 @@ def main() -> int:
                 indices=np.asarray(F, np.int64).reshape(-1, 3), joints=J, weights=W, joint_names=names,
                 material={"doubleSided": True}, colors=np.tile([0.3, 0.2, 0.1, 1.0], (len(P), 1)))
             m = {"max_push_m": 0.01, "moved_share": 0.3, "icp_resid_p95_m": 0.004}
-            ok, reasons = garment_hairdeck.gate(m)
-            # The real fit's report section (garment_hairdeck._place_and_push), values echoed from the call.
+            ok, reasons = garment_hairdeck.gate(m, length_class)
+            # The real fit's report sections (garment_hairdeck._place_and_push, the colour), echoed from the call.
+            colour = ({"method": "gain" if colour_target else "lab_transfer", "applied": True,
+                       "delta_e_before": 20.0, "delta_e_after": 0.0} if colour_target or colour_profile else {})
             placement = {"forward_m": 0.006 if forward_m is None else forward_m,
                          "forward_source": "default" if forward_m is None else "manual",
                          "tilt_deg": 2.5 if tilt_deg is None else tilt_deg,
                          "tilt_source": "auto" if tilt_deg is None else "manual",
                          "tilt_solve": "solved" if tilt_deg is None else "manual", "rounds": 1,
-                         "hairline_target_y": 1.635, "hairline_pushed_y": 1.636, "landmarks": None}
+                         "hairline_target_y": 1.635, "hairline_pushed_y": 1.636, "landmarks": None,
+                         "landmark_source": "profile"}
             return garment_fit.FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons,
-                                         report={"placement": placement})
+                                         report={"placement": placement, "colour": colour})
 
         garment_hairdeck.fit_hairdeck = fit_stub
 
@@ -334,6 +346,9 @@ def main() -> int:
             check("counts", counts(), (1, 1))
             check("first call", (HAIR_CALLS[0]["seed"], FIT_CALLS[0]["colour_target"], FIT_CALLS[0]["forward_m"],
                                  FIT_CALLS[0]["tilt_deg"]), (42, None, None, None))
+            check("first call profile colour / class",
+                  (tuple(round(c, 5) for c in FIT_CALLS[0]["colour_profile"] or ()), FIT_CALLS[0]["length_class"]),
+                  ((round(211 / 255, 5), round(180 / 255, 5), round(151 / 255, 5)), "medium"))
             f1 = gs.garment_fsig("Demo", "hair_demo")
             h = hair()
             g = h.get("garment") or {}
@@ -347,7 +362,11 @@ def main() -> int:
                   {"input": True, "prep": True, "model_input": True})
             check("prep tile meta", ((imgs.get("prep") or {}).get("model"), bool((imgs.get("prep") or {}).get("created_at"))),
                   ("HairDeck", True))
-            check("colour auto", hd.get("colour"), {"target": None, "source": "hairdeck", "auto": "#7f6248"})
+            check("colour auto", hd.get("colour"),
+                  {"target": None, "source": "profile", "auto": "#7f6248",
+                   "profile": {"name": "blonde", "hex": "#d3b497"},
+                   "fitted": {"target": "#d3b497", "source": "profile", "name": "blonde", "applied": True,
+                              "delta_e_before": 20.0, "delta_e_after": 0.0}})
             check("other none", h.get("other"), None)
             r = client.get((imgs.get("prep") or {}).get("url") or "/none")
             check("prep bytes", (r.status_code, r.content), (200, b"prep.png-call1"))
@@ -380,9 +399,10 @@ def main() -> int:
             g = h.get("garment") or {}
             fit = (g.get("steps") or {}).get("fit") or {}
             check("after re-fit", (fit.get("status"), fit.get("colour"), g.get("stale_reasons"), g.get("served_fsig")),
-                  ("accepted", {"target": "#ff8000", "source": "override"}, [], f2))
+                  ("accepted", {"target": "#ff8000", "source": "override", "name": None, "applied": True,
+                                "delta_e_before": 20.0, "delta_e_after": 0.0}, [], f2))
             r = client.post("/characters/Demo/hair/colour", json={"hex": ""})
-            check("reset", (r.status_code, r.json()), (200, {"target": None, "source": "hairdeck"}))
+            check("reset", (r.status_code, r.json()), (200, {"target": None, "source": "profile"}))
             g = hair().get("garment") or {}
             check("back to F1", (g.get("fsig"), (g.get("steps") or {}).get("fit", {}).get("status"), counts()),
                   (f1, "accepted", (1, 2)))
@@ -450,7 +470,8 @@ def main() -> int:
                   (None, None, 0.006, {"forward_m": 0.03, "tilt_deg": 15.0}))
             check("fitted (auto)", pl.get("fitted"),
                   {"forward_m": 0.006, "forward_source": "default", "tilt_deg": 2.5, "tilt_source": "auto",
-                   "tilt_solve": "solved", "hairline_target_y": 1.635, "hairline_y": 1.636})
+                   "tilt_solve": "solved", "hairline_target_y": 1.635, "hairline_y": 1.636,
+                   "landmark_source": "profile"})
             for bad in ({"forward_m": "abc"}, {"forward_m": 0.031}, {"tilt_deg": 15.5}, {"tilt_deg": True},
                         {"tilt_deg": "nan"}):
                 r = client.post("/characters/Demo/hair/placement", json=bad)
