@@ -111,9 +111,9 @@ def sha(path: Path) -> str:
 
 def republish(path: Path, data: bytes) -> None:
     """Write like a publication does: a sibling temp file + os.replace (new inode)."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    staging = path.with_name(f".{path.name}.staging")
+    staging.write_bytes(data)
+    os.replace(staging, path)
 
 
 def node_names(glb: bytes):
@@ -148,15 +148,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="garment-assembly-") as tmp:
         root = Path(tmp)
         os.environ["STORAGE_DIR"] = str(root / "world")
-        os.environ["INSTANCE_DIR"] = str(root / "instance")
+        os.environ["INSTANCE_DIR"] = str(root / "inst")
         os.environ["ANIMATION_CLIPS_DIR"] = str(root / "clips")
         os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
         from app.core import paths
         paths.init(root / "world")
-        paths.init_instance(root / "instance")
+        paths.init_instance(root / "inst")
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
         from app.core import config
-        config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
+        config.load(paths.get_config_path(), instance_path=root / "inst/config.json")
         from app.core import db
         db.init_schema()
         plugins = root / "plugins"
