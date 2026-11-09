@@ -929,6 +929,9 @@ COVERED_MISSING = ("The base body has no current covered variant — the outfit 
 MESH_ITEM_READY = "An own-mesh piece painted on here has its garment mesh now"
 #: The ``garment_warnings`` entry of an own-mesh piece left painted on.
 MESH_ITEM_PAINTED = "{item} stays painted on: {reason}"
+#: ... for a piece whose garment chain failed: no automatic trigger retries
+#: that fsig (``garments.cached_failure``), only Regenerate does.
+MESH_ITEM_FAILED = "{item} stays painted on: {reason} — Regenerate in the Wardrobe"
 NO_MESH_FIT = "no accepted fit on the current base model"
 
 
@@ -1191,7 +1194,9 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
     (``garment_store.accepted_fit``), ``warnings`` = one ``MESH_ITEM_PAINTED``
     entry per piece left out of ``effective`` with the chain's error — such
     a piece stays painted on (ruling P1: never a bare body where it belongs,
-    never painted AND a mesh)."""
+    never painted AND a mesh). A chain that failed for its current fsig is
+    not run again here (``garments.run_queued`` skips it, fix round 1): the
+    warning says to Regenerate in the Wardrobe."""
     from app.core import garment_set, garment_store, garments
     from app.models.inventory import get_item
     profile = _profile_of(character_name, profile)
@@ -1211,10 +1216,12 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
             continue
         result = results.get(item_id) or {}
         reason = str(result.get("error") or "") or (NO_MESH_FIT if base_sha else BASE_MODEL_MISSING)
-        if result.get("step") and result.get("error"):
-            reason = f"{result['step']} — {reason}"
         name = str((get_item(item_id) or {}).get("name") or item_id)
-        warnings.append(MESH_ITEM_PAINTED.format(item=name, reason=reason))
+        if result.get("step") and result.get("error"):
+            # The chain failed for this fsig: cached, only Regenerate retries.
+            warnings.append(MESH_ITEM_FAILED.format(item=name, reason=f"{result['step']} — {reason}"))
+        else:
+            warnings.append(MESH_ITEM_PAINTED.format(item=name, reason=reason))
     logger.info("Own-mesh pieces of %s: intended %s, effective %s", character_name, intended, effective)
     return {"intended": intended, "effective": effective, "warnings": warnings}
 

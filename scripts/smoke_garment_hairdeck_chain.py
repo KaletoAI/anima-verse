@@ -472,7 +472,14 @@ def main() -> int:
                 "base_model_sha256": sha_now, "inputs": {}})
         rep = gc.verify_cache("Demo")
         stale = sorted(k for k in rep["stale_signatures"] if k.startswith("garment:"))
-        want = sorted(f"garment:{hid}_{f}" for f in (f_hd, f_col, e_old))
+        # A superseded fsig whose only file is a failed-run record
+        # (garments/failed/, plan 2026-11-09-base-body-phase5 Task 4 fix
+        # round 1: an earlier refused run) is stale as well.
+        failed_only = {f"garment:{i}_{f}" for (i, f), files in gs.stored_groups("Demo").items()
+                       if i == hid and all(p.parent.name == "failed" for p in files)
+                       and f != gs.garment_fsig("Demo", hid)}
+        check("failed-run records of superseded fsigs", len(failed_only) >= 1, True)
+        want = sorted({f"garment:{hid}_{f}" for f in (f_hd, f_col, e_old)} | failed_only)
         check("stale = superseded fits only", stale, want)
         res = gc.purge_stale("Demo", stale + [f"garment:{hid}_{f_edit}", f"garment:{hid}_{f5a}"])
         check("purge skips both kept fits", res["skipped"], 2)

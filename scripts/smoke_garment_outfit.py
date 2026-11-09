@@ -71,16 +71,21 @@ Expected, derived by hand from the brief:
       pleated skirt" (covered by the dress before, painted now), "a green
       wool coat" (its chain failed), "white sneakers" — NOT "a long red
       dress"; its sidecar mesh_items = {intended [coat, dress], effective
-      [dress], warnings ["Coat stays painted on: fit — fit refused —
-      stub"]} and mesh_token = the token of X;
+      [dress], warnings ["Coat stays painted on: fit — fit refused — stub
+      — Regenerate in the Wardrobe"]} and mesh_token = the token of X;
+      garments/failed/coat_<fsig>.json {step fit, error "fit refused —
+      stub"}, none for dress;
     - back, left, right: draft + fit, no outfit text in either prompt
       (none of the four fragments); every view's sidecar carries the
       front's mesh_items (the side views follow the front too);
     - after_mesh_item_ready was asked for dress (its fit was accepted in
       the run) and found nothing to rebuild (no front named it pending).
-    Baseline, flag OFF (signature of X without token): the front prompt
-    names "a long red dress" and NOT "a blue pleated skirt" (covered),
-    no chain runs, no mesh_items in the sidecar. Flag on again.
+    Baseline, flag OFF (signature of X without token) — the SECOND outfit
+    render after the coat failed: no chain runs at all (coat's failure is
+    cached for its fsig, dress is not flagged); the front prompt names "a
+    long red dress" and NOT "a blue pleated skirt" (covered); mesh_items
+    {intended [coat], effective [], warnings [the coat warning]}. Flag on
+    again.
 [3] Failed chain -> texture + warning (Review Focus 3).
     generate_for_current_outfit(Demo) for X: ok; the bare sidecar carries
     mesh_items, mesh_token, garment_warnings[0] = the coat warning;
@@ -88,7 +93,9 @@ Expected, derived by hand from the brief:
     model3d/assembled/<sig>.glb has "garment_clothing_dress" and NO coat
     node; outfit_model_steps: row mesh_items WARNING "own mesh: Dress ·
     painted on: Coat" and a garment_warnings row.
-[3b] Later fit (coat -> ok): run_queued(Demo, [coat]) -> the hook
+[3b] Later fit (coat -> ok): run_queued(Demo, [coat]) is automatic ->
+    {cached True}, no run; start_garment(Demo, coat) (explicit) runs it
+    once and clears the failure record -> the hook
     after_mesh_item_ready(Demo, coat) asks trigger_now(kinds ("tpose",),
     force False) once; dressed_image(front) of X is None (stale);
     model3d._on_older_base(model) True; outfit_info status "stale",
@@ -121,6 +128,18 @@ Expected, derived by hand from the brief:
     order, max concurrency 1, idle afterwards. Off pipeline:
     after_base_model(Offline) False, resolve_mesh_items(Offline, X) {} and
     resolve_mesh_items(Pet, {top: dress}) {} without a run (Review Focus 4).
+[8] Fix round 1 (a failed chain is not retried automatically): coat
+    ``fail``, X worn. start_garment twice -> two runs (explicit runs ignore
+    the cache). In-memory status cleared (= restart): cached_failure step
+    "fit", garment_info failed.error "fit refused — stub"; resolve_mesh_items
+    runs only dress (done chain), not coat, and coat's accepted fit from [6]
+    still serves (effective [coat, dress]); run_queued -> cached. Coat's
+    prompt fragment changed -> new fsig -> not cached, run_queued runs coat,
+    the new failure is recorded. A fit failure holds on its base model sha
+    only (another sha -> None: the fit depends on the base model, which the
+    fsig leaves out); a mesh failure holds on any. Base model rewritten (new
+    sha) with coat's mesh failure recorded: after_base_model True, runs
+    only dress.
 [7] _fit dispatch (Task 3, 0b532d33): garments._fit for kind clothing
     calls garment_fit.fit_clothing (slots [top], masks body + garment) and
     gates with CLOTHING_GATES; for kind hair fit_hair with GATES. Both
@@ -147,6 +166,7 @@ import numpy as np  # noqa: E402
 PIN = "0b532d33"
 FAILS = []
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
+COAT_WARN = "Coat stays painted on: fit — fit refused — stub — Regenerate in the Wardrobe"
 FRAG = {"dress": "a long red dress", "skirt": "a blue pleated skirt", "shorts": "grey denim shorts",
         "coat": "a green wool coat", "shoes": "white sneakers"}
 
@@ -440,7 +460,7 @@ def main() -> int:
         check("front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": True, "shoes": True})
         want_mesh = {"intended": ["coat", "dress"], "effective": ["dress"],
-                     "warnings": ["Coat stays painted on: fit — fit refused — stub"]}
+                     "warnings": [COAT_WARN]}
         front_meta = json.loads((refs / f"tpose_{sig_x}.json").read_text())
         check("front mesh_items", front_meta.get("mesh_items"), want_mesh)
         check("front mesh_token", front_meta.get("mesh_token"), token_x)
@@ -454,6 +474,10 @@ def main() -> int:
             check(f"{v} carries the front's record", meta.get("mesh_items"), want_mesh)
             draft = json.loads((refs / "drafts" / f"tpose_{v}_{sig_x}.json").read_text())
             check(f"{v} draft record", draft.get("mesh_items"), want_mesh)
+        fail_rec = gs.read_record(gs.garment_path("Demo", "coat", gs.garment_fsig("Demo", "coat"), "failed"))
+        check("coat failure on disk", (fail_rec.get("step"), fail_rec.get("error")), ("fit", "fit refused — stub"))
+        check("dress has none", gs.garment_path("Demo", "dress", gs.garment_fsig("Demo", "dress"),
+                                                "failed").exists(), False)
         check("hook asked for dress, nothing to rebuild", HOOKS, [("Demo", "dress", False)])
         check("no rebuild triggered", TRIGGERS, [])
         print("[2] baseline: flag off")
@@ -466,11 +490,10 @@ def main() -> int:
         prompt = fronts[0]["prompt"] if fronts else ""
         check("off: front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": True, "skirt": False, "coat": True, "shoes": True})
-        check("off: only coat's chain", [r[1] for r in RUNS], ["coat"])
+        check("off: second render starts no chain (coat failed)", [r[1] for r in RUNS], [])
         off_meta = json.loads((refs / f"tpose_{sig_off}.json").read_text())
         check("off: coat painted, dress not intended", off_meta.get("mesh_items"),
-              {"intended": ["coat"], "effective": [],
-               "warnings": ["Coat stays painted on: fit — fit refused — stub"]})
+              {"intended": ["coat"], "effective": [], "warnings": [COAT_WARN]})
         flag("dress", True)
         check("flag on: key of X", model_refs.current_outfit_state("Demo")[2], sig_x)
 
@@ -498,8 +521,15 @@ def main() -> int:
         print("[3b] the coat's fit arrives later")
         mode["coat"] = "ok"
         HOOKS.clear()
+        TRIGGERS.clear()
+        RUNS.clear()
         res = garments.run_queued("Demo", ["coat"])
-        check("coat ok", (res["coat"].get("ok"), "fit" in res["coat"].get("ran", [])), (True, True))
+        check("automatic: cached failure, no run", (res["coat"].get("cached"), RUNS), (True, []))
+        check("explicit run starts", garments.start_garment("Demo", "coat"), True)
+        check("explicit run idle", garments.wait_idle(30), True)
+        check("explicit run ran", [r[1] for r in RUNS], ["coat"])
+        check("failure cleared", gs.garment_path("Demo", "coat", gs.garment_fsig("Demo", "coat"),
+                                                 "failed").exists(), False)
         check("hook found the painted coat", HOOKS, [("Demo", "coat", True)])
         check("rebuild asked once", TRIGGERS, [("Demo", ("tpose",), {"force": False})])
         check("front stale", base_body.dressed_image("Demo", "front", sig_x, b1), None)
@@ -637,6 +667,49 @@ def main() -> int:
                 check(f"{kind} refusal", (e.step, e.error), ("fit", "fit refused — stub refusal"))
                 check(f"{kind} gate limits", sorted((e.gates or {}).get("limits") or {}), sorted(limits))
         check("dispatch", CALLS, [("fit_clothing", ["top"], ["body", "garment"]), ("fit_hair", None, [])])
+
+        # --- [8] a failed chain is not retried automatically ------------------------------
+        print("[8] cached failure: explicit run / fsig change retry, automatic triggers skip")
+        wear("Demo", X)
+        mode["coat"] = "fail"
+        RUNS.clear()
+        check("explicit run 1", garments.start_garment("Demo", "coat"), True)
+        garments.wait_idle(30)
+        check("explicit run 2 (despite the failure)", garments.start_garment("Demo", "coat"), True)
+        garments.wait_idle(30)
+        check("both explicit runs ran", [r[1] for r in RUNS], ["coat", "coat"])
+        gs._failed.clear()  # a restart empties the in-memory status
+        check("after restart: cached", (garments.cached_failure("Demo", "coat") or {}).get("step"), "fit")
+        check("garment_info reports it", (garments.garment_info("Demo", "coat").get("failed") or {}).get("error"),
+              "fit refused — stub")
+        RUNS.clear()
+        res = base_body.resolve_mesh_items("Demo", X)
+        check("automatic: no coat run (dress's done chain answers at once)", [r[1] for r in RUNS], ["dress"])
+        check("automatic: result", (garments.run_queued("Demo", ["coat"])["coat"].get("cached")), True)
+        check("coat's accepted fit (from [6]) still serves", res.get("effective"), ["coat", "dress"])
+        fsig_a = gs.garment_fsig("Demo", "coat")
+        op = dict(inventory.get_item("coat").get("outfit_piece") or {})
+        inventory.update_item("coat", {"prompt_fragment": "a dark green wool coat", "outfit_piece": op})
+        fsig_b = gs.garment_fsig("Demo", "coat")
+        check("fsig changed", fsig_a != fsig_b, True)
+        check("new fsig: not cached", garments.cached_failure("Demo", "coat"), None)
+        res = garments.run_queued("Demo", ["coat"])
+        check("new fsig: the chain runs", ([r[1] for r in RUNS], res["coat"].get("cached")),
+              (["dress", "coat"], None))
+        check("new fsig: failure recorded", gs.garment_path("Demo", "coat", fsig_b, "failed").exists(), True)
+        sha_now = base_body.current_base("Demo")[1]
+        check("fit failure holds on its base model",
+              gs.chain_failure("Demo", "coat", fsig_b, base_model_sha=sha_now) is not None, True)
+        check("fit failure: another base model retries",
+              gs.chain_failure("Demo", "coat", fsig_b, base_model_sha="0" * 64), None)
+        gs.record_failure("Demo", "coat", fsig_b, step="mesh", error="mesh refused", base_model_sha=sha_now)
+        check("mesh failure holds on any base model",
+              (gs.chain_failure("Demo", "coat", fsig_b, base_model_sha="0" * 64) or {}).get("step"), "mesh")
+        RUNS.clear()
+        write_model((40, 120, 140))  # new base sha: the dress's fit is stale, coat's mesh failure holds
+        check("after_base_model", garments.after_base_model("Demo"), True)
+        garments.wait_idle(30)
+        check("after_base_model skips the failed coat", [r[1] for r in RUNS], ["dress"])
 
         garments.wait_idle(30)
         garment_assembly.wait_idle(30)

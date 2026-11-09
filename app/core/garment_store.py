@@ -14,6 +14,10 @@ Per owner, under ``characters/<name>/garments/``::
                                                       garment grafted on; its record
                                                       holds gates + base_model_sha256
     low/{item}_{fsig}.glb                             the distance tier
+    failed/{item}_{fsig}.json                         the last failed chain run of
+                                                      this fsig {step, error,
+                                                      base_model_sha256, failed_at}
+                                                      — automatic triggers skip it
 
 ``fsig`` = md5[:12] over the garment kind's own inputs (hair: description,
 behind-the-shoulders flag, pronouns; clothing — an own-mesh outfit piece,
@@ -77,7 +81,7 @@ GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
 IMAGE_STEPS: Tuple[str, ...] = ("haired", "worn", "ghost", "cutout")
 #: part -> sub-folder of ``garments/`` ("" = the folder itself).
 PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepared",
-                             "fit": "", "low": "low"}
+                             "fit": "", "low": "low", "failed": "failed"}
 
 _FSIG_RE = re.compile(r"[0-9a-f]{12}")
 _ITEM = r"(?P<item>[A-Za-z0-9][A-Za-z0-9_-]*)"
@@ -117,7 +121,8 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
     """The file of one garment part (see the module docstring for the layout).
 
     ``part`` is ``image`` (needs an image ``step`` and a ``view``; ``attempt``
-    > 0 names that attempt's file), ``raw``, ``prepared``, ``fit`` or ``low``.
+    > 0 names that attempt's file), ``raw``, ``prepared``, ``fit``, ``low``
+    or ``failed`` (a JSON record, ``record_failure``).
     ValueError for an invalid item id, fsig, part, step or view, and for any
     path that would resolve outside ``garments/``. Creates nothing."""
     from app.models.inventory import safe_item_id
@@ -138,7 +143,7 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
         path = root / PART_DIRS[part] / f"{iid}_{fsig}_{step}_{view}{tail}"
     else:
         folder = root / PART_DIRS[part] if PART_DIRS[part] else root
-        path = folder / f"{iid}_{fsig}.glb"
+        path = folder / f"{iid}_{fsig}.{'json' if part == 'failed' else 'glb'}"
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"garment path escapes {root}")
     return path
@@ -405,6 +410,51 @@ def newest_accepted_fits(character_name: str, item_id: str, *,
             if method not in best or mtime > best[method][0]:
                 best[method] = (mtime, path, record)
     return {method: (path, record) for method, (_mtime, path, record) in best.items()}
+
+
+# --- Failed chains (on disk) ---------------------------------------------------
+#
+# A chain run that failed for an fsig is NOT re-run by automatic triggers
+# (outfit renders, a new base model): the piece stays painted on with the
+# reason until an explicit run (Regenerate, POST .../garments/{item}/run)
+# or a changed fsig (plan 2026-11-09-base-body-phase5-mesh-items, Task 4 fix
+# round 1). On disk, so a restart does not reset it. A refused FIT also
+# depends on the base model, which the fsig leaves out: it holds only on the
+# base model it failed on.
+
+def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, error: str,
+                   base_model_sha: str = "") -> None:
+    """Persist the failure of a chain run of ``(item_id, fsig)``."""
+    from app.core.timeutils import utc_now
+    path = garment_path(character_name, item_id, fsig, "failed")
+    if not path.parent.parent.parent.is_dir():
+        return  # never mint the folders of a vanished character
+    write_record(path, {"item_id": item_id, "fsig": fsig, "step": step, "error": error,
+                        "base_model_sha256": base_model_sha, "failed_at": _iso(utc_now())})
+
+
+def clear_failure(character_name: str, item_id: str, fsig: str) -> None:
+    """A successful run of ``(item_id, fsig)`` drops its failure record."""
+    try:
+        garment_path(character_name, item_id, fsig, "failed").unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+
+
+def chain_failure(character_name: str, item_id: str, fsig: str, *,
+                  base_model_sha: str = "") -> Optional[Dict[str, Any]]:
+    """The persisted failure of ``(item_id, fsig)`` that automatic triggers
+    honour — None when there is none, and for a failed ``fit`` recorded on
+    another base model than ``base_model_sha``."""
+    try:
+        record = read_record(garment_path(character_name, item_id, fsig, "failed"))
+    except ValueError:
+        return None
+    if not record.get("step"):
+        return None
+    if record.get("step") == "fit" and record.get("base_model_sha256") != base_model_sha:
+        return None
+    return record
 
 
 # --- Run status (in memory) ---------------------------------------------------

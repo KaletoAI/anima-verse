@@ -664,6 +664,7 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
         result = _run_locked(character_name, item, kind, wanted, view, bool(force))
+        _note_outcome(character_name, item_id, result)
     if result.get("ok") and "fit" in (result.get("ran") or []) and kind == _clothing():
         # Outside the run lock: an outfit whose model left this piece painted
         # on (no fit then) is rebuilt without it (``mesh_item_ready``).
@@ -673,6 +674,40 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
         except Exception:  # noqa: BLE001 — the run itself succeeded
             logger.exception("Outfit rebuild after the fit of %s/%s failed", character_name, item_id)
     return result
+
+
+def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> None:
+    """Persist a failed run's step + error under its fsig (automatic
+    triggers skip it, ``cached_failure``); a successful run clears it."""
+    from app.core import base_body, garment_store as gs
+    fsig = str(result.get("fsig") or "")
+    if not fsig:
+        return  # failed before the fsig was known (off the pipeline, unknown item)
+    try:
+        if result.get("ok"):
+            gs.clear_failure(character_name, item_id, fsig)
+        elif result.get("step"):
+            base = base_body.current_base(character_name)
+            gs.record_failure(character_name, item_id, fsig, step=str(result["step"]),
+                              error=str(result.get("error") or ""), base_model_sha=base[1] if base else "")
+    except (OSError, ValueError) as e:
+        logger.warning("Garment failure record %s/%s not written: %s", character_name, item_id, e)
+
+
+def cached_failure(character_name: str, item_id: str, *,
+                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The persisted failure of the item's CURRENT fsig that automatic
+    triggers honour (``garment_store.chain_failure``) — None when the chain
+    may run. Only an explicit run (``start_garment``) or a changed fsig
+    retries a failed chain (plan 2026-11-09-base-body-phase5-mesh-items,
+    Task 4 fix round 1)."""
+    from app.core import base_body, garment_store as gs
+    try:
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    except ValueError:
+        return None
+    base = base_body.current_base(character_name, profile=profile)
+    return gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1] if base else "")
 
 
 def _clothing() -> str:
@@ -933,10 +968,19 @@ def run_queued(character_name: str, item_ids: Iterable[str]) -> Dict[str, Dict[s
     """Run the chains of ``item_ids`` through the character's FIFO and wait
     for every one (blocking — the outfit build calls it). item id ->
     ``run_garment``'s result, or ``{ok: False, error}`` for an item that
-    could not be queued."""
+    could not be queued. An automatic trigger: an item whose chain failed
+    for its current fsig (``cached_failure``) is not run — its result is
+    that failure with ``cached: True``."""
     jobs: Dict[str, Any] = {}
     out: Dict[str, Dict[str, Any]] = {}
     for item_id in item_ids:
+        failure = cached_failure(character_name, item_id)
+        if failure is not None:
+            # An automatic trigger: a chain that failed for this fsig waits
+            # for an explicit run (Regenerate) or a new fsig.
+            out[item_id] = {"ok": False, "fsig": failure.get("fsig"), "step": failure.get("step"),
+                            "error": failure.get("error"), "cached": True, "ran": []}
+            continue
         try:
             jobs[item_id] = enqueue_garment(character_name, item_id)
         except ValueError as e:
@@ -995,7 +1039,9 @@ def after_base_model(character_name: str) -> bool:
     item is queued again behind it) — the whole chain when its fsig changed
     (new base signature or base images), the fit only when just the base
     model bytes changed (its images and mesh are cached under the unchanged
-    fsig). A character with hair text but no hair item gets one first
+    fsig). A chain that failed for the current fsig is skipped
+    (``garment_store.chain_failure``; a refused fit only on the base model
+    it failed on). A character with hair text but no hair item gets one first
     (``_ensure_hair``). True if a run was queued. Never raises."""
     try:
         from app.core import base_body, garment_store as gs
@@ -1015,6 +1061,10 @@ def after_base_model(character_name: str) -> bool:
             except ValueError:
                 continue
             if _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
+                continue
+            if gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1]) is not None:
+                logger.info("Garment %s/%s: failed for fsig %s — waits for an explicit run",
+                            character_name, item_id, fsig)
                 continue
             enqueue_garment(character_name, item_id)
             logger.info("Garment %s/%s: base model changed, chain queued", character_name, item_id)
@@ -1337,6 +1387,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     the served fit's job), ``colour_changed`` (another colour override) and
     ``placement_changed`` (another manual forward/tilt, or a fit from before
     the placement correction).
+    ``failed`` also reports the persisted failure of the current fsig after
+    a restart (automatic triggers skip it until an explicit run).
     ValueError for an invalid item."""
     from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version
@@ -1397,11 +1449,20 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         except OSError:
             preview_url = None
     status = gs.status(character_name, item_id)
+    failed = status["failed"]
+    if failed is None and not status["running_step"] and fsig:
+        # After a restart the in-memory status is empty: the persisted
+        # failure of the current fsig still holds the piece back.
+        record = gs.chain_failure(character_name, item_id, fsig,
+                                  base_model_sha=base[1] or "")
+        if record is not None:
+            failed = {"step": record.get("step"), "error": record.get("error"), "gates": None,
+                      "failed_at": record.get("failed_at")}
     return {"item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
             "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
             "steps": steps, "stale_reasons": stale,
             "running_step": status["running_step"], "started_at": status["started_at"],
-            "failed": status["failed"], "preview_url": preview_url, "served_fsig": served_fsig}
+            "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig}
 
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
