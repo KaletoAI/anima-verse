@@ -183,6 +183,7 @@
         {
           "key": "outfit_body_mode",
           "type": "select",
+          "width": "narrow",
           "label": "Body under own-mesh garments",
           "label_de": "Körper unter eigenen Kleidungs-Meshes",
           "options": [
