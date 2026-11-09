@@ -15,9 +15,15 @@ Hand-derived expectations:
 [3] removing "Libido increased" removes that entry: zero entries afterwards.
 """
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The functions are pure, but their module imports world-DB modules: point
+# the storage at a throwaway directory first (smoke_scripts_storage_lint.py).
+from app.core import paths
+paths.init(tempfile.mkdtemp(prefix="smoke_condition_id_case_"))
 
 from app.core.effect_application import apply_effects_to_profile, validate_profile_effects
 from app.core.game_time import GameTime

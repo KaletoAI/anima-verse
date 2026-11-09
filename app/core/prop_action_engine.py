@@ -2378,7 +2378,7 @@ def check(actor: str, target: dict, action_id: str, revision: str, members=(), *
 
 def state_for(actor: str) -> dict:
     """Only an execution's exact participants may see its question/result."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     result = dict(incoming=[], outgoing=[], current=[], recent_results=[])
     if not isinstance(actor, str) or not actor:
         return result
@@ -2390,7 +2390,7 @@ def state_for(actor: str) -> dict:
         terminal = raw["status"] in store.TERMINAL
         if terminal:
             try:
-                if datetime.fromisoformat(raw["updated_at"].replace("Z", "+00:00")) < cutoff:
+                if timeutils.parse_iso(raw["updated_at"]) < cutoff:
                     continue
             except (ValueError, TypeError):
                 continue
