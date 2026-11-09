@@ -4295,6 +4295,8 @@
     "Rebuild queued — it starts when the running model job ends": "Neubau vorgemerkt — er startet, sobald der laufende Modell-Job endet",
     "Collision capsules": "Kollisionskapseln",
     "Show collision capsules on the playing figure": "Kollisionskapseln an der abgespielten Figur zeigen",
+    "Garment collision": "Kleidungskollision",
+    "Push garments out of the collision capsules (off = as skinned)": "Kleidung aus den Kollisionskapseln drücken (aus = wie geskinnt)",
     "Arms": "Arme",
     "Torso": "Rumpf",
     "Saved — capsules of {n} model(s) could not be recomputed": "Gespeichert — die Kapseln von {n} Modell(en) konnten nicht neu berechnet werden",

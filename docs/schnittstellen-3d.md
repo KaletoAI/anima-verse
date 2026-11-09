@@ -12146,6 +12146,17 @@ model meta when `model_sig` changes). `null` for a model that gets none.
 - Region scales (`scales`, 0.5–1.5 per region) are a per-character override, `model3d_opts.collision_scales`, set
   admin-only by `POST /characters/{name}/model3d/collision/scales` (`{"scales": {region: factor}}`), which
   recomputes every stored model's set — the base body's first, then the outfits' inherited sets.
+- **Garment push** (`createGarmentCollision`, `packages/scene-render/src/garmentCollision.ts`; both the 3D
+  client's figures and the admin viewer). Every SKINNED mesh inside a garment subtree (§ A3a) gets its vertex
+  shader patched: after skinning, the position is pushed radially out of each capsule it lies inside (closest
+  axis point → radius), capsules in payload order, two passes, at most 16 per mesh (the first in payload order).
+  The optional glTF vertex attribute `_COLLIDE` (0..1) scales a vertex's whole push; absent = 1. Which capsules
+  push which garment is decided per garment `kind`: hair none (yet), every other kind all regions except `arm`
+  (an arm passes through cloth; pushed out of the arm capsule the cloth goes into the body). The body is never
+  pushed. Shadows use patched depth/distance materials with the same capsules. Without a garment mesh or
+  capsules nothing is patched. The shader and the TypeScript `pushOutOfCapsules` are one rule
+  (`scripts/smoke_garment_collision.mjs` executes the shader text); `scripts/check_garment_collision.mjs`
+  measures the penetration of a garment through the body on the real clips before/after the push.
 
 ### P2 runtime contract: secondary motion
 

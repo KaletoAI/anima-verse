@@ -17,9 +17,10 @@ import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
-  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
+  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
 } from '@anima/scene-render';
-import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm } from '@anima/scene-render';
+import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
+  GarmentCollision } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -169,6 +170,9 @@ export type FigureTier = 'full' | 'low';
 
 interface LoadedModel {
   motion?: { payload: MotionPayload | undefined };
+  /** The body's collision capsules (`ApiModel.collision`); every figure of
+   *  this model pushes its garments out of them (`createGarmentCollision`). */
+  collision?: CollisionPayload | null;
   name: string;
   template: THREE.Group;
   clips: THREE.AnimationClip[];
@@ -1733,6 +1737,7 @@ export class FigureLibrary {
     if (motion.payload === undefined) motion.payload = info.motion;
     const model: LoadedModel = {
       motion,
+      collision: info.collision ?? null,
       name, template,
       clips: info.rig === 'none' ? [] : gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
@@ -1840,6 +1845,7 @@ export class Figure {
   private motionState?: { payload: MotionPayload | undefined };
   get motion(): MotionPayload | undefined { return this.motionState?.payload; }
   private secondary: SecondaryMotion;
+  private garmentCollision: GarmentCollision | null = null;
   private secondaryRev?: string;
   private secondaryTime = performance.now();
   private secondaryPosition = new THREE.Vector3();
@@ -2095,6 +2101,11 @@ export class Figure {
     }
     this.secondary = createSecondaryMotion(THREE, this.root, this.motion, model.template);
     this.secondaryRev = this.motion?.rev;
+    // Garments pushed out of the body's capsules on the GPU — the SAME
+    // routine the Game-Admin viewer runs. Null (inert) without a garment or
+    // capsules. The patched materials are clones owned by THIS figure (the
+    // template's stay shared and untouched); `dispose` frees them.
+    this.garmentCollision = createGarmentCollision(THREE, inst, model.collision);
     this.secondaryFar = model.tier === 'low';
 
     this.mixer = new THREE.AnimationMixer(inst);
@@ -2637,12 +2648,15 @@ export class Figure {
    *  scene (`NpcLayer`). Geometry, materials and textures are NOT among them:
    *  those belong to the model template and are shared with every other clone
    *  of it (`FigureLibrary.disposeModel` is what frees them, once the template
-   *  itself is retired). The ghost's materials, the mixer's bindings and the
+   *  itself is retired). The ghost's materials, the garment-collision clones
+   *  (`createGarmentCollision`), the mixer's bindings and the
    *  skeleton's bone texture are per figure, and those go here. */
   dispose() {
     this.disposed = true;
     this.prepareClips = undefined;
     this.secondary.dispose();
+    this.garmentCollision?.dispose();
+    this.garmentCollision = null;
     this.ghost.dispose();
     // The mixer's bindings hold the clone bone by bone; without this they keep
     // it — and through it the template — alive for as long as anything still

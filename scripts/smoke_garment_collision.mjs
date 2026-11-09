@@ -1,0 +1,334 @@
+#!/usr/bin/env node
+/**
+ * Smoke check for the GARMENT PUSH — `packages/scene-render/src/garmentCollision.ts`:
+ * the pure push (`pushOutOfCapsules`), its shader twin (`COLLIDE_GLSL_FUNCTION`,
+ * EXECUTED here through a mechanical GLSL→JS rewrite and compared point by
+ * point), the vertex-shader patch on three's real shader sources, and the
+ * three binding (`createGarmentCollision`: which meshes, which space, the
+ * per-frame hook, the ownership of the cloned materials, inert cases).
+ *
+ * Usage: direct node call, self-bundling via esbuild (run from anywhere):
+ *   node scripts/smoke_garment_collision.mjs
+ *
+ * Every expected number is derived BY HAND (§ B5a). A capsule is the set of
+ * points within r of the segment a→b; a point inside is moved along the
+ * perpendicular from its closest axis point c out to |p − c| = r.
+ *
+ * Capsule C = {a (0,0,0), b (0,1,0), r 0.1}:
+ * [1] p (0.05, 0.5, 0): c = (0, 0.5, 0), d = 0.05 < r → (0.1, 0.5, 0).
+ *     p (0.2, 0.5, 0): d = 0.2 ≥ r → unchanged.
+ *     p (0.1, 0.5, 0) ON the surface: d = r, not < r → unchanged.
+ *     p (0, 0.5, 0) ON the axis: d = 0, no direction → unchanged.
+ *     p (0, −0.05, 0.03) in the lower cap: t clamps to 0, c = a,
+ *       d = √(0.0025 + 0.0009) = 0.0583095, k = r/d = 1.7149859 →
+ *       (0, −0.0857493, 0.0514496); |result| = 0.1.
+ *     p (0, 1.06, 0.08) in the upper cap: c = b, d = √(0.0036 + 0.0064) = 0.1
+ *       → exactly on the surface → unchanged.
+ * [2] Degenerate capsule a = b = (0,0,0), r 0.1 (a sphere):
+ *     p (0.03, 0.04, 0): d = 0.05 → × 2 → (0.06, 0.08, 0).
+ * [3] Weight: p (0.05, 0.5, 0), weight 0.5 → halfway: (0.075, 0.5, 0);
+ *     weight 0 → unchanged; weight 2 clamps to 1 → (0.1, 0.5, 0).
+ * [4] Two passes, order: C and C' = {a (0.15,0,0), b (0.15,1,0), r 0.1},
+ *     p (0.06, 0.5, 0). Pass 1: C → (0.1, 0.5, 0); C' (axis x = 0.15,
+ *     d = 0.05) → pushed to x = 0.15 − 0.1 = 0.05. Pass 2 repeats both →
+ *     (0.05, 0.5, 0): payload order decides, deterministically (a vertex
+ *     squeezed between two overlapping capsules ends at the later one's surface).
+ * [5] COLLIDE_MAX: 16 far capsules + a 17th containing p → p unchanged
+ *     (only the first 16 are applied); with the containing one FIRST → pushed.
+ * [6] capsuleInFrame with m = T(1,0,0)·S(2): C → a (1,0,0), b (1,2,0), r 0.2.
+ * [7] ONE SOURCE: COLLIDE_GLSL_FUNCTION run as JS on 3000 random points ×
+ *     random capsule sets of 0–20 capsules (incl. degenerate ones; half the
+ *     points near a capsule axis, so > 600 of them are pushed) gives the
+ *     same point as pushOutOfCapsules (≤ 1e-12 m).
+ * [8] The patch on three's real sources (standard, depth, distance): the
+ *     declarations once after `#include <common>`, the push once right after
+ *     `#include <skinning_vertex>` (before `#include <project_vertex>`), the
+ *     weight attribute only under COLLIDE_WEIGHT; idempotent.
+ * [9] createGarmentCollision on a two-bone figure — Hips at (0,0,0), Spine at
+ *     (0,1,0); payload {torso: Hips→Spine r 0.1, ghost: Hips→Missing,
+ *     sleeve: Hips→Spine r 0.2 region arm}:
+ *     body mesh + garment `garment_clothing_x` (mesh moved to (0.5,0,0), which
+ *     is ITS local space) + hair `garment_hair_y`.
+ *       - one entry (the clothing; hair gets no capsules) holding ONLY the
+ *         torso capsule (cloth is never pushed out of an arm capsule), its local capsule
+ *         a = (−0.5, 0, 0), b = (−0.5, 1, 0), r 0.1 (= world − mesh offset);
+ *       - its material is a CLONE (the template's stays untouched) that chains
+ *         the template material's own compile hook (clone() drops it), depth +
+ *         distance materials set, all three compile the patch (onBeforeCompile
+ *         on a fake shader adds the uniforms and `collidePush(`);
+ *       - hook: Spine moved to (0, 2, 0) → onBeforeRender(frame 1) writes
+ *         b = (−0.5, 2, 0); moved again in the SAME frame → unchanged;
+ *         onBeforeShadow(frame 2) → updated;
+ *       - a garment carrying `_collide` gets the COLLIDE_WEIGHT define;
+ *       - dispose(): original material back, hooks gone (prototype again),
+ *         custom depth/distance cleared, the 3 owned clones disposed;
+ *       - inert: no garment / null payload / hair only → null.
+ */
+import { spawnSync } from 'child_process'
+import * as fs from 'fs'
+import * as path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+/** The mechanical GLSL→JS rewrite of `COLLIDE_GLSL_FUNCTION` (scalar statements only). */
+export function glslPushToJs(glsl, defines) {
+  let body = glsl
+    .replace(/vec3\s+collidePush\s*\(\s*vec3\s+p\s*\)\s*\{/, 'function collidePush(p0) { const p = { x: p0[0], y: p0[1], z: p0[2] };')
+    .replace(/\bfloat\s+/g, 'let ')
+    .replace(/\bint\s+/g, 'let ')
+    .replace(/return p;/, 'return [p.x, p.y, p.z];')
+  if (/\bvec[234]\b|\bmat[234]\b/.test(body)) throw new Error('GLSL push uses vector types — not scalar any more')
+  const names = Object.keys(defines)
+  // eslint-disable-next-line no-new-func
+  return new Function(...names, 'collideA', 'collideB', 'collideCount', 'clamp', 'sqrt',
+    `${body}\nreturn collidePush;`)
+}
+
+async function main() {
+  if (!process.env.SMOKE_BUNDLED) {
+    const bundlePath = '/tmp/smoke_garment_collision_bundled.mjs'
+    const root = path.join(__dirname, '../')
+    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
+      .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
+    if (!bin) {
+      console.error('esbuild not found (npm install) — nothing was checked')
+      process.exit(1)
+    }
+    const built = spawnSync(bin, [
+      __filename, '--bundle', '--platform=node', '--format=esm', `--outfile=${bundlePath}`,
+    ], { cwd: root, stdio: 'inherit' })
+    if (built.status !== 0) process.exit(built.status ?? 1)
+    const run = spawnSync('node', [bundlePath], {
+      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1' }, cwd: root,
+    })
+    process.exit(run.status ?? 1)
+  }
+
+  const G = await import('../packages/scene-render/src/garmentCollision.ts')
+  const THREE = await import('three')
+  const { pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, createGarmentCollision,
+    COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_FUNCTION } = G
+
+  const failures = []
+  const check = (label, ok, detail = '') => {
+    console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? ` — ${detail}` : ''}`)
+    if (!ok) failures.push(label)
+  }
+  const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps
+  const vnear = (a, b, eps = 1e-6) => a.length === 3 && b.length === 3 && a.every((v, i) => near(v, b[i], eps))
+  const fmt = (v) => `(${[...v].map((x) => +x.toFixed(7)).join(', ')})`
+  const C = { a: [0, 0, 0], b: [0, 1, 0], r: 0.1 }
+
+  console.log('--- [1] one capsule ---')
+  let q = pushOutOfCapsules([0.05, 0.5, 0], [C])
+  check('inside the cylinder → (0.1, 0.5, 0)', vnear(q, [0.1, 0.5, 0]), fmt(q))
+  q = pushOutOfCapsules([0.2, 0.5, 0], [C])
+  check('outside → unchanged', vnear(q, [0.2, 0.5, 0]), fmt(q))
+  q = pushOutOfCapsules([0.1, 0.5, 0], [C])
+  check('on the surface → unchanged', vnear(q, [0.1, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0, 0.5, 0], [C])
+  check('on the axis → unchanged', vnear(q, [0, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0, -0.05, 0.03], [C])
+  check('lower cap → (0, −0.0857493, 0.0514496)', vnear(q, [0, -0.0857493, 0.0514496]), fmt(q))
+  check('lower cap → |q − a| = r', near(Math.hypot(...q), 0.1, 1e-9))
+  q = pushOutOfCapsules([0, 1.06, 0.08], [C])
+  check('upper cap, exactly on the surface → unchanged', vnear(q, [0, 1.06, 0.08], 1e-9), fmt(q))
+
+  console.log('--- [2] degenerate capsule a = b ---')
+  q = pushOutOfCapsules([0.03, 0.04, 0], [{ a: [0, 0, 0], b: [0, 0, 0], r: 0.1 }])
+  check('sphere → (0.06, 0.08, 0)', vnear(q, [0.06, 0.08, 0]), fmt(q))
+
+  console.log('--- [3] weight ---')
+  q = pushOutOfCapsules([0.05, 0.5, 0], [C], 0.5)
+  check('weight 0.5 → (0.075, 0.5, 0)', vnear(q, [0.075, 0.5, 0]), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [C], 0)
+  check('weight 0 → unchanged', vnear(q, [0.05, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [C], 2)
+  check('weight 2 clamps to 1 → (0.1, 0.5, 0)', vnear(q, [0.1, 0.5, 0]), fmt(q))
+
+  console.log('--- [4] two passes, payload order ---')
+  const C2 = { a: [0.15, 0, 0], b: [0.15, 1, 0], r: 0.1 }
+  q = pushOutOfCapsules([0.06, 0.5, 0], [C, C2])
+  check(`${COLLIDE_PASSES} passes → (0.05, 0.5, 0)`, COLLIDE_PASSES === 2 && vnear(q, [0.05, 0.5, 0]), fmt(q))
+
+  console.log('--- [5] COLLIDE_MAX ---')
+  const far = Array.from({ length: 16 }, (_, i) => ({ a: [10 + i, 0, 0], b: [10 + i, 1, 0], r: 0.1 }))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [...far, C])
+  check(`COLLIDE_MAX = 16, the 17th is not applied`, COLLIDE_MAX === 16 && vnear(q, [0.05, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [C, ...far])
+  check('first in payload order is applied', vnear(q, [0.1, 0.5, 0]), fmt(q))
+
+  console.log('--- [6] capsuleInFrame ---')
+  const m = new THREE.Matrix4().makeTranslation(1, 0, 0).multiply(new THREE.Matrix4().makeScale(2, 2, 2)).elements
+  const f = capsuleInFrame(C, m)
+  check('a (1,0,0), b (1,2,0), r 0.2', vnear(f.a, [1, 0, 0]) && vnear(f.b, [1, 2, 0]) && near(f.r, 0.2),
+    `${fmt(f.a)} ${fmt(f.b)} ${f.r}`)
+
+  console.log('--- [7] ONE SOURCE: the shader text executed ---')
+  const defines = { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D }
+  const factory = glslPushToJs(COLLIDE_GLSL_FUNCTION, defines)
+  let seed = 12345
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  let worst = 0, moved = 0
+  for (let n = 0; n < 3000; n++) {
+    const count = Math.floor(rnd() * 21)
+    const caps = Array.from({ length: count }, () => {
+      const a = [rnd() - 0.5, rnd() * 2, rnd() - 0.5]
+      const b = rnd() < 0.15 ? [...a] : [a[0] + (rnd() - 0.5) * 0.6, a[1] + (rnd() - 0.5) * 0.6, a[2] + (rnd() - 0.5) * 0.6]
+      return { a, b, r: 0.02 + rnd() * 0.2 }
+    })
+    // half the points near a random capsule's axis, so the sample pushes a lot
+    const near0 = count && rnd() < 0.5 ? caps[Math.floor(rnd() * count)] : null
+    const p = near0 ? near0.a.map((v, i) => v + (near0.b[i] - v) * rnd() + (rnd() - 0.5) * 0.2)
+      : [rnd() - 0.5, rnd() * 2, rnd() - 0.5]
+    const used = caps.slice(0, COLLIDE_MAX)
+    const A = used.map((c) => ({ x: c.a[0], y: c.a[1], z: c.a[2], w: c.r }))
+    const B = used.map((c) => ({ x: c.b[0], y: c.b[1], z: c.b[2], w: 0 }))
+    const glsl = factory(COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, A, B, used.length,
+      (v, lo, hi) => Math.min(hi, Math.max(lo, v)), Math.sqrt)(p)
+    const ts = pushOutOfCapsules(p, caps)
+    worst = Math.max(worst, Math.hypot(glsl[0] - ts[0], glsl[1] - ts[1], glsl[2] - ts[2]))
+    if (Math.hypot(ts[0] - p[0], ts[1] - p[1], ts[2] - p[2]) > 1e-9) moved++
+  }
+  check('GLSL text and TS function agree on 3000 points', worst <= 1e-12, `worst ${worst}`)
+  check('the sample actually pushes (> 600 points moved)', moved > 600, `${moved} moved`)
+
+  console.log('--- [8] shader patch on three\'s sources ---')
+  const count = (s, needle) => s.split(needle).length - 1
+  for (const [name, src] of [['standard', THREE.ShaderLib.standard.vertexShader],
+    ['depth', THREE.ShaderLib.depth.vertexShader], ['distance', THREE.ShaderLib.distance.vertexShader]]) {
+    const out = patchCollisionVertexShader(src)
+    const iSkin = out.indexOf('#include <skinning_vertex>')
+    const iCall = out.indexOf('collidePush( transformed )')
+    const iProj = out.indexOf('#include <project_vertex>')
+    check(`${name}: declarations once, function once`, count(out, 'uniform vec4 collideA') === 1
+      && count(out, 'vec3 collidePush( vec3 p )') === 1)
+    check(`${name}: push after skinning, before projection`, iSkin >= 0 && iCall > iSkin && iProj > iCall)
+    check(`${name}: weight attribute only under COLLIDE_WEIGHT`,
+      /#ifdef COLLIDE_WEIGHT\nattribute float _collide;\n#endif/.test(out))
+    check(`${name}: idempotent`, patchCollisionVertexShader(out) === out)
+  }
+
+  console.log('--- [9] createGarmentCollision on a figure ---')
+  const build = ({ clothing = true, hair = true, weighted = false } = {}) => {
+    const figure = new THREE.Group()
+    const hips = new THREE.Bone(); hips.name = 'mixamorig:Hips'
+    const spine = new THREE.Bone(); spine.name = 'mixamorig:Spine'
+    spine.position.set(0, 1, 0)
+    hips.add(spine)
+    figure.add(hips)
+    const geo = () => {
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute([0.05, 0.5, 0, 0, 1, 0], 3))
+      g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0, 1, 0, 0, 0], 4))
+      g.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0], 4))
+      return g
+    }
+    const meshes = {}
+    meshes.body = new THREE.SkinnedMesh(geo(), new THREE.MeshStandardMaterial())
+    figure.add(meshes.body)
+    if (clothing) {
+      const g = geo()
+      if (weighted) g.setAttribute('_collide', new THREE.Float32BufferAttribute([1, 0.5], 1))
+      meshes.clothing = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial())
+      meshes.clothing.name = 'garment_clothing_x'
+      meshes.clothing.position.set(0.5, 0, 0)
+      figure.add(meshes.clothing)
+    }
+    if (hair) {
+      meshes.hair = new THREE.SkinnedMesh(geo(), new THREE.MeshStandardMaterial())
+      meshes.hair.name = 'garment_hair_y'
+      meshes.hair.userData.garment = { kind: 'hair', item_id: 'y', fsig: 'z' }
+      figure.add(meshes.hair)
+    }
+    figure.updateMatrixWorld(true)
+    const skeleton = new THREE.Skeleton([hips, spine])
+    for (const mesh of Object.values(meshes)) mesh.bind(skeleton)
+    return { figure, hips, spine, meshes }
+  }
+  const payload = { version: 1, capsules: [
+    { id: 'torso', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.1, region: 'torso' },
+    { id: 'ghost', a: 'mixamorig:Hips', b: 'mixamorig:Missing', r: 0.1, region: 'torso' },
+    { id: 'sleeve', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.2, region: 'arm' }] }
+  const fig = build()
+  const templateMaterial = fig.meshes.clothing.material
+  // a compile hook on the template's material (clone() drops it) must survive into the patched clone
+  templateMaterial.onBeforeCompile = (shader) => { shader.vertexShader = `// template hook\n${shader.vertexShader}` }
+  const disposed = []
+  const gc = createGarmentCollision(THREE, fig.figure, payload)
+  check('one entry (clothing; hair has no capsules)', gc?.entries.length === 1
+    && gc.entries[0].mesh === fig.meshes.clothing && gc.entries[0].kind === 'clothing', String(gc?.entries.length))
+  check('clothing: torso only, the arm capsule is not applied',
+    gc?.entries[0].capsules.map((c) => c.capsule.id).join() === 'torso', gc?.entries[0].capsules.map((c) => c.capsule.id).join())
+  check('missing joint reported by the binding', JSON.stringify(gc?.binding.missing) === '["ghost"]')
+  let local = gc.entries[0].local[0]
+  check('local capsule a (−0.5,0,0), b (−0.5,1,0), r 0.1', vnear(local.a, [-0.5, 0, 0]) && vnear(local.b, [-0.5, 1, 0])
+    && near(local.r, 0.1), `${fmt(local.a)} ${fmt(local.b)} ${local.r}`)
+  const own = fig.meshes.clothing.material
+  check('material is a clone, template untouched', own !== templateMaterial
+    && templateMaterial.customProgramCacheKey === THREE.Material.prototype.customProgramCacheKey)
+  const chained = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader }
+  own.onBeforeCompile(chained, null)
+  check('the template\'s own compile hook is chained into the clone', chained.vertexShader.startsWith('// template hook')
+    && chained.vertexShader.includes('collidePush('))
+  check('cache key: the template hook\'s source + |collide', own.customProgramCacheKey()
+    === `${templateMaterial.onBeforeCompile.toString()}|collide`)
+  check('hair material untouched', !String(fig.meshes.hair.material.customProgramCacheKey()).includes('collide'))
+  for (const [name, mat] of [['material', own], ['depth', fig.meshes.clothing.customDepthMaterial],
+    ['distance', fig.meshes.clothing.customDistanceMaterial]]) {
+    mat.addEventListener('dispose', () => disposed.push(name))
+    const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: '' }
+    mat.onBeforeCompile(shader, null)
+    check(`${name}: compiles the patch with the shared uniforms`, shader.vertexShader.includes('collidePush(')
+      && shader.uniforms.collideCount?.value === 1 && shader.uniforms.collideA?.value?.length === COLLIDE_MAX
+      && mat.customProgramCacheKey().endsWith('|collide'))
+  }
+  check('depth material packs RGBA like three\'s own', fig.meshes.clothing.customDepthMaterial.depthPacking === THREE.RGBADepthPacking)
+  const shaderOf = (mat) => { const s = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader }; mat.onBeforeCompile(s, null); return s }
+  const uniformsOf = shaderOf(own).uniforms
+  check('depth material shares the uniform objects', shaderOf(fig.meshes.clothing.customDepthMaterial).uniforms.collideA === uniformsOf.collideA)
+  const fakeRenderer = (frame) => ({ info: { render: { frame } } })
+  fig.spine.position.set(0, 2, 0)
+  fig.figure.updateMatrixWorld(true)
+  fig.meshes.clothing.onBeforeRender(fakeRenderer(1), null, null, null, own, null)
+  const B = uniformsOf.collideB.value[0]
+  check('onBeforeRender frame 1 → b (−0.5, 2, 0)', vnear([B.x, B.y, B.z], [-0.5, 2, 0]), fmt([B.x, B.y, B.z]))
+  fig.spine.position.set(0, 3, 0)
+  fig.figure.updateMatrixWorld(true)
+  fig.meshes.clothing.onBeforeRender(fakeRenderer(1), null, null, null, own, null)
+  check('same frame again → unchanged', near(B.y, 2), String(B.y))
+  fig.meshes.clothing.onBeforeShadow(fakeRenderer(2), null, null, null, null, null, null)
+  check('onBeforeShadow frame 2 → b y 3', near(B.y, 3), String(B.y))
+  const A = uniformsOf.collideA.value[0]
+  check('collideA.w carries r', near(A.w, 0.1), String(A.w))
+  gc.dispose()
+  check('dispose: original material back', fig.meshes.clothing.material === templateMaterial)
+  check('dispose: hooks back on the prototype',
+    !Object.prototype.hasOwnProperty.call(fig.meshes.clothing, 'onBeforeRender')
+    && !Object.prototype.hasOwnProperty.call(fig.meshes.clothing, 'onBeforeShadow'))
+  check('dispose: custom depth/distance cleared', fig.meshes.clothing.customDepthMaterial === undefined
+    && fig.meshes.clothing.customDistanceMaterial === undefined)
+  check('dispose: the 3 owned clones freed', disposed.sort().join() === 'depth,distance,material', disposed.join())
+
+  const w = build({ weighted: true })
+  const gw = createGarmentCollision(THREE, w.figure, payload)
+  check('_collide → COLLIDE_WEIGHT define + its own cache key', 'COLLIDE_WEIGHT' in (w.meshes.clothing.material.defines ?? {})
+    && w.meshes.clothing.material.customProgramCacheKey().endsWith('|collideW'))
+  gw.dispose()
+  check('inert: no garment → null', createGarmentCollision(THREE, build({ clothing: false, hair: false }).figure, payload) === null)
+  check('inert: null payload → null', createGarmentCollision(THREE, build().figure, null) === null)
+  const hairOnly = build({ clothing: false })
+  const hairMat = hairOnly.meshes.hair.material
+  check('inert: hair only → null, untouched', createGarmentCollision(THREE, hairOnly.figure, payload) === null
+    && hairOnly.meshes.hair.material === hairMat && hairOnly.meshes.hair.customDepthMaterial === undefined)
+
+  if (failures.length) {
+    console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)
+    process.exit(1)
+  }
+  console.log('\nOK — garment push, shader twin, patch and binding as derived')
+}
+
+main().catch((e) => { console.error(e); process.exit(1) })

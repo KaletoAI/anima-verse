@@ -19,9 +19,10 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   installSkinnedNormalCorrection, createSecondaryMotion, bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
-  standingHipsRef, clipHeightOffsetM, createCollisionOverlay } from '@anima/scene-render'
+  standingHipsRef, clipHeightOffsetM, createCollisionOverlay, collidingGarmentMeshes,
+  createGarmentCollision } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
-  CollisionOverlay, CollisionPayload } from '@anima/scene-render'
+  CollisionOverlay, CollisionPayload, GarmentCollision } from '@anima/scene-render'
 import { applyViewerTexture } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -461,6 +462,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const [collisionOn, setCollisionOn] = useState(false)
   const collisionRef = useRef<CollisionPayload | null>(null)
   collisionRef.current = collisionOn && collision?.capsules?.length ? collision : null
+  // Garments pushed out of the capsules (`createGarmentCollision`, the same
+  // routine the 3D client runs) — on by default; the toggle compares.
+  const [garmentPushOn, setGarmentPushOn] = useState(true)
+  const [garmentPushable, setGarmentPushable] = useState(false)
+  const garmentPushRef = useRef<CollisionPayload | null>(null)
+  garmentPushRef.current = garmentPushOn && collision?.capsules?.length ? collision : null
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -1111,6 +1118,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let collisionOverlay: CollisionOverlay | null = null
         let collisionShown: CollisionPayload | null | undefined
         disposers.push(() => collisionOverlay?.dispose())
+        // The garment push patches CLONES of the garment materials and puts
+        // the originals back on dispose — before the scene traversal above
+        // frees the model's own materials (disposers run in reverse).
+        let garmentCollision: GarmentCollision | null = null
+        let garmentShown: CollisionPayload | null | undefined
+        disposers.push(() => garmentCollision?.dispose())
+        setGarmentPushable(collidingGarmentMeshes(object).length > 0)
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
 
@@ -2122,6 +2136,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             if (collisionOverlay) scene.add(collisionOverlay.group)
           }
           collisionOverlay?.update()
+          if (garmentShown !== garmentPushRef.current) {
+            garmentCollision?.dispose()
+            garmentShown = garmentPushRef.current
+            garmentCollision = createGarmentCollision(THREE, object, garmentShown)
+          }
           controls.update()
           renderer.render(scene, camera)
           raf = requestAnimationFrame(animate)
@@ -2281,6 +2300,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               aria-pressed={collisionOn} onClick={() => setCollisionOn(on => !on)}
               title={t('Show collision capsules on the playing figure')}>
               {t('Collision capsules')}
+            </button>
+          ) : null}
+          {collision?.capsules?.length && garmentPushable ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={garmentPushOn} onClick={() => setGarmentPushOn(on => !on)}
+              title={t('Push garments out of the collision capsules (off = as skinned)')}>
+              {t('Garment collision')}
             </button>
           ) : null}
           {/* The front view is a MODE the owner holds (§ B1): pressed, the

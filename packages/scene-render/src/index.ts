@@ -183,3 +183,8 @@ export { COLLISION_VERSION, CAPSULE_REGION_COLORS, mat4Multiply, transformPoint,
   createCollisionOverlay } from './collision'
 export type { CollisionCapsule, CollisionPayload, CapsuleNow, JointNow, BoundCapsule, CollisionBinding,
   CollisionOverlay } from './collision'
+
+export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_DECLARATIONS, COLLIDE_GLSL_FUNCTION,
+  COLLIDE_GLSL_APPLY, pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, garmentKind, garmentCapsules,
+  collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
+export type { GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
