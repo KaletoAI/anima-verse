@@ -33,7 +33,8 @@ Fixture (expected values derived by hand):
     recorder sees no call.
 [2] GET /characters/Demo/hair before any item: {pipeline True, humanoid
     True, description "medium blonde hair", behind_shoulders True, item_id
-    None, equipped False, garment None, collision False, method
+    None, equipped False, garment None, collision None (no base model ->
+    no capsule set, commit 8a617513), method
     "edit_chain", method_source "world", world_method "edit_chain",
     hairdeck None, other None} (the method keys: plan
     2026-11-09-hairdeck-hair Task 5, schema default edit_chain; the limits
@@ -197,7 +198,7 @@ def main() -> int:
             check("demo hair", (r.status_code, body if r.status_code == 200 else r.text),
                   (200, {"pipeline": True, "humanoid": True, "description": "medium blonde hair",
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
-                         "collision": False, "method": "edit_chain", "method_source": "world",
+                         "collision": None, "method": "edit_chain", "method_source": "world",
                          "world_method": "edit_chain", "hairdeck": None, "other": None}))
             # The chip limits come from the gate constants (R7): haired XOR < 0.015,
             # ghost |top_dy| <= 0.0052 H, mesh component share >= 0.98, fit bib <= 50 cm².
@@ -243,7 +244,7 @@ def main() -> int:
             g = body.get("garment") or {}
             check("GET with item", (body.get("item_id"), body.get("equipped"), g.get("item_id"),
                                     g.get("running_step"), body.get("collision")),
-                  ("hair_demo", True, "hair_demo", "queued", False))
+                  ("hair_demo", True, "hair_demo", "queued", None))
             gate.set()
             wait_idle()
             check("one run only", len(RUNS), 1)
