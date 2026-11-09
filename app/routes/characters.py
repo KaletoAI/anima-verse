@@ -1332,6 +1332,18 @@ def _resolve_character_model_snapshot(character_name: str):
                 "motion": status["motion"],
                 "model_rev": info["model_rev"], "tiers": info["tiers"],
                 **{key: info[key] for key in ("url", "low_url", "texture_url") if key in info}}
+        # The delivered file may be the garment assembly (bare model +
+        # grafted garments): its size and garments come from ITS sidecar.
+        from app.core import garment_assembly
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("model3d_publication", str(path.parent)):
+            served = garment_assembly.served(character_name, path, "full")
+            if served != path:
+                try:
+                    meta["size"] = served.stat().st_size
+                    meta["garments"] = garment_assembly.read_sidecar(served).get("garments") or {}
+                except OSError:
+                    pass
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         tex = (find_texture(character_name, path.stem)
@@ -1354,7 +1366,13 @@ def _model_asset_response(character_name: str, request: Request, *, tier: str = 
     def serving():
         if signature:
             return find_model3d(character_name, signature)
-        return find_model3d_serving_tier(character_name, tier)[0]
+        path, _match, resolved = find_model3d_serving_tier(character_name, tier)
+        if path is None or texture or download:
+            # A download is the stored (bare) model: re-uploaded, it must
+            # never carry grafted garments into the store.
+            return path
+        from app.core import garment_assembly
+        return garment_assembly.served(character_name, path, resolved)
     def pick():
         path = serving()
         if texture:

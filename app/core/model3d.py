@@ -52,12 +52,68 @@ _staging = threading.local()
 _publication_epochs: Dict[tuple, int] = {}
 
 
+# The garment assembly's delivery files (``garment_assembly``): the bare
+# model + grafted garments, derived, never a publication input of its own.
+ASSEMBLED_DIR = "assembled"
+
+
 def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
     """Only one signature's public files and private backups, never stages."""
     folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'), Path('unrigged'),
-               Path('low/raw'), Path('low/prerig'), Path('facefix'))
+               Path('low/raw'), Path('low/prerig'), Path('facefix'),
+               Path(ASSEMBLED_DIR), Path(ASSEMBLED_DIR) / 'low')
     return {relative / p.name: p for relative in folders
             for p in (directory / relative).glob(f"{signature}.*") if p.is_file()}
+
+
+def _is_assembled(relative: Path) -> bool:
+    """Whether a ``_signature_files`` key is a garment-assembly delivery file."""
+    return bool(relative.parts) and relative.parts[0] == ASSEMBLED_DIR
+
+
+def _fresh_staged_assemblies(stage: Path, signature: str) -> Dict[str, tuple]:
+    """tier -> (bytes, sidecar) of every assembly built INSIDE the stage on
+    the stage's own bare file (its ``bare_revision`` matches that file)."""
+    from app.core import garment_assembly
+    fresh = {}
+    for tier in garment_assembly.TIERS:
+        target = garment_assembly.assembled_path(stage, signature, tier)
+        bare = garment_assembly.bare_path(stage, signature, tier)
+        if not (target.is_file() and bare.is_file()):
+            continue
+        meta = _read_sidecar(target)
+        if meta.get("bare_revision") == garment_assembly.bare_revision(bare):
+            fresh[tier] = (target.read_bytes(), meta)
+    return fresh
+
+
+def _settle_assemblies(directory: Path, signature: str, changed, fresh: Dict[str, tuple]) -> bool:
+    """Called under the publication lock after a signature's files moved:
+    the assembly of every tier whose bare model or sidecar changed is
+    dropped, or replaced by the stage's fresh one (restamped to the
+    published bare file). True when an assembly file changed."""
+    from app.core import garment_assembly
+    touched = False
+    for tier in garment_assembly.TIERS:
+        bare = garment_assembly.bare_path(directory, signature, tier)
+        bare_rel = bare.relative_to(directory)
+        if not any(r.parent == bare_rel.parent and r.stem == signature and r.suffix in (".glb", ".json")
+                   for r in changed):
+            continue  # this tier's bare file is unchanged: its assembly stays as it is
+        target = garment_assembly.assembled_path(directory, signature, tier)
+        if not target.resolve().is_relative_to(directory.resolve()):
+            raise ValueError("Assembly path escapes the model directory")
+        for old in (target, target.with_suffix(".json")):
+            if old.exists():
+                old.unlink()
+                touched = True
+        if tier in fresh and bare.is_file():
+            blob, meta = fresh[tier]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _publish_model_bytes(target, blob)
+            _publish_sidecar(target, {**meta, "bare_revision": garment_assembly.bare_revision(bare)})
+            touched = True
+    return touched
 
 
 def _publish_signature(character_name: str, directory: Path, stage: Path,
@@ -66,8 +122,11 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
     """Commit one signature under the reader lock, rejecting stale work."""
     import os
     from app.core.keyed_lock import keyed_lock
-    staged_files = _signature_files(stage, signature)
-    current_files = _signature_files(directory, signature)
+    # Garment assemblies are derived from the bare files: they are never
+    # replaced or dropped by absence like the rest, but settled per tier
+    # after the move (``_settle_assemblies``).
+    staged_files = {r: p for r, p in _signature_files(stage, signature).items() if not _is_assembled(r)}
+    current_files = {r: p for r, p in _signature_files(directory, signature).items() if not _is_assembled(r)}
     replacements = []
     prepared = stage / ".publication" if retain_stage else stage
     rollback = stage / ".rollback" if rollback_on_error else None
@@ -87,6 +146,7 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                     target = rollback / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
+        fresh_assemblies = _fresh_staged_assemblies(stage, signature)
     except FileNotFoundError:
         return None
     with keyed_lock("model3d", f"{character_name}:{signature}"), \
@@ -108,6 +168,9 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(prepared / relative, target)
                 changed.append(relative)
+            if changed:
+                # Rides on this publication's epoch bump and changed_at.
+                _settle_assemblies(directory, signature, changed, fresh_assemblies)
             snapshot = directory / "rollback" / signature
             if not snapshot.resolve().is_relative_to(directory.resolve()):
                 raise ValueError("Rollback path escapes the model directory")
@@ -165,6 +228,10 @@ def _checkpoint_mesh(character_name: str, signature: str) -> None:
 def _publication_token(directory: Path, signature: str):
     records = []
     for relative, path in sorted(_signature_files(directory, signature).items()):
+        if _is_assembled(relative):
+            # A background assembly must not void a staged operation; the
+            # publication settles the assemblies itself.
+            continue
         stat = path.stat()
         records.append((str(relative), stat.st_size, stat.st_mtime_ns, stat.st_ino))
     return (_publication_epochs.get((str(directory), signature), 0), records)
@@ -219,6 +286,8 @@ def _serial_model(function):
             # it can never be overwritten with a stale snapshot.
             try:
                 for relative, source in _signature_files(directory, signature).items():
+                    if _is_assembled(relative):
+                        continue  # derived; the publication drops or keeps it
                     target = stage / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
@@ -231,6 +300,12 @@ def _serial_model(function):
             publications = getattr(_staging, "source_publications", {})
             publication = {"directory": directory, "signature": signature, "token": token}
             _staging.source_publications = {**publications, character_name: publication}
+            # Garment-assembly builds asked for inside the stage wait for its
+            # publication (garment_assembly.schedule): built earlier, they
+            # would read the old bare file.
+            assembly_requests = getattr(_staging, "assembly_requests", {})
+            requested: set = set()
+            _staging.assembly_requests = {**assembly_requests, character_name: requested}
             generation_error = None
             try:
                 result = function(*bound.args, **bound.kwargs)
@@ -242,6 +317,7 @@ def _serial_model(function):
             finally:
                 _staging.directories = active
                 _staging.source_publications = publications
+                _staging.assembly_requests = assembly_requests
             token = publication["token"]
             # A rig failure never rolls back the already published new mesh,
             # nor publishes partially processed rig/LOD bytes from the stage.
@@ -271,6 +347,10 @@ def _serial_model(function):
                                           "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights"),
                                       invalidate=name == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
+            if requested:
+                from app.core import garment_assembly
+                for requested_signature in sorted(requested):
+                    garment_assembly.schedule(character_name, requested_signature)
             if isinstance(result, dict):
                 if "path" in result:
                     result["path"] = str(directory / Path(result["path"]).name)
@@ -766,13 +846,16 @@ def _capture_model_urls(character_name: str, enc_base: str):
             f.close()
             raise
     try:
+        from app.core import garment_assembly
         full, _, _ = find_model3d_serving_tier(character_name, "")
         if full is None:
             return captured
-        capture("url", enc_base + "?v=", full, True)
+        # The delivered bytes: the garment assembly when it is current.
+        capture("url", enc_base + "?v=", garment_assembly.served(character_name, full, FULL_TIER), True)
         if tier_variant(full, LOW_TIER) is not None:
-            low, _, _ = find_model3d_serving_tier(character_name, LOW_TIER)
-            capture("low_url", enc_base + f"?tier={LOW_TIER}&v=", low, True)
+            low, _, low_tier = find_model3d_serving_tier(character_name, LOW_TIER)
+            capture("low_url", enc_base + f"?tier={LOW_TIER}&v=",
+                    garment_assembly.served(character_name, low, low_tier), True)
         if full.suffix.lower() == ".fbx":
             texture = find_texture(character_name, full.stem)
             if texture is not None:
@@ -1059,7 +1142,9 @@ def _purge_combination(out_dir: Path, signature: str, *,
     from app.blender.refine import RAW_DIR_NAME
     # facefix-ref/ is not listed: the upscaled photo outlives a mesh swap
     # (see _publish_signature); see drop_reference_cache below.
-    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+    # The garment assemblies are derived from the files being replaced too.
+    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME,
+                      out_dir / ASSEMBLED_DIR, out_dir / ASSEMBLED_DIR / LOW_TIER):
         if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix")):
             continue
         for old in directory.glob(f"{signature}.*"):
@@ -1908,6 +1993,10 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
     logger.info("Model3D %s: LOD %s (%s -> %s tris, %d bytes)", character_name,
                 target.name, stage.get("tris_before"), stage.get("tris"),
                 target.stat().st_size)
+    # A new low tier makes its garment assembly stale: rebuild it (after the
+    # publication, when this runs inside a staged operation).
+    from app.core import garment_assembly
+    garment_assembly.schedule(character_name, path.stem)
     return {"ok": True, "tier": LOW_TIER, "ratio": float(ratio),
             "tris": stage.get("tris"), "tris_before": stage.get("tris_before"),
             "size": target.stat().st_size,
@@ -3112,6 +3201,17 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
             found = True
         except OSError:
             records.append((tier, False, 0, 0, 0))
+    # The garment assembly of a top-level model is what the byte routes
+    # deliver: a built, rebuilt or dropped assembly must reload the client.
+    # Recorded only when present, so a model without one keeps its revision.
+    if path.parent.name not in (LOW_TIER, ASSEMBLED_DIR):
+        for tier in MODEL_TIERS:
+            candidate = path.parent / ASSEMBLED_DIR / (path.name if tier == FULL_TIER else Path(tier) / path.name)
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            records.append((f"{ASSEMBLED_DIR}/{tier}", True, stat.st_size, stat.st_mtime_ns, stat.st_ino))
     return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest() if found else ""
 
 
