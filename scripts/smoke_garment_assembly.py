@@ -46,7 +46,10 @@ Expected, derived by hand from plan R11/R12 and the Task 7 brief:
     was called. Routes (admin): GET model3d/file -> the assembled bytes,
     GET model/meta -> size = assembled size + garments, download=true -> the
     bare bytes (a download may be re-uploaded: a stored model stays bare).
-    A second assemble -> {full: current}.
+    The meta GET stores the collision capsule set in the bare sidecar (a
+    sidecar write); that key is no assembly input, so the assembly sidecar
+    carries the same record and stays current (d60ca0fc made the read drop
+    the assembly): a second assemble -> {full: current}.
 [5] Low tier. No bare low: ?tier=low serves the assembled FULL bytes (the
     tier fallback is unchanged), no low_url. Bare low written + garment low
     G3 (3 vertices) -> served(low) = bare low + schedule; assemble ->
@@ -338,6 +341,9 @@ def main() -> int:
         meta = r.json() if r.status_code == 200 else {}
         check("meta size + garments", (r.status_code, meta.get("size"), sorted((meta.get("garments") or {}))),
               (200, asm.stat().st_size, [hid]))
+        check("collision carried into the assembly",
+              ("collision" in model3d._read_sidecar(bare),
+               ga.read_sidecar(asm).get("collision") == model3d._read_sidecar(bare).get("collision")), (True, True))
         check("download stays bare", fetch("?download=true") == (200, bare.read_bytes()), True)
         check("second assemble", ga.assemble("Demo", osig, tiers=("full",)),
               {"ok": True, "tiers": {"full": "current"}})
