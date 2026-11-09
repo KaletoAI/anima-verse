@@ -76,6 +76,15 @@
  * to1: gravity.4,gain0,freq0. [B4] means length1.5->.5=1,
  * girth.8->2=1.4. Missing spread=.5, head_sag=1 and flatten_floor
  * inherits target squash_min=.1, so each constant remains .5,1,.1.
+ * [B5] The server applies clothing (docs/plugins.md, Extension motion
+ * layers); the renderer only blends. Unclothed from: translate.8, spill.4,
+ * gain1, freq2, zeta1, gravity1, max180, sag180, rest0 (rest_max90).
+ * Clothing product c=.25: gain.25, max_deg180*.25=45, translate.8*.25=.2,
+ * spill.4*.25=.1, freq2/sqrt(.25)=4, zeta1/sqrt(.25)=2. Lift .25:
+ * gravity1*.75=.75, sag180*.75=135, rest0+.25*90=22.5. At .75s weight.5:
+ * gain.625, translate.5, spill.25, freq3, zeta1.5, gravity.875; max_deg,
+ * sag_max_deg, rest_deg and rest_max_deg are not blended fields, so they
+ * are the target's 45, 135, 22.5, 90 (the rest angle eases separately).
  * [C1-C4] Numeric column-major bind matrices: anchor and c1 identity;
  * c2 translates (0,-1,0). Rings at y=-.5,-1.5 have radius .1 and
  * unit weights on c1,c2 respectively. Gravity/gain/flatten/stretch are0.

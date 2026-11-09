@@ -4179,6 +4179,11 @@
     "The face projection left dark texels in the face (a black eye socket?) — check the comparison image; a retry with another yaw did not fix it": "Die Gesichtsprojektion hat dunkle Texel im Gesicht hinterlassen (eine schwarze Augenhöhle?) — Vergleichsbild prüfen; ein zweiter Versuch mit anderer Drehung hat es nicht behoben",
     "Body shape under this piece": "Körperform unter diesem Teil",
     "Base-body characters only. By default a body detail under this piece is left out of the 3D model; tick it for sheer pieces the detail shows through. Changing it rebuilds the wearers' outfit models; 2D images stay unchanged.": "Nur Figuren mit Basiskörper. Standardmäßig bleibt ein Körperdetail unter diesem Teil aus dem 3D-Modell weg; für durchscheinende Teile, durch die das Detail sichtbar ist, anhaken. Eine Änderung baut die Outfit-Modelle der Träger neu; 2D-Bilder bleiben unverändert.",
-    "Shows detail through (sheer)": "Detail scheint durch (durchsichtig)"
+    "Shows detail through (sheer)": "Detail scheint durch (durchsichtig)",
+    "Body detail": "Körperdetail",
+    "Motion damping": "Bewegungsdämpfung",
+    "How much this piece holds the body under it in 3D motion: 0 stops the motion, 1 leaves it unchanged. Scales bounce, swing limit, follow-through and spill; several pieces multiply.": "Wie stark dieses Teil den Körper darunter in der 3D-Bewegung hält: 0 stoppt die Bewegung, 1 lässt sie unverändert. Skaliert Nachschwingen, Schwunggrenze, Mitbewegung und Ausweichen zur Seite; mehrere Teile multiplizieren sich.",
+    "How much this piece lifts the body under it in 3D: 0 none, 1 fully (no sag, rest angle raised to its limit). Empty uses the slot default shown; a partial cover counts half; the strongest worn piece wins. Takes effect without a model rebuild.": "Wie stark dieses Teil den Körper darunter in 3D anhebt: 0 gar nicht, 1 ganz (kein Absinken, Ruhewinkel bis zur Grenze angehoben). Leer nimmt den angezeigten Standard des Slots; eine teilweise Bedeckung zählt halb; das stärkste getragene Teil gewinnt. Wirkt ohne Modell-Neubau.",
+    "Slot default": "Slot-Standard"
   }
 }

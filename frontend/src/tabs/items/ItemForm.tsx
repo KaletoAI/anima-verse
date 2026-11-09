@@ -29,37 +29,94 @@ function MotionDampingInput({ value, onCommit }: { value: number; onCommit: (val
     }} />
 }
 
-// The clothing slots that hide a body detail some package declares
-// "exposed_only" — read from the server, never hardcoded here.
-let exposedDetailSlots: Promise<string[]> | null = null
-function loadExposedDetailSlots(): Promise<string[]> {
-  exposedDetailSlots ??= apiGet<{ slots?: string[] }>('/inventory/exposed-detail-slots')
-    .then(r => r.slots ?? [])
-    .catch(() => { exposedDetailSlots = null; return [] })
-  return exposedDetailSlots
+// Which clothing slots the "Body shape under this piece" controls apply to —
+// read from the loaded packages on the server, never hardcoded here.
+interface BodyUnderPiece {
+  exposed_detail_slots: string[]
+  lift_defaults: Record<string, number>
+  motion_damping_slots: string[]
+}
+const NO_BODY_UNDER_PIECE: BodyUnderPiece = { exposed_detail_slots: [], lift_defaults: {}, motion_damping_slots: [] }
+let bodyUnderPiece: Promise<BodyUnderPiece> | null = null
+function loadBodyUnderPiece(): Promise<BodyUnderPiece> {
+  bodyUnderPiece ??= apiGet<Partial<BodyUnderPiece>>('/inventory/body-under-piece')
+    .then(r => ({
+      exposed_detail_slots: r.exposed_detail_slots ?? [],
+      lift_defaults: r.lift_defaults ?? {},
+      motion_damping_slots: r.motion_damping_slots ?? [],
+    }))
+    .catch(() => { bodyUnderPiece = null; return NO_BODY_UNDER_PIECE })
+  return bodyUnderPiece
 }
 
-/** "Body shape under this piece": how the base body looks under a worn
- *  piece in 3D. Holds the sheer switch now; further controls go here. */
+/** The lift a piece gets without a value of its own: the largest slot
+ *  default among the slots it fully covers, else half of the largest among
+ *  the slots it partially covers (same rule as the server). */
+function defaultLift(draft: Pick<DraftItem, 'slots' | 'covers' | 'partially_covers'>, defaults: Record<string, number>): number | null {
+  const pick = (slots: string[]) => slots.filter(s => s in defaults).map(s => defaults[s])
+  const full = pick([...draft.slots, ...draft.covers])
+  if (full.length) return Math.max(...full)
+  const partial = pick(draft.partially_covers)
+  return partial.length ? Math.max(...partial) / 2 : null
+}
+
+function LiftInput({ value, fallback, onCommit }: { value: number | null; fallback: number; onCommit: (value: number | null) => void }) {
+  const { t } = useI18n()
+  const [text, setText] = useState(value == null ? '' : String(value))
+  useEffect(() => setText(value == null ? '' : String(value)), [value])
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <input type="range" min={0} max={1} step={0.05} style={{ flex: 1 }}
+        value={value ?? fallback} onChange={e => onCommit(Number(e.target.value))} />
+      <input className="ga-input" type="number" min={0} max={1} step="any" style={{ width: 90 }}
+        placeholder={String(fallback)} value={text} onChange={e => setText(e.target.value)} onBlur={() => {
+          const parsed = Number(text)
+          if (!text.trim()) onCommit(null)
+          else if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) { onCommit(parsed); setText(String(parsed)) }
+          else setText(value == null ? '' : String(value))
+        }} />
+      <button type="button" className="ga-btn ga-btn-sm" disabled={value == null}
+        onClick={() => onCommit(null)}>{t('Slot default')}</button>
+    </div>
+  )
+}
+
+/** "Body shape under this piece": how the body under a worn piece behaves
+ *  in 3D — detail shown through, motion damping and lift. Each control
+ *  appears only for pieces in the clothing slots it applies to. */
 function BodyUnderPieceFields({ draft, onUpdate }: {
   draft: DraftItem
   onUpdate: <K extends keyof DraftItem>(key: K, value: DraftItem[K]) => void
 }) {
   const { t } = useI18n()
-  const [slots, setSlots] = useState<string[]>([])
-  useEffect(() => { let live = true; loadExposedDetailSlots().then(s => { if (live) setSlots(s) }); return () => { live = false } }, [])
+  const [info, setInfo] = useState<BodyUnderPiece>(NO_BODY_UNDER_PIECE)
+  useEffect(() => { let live = true; loadBodyUnderPiece().then(r => { if (live) setInfo(r) }); return () => { live = false } }, [])
   const covering = new Set([...draft.slots, ...draft.covers, ...draft.partially_covers])
-  const showsDetail = slots.some(slot => covering.has(slot))
-  if (!showsDetail) return null
+  const showsDetail = info.exposed_detail_slots.some(slot => covering.has(slot))
+  const showsDamping = info.motion_damping_slots.some(slot => covering.has(slot))
+  const liftDefault = defaultLift(draft, info.lift_defaults)
+  if (!showsDetail && !showsDamping && liftDefault == null) return null
   return (
-    <Field label={t('Body shape under this piece')}
-      hint={t("Base-body characters only. By default a body detail under this piece is left out of the 3D model; tick it for sheer pieces the detail shows through. Changing it rebuilds the wearers' outfit models; 2D images stay unchanged.")}>
-      <label className="ga-form-check" style={{ marginTop: 6 }}>
-        <input type="checkbox" checked={draft.exposed_detail}
-          onChange={(e) => onUpdate('exposed_detail', e.target.checked)} />
-        {t('Shows detail through (sheer)')}
-      </label>
-    </Field>
+    <div className="ga-fieldset">
+      <div className="ga-fieldset-title">{t('Body shape under this piece')}</div>
+      {showsDetail && <Field label={t('Body detail')}
+        hint={t("Base-body characters only. By default a body detail under this piece is left out of the 3D model; tick it for sheer pieces the detail shows through. Changing it rebuilds the wearers' outfit models; 2D images stay unchanged.")}>
+        <label className="ga-form-check" style={{ marginTop: 6 }}>
+          <input type="checkbox" checked={draft.exposed_detail}
+            onChange={(e) => onUpdate('exposed_detail', e.target.checked)} />
+          {t('Shows detail through (sheer)')}
+        </label>
+      </Field>}
+      {showsDamping && <Field label={t('Motion damping')}
+        hint={t('How much this piece holds the body under it in 3D motion: 0 stops the motion, 1 leaves it unchanged. Scales bounce, swing limit, follow-through and spill; several pieces multiply.')}>
+        <MotionDampingInput value={draft.motion_damping}
+          onCommit={value => onUpdate('motion_damping', value)} />
+      </Field>}
+      {liftDefault != null && <Field label={t('Lift')}
+        hint={t('How much this piece lifts the body under it in 3D: 0 none, 1 fully (no sag, rest angle raised to its limit). Empty uses the slot default shown; a partial cover counts half; the strongest worn piece wins. Takes effect without a model rebuild.')}>
+        <LiftInput value={draft.lift} fallback={liftDefault} onCommit={value => onUpdate('lift', value)} />
+      </Field>}
+    </div>
   )
 }
 
@@ -542,10 +599,6 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         />
       </Field>
 
-      {isOutfit && <Field label={t('Motion damping')} hint={t('Dynamic motion multiplier: 0 stops motion, 1 leaves it unchanged.')}>
-        <MotionDampingInput value={draft.motion_damping}
-          onCommit={value => onUpdate('motion_damping', value)} />
-      </Field>}
       {isOutfit && <Field label={t('3D mesh')}
         hint={t('Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.')}>
         <label className="ga-form-check" style={{ marginTop: 6 }}>

@@ -91,6 +91,30 @@ def exposed_only_slots():
                    if any(rig.exposed_only for rig in slot.rigs) for cover in slot.covered_by})
 
 
+def clothing_lift_slots():
+    """``{clothing slot: default lift}`` over every loaded package rig that
+    declares ``clothing_lift_default`` (the largest default when two rigs
+    name the same slot) — the pieces the item editor offers
+    ``outfit_piece.lift`` for, with the placeholder it shows."""
+    from app.plugins.registry import packages
+    result = {}
+    for package in packages():
+        for slot in package.body_slots:
+            for rig in slot.rigs:
+                for cover, value in rig.clothing_lift_default.items():
+                    result[cover] = max(result.get(cover, 0.0), value)
+    return dict(sorted(result.items()))
+
+
+def motion_damping_slots():
+    """Clothing slots that cover a body slot carrying a moving rig (one with
+    chains) in any loaded package, sorted — where ``outfit_piece.motion_damping``
+    has an effect. Never names a group or a slot itself."""
+    from app.plugins.registry import packages
+    return sorted({cover for package in packages() for slot in package.body_slots
+                   if any(rig.chains for rig in slot.rigs) for cover in slot.covered_by})
+
+
 def piece_covering_slots(occupied, outfit_piece):
     """Every clothing slot a worn piece covers: the slots it occupies (the
     outfit's ``pieces`` mapping and its own ``slots``) plus ``covers`` and
@@ -253,7 +277,14 @@ def validate_motion_overrides(section, *, character=False):
 
 
 def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None):
-    """Package → world → attribute multipliers → raw character → bounce/weight → clothing → state; mesh-independent."""
+    """Package → world → attribute multipliers → raw character → bounce/weight → clothing → state; mesh-independent.
+
+    Clothing: the product of the covering pieces' ``motion_damping`` (or the
+    free-text gain) scales gain, max_deg, translate and spill and makes
+    freq_hz/zeta stiffer by 1/sqrt(factor); the strongest covering piece's
+    ``lift`` (absent = the group's ``clothing_lift_default`` for that slot,
+    half for a partial cover) scales gravity and sag_max_deg by (1 - lift) and
+    adds lift * rest_max_deg to the rest angle before its clamp."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -282,6 +313,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             op = item["outfit_piece"]
             pieces[iid] = {key: op.get(key, 1 if key == "motion_damping" else [])
                            for key in ("motion_damping", "covers", "partially_covers")}
+            # Absent = the group's ``clothing_lift_default`` for the slot.
+            pieces[iid]["lift"] = op.get("lift")
             pieces[iid]["occupied_slots"] = sorted(slot for slot, worn in equipment.items() if worn == iid)
     slots = slots_for_character(character_name, profile=profile)
     attributes = {rig.id: ((profile.get("body_slots") or {}).get(slot.id) or {})
@@ -341,13 +374,38 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                         for key in ("outfit_description", "outfit_worn"))
         factor = values["freetext_clothing_gain"] if apply_clothing and not pieces and free_text else 1.0
         targets = set(coverage.get(group["id"], []))
+        lift_defaults = group.get("clothing_lift_default") or {}
+        lift = 0.0
         for piece in pieces.values():
             f = piece["motion_damping"]
-            if targets.intersection(set(piece["covers"]) | set(piece["occupied_slots"])):
+            full = targets.intersection(set(piece["covers"]) | set(piece["occupied_slots"]))
+            partial = targets.intersection(piece["partially_covers"])
+            if full:
                 factor *= f
-            elif targets.intersection(piece["partially_covers"]):
+            elif partial:
                 factor *= 1 - (1 - f) / 2
-        values["gain"] *= factor
+            # Lift: only the slots the group declares a default for lift it;
+            # a piece's own value replaces that default, a partial cover
+            # counts half, and the strongest piece wins.
+            hit, half = full & set(lift_defaults), False
+            if not hit:
+                hit, half = partial & set(lift_defaults), True
+            if hit:
+                own = piece["lift"]
+                value = own if own is not None else max(lift_defaults[slot] for slot in hit)
+                lift = max(lift, value / 2 if half else value)
+        # The clothing factor holds the whole motion like ``bounce`` does:
+        # amplitude, swing limit, follow-through and outward spill shrink,
+        # the spring gets stiffer and better damped by 1/sqrt(factor).
+        for key in ("gain", "max_deg", "translate", "spill"):
+            values[key] *= factor
+        if factor < 1:
+            # Zero stops the motion anyway; the floor keeps 0 * inf out.
+            for key in ("freq_hz", "zeta"):
+                values[key] *= max(factor, 1e-4) ** -.5
+        # Lift carries the group: less static sag and a raised rest angle.
+        for key in ("gravity", "sag_max_deg"):
+            values[key] *= 1 - lift
         rest = None
         for state in states:
             pose = state["bone_pose"].get(group["id"], {})
@@ -374,7 +432,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
-            **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"], "rest_deg": max(-values["rest_max_deg"], min(rest or 0, values["rest_max_deg"])),
+            **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"],
+            "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + lift * values["rest_max_deg"], values["rest_max_deg"])),
         }
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,

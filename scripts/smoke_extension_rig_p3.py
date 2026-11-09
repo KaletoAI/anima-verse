@@ -9,7 +9,10 @@ No pieces and blank text gives factor1; nonblank text with declared free-text
 gain .25 gives factor.25, while item pieces still give their product. Package gravity .35 stays .35 with character m=2;
 the solver subtracts baked gravity after multiplying current gravity by m.
 World gain .6, attribute gain multiplier .5 yield .3; frequency 2.2*2=4.4.
-Manual gain .9/frequency 3 replace those; clothing .3*.8 gives final .216.
+Manual gain .9/frequency 3 replace those; clothing .3*.8=.24 gives final .216,
+and the same product scales translate .3 -> .072 and spill .2 -> .048 and
+makes frequency 3/sqrt(.24) (docs/plugins.md, clothing product); no lift
+default is declared, so gravity .2 and sag 60 stay.
 Physics-only declarations and profiles leave geometry fingerprints unchanged.
 World gain .6 replaces 1 for its group only. Revisions track inputs even
 when a zero gain masks a changed multiplier; identical reads stay stable.
@@ -307,9 +310,10 @@ def main():
         check(response['options']['extension_motion'] == overrides, 'manual physics route round trip')
         effective = motion_payload('sample')['groups']['sample_group']
         check(effective['straighten_deg'] == 30 and effective['freetext_clothing_gain'] == .5, 'character new fields round trip')
-        check(effective['freq_hz'] == 3 and effective['gravity'] == .2
+        check(abs(effective['freq_hz'] - 3 / .24 ** .5) < 1e-12 and effective['gravity'] == .2
               and abs(effective['gain'] - .216) < 1e-12 and effective['flatten'] == .4
-              and effective['translate'] == .3 and effective['spill'] == .2 and effective['sag_max_deg'] == 60
+              and abs(effective['translate'] - .072) < 1e-12 and abs(effective['spill'] - .048) < 1e-12
+              and effective['sag_max_deg'] == 60
               and effective['axis_gain'] == [.2, .8, .3],
               'manual override beats attribute profile; clothing applies last')
         check(motion_payload('sample', apply_clothing=False)['groups']['sample_group']['gain'] == .9,

@@ -12430,14 +12430,21 @@ rotate the figure root before the solver step; +90 forward/back means lying on t
 
 Worldmap character `motion` and `/characters/{name}/model3d` metadata return the
 same effective physics: package defaults → per-group world override → slot
-attribute-profile multipliers → absolute character override → clothing gain product
-→ state bone pose. For two distinct covering pieces with
-`motion_damping` 0.5 and 0.8, gain is the package/world gain × 0.4. Partial 0.6
-contributes 0.8. Character scale m=2 doubles current gravity before subtracting baked gravity;
+attribute-profile multipliers → absolute character override → clothing product
+and lift → state bone pose. For two distinct covering pieces with
+`motion_damping` 0.5 and 0.8 the clothing product is 0.4: gain, `max_deg`,
+`translate` and `spill` are the package/world values × 0.4, `freq_hz` and
+`zeta` × 1/sqrt(0.4) ≈ 1.581. Partial 0.6 contributes 0.8. Lift (0..1, the
+strongest covering piece's `outfit_piece.lift`, else the group's
+`clothing_lift_default` for the covered slot, half for a partial cover)
+multiplies `gravity` and `sag_max_deg` by (1 − lift) and adds lift ×
+`rest_max_deg` to `rest_deg` before its ± `rest_max_deg` clamp; e.g. lift 0.25
+with `rest_max_deg` 30 gives `rest_deg` 7.5. Both renderers read these
+effective values as they are — neither applies clothing itself. Character scale m=2 doubles current gravity before subtracting baked gravity;
 it stays separate from group gravity and does not change frequency.
 
 `motion.rev` hashes declarations, world overrides, raw equipment assignments, worn
-item damping/coverage definitions, slot values/profiles, absolute character overrides and sliders,
+item damping/lift/coverage definitions, slot values/profiles, absolute character overrides and sliders,
 slot coverage and character scale, active state IDs and their sparse bone poses, plus the
 effective groups. Repeated reads are stable; changes remain visible even when
 the effective result is masked by another multiplier. `model_sig`/`model_rev` remain mesh identities: both renderers

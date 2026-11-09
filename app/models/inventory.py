@@ -494,6 +494,20 @@ def _motion_damping(value):
     return float(value)
 
 
+def _lift(value):
+    """Validate ``outfit_piece.lift`` (0..1): how much the piece carries the
+    body groups under it in 3D (``extension_rig.motion_payload``). ``None``
+    means the slot default a package declares (``clothing_lift_default``),
+    stored as an absent key."""
+    import math
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not 0 <= value <= 1):
+        raise ValueError("lift must be a number in 0..1")
+    return float(value)
+
+
 def _validate_passive_bonuses(properties):
     """Reject malformed passive stat mappings before replacing item properties."""
     if not isinstance(properties, dict):
@@ -613,6 +627,9 @@ def add_item(name: str,
             "own_mesh": _clean_own_mesh(outfit_piece.get("own_mesh")),
             "exposed_detail": _clean_exposed_detail(outfit_piece.get("exposed_detail")),
         }
+        lift = _lift(outfit_piece.get("lift"))
+        if lift is not None:
+            item["outfit_piece"]["lift"] = lift
     if category == "garment" and garment:
         item["garment"] = _clean_garment(garment)
 
@@ -708,6 +725,8 @@ def update_item(item_id: str,
         # client, a partial edit) keeps the stored flag.
         prev_own_mesh = _clean_own_mesh((item.get("outfit_piece") or {}).get("own_mesh"))
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
+        # Same for ``lift``; an explicit null resets it to the slot default.
+        prev_lift = (item.get("outfit_piece") or {}).get("lift")
         for key, value in updates.items():
             if key in allowed or _re_module.fullmatch(r"(?:name|description)_[a-z]{2,3}(?:-[A-Za-z0-9]+)*", key):
                 item[key] = value
@@ -735,6 +754,9 @@ def update_item(item_id: str,
                 "exposed_detail": (_clean_exposed_detail(op.get("exposed_detail")) if "exposed_detail" in op
                                    else prev_exposed_detail),
             }
+            lift = _lift(op.get("lift") if "lift" in op else prev_lift)
+            if lift is not None:
+                item["outfit_piece"]["lift"] = lift
         else:
             item.pop("outfit_piece", None)
         if item.get("category") == "garment" and "garment" in item:

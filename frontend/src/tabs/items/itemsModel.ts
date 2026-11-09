@@ -22,6 +22,9 @@ export interface OutfitPieceMeta {
   // Own fitted 3D mesh on base-body characters (every wearer); never a 2D key.
   own_mesh?: boolean
   exposed_detail?: boolean
+  // How much the piece carries the body under it in 3D (0..1); absent = the
+  // slot default a package declares.
+  lift?: number
 }
 
 export interface ItemProperties {
@@ -103,6 +106,7 @@ export interface DraftItem {
   partially_covers: string[]
   own_mesh: boolean
   exposed_detail: boolean
+  lift: number | null
   effects: string
   apply_condition: string
   condition_duration: number
@@ -241,6 +245,7 @@ export const EMPTY_DRAFT: DraftItem = {
   partially_covers: [],
   own_mesh: false,
   exposed_detail: false,
+  lift: null,
   effects: '',
   apply_condition: '',
   condition_duration: 2,
@@ -281,6 +286,7 @@ export function itemToDraft(it: Item): DraftItem {
     partially_covers: [...(op.partially_covers || [])],
     own_mesh: op.own_mesh === true,
     exposed_detail: op.exposed_detail === true,
+    lift: typeof op.lift === 'number' ? op.lift : null,
     effects: effectsToText(it.effects),
     ...extractConditionFromEffects(it.effects),
     extras,
@@ -322,6 +328,8 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
       partially_covers: d.partially_covers,
       own_mesh: d.own_mesh,
       exposed_detail: d.exposed_detail,
+      // null resets the piece to the slot default.
+      lift: d.lift,
     }
   }
   // "Effect on consume / cast" section: consumables AND spells write

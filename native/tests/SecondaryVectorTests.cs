@@ -130,7 +130,7 @@ public class SecondaryAngleVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(SecondaryVectorAdapters.Dispatch));
 }
 
-/// <summary>shared/test-vectors/secondary_params.json (B1–B4).</summary>
+/// <summary>shared/test-vectors/secondary_params.json (B1–B5).</summary>
 public class SecondaryParamsVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("secondary_params"));

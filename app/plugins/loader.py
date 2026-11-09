@@ -233,7 +233,8 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
                 entries = []
             for entry in entries:
                 try:
-                    rigs.append(RigSpec.parse(entry, attributes=bdef.get("attributes") or {}))
+                    rigs.append(RigSpec.parse(entry, attributes=bdef.get("attributes") or {},
+                                              covered_by=[str(x).strip() for x in (bdef.get("covered_by") or [])]))
                 except (ValueError, TypeError, OverflowError) as exc:
                     logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
             rigs = _resolve_rig_dependencies(rigs, pkg.id, bdef["id"])

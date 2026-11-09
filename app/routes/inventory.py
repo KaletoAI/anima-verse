@@ -1026,14 +1026,21 @@ def list_outfit_types_route() -> Dict[str, Any]:
     return {"outfit_types": list(CANONICAL_OUTFIT_TYPES)}
 
 
-@router.get("/exposed-detail-slots")
-def exposed_detail_slots_route() -> Dict[str, Any]:
-    """The clothing slots that hide a body detail of a package rig declaring
-    ``exposed_only`` — the item editor offers ``outfit_piece.exposed_detail``
-    ("shows the detail through") only for pieces touching one of them. Read
-    from the loaded packages, never a hardcoded list."""
-    from app.core.extension_rig import exposed_only_slots
-    return {"slots": exposed_only_slots()}
+@router.get("/body-under-piece")
+def body_under_piece_route() -> Dict[str, Any]:
+    """Which clothing slots the item editor's "Body shape under this piece"
+    controls apply to, read from the loaded packages (never a hardcoded list):
+
+    - ``exposed_detail_slots``: slots that hide a body detail of a rig
+      declaring ``exposed_only`` → ``outfit_piece.exposed_detail``.
+    - ``lift_defaults``: ``{slot: default}`` from rigs declaring
+      ``clothing_lift_default`` → ``outfit_piece.lift`` (placeholder = default).
+    - ``motion_damping_slots``: slots covering a moving rig →
+      ``outfit_piece.motion_damping``."""
+    from app.core.extension_rig import clothing_lift_slots, exposed_only_slots, motion_damping_slots
+    return {"exposed_detail_slots": exposed_only_slots(),
+            "lift_defaults": clothing_lift_slots(),
+            "motion_damping_slots": motion_damping_slots()}
 
 
 @router.post("/characters/{character_name}/apply-equipped")

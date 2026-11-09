@@ -146,6 +146,46 @@
         "head_sag": 1,
         "flatten_floor": 0.1
       }
+    },
+    {
+      "label": "[B5] clothing product .25 and lift .25 blend in, limits come from the target",
+      "fn": "blendMotionParams",
+      "args": [
+        {
+          "$fixture": "defaults",
+          "$with": {
+            "translate": 0.8,
+            "spill": 0.4
+          }
+        },
+        {
+          "$fixture": "defaults",
+          "$with": {
+            "gain": 0.25,
+            "max_deg": 45,
+            "translate": 0.2,
+            "spill": 0.1,
+            "freq_hz": 4,
+            "zeta": 2,
+            "gravity": 0.75,
+            "sag_max_deg": 135,
+            "rest_deg": 22.5
+          }
+        },
+        0.75
+      ],
+      "expect": {
+        "gain": 0.625,
+        "translate": 0.5,
+        "spill": 0.25,
+        "freq_hz": 3,
+        "zeta": 1.5,
+        "gravity": 0.875,
+        "max_deg": 45,
+        "sag_max_deg": 135,
+        "rest_deg": 22.5,
+        "rest_max_deg": 90
+      }
     }
   ]
 }

@@ -394,10 +394,21 @@ An outfit model is painted onto the covered variant when ANY worn piece covers
 a slot of the group's `covered_by` (its slots, `covers` or `partially_covers`)
 and does not set `outfit_piece.exposed_detail: true` (the item editor's "Shows
 detail through (sheer)", offered only for pieces touching such a slot —
-`GET /inventory/exposed-detail-slots`); otherwise onto the full base. The
+`GET /inventory/body-under-piece` → `exposed_detail_slots`); otherwise onto the full base. The
 outfit sidecar records `base_variant` (`covered`/`rigged`); a piece whose flag
 changes makes its wearers' outfit models stale (`stale_reason:
 detail_changed`). 2D renders are unaffected. The core never names the group.
+
+`clothing_lift_default: {<clothing slot>: 0..1}` (mapping, default empty; keys
+must be in the body slot's `covered_by`) declares which clothing slots LIFT a
+rig group and by how much when a worn piece sets no `outfit_piece.lift` of its
+own. Only the slots named here lift the group; a slot mapped to 0 offers the
+piece-level value without a default. Payload only — no mesh, fingerprint or
+model rebuild (see "Extension motion layers" below). The item editor's "Body
+shape under this piece" section shows the Lift slider only for pieces touching
+such a slot, with the slot default as placeholder (`GET
+/inventory/body-under-piece` → `lift_defaults`), and Motion damping only for
+pieces touching a slot that covers a moving group (`motion_damping_slots`).
 
 max_deg is the whole-chain dynamic swing budget in degrees, applied independently to each root chain of an appendage. For links ordered root to tip, let span_j be the immutable bind length (joint to joint; twice the centroid lever for the final link) and R_j the sum of spans from link j to the tip. Each link receives share_j = R_j^2*span_j / sum_k(R_k^2*span_k) and a dynamic limit of max_deg*share_j. Equal spans yield 9:4:1 /14 for three links and 25:16:9:4:1 /55 for five. Shares come from bind geometry, never per frame, and govern soft swing saturation, the extreme-anchor guard and dynamic translation clamping. A one-link chain has share 1. Static sag_max_deg and spill_max_deg are unchanged.
 
@@ -1491,7 +1502,7 @@ Game-Admin → Setup → Extension motion lists loaded declarations from the adm
 world-settings endpoint. Reset removes the override so future package defaults flow through.
 
 Effective order: package → world override → slot attribute-profile multipliers →
-absolute character overrides → bounce/weight → clothing gain → state bone pose. The character
+absolute character overrides → bounce/weight → clothing product and lift → state bone pose. The character
 3D panel's Extension bones box shows Bounce/Weight sliders and Advanced numeric physics and Reset removes that
 character's group override. It sends `{extension_motion: {group_id: {field: value}}}`
 to admin-only `POST /characters/{name}/model3d/extension-motion`; profile storage
@@ -1501,11 +1512,31 @@ The existing mesh-option route is independent.
 
 After character overrides, every distinct worn item whose occupied slots or `outfit_piece.covers` hit
 the body slot's `covered_by` contributes its `motion_damping` (0..1, default 1)
-to the gain product. Mirrored occupied slots count once; hidden layers still count.
+to the clothing product `c`. Mirrored occupied slots count once; hidden layers still count.
 A partial cover contributes `1 - (1 - motion_damping)/2`; full coverage takes
 precedence for the same item. Without any resolved outfit pieces, non-empty `outfit_description` or `outfit_worn`
 contributes the group's `freetext_clothing_gain` (0..1, default 1). Empty or whitespace-only
 text contributes 1; worn pieces take precedence. `apply_clothing=False` bypasses both factors.
+The clothing product holds the whole motion the way `bounce` does: `gain`,
+`max_deg`, `translate` and `spill` are multiplied by `c`, and for `c < 1`
+`freq_hz` and `zeta` by `1/sqrt(max(c, 1e-4))`; the effective clamps after the
+state layer still apply. Example: `c = .25` multiplies gain, swing limit,
+follow-through and spill by .25 and doubles frequency and damping ratio.
+
+Clothing lift (after the clothing product, before states): for each distinct
+worn piece the slots it fully covers (occupied slots and `covers`) are
+intersected with the keys of the group's `clothing_lift_default`; if none
+hit, its `partially_covers` are. The piece's value is its own
+`outfit_piece.lift` (0..1) when set, else the largest declared default among
+the hit slots; a partial hit counts half. The group's `lift` is the MAXIMUM
+over pieces (0 without any hit). Then `gravity *= 1 - lift`,
+`sag_max_deg *= 1 - lift`, and the rest angle becomes
+`clamp(state_rest + lift * rest_max_deg, ±rest_max_deg)` with the effective
+`rest_max_deg` (positive = toward the body front/up for a forward-and-down
+lever, see the rest axis below). Example with `{underwear_top: .25, top: 0}`
+and `rest_max_deg 30`: a bra without its own value gives lift .25 → rest 7.5°,
+gravity and sag × .75; a top with `lift .6` worn over it raises lift to .6;
+a top that only partially covers `underwear_top` with no value gives .125.
 The shared character template's `motion_gravity_scale` (0..3, default 1) is transported separately as group `gravity_scale=m`:
 `a_g=gravity*(m*g-R_anchor*g_rest)`. Thus upright m=1 gives zero, m=2 adds sag,
 and m=.5 lifts. Static equilibrium `e=a_g/omega²` (after removing inward axial force) is bounded

@@ -111,10 +111,17 @@ class RigSpec:
     # keeps a second model without these groups (``model3d/covered/``), and an
     # outfit whose worn pieces cover the slot is built from that one.
     exposed_only: bool = False
+    # How much a worn piece in a clothing slot lifts this group when the piece
+    # sets no ``outfit_piece.lift`` of its own: ``{clothing slot: 0..1}``.
+    # Only the slots named here lift the group at all (``motion_payload``).
+    clothing_lift_default: Dict[str, float] = field(default_factory=dict)
 
     @classmethod
-    def parse(cls, raw, attributes=None):
-        """Reject malformed chains, conditions and non-finite physics values."""
+    def parse(cls, raw, attributes=None, covered_by=None):
+        """Reject malformed chains, conditions and non-finite physics values.
+
+        ``covered_by``: the owning body slot's clothing slots; when given,
+        ``clothing_lift_default`` may name only those."""
         import math
         from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
         if not isinstance(raw, dict):
@@ -247,6 +254,16 @@ class RigSpec:
         if not isinstance(exposed_only, bool):
             raise ValueError("rig.exposed_only must be a boolean")
         spec.exposed_only = exposed_only
+        lift = raw.get("clothing_lift_default", {})
+        if not isinstance(lift, dict) or any(
+                not isinstance(slot, str) or not slot.strip()
+                or isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not 0 <= value <= 1
+                for slot, value in lift.items()):
+            raise ValueError("rig.clothing_lift_default must map clothing slots to numbers in 0..1")
+        if covered_by is not None and set(slot.strip() for slot in lift) - set(covered_by):
+            raise ValueError("rig.clothing_lift_default may name only the slot's covered_by")
+        spec.clothing_lift_default = {slot.strip(): float(value) for slot, value in lift.items()}
         return spec
 
 
