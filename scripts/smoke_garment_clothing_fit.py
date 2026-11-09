@@ -22,15 +22,29 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
 (A-pose), then ``(P - (0, 0.05, 0)) / 1.7``. Height rigged 1.40 - 0.08 = 1.32 m, unrigged 1.32 / 1.7 units
 -> k = 1.700 (the arms reach neither the top nor the bottom in either pose).
 
-[1] Skirt blend (``clothing_weights``, skirt=True; crotch 0.85, zone below crotch + 0.05 = 0.90, keep 0.5 from the
-    crotch up, 0.0 at the hem, linear in between). Points 1 cm outside the left upper leg (x 0.17, z 0), where the 8
-    nearest body vertices are all LeftUpLeg (the hips rim (0.15, 0.95) is >= 0.036 m away, the leg vertices within
-    0.013 m), hem = the lowest point 0.47:
-        y 0.92 (above the zone)                 -> LeftUpLeg 1
-        y 0.87 (zone, above the crotch)          -> keep 0.5   -> LeftUpLeg 0.5, Hips 0.5
-        y 0.66: t = (0.85 - 0.66) / (0.85 - 0.47) = 0.5 -> keep 0.25 -> LeftUpLeg 0.25, Hips 0.75
-        y 0.47 (the hem)                        -> keep 0     -> Hips 1
-    The mirrored point (-0.17, 0.66, 0) -> RightUpLeg 0.25, Hips 0.75. skirt=False: y 0.87 -> LeftUpLeg 1.
+[1] Skirt blend (``skirt_leg_weights`` / ``clothing_weights`` skirt=True; collision ruling C5, 2026-11-10): zone below
+    crotch + 0.05; the leg columns of each zone vertex become the Gaussian average (sigma = 0.16 / 2 = 0.08) of the
+    leg columns of the zone vertices within 0.16 m, the other columns are rescaled to the rest (all on Hips when it
+    had none); then keep 1.0 at the crotch falling linearly to 0.75 at the hem, the rest of the leg weight to Hips.
+    (a) keep alone (smooth_m 0: every vertex its own neighbourhood), crotch 0.85, hem = the lowest point 0.47, a
+        vertex LeftUpLeg 1:
+        y 0.92 (above the zone 0.90)            -> LeftUpLeg 1 (untouched)
+        y 0.87 (zone, above the crotch, t 0)     -> keep 1     -> LeftUpLeg 1
+        y 0.66: t = (0.85 - 0.66) / (0.85 - 0.47) = 0.5 -> keep 1 - 0.25 x 0.5 = 0.875 -> LeftUpLeg 0.875, Hips 0.125
+        y 0.47 (the hem, t 1)                   -> keep 0.75  -> LeftUpLeg 0.75, Hips 0.25
+    (b) smoothing across the legs (keep 1 everywhere), three vertices at y 0.70 on a line: A x -0.05 RightUpLeg 1,
+        B x 0 Left 0.5 + Right 0.5, C x +0.05 LeftUpLeg 1, and D x +0.30 LeftUpLeg 1 (0.25 from C: outside 0.16).
+        g(0.05) = exp(-0.5 (0.05/0.08)^2) = 0.82258, g(0.10) = exp(-0.5 (0.10/0.08)^2) = 0.45783.
+        A: Left = (0.5 x 0.82258 + 0.45783) / (1 + 0.82258 + 0.45783) = 0.86912 / 2.28041 = 0.38113, Right 0.61887;
+        C mirrored; B: (0.5 + 0.82258) / 2.64516 = 0.5 each; D alone -> LeftUpLeg 1.
+    (c) the rest of the weight: P (0, 0.70, 0) Hips 1, Q (0.05, 0.70, 0) LeftUpLeg 1 (keep 1):
+        P: Left = 0.82258 / 1.82258 = 0.45133, its Hips rescaled to the rest 0.54867;
+        Q: Left = 1 / 1.82258 = 0.54867, no non-leg weight of its own -> the rest 0.45133 on Hips.
+    (d) ``clothing_weights`` on the fixture, points 1 cm outside the upper legs (the 8 nearest body vertices all
+        Left/RightUpLeg, the hips rim >= 0.036 m away), all more than 0.16 m apart -> (a)'s numbers:
+        (0.17, 0.92) LeftUpLeg 1; (0.17, 0.87) LeftUpLeg 1; (0.17, 0.66) LeftUpLeg 0.875 / Hips 0.125;
+        (0.17, 0.47) LeftUpLeg 0.75 / Hips 0.25; (-0.17, 0.66) RightUpLeg 0.875 / Hips 0.125.
+        skirt=False: y 0.66 -> LeftUpLeg 1.
 [2] Sleeves. A point 1 cm above the left upper arm (0.28, 1.39, 0) -> LeftArm 1; above the forearm
     (0.57, 1.385, 0) -> LeftForeArm 1. ``transfer_skinned`` (the clothing path) and ``transfer`` (the hair path) with
     ``split_y`` below the sleeve (only forearm/hand excluded): a sleeve tube r 0.06 m around the A-pose upper arm
@@ -52,8 +66,12 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
     so nothing is pushed), generated in its own frame (x4 + shift) and framed through masks at 1000 px per unit.
     Every vertex ends within 5 mm of its design position, k = 1.700 +- 0.002, moved share 0, the gate passes.
     ``is_skirt``: slots top+bottom and the cut below the crotch surrounds the centre line front and back -> True;
-    the side vertex (0.20, 0.75, 0): t = (0.85 - 0.75) / (0.85 - 0.55) = 1/3 -> keep 1/3 -> LeftUpLeg 0.333,
-    Hips 0.667 (+- 0.01, the vertex moves by the framing's pixel rounding); every hem vertex (y < 0.56) Hips 1.
+    the side vertex (0.20, 0.75, 0): its dress neighbours within 0.16 m all have x > 0.04 and only left-leg donors
+    (LeftUpLeg 1 at these heights), so smoothing keeps LeftUpLeg 1; t = (0.85 - 0.75) / (0.85 - 0.55) = 1/3 ->
+    keep 1 - 0.25 / 3 = 0.917 -> LeftUpLeg 0.917, Hips 0.083 (+- 0.01, the framing's pixel rounding). Every hem
+    vertex (y < 0.56, t 0.97..1, below the crotch: only leg donors, leg total 1) -> Hips 1 - keep = 0.242..0.25 (+-
+    0.01); the centre-front hem vertex (0, 0.55, 0.22) lies between the legs -> by symmetry LeftUpLeg = RightUpLeg
+    = 0.375 (+- 0.02).
     Slots ["top"] -> no skirt. Two trouser tubes (r 0.075 around each leg: nothing within 0.02 of the centre
     line) -> no skirt even with slot "bottom". Masks of different sizes are refused.
 [6] Mesh step: ``garment_mesh.target_tris`` = 25000 for hair (unchanged ``TARGET_TRIS``), 60000 for clothing.
@@ -219,19 +237,46 @@ def weight_of(D, names, i, bone):
 def test_skirt_blend(rig):
     from app.core import garment_fit as gf
     check(abs(gf.crotch_height(rig) - 0.85) < 1e-6, f"[1] crotch = 0.85 (got {gf.crotch_height(rig):.4f})")
+    check((gf.SKIRT_KEEP_TOP, gf.SKIRT_KEEP_HEM, gf.SKIRT_SMOOTH_M, gf.SKIRT_ZONE_M) == (1.0, 0.75, 0.16, 0.05),
+          "[1] constants keep 1.0 -> 0.75, smooth 0.16 m, zone 0.05 m")
+    # columns: 0 Hips, 1 LeftUpLeg, 2 RightUpLeg
+    legs, hips = [1, 2], 0
+
+    def run(pts, W, **kw):
+        return gf.skirt_leg_weights(np.asarray(pts, float), np.asarray(W, float), legs=legs, hips=hips,
+                                    crotch=0.85, **kw)
+
+    def near(a, b):
+        return bool(np.allclose(a, b, atol=1e-4))
+    # (a) keep alone
+    pts = [[0.17, 0.92, 0], [0.17, 0.87, 0], [0.17, 0.66, 0], [0.17, 0.47, 0]]
+    out = run(pts, [[0, 1, 0]] * 4, smooth_m=0.0)
+    for i, want in enumerate([[0, 1, 0], [0, 1, 0], [0.125, 0.875, 0], [0.25, 0.75, 0]]):
+        check(near(out[i], want), f"[1a] keep y {pts[i][1]} -> {want} (got {np.round(out[i], 4).tolist()})")
+    # (b) smoothing across the legs
+    pts = [[-0.05, 0.7, 0], [0, 0.7, 0], [0.05, 0.7, 0], [0.30, 0.7, 0]]
+    out = run(pts, [[0, 0, 1], [0, 0.5, 0.5], [0, 1, 0], [0, 1, 0]], keep_top=1.0, keep_hem=1.0)
+    for i, want in enumerate([[0, 0.38113, 0.61887], [0, 0.5, 0.5], [0, 0.61887, 0.38113], [0, 1, 0]]):
+        check(near(out[i], want), f"[1b] smooth x {pts[i][0]} -> {want} (got {np.round(out[i], 5).tolist()})")
+    # (c) the rest of the weight
+    out = run([[0, 0.7, 0], [0.05, 0.7, 0]], [[1, 0, 0], [0, 1, 0]], keep_top=1.0, keep_hem=1.0)
+    check(near(out[0], [0.54867, 0.45133, 0]) and near(out[1], [0.45133, 0.54867, 0]),
+          f"[1c] rest: Hips rescaled / all on Hips (got {np.round(out, 5).tolist()})")
+    check(np.allclose(out.sum(1), 1), "[1c] rows sum to 1")
+    # (d) clothing_weights on the fixture
     pts = np.array([[0.17, 0.92, 0], [0.17, 0.87, 0], [0.17, 0.66, 0], [0.17, 0.47, 0], [-0.17, 0.66, 0]])
     Jx, Wx = gf.clothing_weights(pts, rig, skirt=True)
     D = dense(Jx, Wx, rig.joint_names)
     names = rig.joint_names
-    want = [(0, {"LeftUpLeg": 1.0}), (1, {"LeftUpLeg": 0.5, "Hips": 0.5}), (2, {"LeftUpLeg": 0.25, "Hips": 0.75}),
-            (3, {"Hips": 1.0}), (4, {"RightUpLeg": 0.25, "Hips": 0.75})]
+    want = [(0, {"LeftUpLeg": 1.0}), (1, {"LeftUpLeg": 1.0, "Hips": 0.0}), (2, {"LeftUpLeg": 0.875, "Hips": 0.125}),
+            (3, {"LeftUpLeg": 0.75, "Hips": 0.25}), (4, {"RightUpLeg": 0.875, "Hips": 0.125})]
     for i, bones in want:
         got = {b: round(weight_of(D, names, i, b), 4) for b in bones}
         ok = all(abs(got[b] - w) <= 1e-3 for b, w in bones.items()) and abs(D[i].sum() - 1) < 1e-6
-        check(ok, f"[1] skirt y {pts[i, 1]} x {pts[i, 0]}: {bones} (got {got})")
-    Jn, Wn = gf.clothing_weights(pts[1:2], rig, skirt=False)
+        check(ok, f"[1d] skirt y {pts[i, 1]} x {pts[i, 0]}: {bones} (got {got})")
+    Jn, Wn = gf.clothing_weights(pts[2:3], rig, skirt=False)
     Dn = dense(Jn, Wn, names)
-    check(abs(weight_of(Dn, names, 0, "LeftUpLeg") - 1) < 1e-3, "[1] no skirt: y 0.87 stays LeftUpLeg 1")
+    check(abs(weight_of(Dn, names, 0, "LeftUpLeg") - 1) < 1e-3, "[1d] no skirt: y 0.66 stays LeftUpLeg 1")
 
 
 # --- [2] sleeves -------------------------------------------------------------------------------------------------
@@ -346,11 +391,16 @@ def test_fit_clothing(unrig, rig):
     D = dense(g.joints, g.weights, g.joint_names)
     i = int(np.argmin(np.linalg.norm(P - np.array([0.20, 0.75, 0.0]), axis=1)))
     got = (weight_of(D, g.joint_names, i, "LeftUpLeg"), weight_of(D, g.joint_names, i, "Hips"))
-    check(abs(got[0] - 1 / 3) <= 0.01 and abs(got[1] - 2 / 3) <= 0.01,
-          f"[5] side vertex y 0.75 -> LeftUpLeg 0.333 / Hips 0.667 (got {got[0]:.3f} / {got[1]:.3f})")
+    check(abs(got[0] - 11 / 12) <= 0.01 and abs(got[1] - 1 / 12) <= 0.01,
+          f"[5] side vertex y 0.75 -> LeftUpLeg 0.917 / Hips 0.083 (got {got[0]:.3f} / {got[1]:.3f})")
     hem = P[:, 1] < 0.56
     hips = D[:, g.joint_names.index("mixamorig:Hips")]
-    check(np.all(hips[hem] > 0.999), f"[5] every hem vertex Hips 1 (min {hips[hem].min():.4f})")
+    check(np.all((hips[hem] > 0.232) & (hips[hem] < 0.26)),
+          f"[5] every hem vertex Hips 0.242..0.25 (+-0.01) (min {hips[hem].min():.4f} max {hips[hem].max():.4f})")
+    i = int(np.argmin(np.linalg.norm(P - np.array([0.0, 0.55, 0.22]), axis=1)))
+    lr = (weight_of(D, g.joint_names, i, "LeftUpLeg"), weight_of(D, g.joint_names, i, "RightUpLeg"))
+    check(abs(lr[0] - 0.375) <= 0.02 and abs(lr[1] - 0.375) <= 0.02,
+          f"[5] centre-front hem vertex: LeftUpLeg = RightUpLeg = 0.375 (got {lr[0]:.3f} / {lr[1]:.3f})")
     check(g.image == png() and g.mime == "image/png", "[5] the garment image is carried")
 
     Xr = g.positions

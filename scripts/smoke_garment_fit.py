@@ -46,8 +46,15 @@ No world, no server, no external assets: every mesh below is built in this file.
     - A cap at r 0.101 (clearance 0.001 units = 0.0017 m < 0.0068 m): the rigged pass pushes it out to radius
       >= 1.7 * 0.1 + 0.0068 - 0.001 = 0.1758 m around the rigged head centre (0, 1.58, 0).
 
-(d) Weights. Head vertices at y >= 1.45, so chin = 1.45 and blend 0.15 ends at 1.30:
-    y 1.375 -> Head 0.5 / Spine2 0.5; y 1.50 -> Head 1; y 1.20 -> Spine2 1.
+(d) Weights (collision ruling C7, 2026-11-10). Rig Hips, Spine2, Neck, Head, LeftShoulder, RightShoulder:
+    Head vertices on a column at x 0, y 1.45..1.70 -> chin 1.45, crown 1.70, ear line 1.45 + 0.25 x 0.25 = 1.5125;
+    LeftShoulder-dominated vertices at x 0.10 up to y 1.44, RightShoulder up to 1.42 -> shoulder top (1.44 + 1.42) / 2
+    = 1.43; Spine2 below. t = (1.5125 - y) / 0.0825, s = t^2 (3 - 2t), Head (1-s)^2, Neck 2s(1-s), Spine2 s^2:
+    y 1.60 and 1.5125 -> Head 1; y 1.491875 (t 0.25, s 0.15625) -> Head 0.711914 / Neck 0.263672 / Spine2 0.024414;
+    y 1.47125 (t 0.5, s 0.5) -> 0.25 / 0.5 / 0.25; y 1.43 and 1.30 -> Spine2 1. Names [Head, Neck, Spine2].
+    Reduced rig (Hips, Spine2, Head; grid x +-0.05, y 1.00..1.70 step 0.005, Head at y >= 1.45): no Shoulder bone ->
+    shoulder top = the highest Spine2 vertex 1.445; no Neck -> Spine2 takes the Neck share: y 1.47875 (t 0.5) ->
+    Head 0.25 / Spine2 0.75. Shoulder vertices raised by 0.17 (top 1.60, above the ear line) -> refused.
 
 (e) Metrics (metres).
     - Bib: chin 1.45, neck cylinder radius 0.05 (front z 0.05). A 5 x 5 cm plate at z 0.07, x [-0.025, 0.025],
@@ -300,20 +307,50 @@ def test_transfer():
 
 def test_weights():
     from app.core import garment_fit as gf
-    ys = np.linspace(1.0, 1.7, 141)
-    P = np.array([[x, y, 0.0] for y in ys for x in (-0.05, 0.05)])
-    br = body_mesh(P, np.zeros((0, 3), np.int64), P[:, 1] >= 1.45 - 1e-9)
-    X = np.array([[0, 1.375, 0], [0, 1.50, 0], [0, 1.20, 0]])
-    names, J, W = gf.hair_weights(X, br, blend_m=0.15)
-    check(names == ["mixamorig:Head", "mixamorig:Spine2"], f"weights: joint names Head, Spine2 (got {names})")
+    from app.core.glb_mesh import BodyMesh
+    names6 = ["mixamorig:Hips", "mixamorig:Spine2", "mixamorig:Neck", "mixamorig:Head", "mixamorig:LeftShoulder",
+              "mixamorig:RightShoulder"]
+    parts = [(np.array([[0, y, 0] for y in np.linspace(1.45, 1.70, 26)]), 3),
+             (np.array([[0.10, y, 0] for y in np.linspace(1.38, 1.44, 7)]), 4),
+             (np.array([[-0.10, y, 0] for y in np.linspace(1.38, 1.42, 5)]), 5),
+             (np.array([[0, y, 0] for y in np.linspace(1.00, 1.40, 41)]), 1)]
+    P = np.concatenate([p for p, _ in parts])
+    Jb = np.zeros((len(P), 4), np.int64)
+    Jb[:, 0] = np.concatenate([np.full(len(p), j) for p, j in parts])
+    Wb = np.zeros((len(P), 4))
+    Wb[:, 0] = 1
+    br = BodyMesh(positions=P, faces=np.zeros((0, 3), np.int64), uvs=np.zeros((len(P), 2)), joints=Jb, weights=Wb,
+                  joint_names=names6)
+    check(abs(gf.ear_line_height(br) - 1.5125) < 1e-9, f"weights: ear line 1.5125 (got {gf.ear_line_height(br)})")
+    check(abs(gf.shoulder_top_height(br) - 1.43) < 1e-9, f"weights: shoulder top 1.43 (got {gf.shoulder_top_height(br)})")
+    ys = [1.60, 1.5125, 1.491875, 1.47125, 1.43, 1.30]
+    names, J, W = gf.hair_weights(np.array([[0, y, 0] for y in ys]), br)
+    check(names == ["mixamorig:Head", "mixamorig:Neck", "mixamorig:Spine2"],
+          f"weights: joint names Head, Neck, Spine2 (got {names})")
 
     def w(row, name):
         return float(sum(W[row, k] for k in range(4) if names[J[row, k]] == name and W[row, k] > 0))
-    check(abs(w(0, "mixamorig:Head") - 0.5) < 1e-9 and abs(w(0, "mixamorig:Spine2") - 0.5) < 1e-9,
-          "weights: y 1.375 -> Head 0.5 / Spine2 0.5")
-    check(abs(w(1, "mixamorig:Head") - 1) < 1e-9 and w(1, "mixamorig:Spine2") == 0, "weights: y 1.50 -> Head 1")
-    check(abs(w(2, "mixamorig:Spine2") - 1) < 1e-9 and w(2, "mixamorig:Head") == 0, "weights: y 1.20 -> Spine2 1")
+    want = [(1, 0, 0), (1, 0, 0), (0.711914, 0.263672, 0.024414), (0.25, 0.5, 0.25), (0, 0, 1), (0, 0, 1)]
+    for row, (h, n, s2) in enumerate(want):
+        got = (w(row, "mixamorig:Head"), w(row, "mixamorig:Neck"), w(row, "mixamorig:Spine2"))
+        check(np.allclose(got, (h, n, s2), atol=1e-6),
+              f"weights: y {ys[row]} -> Head {h} / Neck {n} / Spine2 {s2} (got {np.round(got, 6).tolist()})")
     check(np.allclose(W.sum(1), 1), "weights: rows sum to 1")
+
+    grid = np.array([[x, y, 0.0] for y in np.linspace(1.0, 1.7, 141) for x in (-0.05, 0.05)])
+    small = body_mesh(grid, np.zeros((0, 3), np.int64), grid[:, 1] >= 1.45 - 1e-9)
+    check(abs(gf.shoulder_top_height(small) - 1.445) < 1e-9,
+          f"weights: reduced rig shoulder top = highest Spine2 vertex 1.445 (got {gf.shoulder_top_height(small)})")
+    names, J, W = gf.hair_weights(np.array([[0, 1.47875, 0]]), small)
+    check(names == ["mixamorig:Head", "mixamorig:Spine2"] and np.allclose(W[0, :2], [0.25, 0.75]),
+          f"weights: reduced rig y 1.47875 -> Head 0.25 / Spine2 0.75 (got {names} {np.round(W[0], 6).tolist()})")
+    high = BodyMesh(positions=P + np.where(Jb[:, :1] >= 4, [0.0, 0.17, 0.0], 0.0), faces=br.faces, uvs=br.uvs,
+                    joints=Jb, weights=Wb, joint_names=names6)   # shoulder tops 1.61 / 1.59 -> 1.60 > ear 1.5125
+    try:
+        gf.hair_weights(np.zeros((1, 3)), high)
+        check(False, "weights: shoulder top above the ear line refused")
+    except ValueError:
+        check(True, "weights: shoulder top above the ear line refused")
 
 
 # --- (e) metrics ---------------------------------------------------------------------------
@@ -487,7 +524,7 @@ def test_fit_hair():
     check(abs(res.report["k"] - 1.7) <= 0.002, f"fit_hair: k 1.700 (got {res.report['k']:.4f})")
     check(res.ok, f"fit_hair: gate passes ({res.reasons}; {res.metrics})")
     check(g.joint_names == ["mixamorig:Head", "mixamorig:Spine2"] and np.allclose(g.weights[:, 0], 1),
-          "fit_hair: all weights Head")
+          "fit_hair: all weights Head (the cap lies above the ear line)")
     check(g.image == png() and g.mime == "image/png" and g.material.get("doubleSided") is True,
           "fit_hair: image + material carried")
     try:

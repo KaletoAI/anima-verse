@@ -20,9 +20,10 @@ Clothing (an own-mesh outfit piece, plan ``2026-11-09-base-body-phase5-mesh-item
 spike ``fit_dress.py`` (``fit_clothing``): the same framing; depth by a torso band; the push-out without the crown
 spread; a transfer that lets sleeves ride the arms (only forearm/hand excluded above the waist, every arm/shoulder
 bone below it); weights by inverse distance from the 8 nearest rigged body vertices, restricted to the rig contract,
-and a skirt that blends its leg weights toward Hips down to the hem. Its placement constants are FRACTIONS OF THE
-BODY HEIGHT (the spike worked in units of a 1.0-high body = 1.70 m, so at that height they are the spike's numbers);
-``k`` is the height ratio rigged / unrigged (the whole body is the carrier; A- and T-pose share the height).
+and a skirt whose leg weights are smoothed across the gap between the legs and blended partly toward Hips down to the
+hem. Its placement constants are FRACTIONS OF THE BODY HEIGHT (the spike worked in units of a 1.0-high body =
+1.70 m, so at that height they are the spike's numbers); ``k`` is the height ratio rigged / unrigged (the whole body
+is the carrier; A- and T-pose share the height).
 
 The clothing transfer is SKINNED (``transfer_skinned``, 2026-11-09 sleeve fix): the rigged body IS the unrigged body
 posed by linear blend skinning (measured on the e2e base: per-bone rigid fits residual p50 0.6 mm, the whole body as
@@ -55,7 +56,9 @@ SPREAD_M = 0.0085
 SPREAD_DEPTH_M = 0.119
 PROBE_M = 0.068
 KABSCH_RES_M = 0.006
-HAIR_BLEND_M = 0.15
+# Hair weights (``hair_weights``): the ear line lies this fraction of the head height (chin -> crown) above the chin
+# — the earlobe / jaw angle (measured on Kira's base: 1.513 m; its Head joint 1.515 m, nose tip 1.503 m).
+HAIR_EAR_LINE_FRACTION = 0.25
 POKE_TOL_M = 0.0034
 # Half height of the depth probe band (spike 0.004 units x 1.70) and the SDF crop margin around the garment.
 PROBE_BAND_M = 0.0068
@@ -131,13 +134,22 @@ TRANSFER_PART_ARM_MIN = 0.5
 # 2026-11-09: 0 passes leaves a sharp pleat under each sleeve, 10 and 25 look alike).
 STRETCH_RELAX_RATIO = 3.0
 STRETCH_RELAX_PASSES = 10
-# Skirt (spike ``SKIRT_KEEP_TOP`` / ``SKIRT_KEEP_HEM``): below crotch + ``SKIRT_ZONE_M`` a garment vertex keeps a share
-# of its leg weights — ``SKIRT_KEEP_TOP`` from the crotch up, falling linearly to ``SKIRT_KEEP_HEM`` at the hem — and
-# the rest goes to Hips. Crotch = the lowest rigged vertex within ``CROTCH_HALF_X_M`` of the centre line with Hips
-# weight > ``CROTCH_HIPS_MIN``.
+# Skirt: below crotch + ``SKIRT_ZONE_M`` the leg weights of a garment vertex are the Gaussian average (sigma =
+# ``SKIRT_SMOOTH_M`` / 2, neighbours within ``SKIRT_SMOOTH_M``) of the leg weights of the zone's vertices, so the
+# switch from the left to the right leg spreads over the gap between the legs instead of the few centimetres the
+# inverse-distance donors give; then the vertex keeps ``SKIRT_KEEP_TOP`` of them at the crotch, falling linearly to
+# ``SKIRT_KEEP_HEM`` at the hem, and the rest goes to Hips. Crotch = the lowest rigged vertex within
+# ``CROTCH_HALF_X_M`` of the centre line with Hips weight > ``CROTCH_HIPS_MIN``.
+# Measured 2026-11-10 on the phase-5 e2e dress on Kira's base (dense checker with the capsule push, 8 samples; skirt
+# triangles stretched > 2x by the pose / thigh skin left visible beside the skirt, mean of five views): the old blend
+# (0.5 -> 0, no smoothing) walk 0.85 % / 3.0 %, run 1.07 % / 25.9 %, sit 0.63 % / 73.9 % (the thighs came out in
+# front of a skirt hanging from the hips); more leg weight without smoothing tore the skirt between the legs (1 -> 0.5:
+# walk 2.1 %, run 2.6 %, sit 3.1 %, centre line up to 15 %); 1 -> 0.75 smoothed over 0.16 m: 0.00 % / 2.0 %,
+# 0.00 % / 3.6 %, 0.00 % / 10.2 %. Smoothing radius 0.12 m left 0.9 % of the triangles > 1.5x, 0.16 m 0.16-0.31 %.
 SKIRT_ZONE_M = 0.05
-SKIRT_KEEP_TOP = 0.5
-SKIRT_KEEP_HEM = 0.0
+SKIRT_KEEP_TOP = 1.0
+SKIRT_KEEP_HEM = 0.75
+SKIRT_SMOOTH_M = 0.16
 CROTCH_HALF_X_M = 0.03
 CROTCH_HIPS_MIN = 0.3
 #: Slots whose piece may hang over the legs as a skirt (a dress is top + bottom).
@@ -874,21 +886,70 @@ def chin_height(body_rigged: BodyMesh) -> float:
     return float(body_rigged.positions[head, 1].min())
 
 
-def hair_weights(X, body_rigged: BodyMesh, *, blend_m: float = HAIR_BLEND_M):
-    """Head -> Spine2 by height below the chin -> ``(joint_names, joints (n,4), weights (n,4))``.
+def ear_line_height(body_rigged: BodyMesh) -> float:
+    """The ear line (earlobe / jaw angle): ``HAIR_EAR_LINE_FRACTION`` of the head height (chin -> crown, both
+    measured on the Head-weighted vertices) above the chin."""
+    head = dense_weights(body_rigged)[:, joint_index(body_rigged, "head")] > 0.5
+    chin = chin_height(body_rigged)
+    return float(chin + HAIR_EAR_LINE_FRACTION * (body_rigged.positions[head, 1].max() - chin))
 
-    chin = lowest rigged vertex with Head weight > 0.5; at the chin and above all Head, ``blend_m`` below it all
-    Spine2, linear in between. Joints are resolved by ``norm_bone_name`` (``head``, ``spine2``), never by index.
+
+def shoulder_top_height(body_rigged: BodyMesh) -> float:
+    """The top of the shoulders: per side the highest rigged vertex whose dominant bone is that side's Shoulder
+    (clavicle) bone, averaged over the sides found (Kira's base: 1.437 / 1.440 m — the trapezius top at |x| 9-10 cm).
+    A skin without Shoulder-dominated vertices (a reduced test rig): the highest Spine2-dominated vertex. ValueError
+    when neither exists."""
+    W = dense_weights(body_rigged)
+    dominant = W.argmax(1)
+    tops = []
+    for key in ("leftshoulder", "rightshoulder"):
+        try:
+            side = dominant == joint_index(body_rigged, key)
+        except KeyError:
+            continue
+        if side.any():
+            tops.append(float(body_rigged.positions[side, 1].max()))
+    if tops:
+        return float(np.mean(tops))
+    trunk = dominant == joint_index(body_rigged, "spine2")
+    if not trunk.any():
+        raise ValueError("The rigged body has no vertex dominated by a Shoulder or the Spine2 bone")
+    return float(body_rigged.positions[trunk, 1].max())
+
+
+def hair_weights(X, body_rigged: BodyMesh):
+    """Head -> Neck -> Spine2 by height -> ``(joint_names, joints (n,4), weights (n,4))``; column 0 is always Head.
+
+    A smooth vertical ramp between two measured landmarks: at the ear line (``ear_line_height``) and above all Head,
+    at the shoulder top (``shoulder_top_height``) and below all Spine2. In between ``t`` = the fraction of the way
+    down, ``s = smoothstep(t)``, and the three weights are the quadratic B-spline basis of ``s``: Head (1-s)^2,
+    Neck 2s(1-s), Spine2 s^2 — they sum to 1, each is C1 in the height, and the middle of the ramp rides the neck.
+    Hair below the ear line hangs beside the neck and on the shoulders; weighted to the Head it swept 1.5-2 cm into
+    the shoulder tops on every head tilt (collision ruling C7, Kira: excess sit 9.4 %, celebrating 7.6 %). Joints are
+    resolved by ``norm_bone_name`` (``head``, ``neck``, ``spine2`` — rig-contract bones), never by index; a skin
+    without a Neck joint (a reduced test rig) gives the Neck share to Spine2.
     """
     X = np.asarray(X, np.float64)
     head, spine2 = joint_index(body_rigged, "head"), joint_index(body_rigged, "spine2")
-    chin = chin_height(body_rigged)
-    t = np.clip((chin - X[:, 1]) / blend_m, 0, 1)
-    names = [body_rigged.joint_names[head], body_rigged.joint_names[spine2]]
-    J = np.zeros((len(X), 4), np.int64)
-    J[:, 1] = 1
+    try:
+        neck: Optional[int] = joint_index(body_rigged, "neck")
+    except KeyError:
+        neck = None
+    ear, shoulder = ear_line_height(body_rigged), shoulder_top_height(body_rigged)
+    if not shoulder < ear:
+        raise ValueError(f"The shoulder top ({shoulder:.3f} m) is not below the ear line ({ear:.3f} m)")
+    t = np.clip((ear - X[:, 1]) / (ear - shoulder), 0, 1)
+    s = t * t * (3 - 2 * t)
     W = np.zeros((len(X), 4))
-    W[:, 0], W[:, 1] = 1 - t, t
+    if neck is None:
+        names = [body_rigged.joint_names[i] for i in (head, spine2)]
+        J = np.tile(np.array([0, 1, 0, 0], np.int64), (len(X), 1))
+        W[:, 0] = (1 - s) ** 2
+        W[:, 1] = 1 - W[:, 0]
+    else:
+        names = [body_rigged.joint_names[i] for i in (head, neck, spine2)]
+        J = np.tile(np.array([0, 1, 2, 0], np.int64), (len(X), 1))
+        W[:, 0], W[:, 1], W[:, 2] = (1 - s) ** 2, 2 * s * (1 - s), s ** 2
     return names, J, W
 
 
@@ -948,9 +1009,10 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
        (spike ``fit_dress.py``), of the body weights RESTRICTED to the rig-contract bones and renormalised. A point
        whose neighbours carry only extension bones takes the same inverse distance over the nearest body vertices
        with at least ``CONTRACT_DONOR_MIN`` of their weight on contract bones.
-    2. ``skirt``: below crotch + ``SKIRT_ZONE_M`` a vertex with leg weight keeps ``SKIRT_KEEP_TOP`` of it from the
-       crotch up, falling linearly to ``SKIRT_KEEP_HEM`` at the hem (the lowest point); the rest goes to Hips, so the
-       skirt does not split with the legs.
+    2. ``skirt`` (``skirt_leg_weights``): below crotch + ``SKIRT_ZONE_M`` the leg weights are smoothed over the zone
+       (``SKIRT_SMOOTH_M``) and a vertex keeps ``SKIRT_KEEP_TOP`` of them from the crotch up, falling linearly to
+       ``SKIRT_KEEP_HEM`` at the hem (the lowest point); the rest goes to Hips. The skirt follows the thighs when
+       sitting and spans the gap between the legs smoothly when they scissor.
     3. The four largest weights, renormalised.
     """
     from scipy.spatial import cKDTree
@@ -981,23 +1043,59 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
     W /= np.maximum(W.sum(1, keepdims=True), 1e-12)
 
     if skirt and len(X):
-        hips = joint_index(body, "hips")
         legs = [i for i, n in enumerate(body.joint_names)
                 if contract[i] and any(t in norm_bone_name(n) for t in _LEG_TOKENS)]
-        crotch = crotch_height(body)
-        hem = float(X[:, 1].min())
-        t = np.clip((crotch - X[:, 1]) / max(crotch - hem, 1e-6), 0, 1)
-        keep = SKIRT_KEEP_TOP + (SKIRT_KEEP_HEM - SKIRT_KEEP_TOP) * t
-        legw = W[:, legs].sum(1)
-        zone = (X[:, 1] < crotch + SKIRT_ZONE_M) & (legw > 0)
-        W[np.ix_(zone, legs)] *= keep[zone, None]
-        W[zone, hips] += legw[zone] * (1 - keep[zone])
+        W = skirt_leg_weights(X, W, legs=legs, hips=joint_index(body, "hips"), crotch=crotch_height(body))
 
     J = np.argsort(-W, 1, kind="stable")[:, :4]
     top = np.take_along_axis(W, J, 1)
     top /= np.maximum(top.sum(1, keepdims=True), 1e-12)
     J = np.where(top > 0, J, 0)
     return J.astype(np.int64), top
+
+
+def skirt_leg_weights(X, W, *, legs, hips: int, crotch: float, smooth_m: float = SKIRT_SMOOTH_M,
+                      keep_top: float = SKIRT_KEEP_TOP, keep_hem: float = SKIRT_KEEP_HEM,
+                      zone_m: float = SKIRT_ZONE_M) -> np.ndarray:
+    """The skirt step of ``clothing_weights`` on dense weights ``W`` (n, joints; rows sum to 1) -> new dense weights.
+
+    Zone = the vertices below ``crotch + zone_m``. Per zone vertex: (1) its leg columns become the Gaussian average
+    (sigma ``smooth_m / 2``) of the leg columns of the zone vertices within ``smooth_m`` (itself included); its other
+    columns are rescaled to the remaining weight (all on ``hips`` when it had none); (2) with ``t`` = the fraction of
+    the way from the crotch down to the hem (the lowest point, 0 above the crotch), it keeps ``keep_top + (keep_hem -
+    keep_top) * t`` of its leg weight and the rest goes to ``hips``. Rows still sum to 1.
+    """
+    from scipy.spatial import cKDTree
+    X = np.asarray(X, np.float64)
+    W = np.array(W, np.float64)
+    zone = np.nonzero(X[:, 1] < crotch + zone_m)[0]
+    if not len(zone) or not legs:
+        return W
+    legs = list(legs)
+    L = W[np.ix_(zone, legs)]
+    Ls = np.empty_like(L)
+    Z = X[zone]
+    tree = cKDTree(Z)
+    sigma = max(smooth_m / 2, 1e-9)
+    for a in range(0, len(zone), 1024):
+        rows = tree.query_ball_point(Z[a:a + 1024], max(smooth_m, 0.0))
+        for r, nb in enumerate(rows):
+            nb = np.asarray(nb if len(nb) else [a + r], np.int64)
+            g = np.exp(-0.5 * (np.linalg.norm(Z[nb] - Z[a + r], axis=1) / sigma) ** 2)
+            Ls[a + r] = g @ L[nb] / g.sum()
+    other = np.setdiff1d(np.arange(W.shape[1]), legs)
+    O = W[np.ix_(zone, other)]
+    rest = np.clip(1 - Ls.sum(1), 0, 1)
+    osum = O.sum(1)
+    O = np.where(osum[:, None] > 1e-12, O / np.maximum(osum[:, None], 1e-12) * rest[:, None], 0.0)
+    O[osum <= 1e-12, list(other).index(hips)] = rest[osum <= 1e-12]
+    hem = float(X[:, 1].min())
+    t = np.clip((crotch - Z[:, 1]) / max(crotch - hem, 1e-6), 0, 1)
+    keep = keep_top + (keep_hem - keep_top) * t
+    W[np.ix_(zone, other)] = O
+    W[np.ix_(zone, legs)] = Ls * keep[:, None]
+    W[zone, hips] += Ls.sum(1) * (1 - keep)
+    return W
 
 
 # --- metrics + gate -----------------------------------------------------------------------------------------------------
@@ -1223,7 +1321,7 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
     Qp, disp = push_out(Q, Fk, sdf, clear=CLEAR_M / k, spread=SPREAD_M / k, spread_depth=SPREAD_DEPTH_M / k)
     X, transfer_report = transfer(Qp, body_u, body_r, faces=Fk)
-    names, J, W = hair_weights(X, body_r, blend_m=HAIR_BLEND_M)
+    names, J, W = hair_weights(X, body_r)
     m = metrics(X, Fk, Q * k, Qp * k, body_r)
     ok, reasons = gate(m)
 
@@ -1237,7 +1335,9 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
                  "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
         "transfer": transfer_report,
         "chin_y_m": chin_height(body_r),
-        "share_below_chin": float((W[:, 1] > 0).mean()) if len(W) else 0.0,
+        "ear_line_y_m": ear_line_height(body_r),
+        "shoulder_top_y_m": shoulder_top_height(body_r),
+        "share_below_ear": float((W[:, 0] < 1).mean()) if len(W) else 0.0,
     }
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
 
