@@ -116,6 +116,10 @@ interface Model3DInfo {
   signature?: string
   /** how the served model was found: exact | neutral | nearest */
   match?: string
+  /** Base-body pipeline: the served file was built on an older base body
+   *  (or before the pipeline) — shown with all its details, plus a hint. */
+  stale_base?: boolean
+  stale_reason?: 'older_base' | 'before_pipeline'
   format?: string
   rig?: string
   rig_error?: string
@@ -971,6 +975,13 @@ export function FieldModel3D({ character }: { character: string }) {
           ) : !mixamo ? (
             <div className="ga-hint">
               {t('Generic rig (no standard skeleton) — Mixamo clips will not drive this model.')}
+            </div>
+          ) : null}
+          {model.stale_base ? (
+            <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+              {model.stale_reason === 'before_pipeline'
+                ? t('Built before the base body pipeline — rebuild it')
+                : t('Built on an older base body — rebuild it')}
             </div>
           ) : null}
           {model.match === 'nearest' ? (

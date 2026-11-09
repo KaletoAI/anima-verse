@@ -974,6 +974,15 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                                 "size": path.stat().st_size,
                                 "limb_weights": {"checked": False, "vertices": 0,
                                                  "fully_foreign": 0, "error": ""}}
+        # Base-body pipeline: the served file may be an outfit model built on
+        # an older base body ("stale" for its own combination, or a nearest
+        # stand-in). It is still THE file on screen, so its details stay; the
+        # flag tells the tab to ask for a rebuild. ``stale_reason``:
+        # ``older_base`` / ``before_pipeline`` (no base recorded).
+        info["stale_base"] = _on_older_base(path, _current_base(character_name))
+        if info["stale_base"]:
+            info["stale_reason"] = ("older_base" if _read_sidecar(path).get("base_signature")
+                                    else "before_pipeline")
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
