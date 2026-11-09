@@ -265,6 +265,7 @@
           "min": 0,
           "max": 3,
           "step": 0.1,
+          "width": "narrow",
           "hint": "Gravity multiplier for extension motion (0..3; default 1). Visible upright when not 1; otherwise use Tilt."
         },
         {
@@ -272,6 +273,7 @@
           "type": "select",
           "source": "animation_sets",
           "allow_custom": true,
+          "width": "narrow",
           "label": "Animation set",
           "label_de": "Animations-Set",
           "hint": "Which figure's clips this character uses — the subdirectory in shared/models/clips. Set once, it gets <set>/walk, <set>/sit, <set>/sleep … automatically. Automatic = derived from the character (animal, or female/male by gender).",

@@ -386,6 +386,9 @@ export function TemplateTab({
     const isPrompt = f.type === 'text' && f.multiline
     // Short inputs share a row in the section grid; text and prompts span it.
     const short = !isPrompt && SHORT_TYPES.has(String(f.type || ''))
+    // The template's `width` overrides the type rule (TmplFieldDef.width).
+    const widthClass = f.width === 'narrow' && !isPrompt ? 'tpl-field--narrow'
+      : f.width === 'wide' || !short ? 'tpl-field--wide' : 'tpl-field--short'
     const imagePreview = typeof f.image_preview === 'string' ? f.image_preview : ''
     const input = isPrompt ? (
       <PromptField
@@ -439,7 +442,7 @@ export function TemplateTab({
       )
     }
     return (
-      <div key={fkey} className={short ? 'tpl-field--short' : 'tpl-field--wide'}>
+      <div key={fkey} className={widthClass}>
         <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
           {input}
           {overrideNote}

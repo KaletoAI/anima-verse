@@ -2960,6 +2960,12 @@ a.ga-btn {
 .ga-face-actions-state { min-width: 0; }
 /* Base body tab: preview + toolbar, then the face/rig actions as a third
    column (under the preview when the panel is narrow). */
+/* The 3D tab's side panels (animations, extension bones, generation). */
+.ga-model3d-side { font-size: 13px; }
+.ga-model3d-side .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
+/* A label and a select sized to its options, side by side. */
+.ga-inline-pick { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.ga-inline-pick > .ga-input { width: auto; max-width: 24em; }
 .ga-model3d-actions-row { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: flex-start; }
 .ga-basebody-model { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
 .ga-basebody-model > .ga-model3d-fit { flex: 0 1 680px; min-width: 0; }

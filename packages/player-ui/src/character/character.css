@@ -155,6 +155,15 @@
   flex: 1 1 140px;
   min-width: 0;
 }
+/* `width: "narrow"` in the template: the field is as wide as its input (a
+   number ~7em, a select its options), its hint wraps within 20em. */
+.tpl-section-fields > .tpl-field--narrow {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 20em;
+}
+.tpl-field--narrow .ga-input { width: auto; max-width: 100%; }
+.tpl-field--narrow input[type="number"].ga-input { width: 7em; }
 
 /* A section that declares `grow` in its template takes the height its column
    has left over, and hands it to its single slot child. */

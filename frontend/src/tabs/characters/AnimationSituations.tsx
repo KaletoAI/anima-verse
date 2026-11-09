@@ -152,8 +152,8 @@ export function AnimationSituations({ character, onPlay }: {
       {headings}
       <tbody>{data.situations.map((row) => rowView(row, t(SITUATION_LABELS[row.pose] || row.pose)))}</tbody>
     </table> : null}
-    <label>
-      {t('Activity pose')}
+    <label className="ga-inline-pick">
+      <span>{t('Activity pose')}</span>
       <select className="ga-input" value={pose} onChange={(event) => setPose(event.target.value)}>
         <option value="">{t('None')}</option>
         {poses.map((row) => <option key={row.key} value={row.key}>

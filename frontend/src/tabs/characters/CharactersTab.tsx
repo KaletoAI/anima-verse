@@ -1141,9 +1141,10 @@ export function CharactersTab() {
                           onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
                             ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
-                      model3d_animations: <Model3DAnimations character={selected} />,
-                      model3d_extensions: <Model3DExtensions character={selected} />,
-                      model3d_generation: <Model3DGeneration character={selected} />,
+                      // The 3D tab's side panels share the compact model-panel text size.
+                      model3d_animations: <div className="ga-model3d-side"><Model3DAnimations character={selected} /></div>,
+                      model3d_extensions: <div className="ga-model3d-side"><Model3DExtensions character={selected} /></div>,
+                      model3d_generation: <div className="ga-model3d-side"><Model3DGeneration character={selected} /></div>,
                     }}
                   />
                 ) : null

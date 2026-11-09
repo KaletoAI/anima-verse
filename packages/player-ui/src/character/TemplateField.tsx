@@ -40,6 +40,11 @@ export interface TmplFieldDef {
    *  `expires_at`). The renderers re-read the stores after such a save, or the
    *  readonly display right next to the control keeps showing the old value. */
   reload_after_save?: boolean
+  /** Layout width in a section (TemplateTab): `"narrow"` sizes the field to
+   *  its input — a number ~7em, a select to its options — instead of
+   *  stretching across the row; `"wide"` always takes the whole row. Without
+   *  it, short types (SHORT_TYPES) share a row and stretch, the rest are wide. */
+  width?: 'narrow' | 'wide'
 }
 
 /** An option source. `days` is only filled where the source carries a length
