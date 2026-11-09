@@ -70,6 +70,9 @@ interface CacheSide {
 export interface CacheReport {
   refs: CacheSide
   meshes: CacheSide
+  /** Garment files (hair meshes, their images and fits) of stale
+   *  fingerprints — their keys are part of `stale_signatures` too. */
+  garments?: CacheSide
   stale_signatures: string[]
   protected: string[]
 }
@@ -442,8 +445,12 @@ export function OutfitBatchDialog({
                   {cache.refs.stale ? ` (${cache.refs.stale} ${t('stale')})` : ''}</span>
                 <span>{t('Meshes')}: {cache.meshes.total}
                   {cache.meshes.stale ? ` (${cache.meshes.stale} ${t('stale')})` : ''}</span>
+                {cache.garments?.total ? (
+                  <span>{t('Garments')}: {cache.garments.total}
+                    {cache.garments.stale ? ` (${cache.garments.stale} ${t('stale')})` : ''}</span>
+                ) : null}
                 <span>{t('reclaim')} ~{fmtBytes(
-                  cache.refs.stale_bytes + cache.meshes.stale_bytes)}</span>
+                  cache.refs.stale_bytes + cache.meshes.stale_bytes + (cache.garments?.stale_bytes ?? 0))}</span>
               </>
             ) : (
               <span className="ga-hint">{t('Not checked yet.')}</span>

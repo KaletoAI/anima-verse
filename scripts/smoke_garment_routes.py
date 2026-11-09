@@ -188,10 +188,23 @@ def main() -> int:
             # --- [2] GET before the item ---------------------------------------------
             print("[2] GET /hair before the item")
             r = client.get("/characters/Demo/hair")
-            check("demo hair", (r.status_code, r.json() if r.status_code == 200 else r.text),
+            body = r.json() if r.status_code == 200 else {}
+            limits = body.pop("limits", None) or {}
+            check("demo hair", (r.status_code, body if r.status_code == 200 else r.text),
                   (200, {"pipeline": True, "humanoid": True, "description": "medium blonde hair",
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
                          "collision": False}))
+            # The chip limits come from the gate constants (R7): haired XOR < 0.015,
+            # ghost |top_dy| <= 0.0052 H, mesh component share >= 0.98, fit bib <= 50 cm².
+            check("hair limits", (sorted(limits), limits.get("haired", {}).get("body_xor"),
+                                  limits.get("ghost", {}).get("top_dy"),
+                                  limits.get("mesh", {}).get("largest_component_share"),
+                                  limits.get("fit", {}).get("bib_cm2"),
+                                  limits.get("fit", {}).get("largest_component_share")),
+                  (["fit", "ghost", "haired", "mesh"], {"op": "lt", "value": 0.015},
+                   {"op": "abs_le", "value": 0.0052, "per_height": True},
+                   {"op": "ge", "value": 0.98}, {"op": "le", "value": 50.0},
+                   {"op": "ge", "value": 0.98}))
             r = client.get("/characters/Pet/hair")
             body = r.json() if r.status_code == 200 else {}
             check("pet hair", (r.status_code, body.get("humanoid"), body.get("description"), body.get("garment")),

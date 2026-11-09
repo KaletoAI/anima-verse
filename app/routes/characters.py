@@ -1741,12 +1741,14 @@ class GarmentRunRequest(BaseModel):
 def get_character_hair(character_name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Hair tab: ``{pipeline, humanoid, description, behind_shoulders,
-    item_id, equipped, garment, collision}`` — ``description`` is derived
-    (Appearance + hair slot, R3), ``item_id`` the worn hair item or else the
-    one the character owns (None: no item yet), ``garment`` its
+    item_id, equipped, garment, collision, limits}`` — ``description`` is
+    derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
+    else the one the character owns (None: no item yet), ``garment`` its
     ``garments.garment_info`` (None without an item), ``collision`` always
-    False in this phase (R15)."""
-    from app.core import base_body, garment_hair, garments
+    False in this phase (R15), ``limits`` the gate limits per step for the
+    tab's chips (``garment_gates.limits`` + mesh + fit, from the gate
+    constants themselves)."""
+    from app.core import base_body, garment_fit, garment_gates, garment_hair, garment_mesh, garments
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
     _require_character(character_name)
@@ -1767,7 +1769,12 @@ def get_character_hair(character_name: str,
             "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
             "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
                                                                                      profile=profile)),
-            "item_id": item_id, "equipped": equipped, "garment": info, "collision": False}
+            "item_id": item_id, "equipped": equipped, "garment": info, "collision": False,
+            "limits": {**garment_gates.limits(),
+                       "mesh": {"largest_component_share": {"op": "ge",
+                                                            "value": garment_mesh.MIN_COMPONENT_SHARE}},
+                       "fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
+                               for key, (kind, limit, _label) in garment_fit.GATES.items()}}}
 
 
 @router.post("/{character_name}/hair", status_code=202)

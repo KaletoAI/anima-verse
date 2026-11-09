@@ -25,6 +25,7 @@ import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldBaseBody } from './FieldBaseBody'
+import { FieldHair } from './FieldHair'
 import { BaseBodyOutfitStatus } from './BaseBodyOutfitStatus'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
@@ -137,7 +138,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body', 'hair',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
 ])
 
@@ -1119,6 +1120,13 @@ export function CharactersTab() {
                       // the pose tiles; on the pipeline the outfit model's
                       // retexture status sits under them.
                       base_body: <FieldBaseBody key={selected} character={selected} />,
+                      // Hair as its own mesh (garment chain); the description
+                      // is derived from Appearance, so the tab links there.
+                      hair: (
+                        <FieldHair key={selected} character={selected}
+                          onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
+                            ? () => setSubTab('tab:aussehen') : undefined} />
+                      ),
                       model_refs: (
                         <>
                           <FieldModelRefs character={selected} kinds={['tpose']} />

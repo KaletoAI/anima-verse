@@ -71,6 +71,12 @@
       "columns": [26]
     },
     {
+      "id": "hair_tab",
+      "label": "Hair",
+      "label_de": "Haare",
+      "columns": [27]
+    },
+    {
       "id": "model3d_tab",
       "label": "3D",
       "label_de": "3D",
@@ -159,6 +165,16 @@
       "row": 0,
       "special": "base_body",
       "fields": []
+    },
+    {
+      "id": "hair",
+      "label": "Hair",
+      "label_de": "Haare",
+      "column": 27,
+      "row": 0,
+      "special": "hair",
+      "fields": [],
+      "visible_when": { "feature": "humanoid" }
     },
     {
       "id": "model_refs",

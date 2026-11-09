@@ -256,3 +256,25 @@ def gate_summary(records: Sequence[Dict[str, Any]]) -> str:
     for n, record in enumerate(records, 1):
         parts.append(f"attempt {record.get('attempt', n)}: " + ("; ".join(record.get("reasons") or []) or "ok"))
     return " | ".join(parts)
+
+
+def limits() -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """The image-gate limits per step, for the Hair tab's chips — read from
+    the constants above so the UI never keeps its own copy. ``op``: ``lt`` /
+    ``le`` (value must stay below / at most), ``abs_le`` (|value| at most),
+    ``range`` (``value`` = [min, max]); ``per_height``: the limit is a
+    fraction of the record's image height ``H`` (pixel numbers); ``views``:
+    the views the limit is gated on (all when absent)."""
+    return {
+        "haired": {
+            "body_xor": {"op": "lt", "value": BODY_XOR_MAX},
+            "body_dRGB": {"op": "lt", "value": BODY_DRGB_MAX},
+            "chest_dRGB": {"op": "lt", "value": CHEST_DRGB_MAX, "views": ["front"]},
+        },
+        "ghost": {
+            "top_dy": {"op": "abs_le", "value": TOP_DY_MAX, "per_height": True},
+            "centre_dx": {"op": "abs_le", "value": CENTRE_DX_MAX, "per_height": True},
+            "w_ratio": {"op": "range", "value": [W_RATIO_MIN, W_RATIO_MAX]},
+            "body_left": {"op": "le", "value": BODY_LEFT_MAX},
+        },
+    }
