@@ -2014,6 +2014,12 @@ def _clean_lora_list(raw: Any) -> List[Dict[str, Any]]:
     return clean
 
 
+#: The per-character backend globs of the base-body pipeline steps — the
+#: ``char_spec_field`` of the occasions base_front … outfit_back.
+BASE_BODY_MATCH_FIELDS = ("base_front_workflow", "base_view_workflow", "outfit_front_workflow",
+                          "outfit_back_draft_workflow", "outfit_back_workflow")
+
+
 def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Saves workflow/model/LoRA override for the outfit image service.
     All fields empty deletes the override completely."""
@@ -2027,6 +2033,8 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     # Backend glob in front of the character mesh chain (mesh_humanoid or
     # mesh_creature, whichever the rig selects). Empty = the world chain.
     mesh_workflow = (body.get("mesh_workflow") or "").strip()
+    # One glob per base-body step; empty = the step's fallback field.
+    base_body_matches = {field: (body.get(field) or "").strip() for field in BASE_BODY_MATCH_FIELDS}
     clean_loras = _clean_lora_list(body.get("loras"))
     # Own LoRA list for the T-pose reference renders: it REPLACES the list
     # above for those renders (different backend, different LoRA ecosystem —
@@ -2045,11 +2053,13 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
         # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
         # (it comes from the workflow).
         if (workflow or profile_workflow or tpose_workflow or tpose_view_workflow
-                or mesh_workflow or clean_loras or clean_tpose_loras):
+                or mesh_workflow or any(base_body_matches.values())
+                or clean_loras or clean_tpose_loras):
             prof["outfit_imagegen"] = {"workflow": workflow,
                                        "profile_workflow": profile_workflow,
                                        "tpose_workflow": tpose_workflow,
                                        "tpose_view_workflow": tpose_view_workflow,
+                                       **base_body_matches,
                                        "mesh_workflow": mesh_workflow,
                                        "loras": clean_loras,
                                        "tpose_loras": clean_tpose_loras}
@@ -2061,6 +2071,7 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
             "profile_workflow": profile_workflow,
             "tpose_workflow": tpose_workflow,
             "tpose_view_workflow": tpose_view_workflow,
+            **base_body_matches,
             "mesh_workflow": mesh_workflow, "loras": clean_loras,
             "tpose_loras": clean_tpose_loras}
 

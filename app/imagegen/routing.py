@@ -174,10 +174,12 @@ def _character_spec(occ_def: Dict[str, Any], character: str) -> str:
         return ""
     if not isinstance(ovr, dict):
         return ""
-    spec = normalize_spec(ovr.get(occ_def.get("char_spec_field") or "workflow"))
-    if not spec and occ_def.get("char_spec_fallback"):
-        spec = normalize_spec(ovr.get(occ_def["char_spec_fallback"]))
-    return spec
+    from app.imagegen.occasions import spec_fields
+    for field in spec_fields(occ_def):
+        spec = normalize_spec(ovr.get(field))
+        if spec:
+            return spec
+    return ""
 
 
 # ── resolution ──────────────────────────────────────────────────────────

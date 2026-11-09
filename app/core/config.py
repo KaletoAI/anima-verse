@@ -657,6 +657,15 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "",
         },
     },
+    # The base-body back FIT (occasion outfit_back): an edit of the cut-out
+    # base back with the cut-out back draft as second reference, prompted by
+    # one sentence and nothing else (user decision 2026-11-09, measured: a
+    # style, a view sentence, an outfit text or a negative only cost
+    # silhouette fidelity) — so style and negative stay empty.
+    "outfit_fit": {
+        "keywords": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+        "natural": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+    },
     "expression": {
         "keywords": {
             "prompt_style": "RAW photo, medium shot, upper body portrait framed from the waist up, frame ends at the waist, legs out of frame, natural light, skin texture, detailed face, expressive, high detail",
@@ -1526,21 +1535,44 @@ _GARMENT_ROUTING_SEEDS = (("garment_view", "tpose_view"),
                           ("mesh_garment", "mesh_humanoid"))
 
 
-def _migrate_garment_routing(config: dict) -> bool:
-    """Copy the T-pose view chain to ``garment_view`` and the humanoid mesh chain
-    to ``mesh_garment`` once each; an existing target owns its value and a
-    missing source seeds nothing."""
+def _seed_routing_copies(config: dict, seeds) -> bool:
+    """For each ``(target, source)``: copy the source chain to the target once.
+    An existing target owns its value; a missing source seeds nothing."""
     import copy
     routing = (config.get("image_generation") or {}).get("routing")
     if not isinstance(routing, dict):
         return False
     changed = False
-    for target, source in _GARMENT_ROUTING_SEEDS:
+    for target, source in seeds:
         if target in routing or source not in routing:
             continue
         routing[target] = copy.deepcopy(routing[source])
         changed = True
     return changed
+
+
+def _migrate_garment_routing(config: dict) -> bool:
+    """Copy the T-pose view chain to ``garment_view`` and the humanoid mesh chain
+    to ``mesh_garment`` once each; an existing target owns its value and a
+    missing source seeds nothing."""
+    return _seed_routing_copies(config, _GARMENT_ROUTING_SEEDS)
+
+
+#: (target, source) — the base-body pipeline steps start on the chains they
+#: rendered on before they had their own occasion (the front on tpose, every
+#: edit on tpose_view), so nothing changes until the admin edits them.
+_BASE_BODY_ROUTING_SEEDS = (("base_front", "tpose"),
+                            ("base_view", "tpose_view"),
+                            ("outfit_front", "tpose_view"),
+                            ("outfit_back_draft", "tpose_view"),
+                            ("outfit_back", "tpose_view"))
+
+
+def _migrate_base_body_routing(config: dict) -> bool:
+    """Seed the five base-body chains from tpose / tpose_view once each; a key
+    already in the routing is never overwritten. Runs after
+    ``_migrate_tpose_view_routing`` (which may seed tpose_view itself)."""
+    return _seed_routing_copies(config, _BASE_BODY_ROUTING_SEEDS)
 
 
 _quadruped_chain_hints = set()
@@ -1623,6 +1655,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_tpose_view_routing(config):
         changed = True
     if _migrate_garment_routing(config):
+        changed = True
+    if _migrate_base_body_routing(config):
         changed = True
     if _seed_default_use_cases(config):
         changed = True

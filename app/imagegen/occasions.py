@@ -26,7 +26,8 @@ Per occasion:
                       (profile.outfit_imagegen.<char_spec_field>) is
                       position 0 in front of the occasion chain.
   char_spec_field     outfit_imagegen field read for position 0.
-  char_spec_fallback  read when char_spec_field is empty ("" = none).
+  char_spec_fallback  read when char_spec_field is empty ("" = none); a
+                      tuple names several fields, tried in order.
   needs_ref_slot      True: only backends with ref_slot_count >= 1.
   style_use_cases     info only — the style use cases these renders use.
   covers              info only — the call sites (admin tooltip).
@@ -34,6 +35,8 @@ Per occasion:
                       offers the LLM pose check before generating
                       (app/imagegen/pose_check.py, config
                       ``image_generation.pose_check``).
+  hint                optional English advice shown with the occasion on the
+                      routing page and the character's Image overrides.
 """
 from typing import Any, Dict, List, Tuple
 
@@ -98,6 +101,43 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         ["garment_edit"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}, needs_ref_slot=True),
+    # Base-body pipeline (spec 2026-11-08-base-body-outfits-design.md § A/B):
+    # every step its own chain, per character overridable like the T-pose.
+    # The fallback fields keep a character's existing T-pose picks in force;
+    # config._migrate_base_body_routing seeds the chains from tpose /
+    # tpose_view once.
+    "base_front": _image(
+        "Base body — front", "Pose tab: the bald A-pose base-body front",
+        ["tpose"],
+        {"character_scoped": True, "char_spec_field": "base_front_workflow",
+         "char_spec_fallback": ("tpose_workflow", "workflow")},
+        hint="Identity comes from the profile picture; an accurate (non-turbo) "
+             "model is recommended."),
+    "base_view": _image(
+        "Base body — back/side views", "Pose tab: base-body back, left and right (edits of the front)",
+        ["tpose_back", "tpose_side"],
+        {"character_scoped": True, "char_spec_field": "base_view_workflow",
+         "char_spec_fallback": "tpose_view_workflow"}),
+    "outfit_front": _image(
+        "Outfit — front edit", "Pose tab: the dressed front (edit of the base front)",
+        ["tpose"],
+        {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
+         "char_spec_fallback": "tpose_view_workflow"}),
+    "outfit_back_draft": _image(
+        "Outfit — back draft", "Pose tab: back draft rendered from the dressed front",
+        ["tpose_back"],
+        {"character_scoped": True, "char_spec_field": "outfit_back_draft_workflow",
+         "char_spec_fallback": "tpose_view_workflow"},
+        hint="Rendered fresh from the dressed front; only its clothing is used."),
+    "outfit_back": _image(
+        "Outfit — back fitted onto the base", "Pose tab: the dressed back (edit of the base back, "
+        "the draft as second reference)",
+        ["outfit_fit"],
+        {"character_scoped": True, "char_spec_field": "outfit_back_workflow",
+         "char_spec_fallback": "tpose_view_workflow"},
+        needs_ref_slot=True,
+        hint="Edit of the base back view with the draft as second reference. Grainy "
+             "results are caught by a noise check and re-rendered."),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",
                          ["scene"], _WORLD, **_PEOPLE),
     "location": _image(
@@ -147,6 +187,25 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         "covers": "Poses tab: generate transition", "rig": "",
         "needs_ref_slot": False, "style_use_cases": [], **_WORLD},
 }
+
+#: Image occasions whose renders are mesh inputs: the mesh-input matte, the
+#: character's tpose_loras and the mesh-part LoRA filter apply
+#: (``expression_regen.render_character_image``). The garment edits stay out —
+#: the matte trims the image sides and breaks their shared framing.
+MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
+    "tpose", "tpose_view", "base_front", "base_view",
+    "outfit_front", "outfit_back_draft", "outfit_back")
+
+
+def spec_fields(occ: Dict[str, Any]) -> List[str]:
+    """The ``outfit_imagegen`` fields read for an occasion's position 0, in
+    order: ``char_spec_field`` (default ``workflow``), then the fallback
+    field(s)."""
+    fallback = occ.get("char_spec_fallback") or ()
+    if isinstance(fallback, str):
+        fallback = (fallback,)
+    return [occ.get("char_spec_field") or "workflow", *fallback]
+
 
 MESH_OCCASIONS_BY_RIG: Dict[str, Tuple[str, ...]] = {
     "mixamo": ("mesh_humanoid",),
@@ -217,5 +276,6 @@ def catalog_payload() -> List[Dict[str, Any]]:
              "needs_ref_slot": bool(o.get("needs_ref_slot")),
              "covers": o.get("covers", ""),
              "pose_check": bool(o.get("pose_check")),
+             "hint": o.get("hint", ""),
              "default_chain": list(o.get("default_chain", []))}
             for oid, o in OCCASIONS.items()]

@@ -408,6 +408,7 @@ function renderImageRoutingRules(content) {
              + '<span class="rt-muted" style="font-size:11px;">— ' + irEsc(o.id) + '</span></div>';
         if (o.covers) html += '<div class="desc rt-muted">' + irEsc(o.covers) + '</div>';
         if (o.character_scoped) html += '<div class="desc rt-muted">' + irEsc(IR_TEXT.position0) + '</div>';
+        if (o.hint) html += '<div class="desc">' + irEsc('Hint: ' + o.hint) + '</div>';
         if (o.pose_check) html += irPoseCheckHtml(o);
         if (malformed.has(o.id)) {
             html += '<div class="rt-chain-row"><span class="rt-err">'
