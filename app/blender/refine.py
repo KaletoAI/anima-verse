@@ -400,9 +400,14 @@ def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
     return out
 
 
-def decimate_to(path_in: Path, target_tris: int, out: Path) -> Dict[str, Any]:
+def decimate_to(path_in: Path, target_tris: int, out: Path, *,
+                merge_vertices: bool = False) -> Dict[str, Any]:
     """Reduces the GLB ``path_in`` to about ``target_tris`` triangles and
     writes the result to ``out`` (UV seams kept, skin weights interpolated).
+
+    ``merge_vertices``: weld the glTF's per-UV vertex split on import
+    (``lod.py``) so a static mesh does not tear at its UV seams; off for
+    skinned meshes (unchanged behaviour).
 
     The ratio is ``min(0.999, target / tris)`` with ``tris`` from
     ``measure_file`` — a mesh already below the target still passes through
@@ -434,7 +439,8 @@ def decimate_to(path_in: Path, target_tris: int, out: Path) -> Dict[str, Any]:
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".decimate-", dir=out.parent) as tmp:
         run = runner.run("lod", inputs={"model": path_in},
-                         params={"ratios": [ratio], "keep_uvs": True},
+                         params={"ratios": [ratio], "keep_uvs": True,
+                                 "merge_vertices": bool(merge_vertices)},
                          out_dir=Path(tmp), timeout_s=600)
         if not run.get("ok") or not run.get("outputs"):
             res["error"] = unavailable_reason() or run.get("error") or "no stage produced"

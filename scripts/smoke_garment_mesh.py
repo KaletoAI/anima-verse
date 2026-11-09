@@ -30,7 +30,8 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
       mesh_name "Demo-hair", character_name "Demo", material "dielectric",
       alpha "opaque";
     - runner: "measure" on the raw file (4 tris), then "lod" with
-      ratios [min(0.999, 25000/4 = 6250)] = [0.999] and keep_uvs True;
+      ratios [min(0.999, 25000/4 = 6250)] = [0.999], keep_uvs True and
+      merge_vertices True (bug B of the 2026-11-09 end-to-end run);
     - returns garments/prepared/H_F.glb (exists, bytes = GOOD);
     - record prepared/H_F.json: accepted True, tris_raw 4, tris_prepared 4,
       target_tris 25000, largest_component_share 0.99 (+-1e-6), backend
@@ -58,6 +59,18 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     ratio min(0.999, 200/800) = 0.25; ok True, out exists, tris_before 800,
     tris within [150, 250] (Decimate hits the ratio approximately), no
     "*_lod*" file left beside out.
+[9] Real Blender (optional), the UV-seam tear (bug B): a closed lat-long
+    unit sphere, 32 longitudes x 16 latitudes = 32 x (2 x 16 - 2) = 960
+    tris, stored as 4 latitude bands of 4 rows, each band its own UV island
+    with its OWN vertices (glTF splits a vertex per UV, so a generator's
+    mesh arrives cut at every seam). Welded by position it is one closed
+    surface: largest component share 1.0. decimate_to(..., 240,
+    merge_vertices=True) -> ratio 240/960 = 0.25; the import welds the
+    bands back into one surface, so the result is still one component:
+    share >= 0.98 (the garment gate). Control: merge_vertices=False on the
+    same file must tear (share < 0.98 — each band shrinks on its own), or
+    the fixture does not exercise the bug. Old lod.py ignores the param ->
+    the merged run tears too and fails.
 """
 import json
 import math
@@ -132,6 +145,61 @@ def make_glb(quads, *, grid=0) -> bytes:
         "accessors": [
             {"bufferView": 0, "componentType": 5126, "count": len(pos), "type": "VEC3",
              "min": mins, "max": maxs},
+            {"bufferView": 1, "componentType": 5126, "count": len(uv), "type": "VEC2"},
+            {"bufferView": 2, "componentType": 5125, "count": len(idx), "type": "SCALAR"}],
+    }
+    js = json.dumps(gltf).encode("utf-8")
+    js += b" " * (-len(js) % 4)
+    blob += b"\0" * (-len(blob) % 4)
+    total = 12 + 8 + len(js) + 8 + len(blob)
+    return (struct.pack("<III", 0x46546C67, 2, total)
+            + struct.pack("<II", len(js), 0x4E4F534A) + js
+            + struct.pack("<II", len(blob), 0x004E4942) + blob)
+
+
+def split_sphere_glb(n_lon=32, n_lat=16, band=4) -> bytes:
+    """Closed lat-long unit sphere; every latitude band of ``band`` rows is
+    its own UV island with its own vertices (a glTF UV-seam split)."""
+    pos, uv, idx = [], [], []
+    for b0 in range(0, n_lat, band):
+        index = {}
+        for j in range(b0, b0 + band + 1):
+            th = math.pi * j / n_lat
+            for i in range(n_lon + 1):
+                ph = 2 * math.pi * (i % n_lon) / n_lon
+                index[(j, i)] = len(pos)
+                pos.append((math.sin(th) * math.cos(ph), math.cos(th), math.sin(th) * math.sin(ph)))
+                uv.append((i / n_lon, b0 / n_lat + (j - b0) / band * 0.2))
+        for j in range(b0, b0 + band):
+            for i in range(n_lon):
+                a, b, c, d = index[(j, i)], index[(j, i + 1)], index[(j + 1, i + 1)], index[(j + 1, i)]
+                if j != 0:
+                    idx += [a, b, c]
+                if j != n_lat - 1:
+                    idx += [a, c, d]
+    return glb_from_arrays(pos, uv, idx)
+
+
+def glb_from_arrays(pos, uv, idx) -> bytes:
+    pb = b"".join(struct.pack("<3f", *p) for p in pos)
+    ub = b"".join(struct.pack("<2f", *u) for u in uv)
+    ib = b"".join(struct.pack("<I", i) for i in idx)
+    blob = pb + ub + ib
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "garment", "mesh": 0}],
+        "meshes": [{"name": "garment", "primitives": [{
+            "attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2}]}],
+        "buffers": [{"byteLength": len(blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(pb), "target": 34962},
+            {"buffer": 0, "byteOffset": len(pb), "byteLength": len(ub), "target": 34962},
+            {"buffer": 0, "byteOffset": len(pb) + len(ub), "byteLength": len(ib), "target": 34963}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(pos), "type": "VEC3",
+             "min": [min(p[k] for p in pos) for k in range(3)],
+             "max": [max(p[k] for p in pos) for k in range(3)]},
             {"bufferView": 1, "componentType": 5126, "count": len(uv), "type": "VEC2"},
             {"bufferView": 2, "componentType": 5125, "count": len(idx), "type": "SCALAR"}],
     }
@@ -273,6 +341,7 @@ def main() -> int:
         check("decimate ratio", lod_params.get("ratios"), [min(0.999, 25000 / 4)])
         check("ratio is 0.999", lod_params.get("ratios"), [0.999])
         check("keep_uvs", lod_params.get("keep_uvs"), True)
+        check("merge_vertices", lod_params.get("merge_vertices"), True)
         check("prepared path", prepared, gs.garment_path("Demo", hid, F, "prepared"))
         check("prepared bytes", prepared.read_bytes() == GOOD, True)
         record = gs.read_record(prepared.with_suffix(".json"))
@@ -410,6 +479,24 @@ def main() -> int:
             check("blender tris in [150, 250]", 150 <= tris3 <= 250, True)
             check("blender out exists", gout.is_file(), True)
             check("no lod leftovers", sorted(p.name for p in work.iterdir() if "_lod" in p.name), [])
+
+        print("[9] real Blender: UV-seam split sphere")
+        if not use_blender or not runner.is_available():
+            print("  SKIP (no usable Blender or --no-blender)")
+        else:
+            sphere = work / "sphere.glb"
+            sphere.write_bytes(split_sphere_glb())
+            near("sphere raw share", gm.largest_component_share(sphere), 1.0, 1e-9)
+            merged, torn = work / "sphere_merged.glb", work / "sphere_torn.glb"
+            res_m = refine.decimate_to(sphere, 240, merged, merge_vertices=True)
+            res_t = refine.decimate_to(sphere, 240, torn, merge_vertices=False)
+            check("sphere ok", (res_m.get("ok"), res_t.get("ok")), (True, True))
+            check("sphere tris_before / ratio", (res_m.get("tris_before"), res_m.get("ratio")), (960, 0.25))
+            share_m = gm.largest_component_share(merged) if merged.is_file() else 0.0
+            share_t = gm.largest_component_share(torn) if torn.is_file() else 1.0
+            check(f"merged stays one surface (share {share_m:.4f} >= 0.98)", share_m >= gm.MIN_COMPONENT_SHARE,
+                  True)
+            check(f"control: unmerged tears (share {share_t:.4f} < 0.98)", share_t < gm.MIN_COMPONENT_SHARE, True)
 
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))

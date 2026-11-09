@@ -9,6 +9,14 @@ so the caller states the targets and nothing is decided here.
                 e.g. [0.5, 0.25, 0.1]
     keep_uvs    preserve UV boundaries while collapsing (default on) — without
                 it the texture slides across the reduced surface
+    merge_vertices
+                import the glTF with its vertices welded at the UV seams
+                (default off = the character LODs as before). glTF stores a
+                vertex per UV, so the imported mesh is cut at every seam and
+                each island is decimated on its own: the cut edges shrink
+                apart and the surface tears (a garment mesh went from 0.982
+                to 0.724 largest-component share). Welded, the seams are
+                ordinary edges and ``keep_uvs`` keeps them in place.
 
 One file per ratio, named ``<stem>_lod<N>`` with N the achieved triangle
 count, so a caller can tell the stages apart without opening them. Blender's
@@ -60,6 +68,7 @@ def lod(args):
     if not ratios:
         raise ValueError("no usable ratios given")
     keep_uvs = bool(p.get("keep_uvs", True))
+    merge_vertices = bool(p.get("merge_vertices", False))
     out_dir = Path(args["out_dir"])
     stem = Path(src).stem
 
@@ -68,7 +77,7 @@ def lod(args):
         # Fresh import per stage: decimating an already decimated mesh would
         # compound the error, and the ratios are meant to be of the ORIGINAL.
         _common.reset_scene()
-        _common.import_model(src)
+        _common.import_model(src, gltf_merge_vertices=merge_vertices)
         before = _tris()
         for obj in _mesh_objects():
             if obj.get("lod_preserve"):

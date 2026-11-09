@@ -5,7 +5,8 @@ R13, Task 5).
 From the two cut-outs of the garment (front + back) the routed
 ``mesh_garment`` occasion builds a raw mesh (``garments/raw/{item}_{fsig}.glb``,
 asked for ``face_num=100000`` like the spike), Blender's ``lod.py`` reduces it
-to about ``TARGET_TRIS`` triangles with UV seams kept, and the reduced mesh
+to about ``TARGET_TRIS`` triangles with UV seams kept (vertices welded at
+the seams on import, ``merge_vertices``), and the reduced mesh
 becomes ``garments/prepared/{item}_{fsig}.glb`` — the input of the fit. The
 fit and every mesh gate run on this reduced mesh, so the gates measure what
 ships (R8).
@@ -142,7 +143,9 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
                 raise RuntimeError(f"garment mesh generation delivered no GLB ({delivered.name or 'nothing'})")
             if delivered != raw:
                 os.replace(delivered, raw)
-            dec = refine.decimate_to(raw, TARGET_TRIS, candidate)
+            # Welded on import: split at its UV seams the mesh would tear
+            # apart under the collapse (2026-11-09: share 0.982 -> 0.724).
+            dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
             if not dec.get("ok"):
                 raise RuntimeError(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}")
             share = largest_component_share(candidate)

@@ -76,8 +76,14 @@ def main(fn):
         raise SystemExit(1)
 
 
-def import_model(path):
+def import_model(path, *, gltf_merge_vertices=False):
     """Loads a model into the EMPTY current scene, by extension.
+
+    ``gltf_merge_vertices`` (glTF only): weld the per-UV vertex split glTF
+    stores (every UV seam is a cut in the file) back into one surface. A
+    static mesh that is decimated afterwards needs it — split at its seams,
+    each UV island shrinks on its own and the surface tears apart; skinned
+    character imports keep the default.
 
     glTF: the importer keeps its DEFAULT bone heuristic (BLENDER) on purpose —
     it is the one that PRESERVES the source's joint orientations through an
@@ -98,7 +104,10 @@ def import_model(path):
     if not kind:
         raise ValueError(f"unsupported model format: {ext}")
     if kind == "gltf":
-        bpy.ops.import_scene.gltf(filepath=str(path))
+        if gltf_merge_vertices:
+            bpy.ops.import_scene.gltf(filepath=str(path), merge_vertices=True)
+        else:
+            bpy.ops.import_scene.gltf(filepath=str(path))
         _drop_bone_shape_objects(bpy)
     elif kind == "fbx":
         # global_scale stays 1.0 on purpose: many rigs (Mixamo among them) are
