@@ -825,7 +825,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            expression_set_loras: Optional[list] = None,
                            extra_negative: str = "",
                            sidecar_extra: Optional[Dict[str, Any]] = None,
-                           character_loras: bool = False) -> Optional[Path]:
+                           character_loras: bool = False,
+                           postprocess: bool = True) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -837,6 +838,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``character_loras`` lets a ``bare_prompt`` render carry the character's
     own LoRAs (``outfit_imagegen.loras``, replaced by ``tpose_loras`` on the
     mesh-input occasions, mesh-part filtered) — never slot LoRAs.
+    ``postprocess=False`` publishes the backend's file as delivered: no
+    background removal, no side trim — a garment edit keeps the full frame
+    of its source (``garment_images``), the gates compare it pixel for pixel.
     """
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
@@ -1159,12 +1163,15 @@ def render_character_image(character_name: str, *, output_stem: Path,
         tmp_path = staging_dir / f".tmp_{out_stem_name}{src_path.suffix}"
         shutil.move(str(src_path), str(tmp_path))
 
-        try:
-            final_tmp = postprocess_outfit_image(tmp_path, mesh_input=_mesh_input,
-                                                 portrait_matte=bool(framing))
-        except Exception as pp_err:
-            logger.warning("Post-processing failed, using the original: %s", pp_err)
+        if not postprocess:
             final_tmp = tmp_path
+        else:
+            try:
+                final_tmp = postprocess_outfit_image(tmp_path, mesh_input=_mesh_input,
+                                                     portrait_matte=bool(framing))
+            except Exception as pp_err:
+                logger.warning("Post-processing failed, using the original: %s", pp_err)
+                final_tmp = tmp_path
 
         if image_use_case == "face_view":
             # This per-character asset has a fixed PNG filename, including when

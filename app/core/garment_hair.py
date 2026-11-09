@@ -112,6 +112,113 @@ def fsig_inputs(character_name: str, *, profile: Optional[Dict[str, Any]] = None
             "pronouns": list(pronouns(profile))}
 
 
+# --- The image chain (Task 4): edit prompts, negatives, gates -----------------
+
+#: The edit steps of the hair chain and what each edits: the base view, or the
+#: accepted image of an earlier step. No step carries character LoRAs (ruling:
+#: the spike edits that gave the gate numbers ran without any).
+EDIT_STEPS: Dict[str, Dict[str, str]] = {"haired": {"source": "base"},
+                                         "ghost": {"source": "haired"}}
+
+# The spike's sentences (hair_edit.py, keys ("haired", view) and ("ghost",
+# view)), verbatim apart from the pronouns. {p} = possessive, {s} = subject,
+# {has} = "has"/"have".
+_KEEP_FRONT = ("Keep the image exactly as it is: the same person, same face, same body shape, same pose, same arm "
+               "and hand position, same framing and background.")
+_KEEP_BACK = ("Keep the image exactly as it is: the same person seen from behind, same body shape, same pose, same "
+              "arm and hand position, same framing and background.")
+_CHANGE = "Only change {p} head: {s} now {has} {hair}."
+# Only for hair that falls behind the shoulders (hair_behind_shoulders).
+_BEHIND = {
+    "front": ("All of the hair falls behind {p} shoulders onto {p} upper back; the face, the neck, the collarbones, "
+              "the chest and the front of the shoulders stay completely free of hair."),
+    "back": ("The hair covers the back of {p} head and falls straight down onto {p} upper back between the "
+             "shoulder blades; the arms and the shoulders stay free of hair."),
+}
+_GHOST = {
+    "front": ("Keep the image exactly as it is: the same hair in exactly the same position, size, shape, strands "
+              "and framing, the same background. Remove the person completely: no face, no head, no neck, no ears, "
+              "no skin, no body, no arms. The hair keeps its worn, three-dimensional shape as if on an invisible "
+              "head (ghost mannequin product photo of a wig); where the face and the head were, the inner side of "
+              "the hair is visible."),
+    "back": ("Keep the image exactly as it is: the same hair in exactly the same position, size, shape, strands "
+             "and framing, the same background. Remove the person completely: no head, no neck, no ears, no skin, "
+             "no body, no arms. The hair keeps its worn, three-dimensional shape as if on an invisible head (ghost "
+             "mannequin product photo of a wig)."),
+}
+# The step terms of the spike's negatives; the shared part (spike NEG) is the
+# negative of the use case ``garment_edit`` and is prepended by the service.
+_STEP_NEGATIVE = {
+    ("haired", "front"): ("hair over the chest", "hair in front of the shoulders", "bangs over the eyes",
+                          "ponytail", "bun", "braid", "hat", "headband", "clothing", "jewelry"),
+    ("haired", "back"): ("hair over the arms", "ponytail", "bun", "braid", "hat", "headband", "clothing",
+                         "jewelry", "face"),
+    ("ghost", "front"): ("person", "face", "skin", "neck", "ears", "body", "shoulders", "arms", "mannequin head",
+                         "wig stand", "styrofoam head"),
+    ("ghost", "back"): ("person", "face", "skin", "neck", "ears", "body", "shoulders", "arms", "mannequin head",
+                        "wig stand", "styrofoam head"),
+}
+# A negative term leaves the negative when the hair description names it
+# (a ponytail must not be forbidden from hair that IS a ponytail) — the
+# pattern table of base_body.DRESS_GARMENT_NEGATIVE.
+HAIR_STYLE_NEGATIVE = (
+    ("ponytail", r"pony ?tails?"),
+    ("bun", r"buns?"),
+    ("braid", r"braid(?:s|ed)?|plait(?:s|ed)?"),
+    ("bangs over the eyes", r"bangs|fringe"),
+    ("headband", r"head ?bands?"),
+)
+
+
+def _negative(step: str, view: str, description: str) -> str:
+    dropped = {term for term, pattern in HAIR_STYLE_NEGATIVE
+               if re.search(rf"\b(?:{pattern})\b", description or "", re.IGNORECASE)}
+    return ", ".join(term for term in _STEP_NEGATIVE[(step, view)] if term not in dropped)
+
+
+def edit_prompt(character_name: str, step: str, view: str, *,
+                profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+    """``(prompt, extra negative)`` of one hair edit (spike wording).
+
+    ``haired``: the base view with the character's hair added — pronouns from
+    the profile gender ("they now have" for anything but female/male); the
+    sentence that puts the hair behind the shoulders only when
+    ``hair_behind_shoulders``. ``ghost``: the hair alone on an invisible
+    head. The negative is the step's own terms minus every hair-style term the
+    description names; the use case ``garment_edit`` adds the shared part."""
+    if step not in EDIT_STEPS:
+        raise ValueError(f"no hair edit step {step!r}")
+    if view not in _GHOST:
+        raise ValueError(f"no hair edit view {view!r}")
+    profile = _profile_of(character_name, profile)
+    description = hair_description(character_name, profile=profile)
+    if step == "ghost":
+        return _GHOST[view], _negative(step, view, description)
+    if not description:
+        raise ValueError("No hair set — fill in the hair in Appearance")
+    possessive, subject = pronouns(profile)
+    words = {"p": possessive, "s": subject, "has": "have" if subject == "they" else "has",
+             "hair": description}
+    parts = [_KEEP_FRONT if view == "front" else _KEEP_BACK, _CHANGE.format(**words)]
+    if hair_behind_shoulders(character_name, profile=profile):
+        parts.append(_BEHIND[view].format(**words))
+    return " ".join(parts), _negative(step, view, description)
+
+
+def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
+         edit_rgb, edit_mask) -> Dict[str, Any]:
+    """The gate record of one attempt (``garment_gates``): ``haired`` against
+    the base view; ``ghost`` against the hair of the accepted haired image
+    (``source``). All arrays share the base view's size."""
+    from app.core import garment_gates
+    if step == "haired":
+        return garment_gates.haired_gate(base_rgb, base_mask, edit_rgb, edit_mask, view=view)
+    if step == "ghost":
+        ref = garment_gates.hair_ref(base_rgb, base_mask, source_rgb, source_mask)
+        return garment_gates.ghost_gate(base_rgb, base_mask, ref, edit_rgb, edit_mask, view=view)
+    raise ValueError(f"no hair edit step {step!r}")
+
+
 def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
     return bool(item and item.get("category") == "garment"
                 and (item.get("owner") or "").strip() == character_name
