@@ -70,12 +70,20 @@ AUTO_TILT_TOL_DEG = 0.01
 #: The auto tilt aims at the PUSHED hairline: at most this many push-outs, done within HAIRLINE_TOL_M.
 PLACEMENT_ROUNDS = 4
 HAIRLINE_TOL_M = 0.001
+#: Step of the auto tilts tried when the hairline tilt fails the push gate (``_place_and_push``).
+GATE_TILT_STEP_DEG = 1.5
 #: Bounds of the manual values (the Hair tab's inputs; ``garment_hair.set_hair_placement``).
 TILT_LIMIT_DEG = 15.0
 FORWARD_LIMIT_M = 0.03
 #: Head centre profile for the landmarks: Head-weighted body vertices with |x - head cx| below this, in y bins.
 PROFILE_HALF_WIDTH_M = 0.02
 PROFILE_BIN_M = 0.005
+#: A nose tip stands out of the nasion below the brow, and the brow out of the nasion, by at least this much.
+LANDMARK_MIN_DIP_M = 0.003
+#: A nose tip lies in the front of the head: front z >= cz + LANDMARK_NOSE_FRONT * depth (the front 20 %). Keeps a
+#: chin/neck junction from passing for a face (on the smoke's sphere head the neck ring at z 0.04 dips into the
+#: sphere's south pole).
+LANDMARK_NOSE_FRONT = 0.3
 
 GATES = {
     "max_push_m": ("max", 0.12, "largest push-out"),
@@ -182,12 +190,22 @@ def _head_box(P: np.ndarray, head_v: np.ndarray) -> Tuple[float, float, float, f
     return float((lo[0] + hi[0]) / 2), float((lo[2] + hi[2]) / 2), float(hi[0] - lo[0]), float(hi[2] - lo[2])
 
 
-def front_hairline(hair_X: np.ndarray, box: Tuple[float, float, float, float]) -> Optional[float]:
-    """The front hairline: the lowest hair vertex with ``z > cz + HAIRLINE_FRONT_DEPTH * depth`` and
-    ``|x - cx| < HAIRLINE_HALF_WIDTH * width`` (``box`` = ``_head_box``); None without hair in that strip."""
+def _front_strip(hair_X: np.ndarray, box: Tuple[float, float, float, float],
+                 floor_y: Optional[float] = None) -> np.ndarray:
     cx, cz, width, depth = box
     front = ((hair_X[:, 2] > cz + HAIRLINE_FRONT_DEPTH * depth)
              & (np.abs(hair_X[:, 0] - cx) < HAIRLINE_HALF_WIDTH * width))
+    return front if floor_y is None else front & (hair_X[:, 1] >= floor_y)
+
+
+def front_hairline(hair_X: np.ndarray, box: Tuple[float, float, float, float],
+                   floor_y: Optional[float] = None) -> Optional[float]:
+    """The front hairline: the lowest hair vertex with ``z > cz + HAIRLINE_FRONT_DEPTH * depth`` and
+    ``|x - cx| < HAIRLINE_HALF_WIDTH * width`` (``box`` = ``_head_box``) and, with ``floor_y`` (the nasion of
+    ``head_landmarks``), at or above it: a strand hanging in front of the face below eye level is no hairline (Kira's
+    HairDeck seed 43 has one down to the chin, y 1.445 — the scalp cap then covered the whole face). None without
+    hair in that strip."""
+    front = _front_strip(hair_X, box, floor_y)
     return float(hair_X[front, 1].min()) if front.any() else None
 
 
@@ -196,11 +214,15 @@ def head_landmarks(P: np.ndarray, head_v: np.ndarray, chin: float, top: float) -
 
     Profile = the Head-weighted vertices within ``PROFILE_HALF_WIDTH_M`` of the head's centre x and in front of its
     centre z (a bin holding only back-of-head vertices must not read as a dip), front z = the largest z per
-    ``PROFILE_BIN_M`` bin of y (bins from the chin up). Nose tip = the bin of largest front z in the
-    lower half of the head (chin .. chin + 0.5 * (top - chin)); nasion = the bin of SMALLEST front z between the
-    nose tip and halfway from it to the crown; brow = the profile vertex of largest z above the nasion bin (the
-    brow ridge). None unless nasion < nose tip and brow > nasion in front z (a sphere has neither)."""
-    cx, cz, _, _ = _head_box(P, head_v)
+    ``PROFILE_BIN_M`` bin of y (bins from the chin up). Every bin of the lower half of the head (centre <= chin +
+    0.5 * (top - chin)) is a nose-tip candidate; its nasion = the bin of SMALLEST front z between it and halfway from
+    it to the crown, its brow = the profile vertex of largest z above that nasion bin (the brow ridge / forehead).
+    The nose tip is the candidate with the deepest dip to its nasion, counting only candidates whose dip is at least
+    ``LANDMARK_MIN_DIP_M``, whose brow stands out of the nasion by as much and which lies in the front of the head
+    (``LANDMARK_NOSE_FRONT``). Not "the largest z of the lower half":
+    on a head pitched back (chin up; Kira's base ``base20d5701a``: the nose 1.8 cm BEHIND the forehead) that is the
+    top of the band, and no face was found. None for a profile without that dip (a sphere)."""
+    cx, cz, _, depth = _head_box(P, head_v)
     S = P[head_v & (np.abs(P[:, 0] - cx) < PROFILE_HALF_WIDTH_M) & (P[:, 2] > cz)]
     if len(S) < 3 or not top > chin:
         return None
@@ -210,20 +232,25 @@ def head_landmarks(P: np.ndarray, head_v: np.ndarray, chin: float, top: float) -
     np.maximum.at(zmax, idx, S[:, 2])
     centre_y = chin + (np.arange(n_bins) + 0.5) * PROFILE_BIN_M
     filled = np.isfinite(zmax)
-    lower = filled & (centre_y <= chin + 0.5 * (top - chin))
-    if not lower.any():
+    best: Optional[Tuple[float, int, int, np.ndarray]] = None
+    nose_band = filled & (centre_y <= chin + 0.5 * (top - chin)) & (zmax >= cz + LANDMARK_NOSE_FRONT * depth)
+    for nose in np.flatnonzero(nose_band):
+        band = filled & (centre_y > centre_y[nose]) & (centre_y <= centre_y[nose] + 0.5 * (top - centre_y[nose]))
+        if not band.any():
+            continue
+        nasion = int(np.flatnonzero(band)[np.argmin(zmax[band])])
+        dip = float(zmax[nose] - zmax[nasion])
+        above = S[S[:, 1] >= chin + (nasion + 1) * PROFILE_BIN_M]
+        if dip < LANDMARK_MIN_DIP_M or not len(above):
+            continue
+        brow = above[int(np.argmax(above[:, 2]))]
+        if brow[2] - zmax[nasion] < LANDMARK_MIN_DIP_M:
+            continue
+        if best is None or dip > best[0]:
+            best = (dip, int(nose), nasion, brow)
+    if best is None:
         return None
-    nose = int(np.flatnonzero(lower)[np.argmax(zmax[lower])])
-    band = filled & (centre_y > centre_y[nose]) & (centre_y <= centre_y[nose] + 0.5 * (top - centre_y[nose]))
-    if not band.any():
-        return None
-    nasion = int(np.flatnonzero(band)[np.argmin(zmax[band])])
-    above = S[S[:, 1] >= chin + (nasion + 1) * PROFILE_BIN_M]
-    if not len(above):
-        return None
-    brow = above[int(np.argmax(above[:, 2]))]
-    if not (zmax[nasion] < zmax[nose] and brow[2] > zmax[nasion]):
-        return None
+    _, nose, nasion, brow = best
     return {"nose_tip_y": round(float(centre_y[nose]), 5), "nose_tip_z": round(float(zmax[nose]), 5),
             "nasion_y": round(float(centre_y[nasion]), 5), "nasion_z": round(float(zmax[nasion]), 5),
             "brow_y": round(float(brow[1]), 5), "brow_z": round(float(brow[2]), 5),
@@ -251,13 +278,13 @@ def adjust_placement(Q: np.ndarray, pivot: np.ndarray, forward_m: float, tilt_de
 
 
 def solve_tilt(Q: np.ndarray, pivot: np.ndarray, forward_m: float, box: Tuple[float, float, float, float],
-               target_y: float) -> Tuple[float, str]:
+               target_y: float, floor_y: Optional[float] = None) -> Tuple[float, str]:
     """``(tilt_deg, how)``: the forward tilt in [0, AUTO_TILT_MAX_DEG] whose ``front_hairline`` (placed hair,
     before the push-out) reaches ``target_y``, by bisection to ``AUTO_TILT_TOL_DEG``. ``how``: ``"solved"``,
     ``"at_or_below_target"`` (0: the hairline is already low enough), ``"clamped"`` (the largest tilt still leaves
-    it above) or ``"no_hairline"`` (0: no hair in the front strip)."""
+    it above) or ``"no_hairline"`` (0: no hair in the front strip). ``floor_y``: as in ``front_hairline``."""
     def hairline(deg: float) -> Optional[float]:
-        return front_hairline(adjust_placement(Q, pivot, forward_m, deg), box)
+        return front_hairline(adjust_placement(Q, pivot, forward_m, deg), box, floor_y)
 
     h0 = hairline(0.0)
     if h0 is None:
@@ -287,8 +314,8 @@ def _check_manual(forward_m: Optional[float], tilt_deg: Optional[float]) -> None
 
 # --- scalp cap -----------------------------------------------------------------------------------------------------
 
-def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf) -> Tuple[np.ndarray, np.ndarray, np.ndarray,
-                                                                           Optional[float], Dict[str, Any]]:
+def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optional[float] = None
+               ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[float], Dict[str, Any]]:
     """``(positions, faces, normals, hairline_y, info)`` of the scalp cap (faces index the returned positions).
 
     Rigged body triangles whose three vertices carry Head weight > 0.5, whose centroid lies above the front hairline
@@ -304,10 +331,9 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf) -> Tuple[np.nd
     head_v = head_w > 0.5
     box = _head_box(P, head_v)
     cx, cz, width, depth = box
-    front = ((hair_X[:, 2] > cz + HAIRLINE_FRONT_DEPTH * depth)
-             & (np.abs(hair_X[:, 0] - cx) < HAIRLINE_HALF_WIDTH * width))
+    front = _front_strip(hair_X, box, floor_y)
     empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3)))
-    hairline = front_hairline(hair_X, box)
+    hairline = front_hairline(hair_X, box, floor_y)
     if hairline is None:
         return (*empty, None, {"note": "no hair in front of the head: no hairline, no cap"})
     centroid = P[F].mean(1)
@@ -361,11 +387,20 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     ``head_landmarks`` (none = tilt 0) and ``solve_tilt`` aims the PLACED hair at it. The push-out then lifts the
     front cards that sat inside the forehead (Kira: by 6-9 mm), so the pushed hairline — the one the scalp cap
     uses — is measured and the aim lowered by the miss, up to ``PLACEMENT_ROUNDS`` push-outs, until it lands
-    within ``HAIRLINE_TOL_M`` of the target or the tilt is at a bound of its search range."""
+    within ``HAIRLINE_TOL_M`` of the target or the tilt is at a bound of its search range. The hairline only counts
+    hair at or above the nasion (``front_hairline``'s floor) when the landmarks are found.
+
+    The push gate comes first: when the automatic tilt leaves a push-out the ``GATES`` refuse (``max_push_m`` /
+    ``moved_share``), the other tilts of [0, AUTO_TILT_MAX_DEG] in ``GATE_TILT_STEP_DEG`` steps are tried, nearest
+    first, and the first that passes is taken (``tilt_solve`` gets ``+push_gate``; report ``gate_search``). Kira's
+    base ``base20d5701a`` (head ~5 cm further forward over the upper back, pitched back) puts the back curtain 8-9.5
+    cm deep into the upper back at tilt 0 (push 0.12-0.15); a forward tilt swings that curtain back out of it.
+    A manual tilt is never searched: it is fitted as set, and the gate decides."""
     box = _head_box(body.positions, head_v)
     forward = DEFAULT_FORWARD_M if forward_m is None else float(forward_m)
     landmarks = head_landmarks(body.positions, head_v, chin, top)
     target = hairline_target(landmarks["brow_y"], landmarks["crown_y"]) if landmarks else None
+    floor = landmarks["nasion_y"] if landmarks else None
     auto = tilt_deg is None and target is not None
     aim, rounds = target, 0
     while True:
@@ -375,16 +410,31 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
         elif target is None:
             tilt, how = 0.0, "no_landmarks"
         else:
-            tilt, how = solve_tilt(Q0, pivot, forward, box, aim)
+            tilt, how = solve_tilt(Q0, pivot, forward, box, aim, floor)
         Q = adjust_placement(Q0, pivot, forward, tilt) if (forward or tilt) else Q0
         pushed = _push(Q, F, U, body)
-        pushed_hl = front_hairline(pushed["Qp"], box)
+        pushed_hl = front_hairline(pushed["Qp"], box, floor)
         if not auto or pushed_hl is None or how == "no_hairline" or rounds >= PLACEMENT_ROUNDS:
             break
         miss = pushed_hl - target
         if abs(miss) <= HAIRLINE_TOL_M or (miss > 0 and tilt >= AUTO_TILT_MAX_DEG) or (miss < 0 and tilt <= 0):
             break
         aim -= miss
+
+    gate_search = None
+    if tilt_deg is None and not _push_passes(pushed):
+        tried = [[round(tilt, 3), _push_max(pushed)]]
+        grid = np.round(np.arange(0.0, AUTO_TILT_MAX_DEG + 1e-9, GATE_TILT_STEP_DEG), 3)
+        picked = None
+        for cand in sorted((float(c) for c in grid if abs(c - tilt) > 1e-6), key=lambda c: (abs(c - tilt), c)):
+            Qc = adjust_placement(Q0, pivot, forward, cand)
+            pc = _push(Qc, F, U, body)
+            tried.append([cand, _push_max(pc)])
+            if _push_passes(pc):
+                picked, tilt, Q, pushed, how = cand, cand, Qc, pc, how + "+push_gate"
+                pushed_hl = front_hairline(pushed["Qp"], box, floor)
+                break
+        gate_search = {"tried": tried, "picked": picked}
 
     def r5(v: Optional[float]) -> Optional[float]:
         return None if v is None else round(float(v), 5)
@@ -395,8 +445,23 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
         "tilt_solve": how, "rounds": rounds, "pivot": [round(float(v), 5) for v in pivot], "landmarks": landmarks,
         "hairline_ratio": HAIRLINE_BROW_RATIO, "hairline_target_y": r5(target),
         "hairline_aim_y": r5(aim) if auto else None,
-        "hairline_unadjusted_y": r5(front_hairline(Q0, box)), "hairline_placed_y": r5(front_hairline(Q, box)),
-        "hairline_pushed_y": r5(pushed_hl)}
+        "hairline_floor_y": floor, "hairline_unadjusted_y": r5(front_hairline(Q0, box, floor)),
+        "hairline_placed_y": r5(front_hairline(Q, box, floor)), "hairline_pushed_y": r5(pushed_hl),
+        "gate_search": gate_search}
+
+
+def _push_max(pushed: Dict[str, Any]) -> float:
+    disp = pushed["disp"]
+    return round(float(np.linalg.norm(disp, axis=1).max()), 4) if len(disp) else 0.0
+
+
+def _push_passes(pushed: Dict[str, Any]) -> bool:
+    """Whether a push-out passes the push gates (``max_push_m``, ``moved_share``) as ``fit_hairdeck`` reports them."""
+    mag = np.linalg.norm(pushed["disp"], axis=1)
+    if not len(mag):
+        return True
+    return (round(float(mag.max()), 4) <= GATES["max_push_m"][1]
+            and round(float((mag > MOVED_EPS_M).mean()), 4) <= GATES["moved_share"][1])
 
 
 def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
@@ -447,7 +512,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     colours, colour_info = _correct_colours(C, colour_target)
 
     # scalp cap
-    Vc, Fc, Nc, hairline, cap_info = _scalp_cap(body, head_w, Qp, sdf)
+    Vc, Fc, Nc, hairline, cap_info = _scalp_cap(body, head_w, Qp, sdf, placement["hairline_floor_y"])
     nc = len(Vc)
     cap_colour = np.r_[np.percentile(colours[:, :3], CAP_COLOUR_PERCENTILE, axis=0), 1.0]
     below = int((Vc[Fc].mean(1)[:, 1] < hairline).sum()) if len(Fc) else 0

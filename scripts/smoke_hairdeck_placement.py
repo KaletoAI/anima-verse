@@ -48,6 +48,28 @@ measured on Kira's record (``hair_kira_3f3e184afa64.json``) and on her base ``ba
     Manual tilt 4 (forward 0.002): no aiming, one round, tilt 4 "manual", forward 0.002 "manual",
     hairline_aim_y None; pushed = 1.6054 + 0.095 sin 16 deg + 0.006 = 1.6054 + 0.0261854 + 0.006 = 1.6375854
     (the report rounds to 1e-5).
+[7] Fix round (Kira's new base ``base20d5701a``, refused with max_push_m 0.1349): three rules.
+    a) Landmarks of a head pitched back (chin up). Profile (chin 1.45, crown 1.70; the new base's own values):
+       (1.461, 0.200), (1.501, 0.252) nose, (1.531, 0.243) nasion, (1.571, 0.265), (1.606, 0.270) forehead,
+       (1.651, 0.249), (1.700, 0.156); box points (+-0.083, 1.60, 0.17) and (0, 1.60, 0.069) -> cz 0.1695, the
+       profile (z > cz) keeps every face point. Bin centres: 1.4625, 1.5025, 1.5325, 1.5725, 1.6075, 1.6525,
+       1.6975. The OLD rule (nose = largest z of the lower half, centres <= 1.575) takes 1.5725 (0.265): its
+       nasion band (1.5725, 1.63625] holds only 1.6075 (0.270 > 0.265) -> no face (None) -> tilt 0.
+       The deepest-dip rule: candidate 1.5025 (0.252): band (1.5025, 1.60125] = {1.5325: 0.243, 1.5725: 0.265}
+       -> nasion 1.5325, dip 0.009 >= 0.003; brow = largest z at y >= 1.45 + 17 * 0.005 = 1.535: 1.606 (0.270),
+       0.270 - 0.243 = 0.027 >= 0.003 -> valid. 1.4625 (dip 0.200 - 0.243 < 0), 1.5325 (band min 0.265 > 0.243),
+       1.5725 (band min 0.270 > 0.265): no dip. -> nose 1.5025, nasion 1.5325, brow 1.606, target
+       1.606 + 0.25 * 0.094 = 1.6295.
+    b) Nasion floor: the [4] arc plus one strand vertex (p_x, 1.45, 0.20) in the front strip of the [2] box
+       (0.20 > 0.11775): without a floor the hairline is that strand, 1.45 (HairDeck seed 43 on Kira: 1.445, and
+       the scalp cap covered the face); with the floor 1.5625 (the [2] nasion) it is the arc's 1.6378919.
+    c) The push gate first. ``_push`` stand-in returns no lift and, call by call, a largest push of 0.1349,
+       0.147, 0.1198 (Kira's seed-43 numbers at tilt 0 / 1.5 / 3, forward 0.006). The arc lowered by 0.01
+       (hairline 1.6278919 < the [2] target 1.63325) -> auto tilt 0 "at_or_below_target"; 0.1349 > 0.12 ->
+       candidates nearest first: 1.5 (0.147, refused), 3.0 (0.1198 <= 0.12, passes) -> tilt 3.0,
+       "at_or_below_target+push_gate", gate_search tried [[0, 0.1349], [1.5, 0.147], [3.0, 0.1198]], picked 3.0.
+       Every push 0.2: all 11 tilts 0, 1.5 .. 15 tried, picked None, tilt stays 0 (the fit then refuses).
+       Manual tilt 0 with push 0.2: no search (gate_search None).
 [6] The whole fit on the sphere fixture of smoke_garment_hairdeck_fit (head sphere r 0.1 at (0, 1.6, 0), plain
     shell): auto finds no landmarks -> tilt 0 "no_landmarks", forward 0.006 "default", hairline_target_y None,
     metrics forward_m 0.006 / tilt_deg 0; the head match itself is unchanged (icp_scale 2.0 +- 0.01). The shell's
@@ -152,7 +174,7 @@ def main() -> int:
         # [5]
         print("[5] the auto tilt aims at the pushed hairline")
         real_push = gh._push
-        gh._push = lambda Q, F, U, body: {"Qp": np.asarray(Q) + [0, 0.006, 0]}
+        gh._push = lambda Q, F, U, body: {"Qp": np.asarray(Q) + [0, 0.006, 0], "disp": np.zeros((len(Q), 3))}
         try:
             body = SimpleNamespace(positions=P)
             F = np.zeros((0, 3), np.int64)
@@ -170,6 +192,52 @@ def main() -> int:
             check(near(pl["hairline_pushed_y"], 1.6054 + 0.095 * math.sin(math.radians(16)) + 0.006, 1e-5)
                   and near(pl["hairline_pushed_y"], 1.6375854, 1e-5), f"manual pushed 1.6375854 "
                   f"({pl['hairline_pushed_y']})")
+        finally:
+            gh._push = real_push
+
+        # [7]
+        print("[7] pitched-back head, nasion floor, push gate first")
+        pitched = [(1.461, 0.200), (1.501, 0.252), (1.531, 0.243), (1.571, 0.265), (1.606, 0.270), (1.651, 0.249),
+                   (1.700, 0.156)]
+        P7 = np.array([(0.0, y, z) for y, z in pitched] + [(-0.083, 1.60, 0.17), (0.083, 1.60, 0.17),
+                                                             (0.0, 1.60, 0.069)])
+        lm7 = gh.head_landmarks(P7, np.ones(len(P7), bool), 1.45, 1.70)
+        print("   ", lm7)
+        check(lm7 is not None and near(lm7["nose_tip_y"], 1.5025, 1e-6) and near(lm7["nasion_y"], 1.5325, 1e-6)
+              and near(lm7["brow_y"], 1.606, 1e-6), "pitched back: nose 1.5025, nasion 1.5325, brow 1.606")
+        check(lm7 is not None and near(gh.hairline_target(lm7["brow_y"], lm7["crown_y"]), 1.6295, 1e-6),
+              "pitched back: target 1.6295")
+        strand = np.vstack([H, [PIVOT[0], 1.45, 0.20]])
+        check(near(gh.front_hairline(strand, box), 1.45, 1e-9), "no floor: the strand at 1.45 is the hairline")
+        check(near(gh.front_hairline(strand, box, 1.5625), 1.6378919, 1e-6), "floor 1.5625: the arc's 1.63789")
+
+        def push_seq(values):
+            calls = iter(values)
+
+            def fake(Q, F, U, body):
+                disp = np.zeros((len(Q), 3))
+                disp[0, 0] = next(calls)
+                return {"Qp": np.asarray(Q), "disp": disp}
+            return fake
+
+        try:
+            body = SimpleNamespace(positions=P)
+            F = np.zeros((0, 3), np.int64)
+            low = H - [0, 0.01, 0]
+            gh._push = push_seq([0.1349, 0.147, 0.1198])
+            _, pl = gh._place_and_push(low, PIVOT, F, None, body, head_v, CHIN, CROWN, None, None)
+            check(pl["tilt_deg"] == 3.0 and pl["tilt_solve"] == "at_or_below_target+push_gate"
+                  and pl["gate_search"] == {"tried": [[0.0, 0.1349], [1.5, 0.147], [3.0, 0.1198]], "picked": 3.0},
+                  f"gate search picks 3.0: {pl['tilt_solve']} {pl['gate_search']}")
+            gh._push = push_seq([0.2] * 11)
+            _, pl = gh._place_and_push(low, PIVOT, F, None, body, head_v, CHIN, CROWN, None, None)
+            gs7 = pl["gate_search"] or {}
+            check(pl["tilt_deg"] == 0 and gs7.get("picked") is None
+                  and [t for t, _ in gs7.get("tried", [])] == [0.0] + [1.5 * k for k in range(1, 11)],
+                  f"nothing passes: 11 tilts tried, tilt 0 kept ({gs7})")
+            gh._push = push_seq([0.2])
+            _, pl = gh._place_and_push(low, PIVOT, F, None, body, head_v, CHIN, CROWN, None, 0.0)
+            check(pl["gate_search"] is None and pl["tilt_deg"] == 0, "manual tilt: no search")
         finally:
             gh._push = real_push
 
