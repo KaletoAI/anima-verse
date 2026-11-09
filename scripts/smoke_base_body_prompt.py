@@ -15,7 +15,9 @@ hair long brunette, character_appearance "wears a red scarf". Fixture package
 ``fixture_marks`` (apply_to human-default) declares the slot ``marking``
 (always "{shade} marking", NOT flagged ``base_body``, ``base_body_negative``
 "  visible marking  ") and the slot ``spot`` (applies_to gender male only,
-``base_body_negative`` "spot"); Demo stores shade "faint".
+``base_body_negative`` "spot", ``base_body_prompt`` "pale spot") and the slot
+``tail`` (attribute length, NOT flagged ``base_body``, ``base_body_prompt``
+"  {length} tail  "); Demo stores shade "faint" and no tail length.
 
 [1] base_appearance. Gender/age through the template's character_appearance
     replacement tokens, in the "{gender}, {age} years old" phrasing World-Dev
@@ -29,7 +31,8 @@ hair long brunette, character_appearance "wears a red scarf". Fixture package
     is carried by the build fragment, so it is not added a second time:
         "female, 30 years old, green eyes, olive skin, average height, athletic build"
     It contains neither "hair" (hair slot unflagged) nor "scarf" (free text
-    never used) nor "marking" (unflagged pack slot).
+    never used) nor "marking" (unflagged pack slot) nor "tail" (its
+    ``base_body_prompt`` has no length value -> dropped) nor "spot" (male only).
 [2] Front prompt. A-pose front text of model_refs without its hair clause
     ("no hair on the chest or in front of the shoulders, chest, collarbones
     and front of the shoulders fully uncovered"):
@@ -73,6 +76,15 @@ hair long brunette, character_appearance "wears a red scarf". Fixture package
     signature changes when the marking's text changes ("visible marking" ->
     "bold marking") and is back to the old value once restored — the
     signature hashes the negatives.
+[10] base_body_prompt: the parsed tail spec carries "{length} tail" (the
+    loader strips the blanks), marking/human slots carry "". Demo with tail
+    length "long": appearance = APPEARANCE + ", long tail" (appended after the
+    flagged fragments, though tail is not flagged), the front prompt ends
+    ", long tail", and the base signature differs from the one without a
+    length; length "short" -> APPEARANCE + ", short tail" and yet another
+    signature. A male profile with length "long": the description ends
+    ", pale spot, long tail" (slot order marking, spot, tail; spot applies to
+    males and has no placeholder) — the female one has no "spot".
 """
 import json
 import os
@@ -106,6 +118,11 @@ FIXTURE = {
         "id": "spot",
         "applies_to": {"gender": ["male"]},
         "base_body_negative": "spot",
+        "base_body_prompt": "pale spot",
+    }, {
+        "id": "tail",
+        "attributes": {"length": {"type": "select", "options": ["short", "long"]}},
+        "base_body_prompt": "  {length} tail  ",
     }],
 }
 
@@ -187,6 +204,8 @@ def main() -> int:
         check("no hair", "hair" in appearance, False)
         check("no scarf", "scarf" in appearance, False)
         check("no marking", "marking" in appearance, False)
+        check("no tail without a length", "tail" in appearance, False)
+        check("no spot for a female", "spot" in appearance, False)
         check("stored profile path", base_body.base_appearance(name), APPEARANCE)
 
         print("[2] front")
@@ -260,6 +279,29 @@ def main() -> int:
         finally:
             marking.base_body_negative = "visible marking"
         check("restored signature", base_body.base_signature(name, profile=stored), sig)
+
+        print("[10] base_body_prompt")
+        specs = {s.id: s for s in slots_for_character(name, profile=stored)}
+        check("parsed + stripped", specs["tail"].base_body_prompt, "{length} tail")
+        check("default empty", (specs["marking"].base_body_prompt, specs["skin"].base_body_prompt), ("", ""))
+        long_tail = json.loads(json.dumps(stored))
+        long_tail["body_slots"]["tail"] = {"length": "long"}
+        check("long tail appearance", base_body.base_appearance(name, profile=long_tail),
+              APPEARANCE + ", long tail")
+        check("front prompt ends with it",
+              base_body.base_prompt(name, "front", profile=long_tail)[0].endswith(", long tail"), True)
+        sig_none = base_body.base_signature(name, profile=stored)
+        sig_long = base_body.base_signature(name, profile=long_tail)
+        check("value changes signature", sig_long != sig_none, True)
+        short_tail = json.loads(json.dumps(stored))
+        short_tail["body_slots"]["tail"] = {"length": "short"}
+        check("short tail appearance", base_body.base_appearance(name, profile=short_tail),
+              APPEARANCE + ", short tail")
+        check("short vs long signature", base_body.base_signature(name, profile=short_tail)
+              not in (sig_none, sig_long), True)
+        male_tail = dict(long_tail, gender="male")
+        check("male: spot then tail",
+              base_body.base_appearance(name, profile=male_tail).endswith(", pale spot, long tail"), True)
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

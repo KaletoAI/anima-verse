@@ -20,7 +20,9 @@ Decisions wired in (dialog 2026-07-08):
 
 A slot may declare ``base_body: true`` — its ``always`` fragment belongs to
 the base body (``app/core/base_body.py``), the bald, unclothed figure the
-outfits are painted onto. Slots without the flag stay out of it.
+outfits are painted onto. Slots without the flag stay out of it. Independent
+of the flag, a slot's ``base_body_prompt`` (``base_body_fragments``) adds a
+body-shape text of its own to the base body of every character it applies to.
 
 A slot may declare ``back: true`` — its anatomy is visible from BEHIND as
 well. A render that shows the character's back (the T-pose back view) keeps
@@ -417,6 +419,32 @@ def prompt_fragments(character_name: str,
             if frag:
                 exposed.append(frag)
     return {"general": general, "exposed": exposed}
+
+
+def base_body_fragments(character_name: str, *,
+                        profile: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The ``base_body_prompt`` texts of every slot that APPLIES to the
+    character (``slots_for_character``, slot order), flagged ``base_body``
+    or not, rendered like the other fragments in the neutral state: an
+    ``{attr}`` placeholder takes the character's stored slot value, and a
+    text whose attribute has no value is dropped whole."""
+    specs = [s for s in slots_for_character(character_name, profile=profile)
+             if str(getattr(s, "base_body_prompt", "") or "").strip()]
+    if not specs:
+        return []
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return []
+    out: List[str] = []
+    for spec in specs:
+        frag = _render_slot_text(spec.base_body_prompt, _slot_text_values(spec, profile), profile,
+                                 character_name, neutral_state=True)
+        if frag:
+            out.append(frag)
+    return out
 
 
 def _slot_text_values(spec, profile: Dict[str, Any]) -> Dict[str, str]:

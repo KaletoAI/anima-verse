@@ -127,11 +127,14 @@ def _identity_words(profile: Dict[str, Any]) -> str:
 
 def base_appearance(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
     """Gender/age words + height phrase + the ``always`` fragments of the
-    character's body slots flagged ``base_body: true``, in slot order."""
+    character's body slots flagged ``base_body: true``, in slot order, then
+    the ``base_body_prompt`` texts of every slot that applies to the
+    character (``body_slots.base_body_fragments``, flag irrelevant)."""
     profile = _profile_of(character_name, profile)
-    from app.core.body_slots import prompt_fragments
+    from app.core.body_slots import base_body_fragments, prompt_fragments
     from app.core.height import height_phrase
-    fragments = prompt_fragments(character_name, profile=profile, base_body=True)["general"]
+    fragments = (prompt_fragments(character_name, profile=profile, base_body=True)["general"]
+                 + base_body_fragments(character_name, profile=profile))
     parts = []
     identity = _identity_words(profile)
     if identity:

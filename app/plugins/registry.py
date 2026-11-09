@@ -325,6 +325,11 @@ class BodySlotSpec:
     # to, whether or not the slot is flagged ``base_body`` — a pack keeps its
     # own anatomy out of the base views without the core naming it.
     base_body_negative: str = ""
+    # Appended to the base-body DESCRIPTION for every character the slot
+    # applies to, also independent of ``base_body``: an ``{attr}`` template
+    # rendered with the character's slot values (dropped when one has no
+    # value) — how a pack's body-shape attribute reaches the base render.
+    base_body_prompt: str = ""
     rigs: List[RigSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
     # Mesh-input (T-pose) text chosen by one attribute's value:
