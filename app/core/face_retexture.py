@@ -294,36 +294,6 @@ def validated_params(params=None) -> dict:
     return result
 
 
-def _accessor_array(parsed: dict, index: int):
-    """Read packed or interleaved GLB accessors without reading stride padding."""
-    import numpy as np
-    gltf, binary = parsed['gltf'], parsed['bin']
-    accessor = gltf['accessors'][index]
-    if accessor.get('sparse') is not None:
-        raise ValueError('Sparse geometry accessors are unsupported')
-    dtype = np.dtype({5120: 'i1', 5121: 'u1', 5122: '<i2', 5123: '<u2',
-                      5125: '<u4', 5126: '<f4'}[accessor['componentType']])
-    components = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}[accessor['type']]
-    view = gltf['bufferViews'][accessor['bufferView']]
-    width = dtype.itemsize * components
-    count = int(accessor['count'])
-    offset = int(accessor.get('byteOffset', 0))
-    stride = int(view.get('byteStride', width))
-    start = int(view.get('byteOffset', 0))
-    if (view.get('buffer', 0) != 0 or count <= 0 or offset < 0 or start < 0
-            or stride < width or offset + (count - 1) * stride + width > view['byteLength']
-            or start + view['byteLength'] > len(binary)):
-        raise ValueError('Geometry accessor is truncated or invalid')
-    array = np.ndarray((count, components), dtype=dtype, buffer=binary,
-                       offset=start + offset, strides=(stride, dtype.itemsize))
-    if accessor.get('normalized') and dtype.kind in 'iu':
-        limits = np.iinfo(dtype)
-        array = array.astype(np.float64) / limits.max
-        if dtype.kind == 'i':
-            array = np.maximum(array, -1)
-    return array
-
-
 def _primitive_basecolor(parsed: dict, primitive: dict):
     """Resolve the used material's embedded image, rather than image zero."""
     from app.core.model_validate import texture_image_index
@@ -356,6 +326,7 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
     import struct
     import numpy as np
     from PIL import ImageDraw, ImageFilter
+    from app.core.glb_mesh import accessor_array
     from app.core.model_validate import parse_glb, texture_image_index
     from app.core.mesh_source import validate_face_source, validate_source
 
@@ -369,16 +340,16 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
     primitive = _body_primitives(source)[0]
     primitives = _body_primitives(hub)
     try:
-        positions = _accessor_array(source, primitive['attributes']['POSITION'])
-        uvs = _accessor_array(source, primitive['attributes']['TEXCOORD_0'])
-        triangles = _accessor_array(source, primitive['indices']).reshape(-1, 3)
+        positions = accessor_array(source, primitive['attributes']['POSITION'])
+        uvs = accessor_array(source, primitive['attributes']['TEXCOORD_0'])
+        triangles = accessor_array(source, primitive['indices']).reshape(-1, 3)
         hub_triangles = []
         for face in primitives:
             for name, expected in (('POSITION', positions), ('TEXCOORD_0', uvs)):
-                actual = _accessor_array(hub, face['attributes'][name])
+                actual = accessor_array(hub, face['attributes'][name])
                 if not np.array_equal(expected, actual):
                     raise ValueError(f'Face retexture changed {name} geometry')
-            indices = _accessor_array(hub, face['indices']).reshape(-1, 3)
+            indices = accessor_array(hub, face['indices']).reshape(-1, 3)
             if np.any(indices >= len(positions)):
                 raise ValueError('Face triangle index exceeds POSITION accessor')
             hub_triangles.append(indices)

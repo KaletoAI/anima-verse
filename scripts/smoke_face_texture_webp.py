@@ -165,7 +165,8 @@ def main():
         assert raw[12:16] == kind
         assert mv._image_size(raw) == (13,7)
     print('OK: UniForge source, triangle count and VP8/VP8L/VP8X sizes')
-    from app.core.face_retexture import bake_face_texture, face_texture_preserved, _accessor_array
+    from app.core.face_retexture import bake_face_texture, face_texture_preserved
+    from app.core.glb_mesh import accessor_array
     hd, hb = fixture(True)
     hub = glb(hd, hb)
     assert mv.face_texture_geometry(hub)['ok']
@@ -194,7 +195,7 @@ def main():
     for key in ('extensionsUsed', 'extensionsRequired'):
         assert gd[key] == ['EXT_texture_webp']
     for index in (0,1,2):
-        assert np.array_equal(_accessor_array(parsed, index), _accessor_array(result, index))
+        assert np.array_equal(accessor_array(parsed, index), accessor_array(result, index))
     assert validate_source(baked)['ok']
     assert mv.face_texture_geometry(baked, original=True)['ok']
     assert face_texture_preserved(baked, baked, original_glb=source)
