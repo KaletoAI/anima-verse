@@ -544,7 +544,8 @@ def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int
 
 # --- weights ---------------------------------------------------------------------------------------------------------------
 
-def _chin(body_rigged: BodyMesh) -> float:
+def chin_height(body_rigged: BodyMesh) -> float:
+    """Height of the lowest rigged vertex with Head weight > 0.5."""
     head = dense_weights(body_rigged)[:, joint_index(body_rigged, "head")] > 0.5
     if not head.any():
         raise ValueError("The rigged body has no Head-weighted vertex")
@@ -559,7 +560,7 @@ def hair_weights(X, body_rigged: BodyMesh, *, blend_m: float = HAIR_BLEND_M):
     """
     X = np.asarray(X, np.float64)
     head, spine2 = joint_index(body_rigged, "head"), joint_index(body_rigged, "spine2")
-    chin = _chin(body_rigged)
+    chin = chin_height(body_rigged)
     t = np.clip((chin - X[:, 1]) / blend_m, 0, 1)
     names = [body_rigged.joint_names[head], body_rigged.joint_names[spine2]]
     J = np.zeros((len(X), 4), np.int64)
@@ -584,7 +585,7 @@ def bib_area_cm2(X, Fw, body_rigged: BodyMesh) -> float:
     Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
     if len(Fw) == 0:
         return 0.0
-    chin, xc = _chin(body_rigged), _head_centre_x(body_rigged)
+    chin, xc = chin_height(body_rigged), _head_centre_x(body_rigged)
     Pr = body_rigged.positions
     nb = Pr[(np.abs(Pr[:, 0] - xc) < 0.04) & (Pr[:, 1] > chin - 0.17) & (Pr[:, 1] < chin + 0.01)]
     bins = np.round(nb[:, 1] / 0.01).astype(int)
@@ -664,15 +665,16 @@ def metrics(X, Fw, Q0_pre, Q_post, body_rigged: BodyMesh) -> Dict[str, Any]:
         "max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
         "moved_share": round(float((push > MOVED_EPS_M).mean()) if len(push) else 0.0, 4),
         "largest_component_share": round(float(share.max()) if len(share) else 0.0, 4),
-        "drop_below_chin_m": round(_chin(body_rigged) - float(X[:, 1].min()), 4),
+        "drop_below_chin_m": round(chin_height(body_rigged) - float(X[:, 1].min()), 4),
         "tris": int(len(Fw)),
     }
 
 
-def gate(m: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """``(ok, reasons)`` against the R7 limits; a missing or non-finite number refuses."""
+def gate(m: Dict[str, Any], gates: Optional[Dict[str, Tuple[str, float, str]]] = None) -> Tuple[bool, List[str]]:
+    """``(ok, reasons)`` against ``gates`` (default: the R7 limits ``GATES``); a missing or non-finite number
+    refuses."""
     reasons = []
-    for key, (kind, limit, label) in GATES.items():
+    for key, (kind, limit, label) in (GATES if gates is None else gates).items():
         value = m.get(key)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             reasons.append(f"{key}: missing ({label})")
@@ -700,7 +702,7 @@ def _mask(mask) -> np.ndarray:
     return arr if arr.dtype == bool else arr >= 17
 
 
-def _vertex_normals(X: np.ndarray, F: np.ndarray) -> np.ndarray:
+def vertex_normals(X: np.ndarray, F: np.ndarray) -> np.ndarray:
     N = np.zeros_like(X)
     fn = np.cross(X[F[:, 1]] - X[F[:, 0]], X[F[:, 2]] - X[F[:, 0]])
     for i in range(3):
@@ -764,7 +766,7 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     final = np.full(len(kept_v), -1, np.int64)
     final[used] = np.arange(len(used))
     src = vmap[kept_v[used]]
-    normals = _vertex_normals(X, Fk)
+    normals = vertex_normals(X, Fk)
     garment = GarmentMesh(positions=X[src], normals=normals[src], uvs=np.asarray(Ud, np.float64)[kept_v[used]],
                           indices=final[faces], joints=J[src], weights=W[src], joint_names=names,
                           image=image, mime=mime, material=material)
@@ -776,7 +778,7 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
         "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
                  "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
         "transfer": transfer_report,
-        "chin_y_m": _chin(body_r),
+        "chin_y_m": chin_height(body_r),
         "share_below_chin": float((W[:, 1] > 0).mean()) if len(W) else 0.0,
     }
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
