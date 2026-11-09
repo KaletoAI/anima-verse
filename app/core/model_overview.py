@@ -82,6 +82,10 @@ HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "hairdeck_changed": "Profile picture or HairDeck settings changed",
                       "colour_changed": "Hair colour changed",
                       "placement_changed": "Hair placement changed"}
+# ... of an own-mesh outfit piece (kind clothing, the Wardrobe): its inputs are the item's.
+CLOTHING_STALE_REASONS = {"description_changed": "Piece description changed",
+                          "base_changed": "Base body changed",
+                          "base_model_changed": "Base model changed"}
 FITTED_ON_OLDER_BASE = "Fitted on an older base model"
 
 
@@ -673,14 +677,16 @@ def model3d_freshness(model: Dict[str, Any], *, views_newer: bool = False) -> Di
     return freshness(CURRENT)
 
 
-def hair_preview_freshness(garment: Dict[str, Any]) -> Dict[str, str]:
-    """The Hair tab's preview: the current-fsig fit, or an older one."""
+def garment_preview_freshness(garment: Dict[str, Any]) -> Dict[str, str]:
+    """A garment preview (the Hair tab, the Wardrobe's own-mesh panel): the
+    current-fsig fit, or an older one and why (labels per ``kind``)."""
     if not garment.get("preview_url"):
         return freshness(MISSING, NO_PROVENANCE)
     fit = _dict(_dict(garment.get("steps")).get("fit"))
     if garment.get("fsig") and fit.get("status") == "accepted":
         return freshness(CURRENT)
-    reasons = [HAIR_STALE_REASONS.get(r, r) for r in garment.get("stale_reasons") or [] if isinstance(r, str)]
+    labels = CLOTHING_STALE_REASONS if garment.get("kind") == "clothing" else HAIR_STALE_REASONS
+    reasons = [labels.get(r, r) for r in garment.get("stale_reasons") or [] if isinstance(r, str)]
     return freshness(STALE, _join(reasons) or OLDER_FIT)
 
 
@@ -903,24 +909,89 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
     return info
 
 
+def _annotate_garment_info(garment: Any) -> None:
+    """``freshness`` on every image of a ``garments.garment_info`` (all of
+    them belong to the current fsig: current when present) and its
+    ``preview_freshness``."""
+    if not isinstance(garment, dict):
+        return
+    for views in (garment.get("steps") or {}).values():
+        if not isinstance(views, dict):
+            continue
+        for tile in views.values():
+            if isinstance(tile, dict) and "attempts" in tile:
+                tile["freshness"] = freshness(CURRENT)
+                for attempt in tile.get("attempts") or []:
+                    if isinstance(attempt, dict):
+                        attempt["freshness"] = freshness(CURRENT)
+    garment["preview_freshness"] = garment_preview_freshness(garment)
+
+
+# The steps of a garment's chain -> row label (``garment_steps``).
+GARMENT_STEP_LABELS = {"haired": "Haired views", "worn": "Worn views", "ghost": "Hair-only views",
+                       "cutout": "Cut-outs", "mesh": "Mesh", "hairdeck": "HairDeck", "fit": "Fit"}
+CLOTHING_GHOST_LABEL = "Piece-only views"
+STEP_RUNNING = "running"
+
+
+def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The ModelSteps rows of a ``garments.garment_info``: one row per step of
+    its chain in order — an image step is done when both views are accepted,
+    the mesh done / failed (refused), the fit done / warning (fitted on an
+    older base model or from a replaced mesh); the step in flight says
+    ``running``, the failed step its error."""
+    rows: List[Dict[str, Any]] = []
+    steps = _dict(garment.get("steps"))
+    failed = _dict(garment.get("failed"))
+    running = garment.get("running_step")
+    clothing = garment.get("kind") == "clothing"
+    for step_id, data in steps.items():
+        label = CLOTHING_GHOST_LABEL if clothing and step_id == "ghost" else GARMENT_STEP_LABELS.get(step_id, step_id)
+        data = _dict(data)
+        numbers: Dict[str, Any] = {}
+        if step_id in ("haired", "worn", "ghost", "cutout"):
+            tiles = [_dict(data.get(view)) for view in ("front", "back")]
+            status = DONE if all(tile.get("accepted") for tile in tiles) else MISSING
+            detail = ""
+        elif step_id == "fit":
+            state = data.get("status")
+            status = DONE if state == "accepted" else WARNING if state in ("stale", "outdated") else MISSING
+            numbers = {k: v for k, v in _dict(data.get("metrics")).items() if isinstance(v, (int, float))}
+            detail = f"{data['tris']} triangles" if data.get("tris") else ""
+        else:  # mesh, hairdeck
+            state = data.get("status")
+            status = DONE if state == "accepted" else FAILED if state == "refused" else MISSING
+            numbers = {k: v for k, v in _dict(data.get("metrics")).items() if isinstance(v, (int, float))}
+            detail = ""
+        if running == step_id:
+            detail = STEP_RUNNING
+        elif failed.get("step") == step_id:
+            status, detail = FAILED, str(failed.get("error") or "")
+        rows.append(step(step_id, label, status, detail, numbers))
+    return rows
+
+
+def annotate_garment(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The Wardrobe's own-mesh panel payload (``GET
+    /characters/{c}/garments/{item}``) + ``freshness`` on every image of its
+    ``garment``, ``garment.preview_freshness`` and ``steps`` (the ModelSteps
+    rows beside the preview, ``garment_steps``). Never raises."""
+    try:
+        _annotate_garment_info(payload.get("garment"))
+        garment = payload.get("garment")
+        payload["steps"] = garment_steps(garment) if isinstance(garment, dict) else []
+    except Exception:  # noqa: BLE001
+        logger.exception("Garment freshness failed")
+    return payload
+
+
 def annotate_hair(payload: Dict[str, Any]) -> Dict[str, Any]:
     """The Hair tab payload + ``freshness`` on every image (all of them
     belong to the current fsig / hsig / profile picture: current when
     present), ``garment.preview_freshness`` and
     ``other.preview_freshness``. Never raises."""
     try:
-        garment = payload.get("garment")
-        if isinstance(garment, dict):
-            for views in (garment.get("steps") or {}).values():
-                if not isinstance(views, dict):
-                    continue
-                for tile in views.values():
-                    if isinstance(tile, dict) and "attempts" in tile:
-                        tile["freshness"] = freshness(CURRENT)
-                        for attempt in tile.get("attempts") or []:
-                            if isinstance(attempt, dict):
-                                attempt["freshness"] = freshness(CURRENT)
-            garment["preview_freshness"] = hair_preview_freshness(garment)
+        _annotate_garment_info(payload.get("garment"))
         hairdeck = payload.get("hairdeck")
         if isinstance(hairdeck, dict):
             for tile in (hairdeck.get("images") or {}).values():

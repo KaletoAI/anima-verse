@@ -1844,6 +1844,74 @@ class GarmentRunRequest(BaseModel):
     force: bool = False
 
 
+def _gate_limits(gates: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Chip limits of a mesh gate table ``{key: (min|max, limit, label)}``."""
+    return {key: {"op": "le" if kind == "max" else "ge", "value": limit}
+            for key, (kind, limit, _label) in gates.items()}
+
+
+def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """The gate limits per step of a garment ``kind`` for the chips, read
+    from the gate constants themselves: the image gates
+    (``garment_gates.limits``), the mesh component share and the fit gates
+    (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``)."""
+    from app.core import garment_fit, garment_gates, garment_mesh
+    return {**garment_gates.limits(kind),
+            "mesh": {"largest_component_share": {"op": "ge", "value": garment_mesh.MIN_COMPONENT_SHARE}},
+            "fit": _gate_limits(garment_fit.CLOTHING_GATES if kind == "clothing" else garment_fit.GATES)}
+
+
+@router.get("/{character_name}/garments")
+def get_character_garments(character_name: str,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The Wardrobe's own-mesh overview (``garment_set.wardrobe``):
+    ``{pipeline, items: {item_id: {state, step, painted, reason}}, overlaps:
+    [{items, slots}]}`` — every own-mesh piece the character holds or
+    wears, and the worn pairs whose meshes take the same body slot."""
+    from app.core import garment_set
+    _require_character(character_name)
+    return garment_set.wardrobe(character_name)
+
+
+@router.get("/{character_name}/garments/{item_id}")
+def get_character_garment(character_name: str, item_id: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The Wardrobe's panel of one own-mesh piece (or any garment of the
+    character): ``{pipeline, item_id, name, kind, own_mesh, worn, status,
+    garment, limits}`` — ``garment`` is ``garments.garment_info`` (every
+    image with its ``freshness``, the preview with ``preview_freshness``,
+    ``failed`` also after a restart), ``limits`` the chip limits of the
+    item's kind (``_garment_limits``), ``status`` the row chip
+    (``garment_set.piece_status``). 404 for an item that is no garment of
+    this character (an outfit piece without the own-mesh flag, a piece it
+    does not hold, another character's hair)."""
+    from app.core import base_body, garment_set, garments
+    from app.models.character import get_character_profile
+    from app.models.inventory import get_item
+    _require_character(character_name)
+    try:
+        info = garments.garment_info(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    kind = str(info.get("kind") or "")
+    item = get_item(item_id) or {}
+    profile = get_character_profile(character_name) or {}
+    pipeline = base_body.is_base_pipeline(character_name, profile=profile)
+    base = base_body.current_base(character_name, profile=profile) if pipeline else None
+    pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
+    mesh_pieces = profile.get("equipped_mesh_pieces") if isinstance(profile.get("equipped_mesh_pieces"), dict) else {}
+    worn = item_id in pieces.values() or item_id in mesh_pieces.values()
+    # Only clothing is painted on while it has no fit (hair is simply absent).
+    painted_when_unfitted = bool(pipeline and worn and kind == garment_set.CLOTHING)
+    payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
+               "kind": kind, "own_mesh": kind == garment_set.CLOTHING, "worn": bool(worn),
+               "status": garment_set.piece_status(info, worn=painted_when_unfitted,
+                                                  base_model_ready=bool(base and base[1])),
+               "garment": info, "limits": _garment_limits(kind)}
+    from app.core.model_overview import annotate_garment
+    return annotate_garment(payload)
+
+
 @router.get("/{character_name}/hair")
 def get_character_hair(character_name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -1862,8 +1930,7 @@ def get_character_hair(character_name: str,
     the method not selected (``garments.other_method_info``), both None
     without an item. Every image carries a ``freshness`` and both previews a
     ``preview_freshness`` (``model_overview.annotate_hair``)."""
-    from app.core import (base_body, garment_fit, garment_gates, garment_hair, garment_hairdeck, garment_mesh,
-                          garments)
+    from app.core import base_body, garment_hair, garment_hairdeck, garments
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
     _require_character(character_name)
@@ -1888,13 +1955,8 @@ def get_character_hair(character_name: str,
                 "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
                                                                                          profile=profile)),
                 "item_id": item_id, "equipped": equipped, "garment": info, "collision": False,
-                "limits": {**garment_gates.limits(),
-                           "mesh": {"largest_component_share": {"op": "ge",
-                                                                "value": garment_mesh.MIN_COMPONENT_SHARE}},
-                           "fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
-                                   for key, (kind, limit, _label) in garment_fit.GATES.items()},
-                           "hairdeck_fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
-                                            for key, (kind, limit, _label) in garment_hairdeck.GATES.items()}},
+                "limits": {**_garment_limits("hair"),
+                           "hairdeck_fit": _gate_limits(garment_hairdeck.GATES)},
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.world_hair_method(),
                 "hairdeck": hairdeck, "other": other}

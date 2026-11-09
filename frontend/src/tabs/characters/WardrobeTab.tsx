@@ -5,6 +5,8 @@
  * Source: GET /characters/{c}/belongings (same shape as /play/belongings).
  * Setters: POST /inventory/characters/{c}/{equip,unequip,apply-outfit-set},
  * GET/POST /characters/{c}/outfit-lock for the "keep this outfit" switch.
+ * Own-mesh pieces (WardrobeGarment): GET /characters/{c}/garments for the
+ * row toggles, chips and the overlap warning; one expandable chain panel.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -12,6 +14,8 @@ import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
+import { GarmentPiecePanel, OwnMeshToggle, PieceStatusChip } from './WardrobeGarment'
+import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 
@@ -182,10 +186,14 @@ export function WardrobeTab({ character }: { character: string }) {
     return () => ro.disconnect()
   }, [avatarReady])
 
+  // Own-mesh pieces: row toggles + chips, one expanded chain panel.
+  const { data: garments, reload: reloadGarments, setStatus: setGarmentStatus } = useWardrobeGarments(character)
+  const [openGarment, setOpenGarment] = useState('')
   const load = useCallback(async () => {
     if (!character) { setData(EMPTY); return }
     try { setData(await apiGet<Belongings>(`/characters/${enc}/belongings`)) } catch { /* ignore */ }
-  }, [character, enc])
+    void reloadGarments()
+  }, [character, enc, reloadGarments])
   useEffect(() => { load() }, [load])
 
   const act = useCallback(async (url: string, body: Record<string, unknown>) => {
@@ -279,6 +287,8 @@ export function WardrobeTab({ character }: { character: string }) {
   const anchorOf = (s: string): [number, number] | undefined =>
     data.slot_anchors?.[s] || SLOT_ANCHOR[s]
   const figureSlots = data.slot_order.filter((s) => anchorOf(s))
+  const itemName = (id: string) => data.items.find((it) => it.item_id === id)?.name || id
+  const anyOwnMesh = !!garments && Object.keys(garments.items).length > 0
 
   return (
     <div style={{ display: 'flex', gap: 12, height: '100%', minHeight: 0, fontSize: '0.9em' }}>
@@ -312,17 +322,32 @@ export function WardrobeTab({ character }: { character: string }) {
           options={outfitTypes.map((ot) => ({ value: ot, label: t(ot) }))}
           title={t('Filter by outfit type. Pieces without a type are shown in every filter — they go with everything.')}
         />
+        {garments && !garments.pipeline && anyOwnMesh ? (
+          <div className="ga-form-hint" style={{ fontSize: '0.8em' }}>
+            {t('Own meshes need the base body pipeline — switch it on in the Base body tab')}
+          </div>
+        ) : null}
+        {garments?.overlaps.map((o) => (
+          <div key={o.items.join('|')} role="alert" style={{ fontSize: '0.8em', color: 'var(--warning, #d29922)' }}>
+            {t('{a} and {b} are both own meshes on {slots} — garments have no collision yet, they can intersect.')
+              .replace('{a}', itemName(o.items[0])).replace('{b}', itemName(o.items[1]))
+              .replace('{slots}', o.slots.map((s) => t(data.slot_labels[s] || s)).join(', '))}
+          </div>
+        ))}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
           {filtered.length === 0 && <div className="ga-placeholder">{t('No outfit pieces')}</div>}
           {filtered.map((it) => {
             const sub = it.description || it.slots.map((s) => data.slot_labels[s] || s).join(', ')
             const rarityColor = RARITY_COLOR[it.rarity] || RARITY_COLOR.common
+            const garmentStatus = garments?.items[it.item_id]
+            const open = openGarment === it.item_id && !!garmentStatus
             return (
-              <div key={it.item_id} title={it.rarity || 'common'} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
+              <div key={it.item_id} style={{
+                display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px',
                 borderRadius: 6, borderLeft: `3px solid ${rarityColor}`,
                 background: it.equipped ? 'rgba(120,170,255,0.14)' : 'rgba(255,255,255,0.04)',
               }}>
+              <div title={it.rarity || 'common'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <ItemIcon itemId={it.item_id} hasImage={it.image} emoji="👕" size={40} />
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -350,6 +375,23 @@ export function WardrobeTab({ character }: { character: string }) {
                   : <button disabled={busy} style={btn()} onClick={() => act(`/inventory/characters/${enc}/equip`, { item_id: it.item_id })}>{t('Wear')}</button>}
                 <button disabled={busy} title={t('Remove from inventory')} style={{ ...btn(), borderColor: 'rgba(224,86,86,0.4)' }}
                   onClick={() => removeItem(it.item_id)}>✕</button>
+              </div>
+              {garments ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 50, minWidth: 0 }}>
+                  <OwnMeshToggle itemId={it.item_id} checked={!!garmentStatus} disabled={busy}
+                    onChanged={() => { void load() }} />
+                  {garmentStatus ? <PieceStatusChip status={garmentStatus} /> : null}
+                  {garmentStatus ? (
+                    <button style={{ ...btn(), marginLeft: 'auto' }} aria-expanded={open}
+                      onClick={() => setOpenGarment(open ? '' : it.item_id)}>
+                      {open ? t('Hide steps') : t('Mesh steps')}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {open ? (
+                <GarmentPiecePanel character={character} itemId={it.item_id} onStatus={setGarmentStatus} />
+              ) : null}
               </div>
             )
           })}

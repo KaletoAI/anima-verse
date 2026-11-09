@@ -290,15 +290,20 @@ def main() -> int:
     check("model3d unknown", mo.model3d_freshness({"match": "exact", "tpose_status": "unknown"})["state"], M)
     check("model3d current", mo.model3d_freshness({"match": "exact", "base_signature": "b",
                                                    "tpose_status": "unknown"})["state"], C)
-    check("hair none", mo.hair_preview_freshness({"preview_url": None})["state"], M)
-    check("hair current", mo.hair_preview_freshness({"preview_url": "u", "fsig": "f",
+    check("hair none", mo.garment_preview_freshness({"preview_url": None})["state"], M)
+    check("hair current", mo.garment_preview_freshness({"preview_url": "u", "fsig": "f",
                                                      "steps": {"fit": {"status": "accepted"}}})["state"], C)
-    check("hair reasons", st(mo.hair_preview_freshness({"preview_url": "u", "fsig": "f",
+    check("hair reasons", st(mo.garment_preview_freshness({"preview_url": "u", "fsig": "f",
                                                         "steps": {"fit": {"status": "refused"}},
                                                         "stale_reasons": ["colour_changed", "placement_changed"]})),
           (S, "Hair colour changed · Hair placement changed"))
-    check("hair older", st(mo.hair_preview_freshness({"preview_url": "u", "fsig": None, "stale_reasons": []})),
+    check("hair older", st(mo.garment_preview_freshness({"preview_url": "u", "fsig": None, "stale_reasons": []})),
           (S, "An older fit is shown"))
+    # A clothing piece (the Wardrobe) names its own inputs: the piece, not the hair.
+    check("clothing reasons", st(mo.garment_preview_freshness({"preview_url": "u", "fsig": "f", "kind": "clothing",
+                                                               "steps": {"fit": {"status": "missing"}},
+                                                               "stale_reasons": ["description_changed"]})),
+          (S, "Piece description changed"))
     check("dressed newer", mo.dressed_newer(t16, {"front": {"created_at": "2026-11-09T16:05:00+00:00"}}), True)
     check("dressed older", mo.dressed_newer(t16, {"front": {"created_at": "2026-11-09T15:00:00+00:00"},
                                                   "back": None}), False)
@@ -353,7 +358,8 @@ def main() -> int:
     for fn, payload in ((lambda p: mo.annotate_base_info("Ann", p), {"signature": bsig, "image_meta": "x"}),
                         (lambda p: mo.annotate_model3d_info("Ann", p), {"model": "x"}),
                         (lambda p: mo.annotate_model_refs_info("Ann", p), {"views": 3}),
-                        (mo.annotate_hair, {"garment": {"steps": 7}})):
+                        (mo.annotate_hair, {"garment": {"steps": 7}}),
+                        (mo.annotate_garment, {"garment": {"steps": 7}})):
         try:
             fn(payload)
             raised = False
@@ -364,13 +370,14 @@ def main() -> int:
     print("[5] route wiring")
     tree = ast.parse((ROOT / "app" / "routes" / "characters.py").read_text(encoding="utf-8"))
     want = {"get_character_base_body": "annotate_base_info", "get_character_model3d": "annotate_model3d_info",
-            "get_character_model_refs": "annotate_model_refs_info", "get_character_hair": "annotate_hair"}
+            "get_character_model_refs": "annotate_model_refs_info", "get_character_hair": "annotate_hair",
+            "get_character_garment": "annotate_garment"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in want:
             calls = {n.func.id for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
             check(f"{node.name} -> {want[node.name]}", want[node.name] in calls, True)
             want[node.name] = None
-    check("all four routes found", [k for k, v in want.items() if v], [])
+    check("all five routes found", [k for k, v in want.items() if v], [])
 
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0

@@ -29,38 +29,18 @@
  * only re-fit from the stored HairDeck result.
  */
 import { useCallback, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
+import { FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, StepState } from './GarmentSteps'
+import type { ImageStepSpec } from './GarmentSteps'
+import { EMPTY_TILE, ERROR_STYLE, ROW, TILE_HEIGHT, WARN_STYLE, flatFit, num } from './garmentStyle'
+import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
-import { GARMENT_VIEWS, garmentRunning, useGarment } from './useGarment'
-import type {
-  GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, HairDeckPanel, HairInfo,
-  HairMethod, HairPlacement, OtherMethodInfo,
-} from './useGarment'
-
-const TILE_HEIGHT = 200
-
-const EMPTY_TILE: CSSProperties = {
-  width: '100%',
-  height: TILE_HEIGHT,
-  borderRadius: 6,
-  border: '1px solid var(--border, #30363d)',
-  background: 'rgba(255, 255, 255, 0.04)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  textAlign: 'center',
-  padding: 6,
-  boxSizing: 'border-box',
-}
-
-const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
-const WARN_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
-const ROW: CSSProperties = { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }
+import { garmentRunning, useGarment } from './useGarment'
+import type { HairDeckPanel, HairInfo, HairMethod, HairPlacement, OtherMethodInfo } from './useGarment'
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -98,24 +78,6 @@ const STALE_LABELS: Record<string, string> = {
   placement_changed: 'Hair placement changed',
 }
 
-const FIT_STATUS: Record<string, string> = {
-  accepted: 'Accepted',
-  stale: 'Fitted on an older base model',
-  outdated: 'Fitted from a replaced mesh',
-  missing: 'Not fitted yet',
-}
-
-/** One chip: which number of a gate record, how it reads, how it scales.
- *  The limit itself always comes from the server (`HairInfo.limits`). */
-interface ChipSpec {
-  key: string
-  label: string
-  /** Multiplier for display (shares → %, metres → cm). */
-  scale: number
-  unit: string
-  digits: number
-}
-
 const HAIRED_CHIPS: ChipSpec[] = [
   { key: 'body_xor', label: 'Body change', scale: 100, unit: '%', digits: 2 },
   { key: 'body_dRGB', label: 'Colour change', scale: 1, unit: '', digits: 2 },
@@ -127,10 +89,6 @@ const GHOST_CHIPS: ChipSpec[] = [
   { key: 'centre_dx', label: 'Centre offset', scale: 1, unit: 'px', digits: 1 },
   { key: 'w_ratio', label: 'Width ratio', scale: 1, unit: '', digits: 3 },
   { key: 'body_left', label: 'Body left', scale: 100, unit: '%', digits: 2 },
-]
-
-const MESH_CHIPS: ChipSpec[] = [
-  { key: 'largest_component_share', label: 'Component share', scale: 100, unit: '%', digits: 1 },
 ]
 
 const FIT_CHIPS: ChipSpec[] = [
@@ -155,120 +113,12 @@ const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
   { key: 'tilt_deg', label: 'Forward tilt', scale: 1, unit: '°', digits: 1 },
 ]
 
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-
-/** Whether `value` passes `limit` (`garment_gates.limits` semantics). */
-function passes(limit: GateLimit, value: number, height: number | null): boolean | null {
-  const scaleH = (x: number) => (limit.per_height ? (height === null ? null : x * height) : x)
-  if (limit.op === 'range') {
-    const [lo, hi] = Array.isArray(limit.value) ? limit.value : [limit.value, limit.value]
-    return value >= lo && value <= hi
-  }
-  const lim = scaleH(Array.isArray(limit.value) ? limit.value[0] : limit.value)
-  if (lim === null) return null
-  switch (limit.op) {
-    case 'lt': return value < lim
-    case 'le': return value <= lim
-    case 'ge': return value >= lim
-    case 'abs_le': return Math.abs(value) <= lim
-    default: return null
-  }
-}
-
-function limitText(limit: GateLimit, spec: ChipSpec, height: number | null): string {
-  const f = (x: number) => `${(x * spec.scale).toFixed(spec.digits)}${spec.unit ? ` ${spec.unit}` : ''}`
-  if (limit.op === 'range') {
-    const [lo, hi] = Array.isArray(limit.value) ? limit.value : [limit.value, limit.value]
-    return `${f(lo)}–${f(hi)}`
-  }
-  const raw = Array.isArray(limit.value) ? limit.value[0] : limit.value
-  const lim = limit.per_height ? (height === null ? null : raw * height) : raw
-  if (lim === null) return ''
-  const op = limit.op === 'lt' ? '<' : limit.op === 'le' ? '≤' : limit.op === 'ge' ? '≥' : '± ≤'
-  return `${op} ${f(lim)}`
-}
-
-function GateChips({ specs, record, limits, view }: {
-  specs: ChipSpec[]
-  record: Record<string, unknown> | null | undefined
-  limits: Record<string, GateLimit> | undefined
-  view?: string
-}) {
-  const { t } = useI18n()
-  if (!record) return null
-  const height = num(record.H)
-  const chips: ReactNode[] = []
-  for (const spec of specs) {
-    const value = num(record[spec.key])
-    const limit = limits?.[spec.key]
-    // A limit gated on other views only (the chest on the back) is not shown.
-    if (limit?.views && view && !limit.views.includes(view)) continue
-    if (value === null) continue
-    const ok = limit ? passes(limit, value, height) : null
-    const color = ok === null ? 'var(--border, #30363d)' : ok ? 'var(--success, #3fb950)' : 'var(--danger, #f85149)'
-    const shown = `${(value * spec.scale).toFixed(spec.digits)}${spec.unit ? ` ${spec.unit}` : ''}`
-    const lim = limit ? limitText(limit, spec, height) : ''
-    chips.push(
-      <span
-        key={spec.key}
-        title={lim ? `${t('Limit')}: ${lim}` : t('Reported, not gated')}
-        style={{
-          display: 'inline-block',
-          padding: '1px 6px',
-          borderRadius: 10,
-          border: `1px solid ${color}`,
-          color: ok === false ? 'var(--danger, #f85149)' : undefined,
-          fontSize: '0.85em',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {t(spec.label)} {shown}{lim ? ` (${lim})` : ''}
-      </span>,
-    )
-  }
-  if (!chips.length) return null
-  return <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>{chips}</div>
-}
-
-/** Every number and reason of one gate record — the generic list for
- *  refused attempts (both attempts' numbers, plan review focus 5). */
-function RecordNumbers({ label, record }: { label: string; record: unknown }) {
-  if (!record || typeof record !== 'object') return null
-  const rec = record as GateRecord
-  const numbers = Object.entries(rec)
-    .filter(([, v]) => typeof v === 'number')
-    .map(([k, v]) => `${k} ${Number.isInteger(v) ? v : (v as number).toFixed(4)}`)
-  const reasons = Array.isArray(rec.reasons) ? rec.reasons : []
-  return (
-    <div className="ga-hint" style={{ overflowWrap: 'anywhere' }}>
-      <strong>{label}</strong>{numbers.length ? ` — ${numbers.join(' · ')}` : ''}
-      {reasons.map((r) => <div key={r} style={ERROR_STYLE}>{r}</div>)}
-    </div>
-  )
-}
-
-/** The gate records of a failure, labelled: per attempt, per view (the
- *  front/back bottoms check) or the fit's single record. */
-function failureRecords(gates: Record<string, unknown> | null, t: (s: string) => string): Array<[string, unknown]> {
-  if (!gates) return []
-  if (Array.isArray(gates.attempts)) {
-    return (gates.attempts as GateRecord[]).map((r, i) => [`${t('Attempt')} ${num(r?.attempt) ?? i + 1}`, flatFit(r)])
-  }
-  if (gates.front || gates.back) {
-    return [[t('Front view'), gates.front], [t('Back view'), gates.back]]
-  }
-  if (gates.metrics && typeof gates.metrics === 'object') {
-    return [[t('Fit'), { ...(gates.metrics as object), reasons: gates.reasons }]]
-  }
-  return [[t('Gate'), gates]]
-}
-
-/** A HairDeck fit attempt `{attempt, seed, ok, reasons, limits, metrics}`
- *  with its metrics lifted beside attempt/seed, so RecordNumbers lists them. */
-function flatFit(r: GateRecord | null | undefined): unknown {
-  if (!r || typeof r.metrics !== 'object' || r.metrics === null) return r
-  return { attempt: r.attempt, seed: r.seed, ...(r.metrics as object), reasons: r.reasons }
-}
+/** The hair chain's image steps in order, with the chips of their gates. */
+const HAIR_IMAGE_STEPS: ImageStepSpec[] = [
+  { step: 'haired', chips: HAIRED_CHIPS },
+  { step: 'ghost', chips: GHOST_CHIPS },
+  { step: 'cutout' },
+]
 
 function Swatch({ hex }: { hex: string }) {
   return (
@@ -485,96 +335,6 @@ function OtherMethod({ other, method, limits }: {
   )
 }
 
-/** The record the tile's chips show: the accepted final's (last of its
- *  attempts), else the newest refused attempt's. */
-function shownRecord(img: GarmentImageInfo | undefined): GateRecord | null {
-  if (!img) return null
-  const finals = img.gates ? Object.values(img.gates) : []
-  if (finals.length) return finals[finals.length - 1]
-  const last = img.attempts?.[img.attempts.length - 1]
-  return last?.gate ?? null
-}
-
-function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle, onRegenerate, extra }: {
-  img: GarmentImageInfo | undefined
-  label: string
-  small?: boolean
-  chips?: ChipSpec[]
-  limits?: Record<string, GateLimit>
-  view: GarmentView
-  busy: boolean
-  blockedTitle?: string
-  onRegenerate: () => void
-  extra?: ReactNode
-}) {
-  const { t } = useI18n()
-  const url = img?.url || null
-  const height = small ? 120 : TILE_HEIGHT
-  const attempts = img?.attempts ?? []
-  return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div className="ga-hint">{label}</div>
-      {url ? (
-        <RefImage key={url} src={url} height={height} label={label} meta={img} compact={small} />
-      ) : (
-        <div className="ga-hint" style={{ ...EMPTY_TILE, height }}>{t('No render yet')}</div>
-      )}
-      {url && img && !img.accepted ? <div className="ga-hint" style={WARN_STYLE}>{t('Not accepted')}</div> : null}
-      {chips ? <GateChips specs={chips} record={shownRecord(img)} limits={limits} view={view} /> : null}
-      {extra}
-      {attempts.length ? (
-        <details style={{ marginTop: 4 }}>
-          <summary className="ga-hint" style={{ cursor: 'pointer' }}>
-            {t('Attempts')} ({attempts.length})
-          </summary>
-          {attempts.map((a) => (
-            <div key={a.attempt} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 4 }}>
-              <RefImage src={a.url} width={96} height={96} label={`${label} · ${t('Attempt')} ${a.attempt}`}
-                meta={a} compact />
-              <div style={{ minWidth: 0 }}>
-                {chips ? <GateChips specs={chips} record={a.gate} limits={limits} view={view} /> : null}
-                <RecordNumbers label={`${t('Attempt')} ${a.attempt}`} record={a.gate} />
-              </div>
-            </div>
-          ))}
-        </details>
-      ) : null}
-      <button
-        type="button"
-        className="ga-btn ga-btn-sm"
-        style={{ marginTop: 4 }}
-        disabled={busy || !!blockedTitle}
-        title={blockedTitle}
-        onClick={onRegenerate}
-        aria-label={`${t('Regenerate')} · ${label}`}
-      >
-        {url ? t('Regenerate') : t('Generate')}
-      </button>
-    </div>
-  )
-}
-
-function StepState({ garment, step }: { garment: GarmentInfo; step: string }) {
-  const { t } = useI18n()
-  if (garment.running_step === step) return <div className="ga-hint">{t('Generating…')}</div>
-  if (garment.failed?.step === step) {
-    return <div className="ga-hint" style={ERROR_STYLE}>{t('Failed')}: {garment.failed.error}</div>
-  }
-  return null
-}
-
-function upscaleText(upscale: Record<string, unknown> | null | undefined, t: (s: string) => string): string {
-  const status = String(upscale?.status || '')
-  if (status === 'applied') {
-    const scale = num(upscale?.scale)
-    const backend = upscale?.backend ? String(upscale.backend) : ''
-    return `${t('Upscaled')}${scale ? ` ×${scale}` : ''}${backend ? ` (${backend})` : ''}`
-  }
-  if (status === 'lanczos') return t('Lanczos only (upscale failed)')
-  if (status === 'not_needed') return t('No upscale needed')
-  return ''
-}
-
 export function FieldHair({ character, onEditAppearance }: {
   character: string
   /** Opens the Appearance tab, where the hair text is edited. */
@@ -584,7 +344,7 @@ export function FieldHair({ character, onEditAppearance }: {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
-  const { info, setInfo, startPoll } = useGarment(character)
+  const { info, setInfo, startPoll } = useGarment<HairInfo>(character ? `/characters/${enc}/hair` : null)
   // The user's own click, until the request answered (the poll then shows
   // the server's running state).
   const [posting, setPosting] = useState(false)
@@ -677,129 +437,23 @@ export function FieldHair({ character, onEditAppearance }: {
   const garment = info.garment
   const busy = posting || garmentRunning(info)
   const limits = info.limits || {}
-  const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : t('Back view'))
-  const steps = garment?.steps ?? {}
-  const accepted = (step: GarmentImageStep, view: GarmentView) => !!steps[step]?.[view]?.accepted
-  const previous: Partial<Record<GarmentImageStep, GarmentImageStep>> = { ghost: 'haired', cutout: 'ghost' }
-
-  const imageRow = (step: GarmentImageStep, chips?: ChipSpec[]) => (
-    <>
-      <div className="ga-fieldset-title">{t(STEP_LABELS[step])}</div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        {GARMENT_VIEWS.map((view) => {
-          const img = steps[step]?.[view]
-          const prev = previous[step]
-          const blocked = prev && !accepted(prev, view) ? t('Run the previous step first') : undefined
-          return (
-            <ImageTile
-              key={view}
-              img={img}
-              label={viewLabel(view)}
-              small={step === 'cutout'}
-              chips={chips}
-              limits={chips ? limits[step as 'haired' | 'ghost'] : undefined}
-              view={view}
-              busy={busy || !garment}
-              blockedTitle={blocked}
-              onRegenerate={() => { void run({ step, view, force: true }) }}
-              extra={step === 'cutout' && img?.url ? (
-                <div className="ga-hint" title={img.upscale?.reason ? String(img.upscale.reason) : undefined}>
-                  {[
-                    img.side ? `${t('Square side')} ${img.side} px` : '',
-                    upscaleText(img.upscale, t),
-                  ].filter(Boolean).join(' · ')}
-                </div>
-              ) : null}
-            />
-          )
-        })}
-      </div>
-      {garment ? <StepState garment={garment} step={step} /> : null}
-    </>
-  )
-
-  const mesh = steps.mesh
-  const fit = steps.fit
-  const fitRecord = fit && fit.status !== 'missing'
-    ? fit.metrics
-    : garment?.failed?.step === 'fit' && garment.failed.gates?.metrics
-      ? (garment.failed.gates.metrics as Record<string, unknown>)
-      : null
-  const failures = garment?.failed ? failureRecords(garment.failed.gates, t) : []
+  const fit = garment?.steps.fit
   const hd = info.hairdeck
   const isHairDeck = info.method === 'hairdeck'
   const noHair = !!garment && !garment.served_fsig && !garment.running_step && fit?.status !== 'accepted'
-
-  const fitBlock = (chips: ChipSpec[], fitLimits: Record<string, GateLimit> | undefined, ready: boolean) => (
-    <>
-      <div className="ga-fieldset-title">{t('Fit')}</div>
-      <div style={ROW}>
-        <span className="ga-hint">
-          {t(FIT_STATUS[fit?.status || 'missing'])}
-          {fit?.tris ? ` · ${t('Triangles')} ${fit.tris.toLocaleString()}` : ''}
-          {fit?.created_at ? ` · ${formatDateTime(fit.created_at, clockSettings())}` : ''}
-        </span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || !garment || !ready}
-          title={garment && !ready ? t('Run the previous step first') : undefined}
-          onClick={() => { void run({ step: 'fit', force: true }) }}
-        >
-          {t('Re-fit')}
-        </button>
-      </div>
-      <GateChips specs={chips} record={fitRecord} limits={fitLimits} />
-      {fit?.low && fit.low.ok === false ? (
-        <div className="ga-hint" style={WARN_STYLE}>
-          {t('Distance tier failed — the full hair is used')}: {fit.low.error}
-        </div>
-      ) : null}
-      {garment ? <StepState garment={garment} step="fit" /> : null}
-    </>
-  )
+  const onRun = (body: GarmentRunBody) => { void run(body) }
 
   const editChainSection = (
-    <>
-      {imageRow('haired', HAIRED_CHIPS)}
-      {imageRow('ghost', GHOST_CHIPS)}
-      {imageRow('cutout')}
-
-      <div className="ga-fieldset-title">{t('Mesh')}</div>
-      <div style={ROW}>
-        <span className="ga-hint">
-          {!mesh || mesh.status === 'missing' ? t('Not built yet')
-            : mesh.status === 'refused' ? t('Refused')
-            : t('Accepted')}
-          {mesh?.metrics.tris_raw != null && mesh.metrics.tris_prepared != null
-            ? ` · ${t('Triangles')} ${mesh.metrics.tris_raw.toLocaleString()} → ${mesh.metrics.tris_prepared.toLocaleString()}`
-            : ''}
-          {mesh?.metrics.backend ? ` · ${mesh.metrics.backend}` : ''}
-          {mesh?.created_at ? ` · ${formatDateTime(mesh.created_at, clockSettings())}` : ''}
-        </span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || !garment || !GARMENT_VIEWS.every((v) => accepted('cutout', v))}
-          title={garment && !GARMENT_VIEWS.every((v) => accepted('cutout', v)) ? t('Run the previous step first') : undefined}
-          onClick={() => { void run({ step: 'mesh', force: true }) }}
-        >
-          {mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
-        </button>
-      </div>
-      <GateChips specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} />
-      {mesh?.status === 'refused' && mesh.gates.length ? (
-        <details>
-          <summary className="ga-hint" style={{ cursor: 'pointer' }}>{t('Attempts')} ({mesh.gates.length})</summary>
-          {mesh.gates.map((g, i) => (
-            <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={g} />
-          ))}
-        </details>
-      ) : null}
-      {garment ? <StepState garment={garment} step="mesh" /> : null}
-
-      {fitBlock(FIT_CHIPS, limits.fit, mesh?.status === 'accepted')}
-    </>
+    <GarmentSteps
+      garment={garment}
+      imageSteps={HAIR_IMAGE_STEPS}
+      stepLabels={STEP_LABELS}
+      limits={limits}
+      fitChips={FIT_CHIPS}
+      busy={busy}
+      onRun={onRun}
+      lowFailedText="Distance tier failed — the full hair is used"
+    />
   )
 
   const hairdeckSection = hd ? (
@@ -866,7 +520,9 @@ export function FieldHair({ character, onEditAppearance }: {
         </>
       ) : null}
 
-      {fitBlock(HAIRDECK_FIT_CHIPS, limits.hairdeck_fit, hd.status === 'accepted')}
+      <FitBlock garment={garment} chips={HAIRDECK_FIT_CHIPS} limits={limits.hairdeck_fit}
+        ready={hd.status === 'accepted'} busy={busy} onRun={onRun}
+        lowFailedText="Distance tier failed — the full hair is used" />
       {hd.attempts.length ? (
         <details>
           <summary className="ga-hint" style={{ cursor: 'pointer' }}>
@@ -963,23 +619,7 @@ export function FieldHair({ character, onEditAppearance }: {
             </div>
           ) : null}
 
-          {garment?.failed && !garment.running_step ? (
-            <div>
-              <div className="ga-hint" style={ERROR_STYLE}>
-                {t('Failed')} · {t(STEP_LABELS[garment.failed.step] || garment.failed.step)}: {garment.failed.error}
-              </div>
-              {failures.length ? (
-                <details>
-                  <summary className="ga-hint" style={{ cursor: 'pointer' }}>
-                    {t('Numbers of the refused attempts')} ({failures.length})
-                  </summary>
-                  {failures.map(([label, record]) => (
-                    <RecordNumbers key={label} label={label} record={record} />
-                  ))}
-                </details>
-              ) : null}
-            </div>
-          ) : null}
+          <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
 
           {noHair ? (
             <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>

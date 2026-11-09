@@ -1,11 +1,12 @@
 /**
- * useGarment — the character's hair as its own mesh, as
- * `GET /characters/{name}/hair` reports it (`app/routes/characters.py` →
- * `garments.garment_info`), polled while a garment run of the character
- * goes. Same poll pattern as useBaseBody: one load, then a 3 s tick while a
- * step runs (no give-up — an edit may wait minutes in the GPU queue; after
- * 40 ticks the tick slows down), stopped when nothing runs, on unmount and
- * on a character switch.
+ * useGarment — one garment info route, polled while a garment run goes:
+ * the Hair tab's `GET /characters/{name}/hair` or the Wardrobe's
+ * `GET /characters/{name}/garments/{item}` (`app/routes/characters.py` →
+ * `garments.garment_info` under the payload's `garment`). Same poll pattern
+ * as useBaseBody: one load, then a 3 s tick while a step runs (no give-up —
+ * an edit may wait minutes in the GPU queue; after 40 ticks the tick slows
+ * down), stopped when nothing runs, on unmount and when the URL changes
+ * (another character or item; null = nothing to load).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
@@ -15,8 +16,9 @@ import type { Freshness } from './FreshnessBadge'
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
 
-export const GARMENT_IMAGE_STEPS = ['haired', 'ghost', 'cutout'] as const
-export type GarmentImageStep = typeof GARMENT_IMAGE_STEPS[number]
+/** The image steps of both kinds: hair haired → ghost → cutout, clothing
+ *  worn → ghost → cutout (`garment_store.GARMENT_STEPS`). */
+export type GarmentImageStep = 'haired' | 'worn' | 'ghost' | 'cutout'
 export type GarmentStep = GarmentImageStep | 'mesh' | 'hairdeck' | 'fit'
 
 /** One gate record (`garment_gates.haired_gate` / `ghost_gate`, a mesh
@@ -148,6 +150,7 @@ export interface GarmentInfo {
   description: string
   steps: {
     haired?: Partial<Record<GarmentView, GarmentImageInfo>>
+    worn?: Partial<Record<GarmentView, GarmentImageInfo>>
     ghost?: Partial<Record<GarmentView, GarmentImageInfo>>
     cutout?: Partial<Record<GarmentView, GarmentImageInfo>>
     mesh?: GarmentMeshInfo
@@ -199,11 +202,44 @@ const POLL_MS = 3000
 const POLL_SLOW_MS = 15000
 const POLL_SLOW_AFTER = 40
 
-export const garmentRunning = (d: HairInfo | null | undefined) => !!d?.garment?.running_step
+/** The row chip of an own-mesh piece (`garment_set.piece_status`). */
+export interface PieceStatus {
+  /** How far the chain of the current fingerprint got (`running` wins). */
+  state: 'running' | 'fitted' | 'mesh' | 'images' | 'missing'
+  /** The step in flight while running. */
+  step: string | null
+  /** Worn without an accepted fit: the outfit build paints it onto the body. */
+  painted: boolean
+  /** Why it is painted on (server text, the outfit warning's words). */
+  reason: string | null
+}
 
-export function useGarment(character: string) {
-  const enc = encodeURIComponent(character)
-  const [info, setInfo] = useState<HairInfo | null>(null)
+/** GET /characters/{n}/garments — the Wardrobe's own-mesh overview. */
+export interface WardrobeGarments {
+  pipeline: boolean
+  /** Every own-mesh piece the character holds or wears. */
+  items: Record<string, PieceStatus>
+  /** Worn own-mesh pieces whose meshes take the same body slot. */
+  overlaps: Array<{ items: [string, string]; slots: string[] }>
+}
+
+/** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */
+export interface GarmentItemInfo {
+  pipeline: boolean
+  item_id: string
+  name: string
+  kind: string
+  own_mesh: boolean
+  worn: boolean
+  status: PieceStatus
+  garment: GarmentInfo | null
+  limits: Partial<Record<string, Record<string, GateLimit>>>
+}
+
+export const garmentRunning = (d: { garment?: GarmentInfo | null } | null | undefined) => !!d?.garment?.running_step
+
+export function useGarment<T extends { garment?: GarmentInfo | null }>(url: string | null) {
+  const [info, setInfo] = useState<T | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Poll generation: a tick of a stopped/restarted chain drops its result.
   const pollIdRef = useRef(0)
@@ -221,9 +257,9 @@ export function useGarment(character: string) {
       let n = 0
       const tick = async () => {
         timerRef.current = null
-        let d: HairInfo | null = null
+        let d: T | null = null
         try {
-          d = await apiGet<HairInfo>(`/characters/${enc}/hair`)
+          d = url ? await apiGet<T>(url) : null
         } catch {
           d = null
         }
@@ -235,15 +271,36 @@ export function useGarment(character: string) {
       }
       timerRef.current = setTimeout(tick, delayMs)
     },
-    [enc, stopPoll],
+    [url, stopPoll],
   )
 
   useEffect(() => {
     setInfo(null)
-    if (!character) return stopPoll
+    if (!url) return stopPoll
     startPoll()
     return stopPoll
-  }, [character, startPoll, stopPoll])
+  }, [url, startPoll, stopPoll])
 
   return { info, setInfo, startPoll }
+}
+
+/** The Wardrobe's own-mesh overview of a character (GET
+ *  /characters/{n}/garments), loaded by `reload` — the Wardrobe calls it with
+ *  its belongings; null before, and when it failed (the toggles then stay
+ *  hidden). */
+export function useWardrobeGarments(character: string) {
+  const [data, setData] = useState<WardrobeGarments | null>(null)
+  const load = useCallback(async () => {
+    if (!character) { setData(null); return }
+    try {
+      setData(await apiGet<WardrobeGarments>(`/characters/${encodeURIComponent(character)}/garments`))
+    } catch {
+      setData(null)
+    }
+  }, [character])
+  /** A panel's newer row status, without reloading the overview. */
+  const setStatus = useCallback((itemId: string, status: PieceStatus) => {
+    setData((prev) => (prev && prev.items[itemId] ? { ...prev, items: { ...prev.items, [itemId]: status } } : prev))
+  }, [])
+  return { data, reload: load, setStatus }
 }
