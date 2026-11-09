@@ -29,7 +29,7 @@ def measure_file(path: Path) -> Optional[Dict[str, Any]]:
     from app.blender import runner
     res = runner.run("measure", inputs={"model": Path(path)})
     if not res.get("ok"):
-        logger.debug("nicht vermessen (%s): %s", Path(path).name,
+        logger.debug("not measured (%s): %s", Path(path).name,
                      res.get("error"))
         return None
     data = dict(res["data"])
@@ -398,6 +398,51 @@ def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
     out.update(ok=True, blob=blob, tris=stage.get("tris"),
                tris_before=stage.get("tris_before"))
     return out
+
+
+def decimate_to(path_in: Path, target_tris: int, out: Path) -> Dict[str, Any]:
+    """Reduces the GLB ``path_in`` to about ``target_tris`` triangles and
+    writes the result to ``out`` (UV seams kept, skin weights interpolated).
+
+    The ratio is ``min(0.999, target / tris)`` with ``tris`` from
+    ``measure_file`` — a mesh already below the target still passes through
+    Blender once, so every result has the same exporter behind it. The
+    ``<stem>_lod<N>`` file of ``lod.py`` is moved to ``out`` (a temp folder
+    beside ``out``, then one rename), never left next to it. No validation:
+    the callers decide what a reduced mesh must satisfy (a garment is static,
+    its fitted distance tier is skinned).
+
+    Returns ``{"ok", "path", "tris_before", "tris", "ratio", "error"}``;
+    ``ok`` False leaves ``out`` untouched.
+    """
+    import os
+    import tempfile
+    from app.blender import runner
+    path_in, out = Path(path_in), Path(out)
+    res: Dict[str, Any] = {"ok": False, "path": "", "tris_before": None,
+                           "tris": None, "ratio": None, "error": ""}
+    if path_in.suffix.lower() != ".glb":
+        res["error"] = f"decimation handles GLB, not {path_in.suffix}"
+        return res
+    measured = measure_file(path_in)
+    tris = int((measured or {}).get("tris") or 0)
+    if tris <= 0:
+        res["error"] = (unavailable_reason() or "could not measure the triangle count")
+        return res
+    ratio = min(0.999, float(target_tris) / tris)
+    res.update(tris_before=tris, ratio=ratio)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".decimate-", dir=out.parent) as tmp:
+        run = runner.run("lod", inputs={"model": path_in},
+                         params={"ratios": [ratio], "keep_uvs": True},
+                         out_dir=Path(tmp), timeout_s=600)
+        if not run.get("ok") or not run.get("outputs"):
+            res["error"] = unavailable_reason() or run.get("error") or "no stage produced"
+            return res
+        stage = (run["data"].get("stages") or [{}])[0]
+        os.replace(next(iter(run["outputs"].values())), out)
+    res.update(ok=True, path=str(out), tris=stage.get("tris"))
+    return res
 
 
 def unavailable_reason() -> str:

@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+"""Hair as its own mesh, task 5: the routed garment mesh and its decimation
+(app/core/garment_mesh.py, app/blender/refine.py::decimate_to).
+
+Usage:
+    ./.venv/bin/python scripts/smoke_garment_mesh.py [--no-blender]
+
+Runs against a THROWAWAY storage directory with a copy of the repo's ``human``
+package — no real world, no hub, no server. The image service is a recorder
+that writes synthetic GLBs; ``runner.run`` is stubbed for the generate checks.
+Section [8] runs ONE real Blender decimation on a synthetic grid when a usable
+Blender (5.2) is found; ``--no-blender`` or a missing Blender skips it.
+Every expectation is derived by hand below from plan
+2026-11-09-base-body-phase4-hair (R8, R10, R13, Task 5).
+
+Fixture: ``Demo`` (human-roleplay, on the base-body pipeline, hair slot
+{length: medium, color: blonde}); ensure_hair_item gives H = "hair_demo",
+kind "hair". F = "0123456789ab" (any 12-hex fsig: generate takes it as given).
+Cut-outs: garments/images/H_F_cutout_{front,back}.png (fake PNG bytes).
+
+Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
+    GOOD: quad A side sqrt(0.99) -> area 0.99, quad B side 0.1 -> area 0.01;
+          largest component share = 0.99 / 1.00 = 0.99 >= 0.98 -> pass.
+    BAD:  quad A area 0.97, quad B area 0.03 -> share 0.97 < 0.98 -> fail.
+
+[1] generate(Demo, H, F) with the service writing GOOD:
+    - ONE generate_mesh call with occasion "mesh_garment", face_num 100000,
+      view_images {"back": <cutout back>} (keys {"back"}),
+      source_image_path = <cutout front>, output_path = garments/raw/H_F.glb,
+      mesh_name "Demo-hair", character_name "Demo", material "dielectric",
+      alpha "opaque";
+    - runner: "measure" on the raw file (4 tris), then "lod" with
+      ratios [min(0.999, 25000/4 = 6250)] = [0.999] and keep_uvs True;
+    - returns garments/prepared/H_F.glb (exists, bytes = GOOD);
+    - record prepared/H_F.json: accepted True, tris_raw 4, tris_prepared 4,
+      target_tris 25000, largest_component_share 0.99 (+-1e-6), backend
+      "FakeMesh", routing {"occasion": "mesh_garment"} copied from the result,
+      1 attempt.
+[2] Cache: a second generate makes NO service call and returns the same path;
+    force=True makes exactly one more call.
+[3] BAD on both attempts (fsig G = "00000000bad0"): 2 service calls, then
+    MeshGateRefused with 2 records; record accepted False,
+    largest_component_share 0.97 (+-1e-6), attempts [0.97, 0.97], both ok
+    False with a reason naming "largest component"; no prepared GLB left,
+    no candidate file left in prepared/.
+[4] BAD then GOOD (fsig M = "0000000000c4"): 2 calls, accepted at attempt 2;
+    record attempts[0].ok False (0.97), attempts[1].ok True (0.99).
+[5] A missing back cut-out (fsig N = "0000000000d5", front only) ->
+    FileNotFoundError, no service call.
+[6] The service answering {"ok": False, "error": "down"} (fsig E =
+    "0000000000e6") -> RuntimeError naming "down", no record, no prepared GLB.
+[7] decimate_to with stubbed runner:
+    - measure reports 100000 tris, target 25000 -> ratio 0.25, the lod output
+      "model_lod25000.glb" is moved to the given out path, result
+      {ok True, tris_before 100000, tris 25000, ratio 0.25};
+    - measure fails -> ok False, error non-empty, out not written.
+[8] Real Blender (optional): a flat 20x20 grid = 800 tris, target 200 ->
+    ratio min(0.999, 200/800) = 0.25; ok True, out exists, tris_before 800,
+    tris within [150, 250] (Decimate hits the ratio approximately), no
+    "*_lod*" file left beside out.
+"""
+import json
+import math
+import os
+import shutil
+import struct
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+FAILS = []
+
+
+def check(label, got, want):
+    ok = got == want
+    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}" + ("" if ok else f" — expected {want!r}"))
+    if not ok:
+        FAILS.append(label)
+
+
+def near(label, got, want, tol):
+    ok = got is not None and abs(float(got) - want) <= tol
+    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}" + ("" if ok else f" — expected {want} ± {tol}"))
+    if not ok:
+        FAILS.append(label)
+
+
+# --- Synthetic GLBs -----------------------------------------------------------
+
+def make_glb(quads, *, grid=0) -> bytes:
+    """A static GLB. ``quads``: list of (x0, side) axis-aligned squares in the
+    z=0 plane, each its own 4 vertices (disjoint). ``grid`` > 0 instead builds
+    one flat grid of grid x grid quads (shared vertices, continuous UVs)."""
+    pos, uv, idx = [], [], []
+    if grid:
+        n = grid + 1
+        for j in range(n):
+            for i in range(n):
+                pos.append((i / grid, j / grid, 0.0))
+                uv.append((i / grid, j / grid))
+        for j in range(grid):
+            for i in range(grid):
+                a = j * n + i
+                idx += [a, a + 1, a + n + 1, a, a + n + 1, a + n]
+    else:
+        for x0, side in quads:
+            base = len(pos)
+            for dx, dy in ((0, 0), (1, 0), (1, 1), (0, 1)):
+                pos.append((x0 + dx * side, dy * side, 0.0))
+                uv.append((float(dx), float(dy)))
+            idx += [base, base + 1, base + 2, base, base + 2, base + 3]
+    pb = b"".join(struct.pack("<3f", *p) for p in pos)
+    ub = b"".join(struct.pack("<2f", *u) for u in uv)
+    ib = b"".join(struct.pack("<I", i) for i in idx)
+    blob = pb + ub + ib
+    mins = [min(p[k] for p in pos) for k in range(3)]
+    maxs = [max(p[k] for p in pos) for k in range(3)]
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "garment", "mesh": 0}],
+        "meshes": [{"name": "garment", "primitives": [{
+            "attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2}]}],
+        "buffers": [{"byteLength": len(blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(pb), "target": 34962},
+            {"buffer": 0, "byteOffset": len(pb), "byteLength": len(ub), "target": 34962},
+            {"buffer": 0, "byteOffset": len(pb) + len(ub), "byteLength": len(ib), "target": 34963}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(pos), "type": "VEC3",
+             "min": mins, "max": maxs},
+            {"bufferView": 1, "componentType": 5126, "count": len(uv), "type": "VEC2"},
+            {"bufferView": 2, "componentType": 5125, "count": len(idx), "type": "SCALAR"}],
+    }
+    js = json.dumps(gltf).encode("utf-8")
+    js += b" " * (-len(js) % 4)
+    blob += b"\0" * (-len(blob) % 4)
+    total = 12 + 8 + len(js) + 8 + len(blob)
+    return (struct.pack("<III", 0x46546C67, 2, total)
+            + struct.pack("<II", len(js), 0x4E4F534A) + js
+            + struct.pack("<II", len(blob), 0x004E4942) + blob)
+
+
+GOOD = make_glb([(0.0, math.sqrt(0.99)), (5.0, 0.1)])
+BAD = make_glb([(0.0, math.sqrt(0.97)), (5.0, math.sqrt(0.03))])
+
+
+class Recorder:
+    """Stands in for the image service: writes ``script[i]`` per call."""
+
+    def __init__(self):
+        self.calls = []
+        self.script = []
+        self.answer = None
+
+    def generate_mesh(self, **kw):
+        self.calls.append(kw)
+        if self.answer is not None:
+            return dict(self.answer)
+        blob = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
+        out = Path(kw["output_path"])
+        out.write_bytes(blob)
+        return {"ok": True, "path": str(out), "format": "glb", "backend": "FakeMesh",
+                "routing": {"occasion": "mesh_garment"}}
+
+
+def main() -> int:
+    use_blender = "--no-blender" not in sys.argv[1:]
+    with tempfile.TemporaryDirectory(prefix="garment-mesh-") as tmp:
+        root = Path(tmp)
+        os.environ["ANIMATION_CLIPS_DIR"] = str(root / "clips")
+        os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
+        from app.core import paths
+        paths.init(root / "world")
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        from app.core import config
+        config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
+        from app.core import db
+        db.init_schema()
+        plugins = root / "plugins"
+        shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
+        from app.plugins.loader import discover_packages
+        discover_packages(plugins, force=True)
+
+        from app.blender import refine, runner
+        from app.core import base_body, garment_assembly, garment_hair
+        from app.core import garment_store as gs
+        from app.imagegen import service as service_mod
+        from app.models.character import save_character_profile
+        garment_assembly.schedule = lambda *a, **k: False
+        try:
+            from app.core import garment_mesh as gm
+        except ImportError as e:
+            check("garment_mesh importable", str(e), "importable")
+            print("FAILED: " + ", ".join(FAILS))
+            return 1
+
+        human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
+                 "character_appearance": "slender, wavy hair",
+                 "body_slots": {"skin": {"tone": "olive"}, "eyes": {"color": "green"},
+                                "build": {"type": "athletic"},
+                                "hair": {"length": "medium", "color": "blonde"}}}
+        check("create Demo", save_character_profile("Demo", human, create_new=True), True)
+        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
+        hid = garment_hair.ensure_hair_item("Demo")
+        check("hair item id", hid, "hair_demo")
+
+        def cutouts(fsig, views=("front", "back")):
+            out = {}
+            for view in views:
+                p = gs.garment_path("Demo", hid, fsig, "image", step="cutout", view=view)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(b"\x89PNG-" + view.encode() + b"-" + fsig.encode())
+                out[view] = p
+            return out
+
+        rec = Recorder()
+        service_mod.get_image_service = lambda: rec
+
+        # Stubbed Blender: "measure" counts the fixture's triangles from its
+        # index accessor; "lod" copies the input to <stem>_lod<N>.glb.
+        runner_calls = []
+        real_run, real_version = runner.run, runner.version
+
+        def glb_tris(path):
+            data = Path(path).read_bytes()
+            jlen = struct.unpack_from("<I", data, 12)[0]
+            gltf = json.loads(data[20:20 + jlen])
+            return sum(gltf["accessors"][p["indices"]]["count"] // 3
+                       for m in gltf["meshes"] for p in m["primitives"])
+
+        def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
+            runner_calls.append((script, dict(params or {}), Path(inputs["model"])))
+            src = Path(inputs["model"])
+            tris = glb_tris(src)
+            if script == "measure":
+                return {"ok": True, "error": "", "data": {"tris": tris}, "outputs": {}}
+            if script == "lod":
+                dst = Path(out_dir) / f"model_lod{tris}.glb"
+                shutil.copyfile(src, dst)
+                return {"ok": True, "error": "",
+                        "data": {"stages": [{"ratio": params["ratios"][0], "tris_before": tris,
+                                             "tris": tris, "file": dst.name}],
+                                 "source_tris": tris},
+                        "outputs": {f"lod{tris}": str(dst)}}
+            return {"ok": False, "error": "unexpected script", "data": {}, "outputs": {}}
+
+        runner.run = fake_run
+        runner.version = lambda executable="": "5.2.2"
+
+        print("[1] generate")
+        F = "0123456789ab"
+        cut = cutouts(F)
+        rec.script = [GOOD]
+        prepared = gm.generate("Demo", hid, F)
+        check("one service call", len(rec.calls), 1)
+        kw = rec.calls[0] if rec.calls else {}
+        check("occasion", kw.get("occasion"), "mesh_garment")
+        check("face_num", kw.get("face_num"), 100000)
+        check("view_images keys", set((kw.get("view_images") or {}).keys()), {"back"})
+        check("back view path", (kw.get("view_images") or {}).get("back"), str(cut["back"]))
+        check("front path", str(kw.get("source_image_path")), str(cut["front"]))
+        check("output_path", str(kw.get("output_path")), str(gs.garment_path("Demo", hid, F, "raw")))
+        check("mesh_name", kw.get("mesh_name"), "Demo-hair")
+        check("character_name", kw.get("character_name"), "Demo")
+        check("material", kw.get("material"), "dielectric")
+        check("alpha", kw.get("alpha"), "opaque")
+        check("runner scripts", [c[0] for c in runner_calls], ["measure", "lod"])
+        lod_params = runner_calls[1][1] if len(runner_calls) > 1 else {}
+        check("decimate ratio", lod_params.get("ratios"), [min(0.999, 25000 / 4)])
+        check("ratio is 0.999", lod_params.get("ratios"), [0.999])
+        check("keep_uvs", lod_params.get("keep_uvs"), True)
+        check("prepared path", prepared, gs.garment_path("Demo", hid, F, "prepared"))
+        check("prepared bytes", prepared.read_bytes() == GOOD, True)
+        record = gs.read_record(prepared.with_suffix(".json"))
+        check("accepted", record.get("accepted"), True)
+        check("tris_raw", record.get("tris_raw"), 4)
+        check("tris_prepared", record.get("tris_prepared"), 4)
+        check("target_tris", record.get("target_tris"), 25000)
+        near("largest share", record.get("largest_component_share"), 0.99, 1e-6)
+        check("backend", record.get("backend"), "FakeMesh")
+        check("routing", record.get("routing"), {"occasion": "mesh_garment"})
+        check("attempts", len(record.get("attempts") or []), 1)
+        check("TARGET_TRIS", gm.TARGET_TRIS, 25000)
+
+        print("[2] cache")
+        again = gm.generate("Demo", hid, F)
+        check("cached: no call", len(rec.calls), 1)
+        check("cached path", again, prepared)
+        gm.generate("Demo", hid, F, force=True)
+        check("force: one more call", len(rec.calls), 2)
+
+        print("[3] two failed attempts")
+        G = "00000000bad0"
+        cutouts(G)
+        rec.calls.clear()
+        rec.script = [BAD]
+        refused = None
+        try:
+            gm.generate("Demo", hid, G)
+        except gm.MeshGateRefused as e:
+            refused = e
+        check("refused", refused is not None, True)
+        check("two calls", len(rec.calls), 2)
+        check("refusal records", len(getattr(refused, "records", []) or []), 2)
+        check("refusal step", getattr(refused, "step", None), "mesh")
+        prep_g = gs.garment_path("Demo", hid, G, "prepared")
+        rec_g = gs.read_record(prep_g.with_suffix(".json"))
+        check("failure record accepted", rec_g.get("accepted"), False)
+        near("failure share", rec_g.get("largest_component_share"), 0.97, 1e-6)
+        shares = [round(a.get("largest_component_share", -1), 6) for a in rec_g.get("attempts") or []]
+        check("attempt shares", shares, [0.97, 0.97])
+        check("attempts not ok", [a.get("ok") for a in rec_g.get("attempts") or []], [False, False])
+        check("reason names the gate",
+              all("largest component" in " ".join(a.get("reasons") or []) for a in rec_g.get("attempts") or []),
+              True)
+        check("no prepared GLB", prep_g.exists(), False)
+        leftovers = sorted(p.name for p in prep_g.parent.iterdir() if p.name.startswith("."))
+        check("no candidate left", leftovers, [])
+
+        print("[4] fail then pass")
+        M = "0000000000c4"
+        cutouts(M)
+        rec.calls.clear()
+        rec.script = [BAD, GOOD]
+        p_m = gm.generate("Demo", hid, M)
+        check("two calls", len(rec.calls), 2)
+        rec_m = gs.read_record(p_m.with_suffix(".json"))
+        check("accepted at 2", rec_m.get("accepted"), True)
+        check("attempt oks", [a.get("ok") for a in rec_m.get("attempts") or []], [False, True])
+        check("attempt shares", [round(a.get("largest_component_share", -1), 6)
+                                 for a in rec_m.get("attempts") or []], [0.97, 0.99])
+
+        print("[5] missing cut-out")
+        N = "0000000000d5"
+        cutouts(N, views=("front",))
+        rec.calls.clear()
+        try:
+            gm.generate("Demo", hid, N)
+            check("missing back raises", "no error", "FileNotFoundError")
+        except FileNotFoundError:
+            check("missing back raises", "FileNotFoundError", "FileNotFoundError")
+        check("no call", len(rec.calls), 0)
+
+        print("[6] backend error")
+        E = "0000000000e6"
+        cutouts(E)
+        rec.answer = {"ok": False, "error": "down"}
+        try:
+            gm.generate("Demo", hid, E)
+            check("error raises", "no error", "RuntimeError")
+        except RuntimeError as e:
+            check("error raises", "down" in str(e), True)
+        rec.answer = None
+        prep_e = gs.garment_path("Demo", hid, E, "prepared")
+        check("no record", prep_e.with_suffix(".json").exists(), False)
+        check("no prepared", prep_e.exists(), False)
+
+        print("[7] decimate_to (stubbed)")
+        work = root / "dec"
+        work.mkdir()
+        src = work / "big.glb"
+        src.write_bytes(GOOD)
+        runner_calls.clear()
+
+        def run_100k(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
+            runner_calls.append((script, dict(params or {})))
+            if script == "measure":
+                return {"ok": True, "error": "", "data": {"tris": 100000}, "outputs": {}}
+            dst = Path(out_dir) / "model_lod25000.glb"
+            shutil.copyfile(inputs["model"], dst)
+            return {"ok": True, "error": "",
+                    "data": {"stages": [{"ratio": params["ratios"][0], "tris_before": 100000,
+                                         "tris": 25000, "file": dst.name}], "source_tris": 100000},
+                    "outputs": {"lod25000": str(dst)}}
+
+        runner.run = run_100k
+        out = work / "small.glb"
+        res = refine.decimate_to(src, 25000, out)
+        check("ok", res.get("ok"), True)
+        check("ratio", res.get("ratio"), 0.25)
+        check("lod ratios", runner_calls[-1][1].get("ratios"), [0.25])
+        check("tris_before", res.get("tris_before"), 100000)
+        check("tris", res.get("tris"), 25000)
+        check("out written", out.read_bytes() == GOOD, True)
+        check("only out in dir", sorted(p.name for p in work.iterdir()), ["big.glb", "small.glb"])
+        runner.run = lambda script, **k: {"ok": False, "error": "no blender", "data": {}, "outputs": {}}
+        out2 = work / "none.glb"
+        res2 = refine.decimate_to(src, 25000, out2)
+        check("measure fails: ok False", res2.get("ok"), False)
+        check("measure fails: error", bool(res2.get("error")), True)
+        check("measure fails: no out", out2.exists(), False)
+
+        print("[8] real Blender decimation")
+        runner.run, runner.version = real_run, real_version
+        if not use_blender or not runner.is_available():
+            print("  SKIP (no usable Blender or --no-blender)")
+        else:
+            grid = work / "grid.glb"
+            grid.write_bytes(make_glb([], grid=20))
+            gout = work / "grid_small.glb"
+            res3 = refine.decimate_to(grid, 200, gout)
+            check("blender ok", res3.get("ok"), True)
+            check("blender ratio", res3.get("ratio"), 0.25)
+            check("blender tris_before", res3.get("tris_before"), 800)
+            tris3 = res3.get("tris") or 0
+            check("blender tris in [150, 250]", 150 <= tris3 <= 250, True)
+            check("blender out exists", gout.is_file(), True)
+            check("no lod leftovers", sorted(p.name for p in work.iterdir() if "_lod" in p.name), [])
+
+    if FAILS:
+        print("FAILED: " + ", ".join(FAILS))
+        return 1
+    print("ALL OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
