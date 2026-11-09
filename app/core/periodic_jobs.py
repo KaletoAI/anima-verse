@@ -24,6 +24,7 @@ Sub-tasks that run per tick (each with its own sub-frequency):
     - pose_animation_candidates — daily (SYSTEM-time storage hygiene: generated
                                   pose-animation variants left undecided 7 days)
     - glb_delivery_cache         — daily (unused meshopt copies after 30 SYSTEM days)
+    - artefact_gc               — daily (derived 3D files no root reaches, app/core/artefact_graph.py)
     - package_tick              — registered package continuations (world tick)
 
 The tick interval is configurable in Game Admin → Settings → Server, range
@@ -399,6 +400,17 @@ def _sub_video_webm_orphans():
         logger.debug("video_webm_orphans sub error: %s", error)
 
 
+def _sub_artefact_gc():
+    """Remove every derived 3D file no root reaches any more (daily; grace
+    window on, running work protected — ``app/core/artefact_graph.py``).
+    Skipped while the world is frozen, like the other hygiene jobs."""
+    try:
+        from app.core.artefact_graph import sweep_all
+        sweep_all()
+    except Exception as error:
+        logger.debug("artefact_gc sub error: %s", error)
+
+
 def _sub_door_models():
     """Sweep door assets unused for seven SYSTEM days."""
     try:
@@ -640,6 +652,7 @@ _SUB_TASKS: List[tuple] = [
     # 86400s — the horizon counts whole SYSTEM days; a finer interval would
     # only re-scan the same rows for nothing.
     (_sub_door_models,               86400,                 "door_models"),
+    (_sub_artefact_gc,               86400,                 "artefact_gc"),
     (_sub_glb_delivery_cache,        86400,                 "glb_delivery_cache"),
     (_sub_chat_retention,            86400,                 "chat_retention"),
     (_sub_screenshot_uploads,        86400,                 "screenshot_uploads"),

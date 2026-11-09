@@ -13,6 +13,7 @@ upload and a generation are interchangeable and either one is "the current
 model". Switching back to a known outfit reuses whatever is stored.
 """
 
+import contextlib
 import json
 import hashlib
 import functools
@@ -52,6 +53,34 @@ _char_locks: Dict[str, threading.Lock] = {}
 # same-filesystem directory. Nested full/low operations share that transaction.
 _staging = threading.local()
 _publication_epochs: Dict[tuple, int] = {}
+# Every live ``.process-*`` stage of this process: resolved stage path ->
+# (character, signature). The artefact GC (``artefact_graph``) protects the
+# signature of a live stage and removes only stages nobody registered (the
+# leftovers of a killed process).
+_active_stages: Dict[str, tuple] = {}
+_active_stages_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _registered_stage(directory: Path, character_name: str, signature: str):
+    """``tempfile.TemporaryDirectory(prefix=".process-", dir=directory)``,
+    registered in ``_active_stages`` while it lives."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix=".process-", dir=directory) as tmp:
+        key = str(Path(tmp).resolve())
+        with _active_stages_lock:
+            _active_stages[key] = (character_name, signature)
+        try:
+            yield tmp
+        finally:
+            with _active_stages_lock:
+                _active_stages.pop(key, None)
+
+
+def active_stages() -> Dict[str, tuple]:
+    """A copy of ``_active_stages``."""
+    with _active_stages_lock:
+        return dict(_active_stages)
 
 
 # The garment assembly's delivery files (``garment_assembly``): the bare
@@ -257,7 +286,6 @@ def _serial_model(function):
 
     @functools.wraps(function)
     def wrapped(character_name, *args, **kwargs):
-        import tempfile
         from app.core.keyed_lock import keyed_lock
         bound = inspect.signature(function).bind_partial(character_name, *args, **kwargs)
         signature = bound.arguments.get("signature")
@@ -285,7 +313,7 @@ def _serial_model(function):
             return function(*bound.args, **bound.kwargs)
         with keyed_lock("model3d_publication", str(directory)):
             token = _publication_token(directory, signature)
-        with tempfile.TemporaryDirectory(prefix=".process-", dir=directory) as tmp:
+        with _registered_stage(directory, character_name, signature) as tmp:
             stage = Path(tmp)
             # Copy outside the lock. A racing mutation invalidates the token;
             # it can never be overwritten with a stale snapshot.

@@ -1554,6 +1554,10 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
         raise HTTPException(status_code=500, detail="profile not stored")
     if "expression_set" in fields:
         _drop_expressions_on_set_switch(character_name, profile, before.get("expression_set"))
+    if any(k in fields and before.get(k) != profile.get(k) for k in ("outfit_body_mode", "model_pipeline")):
+        # The outfit body mode decides which bodies stay (app/core/artefact_graph.py).
+        from app.core import artefact_graph
+        artefact_graph.collect_quietly(character_name, "outfit body mode switched")
     from app.core import sync_topics
     sync_topics.profile_patched(character_name, before, {k: profile.get(k) for k in fields})
     return {"status": "success", "character": character_name,

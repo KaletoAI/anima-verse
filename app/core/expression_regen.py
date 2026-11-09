@@ -796,6 +796,10 @@ def _invalidate_outfit_caches_for_item(character_name: str, item_id: str) -> Set
     purged |= invalidate_models_for_item(character_name, item_id)
     if not purged:
         return purged
+    # What hung from the purged combinations (painted texture, outfit body,
+    # their fits) goes with them (app/core/artefact_graph.py).
+    from app.core import artefact_graph
+    artefact_graph.collect_quietly(character_name, f"item {item_id} changed")
     try:
         worn = current_outfit_state(character_name)[2]
     except Exception:  # noqa: BLE001 — an unreadable state only costs the

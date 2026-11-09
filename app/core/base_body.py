@@ -586,6 +586,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     render(v, reference)
         logger.info("Base body %s (%s): %s", character_name, bsig,
                     {k: bool(p) for k, p in results.items()})
+        if any(results.values()):
+            # New base views: what hangs from an older base goes (artefact_graph).
+            from app.core import artefact_graph
+            artefact_graph.collect_quietly(character_name, "base images rendered")
         return results
 
 
@@ -712,6 +716,9 @@ def generate_base_model(character_name: str, *, force: bool = False) -> Dict[str
             # its chain (fit only when just the model bytes changed).
             from app.core import garments
             garments.after_base_model(character_name)
+            # The chains of an older base go now (app/core/artefact_graph.py, ruling "base regenerated").
+            from app.core import artefact_graph
+            artefact_graph.collect_quietly(character_name, "base model generated")
         return result
     except Exception as e:
         error = str(e) or type(e).__name__

@@ -2982,10 +2982,41 @@ def get_character_model3d_texture(character_name: str, request: Request):
 @router.delete("/{character_name}/model3d")
 def delete_character_model3d(character_name: str) -> Dict[str, Any]:
     """Deletes the cached mesh of the current outfit combination."""
+    from app.core import artefact_graph
     from app.core.model3d import delete_model3d
     if not delete_model3d(character_name):
         raise HTTPException(status_code=404, detail="No model")
+    artefact_graph.collect_quietly(character_name, "outfit model deleted")
     return {"status": "success"}
+
+
+@router.get("/{character_name}/artefacts/orphans")
+def get_character_artefact_orphans(character_name: str,
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Dry run of the artefact GC (``app/core/artefact_graph.py``): every
+    derived file group no root reaches, with its parents and why — and what
+    is kept although unreachable (running, grace). Deletes nothing."""
+    from app.core import artefact_graph
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    try:
+        return artefact_graph.collect(character_name, dry_run=True, explicit=True, reason="report")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{character_name}/artefacts/collect")
+def collect_character_artefacts(character_name: str,
+                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Delete every orphaned derived file group of the character now
+    (explicit: no grace window; running work is never touched)."""
+    from app.core import artefact_graph
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    try:
+        return artefact_graph.collect(character_name, explicit=True, reason="admin collect")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # --- Outfit batch: pre-warm T-pose + mesh for every saved outfit ---

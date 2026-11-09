@@ -1,4 +1,12 @@
-"""Verify and clean the per-outfit render caches of one character.
+"""The outfit rule and the scanners of the artefact GC, plus the report the
+outfit-batch dialog shows.
+
+The JUDGE of every derived file is ``app/core/artefact_graph.py`` (parents,
+roots, reachability, the one collector every delete path calls). This module
+keeps what it is built from: the outfit rule (manifest re-sign, reachable
+set), the file scanners per cache, the garment roots — and
+``verify_cache`` / ``purge_stale``, which read and act on the graph for the
+outfit-batch cache dialog.
 
 Two caches key on the SAME signature (``model_refs.current_outfit_state``):
 
@@ -59,17 +67,15 @@ garment group is judged at all.
 **Painted bodies** (``base_body`` texture store, plan
 2026-11-10-texture-body-reuse Task 1) live in ``model3d/texture/`` and
 ``model_refs/texture/[drafts/]`` under a texture signature (``"tex"`` + 12
-hex); the report names such a group ``texture:<tsig>``. A group is kept
-while an outfit model (``model3d/<sig>.json``) or an outfit's dressed view
-(``model_refs/tpose*_<sig>.json`` — the current outfit's among them) names
-it as ``texture_signature`` AND none of its sidecars names another base
-signature than the current one (a body of an old base is never served
-again). Unreferenced groups are stale.
+hex); the report names such a group ``texture:<tsig>``. **Outfit bodies**
+(``ob`` + 8 hex, plan 2026-11-10-outfit-body-mesh-mode) share the model and
+reference directories like a base body, their fits live in
+``garments/bodies/<id>/``. How both are judged: ``artefact_graph``.
 """
 
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -83,10 +89,9 @@ MAX_REACHABLE_COMBOS = 5_000_000
 REF_PREFIXES = ("tpose_animal_", "tpose_front_", "tpose_right_", "tpose_back_", "tpose_left_",
                 "tpose_", "pose_")
 #: The shape of a mesh cache key: ``model_refs.outfit_signature`` (md5[:12]),
-#: a retired -s fork (accepted only for deletion) or a base-body signature.
-#: Only a stem of this shape is ever handed to the purger, whose
-#: argument goes into a glob.
-_MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?|base[0-9a-f]{8}")
+#: a retired -s fork (accepted only for deletion), a base-body signature or
+#: an outfit body id — the names of the rollback snapshots this module lists.
+_MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?|base[0-9a-f]{8}|ob[0-9a-f]{8}")
 #: The shape of a base-body signature (``base_body.base_signature``).
 _BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
 #: The shape of an outfit body id (``base_body.outfit_body_id``).
@@ -351,69 +356,41 @@ def _texture_files(character_name: str) -> Dict[str, List[Path]]:
     return out
 
 
-def _texture_referenced(character_name: str) -> Set[str]:
-    """Texture signatures named by an outfit model or an outfit's dressed
-    view (top-level sidecars only — never the store's own)."""
-    import json
-    from app.core.base_body import is_texture_signature
-    from app.models.character import get_character_dir
-    root = get_character_dir(character_name)
-    sidecars = list((root / "model3d").glob("*.json")) + list((root / "model_refs").glob("tpose*.json"))
-    out: Set[str] = set()
-    for sidecar in sidecars:
-        try:
-            tsig = json.loads(sidecar.read_text(encoding="utf-8")).get("texture_signature")
-        except (OSError, ValueError, AttributeError):
-            continue
-        if is_texture_signature(tsig):
-            out.add(str(tsig))
-    return out
-
-
-def _texture_valid(files: Iterable[Path], referenced: Set[str], key: str,
-                   current_base: Optional[str]) -> bool:
-    import json
-    if key[len(TEXTURE_KEY_PREFIX):] not in referenced:
-        return False
-    if current_base is None:
-        return True  # the base cannot be judged: never delete on a guess
-    for p in files:
-        if p.suffix.lower() != ".json":
-            continue
-        try:
-            recorded = json.loads(p.read_text(encoding="utf-8")).get("base_signature")
-        except (OSError, ValueError, AttributeError):
-            continue
-        if recorded and recorded != current_base:
-            return False
-    return True
-
-
-def _garment_keep(character_name: str) -> Optional[Set[str]]:
-    """The garment groups that stay: per garment item — every equipped mesh
-    piece (hair) and every own-mesh outfit piece the character HOLDS or wears
-    (``garment_set.held_clothing``: a dress in the wardrobe keeps its fit,
-    plan 2026-11-09-base-body-phase5-mesh-items Task 4) — the current fsig,
-    the fit served on the current base model, and per method (hair: edit
-    chain / HairDeck) the newest accepted fit on the current base model and
-    the newest accepted fit at all — so switching the hair method back never
-    costs a generation (plan 2026-11-09-hairdeck-hair, Review Focus 3). An
-    older accepted fit of the same method is stale. None when that cannot be
-    computed (then nothing is judged — never delete on a guess)."""
+def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Set[str]]]:
+    """``(keep, items, hair items)`` — the garment roots of the artefact
+    graph. ``keep``: the garment groups that stay — per garment item, every
+    equipped mesh piece (hair) and every own-mesh outfit piece the character
+    HOLDS or wears (``garment_set.held_clothing``: a dress in the wardrobe
+    keeps its fit, plan 2026-11-09-base-body-phase5-mesh-items Task 4) — the
+    current fsig, the fit served on the current base model, and per method
+    (hair: edit chain / HairDeck) the newest accepted fit on the current base
+    model and the newest accepted fit at all — so switching the hair method
+    back never costs a generation (plan 2026-11-09-hairdeck-hair, Review
+    Focus 3). An older accepted fit of the same method is stale. ``items``:
+    the kept items (a deleted item keeps nothing); ``hair items``: the kept
+    hair garments (their HairDeck jobs are judged by ``artefact_graph``).
+    None when the roots cannot be computed (then nothing is judged — never
+    delete on a guess)."""
     try:
         from app.core import base_body, garment_set, garment_store
         from app.models.inventory import get_equipped_mesh_pieces, get_item
         keep: Set[str] = set()
+        kept_items: Set[str] = set()
+        hair: Set[str] = set()
         base = base_body.current_base(character_name)
         items = sorted({*get_equipped_mesh_pieces(character_name).values(),
                         *garment_set.held_clothing(character_name)})
         for item_id in items:
-            if get_item(item_id) is None:
+            item = get_item(item_id)
+            if item is None:
                 continue  # a deleted item keeps nothing
+            kept_items.add(item_id)
             try:
                 keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id)))
             except ValueError:
                 pass  # no current fingerprint (e.g. the flag is off): the accepted fits below stay
+            if garment_set.garment_kind_of(item) == garment_set.HAIR:
+                hair.add(item_id)
             if base and base[1]:
                 fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1])
                 parsed = garment_store.parse_name(fit[0]) if fit else None
@@ -427,118 +404,53 @@ def _garment_keep(character_name: str) -> Optional[Set[str]]:
                 parsed = garment_store.parse_name(path)
                 if parsed:
                     keep.add(_garment_key(*parsed))
-        return keep
+        return keep, kept_items, hair
     except Exception:
         logger.exception("Cache GC %s: garment keep set unavailable", character_name)
         return None
 
 
+def _garment_keep(character_name: str) -> Optional[Set[str]]:
+    """The garment groups that stay (``_garment_roots``), None when unknown."""
+    roots = _garment_roots(character_name)
+    return roots[0] if roots is not None else None
+
+
 def verify_cache(character_name: str) -> Dict[str, Any]:
-    """Report on both caches:
+    """Report on the character's derived files — the artefact graph
+    (``app/core/artefact_graph.py``) read as the outfit-batch dialog shows it:
 
     ``{refs: {total, valid, stale, stale_bytes}, meshes: {…}, garments: {…}, textures: {…},
-    stale_signatures: [...], protected: [sig]}``
+    body_fits: {…}, hairdeck: {…}, temp: {…}, stale_signatures: [...], protected: [sig]}``
 
-    Signature counts, not file counts — one signature owns an image and its
-    sidecar. Raises ValueError when the reachable set is refused (see
+    Group counts, not file counts — one signature owns an image and its
+    sidecar. A group whose work is running counts as valid. Raises
+    ValueError when the reachable set is refused (see
     ``reachable_signatures``).
     """
-    memo: List[Set[str]] = []
-
-    def reachable() -> Set[str]:
-        # Lazy: a ValueError (too many combinations) surfaces only when an
-        # entry without a manifest really needs the set.
-        if not memo:
-            memo.append(reachable_signatures(character_name))
-        return memo[0]
-
-    from app.core.model3d import _stored_manifest
-    owned = _inventory_ids(character_name)
-    worn = _worn_signature(character_name)
-    current_base = _current_base_signature(character_name)
-
+    from app.core import artefact_graph
+    analysis = artefact_graph.analyse(character_name, explicit=True)
+    worn = analysis.roots.worn
     stale: List[str] = []
-    out: Dict[str, Any] = {"stale_signatures": stale,
-                           "protected": [worn] if worn else []}
-    for key, files_of in (("refs", _ref_files), ("meshes", _mesh_files)):
-        groups = files_of(character_name)
-        valid = 0
-        stale_bytes = 0
-        for signature, files in groups.items():
-            if signature and signature == worn:
-                valid += 1
-                continue
-            if _OUTFIT_BODY_RE.fullmatch(signature):
-                # An outfit body (base_body mesh mode): kept — it is judged by
-                # the reachability walk of its parent record (plan
-                # 2026-11-10-outfit-body-mesh-mode Task 3), never by a manifest.
-                valid += 1
-                continue
-            if _BASE_SIG_RE.fullmatch(signature):
-                # Base body: only the current one counts; a run in progress
-                # (checkpoint without its top model yet) is current too.
-                if current_base is None or signature == current_base:
-                    valid += 1
-                    continue
-                stale_bytes += _bytes_of(files)
-                if signature not in stale:
-                    stale.append(signature)
-                continue
-            if key == "meshes":
-                # A lone low/raw leftover can never be served: stale.
-                if not _has_top_model(signature, files):
-                    stale_bytes += _bytes_of(files)
-                    if signature not in stale:
-                        stale.append(signature)
-                    continue
-                # Own sidecar, else the T-pose sidecar of the same signature.
-                manifest = _stored_manifest(character_name, signature)
-            else:
-                manifest = read_manifest(_sidecar_of(files) or Path("/nonexistent"))
-            if _entry_valid(signature, manifest, owned, reachable,
-                            character_name):
-                valid += 1
-                continue
-            stale_bytes += _bytes_of(files)
-            if signature not in stale:
-                stale.append(signature)
-        out[key] = {"total": len(groups), "valid": valid,
-                    "stale": len(groups) - valid, "stale_bytes": stale_bytes}
-    garment_groups = _garment_files(character_name)
-    keep = _garment_keep(character_name) if garment_groups else set()
-    garment_stale_bytes = 0
-    garment_valid = 0
-    for gkey, files in garment_groups.items():
-        if keep is None or gkey in keep:
-            garment_valid += 1
-            continue
-        garment_stale_bytes += _bytes_of(files)
-        stale.append(gkey)
-    out["garments"] = {"total": len(garment_groups), "valid": garment_valid,
-                       "stale": len(garment_groups) - garment_valid,
-                       "stale_bytes": garment_stale_bytes}
-    texture_groups = _texture_files(character_name)
-    referenced = _texture_referenced(character_name) if texture_groups else set()
-    texture_valid = 0
-    texture_stale_bytes = 0
-    for tkey, files in texture_groups.items():
-        if _texture_valid(files, referenced, tkey, current_base):
-            texture_valid += 1
-            continue
-        texture_stale_bytes += _bytes_of(files)
-        stale.append(tkey)
-    out["textures"] = {"total": len(texture_groups), "valid": texture_valid,
-                       "stale": len(texture_groups) - texture_valid,
-                       "stale_bytes": texture_stale_bytes}
-    logger.info("Cache GC %s: refs %s, meshes %s, garments %s, textures %s, %d stale signature(s)",
-                character_name, out["refs"], out["meshes"], out["garments"], out["textures"], len(stale))
+    out: Dict[str, Any] = {"stale_signatures": stale, "protected": [worn] if worn else []}
+    for category in artefact_graph.CATEGORIES:
+        group = [n for n in analysis.nodes if n.category == category]
+        stale_nodes = [n for n in group if not n.reachable and not n.protected]
+        out[category] = {"total": len(group), "valid": len(group) - len(stale_nodes),
+                         "stale": len(stale_nodes), "stale_bytes": sum(n.size() for n in stale_nodes)}
+        for node in stale_nodes:
+            if node.key not in stale:
+                stale.append(node.key)
+    logger.info("Cache GC %s: refs %s, meshes %s, garments %s, textures %s, body fits %s, %d stale key(s)",
+                character_name, out["refs"], out["meshes"], out["garments"], out["textures"],
+                out["body_fits"], len(stale))
     return out
 
 
 def purge_stale(character_name: str,
                 signatures: Iterable[str]) -> Dict[str, Any]:
-    """Delete the files of the given signatures — but only those the CURRENT
-    report still calls stale.
+    """Delete the given keys — but only those the CURRENT graph still calls
+    unreachable (``artefact_graph.collect(keys=…)``, explicit).
 
     The re-check is the point: the report the caller acted on may be minutes
     old, and a batch run may have produced a perfectly valid entry in the
@@ -547,84 +459,9 @@ def purge_stale(character_name: str,
     wanted = {str(s) for s in (signatures or []) if s}
     if not wanted:
         return {"deleted_files": 0, "freed_bytes": 0, "skipped": 0}
-    report = verify_cache(character_name)
-    allowed = set(report["stale_signatures"])
-    skipped = len(wanted - allowed)
-    deleted = 0
-    freed = 0
-    for signature, files in _mesh_files(character_name).items():
-        if signature not in wanted or signature not in allowed:
-            continue
-        if not _MESH_SIG_RE.fullmatch(signature):
-            logger.warning("Cache GC %s: %r is no signature, not purged",
-                           character_name, signature)
-            continue
-        # Through the ONE purger of a combination (model, sidecar, texture,
-        # tiers, raw backup); counted from the list gathered before.
-        sizes = {}
-        for p in files:
-            try:
-                sizes[p] = p.stat().st_size
-            except OSError:
-                pass
-        from app.core.model3d import _purge_combination, get_model3d_dir
-        try:
-            _purge_combination(get_model3d_dir(character_name), signature,
-                               drop_reference_cache=True)
-        except OSError as e:
-            logger.warning("Cache GC %s: %s not fully removed: %s",
-                           character_name, signature, e)
-        for p, size in sizes.items():
-            if not p.exists():
-                deleted += 1
-                freed += size
-    for signature, files in _ref_files(character_name).items():
-        if signature not in wanted or signature not in allowed:
-            continue
-        for p in files:
-            try:
-                size = p.stat().st_size
-                p.unlink()
-                deleted += 1
-                freed += size
-            except OSError as e:
-                logger.warning("Cache GC %s: %s not removed: %s",
-                               character_name, p.name, e)
-    from app.core.garment_store import garments_dir
-    garment_root = garments_dir(character_name).resolve(strict=False)
-    for gkey, files in _garment_files(character_name).items():
-        if gkey not in wanted or gkey not in allowed:
-            continue
-        for p in files:
-            try:
-                if not p.resolve().is_relative_to(garment_root):
-                    logger.warning("Cache GC %s: %s is outside garments/, not removed",
-                                   character_name, p)
-                    continue
-                size = p.stat().st_size
-                p.unlink()
-                deleted += 1
-                freed += size
-            except OSError as e:
-                logger.warning("Cache GC %s: %s not removed: %s",
-                               character_name, p.name, e)
-    texture_roots = [d.resolve(strict=False) for d in _texture_dirs(character_name)]
-    for tkey, files in _texture_files(character_name).items():
-        if tkey not in wanted or tkey not in allowed:
-            continue
-        for p in files:
-            try:
-                if p.resolve().parent not in texture_roots:
-                    logger.warning("Cache GC %s: %s is outside the texture store, not removed",
-                                   character_name, p)
-                    continue
-                size = p.stat().st_size
-                p.unlink()
-                deleted += 1
-                freed += size
-            except OSError as e:
-                logger.warning("Cache GC %s: %s not removed: %s", character_name, p.name, e)
-    logger.info("Cache GC %s: %d file(s) deleted, %.1f MB freed, %d signature(s) "
-                "skipped (no longer stale)", character_name, deleted,
-                freed / 1e6, skipped)
-    return {"deleted_files": deleted, "freed_bytes": freed, "skipped": skipped}
+    from app.core import artefact_graph
+    report = artefact_graph.collect(character_name, explicit=True, keys=wanted, reason="cache purge")
+    held = {s["key"] for s in report["skipped"]}
+    done = {e["key"] for e in report["orphans"]} - held
+    return {"deleted_files": report["deleted_files"], "freed_bytes": report["freed_bytes"],
+            "skipped": len(wanted - done)}

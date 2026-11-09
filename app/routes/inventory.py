@@ -259,16 +259,26 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
 @router.delete("/items/{item_id}")
 def delete_item_route(
     item_id: str) -> Dict[str, Any]:
-    """Delete an item."""
+    """Delete an item — and, through the artefact GC, every derived file of
+    it in every character that held it (fits on every body, its outfit
+    bodies and textures, its outfit renders)."""
+    from app.core import artefact_graph
     # Invalidate variants while the item can still be found in inventories.
     try:
         from app.core.expression_regen import invalidate_variants_for_item
         invalidate_variants_for_item(item_id)
     except Exception as e:
         logger.debug("Variant invalidation failed: %s", e)
+    try:
+        holders = artefact_graph.item_holders(item_id)  # before its inventory rows go
+    except Exception:
+        logger.exception("Item %s: holders for the artefact GC unreadable", item_id)
+        holders = []
     deleted = delete_item(item_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Item not found")
+    for name in holders:
+        artefact_graph.collect_quietly(name, f"item {item_id} deleted")
     return {"ok": True}
 
 
@@ -1120,9 +1130,11 @@ def preview_outfit_set_route(character_name: str, outfit_id: str,
 def delete_outfit_set_route(character_name: str, outfit_id: str,
                             _admin=Depends(require_admin)) -> Dict[str, Any]:
     """Remove the preset only; leave inventory and equipped pieces intact."""
+    from app.core import artefact_graph
     from app.models.character import delete_character_outfit
     if not delete_character_outfit(character_name, outfit_id):
         raise HTTPException(status_code=404, detail="outfit not found")
+    artefact_graph.collect_quietly(character_name, "outfit set deleted")
     return {"status": "ok", "outfit_id": outfit_id}
 
 
