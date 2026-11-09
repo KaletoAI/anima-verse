@@ -225,7 +225,7 @@ def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
                 and (item.get("garment") or {}).get("kind") == HAIR_KIND)
 
 
-def _find_hair_item(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def find_hair_item(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The character's hair item: the one worn in the hair slot, else the
     first (by id) item it owns whose garment kind is hair."""
     from app.models import inventory
@@ -278,7 +278,7 @@ def ensure_hair_item(character_name: str) -> str:
         if not description:
             raise ValueError("No hair set — fill in the hair in Appearance; a bald character gets no hair item")
         garment = {"kind": HAIR_KIND, "slot": HAIR_KIND, "body_slot": slot.id}
-        item = _find_hair_item(character_name, profile)
+        item = find_hair_item(character_name, profile)
         if item is None:
             item = inventory.add_item(
                 name=HAIR_ITEM_NAME, category="garment", owner=character_name,

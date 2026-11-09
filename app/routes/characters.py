@@ -1721,6 +1721,164 @@ def get_character_base_body_image(character_name: str, view: str, request: Reque
     return etag_file_response(path, request, media_type or "application/octet-stream")
 
 
+# --- Garments: hair as its own mesh (app/core/garments.py, garment_hair.py) ---
+# Plan 2026-11-09-base-body-phase4-hair. All admin-only; the chain runs in a
+# worker thread (garments.start_garment), these routes only start and read.
+
+class GarmentEquippedRequest(BaseModel):
+    equipped: bool
+
+
+class GarmentRunRequest(BaseModel):
+    # Plain strings, validated by garments.start_garment: an unknown step or
+    # view is a 400 with its message, not a schema 422.
+    step: Optional[str] = None
+    view: Optional[str] = None
+    force: bool = False
+
+
+@router.get("/{character_name}/hair")
+def get_character_hair(character_name: str,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The Hair tab: ``{pipeline, humanoid, description, behind_shoulders,
+    item_id, equipped, garment, collision}`` — ``description`` is derived
+    (Appearance + hair slot, R3), ``item_id`` the worn hair item or else the
+    one the character owns (None: no item yet), ``garment`` its
+    ``garments.garment_info`` (None without an item), ``collision`` always
+    False in this phase (R15)."""
+    from app.core import base_body, garment_hair, garments
+    from app.core.model_refs import is_humanoid
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    profile = get_character_profile(character_name) or {}
+    humanoid = bool(is_humanoid(character_name, profile=profile))
+    item = garment_hair.find_hair_item(character_name, profile) if humanoid else None
+    item_id = item["id"] if item else None
+    worn = profile.get("equipped_mesh_pieces")
+    equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
+    info = None
+    if item_id:
+        try:
+            info = garments.garment_info(character_name, item_id)
+        except ValueError:
+            info = None
+    return {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
+            "humanoid": humanoid,
+            "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
+            "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
+                                                                                     profile=profile)),
+            "item_id": item_id, "equipped": equipped, "garment": info, "collision": False}
+
+
+@router.post("/{character_name}/hair", status_code=202)
+def create_character_hair(character_name: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Create (if missing), refresh and wear the hair item, then start its
+    chain (R14: creating the item starts it; every cached step is skipped).
+    ``started`` False = a garment run of the character is already going.
+    400 for a non-humanoid, a character off the base-body pipeline or one
+    without any hair text."""
+    from app.core import garment_hair, garments
+    _require_character(character_name)
+    try:
+        item_id = garment_hair.ensure_hair_item(character_name)
+        started = garments.start_garment(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"item_id": item_id, "started": bool(started)}
+
+
+@router.post("/{character_name}/hair/equipped")
+def set_character_hair_equipped(character_name: str, body: GarmentEquippedRequest,
+                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Wear or take off the character's hair item (its mesh-item slot only;
+    no 2D path sees it, R2). 404 when the character has no hair item. No GPU
+    work starts — the served model is re-assembled."""
+    from app.core import garment_hair
+    from app.models import inventory
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    item = garment_hair.find_hair_item(character_name, get_character_profile(character_name) or {})
+    if not item:
+        raise HTTPException(status_code=404, detail="This character has no hair item")
+    try:
+        if body.equipped:
+            saved = inventory.equip_mesh_piece(character_name, item["id"])
+        else:
+            slot = str((item.get("garment") or {}).get("slot") or garment_hair.HAIR_KIND)
+            saved = inventory.unequip_mesh_piece(character_name, slot)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    return {"equipped": bool(body.equipped)}
+
+
+@router.post("/{character_name}/garments/{item_id}/run", status_code=202)
+def run_character_garment(character_name: str, item_id: str, body: GarmentRunRequest,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """(Re-)run a garment's chain in a worker thread: from the first missing
+    step, or from ``step`` (``force``: re-run it — only ``view`` for an image
+    step — and everything after it). 400 for an unknown step/view, an item
+    that is no garment of this character, or a character off the base-body
+    pipeline; 409 while a garment run of the character is going."""
+    from app.core import base_body, garments
+    _require_character(character_name)
+    try:
+        garments.check_run(character_name, item_id, steps=body.step, view=body.view)
+        if base_body.current_base(character_name) is None:
+            raise ValueError(f"{character_name} is not on the base-body pipeline")
+        started = garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
+                                         force=body.force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not started:
+        raise HTTPException(status_code=409, detail="A garment run is already going for this character")
+    return {"started": True}
+
+
+@router.get("/{character_name}/garments/{item_id}/images/{step}/{view}")
+def get_character_garment_image(character_name: str, item_id: str, step: str, view: str, request: Request,
+                                attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
+    """One image of the garment's CURRENT fingerprint: the accepted final, or
+    ``attempt`` 1..n. 400 for an unknown step/view/attempt, 404 for an item
+    that is no garment of this character or an image that is not there."""
+    from fastapi.responses import Response
+    from app.core import garment_store as gs
+    from app.core import garments
+    from app.core.garment_images import ATTEMPTS
+    if step not in gs.IMAGE_STEPS:
+        raise HTTPException(status_code=400, detail=f"step must be one of {', '.join(gs.IMAGE_STEPS)}")
+    if view not in gs.GARMENT_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.GARMENT_VIEWS)}")
+    if not 0 <= attempt <= ATTEMPTS:
+        raise HTTPException(status_code=400, detail=f"attempt must be 0..{ATTEMPTS}")
+    _require_character(character_name)
+    try:
+        path = garments.image_path(character_name, item_id, step, view, attempt)
+    except ValueError:
+        path = None
+    if path is None or not path.is_file():
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "image/png")
+
+
+@router.get("/{character_name}/garments/{item_id}/model")
+def get_character_garment_model(character_name: str, item_id: str, request: Request,
+                                _: Dict[str, Any] = Depends(require_admin)):
+    """The Hair tab's preview GLB (the rigged base with the garment grafted
+    on, ``garments.preview_path``), versioned by content; 404 without a fit
+    or for an item that is no garment of this character."""
+    from app.core import garments
+    from app.core.http_files import snapshot_response
+    _require_character(character_name)
+    return snapshot_response(None, request, media_type="model/gltf-binary",
+                             version=request.query_params.get("v"),
+                             resolve=lambda: garments.preview_path(character_name, item_id))
+
+
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---
 
 @router.get("/{character_name}/animations")

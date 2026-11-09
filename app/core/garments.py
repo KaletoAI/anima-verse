@@ -392,6 +392,17 @@ def _refusal(character_name: str, item_id: str, fsig: str, step: str, error: str
     return {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": gates, "ran": ran}
 
 
+def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
+              view: Optional[str] = None) -> None:
+    """ValueError unless ``item_id`` is a garment of a known kind owned by
+    the character and ``steps`` / ``view`` name steps and a view of it."""
+    from app.core.garment_store import GARMENT_STEPS, GARMENT_VIEWS
+    _item_, kind = _item(character_name, item_id)
+    _steps(steps, GARMENT_STEPS[kind])
+    if view is not None and view not in GARMENT_VIEWS:
+        raise ValueError(f"Unknown garment view {view!r}")
+
+
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                   view: Optional[str] = None, force: bool = False) -> bool:
     """Run ``run_garment`` in a worker thread. False when a run of the
@@ -399,11 +410,7 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     from THIS moment (the UI polls). ValueError for an invalid item, step or
     view (checked before anything starts)."""
     from app.core import garment_store as gs
-    from app.core.garment_store import GARMENT_STEPS, GARMENT_VIEWS
-    _item_, kind = _item(character_name, item_id)
-    _steps(steps, GARMENT_STEPS[kind])
-    if view is not None and view not in GARMENT_VIEWS:
-        raise ValueError(f"Unknown garment view {view!r}")
+    check_run(character_name, item_id, steps=steps, view=view)
     with _lock:
         if character_name in _active:
             return False
@@ -460,12 +467,34 @@ def _worn_garments(character_name: str, profile: Dict[str, Any]) -> List[str]:
     return sorted({str(v) for v in worn.values() if v})
 
 
+def _ensure_hair(character_name: str, profile: Dict[str, Any]) -> bool:
+    """Create and wear the hair item of a character on the pipeline that has
+    hair text but no hair item at all — so the chain below starts without a
+    click (R14; the phase-6 migration relies on it). A bald character gets
+    no item; an item the character owns but does not wear (taken off in the
+    Hair tab) is left off. True when an item was created."""
+    from app.core import garment_hair
+    if garment_hair.find_hair_item(character_name, profile) is not None:
+        return False
+    if not garment_hair.hair_description(character_name, profile=profile):
+        return False
+    try:
+        item_id = garment_hair.ensure_hair_item(character_name)
+    except (ValueError, RuntimeError) as e:
+        logger.info("No hair item for %s after the base model: %s", character_name, e)
+        return False
+    logger.info("Hair item %s created for %s after the base model", item_id, character_name)
+    return True
+
+
 def after_base_model(character_name: str) -> bool:
     """R14: after a successful base model run, every worn garment whose fit
     is not accepted on the current base model gets a run — the whole chain
     when its fsig changed (new base signature or base images), the fit only
     when just the base model bytes changed (its images and mesh are cached
-    under the unchanged fsig). True if a run was started. Never raises."""
+    under the unchanged fsig). A character with hair text but no hair item
+    gets one first (``_ensure_hair``). True if a run was started. Never
+    raises."""
     try:
         from app.core import base_body, garment_store as gs
         from app.models.character import get_character_profile
@@ -473,6 +502,8 @@ def after_base_model(character_name: str) -> bool:
         base = base_body.current_base(character_name, profile=profile)
         if base is None:
             return False
+        if _ensure_hair(character_name, profile):
+            profile = get_character_profile(character_name) or {}
         started = False
         for item_id in _worn_garments(character_name, profile):
             try:
@@ -576,6 +607,16 @@ def _newest_fit(character_name: str, item_id: str) -> Optional[Tuple[Path, Dict[
             if record.get("accepted") is True and stamp is not None and (best is None or stamp > best[0]):
                 best = (stamp, path, record)
     return (best[1], best[2]) if best else None
+
+
+def image_path(character_name: str, item_id: str, step: str, view: str, attempt: int = 0) -> Path:
+    """The image file of one step/view (``attempt`` 0 = the final) under the
+    CURRENT fsig — what ``garment_info``'s image URLs name. ValueError for an
+    item that is no garment of the character, an unknown step/view, or a path
+    outside ``garments/`` (``garment_store.garment_path``)."""
+    from app.core import garment_store as gs
+    _item(character_name, item_id)
+    return _image(character_name, item_id, gs.garment_fsig(character_name, item_id), step, view, attempt)
 
 
 def preview_path(character_name: str, item_id: str) -> Optional[Path]:

@@ -98,6 +98,18 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
     assembled file.
 [10] generate_base_model: a successful (stubbed) run calls after_base_model
     once; a failed one does not.
+[11] after_base_model ensures the hair item first (controller ruling after
+    Task 8: nothing else creates it without a click):
+    Neo    pipeline human, hair slot {short, black}, NO item, base images +
+           model written -> after_base_model True; item "hair_neo" (slug
+           "neo") created and worn {hair: hair_neo}, prompt_fragment = its
+           hair_description; the whole chain runs: 4 renders, 1 mesh call,
+           fit record accepted on Neo's base signature.
+    Baldy  pipeline human, no hair slot value and no hair clause -> ""
+           -> after_base_model False, no item, worn {}, 0 renders, 0 mesh.
+    Unworn pipeline human with hair text that OWNS a hair item it does not
+           wear (taken off in the Hair tab) -> after_base_model False, the
+           item stays off (worn {}), 0 renders.
 """
 import hashlib
 import io
@@ -616,6 +628,63 @@ def main() -> int:
             garments.after_base_model = real_after
             base_body.check_model_ready = real_ready
             model3d.generate_for_current_outfit = real_generate
+        # --- [11] the hair item is ensured by the trigger ---------------------------------
+        print("[11] after_base_model ensures the hair item")
+
+        def write_base_for(name):
+            bsig = base_body.base_signature(name)
+            r = get_character_dir(name) / "model_refs"
+            m = get_character_dir(name) / "model3d"
+            r.mkdir(parents=True, exist_ok=True)
+            for v in base_body.BASE_VIEWS:
+                stem = f"tpose_{bsig}" if v == "front" else f"tpose_{v}_{bsig}"
+                (r / f"{stem}.png").write_bytes(png(BASE))
+                (r / f"{stem}.json").write_text(json.dumps({"base_signature": bsig}))
+            unrigged, rigged = base_bodies()
+            (m / "unrigged").mkdir(parents=True, exist_ok=True)
+            (m / "unrigged" / f"{bsig}.glb").write_bytes(unrigged)
+            (m / f"{bsig}.glb").write_bytes(rigged)
+            (m / f"{bsig}.json").write_text(json.dumps({
+                "base": True, "rig": "mixamo", "signature": bsig, "format": "glb", "source": "generated"}))
+            return bsig
+
+        neo = json.loads(json.dumps(human))
+        neo["body_slots"]["hair"] = {"length": "short", "color": "black"}
+        baldy = json.loads(json.dumps(human))
+        baldy["body_slots"].pop("hair")
+        for name, prof in (("Neo", neo), ("Baldy", baldy), ("Unworn", json.loads(json.dumps(human)))):
+            check(f"create {name}", save_character_profile(name, prof, create_new=True), True)
+            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
+        check("Baldy has no hair text", garment_hair.hair_description("Baldy"), "")
+        unworn = garment_hair.ensure_hair_item("Unworn")
+        check("Unworn takes it off", inventory.unequip_mesh_piece("Unworn", "hair"), True)
+        bsig_neo = write_base_for("Neo")
+        for name in ("Baldy", "Unworn"):
+            write_base_for(name)
+        garments.wait_idle(30)
+        before = counts()
+        check("Neo started", garments.after_base_model("Neo"), True)
+        check("idle", garments.wait_idle(120), True)
+        after = counts()
+        check("Neo item worn", inventory.get_equipped_mesh_pieces("Neo"), {"hair": "hair_neo"})
+        neo_item = inventory.get_item("hair_neo") or {}
+        check("Neo item", (neo_item.get("category"), neo_item.get("owner"), neo_item.get("prompt_fragment")),
+              ("garment", "Neo", garment_hair.hair_description("Neo")))
+        check("Neo whole chain", (after[0] - before[0], after[1] - before[1]), (4, 1))
+        fneo = gs.garment_fsig("Neo", "hair_neo")
+        rneo = gs.read_record(gs.garment_path("Neo", "hair_neo", fneo, "fit").with_suffix(".json"))
+        check("Neo fit", (rneo.get("accepted"), rneo.get("base_signature")), (True, bsig_neo))
+        before = counts()
+        check("Baldy not started", garments.after_base_model("Baldy"), False)
+        check("Unworn not started", garments.after_base_model("Unworn"), False)
+        check("idle", garments.wait_idle(30), True)
+        check("Baldy no item", (inventory.get_equipped_mesh_pieces("Baldy"),
+                                garment_hair.find_hair_item("Baldy", get_character_profile("Baldy"))), ({}, None))
+        check("Unworn stays off", (inventory.get_equipped_mesh_pieces("Unworn"),
+                                   (garment_hair.find_hair_item("Unworn", get_character_profile("Unworn"))
+                                    or {}).get("id")), ({}, unworn))
+        check("no GPU work", counts()[:2], before[:2])
+
         garments.wait_idle(30)
         for t in threading.enumerate():
             if t.name.startswith("garment-") and t.is_alive():
