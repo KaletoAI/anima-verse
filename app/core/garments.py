@@ -11,7 +11,16 @@ produced new output makes every later step run again (``force`` propagates
 downstream); one that was served from the cache does not.
 
 - image steps (``garment_images``): per view; ``ghost`` additionally needs
-  both hair-only images to end at the same height (``bottoms_agree``);
+  both hair-only images to end at the same height (``bottoms_agree``). The
+  back view sees how long the hair is, the front only guesses it (its ends
+  hang behind the body): a front attempt is gated against the accepted back
+  (``_bottom_check``), and a pair that disagrees — a new back, or both views
+  from before — renders the front again against the back, with its own
+  attempts. A disagreeing pair never ends a run without a new attempt;
+- every image step checks after each view that the run's inputs (base views,
+  hair description: ``garment_fsig``) did not change meanwhile — a base view
+  regenerated during the run refuses with ``INPUTS_CHANGED_ERROR`` instead of
+  gating images of the new base against images of the old one;
 - ``mesh`` (``garment_mesh.generate``): built from both cut-outs; a new
   accepted image deletes the prepared mesh of the same fsig (it was built
   from the replaced images);
@@ -79,6 +88,8 @@ HAIRDECK_ATTEMPTS = 2
 #: ``info.json`` notes of a HairDeck job that found nothing to make hair of.
 NO_HAIR_NOTES = ("no hair found", "no person found")
 NO_HAIR_ERROR = "HairDeck found no hair in the profile picture"
+INPUTS_CHANGED_ERROR = ("The base views or the hair description changed during the run "
+                        "— run the chain again to start from the new ones")
 
 
 class _Refused(Exception):
@@ -186,6 +197,21 @@ def _bottoms(character_name: str, item_id: str, fsig: str) -> Tuple[bool, Dict[s
     if not gates["front"] or not gates["back"]:
         return False, gates
     return bottoms_agree(gates["front"], gates["back"]), gates
+
+
+def _bottom_check(character_name: str, item_id: str, fsig: str):
+    """The pair check of a hair-only FRONT attempt: its bottom edge against
+    the accepted back's (``garment_gates.bottoms_reason``)."""
+    from app.core.garment_gates import bottoms_reason
+    back = _accepted_gate(_image(character_name, item_id, fsig, "ghost", "back")) or {}
+    return lambda record: bottoms_reason(record, back)
+
+
+def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str) -> None:
+    """``_Refused`` when the fsig of the run is no longer the current one."""
+    from app.core.garment_store import garment_fsig
+    if garment_fsig(character_name, item_id) != fsig:
+        raise _Refused(step, INPUTS_CHANGED_ERROR, None)
 
 
 def _mesh_done(character_name: str, item_id: str, fsig: str) -> bool:
@@ -637,19 +663,34 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             gs.start(character_name, item_id, step)
             produced = False
             if step in gs.IMAGE_STEPS:
-                for v in gs.GARMENT_VIEWS:
+                renders = [v for v in gs.GARMENT_VIEWS
+                           if (forced and (view is None or v == view))
+                           or not _accepted(_image(character_name, item_id, fsig, step, v))]
+                for v in renders:
                     f = forced and (view is None or v == view)
-                    if not f and _accepted(_image(character_name, item_id, fsig, step, v)):
-                        continue
                     if step == "cutout":
                         garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                     else:
-                        garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f)
+                        # The front is checked against a back that stays; when
+                        # the back renders in this run too, the pair is checked
+                        # after both (below), never against the replaced back.
+                        pair = (_bottom_check(character_name, item_id, fsig)
+                                if step == "ghost" and v == "front" and "back" not in renders else None)
+                        garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f,
+                                                     pair_check=pair)
                     produced = True
                     # Right away: a refusal of the next view must not leave a
                     # mesh behind that was built from the replaced image.
                     _drop_mesh(character_name, item_id, fsig)
-                if step == "ghost":
+                    _inputs_unchanged(character_name, item_id, fsig, step)
+                if step == "ghost" and not _bottoms(character_name, item_id, fsig)[0]:
+                    # The back shows the hair's length; the front renders
+                    # again against it (two attempts; GateRefused when both miss).
+                    garment_images.run_edit_step(character_name, item_id, fsig, "ghost", "front", force=True,
+                                                 pair_check=_bottom_check(character_name, item_id, fsig))
+                    produced = True
+                    _drop_mesh(character_name, item_id, fsig)
+                    _inputs_unchanged(character_name, item_id, fsig, step)
                     agree, gates = _bottoms(character_name, item_id, fsig)
                     if not agree:
                         raise _Refused("ghost", "front and back hair end at different heights", gates)

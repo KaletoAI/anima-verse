@@ -35,7 +35,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -191,9 +191,15 @@ def _accepted(path: Path) -> bool:
 
 
 def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
-                  force: bool = False) -> Path:
+                  force: bool = False,
+                  pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None) -> Path:
     """Render, gate and store one edit step of one view; returns the final
     image ``images/{item}_{fsig}_{step}_{view}.png``.
+
+    ``pair_check`` (the orchestration's check against the OTHER view, e.g.
+    the hair-only front against the accepted back's bottom edge) gets every
+    attempt's gate record; a reason it returns refuses that attempt like a
+    gate reason does, so the check uses the attempts of this step.
 
     Cached: an accepted final of this fsig is returned unless ``force``.
     ``base_body.MissingInput`` when the base view or the source step's
@@ -265,6 +271,9 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask,
                                source_rgb=source_rgb, source_mask=source_mask,
                                edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size))
+            reason = pair_check(record) if pair_check is not None else None
+            if reason:
+                record = {**record, "ok": False, "reasons": [*(record.get("reasons") or []), reason]}
         record["attempt"] = attempt
         records.append(record)
         if path is not None:

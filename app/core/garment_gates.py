@@ -18,7 +18,8 @@ limits as fractions of the image height H — the spike ran at H = 1536):
   (``hair_ref``), and no piece of the body may be left ("body left": ghost
   pixels on the base body below the chin line that still have its colour).
 
-``bottoms_agree`` compares the bottom edges of the front and back hair.
+``bottoms_agree`` compares the bottom edges of the front and back hair;
+``bottoms_reason`` words a disagreement as a refusal of a front attempt.
 """
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -239,15 +240,34 @@ def ghost_gate(bald_rgb, bald_mask, hair_ref_mask, ghost_rgb, ghost_mask, *, vie
             "ok": not reasons, "reasons": reasons}
 
 
-def bottoms_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
-    """Front and back hair end at the same height: |bottom_front − bottom_back|
-    ≤ 0.05 × the taller hair height (all as fractions of H)."""
+def bottoms_gap(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[tuple]:
+    """``(|bottom_front − bottom_back|, limit)`` with limit = 0.05 × the
+    taller hair height (all as fractions of H); None when a record lacks
+    the numbers (a gate that stopped before measuring)."""
     try:
         fb, bb = float(front_gate["bottom"]), float(back_gate["bottom"])
         height = max(float(front_gate["hair_h"]), float(back_gate["hair_h"]))
     except (KeyError, TypeError, ValueError):
-        return False
-    return abs(fb - bb) <= BOTTOM_AGREE * height
+        return None
+    return abs(fb - bb), BOTTOM_AGREE * height
+
+
+def bottoms_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
+    """Front and back hair end at the same height: |bottom_front − bottom_back|
+    ≤ 0.05 × the taller hair height (all as fractions of H)."""
+    gap = bottoms_gap(front_gate, back_gate)
+    return gap is not None and gap[0] <= gap[1]
+
+
+def bottoms_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
+    """The refusal reason of a front hair-only attempt that does not end
+    where the accepted back view's hair ends (``bottoms_agree``); None when
+    they agree or the attempt has no measured hair."""
+    gap = bottoms_gap(front_gate, back_gate)
+    if gap is None or gap[0] <= gap[1]:
+        return None
+    return (f"hair ends at another height than in the back view: |Δ| {_r(gap[0], 4)} H > {_r(gap[1], 4)} H "
+            f"(front {front_gate.get('bottom')}, back {back_gate.get('bottom')})")
 
 
 def gate_summary(records: Sequence[Dict[str, Any]]) -> str:
