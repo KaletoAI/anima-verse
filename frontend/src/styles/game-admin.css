@@ -2930,7 +2930,9 @@ a.ga-btn {
 .ga-model3d-preview { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; min-width: 0; }
 .ga-model3d-canvas { flex: 1 1 280px; min-width: 0; }
 .ga-model3d-status { font-size: 10px; line-height: 1.3; display: grid; gap: 3px; }
-.ga-model3d-status-row { display: flex; align-items: baseline; gap: 5px; overflow-wrap: anywhere; }
+.ga-model3d-status-row { display: flex; align-items: baseline; gap: 5px; min-width: 0; cursor: help; }
+/* One line per check: the short state shows, the details are the tooltip. */
+.ga-model3d-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ga-model3d-status-dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; align-self: center; background: var(--text-muted, #888); }
 .ga-model3d-status-green { background: var(--success, #55a96c); }
 .ga-model3d-status-yellow { background: var(--warning, #d6aa44); }
@@ -2947,6 +2949,40 @@ a.ga-btn {
 .ga-model3d-save, .ga-model3d-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ga-model3d-controls > label { flex: 1 1 200px; min-width: 0; }
 .ga-model3d-controls .ga-input { min-width: 0; }
+/* A figure needs no full column width: the canvas stops at 440 px, the side
+   toolbar (checks, tilt, collision and motion sliders) sits right beside it. */
+.ga-model3d-fit .ga-model3d-preview { flex-wrap: nowrap; }
+.ga-model3d-fit .ga-model3d-canvas { flex: 0 1 440px; }
+.ga-model3d-fit .ga-model3d-toolbar { flex: 0 0 220px; }
+/* Face and rig actions of one model (ModelFaceActions). */
+.ga-face-actions { display: flex; flex-direction: column; gap: 6px; }
+.ga-face-actions-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ga-face-actions-state { min-width: 0; }
+/* Collision sliders in the viewer's side toolbar: label · slider · value. */
+.ga-collision-grid { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 2px 6px; align-items: center; font-size: 11px; }
+.ga-collision-grid input[type="range"] { width: 100%; margin: 0; }
+/* Two-column character tabs (Base body, Pose, Hair): images left, the 3D
+   preview with its controls right. */
+.ga-split { display: grid; gap: 16px; align-items: start; }
+.ga-split-views { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); }
+.ga-split-hair { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(340px, 440px); }
+.ga-split > * { min-width: 0; }
+/* The split tabs (Base body, Pose, Hair) and the face actions are dense: one
+   text size for everything, hints muted and a step smaller. */
+.ga-split, .ga-face-actions, .ga-model3d-tab { font-size: 13px; }
+.ga-split .ga-hint, .ga-face-actions .ga-hint, .ga-model3d-tab .ga-hint {
+  font-size: 12px; color: var(--text-muted, #8b949e); margin: 0;
+}
+.ga-split-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ga-view-stack { display: flex; flex-direction: column; gap: 8px; }
+.ga-view-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+@media (max-width: 1300px) {
+  .ga-split-hair { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
+  .ga-split-hair > :first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 1000px) {
+  .ga-split-views, .ga-split-hair { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Building hull: compact groups with captions above their controls. */
 .ga-hull-grid {

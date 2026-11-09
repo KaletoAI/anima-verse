@@ -7,10 +7,10 @@
  * pipeline in the 3D tab — so both tabs render the same component. The
  * 3D tab keeps its own overview for a model of the old path (no `steps`).
  *
- * status → dot: done green · warning yellow · failed red · skipped and
- * missing (nothing recorded) grey. `label` is a fixed English phrase
- * (translated); `detail` is server text with the numbers in it; `numbers`
- * are the raw values, in the row's tooltip.
+ * One line per step: dot + label + short state (done green · warning
+ * yellow · failed red · skipped and missing (nothing recorded) grey).
+ * `label` is a fixed English phrase (translated); `detail` (server text with
+ * the numbers in it) and `numbers` (the raw values) are the row's tooltip.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 
@@ -53,7 +53,7 @@ export function ModelSteps({ steps }: { steps: ModelStep[] }) {
         return (
           <div key={s.id} className="ga-model3d-status-row" title={tip}>
             <span className={`ga-model3d-status-dot ga-model3d-status-${DOT[s.status] || 'grey'}`} />
-            <span>{t(s.label)}{s.detail ? ` · ${s.detail}` : ` · ${t(STATUS_LABEL[s.status] || s.status)}`}</span>
+            <span className="ga-model3d-status-text">{t(s.label)} · {t(STATUS_LABEL[s.status] || s.status)}</span>
           </div>
         )
       })}

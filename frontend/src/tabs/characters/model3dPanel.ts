@@ -12,7 +12,7 @@ export interface Model3DPanelSnapshot {
   extensionResult: ExtensionRigResult | undefined
   canMeasure: boolean
   model: Model3DStatus['model']
-  setModelOption: (key: 'auto_generate' | 'face_before_rig' | 'face_cleanup', value: boolean) => Promise<void>
+  setModelOption: (key: 'auto_generate', value: boolean) => Promise<void>
   setExtensionOption: (id: string, key: 'enabled' | 'flip', value: boolean) => Promise<void>
   setExtensionMotion: (id: string, values?: Physics, slidersOnly?: boolean) => Promise<boolean>
   rebuildExtensions: () => Promise<void>

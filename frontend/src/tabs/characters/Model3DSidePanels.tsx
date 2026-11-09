@@ -87,42 +87,20 @@ export function Model3DGeneration({ character }: { character: string }) {
   if (!panel) return <div className="ga-hint">{t('Loading…')}</div>
   const { st, setModelOption } = panel
   // Base-body pipeline: every outfit model is built from the base body on
-  // its own (no backend, no GPU), and the only mesh that is rigged is the
-  // base body — the face option applies to it.
-  const pipeline = !!st.pipeline
-  return <>
-      <label className="ga-check-row"
-        title={pipeline
-          ? t('On the base-body pipeline every outfit model is built from the base body automatically — this option applies only off the pipeline.')
-          : t('Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.')}>
-        <input
-          type="checkbox"
-          checked={!!st.options?.auto_generate}
-          disabled={pipeline}
-          onChange={(e) => setModelOption('auto_generate', e.target.checked)}
-        />
-        <span>{t('Auto-generate 3D model (cheapest backend)')}</span>
-      </label>
-      {pipeline ? <div className="ga-hint">{t('Outfit models are built from the base body automatically.')}</div> : null}
-      <label className="ga-check-row"
-        title={st.rig && st.rig !== 'mixamo' ? t('Humanoid models only.')
-          : t('Before the face retexture, lash flaps the mesher built from painted lashes are pressed back onto the lids and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>
-        <input
-          type="checkbox"
-          checked={!!st.options?.face_cleanup}
-          disabled={!!st.rig && st.rig !== 'mixamo'}
-          onChange={(e) => setModelOption('face_cleanup', e.target.checked)}
-        />
-        <span>{t('Face cleanup before the face retexture (lashes, lips)')}</span>
-      </label>
-      <label className="ga-check-row"
-        title={st.rig && st.rig !== 'mixamo' ? t('Humanoid models only.')
-          : pipeline ? t('The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.')
-          : t('New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.')}>
-        <input type="checkbox" checked={!!st.options?.face_before_rig}
-          disabled={!!st.rig && st.rig !== 'mixamo'}
-          onChange={e => setModelOption('face_before_rig', e.target.checked)} />
-        <span>{t('Improve face before rigging')}</span>
-      </label>
-  </>
+  // its own (no backend, no GPU) — nothing to choose here. The face options
+  // (face cleanup, face before rigging) live with the model they act on:
+  // ModelFaceActions, in the Base body tab on the pipeline, beside the
+  // preview in the 3D tab off it.
+  if (st.pipeline) return <div className="ga-hint">{t('Outfit models are built from the base body automatically.')}</div>
+  return (
+    <label className="ga-check-row"
+      title={t('Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.')}>
+      <input
+        type="checkbox"
+        checked={!!st.options?.auto_generate}
+        onChange={(e) => setModelOption('auto_generate', e.target.checked)}
+      />
+      <span>{t('Auto-generate 3D model (cheapest backend)')}</span>
+    </label>
+  )
 }

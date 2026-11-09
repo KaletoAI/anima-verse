@@ -11,6 +11,8 @@ import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
 import type { ModelStep } from './ModelSteps'
+import type { CollisionPayload } from '@anima/scene-render'
+import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -40,7 +42,13 @@ export interface BaseModelInfo {
   steps?: ModelStep[]
   /** Built from the base views stored now? */
   freshness?: Freshness | null
+  /** The base body's capsule set — the one every outfit model inherits
+   *  (characters.py `_base_body_model_extras`, `collision.ensure`). */
+  collision?: CollisionPayload | null
 }
+
+/** The base model's face fields (`model3d.face_info`), merged into `model`. */
+export type BaseModelWithFace = BaseModelInfo & FaceFields
 
 /** The current outfit's model on the pipeline. */
 export interface BaseOutfitInfo {
@@ -69,8 +77,12 @@ export interface BaseBodyInfo {
   /** Per stored view: model, creation time and freshness for the image tile. */
   image_meta?: Partial<Record<BaseView, ImageTileMeta | null>>
   status: Partial<Record<BaseView, BaseViewStatus>>
-  model: BaseModelInfo | null
+  model: BaseModelWithFace | null
   outfit: BaseOutfitInfo | null
+  /** The face cleanup of the base source (`model3d.face_cleanup_state`). */
+  face_cleanup?: FaceCleanupState | null
+  /** The stored collision region scales (`model3d_opts.collision_scales`). */
+  collision_scales?: Record<string, number>
   now?: string
 }
 
@@ -86,7 +98,8 @@ export const viewsRunning = (d: BaseBodyInfo | null | undefined) =>
 export const modelRunning = (d: BaseBodyInfo | null | undefined) =>
   d?.model?.status === 'running' || d?.outfit?.status === 'running'
 
-const isActive = (d: BaseBodyInfo | null | undefined) => viewsRunning(d) || modelRunning(d)
+const isActive = (d: BaseBodyInfo | null | undefined) =>
+  viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running
 
 export function useBaseBody(character: string) {
   const enc = encodeURIComponent(character)

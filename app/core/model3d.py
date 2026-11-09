@@ -40,6 +40,8 @@ _lock = threading.Lock()
 _generating: set = set()
 _rerig_results: Dict[str, Dict[str, Any]] = {}
 _face_retexture_results: Dict[str, Dict[str, Any]] = {}
+# The last "Re-apply face cleanup" run per character (``trigger_face_cleanup``).
+_face_cleanup_results: Dict[str, Dict[str, Any]] = {}
 # Distance meshes currently being built in the background, keyed by file path
 # — one build per file, however many clients ask for it at once.
 _lod_building: set = set()
@@ -1165,7 +1167,6 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     out["face_retexture_backends"] = [{"name": b.name, "model": b.model}
                                      for b in get_image_service().list_face_retexture_backends()]
     if path:
-        from app.core.face_retexture import snapshot_info
         # On the base-body pipeline the face is the base body's (the face
         # routes act on the base signature): status, revert and comparison
         # come from the base model, not from the outfit painted onto it.
@@ -1176,20 +1177,31 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
             if base_path.is_file():
                 face_path = base_path
                 out["model"]["face_signature"] = base_path.stem
-        out["model"]["face_retexture"] = _read_sidecar(face_path).get("face_retexture")
-        snapshot = snapshot_info(face_path.parent, face_path.stem)
-        out["model"]["face_retexture_snapshot"] = snapshot
-        out["model"]["face_retexture_revert"] = (
-            "snapshot" if snapshot["ok"] else "rerig" if (
-                not (face_path.parent / "rollback" / face_path.stem).exists()
-                and (out["model"]["face_retexture"] or {}).get("status") == "applied"
-                and (face_path.parent / "unrigged" / f"{face_path.stem}.glb").is_file()) else None)
-        if (face_path.parent / "facefix" / f"{face_path.stem}.png").is_file():
-            out["model"]["face_retexture_compare_url"] = f"/characters/{quote(character_name)}/model3d/face-retexture/compare?signature={face_path.stem}"
+        out["model"].update(face_info(character_name, face_path))
     with _lock:
         out["pending"] = character_name in _generating
         out["rerig_result"] = _rerig_results.get(character_name)
         out["face_retexture_result"] = _face_retexture_results.get(character_name)
+    return out
+
+
+def face_info(character_name: str, face_path: Path) -> Dict[str, Any]:
+    """The face-retexture fields of the stored model ``face_path``:
+    ``{face_retexture, face_retexture_snapshot, face_retexture_revert,
+    face_retexture_compare_url?}`` — the 3D tab's model (the base model's on
+    the pipeline) and the Base body tab's base model."""
+    from app.core.face_retexture import snapshot_info
+    out: Dict[str, Any] = {"face_retexture": _read_sidecar(face_path).get("face_retexture")}
+    snapshot = snapshot_info(face_path.parent, face_path.stem)
+    out["face_retexture_snapshot"] = snapshot
+    out["face_retexture_revert"] = (
+        "snapshot" if snapshot["ok"] else "rerig" if (
+            not (face_path.parent / "rollback" / face_path.stem).exists()
+            and (out["face_retexture"] or {}).get("status") == "applied"
+            and (face_path.parent / "unrigged" / f"{face_path.stem}.glb").is_file()) else None)
+    if (face_path.parent / "facefix" / f"{face_path.stem}.png").is_file():
+        out["face_retexture_compare_url"] = (f"/characters/{quote(character_name)}/model3d/face-retexture/compare"
+                                             f"?signature={face_path.stem}")
     return out
 
 
@@ -3994,6 +4006,177 @@ def trigger_face_retexture(character_name: str, signature: str, *,
                     _generating.discard(character_name)
     threading.Thread(target=run, daemon=True).start()
     return {'status': 'generating', 'task_id': task_id}
+
+
+# ── Face cleanup re-apply ─────────────────────────────────────────────────
+# The face cleanup (app/core/face_cleanup.py) runs on the mesher's result
+# before it becomes the retained source ``unrigged/<signature>.glb``. Its
+# per-character switch (``model3d_opts.face_cleanup``) only decides the NEXT
+# mesher run; "Re-apply face cleanup" brings it onto the STORED mesh: the
+# retained source is cleaned in place (a local step, published on its own),
+# then everything after it is rebuilt from it — the face retexture when the
+# model carries one or "Improve face before rigging" is on (its stages: an
+# upscale of a front-view reference, the face retexture, the rig), otherwise a
+# re-rig. Normalize, extension bones, collision capsules and the distance tier
+# follow the rig as on every rig run; on the base-body pipeline the outfit
+# models turn stale (``after_base_face_change``). The mesher's own bytes are
+# not retained: a source cleaned once stays cleaned (the switch off only
+# affects the next mesher run), and a source cleaned at the current
+# ``face_cleanup.VERSION`` is not cleaned again.
+
+FACE_CLEANUP_JOBS = {"face_retexture": ["upscale (front-view reference only)", "face retexture", "rig"],
+                     "rerig": ["rig"]}
+
+
+def face_cleanup_signature(character_name: str, signature: str = "") -> str:
+    """The signature whose retained source the face cleanup acts on: the
+    base body's on the base-body pipeline (outfit models have no unrigged
+    source of their own), else ``signature`` or the served model's."""
+    base = _current_base(character_name)
+    if base:
+        return base[0]
+    if signature:
+        return signature
+    served = find_model3d_serving(character_name)[0]
+    return served.stem if served else ""
+
+
+def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
+    """What the UI shows of the face cleanup of ``unrigged/<signature>.glb``
+    and what a re-apply costs: ``{signature, enabled, humanoid, stored,
+    status, summary, version, current_version, follow_up, jobs, can_reapply,
+    blocked, running, result}``. ``status``: applied | skipped | failed |
+    missing (a source made before the step) | none (no source). ``blocked``
+    is the English reason a re-apply is refused ('' when it can run)."""
+    from app.core import face_cleanup
+    options = get_model3d_options(character_name)
+    enabled = bool(options.get("face_cleanup"))
+    humanoid = required_rig(character_name) == "mixamo"
+    directory = get_model3d_dir(character_name)
+    source = directory / "unrigged" / f"{signature}.glb" if signature else None
+    stored = bool(source is not None and source.is_file())
+    record = _read_sidecar(source).get("face_cleanup") if stored else None
+    record = record if isinstance(record, dict) else {}
+    status = str(record.get("status") or ("missing" if stored else "none"))
+    summary = (str(record.get("error") or "") if status == "failed"
+               else str(record.get("reason") or "") if status == "skipped" and record.get("reason")
+               else face_cleanup.summary(record) if record else "")
+    applied_now = status == "applied" and record.get("version") == face_cleanup.VERSION
+    follow_up = "face_retexture" if humanoid and stored and (
+        options.get("face_before_rig") or (directory / "facefix" / f"{signature}.glb").is_file()) else "rerig"
+    with _lock:
+        running = character_name in _generating
+        result = _face_cleanup_results.get(character_name)
+    blocked = ("Humanoid models only." if not humanoid
+               else "No retained unrigged mesh — generate the model again." if not stored
+               else "Switch the face cleanup on first." if not enabled
+               else "Already applied to the stored mesh." if applied_now
+               else "A 3D model run of this character is going." if running else "")
+    return {"signature": signature, "enabled": enabled, "humanoid": humanoid, "stored": stored,
+            "status": status, "summary": summary, "version": record.get("version"),
+            "current_version": face_cleanup.VERSION, "follow_up": follow_up,
+            "jobs": FACE_CLEANUP_JOBS[follow_up], "can_reapply": not blocked, "blocked": blocked,
+            "running": running, "result": result}
+
+
+@_serial_model
+def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
+    """Clean the retained source ``unrigged/<signature>.glb`` in place (staged
+    by ``_serial_model``, published on return). The rigged model is not
+    touched here — the caller rebuilds it from the cleaned source."""
+    from app.core import face_cleanup
+    from app.core.mesh_source import validate_source
+    root = get_model3d_dir(character_name)
+    source = root / "unrigged" / f"{signature}.glb"
+    if not source.is_file():
+        return {"ok": False, "error": "No retained unrigged mesh — generate the model again."}
+    blob = source.read_bytes()
+    try:
+        cleaned, record = face_cleanup.clean_face(blob)
+        if record.get("status") == "applied":
+            verdict = validate_source(cleaned)
+            if not verdict.get("ok"):
+                raise ValueError("cleaned mesh fails validation: " + "; ".join(verdict.get("errors") or []))
+    except Exception as exc:  # noqa: BLE001 — reported, the stored source stays as it was
+        return {"ok": False, "error": f"Face cleanup failed: {exc}"}
+    record["reapplied"] = True
+    meta = _read_sidecar(source)
+    meta["face_cleanup"] = record
+    if cleaned != blob:
+        _publish_model_bytes(source, cleaned)
+        # The face-revert snapshot shows the model before its face retexture,
+        # built on the source just replaced: drop it with the publication.
+        (root / ".replace-source").touch()
+    _publish_sidecar(source, meta)
+    logger.info("Face cleanup re-applied %s/%s: %s", character_name, signature, face_cleanup.summary(record))
+    return {"ok": True, "face_cleanup": record, "changed": cleaned != blob}
+
+
+def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
+    """Start "Re-apply face cleanup" for ``signature`` in a tracked thread on
+    the character's shared generation guard: ``{status: "generating",
+    task_id, follow_up, jobs}`` or ``{status: "already_running"}``.
+    ValueError when the state refuses it (``face_cleanup_state.blocked``);
+    LookupError with the problems when the follow-up cannot run (no face
+    retexture backend, no rig route, a changed reference photo)."""
+    from app.core.face_retexture import check as face_check, runnable as face_runnable, safe_signature
+    from app.core.task_queue import get_task_queue
+    safe_signature(signature)
+    state = face_cleanup_state(character_name, signature)
+    if state["running"]:
+        return {"status": "already_running"}
+    if not state["can_reapply"]:
+        raise ValueError(state["blocked"])
+    follow_up = state["follow_up"]
+    if follow_up == "face_retexture":
+        problems = face_check(character_name, signature)["problems"] + face_runnable(character_name)["problems"]
+    else:
+        from app.imagegen.routing import chain_candidates
+        from app.imagegen.service import get_image_service
+        problems = [] if chain_candidates("rig_humanoid", pool=get_image_service().pool) else [
+            {"code": "no_rigger", "message": "No humanoid rig route is configured."}]
+    if problems:
+        raise LookupError("; ".join(p["message"] for p in problems))
+    with _lock:
+        if character_name in _generating:
+            return {"status": "already_running"}
+        _generating.add(character_name)
+        _face_cleanup_results.pop(character_name, None)
+    try:
+        queue = get_task_queue()
+        task_id = queue.track_start("model3d_face_cleanup", f"Face cleanup: {character_name}",
+                                    agent_name=character_name, start_running=True)
+    except Exception:
+        with _lock:
+            _generating.discard(character_name)
+        raise
+
+    def run():
+        result: Dict[str, Any] = {"ok": False, "error": "Face cleanup failed"}
+        try:
+            with _char_lock(character_name):
+                result = _reclean_face_source(character_name, signature)
+                if result.get("ok"):
+                    if follow_up == "face_retexture":
+                        result = face_retexture_model(character_name, signature, track_id=task_id)
+                    else:
+                        result = rerig_model(character_name, signature, track_id=task_id)
+            if result.get("ok"):
+                after_base_face_change(character_name, signature)
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+            logger.exception("Face cleanup re-apply failed for %s", character_name)
+        finally:
+            try:
+                queue.track_finish(task_id, error="" if result.get("ok") else result.get("error") or "Face cleanup failed")
+            finally:
+                with _lock:
+                    _face_cleanup_results[character_name] = {"ok": bool(result.get("ok")),
+                                                             "error": result.get("error", ""),
+                                                             "task_id": task_id, "follow_up": follow_up}
+                    _generating.discard(character_name)
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "generating", "task_id": task_id, "follow_up": follow_up, "jobs": state["jobs"]}
 
 
 # ── Resume registration (app/core/hub_ops.py) ─────────────────────────────

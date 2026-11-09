@@ -18,6 +18,11 @@
  * Changing it does not start GPU work (R14): the tab shows "Hair description
  * changed" and the old hair stays served until Regenerate.
  *
+ * Layout: three columns — method, description and state; the selected
+ * method's steps (small tiles, a click enlarges); the fitted preview with
+ * what re-fits it (HairDeck colour and placement), "Run all" and the other
+ * method's last result.
+ *
  * Two hair methods (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md,
  * Task 5): the edit chain above, or HairDeck (the profile picture -> hair
  * cards in one Hub call -> fit). The method selector at the top stores the
@@ -35,12 +40,15 @@ import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, StepState } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
-import { EMPTY_TILE, ERROR_STYLE, ROW, TILE_HEIGHT, WARN_STYLE, flatFit, num } from './garmentStyle'
+import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, flatFit, num } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import { garmentRunning, useGarment } from './useGarment'
 import type { HairDeckPanel, HairInfo, HairMethod, HairPlacement, OtherMethodInfo } from './useGarment'
+
+/** HairDeck's three image tiles: small, a click enlarges. */
+const HAIRDECK_TILE = 140
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -468,6 +476,7 @@ export function FieldHair({ character, onEditAppearance }: {
       busy={busy}
       onRun={onRun}
       lowFailedText="Distance tier failed — the full hair is used"
+      compact
     />
   )
 
@@ -483,9 +492,9 @@ export function FieldHair({ character, onEditAppearance }: {
             <div key={key} style={{ flex: 1, minWidth: 0 }}>
               <div className="ga-hint">{t(label)}</div>
               {img ? (
-                <RefImage key={img.url} src={img.url} height={TILE_HEIGHT} label={t(label)} meta={img} />
+                <RefImage key={img.url} src={img.url} height={HAIRDECK_TILE} label={t(label)} meta={img} compact />
               ) : (
-                <div className="ga-hint" style={EMPTY_TILE}>
+                <div className="ga-hint" style={{ ...EMPTY_TILE, height: HAIRDECK_TILE }}>
                   {key === 'input' ? t('No profile picture') : t('No render yet')}
                 </div>
               )}
@@ -516,6 +525,25 @@ export function FieldHair({ character, onEditAppearance }: {
       {hd.status === 'refused' && hd.error ? <div className="ga-hint" style={ERROR_STYLE}>{hd.error}</div> : null}
       {garment ? <StepState garment={garment} step="hairdeck" /> : null}
 
+      <FitBlock garment={garment} chips={HAIRDECK_FIT_CHIPS} limits={limits.hairdeck_fit}
+        ready={hd.status === 'accepted'} busy={busy} onRun={onRun}
+        lowFailedText="Distance tier failed — the full hair is used" />
+      {hd.attempts.length ? (
+        <details>
+          <summary className="ga-hint" style={{ cursor: 'pointer' }}>
+            {t('Refused fit attempts')} ({hd.attempts.length})
+          </summary>
+          {hd.attempts.map((g, i) => (
+            <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={flatFit(g)} />
+          ))}
+        </details>
+      ) : null}
+    </>
+  ) : null
+
+  // Colour and placement re-fit the hair: they sit beside the preview.
+  const hairdeckLook = hd && isHairDeck ? (
+    <>
       <div className="ga-fieldset-title">{t('Hair colour')}</div>
       <HairColour
         key={`${hd.colour.target || ''}|${hd.colour.profile?.hex || ''}|${hd.colour.auto || ''}`}
@@ -537,29 +565,17 @@ export function FieldHair({ character, onEditAppearance }: {
           />
         </>
       ) : null}
-
-      <FitBlock garment={garment} chips={HAIRDECK_FIT_CHIPS} limits={limits.hairdeck_fit}
-        ready={hd.status === 'accepted'} busy={busy} onRun={onRun}
-        lowFailedText="Distance tier failed — the full hair is used" />
-      {hd.attempts.length ? (
-        <details>
-          <summary className="ga-hint" style={{ cursor: 'pointer' }}>
-            {t('Refused fit attempts')} ({hd.attempts.length})
-          </summary>
-          {hd.attempts.map((g, i) => (
-            <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={flatFit(g)} />
-          ))}
-        </details>
-      ) : null}
     </>
   ) : null
 
   return (
-    <div className="ga-form">
+    <div className="ga-split ga-split-hair">
+      <div className="ga-split-col">
       <div className="ga-fieldset-title">{t('Hair method')}</div>
       <div style={ROW}>
         <select
           className="ga-input"
+          style={{ width: 'auto', maxWidth: '100%' }}
           value={info.method_source === 'character' ? info.method : ''}
           disabled={busy}
           title={garmentRunning(info) ? t('Wait for the running hair job') : undefined}
@@ -648,34 +664,41 @@ export function FieldHair({ character, onEditAppearance }: {
             </div>
           ) : null}
 
-          {isHairDeck ? hairdeckSection : editChainSection}
-
-          <div className="ga-fieldset-title">{t('Preview')}</div>
-          {garment?.preview_url ? (
-            <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={360}
-              freshness={garment.preview_freshness} />
-          ) : (
-            <div className="ga-hint">{t('No fitted hair yet')}</div>
-          )}
-          <div className="ga-hint">
-            {t('Hair has no collision yet — it can pass through arms and shoulders when they move')}
-          </div>
-
-          <div style={ROW}>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={busy || !garment}
-              title={t('Runs every step that is missing or out of date')}
-              onClick={() => { void run({}) }}
-            >
-              {garmentRunning(info) ? t('Generating…') : t('Run all')}
-            </button>
-          </div>
-
-          <OtherMethod other={info.other} method={info.method} limits={limits} />
         </>
       )}
+      </div>
+      {info.item_id ? (
+        <>
+          <div className="ga-split-col">
+            {isHairDeck ? hairdeckSection : editChainSection}
+          </div>
+          <div className="ga-split-col">
+            <div className="ga-face-actions-row">
+              <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Preview')}</span>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                disabled={busy || !garment}
+                title={t('Runs every step that is missing or out of date')}
+                onClick={() => { void run({}) }}
+              >
+                {garmentRunning(info) ? t('Generating…') : t('Run all')}
+              </button>
+            </div>
+            {garment?.preview_url ? (
+              <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={380}
+                freshness={garment.preview_freshness} />
+            ) : (
+              <div className="ga-hint">{t('No fitted hair yet')}</div>
+            )}
+            <div className="ga-hint">
+              {t('Hair has no collision yet — it can pass through arms and shoulders when they move')}
+            </div>
+            {hairdeckLook}
+            <OtherMethod other={info.other} method={info.method} limits={limits} />
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }

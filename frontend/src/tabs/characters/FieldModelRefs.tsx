@@ -95,6 +95,8 @@ const DRAFT_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
+/** Tile height of the stacked layout (small: a click enlarges). */
+const STACK_TILE = 150
 /** A server-reported state is shown only after persisting this long. */
 const HINT_AFTER_S = 20
 /** Poll cadence while something runs or is scheduled; slows after ~2 min. */
@@ -138,10 +140,15 @@ export function FieldModelRefs({
   character,
   kinds = ['pose', 'tpose'],
   refreshKey = '',
+  layout = 'row',
 }: {
   character: string
   kinds?: RefKind[]
   refreshKey?: string
+  /** `stack`: one narrow column of small tiles (the Pose tab's left column,
+   *  next to the outfit model's preview) — the main view, then every extra
+   *  view with its draft beside it. A click enlarges a tile. */
+  layout?: 'row' | 'stack'
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -354,9 +361,130 @@ export function FieldModelRefs({
   const toggleViews = VIEW_ORDER.filter(
     (view) => view in (info.views || {}) && (!info.pipeline || view === 'face'))
 
+  // One extra view (its regenerate button in the corner) and one draft tile.
+  const renderView = (view: typeof VIEW_ORDER[number], height: number) => {
+    const vi = info.views?.[view]?.info
+    return (
+      <div key={view} style={{ flex: 1, minWidth: 0 }}>
+        <div className="ga-hint">{viewLabel(view)}</div>
+        {view === 'face' ? <div className="ga-hint">
+          {t('from profile picture')}
+          {info.face_view?.stale ? <span title={t('The profile picture changed — regenerate')}> · {t('stale')}</span> : null}
+          {info.face_view?.rendering ? <span> · {t('Generating…')}</span> : null}
+        </div> : null}
+        {vi?.warning ? (
+          <div className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>{vi.warning}</div>
+        ) : null}
+        {vi ? (
+          <RefImage
+            key={`${view}-${bust}`}
+            src={`${view === 'face' ? info.face_view?.url : `/characters/${enc}/model-refs/tpose_${view}`}?v=${bust}`}
+            height={height}
+            radius={6}
+            compact
+            label={viewLabel(view)}
+            meta={vi}
+            action={(
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                style={{ fontSize: 10, padding: '1px 5px' }}
+                disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
+                onClick={() => (view === 'face' ? setFaceDialogOpen(true) : generate(view))}
+                aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
+              >
+                {t('Regenerate')}
+              </button>
+            )}
+          />
+        ) : (
+          <>
+            <div className="ga-hint">{t('No render yet')}</div>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
+              onClick={() => (view === 'face' ? setFaceDialogOpen(true) : generate(view))}
+              aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
+            >
+              {t('Regenerate')}
+            </button>
+          </>
+        )}
+      </div>
+    )
+  }
+  const renderDraft = (view: typeof DRAFT_ORDER[number], height: number) => {
+    // The view's draft (rendered from the dressed front; only
+    // its clothing is fitted onto the base view). Regenerating
+    // the view renders draft and fit anew.
+    const draft = info.drafts?.[view]
+    const label = draftLabel(view)
+    return (
+      <div key={`draft-${view}`} style={{ flex: 1, minWidth: 0 }}>
+        <div className="ga-hint">{label}</div>
+        {draft ? (
+          <RefImage
+            key={`${view}-draft-${bust}`}
+            src={`/characters/${enc}/model-refs/tpose_${view}_draft?v=${bust}`}
+            height={height}
+            radius={6}
+            compact
+            label={label}
+            meta={draft}
+          />
+        ) : (
+          <div className="ga-hint">{t('No render yet')}</div>
+        )}
+      </div>
+    )
+  }
+  const draftViews = info.pipeline
+    ? DRAFT_ORDER.filter((v) => info.views?.[v] && info.drafts && v in info.drafts) : []
+
   return (
     <div className="ga-form">
       {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
+      {layout === 'stack' ? (
+        <div className="ga-view-stack">
+          {kindList.map((kind) => (
+            <div key={kind} style={{ minWidth: 0 }}>
+              <div className="ga-hint">{kind === 'tpose' ? t('Main view') : label(kind)}</div>
+              {info[kind] ? (
+                <RefImage key={`${kind}-${bust}`} src={`/characters/${enc}/model-refs/${kind}?v=${bust}`}
+                  height={STACK_TILE} radius={6} compact label={label(kind)} meta={info[kind]}
+                  action={kind === 'tpose' ? (
+                    <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: 10, padding: '1px 5px' }}
+                      disabled={blocked} onClick={() => generate('main')}
+                      aria-label={`${t('Regenerate')} · ${t('Main view')}`}>
+                      {t('Regenerate')}
+                    </button>
+                  ) : undefined} />
+              ) : (
+                <>
+                  <div className="ga-hint">{t('No render yet')}</div>
+                  {kind === 'tpose' ? (
+                    <button type="button" className="ga-btn ga-btn-sm" disabled={blocked} onClick={() => generate('main')}
+                      aria-label={`${t('Regenerate')} · ${t('Main view')}`}>
+                      {t('Regenerate')} · {t('Main view')}
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ))}
+          {kindList.includes('tpose') ? VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map((view) => (
+            // A dressed back/side view and the draft it was fitted from, side
+            // by side; a view without a stored draft keeps the full width.
+            (draftViews as string[]).includes(view) && info.drafts?.[view] ? (
+              <div key={view} className="ga-view-pair">
+                {renderView(view, STACK_TILE)}
+                {renderDraft(view as typeof DRAFT_ORDER[number], STACK_TILE)}
+              </div>
+            ) : renderView(view, STACK_TILE)
+          )) : null}
+        </div>
+      ) : (
       <div style={{ display: 'flex', gap: 8 }}>
         {kindList.map((kind) => {
           const ri = info[kind]
@@ -404,91 +532,15 @@ export function FieldModelRefs({
                 // Extra T-pose views share the T-pose status lane, but each
                 // can be regenerated without replacing the other images.
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  {VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map(
-                    (view) => {
-                      const vi = info.views?.[view]?.info
-                      return (
-                        <div key={view} style={{ flex: 1, minWidth: 0 }}>
-                          <div className="ga-hint">{viewLabel(view)}</div>
-                          {view === 'face' ? <div className="ga-hint">
-                            {t('from profile picture')}
-                            {info.face_view?.stale ? <span title={t('The profile picture changed — regenerate')}> · {t('stale')}</span> : null}
-                            {info.face_view?.rendering ? <span> · {t('Generating…')}</span> : null}
-                          </div> : null}
-                          {vi?.warning ? (
-                            <div className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>{vi.warning}</div>
-                          ) : null}
-                          {vi ? (
-                            <RefImage
-                              key={`${view}-${bust}`}
-                              src={`${view === 'face' ? info.face_view?.url : `/characters/${enc}/model-refs/tpose_${view}`}?v=${bust}`}
-                              height={110}
-                              radius={6}
-                              compact
-                              label={viewLabel(view)}
-                              meta={vi}
-                              action={(
-                                <button
-                                  type="button"
-                                  className="ga-btn ga-btn-sm"
-                                  style={{ fontSize: 10, padding: '1px 5px' }}
-                                  disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
-                                  onClick={() => (view === 'face' ? setFaceDialogOpen(true) : generate(view))}
-                                  aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
-                                >
-                                  {t('Regenerate')}
-                                </button>
-                              )}
-                            />
-                          ) : (
-                            <>
-                              <div className="ga-hint">{t('No render yet')}</div>
-                              <button
-                                type="button"
-                                className="ga-btn ga-btn-sm"
-                                disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
-                                onClick={() => (view === 'face' ? setFaceDialogOpen(true) : generate(view))}
-                                aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
-                              >
-                                {t('Regenerate')}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )
-                    },
-                  )}
-                  {info.pipeline ? DRAFT_ORDER.filter((v) => info.views?.[v] && info.drafts && v in info.drafts).map((view) => {
-                    // The view's draft (rendered from the dressed front; only
-                    // its clothing is fitted onto the base view). Regenerating
-                    // the view renders draft and fit anew.
-                    const draft = info.drafts?.[view]
-                    const label = draftLabel(view)
-                    return (
-                      <div key={`draft-${view}`} style={{ flex: 1, minWidth: 0 }}>
-                        <div className="ga-hint">{label}</div>
-                        {draft ? (
-                          <RefImage
-                            key={`${view}-draft-${bust}`}
-                            src={`/characters/${enc}/model-refs/tpose_${view}_draft?v=${bust}`}
-                            height={110}
-                            radius={6}
-                            compact
-                            label={label}
-                            meta={draft}
-                          />
-                        ) : (
-                          <div className="ga-hint">{t('No render yet')}</div>
-                        )}
-                      </div>
-                    )
-                  }) : null}
+                  {VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map((view) => renderView(view, 110))}
+                  {draftViews.map((view) => renderDraft(view, 110))}
                 </div>
               ) : null}
             </div>
           )
         })}
       </div>
+      )}
       <div className="ga-hint">
         {kindList.includes('tpose')
           ? t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The pose render feeds the image-to-3D pipeline.')

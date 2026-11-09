@@ -281,7 +281,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox, collision }:
+  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -442,7 +442,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  capsules": wireframes on the PLAYING figure, placed every frame by
      *  `createCollisionOverlay` of @anima/scene-render (the endpoint rule the
      *  garment push uses too). Refreshed live without reloading the model. */
-    collision?: CollisionPayload | null }) {
+    collision?: CollisionPayload | null
+    /** Show the capsules whatever the toggle says — while the caller's
+     *  radius sliders preview a draft (CollisionScales), so the effect is
+     *  visible as the slider moves. */
+    showCollision?: boolean }) {
   const { t } = useI18n()
   const [takes, setTakes] = useState<string[]>([])
   const [take, setTake] = useState('')
@@ -461,7 +465,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   motionRef.current = motion
   const [collisionOn, setCollisionOn] = useState(false)
   const collisionRef = useRef<CollisionPayload | null>(null)
-  collisionRef.current = collisionOn && collision?.capsules?.length ? collision : null
+  const collisionShownOn = collisionOn || showCollision
+  collisionRef.current = collisionShownOn && collision?.capsules?.length ? collision : null
   // Garments pushed out of the capsules (`createGarmentCollision`, the same
   // routine the 3D client runs) — on by default; the toggle compares.
   const [garmentPushOn, setGarmentPushOn] = useState(true)
@@ -2307,7 +2312,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           ) : null}
           {collision?.capsules?.length ? (
             <button type="button" className="ga-btn ga-btn-sm"
-              aria-pressed={collisionOn} onClick={() => setCollisionOn(on => !on)}
+              aria-pressed={collisionShownOn} onClick={() => setCollisionOn(on => !on)}
               title={t('Show collision capsules on the playing figure')}>
               {t('Collision capsules')}
             </button>

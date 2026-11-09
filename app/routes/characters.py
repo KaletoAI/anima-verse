@@ -1733,7 +1733,30 @@ def get_character_base_body(character_name: str,
     from app.core.base_body import base_info
     from app.core.model_overview import annotate_base_info
     _require_character(character_name)
-    return annotate_base_info(character_name, base_info(character_name))
+    info = annotate_base_info(character_name, base_info(character_name))
+    return _base_body_model_extras(character_name, info)
+
+
+def _base_body_model_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
+    """What the Base body tab acts on besides the views: the base model's
+    face fields (``model3d.face_info``) and collision capsules
+    (``collision.ensure`` — the set the outfit models inherit), the stored
+    region scales (``collision_scales``) and the face cleanup of the base
+    source (``face_cleanup``, ``model3d.face_cleanup_state``). Never raises."""
+    from app.core import collision
+    from app.core.model3d import face_cleanup_state, face_info, find_model3d, get_model3d_options
+    try:
+        bsig = info.get("signature") or ""
+        info["collision_scales"] = get_model3d_options(character_name).get("collision_scales") or {}
+        info["face_cleanup"] = face_cleanup_state(character_name, bsig) if bsig and info.get("humanoid") else None
+        model = info.get("model")
+        path = find_model3d(character_name, bsig) if bsig and isinstance(model, dict) else None
+        if path is not None and model.get("status") != "running":
+            model.update(face_info(character_name, path))
+            model["collision"] = collision.ensure(character_name, bsig)
+    except Exception:  # noqa: BLE001 — the poll never fails on the extras
+        logger.exception("Base body extras of %s failed", character_name)
+    return info
 
 
 @router.post("/{character_name}/base-body/images", status_code=202)
@@ -2203,6 +2226,15 @@ def get_character_model3d(character_name: str, request: Request, preview_states:
     info = annotate_model3d_info(character_name, get_model3d_info(character_name, preview_states=selected))
     # ``pipeline``: what the tab's actions mean on the base-body pipeline.
     info = annotate_pipeline(character_name, info)
+    # The face cleanup of the source the face acts on (the base body's on the
+    # pipeline): state + what "Re-apply face cleanup" costs.
+    try:
+        from app.core.model3d import face_cleanup_signature, face_cleanup_state
+        signature = face_cleanup_signature(character_name, (info.get("model") or {}).get("signature") or "")
+        info["face_cleanup"] = face_cleanup_state(character_name, signature) if signature else None
+    except Exception:  # noqa: BLE001 — the status read never fails on it
+        logger.exception("Face cleanup state of %s failed", character_name)
+        info["face_cleanup"] = None
     chain = resolve_sets(character_name)
     info["animation_set"] = chain[0] if chain else ""
     info["animation_sets"] = chain          # explicit first, then derived
@@ -2468,6 +2500,30 @@ def rerig_character_model3d(
             raise HTTPException(400, "Selected backend has the wrong category — no automatic fallback")
         pick = selected.name
     return trigger_rerig(character_name, signature, backend_glob=pick)
+
+
+@router.post("/{character_name}/model3d/face-cleanup")
+def reapply_character_face_cleanup(
+        character_name: str, signature: str = "",
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Re-apply the face cleanup to the STORED mesh (``model3d.trigger_face_cleanup``):
+    clean the retained unrigged source in place, then rebuild what follows it
+    (face retexture + rig, or a re-rig). On the base-body pipeline it acts on
+    the base body whatever ``signature`` says. 409 when the state refuses it
+    (switch off, already applied, no source, not humanoid) or the follow-up
+    cannot run (``detail`` names why)."""
+    from app.core.model3d import face_cleanup_signature, trigger_face_cleanup
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    if any(c in signature for c in ("/", "\\", "\x00")) or signature in (".", ".."):
+        raise HTTPException(400, "Invalid model signature")
+    target = face_cleanup_signature(character_name, signature)
+    if not target:
+        raise HTTPException(409, "No retained unrigged mesh — generate the model again.")
+    try:
+        return trigger_face_cleanup(character_name, target)
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 def _face_retexture_signature(character_name: str, signature: str) -> str:

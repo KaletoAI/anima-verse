@@ -6,6 +6,8 @@
  * every stored model — on the base-body pipeline the base body's set first,
  * then the sets the outfit models inherit from it.
  *
+ * Rendered compact in the viewer's side toolbar (Base body tab on the
+ * pipeline, 3D tab off it), so the capsules move with the slider.
  * While a slider moves, `onPreview` hands the caller a PREVIEW payload: the
  * shown set with each radius scaled by draft ÷ fitted scale, for the viewer's
  * capsule overlay. It is only that — the saved set is fitted by the server
@@ -92,25 +94,24 @@ export function CollisionScales({ character, collision, scales, disabled, onPrev
 
   const count = collision?.capsules?.length ?? 0
   const busy = disabled || saving
+  const help = t("Radius per body region. Saving recomputes the capsules of every stored model of this character; outfit models on the base body inherit the base body's set. The viewer shows them with “Collision capsules”.")
+  const stateText = collision?.error ? `${t('Fitting failed')}: ${collision.error}`
+    : collision ? [
+      t('{n} capsules').replace('{n}', String(count)),
+      collision.source === 'base' ? t('from the base model') : '',
+      collision.skipped?.length ? `${t('skipped')}: ${collision.skipped.map(entry => `${entry.id} (${entry.reason})`).join(', ')}` : '',
+    ].filter(Boolean).join(' · ')
+    : t('Not computed yet — the capsules are fitted when the model is loaded.')
+  // Compact on purpose: it sits in the viewer's side toolbar, so the
+  // capsules (shown while a draft differs) move with the slider.
   return (
-    <fieldset className="ga-fieldset">
+    <fieldset className="ga-fieldset ga-model3d-group" title={help}>
       <legend>{t('Collision capsules')}</legend>
-      {collision?.error ? (
-        <p className="ga-hint" role="alert">{t('Fitting failed')}: {collision.error}</p>
-      ) : collision ? (
-        <p className="ga-hint">
-          {t('{n} capsules').replace('{n}', String(count))}
-          {collision.source === 'base' ? ` · ${t('from the base model')}` : ''}
-          {collision.skipped?.length
-            ? ` · ${t('skipped')}: ${collision.skipped.map(entry => `${entry.id} (${entry.reason})`).join(', ')}` : ''}
-        </p>
-      ) : (
-        <p className="ga-hint">{t('Not computed yet — the capsules are fitted when the model is loaded.')}</p>
-      )}
-      <p className="ga-hint">
-        {t("Radius per body region. Saving recomputes the capsules of every stored model of this character; outfit models on the base body inherit the base body's set. The viewer shows them with “Collision capsules”.")}
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '4px 8px', alignItems: 'center' }}>
+      <div className="ga-hint" role={collision?.error ? 'alert' : undefined} title={stateText}
+        style={{ fontSize: 10, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {stateText}
+      </div>
+      <div className="ga-collision-grid">
         {COLLISION_REGIONS.map(region => (
           <label key={region} style={{ display: 'contents' }}>
             <span>{t(REGION_LABELS[region])}</span>
@@ -123,9 +124,9 @@ export function CollisionScales({ character, collision, scales, disabled, onPrev
           </label>
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
-        {changed ? <span className="ga-hint">{t('Unsaved changes')}</span> : null}
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !changed}
+          title={changed ? t('Unsaved changes') : undefined}
           onClick={() => void save(draft)}>{t('Save')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !changed}
           onClick={() => setDraft(stored)}>{t('Revert')}</button>

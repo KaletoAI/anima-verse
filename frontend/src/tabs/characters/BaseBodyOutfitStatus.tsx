@@ -1,5 +1,5 @@
 /**
- * BaseBodyOutfitStatus — under the Pose tab's pose tiles: how the CURRENT
+ * BaseBodyOutfitStatus — under the Pose tab's outfit-model preview: how the CURRENT
  * outfit's model on the base-body pipeline stands (`base_info.outfit`).
  * Renders nothing off the pipeline.
  *
@@ -34,7 +34,11 @@ function texelShare(proof: Record<string, unknown> | null, key: string): number 
 
 const pct = (v: number) => `${(v * 100).toFixed(1)} %`
 
-export function BaseBodyOutfitStatus({ character }: { character: string }) {
+export function BaseBodyOutfitStatus({ character, onStarted }: {
+  character: string
+  /** A rebuild was started (the caller re-reads its model preview). */
+  onStarted?: () => void
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
@@ -54,12 +58,13 @@ export function BaseBodyOutfitStatus({ character }: { character: string }) {
         toast(t('Generating…'))
       }
       startPoll(500)
+      onStarted?.()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setPosting(false)
     }
-  }, [enc, posting, startPoll, t, toast])
+  }, [enc, onStarted, posting, startPoll, t, toast])
 
   const outfit = info?.outfit
   if (!info?.pipeline || !outfit) return null

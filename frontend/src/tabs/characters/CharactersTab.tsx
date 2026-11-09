@@ -25,8 +25,8 @@ import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldBaseBody } from './FieldBaseBody'
+import { FieldPose } from './FieldPose'
 import { FieldHair } from './FieldHair'
-import { BaseBodyOutfitStatus } from './BaseBodyOutfitStatus'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
 import { SecretsEditor } from './SecretsEditor'
@@ -1119,9 +1119,9 @@ export function CharactersTab() {
                           savedSignal={savedSignal}
                         />
                       ),
-                      // Base body (bald A-pose views + rigged base model) in
-                      // its own tab before Pose; on the pipeline the outfit
-                      // model's retexture status sits under the pose tiles.
+                      // Base body (bald A-pose views + rigged base model with
+                      // its face, rig and collision actions) in its own tab
+                      // before Pose; the outfit model sits in the Pose tab.
                       base_body: <FieldBaseBody key={selected} character={selected} />,
                       // Hair as its own mesh (garment chain); the description
                       // is derived from Appearance, so the tab links there.
@@ -1130,13 +1130,17 @@ export function CharactersTab() {
                           onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
                             ? () => setSubTab('tab:aussehen') : undefined} />
                       ),
+                      // Pose renders left, the outfit model built from them right.
                       model_refs: (
-                        <>
-                          <FieldModelRefs character={selected} kinds={['tpose']} />
-                          <BaseBodyOutfitStatus key={selected} character={selected} />
-                        </>
+                        <FieldPose key={selected} character={selected}
+                          onOpen3D={fieldTabs.some((g) => g.id === 'tab:model3d_tab')
+                            ? () => setSubTab('tab:model3d_tab') : undefined} />
                       ),
-                      model3d_gen: <FieldModel3D key={selected} character={selected} />,
+                      model3d_gen: (
+                        <FieldModel3D key={selected} character={selected}
+                          onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
+                            ? () => setSubTab('tab:base_body_tab') : undefined} />
+                      ),
                       model3d_animations: <Model3DAnimations character={selected} />,
                       model3d_extensions: <Model3DExtensions character={selected} />,
                       model3d_generation: <Model3DGeneration character={selected} />,
