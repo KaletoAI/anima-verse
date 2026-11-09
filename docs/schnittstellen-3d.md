@@ -127,6 +127,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
   - [A1. Freie Weltkarte (Meter)](#a1-freie-weltkarte-meter)
   - [A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)](#a2-die-platzierungsketten-heute-drei-v4-vereinheitlicht-sie-b2)
   - [A3. Standhöhen & Figuren-Maßstab — Klärung der 0,12-Frage](#a3-standhöhen-figuren-maßstab-klärung-der-012-frage)
+  - [A3a. Kleidungs-Meshes (Garments) im Charakter-GLB](#a3a-kleidungs-meshes-garments-im-charakter-glb)
   - [A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`](#a4-raum-rezept-get-playroomsroom_idrecipe)
   - [A5. Outdoor-Räume (`always_visible`)](#a5-outdoor-räume-always_visible)
   - [A6. Gebäude-Grundriss, Etagen, Fahrstuhl (AV3D-12)](#a6-gebäude-grundriss-etagen-fahrstuhl-av3d-12)
@@ -2025,6 +2026,47 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
 - Es gibt **keinen Kachelbezug mehr**: „Figur relativ zur 10-m-Kachel"
   war die Doppelmaßstab-Quelle, die die Seamless-World-Umstellung
   beseitigt.
+
+## A3a. Kleidungs-Meshes (Garments) im Charakter-GLB
+
+Seit Phase 4 des Basiskörper-Programms (Plan
+`docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md`, R11/R12) kann das
+AUSGELIEFERTE Charakter-GLB (`url` und `low_url` aus § A7) neben dem Körper
+weitere Meshes tragen — heute die Haare eines Charakters auf der
+Basiskörper-Pipeline.
+
+- **Form:** jedes Garment ist ein zusätzliches **Skinned Mesh auf Skin 0**
+  (dieselben Knochen wie der Körper, Gewichte auf `Head` → `Spine2`). Knoten-
+  und Mesh-Name `garment_<kind>_<item_id>` (überlebt Blender und three.js'
+  `sanitizeNodeName`), Knoten-`extras.garment = {kind, item_id, fsig}` —
+  three.js' GLTFLoader legt das als `userData.garment` ab. Material deckend
+  (`alphaMode: OPAQUE`). Die Fernstufe (`low_url`) trägt die reduzierte
+  Fassung desselben Garments.
+- **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
+  (`model3d/assembled/{sig}.glb` = nacktes Outfit-Modell + gepfropfte
+  Garments); das gespeicherte `{sig}.glb` bleibt immer nackt. Ändert sich die
+  Zusammenstellung (neue Haare, neu angepasst, abgelegt), ändert sich
+  `model_rev` (§ A11a `model_sig`) — der Client lädt wie bei jedem Modelltausch
+  neu. Ohne Garment ist die Auslieferung byte-gleich das nackte Modell.
+- **Figurenhöhe ohne Garments (bindend für beide Renderer):** Höhe, Boden-
+  und XZ-Anker einer Figur werden über den Körper OHNE Garment-Teilbäume
+  gemessen — `figureBox` / `isGarmentNode` in `@anima/scene-render`
+  (`packages/scene-render/src/figure.ts`; Kennung: `userData.garment`,
+  Rückfall Namenspräfix `garment_`). Haare über dem Scheitel ändern also
+  weder `model.height` noch, darüber, `clipHeightOffsetM`, die
+  Gang-Amplitude oder den Maßstab einer Marker-Figur (`anchorFigureBind`).
+  Die Kamera-Rahmung einer Vorschau darf das ganze Modell nehmen — sie leitet
+  keine Höhe ab.
+- **Ich-Perspektive:** das Schrumpfen des Kopfknochens nimmt die Haare nur so
+  weit mit, wie sie an `Head` hängen; Spitzen mit `Spine2`-Gewicht unter dem
+  Kinn bleiben sichtbar (gewollt).
+- **Keine Kollision:** Garments haben in dieser Phase keine Kollisionskapseln
+  (eigener Plan `2026-11-08-collision-capsules-design.md`) — Haare können bei
+  Bewegung durch Arme und Schultern gehen.
+- **Beweis (§ B5a):** `node scripts/smoke_figure_height_garment.mjs` — ein
+  1,70-m-Körper plus ein bis 1,78 m reichendes Garment misst 1,70 (der alte
+  Ganzmodell-Kasten 1,78), auch als Skinned Mesh und als Gruppe mit mehreren
+  Primitiven.
 
 ## A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`
 

@@ -49,7 +49,7 @@
  * that lived here was deleted 2026-08-28: it had already drifted from the
  * catalog's groups).
  */
-import type { Object3D } from 'three'
+import type { Box3, BufferGeometry, Object3D } from 'three'
 import { normBoneName } from './clipRetarget'
 
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
@@ -205,8 +205,64 @@ export function clipHipsDrop(hipsBindY?: number | null,
 }
 
 /**
+ * A GARMENT node of a character GLB (docs/schnittstellen-3d.md § A3a): an
+ * extra skinned mesh on skin 0 — hair today — that the server grafts onto
+ * the body. Marked by the node extras `garment = {kind, item_id, fsig}`
+ * (three's GLTFLoader puts node extras into `userData`), named
+ * `garment_<kind>_<item>`; the name prefix is the fallback for a pipeline
+ * that drops extras.
+ */
+export function isGarmentNode(o: Object3D): boolean {
+  const g = (o.userData as { garment?: unknown } | undefined)?.garment
+  return (!!g && typeof g === 'object') || o.name.startsWith('garment_')
+}
+
+/**
+ * The FIGURE's box: `Box3.setFromObject(root)` over everything EXCEPT
+ * garment subtrees. A garment is not the figure — hair standing 8 cm over
+ * the crown must not make a 1.70 m body 1.78 m tall, and with it every
+ * height derived from the box (the figure scale, the clip height offsets,
+ * the gait amplitude). Without a garment the result IS `setFromObject`
+ * (same call), so nothing changes for any other model. Each object is
+ * measured the way `Box3.expandByObject` measures it (its own or its
+ * geometry's bounding box in world space; a skinned mesh's own box).
+ */
+export function figureBox(THREE: typeof import('three'), root: Object3D): Box3 {
+  let garments = false
+  root.traverse((o) => { if (isGarmentNode(o)) garments = true })
+  const box = new THREE.Box3()
+  if (!garments) return box.setFromObject(root)
+  const part = new THREE.Box3()
+  const expand = (o: Object3D) => {
+    if (isGarmentNode(o)) return
+    o.updateWorldMatrix(false, false)
+    const mesh = o as Object3D & {
+      geometry?: BufferGeometry
+      boundingBox?: Box3 | null
+      computeBoundingBox?: () => void
+    }
+    if (mesh.geometry !== undefined) {
+      if (mesh.boundingBox !== undefined) {
+        if (mesh.boundingBox === null) mesh.computeBoundingBox?.()
+        if (mesh.boundingBox) part.copy(mesh.boundingBox)
+        else part.makeEmpty()
+      } else {
+        if (mesh.geometry.boundingBox === null) mesh.geometry.computeBoundingBox()
+        part.copy(mesh.geometry.boundingBox!)
+      }
+      part.applyMatrix4(o.matrixWorld)
+      box.union(part)
+    }
+    for (const child of o.children) expand(child)
+  }
+  expand(root)
+  return box
+}
+
+/**
  * Scale a figure to `figureHeight` and anchor it in its BIND POSE: soles on
- * y = 0, XZ centred on the origin. Returns the scale factor applied.
+ * y = 0, XZ centred on the origin. Returns the scale factor applied. The
+ * box is the FIGURE's (`figureBox`): garments do not count.
  *
  * CALL THIS BEFORE THE CLIP IS PLAYED. The measurement is deliberately
  * `Box3.setFromObject`, which reads the geometry's bind bounding box and not
@@ -223,7 +279,7 @@ export function anchorFigureBind(THREE: typeof import('three'),
   pivot.scale.setScalar(1)
   pivot.position.set(0, 0, 0)
   pivot.updateMatrixWorld(true)
-  const box = new THREE.Box3().setFromObject(pivot)
+  const box = figureBox(THREE, pivot)
   const size = box.getSize(new THREE.Vector3())
   const centre = box.getCenter(new THREE.Vector3())
   const k = figureHeight / (size.y || 1)

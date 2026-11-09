@@ -17,7 +17,7 @@ import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
-  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM,
+  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
@@ -1180,7 +1180,7 @@ export class FigureLibrary {
         const template = gltf.scene;
         // Stand Z-up exports (the Blender/FBX route) upright automatically
         {
-          const b = new THREE.Box3().setFromObject(template);
+          const b = figureBox(THREE, template);
           const s = b.getSize(new THREE.Vector3());
           if (s.z > s.y * 1.5) {
             template.rotation.x = -Math.PI / 2;
@@ -1197,7 +1197,7 @@ export class FigureLibrary {
             }
           });
         }
-        const bbox = new THREE.Box3().setFromObject(template);
+        const bbox = figureBox(THREE, template);
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
         const height = m.height ?? this.defaultHeight;
         const usable = gltf.animations.filter((c) => c.tracks.length > 0);
@@ -1739,13 +1739,17 @@ export class FigureLibrary {
     });
     if (matLog.length) console.info(`[figures] ${name}: ${matLog.join(' | ')}`);
 
-    const b = new THREE.Box3().setFromObject(template);
+    // The FIGURE's box (`figureBox`): garment meshes grafted onto the body
+    // (hair, § A3a — `extras.garment`, name `garment_<kind>_<item>`) do not
+    // count, so hair over the crown changes neither `model.height` nor,
+    // through it, `clipHeightOffsetM` or the gait amplitude.
+    const b = figureBox(THREE, template);
     const s = b.getSize(new THREE.Vector3());
     if (s.z > s.y * 1.5) {                       // stand a Z-up export upright
       template.rotation.x = -Math.PI / 2;
       template.updateMatrixWorld(true);
     }
-    const bbox = new THREE.Box3().setFromObject(template);
+    const bbox = figureBox(THREE, template);
     const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
     // A server-normalised file already stands its real height on the ground;
     // rescaling it by the box would shrink a figure by its hair/hat again
@@ -2066,7 +2070,10 @@ export class Figure {
    *  shrunk to nothing for the render — face, hair and every bone hanging off
    *  the head go with it, the rest of the body stays — and the lens rides on
    *  it (`firstPersonEye`). `head` is null on a rig without one (procedural
-   *  animals): such a figure is hidden whole in first person, as before. */
+   *  animals): such a figure is hidden whole in first person, as before.
+   *  A garment hair mesh (§ A3a) shrinks with it only as far as it is
+   *  weighted to Head: its ends below the chin blend to Spine2 and stay
+   *  visible — deliberately left as is (long hair seen over the shoulders). */
   private head: THREE.Bone | null = null;
   private readonly headScale = new THREE.Vector3(1, 1, 1);
   /** Eye offset from the head joint in the HEAD BONE's rest frame, in world
@@ -2088,9 +2095,11 @@ export class Figure {
         o.frustumCulled = false; // skinned-mesh bounds are wrong while walking otherwise
       }
     });
-    // The mesh origin is not always at the feet: centre XZ, feet on y=0
+    // The mesh origin is not always at the feet: centre XZ, feet on y=0 —
+    // measured on the figure without its garments (hair hanging behind the
+    // back must not pull the XZ centre).
     inst.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(inst);
+    const box = figureBox(THREE, inst);
     if (!box.isEmpty()) {
       const center = box.getCenter(new THREE.Vector3());
       inst.position.x -= center.x;
