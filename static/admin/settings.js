@@ -1647,6 +1647,9 @@ function validateJsonObjectsBeforeSave() {
     document.querySelectorAll('textarea[id^="f-llm_routing["]').forEach(input => {
         if (input.id.endsWith('.extra_params')) validateJsonObjectField(input.id.slice(2), input);
     });
+    document.querySelectorAll('textarea[id^="f-providers["]').forEach(input => {
+        if (input.id.endsWith('.thinking_off_params')) validateJsonObjectField(input.id.slice(2), input);
+    });
     if (!INVALID_JSON_OBJECTS.size) return true;
     const path = [...INVALID_JSON_OBJECTS][0];
     const input = document.getElementById('f-' + path);

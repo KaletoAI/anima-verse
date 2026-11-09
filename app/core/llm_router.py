@@ -141,6 +141,7 @@ class LLMInstance:
         if self._provider:
             client.provider_quota = self._provider.quota
             client.quota_reservation = self._quota_reservation
+            client.thinking_off_params = dict(self._provider.thinking_off_params or {})
         client.provider_name = self.provider_name
         return client
 

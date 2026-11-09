@@ -53,6 +53,17 @@ def _int_field(entry: dict, key: str, default: int) -> int:
         return default
 
 
+def _json_object_field(entry: dict, key: str) -> dict:
+    """A JSON-object provider field; malformed falls back to {} with a warning
+    (the settings save validates it, a hand-edited file may not be)."""
+    from app.core.llm_router import parse_extra_params
+    try:
+        return parse_extra_params(entry.get(key) or {})
+    except ValueError as exc:
+        logger.warning("Provider %s: %s ignored — %s", entry.get("name", "?"), key, exc)
+        return {}
+
+
 class ProviderManager:
     """Orchestrates all providers and their queues."""
 
@@ -154,6 +165,7 @@ class ProviderManager:
                 rate_limit_requests=_int_field(entry, "rate_limit_requests", 0),
                 rate_limit_window_seconds=_int_field(entry, "rate_limit_window_seconds", 60),
                 max_parallel_llm=_int_field(entry, "max_parallel_llm", 0),
+                thinking_off_params=_json_object_field(entry, "thinking_off_params"),
                 name=name,
                 type=ptype,
                 api_base=api_base,
@@ -452,6 +464,7 @@ class ProviderManager:
             rate_limit_requests=_int_field(entry, "rate_limit_requests", 0),
             rate_limit_window_seconds=_int_field(entry, "rate_limit_window_seconds", 60),
             max_parallel_llm=_int_field(entry, "max_parallel_llm", 0),
+            thinking_off_params=_json_object_field(entry, "thinking_off_params"),
             name=name,
             type=str(entry.get("type", field_default("providers", "type"))).strip().lower(),
             api_base=str(entry.get("api_base", "")).strip(),

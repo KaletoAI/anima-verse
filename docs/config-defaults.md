@@ -42,6 +42,13 @@ the first request slot; a full provider is skipped for the next task-chain entry
 If the whole chain is blocked solely by quota, supported callers wait for the
 earliest slot. HTTP 429 gates the provider until Retry-After (otherwise the
 window end, or 60 seconds with no configured quota), without a health cooldown.
+
+`thinking_off_params` (default **{}**) is merged into every request on that provider
+whose thinking is off — tasks without thinking, the model tests and the RP judge — after
+the default switch `chat_template_kwargs.enable_thinking=false` and before an LLM entry's
+own `extra_params`. Venice rejects `chat_template_kwargs`, so its reasoning models think
+anyway unless this holds `{"venice_parameters": {"disable_thinking": true}}` (the
+"Venice template" button).
 The parallel cap applies at lane acquisition across all the provider's model
 pools, retaining lane waiting and background overflow. The lane view on
 `/admin/agent-loop` displays this cap. These fields are read directly from config,

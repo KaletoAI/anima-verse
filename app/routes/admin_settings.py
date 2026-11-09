@@ -1012,7 +1012,8 @@ def _settings_save_sync(values: dict, resets: list, confirm_drop: list,
         with config._LOCK:
             merged, current = config_admin.prepare_layer(
                 config_scope.INSTANCE, values, resets, confirm_drop, base_revision)
-            err = _validate_llm_routing(merged.get("llm_routing"))
+            err = (_validate_llm_routing(merged.get("llm_routing"))
+                   or _validate_provider_json(merged.get("providers")))
             if err:
                 raise HTTPException(400, err)
             img_err, img_warnings = _validate_image_routing(
@@ -1316,6 +1317,19 @@ def _llm_task_state_runtime_preset_sync(user, data: Any):
         return {"status": "cleared"}
     tasks = activate_preset_runtime(preset)
     return {"status": "ok", "preset": preset, "disabled": tasks}
+
+
+def _validate_provider_json(providers) -> str:
+    """A provider's thinking_off_params must be a JSON object ("" = none)."""
+    from app.core.llm_router import parse_extra_params
+    for idx, entry in enumerate(providers if isinstance(providers, list) else []):
+        if isinstance(entry, dict) and entry.get("thinking_off_params") not in (None, ""):
+            try:
+                parse_extra_params(entry["thinking_off_params"])
+            except ValueError as exc:
+                return (f"LLM Providers: {entry.get('name') or '#' + str(idx + 1)}: "
+                        f"thinking_off_params: {str(exc).replace('extra_params', 'value')}")
+    return ""
 
 
 def _validate_llm_routing(routing) -> str:

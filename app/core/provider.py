@@ -64,6 +64,9 @@ class Provider:
     rate_limit_requests: int = 0
     rate_limit_window_seconds: int = 60
     max_parallel_llm: int = 0
+    # Request-body parameters for calls whose thinking is off (config field
+    # ``thinking_off_params``; merged by LLMClient._build_kwargs).
+    thinking_off_params: Dict[str, Any] = field(default_factory=dict)
     quota: Any = field(default=None, repr=False)
     available: bool = False
     # Cooldown gate set by upstream-failure detector (5xx, connection drop,

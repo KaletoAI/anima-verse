@@ -326,6 +326,9 @@ class LLMClient:
         # from the history. None = do not send it (the routing entry has none).
         self.repetition_penalty = repetition_penalty
         self.extra_params = deepcopy(extra_params) if extra_params else {}
+        # The provider's parameters for a call without thinking (provider
+        # field thinking_off_params; set by LLMInstance.create_llm).
+        self.thinking_off_params: Dict[str, Any] = {}
 
         client_kwargs = {
             "api_key": api_key,
@@ -360,6 +363,10 @@ class LLMClient:
             extra_body["chat_template_kwargs"] = {"enable_thinking": False}
             if _is_gemma_model(self.model):
                 extra_body["thinking"] = {"type": "disabled"}
+            # An API that rejects chat_template_kwargs (Venice) has its own
+            # switch; without it a reasoning model thinks anyway.
+            if self.thinking_off_params:
+                extra_body = merge_extra_params(extra_body, self.thinking_off_params)
         if self.chat_template:
             extra_body["chat_template"] = self.chat_template
         if self.repetition_penalty is not None:

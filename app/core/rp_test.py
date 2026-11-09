@@ -343,6 +343,18 @@ def parse_judge(text: str, ids: List[str]) -> Dict[str, Dict[str, str]]:
     return out
 
 
+def _cut_off(raw: Dict[str, Any]) -> Optional["JudgeError"]:
+    """A judge answer that ended at the token limit, named as such: hidden
+    reasoning is what usually fills the budget (a provider whose thinking is
+    not switched off — provider field "Parameters when thinking is off")."""
+    if raw.get("finish_reason") != "length":
+        return None
+    reasoning = raw.get("reasoning_tokens")
+    detail = (f"{reasoning} of {raw.get('completion_tokens') or JUDGE_MAX_TOKENS} tokens were reasoning — "
+              "switch the judge provider's thinking off" if reasoning else "answer too long")
+    return JudgeError(f"judge answer cut off at the token limit ({detail})")
+
+
 def ask_judge(call, system: str, user: str, ids: List[str]) -> Dict[str, Dict[str, str]]:
     """One judge request, one retry on an unusable answer or a failed request
     (a 429 from a provider without a configured quota lands here)."""
@@ -350,7 +362,10 @@ def ask_judge(call, system: str, user: str, ids: List[str]) -> Dict[str, Dict[st
     for attempt in range(2):
         try:
             raw = call([{"role": "system", "content": system}, {"role": "user", "content": user}])
-            return parse_judge(raw.get("content", ""), ids)
+            try:
+                return parse_judge(raw.get("content", ""), ids)
+            except JudgeError as exc:
+                raise _cut_off(raw) or exc
         except Exception as exc:  # noqa: BLE001 — retried once, then raised
             if exc.__class__.__name__ == "_QuotaWaitCancelled":
                 raise
