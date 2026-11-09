@@ -45,13 +45,16 @@ export interface BaseModelInfo {
 /** The current outfit's model on the pipeline. */
 export interface BaseOutfitInfo {
   signature: string
-  /** stale = built on an older base body (or before the pipeline). */
+  /** stale = built on an older base body (or before the pipeline, for
+   *  another body detail, or with an own-mesh piece painted on that has its
+   *  garment mesh now). */
   status: 'running' | 'failed' | 'stale' | 'ready' | 'missing'
   error: string
   /** Why a stale model is stale; null unless status is stale. */
-  stale_reason: 'older_base' | 'before_pipeline' | null
-  /** View-guard warnings of the stored model: dressed views left out
-   *  because the edit turned the figure around (server English text). */
+  stale_reason: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready' | null
+  /** Warnings of the stored model: dressed views left out because the
+   *  edit turned the figure around, own-mesh pieces left painted on
+   *  (server English text). */
   warnings: string[]
   /** The retexture worker's proof (None for an undressed base copy). */
   proof: Record<string, unknown> | null

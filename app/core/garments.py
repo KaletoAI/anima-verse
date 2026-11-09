@@ -64,15 +64,25 @@ switch never generates anything, and a method without an accepted fit yet
 serves no hair.
 
 One run per character at a time (``garment_store.char_lock``); ``run_garment``
-blocks and is called from a worker thread (``start_garment``) — every
-generation inside goes through the image service, the fit and the graft are
-CPU work on that thread. No profile lock is held across a step.
+blocks and is called from the character's worker thread — every generation
+inside goes through the image service, the fit and the graft are CPU work on
+that thread. No profile lock is held across a step. The worker drains a
+per-character FIFO (``_queues``): ``start_garment`` (a click; refused while
+the character has runs) starts it with one run, ``enqueue_garment`` (the
+triggers: ``after_base_model``, the outfit build's ``run_queued``) appends a
+default run behind the others — several garments of one character run one
+after the other, each request once.
+
+An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
+asks ``base_body.after_mesh_item_ready``: an outfit model that left it
+painted on (no fit then) is rebuilt without it.
 """
 import hashlib
 import os
 import threading
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import quote
 
 from app.core.log import get_logger
@@ -83,11 +93,13 @@ logger = get_logger("garments")
 QUEUED = "queued"
 
 _lock = threading.Lock()
-# Characters with a ``start_garment`` worker (started or running).
+# Characters with a garment worker (started or running).
 _active: set = set()
-# Characters whose base model changed while their worker ran: once it ends,
-# ``after_base_model`` checks again (the run may have used the old model).
-_followups: set = set()
+# Per character the FIFO of runs its worker still has to do (``_Job``): the
+# worker drains it one run after the other, so several garments of one
+# character (hair + own-mesh outfit pieces) never run at once and each
+# request runs exactly once.
+_queues: Dict[str, Deque["_Job"]] = {}
 _ORDINALS = ("first", "second", "third")
 #: The seed of the first HairDeck job of an hsig. A forced regenerate takes
 #: the next seed after the highest one the job record has seen
@@ -651,7 +663,21 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
         raise ValueError(f"Unknown garment view {view!r}")
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
-        return _run_locked(character_name, item, kind, wanted, view, bool(force))
+        result = _run_locked(character_name, item, kind, wanted, view, bool(force))
+    if result.get("ok") and "fit" in (result.get("ran") or []) and kind == _clothing():
+        # Outside the run lock: an outfit whose model left this piece painted
+        # on (no fit then) is rebuilt without it (``mesh_item_ready``).
+        try:
+            from app.core import base_body
+            base_body.after_mesh_item_ready(character_name, item_id)
+        except Exception:  # noqa: BLE001 — the run itself succeeded
+            logger.exception("Outfit rebuild after the fit of %s/%s failed", character_name, item_id)
+    return result
+
+
+def _clothing() -> str:
+    from app.core.garment_set import CLOTHING
+    return CLOTHING
 
 
 def _item_order(character_name: str, item_id: str,
@@ -802,47 +828,123 @@ def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iter
         raise ValueError(f"Unknown garment view {view!r}")
 
 
+class _Job:
+    """One queued run of a character's worker (``_queues``)."""
+
+    def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
+                 force: bool):
+        self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
+        self.done = threading.Event()
+        self.result: Dict[str, Any] = {}
+
+    @property
+    def plain(self) -> bool:
+        """A default run (first missing step on) — what a trigger asks for."""
+        return self.steps is None and self.view is None and not self.force
+
+
+def _spawn_locked(character_name: str) -> None:
+    """Start the worker of a character whose queue was just filled (caller
+    holds ``_lock`` and has added the character to ``_active``)."""
+    threading.Thread(target=_worker, args=(character_name,), daemon=True,
+                     name=f"garment-{character_name}").start()
+
+
+def _worker(character_name: str) -> None:
+    """Drain the character's FIFO, one run after the other."""
+    from app.core import garment_store as gs
+    while True:
+        with _lock:
+            queue = _queues.get(character_name)
+            if not queue:
+                _queues.pop(character_name, None)
+                _active.discard(character_name)
+                return
+            job = queue.popleft()
+        error: Optional[str] = None
+        try:
+            job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
+                                     force=job.force)
+        except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
+            logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
+            error = str(e) or type(e).__name__
+            job.result = {"ok": False, "error": error}
+        finally:
+            # Ends the ``queued`` mark of a run that had nothing to do or
+            # failed before its first step (a step replaces the mark).
+            gs.end(character_name, job.item_id, QUEUED, error=error)
+            job.done.set()
+
+
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                   view: Optional[str] = None, force: bool = False) -> bool:
     """Run ``run_garment`` in a worker thread. False when a run of the
-    character is already going. The item counts as running (``queued``)
-    from THIS moment (the UI polls). ValueError for an invalid item, step or
-    view (checked before anything starts)."""
+    character is already going (or queued). The item counts as running
+    (``queued``) from THIS moment (the UI polls). ValueError for an invalid
+    item, step or view (checked before anything starts)."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view)
     with _lock:
         if character_name in _active:
             return False
         _active.add(character_name)
-    gs.start(character_name, item_id, QUEUED)
-
-    def run() -> None:
-        followup = False
-        error: Optional[str] = None
+        _queues[character_name] = deque([_Job(item_id, steps, view, bool(force))])
+        gs.start(character_name, item_id, QUEUED)
         try:
-            run_garment(character_name, item_id, steps=steps, view=view, force=force)
-        except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
-            logger.error("Garment run %s/%s failed: %s", character_name, item_id, e)
-            error = str(e) or type(e).__name__
-        finally:
-            # Ends the ``queued`` mark of a run that had nothing to do or
-            # failed before its first step (a step replaces the mark).
-            gs.end(character_name, item_id, QUEUED, error=error)
-            with _lock:
-                _active.discard(character_name)
-                followup = character_name in _followups
-                _followups.discard(character_name)
-        if followup:
-            after_base_model(character_name)
-
-    try:
-        threading.Thread(target=run, daemon=True, name=f"garment-{character_name}").start()
-    except Exception:
-        with _lock:
+            _spawn_locked(character_name)
+        except Exception:
             _active.discard(character_name)
-        gs.end(character_name, item_id, QUEUED)
-        raise
+            _queues.pop(character_name, None)
+            gs.end(character_name, item_id, QUEUED)
+            raise
     return True
+
+
+def enqueue_garment(character_name: str, item_id: str) -> "_Job":
+    """Queue a default run (first missing step on) of ``item_id`` behind the
+    character's other runs — the per-character FIFO the triggers use
+    (``after_base_model``, the outfit build). A default run of the same
+    item that has not started yet is reused, never queued twice. Returns
+    the job (``done`` / ``result``). ValueError like ``check_run``."""
+    from app.core import garment_store as gs
+    check_run(character_name, item_id)
+    with _lock:
+        queue = _queues.setdefault(character_name, deque())
+        for job in queue:
+            if job.item_id == item_id and job.plain:
+                return job
+        job = _Job(item_id, None, None, False)
+        queue.append(job)
+        if not gs.status(character_name, item_id).get("running_step"):
+            gs.start(character_name, item_id, QUEUED)
+        if character_name not in _active:
+            _active.add(character_name)
+            try:
+                _spawn_locked(character_name)
+            except Exception:
+                _active.discard(character_name)
+                _queues.pop(character_name, None)
+                gs.end(character_name, item_id, QUEUED)
+                raise
+    return job
+
+
+def run_queued(character_name: str, item_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    """Run the chains of ``item_ids`` through the character's FIFO and wait
+    for every one (blocking — the outfit build calls it). item id ->
+    ``run_garment``'s result, or ``{ok: False, error}`` for an item that
+    could not be queued."""
+    jobs: Dict[str, Any] = {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for item_id in item_ids:
+        try:
+            jobs[item_id] = enqueue_garment(character_name, item_id)
+        except ValueError as e:
+            out[item_id] = {"ok": False, "error": str(e)}
+    for item_id, job in jobs.items():
+        job.done.wait()
+        out[item_id] = dict(job.result or {"ok": False, "error": "the run ended without a result"})
+    return out
 
 
 def wait_idle(timeout: float = 60.0) -> bool:
@@ -860,10 +962,9 @@ def wait_idle(timeout: float = 60.0) -> bool:
 # --- Triggers -------------------------------------------------------------------
 
 def _worn_garments(character_name: str, profile: Dict[str, Any]) -> List[str]:
-    worn = profile.get("equipped_mesh_pieces")
-    if not isinstance(worn, dict):
-        return []
-    return sorted({str(v) for v in worn.values() if v})
+    """Hair + the own-mesh outfit pieces worn (``garment_set.worn_garments``)."""
+    from app.core import garment_set
+    return garment_set.worn_garments(character_name, profile=profile)
 
 
 def _ensure_hair(character_name: str, profile: Dict[str, Any]) -> bool:
@@ -887,13 +988,15 @@ def _ensure_hair(character_name: str, profile: Dict[str, Any]) -> bool:
 
 
 def after_base_model(character_name: str) -> bool:
-    """R14: after a successful base model run, every worn garment whose fit
-    is not accepted on the current base model gets a run — the whole chain
-    when its fsig changed (new base signature or base images), the fit only
-    when just the base model bytes changed (its images and mesh are cached
-    under the unchanged fsig). A character with hair text but no hair item
-    gets one first (``_ensure_hair``). True if a run was started. Never
-    raises."""
+    """R14: after a successful base model run, every worn garment (hair and
+    the own-mesh outfit pieces worn) whose fit is not accepted on the
+    current base model gets a run through the character's FIFO
+    (``enqueue_garment``; a run in progress may have used the old model, its
+    item is queued again behind it) — the whole chain when its fsig changed
+    (new base signature or base images), the fit only when just the base
+    model bytes changed (its images and mesh are cached under the unchanged
+    fsig). A character with hair text but no hair item gets one first
+    (``_ensure_hair``). True if a run was queued. Never raises."""
     try:
         from app.core import base_body, garment_store as gs
         from app.models.character import get_character_profile
@@ -913,13 +1016,9 @@ def after_base_model(character_name: str) -> bool:
                 continue
             if _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
                 continue
-            if start_garment(character_name, item_id):
-                logger.info("Garment %s/%s: base model changed, chain started", character_name, item_id)
-                started = True
-            else:
-                with _lock:
-                    if character_name in _active:
-                        _followups.add(character_name)
+            enqueue_garment(character_name, item_id)
+            logger.info("Garment %s/%s: base model changed, chain queued", character_name, item_id)
+            started = True
         return started
     except Exception:  # noqa: BLE001 — a trigger never breaks the base model run
         logger.exception("Garment trigger after the base model of %s failed", character_name)

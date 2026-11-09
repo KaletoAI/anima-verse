@@ -48,7 +48,8 @@ No manifest is read for them.
 **Garments** (``app/core/garment_store.py``) live in ``characters/<name>/garments/``
 and are grouped by ``(item, fsig)``; the report names such a group
 ``garment:<item>_<fsig>``. Valid are the CURRENT-fsig files of every equipped
-garment item (a run in flight writes exactly those) and the group of the fit
+garment item and of every own-mesh outfit piece the character holds
+(``garment_set.held_clothing``; a run in flight writes exactly those) and the group of the fit
 that is served instead while the current one is not accepted yet — the newest
 accepted fit on the current base model (``garment_store.accepted_fit``, R11).
 Every other recognised garment group is stale; a file whose name the store
@@ -146,7 +147,8 @@ def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
             items = meta.get(ikey)
             return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
                     "items": [str(i) for i in (items or []) if i],
-                    "mesh_variant": meta.get("mesh_variant", "")}
+                    "mesh_variant": meta.get("mesh_variant", ""),
+                    "mesh_token": meta.get("mesh_token", "")}
     return None
 
 
@@ -179,8 +181,8 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
         if not used.issubset(owned):
             return False
         from app.core.model_refs import mesh_signature
-        return mesh_signature(manifest["pieces"], manifest["items"],
-                              character_name, manifest.get("mesh_variant", "")) == base
+        return mesh_signature(manifest["pieces"], manifest["items"], character_name,
+                              manifest.get("mesh_variant", ""), manifest.get("mesh_token", "")) == base
     return base in reachable()
 
 
@@ -305,22 +307,30 @@ def _garment_files(character_name: str) -> Dict[str, List[Path]]:
 
 
 def _garment_keep(character_name: str) -> Optional[Set[str]]:
-    """The garment groups that stay: per equipped garment item the current
-    fsig, the fit served on the current base model, and per method (hair:
-    edit chain / HairDeck) the newest accepted fit on the current base model
-    and the newest accepted fit at all — so switching the hair method back
-    never costs a generation (plan 2026-11-09-hairdeck-hair, Review Focus 3).
-    An older accepted fit of the same method is stale. None when that cannot
-    be computed (then nothing is judged — never delete on a guess)."""
+    """The garment groups that stay: per garment item — every equipped mesh
+    piece (hair) and every own-mesh outfit piece the character HOLDS or wears
+    (``garment_set.held_clothing``: a dress in the wardrobe keeps its fit,
+    plan 2026-11-09-base-body-phase5-mesh-items Task 4) — the current fsig,
+    the fit served on the current base model, and per method (hair: edit
+    chain / HairDeck) the newest accepted fit on the current base model and
+    the newest accepted fit at all — so switching the hair method back never
+    costs a generation (plan 2026-11-09-hairdeck-hair, Review Focus 3). An
+    older accepted fit of the same method is stale. None when that cannot be
+    computed (then nothing is judged — never delete on a guess)."""
     try:
-        from app.core import base_body, garment_store
+        from app.core import base_body, garment_set, garment_store
         from app.models.inventory import get_equipped_mesh_pieces, get_item
         keep: Set[str] = set()
         base = base_body.current_base(character_name)
-        for item_id in get_equipped_mesh_pieces(character_name).values():
+        items = sorted({*get_equipped_mesh_pieces(character_name).values(),
+                        *garment_set.held_clothing(character_name)})
+        for item_id in items:
             if get_item(item_id) is None:
                 continue  # a deleted item keeps nothing
-            keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id)))
+            try:
+                keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id)))
+            except ValueError:
+                pass  # no current fingerprint (e.g. the flag is off): the accepted fits below stay
             if base and base[1]:
                 fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1])
                 parsed = garment_store.parse_name(fit[0]) if fit else None

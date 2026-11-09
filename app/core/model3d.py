@@ -573,17 +573,22 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     another base signature, another base model under the same signature,
     or none recorded (a whole-body model from before the switch) — or built
     from the other base model than its pieces call for now
-    (``base_body.variant_current``: a piece's ``exposed_detail`` changed).
-    The base model itself is never stale here."""
+    (``base_body.variant_current``: a piece's ``exposed_detail`` changed),
+    or left an own-mesh piece painted on that has its garment mesh now
+    (``base_body.mesh_items_ready``). The base model itself is never stale
+    here."""
     if not base:
         return False
-    from app.core.base_body import built_on_current_base, is_base_signature, variant_current
+    from app.core.base_body import built_on_current_base, is_base_signature, mesh_items_ready, variant_current
     if is_base_signature(path.stem):
         return False
     meta = _read_sidecar(path)
     if not built_on_current_base(meta, base):
         return True
-    return bool(meta.get("character")) and not variant_current(meta["character"], meta)
+    if not meta.get("character"):
+        return False
+    return (not variant_current(meta["character"], meta)
+            or bool(mesh_items_ready(meta["character"], meta, base_sha=base[1])))
 
 
 def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -986,15 +991,17 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # an older base body ("stale" for its own combination, or a nearest
         # stand-in). It is still THE file on screen, so its details stay; the
         # flag tells the tab to ask for a rebuild. ``stale_reason``:
-        # ``older_base`` / ``before_pipeline`` (no base recorded).
+        # ``older_base`` / ``before_pipeline`` (no base recorded) /
+        # ``detail_changed`` / ``mesh_item_ready``.
         current_base = _current_base(character_name)
         info["stale_base"] = _on_older_base(path, current_base)
         if info["stale_base"]:
-            from app.core.base_body import built_on_current_base
+            from app.core.base_body import built_on_current_base, variant_current
             stale_meta = _read_sidecar(path)
             info["stale_reason"] = ("before_pipeline" if not stale_meta.get("base_signature")
                                     else "older_base" if not built_on_current_base(stale_meta, current_base)
-                                    else "detail_changed")
+                                    else "detail_changed" if not variant_current(character_name, stale_meta)
+                                    else "mesh_item_ready")
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
@@ -1680,7 +1687,7 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     _publish_model_bytes(target, contents)
     if texture is not None:
         _publish_model_bytes(target.with_suffix(".png"), texture)
-    from app.core.model_refs import mesh_variant
+    from app.core.model_refs import mesh_items_token, mesh_variant
     meta = {
         "created_at": utc_now_iso(),
         "source": "upload",
@@ -1696,6 +1703,9 @@ def _save_uploaded_model(character_name: str, original_filename: str,
         "pieces": dict(pieces or {}),
         "items": list(items or []),
     }
+    token = mesh_items_token(character_name, pieces)
+    if token:
+        meta["mesh_token"] = token
     # An upload takes the same route as a generated model: re-encode and
     # normalise first, then measure, so the numbers describe what will be
     # served.
@@ -2287,9 +2297,18 @@ def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
     if not isinstance(pieces, dict):
         return {}
     items = meta.get("equipped_items")
-    return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
-            "items": [str(i) for i in (items or []) if i],
-            "mesh_variant": meta.get("mesh_variant", "")}
+    manifest = {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
+                "items": [str(i) for i in (items or []) if i],
+                "mesh_variant": meta.get("mesh_variant", "")}
+    # Own-mesh pieces (base-body pipeline, plan 2026-11-09-base-body-phase5):
+    # the token re-signs the entry (``model_refs.mesh_items_token``) and the
+    # intended/effective mesh set decides which garments the assembly grafts
+    # onto THIS model (``garment_assembly._wanted``). Only when recorded.
+    if meta.get("mesh_token"):
+        manifest["mesh_token"] = str(meta["mesh_token"])
+    if isinstance(meta.get("mesh_items"), dict):
+        manifest["mesh_items"] = meta["mesh_items"]
+    return manifest
 
 
 def _store_unrigged_model(character_name: str, signature: str, result: Dict[str, Any],

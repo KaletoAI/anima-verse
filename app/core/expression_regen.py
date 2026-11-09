@@ -1225,9 +1225,13 @@ def render_character_image(character_name: str, *, output_stem: Path,
         _gen_meta = getattr(_tls, 'last_image_meta', None) if _tls is not None else None
         if _gen_meta is None:
             _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
-        from app.core.model_refs import mesh_variant
+        from app.core.model_refs import mesh_items_token, mesh_variant
+        # A mesh input records the own-mesh pieces' token beside the variant
+        # (only when there is one: every other sidecar stays as it was).
+        _mesh_token = mesh_items_token(character_name, equipped_pieces, _render_profile) if _mesh_input else ""
         _expr_meta = {
             **({"mesh_variant": mesh_variant(character_name, equipped_pieces, _render_profile)} if _mesh_input else {}),
+            **({"mesh_token": _mesh_token} if _mesh_token else {}),
             "provider": _gen_meta.get("backend_type", ""),
             "service": _gen_meta.get("backend", ""),
             "model": _gen_meta.get("model", ""),

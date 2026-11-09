@@ -23,15 +23,21 @@ under ``model3d_publication`` only if the bare file is still the one it read
 (generation-key rule), so a republished bare file can never be covered by an
 assembly of its predecessor.
 
-Which garment: per equipped mesh piece the fit ``garment_store.accepted_fit``
-names on the CURRENT base model (current fsig, else the newest accepted fit)
-— and only when the bare model of the signature was built on that same base
-model (``built_on_fit_base``: the bare full sidecar's ``base_model_sha256``,
-else its ``base_signature``, equals the fit record's). An outfit model from
-an older base (served as stale until rebuilt) has another body under the
-hair: it is served bare, and no assembly is built for it. Off the base-body
-pipeline, or with no equipped mesh piece, nothing is wanted and the bare
-file is served unchanged.
+Which garment: the hair of the profile's ``equipped_mesh_pieces`` (outfit
+independent) plus the own-mesh outfit pieces of THE SIGNATURE — the
+``mesh_items.effective`` list its bare sidecar recorded (plan
+2026-11-09-base-body-phase5-mesh-items, Task 4: the pieces the build left
+out of the texture), never the current profile's pieces, so a stand-in or a
+model of another outfit carries exactly the garments its texture lacks.
+Per garment the fit ``garment_store.accepted_fit`` names on the CURRENT base
+model (current fsig, else the newest accepted fit) — and only when the bare
+model of the signature was built on that same base model
+(``built_on_fit_base``: the bare full sidecar's ``base_model_sha256``, else
+its ``base_signature``, equals the fit record's). An outfit model from an
+older base (served as stale until rebuilt) has another body under the
+garments: it is served bare, and no assembly is built for it. Off the
+base-body pipeline, or with nothing wanted, the bare file is served
+unchanged.
 """
 import json
 import threading
@@ -122,30 +128,53 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
     return bool(bsig) and bsig == str(record.get("base_signature") or "")
 
 
+def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
+    """The own-mesh outfit pieces a bare outfit model was built WITHOUT in its
+    texture (sidecar ``mesh_items.effective``), sorted; [] when it records
+    none."""
+    mesh = (bare_meta or {}).get("mesh_items")
+    if not isinstance(mesh, dict):
+        return []
+    return sorted({str(i) for i in (mesh.get("effective") or []) if isinstance(i, str) and i})
+
+
 def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             bare_meta: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The garments to graft, sorted by item id: ``{item_id, kind, fsig, fit,
-    low, record}`` per equipped mesh piece with an accepted fit on the current
-    base model. [] off the pipeline or without equipped mesh pieces. With
-    ``bare_meta`` (the bare model's sidecar) only fits on the base model that
-    bare model was built on (``built_on_fit_base``)."""
+    low, record}`` per garment with an accepted fit on the current base
+    model — the hair of the profile's ``equipped_mesh_pieces``, and with
+    ``bare_meta`` (the bare model's sidecar) the signature's effective mesh
+    set (``effective_mesh_items``), restricted to fits on the base model that
+    bare model was built on (``built_on_fit_base``). [] off the pipeline or
+    with nothing wanted."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     worn = profile.get("equipped_mesh_pieces")
-    if not isinstance(worn, dict) or not any(worn.values()):
+    hair = {str(v) for v in worn.values() if v} if isinstance(worn, dict) else set()
+    clothing = set(effective_mesh_items(bare_meta)) - hair
+    if not hair and not clothing:
         return []
     from app.core import base_body, garment_store
+    from app.core.garment_set import CLOTHING
     from app.models.inventory import get_item
     base = base_body.current_base(character_name, profile=profile)
     if not base or not base[1]:
         return []
     out: List[Dict[str, Any]] = []
-    for item_id in sorted({str(v) for v in worn.values() if v}):
+    for item_id in sorted(hair | clothing):
         item = get_item(item_id) or {}
-        kind = str((item.get("garment") or {}).get("kind") or "")
-        if item.get("category") != "garment" or kind not in garment_store.GARMENT_VERSION:
-            continue
+        if item_id in clothing:
+            # The bare model was built without it in the texture: graft it
+            # even when the flag was switched off since (that state has a
+            # signature of its own; this model needs its garment).
+            if item.get("category") != "outfit_piece":
+                continue
+            kind = CLOTHING
+        else:
+            kind = str((item.get("garment") or {}).get("kind") or "")
+            if item.get("category") != "garment" or kind not in garment_store.GARMENT_VERSION:
+                continue
         # The fit of the CURRENT method (garment_store.accepted_fit): a switched
         # hair method serves that method's fit, or no hair before it has one.
         fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)

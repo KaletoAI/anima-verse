@@ -551,22 +551,70 @@ def mesh_variant(character_name, pieces=None, profile=None):
         if mesh_part_active(slot, profile) and is_slot_exposed(slot, profile))
 
 
-def mesh_signature(pieces, items, character_name, variant):
-    """Hash the ordinary outfit plus a recorded mesh variant, including for cache GC."""
+#: Opens the mesh-items token (``mesh_items_token``).
+MESH_ITEMS_PREFIX = "|meshitems:"
+
+
+def mesh_items_token(character_name, pieces=None, profile=None) -> str:
+    """The mesh-input token of the own-mesh outfit pieces worn in ``pieces``
+    (``{slot: item id}``, default: the profile's ``equipped_pieces``; plan
+    ``2026-11-09-base-body-phase5-mesh-items.md`` Task 4) — a sibling of
+    ``mesh_variant``, hashed after it by ``mesh_signature`` and recorded in
+    the mesh-input sidecars as ``mesh_token``.
+
+    ``""`` — the signature stays byte-identical to the one before own-mesh
+    pieces — unless the character is on the base-body pipeline and at least
+    one worn piece carries ``outfit_piece.own_mesh``. Then
+    ``|meshitems:<sorted flagged ids>|worn:<slot>=<id>;…`` over the FULL
+    pieces: a piece hidden under a mesh dress (``covers``) shows as texture
+    once the dress is a mesh, so it must count even though the outfit
+    signature's visibility normalisation drops it. A flag flip changes the
+    token, so the mesh-input images and the outfit model of the new state
+    get keys of their own (never a painted dress under a mesh dress).
+
+    Cheap first pass: without a flagged piece (item definitions from the
+    cached snapshot) no profile is read."""
+    from app.core.garment_set import CLOTHING, garment_kind_of
+    from app.core.motion_item_cache import item_snapshot
+    if pieces is None:
+        if profile is None:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        pieces = profile.get("equipped_pieces") or {}
+    worn = {str(slot): str(iid).strip() for slot, iid in (pieces or {}).items() if iid and str(iid).strip()}
+    if not worn:
+        return ""
+    items = item_snapshot() or {}
+    flagged = sorted({iid for iid in worn.values() if garment_kind_of(items.get(iid)) == CLOTHING})
+    if not flagged:
+        return ""
+    from app.core.base_body import is_base_pipeline
+    if not is_base_pipeline(character_name, profile=profile):
+        return ""
+    return (MESH_ITEMS_PREFIX + ",".join(flagged) + "|worn:"
+            + ";".join(f"{slot}={worn[slot]}" for slot in sorted(worn)))
+
+
+def mesh_signature(pieces, items, character_name, variant, mesh_items=""):
+    """Hash the ordinary outfit plus a recorded mesh variant and mesh-items
+    token (``mesh_items_token``; "" keeps every key from before own-mesh
+    pieces), including for cache GC."""
     import hashlib
-    raw = outfit_signature_raw(pieces, items, character_name) + variant
+    raw = outfit_signature_raw(pieces, items, character_name) + variant + (mesh_items or "")
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
 def current_outfit_state(character_name: str) -> tuple:
-    """THE mesh-input signature: worn outfit plus exposed procedural part variant.
+    """THE mesh-input signature: worn outfit plus exposed procedural part
+    variant plus the own-mesh pieces' token (``mesh_items_token``).
 
     Expression, preview and ordinary pose keys use outfit_signature instead.
     """
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
-    sig = mesh_signature(pieces, items, character_name, mesh_variant(character_name, pieces))
+    sig = mesh_signature(pieces, items, character_name, mesh_variant(character_name, pieces),
+                         mesh_items_token(character_name, pieces))
     return pieces, items, sig
 
 
@@ -892,7 +940,8 @@ def generate_model_ref_images(character_name: str,
     from app.core.body_slots import slots_for_character
     if (any(slot.mesh_part for slot in slots_for_character(character_name, profile=mesh_profile))
             and mesh_signature(pieces, items, character_name,
-                               mesh_variant(character_name, pieces, mesh_profile)) != signature):
+                               mesh_variant(character_name, pieces, mesh_profile),
+                               mesh_items_token(character_name, pieces, mesh_profile)) != signature):
         logger.info("Skipping superseded mesh input for %s (%s)", character_name, signature)
         return {}
     neutral = signature

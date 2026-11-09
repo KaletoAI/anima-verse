@@ -4243,6 +4243,9 @@
     "No provenance recorded": "Keine Herkunft erfasst",
     "Built on an older base body": "Auf einem älteren Grundkörper gebaut",
     "Built before the base body pipeline": "Vor der Grundkörper-Pipeline gebaut",
-    "Built for another body detail under the clothing": "Für ein anderes Körperdetail unter der Kleidung gebaut"
+    "Built for another body detail under the clothing": "Für ein anderes Körperdetail unter der Kleidung gebaut",
+    "An own-mesh piece painted on here has its garment mesh now": "Ein hier aufgemaltes Teil mit eigenem Mesh hat jetzt sein Kleidungs-Mesh",
+    "Own-mesh pieces": "Teile mit eigenem Mesh",
+    "An own-mesh piece painted on here has its garment mesh now — rebuild it": "Ein hier aufgemaltes Teil mit eigenem Mesh hat jetzt sein Kleidungs-Mesh — neu bauen"
   }
 }

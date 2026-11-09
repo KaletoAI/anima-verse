@@ -17,8 +17,9 @@ a 3D model or an image, decided here on the server.
      (sidecar ``source: "base_body"``) — base model used, base variant and
      the piece that decided it, every dressed view with its fit gate and
      view guard, the back refit, the body retexture proof, the restored face
-     texels, the extension rig (inherited from the base), the garments
-     assembled onto it, measurement and distance mesh. A model of the old
+     texels, the extension rig (inherited from the base), the own-mesh
+     pieces (own garment mesh / left painted on), the garments assembled
+     onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it.
 
 2. FRESHNESS — ``{state, reason}`` beside every image and 3D preview of the
@@ -27,7 +28,8 @@ a 3D model or an image, decided here on the server.
    (no provenance recorded to compare against). The stale notions are the
    ones the pipeline already keeps: base signature and base view hashes, the
    dressed front a draft was made from, the base views a base model was
-   built from, the garment fsig and the hair stale reasons, the pose render
+   built from, an own-mesh piece painted on that has its garment mesh now
+   (``mesh_item_ready``), the garment fsig and the hair stale reasons, the pose render
    behind an old-path model, the profile picture behind the face view.
 
 The ``annotate_*`` functions add both to the payloads of the info routes
@@ -65,10 +67,14 @@ STAND_IN = "Stand-in: model of another outfit"
 PROFILE_CHANGED = "The profile picture changed"
 OLDER_FIT = "An older fit is shown"
 NO_PROVENANCE = "No provenance recorded"
-# The same phrases as base_body.OLDER_BASE / BEFORE_PIPELINE / DETAIL_CHANGED.
+# The same phrase as base_body.MESH_ITEM_READY: an own-mesh piece this image or
+# model left painted on has an accepted garment fit now.
+MESH_ITEM_READY = "An own-mesh piece painted on here has its garment mesh now"
+# The same phrases as base_body.OLDER_BASE / BEFORE_PIPELINE / DETAIL_CHANGED / MESH_ITEM_READY.
 MODEL_STALE_REASONS = {"older_base": "Built on an older base body",
                        "before_pipeline": "Built before the base body pipeline",
-                       "detail_changed": "Built for another body detail under the clothing"}
+                       "detail_changed": "Built for another body detail under the clothing",
+                       "mesh_item_ready": MESH_ITEM_READY}
 # garments.garment_info ``stale_reasons`` -> phrase (the Hair tab's labels).
 HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "base_changed": "Base body changed",
@@ -483,6 +489,25 @@ def _face_texels_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 f"{int(restored or 0):,} of {int(numbers['mask'] or 0):,} texels", numbers)
 
 
+def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """The own-mesh pieces of an outfit model (sidecar ``mesh_items``): which
+    are their own garment mesh, which stayed painted on (their reasons are in
+    the garment warnings). None for an outfit without any."""
+    mesh = _dict(meta.get("mesh_items"))
+    intended = [i for i in mesh.get("intended") or [] if isinstance(i, str)]
+    if not intended:
+        return None
+    effective = [i for i in intended if i in set(mesh.get("effective") or [])]
+    painted = [i for i in intended if i not in effective]
+    parts = []
+    if effective:
+        parts.append("own mesh: " + ", ".join(names.get(i, i) for i in effective))
+    if painted:
+        parts.append("painted on: " + ", ".join(names.get(i, i) for i in painted))
+    return step("mesh_items", "Own-mesh pieces", WARNING if painted else DONE, " · ".join(parts),
+                {"intended": len(intended), "effective": len(effective)})
+
+
 def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[Dict[str, Any]]:
     """``garments``: ``[{item_id, name, kind, method, fsig, current_fsig,
     served}]`` (``served``: the assembly on disk carries this fit)."""
@@ -511,7 +536,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        base_meta: Optional[Dict[str, Any]], wanted_variant: Optional[str],
                        deciders: List[str], shown: List[str], dressed_records: Dict[str, Optional[Dict[str, Any]]],
                        garments: List[Dict[str, Any]], tiers: List[str], low_tris: Any = None,
-                       refit_limit: float = 4.0, covered_missing_text: str = "") -> List[Dict[str, Any]]:
+                       refit_limit: float = 4.0, covered_missing_text: str = "",
+                       item_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit model on the base-body pipeline (pure).
     ``meta``: its sidecar; ``base``: the current ``(bsig, base model
     sha256)``; ``base_meta``: the sidecar of the base model it names (None
@@ -520,7 +546,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     exposed-only groups / show them through (``exposed_detail``);
     ``dressed_records``: the sidecar of every dressed view the build looked
     at (front, back, sides), None when the file is gone; ``garments``: see
-    ``_garment_steps``; ``tiers`` / ``low_tris``: the distance mesh."""
+    ``_garment_steps``; ``tiers`` / ``low_tris``: the distance mesh;
+    ``item_names``: item id -> name for the own-mesh pieces row."""
     proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
     used = {"front"} | set(_dict(meta.get("view_images")))
@@ -554,6 +581,9 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     else:
         source = ""
     rows.append(_extension_step(state, source=source))
+    mesh_row = _mesh_items_step(meta, item_names or {})
+    if mesh_row is not None:
+        rows.append(mesh_row)
     rows += _garment_steps(garments, [w for w in (meta.get("garment_warnings") or []) if isinstance(w, str)])
     rows.append(_measure_step(meta))
     rows.append(_lod_step(meta, tiers, low_tris))
@@ -562,8 +592,11 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
 
 # --- Freshness rules (pure) ------------------------------------------------------
 
-def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str) -> Dict[str, str]:
-    """A dressed view on the pipeline: made from the current base view?"""
+def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
+                      mesh_ready: bool = False) -> Dict[str, str]:
+    """A dressed view on the pipeline: made from the current base view?
+    ``mesh_ready``: an own-mesh piece it left painted on has its garment
+    mesh now (``base_body.mesh_items_ready``)."""
     if not meta.get("base_signature"):
         return freshness(MISSING, NO_PROVENANCE)
     if meta["base_signature"] != bsig:
@@ -572,6 +605,8 @@ def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str) ->
         return freshness(MISSING, NO_PROVENANCE)
     if meta["base_image_sha256"] != base_view_sha:
         return freshness(STALE, OLDER_BASE_VIEW)
+    if mesh_ready:
+        return freshness(STALE, MESH_ITEM_READY)
     return freshness(CURRENT)
 
 
@@ -789,12 +824,16 @@ def outfit_model_overview(character_name: str,
             records[view] = _sidecar(refs / name) if (refs / name).is_file() else None
     low = tier_variant(path, "low")
     low_tris = _sidecar(low).get("tris") if low else None
+    from app.core.motion_item_cache import item_snapshot
+    items = item_snapshot() or {}
     steps = outfit_model_steps(meta, base=base, base_meta=base_meta, wanted_variant=wanted, deciders=deciders,
                                shown=shown, dressed_records=records,
                                garments=_assembled_garments(character_name, path.stem),
                                tiers=available_tiers(path), low_tris=low_tris,
                                refit_limit=base_body.BACK_REFIT_DELTA_E,
-                               covered_missing_text=base_body.COVERED_MISSING)
+                               covered_missing_text=base_body.COVERED_MISSING,
+                               item_names={i: str((items.get(i) or {}).get("name") or i)
+                                           for i in base_body.mesh_items_intended(meta)})
     return steps, dressed_newer(str(meta.get("created_at") or ""), records)
 
 
@@ -841,7 +880,10 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
                 tile["freshness"] = freshness(CURRENT)
                 return
             path = find_ref_image(character_name, base_body._kind(view), signature) if signature else None
-            tile["freshness"] = dressed_freshness(_sidecar(path), bsig=bsig, base_view_sha=shas.get(view, ""))
+            record = _sidecar(path)
+            tile["freshness"] = dressed_freshness(
+                record, bsig=bsig, base_view_sha=shas.get(view, ""),
+                mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)))
 
         mark(info.get("tpose"), "front")
         if isinstance(info.get("pose"), dict):
