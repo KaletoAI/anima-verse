@@ -630,7 +630,9 @@ def build_prompt_section(
     are only included when that feature is true in active_features.
     When is_partner=True, fields with "prompt_self_only": true are skipped
     (e.g. traits, goals, beliefs, rules belong only into the own character
-    block, never into the partner block).
+    block, never into the partner block), and a field's "prompt_label_partner"
+    replaces its "prompt_label" there — a label written to the speaker ("How
+    others perceive you") would otherwise describe the partner as "you".
 
     Fields with "source_file" are loaded from an MD file in the character
     directory instead of from the profile data (character_name must be set for
@@ -698,7 +700,8 @@ def build_prompt_section(
             if (value is None) if is_stat else (not value):
                 continue
 
-        label = field.get("prompt_label") or field.get("label", key)
+        label = ((is_partner and field.get("prompt_label_partner"))
+                 or field.get("prompt_label") or field.get("label", key))
         if is_stat:
             if stat_rules is None:
                 stat_rules = (rules_for_character(character_name, profile=data)

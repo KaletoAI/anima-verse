@@ -257,6 +257,7 @@
           "source_file": "soul/presence.md",
           "in_prompt": true,
           "prompt_label": "How others perceive you",
+          "prompt_label_partner": "How others perceive them",
           "llm_generable": true,
           "editor_visible": false,
           "hint": "What others perceive when meeting this animal — first impression and underlying vibe (more than appearance, less than personality). Used in BOTH self and partner blocks of the chat prompt.",

@@ -13,7 +13,8 @@ Usage: ./.venv/bin/python scripts/smoke_rp_cases_fixture.py
 3. The prompts the cases froze carry no authoring comment (<!-- … -->), and
    the cat (template feature humanoid off) gets the non-verbal identity line,
    never "You ARE this person … Speak in the first person" (review 2026-11-09:
-   that line is how an animal ended up talking).
+   that line is how an animal ended up talking); the partner block labels the
+   partner's presence "How others perceive them", never "… you".
 4. Freshness: rebuilding with scripts/rp_test_build_cases.py gives the SAME
    cases — when a chat template changes, the stored prompts are stale and
    this fails until the builder is run again.
@@ -65,6 +66,12 @@ for case in data['cases']:
         assert 'you have no human speech' in system and 'You ARE this person' not in system, case['id']
     else:
         assert 'You ARE this person' in system and 'no human speech' not in system, case['id']
+    # The partner block describes the partner: its presence label speaks
+    # about "them", never "you" (prompt_label_partner, review 2026-11-09).
+    partner = system.split('You are talking to ', 1)
+    assert len(partner) == 2, case['id']
+    assert 'How others perceive you' not in partner[1], case['id']
+    assert 'How others perceive them' in partner[1], case['id']
 print(f"Shape OK: {len(ids)} cases, {len(data['anchors'])} anchors")
 
 # Freshness: rebuild into memory and compare the cases.
