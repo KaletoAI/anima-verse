@@ -16,6 +16,7 @@ import os
 import signal
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from app.core import config
 from app.core.base_body import BASE_VIEWS
@@ -68,10 +69,19 @@ def _kill_group(proc: subprocess.Popen) -> None:
         pass
 
 
+#: Views the worker treats as side views (arm exclusion zone).
+SIDE_VIEWS = ("left", "right")
+
+
 def build_argv(python: Path, glb_in: Path, views: dict, out_glb: Path,
-               proof: Path, atlas: Path) -> list:
+               proof: Path, atlas: Path, *, side_arm_margin: Optional[float] = None,
+               arm_rig_glb: Optional[Path] = None) -> list:
     """The worker command line: views in BASE_VIEWS order, absent ones skipped,
-    every path absolute (the worker runs with its own repo as cwd)."""
+    every path absolute (the worker runs with its own repo as cwd). With a
+    side view among ``views``: ``--side-arm-margin`` (when given) and
+    ``--arm-rig-glb`` (when given) — the left/right views then skip the arm
+    and that margin around it (fraction of the body height); without a
+    side view neither flag is passed."""
     unknown = sorted(set(views) - set(BASE_VIEWS))
     if unknown:
         raise ValueError(f"Unknown retexture view(s): {', '.join(unknown)}")
@@ -86,15 +96,23 @@ def build_argv(python: Path, glb_in: Path, views: dict, out_glb: Path,
     argv += ["--out", os.path.abspath(out_glb),
              "--proof", os.path.abspath(proof),
              "--atlas", os.path.abspath(atlas)]
+    if any(name in views for name in SIDE_VIEWS):
+        if side_arm_margin is not None:
+            argv += ["--side-arm-margin", repr(float(side_arm_margin))]
+        if arm_rig_glb is not None:
+            argv += ["--arm-rig-glb", os.path.abspath(arm_rig_glb)]
     return argv
 
 
 def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
-              *, proof: Path, atlas: Path) -> dict:
+              *, proof: Path, atlas: Path, side_arm_margin: Optional[float] = None,
+              arm_rig_glb: Optional[Path] = None) -> dict:
     """Run the worker once and return its parsed proof JSON.
 
     ``views`` maps a view name (``front`` required; ``back``/``left``/``right``
-    optional) to ``(dressed_png, registration_png)``.
+    optional) to ``(dressed_png, registration_png)``. ``side_arm_margin`` /
+    ``arm_rig_glb`` (a rigged copy of ``glb_in`` with the same UV layout)
+    reach the worker only with a side view (``build_argv``).
     Raises RetextureUnavailable (not configured / not installed),
     RetextureFailed (exit != 0 with the last stderr lines as message, timeout,
     missing or unreadable proof) and ValueError (bad ``views``).
@@ -103,7 +121,8 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
     python = worker_dir / ".venv" / "bin" / "python"
     if not python.is_file():
         raise RetextureUnavailable(f"Body retexture worker not installed: {python} not found")
-    argv = build_argv(python, glb_in, views, out_glb, proof, atlas)
+    argv = build_argv(python, glb_in, views, out_glb, proof, atlas,
+                      side_arm_margin=side_arm_margin, arm_rig_glb=arm_rig_glb)
     timeout = _timeout_seconds()
     proof = Path(proof)
     # A proof left by an earlier run must never pass as this run's result.

@@ -747,9 +747,11 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     its own status lane and the outfit-independent ``face_view`` payload.
 
     A humanoid on the base-body pipeline (``pipeline: true``) has only the
-    dressed back as an extra outfit view (``base_body.DRESSED_VIEWS``; always
-    enabled, no toggle) and ``back_draft``: the info of the back's draft
-    (served as kind ``tpose_back_draft``), None when there is none."""
+    dressed back — plus left and right with the world setting
+    ``base_body.dressed_side_views`` — as extra outfit views
+    (``base_body.dressed_views()``; always enabled, no toggle) and
+    ``drafts``: ``{view: info of its draft | None}`` for each of those views
+    (served as kind ``tpose_<view>_draft``)."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -763,15 +765,17 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     from app.core import base_body
     pipeline = base_body.is_base_pipeline(character_name)
     out["pipeline"] = pipeline
+    dressed = base_body.dressed_views() if pipeline else ()
     for view in tpose_views_for_character(character_name):
-        if view == "face" or (pipeline and view not in base_body.DRESSED_VIEWS):
+        if view == "face" or (pipeline and view not in dressed):
             continue
         path = (find_ref_image(character_name, f"tpose_{view}", signature)
                 if signature else None)
         views[view] = {"enabled": pipeline or view in enabled, "info": _ref_info(path)}
     if pipeline:
-        draft = base_body.back_draft_path(character_name, signature) if signature else None
-        out["back_draft"] = _ref_info(draft)
+        out["drafts"] = {view: _ref_info(base_body.draft_path(character_name, view, signature)
+                                         if signature else None)
+                         for view in dressed if view in base_body.DRAFT_VIEWS}
     if is_humanoid(character_name):
         face = face_view_info(character_name)
         out["face_view"] = face
@@ -854,8 +858,9 @@ def generate_model_ref_images(character_name: str,
 
     A humanoid on the base-body pipeline gets its "tpose" kind from
     ``base_body.generate_dressed_images`` instead: the dressed front and
-    back into the same files (``tpose_view`` "main" = front, "back" = the
-    back alone; a side view is a ValueError there)."""
+    back (and the sides with ``base_body.dressed_side_views``) into the same
+    files (``tpose_view`` "main" = front, "back" = the back alone; a side
+    view while the sides are off is a ValueError there)."""
     from app.core.expression_regen import render_character_image
     from app.core.expression_pose_maps import default_pose_prompt
 

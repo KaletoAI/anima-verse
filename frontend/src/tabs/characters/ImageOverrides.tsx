@@ -41,10 +41,10 @@ import { Field } from '@anima/player-ui'
  * record — a body carrying only `loras` would blank the match patterns.
  * The buffer hands its patch to that route unchanged, so the patch has to BE
  * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, mesh_workflow, hair_mesh_workflow, loras, tpose_loras}`
- * plus the five base-body step globs (`BASE_BODY_FIELDS`),
+ * plus the seven base-body step globs (`BASE_BODY_FIELDS`),
  * every time, with the edited value taken from the event (the state behind it
  * is one render old) and the other fields from the current render. One
- * keystroke here therefore counts as thirteen pending fields in "Save (n)".
+ * keystroke here therefore counts as fifteen pending fields in "Save (n)".
  *
  * The "Add LoRA" choices are the one thing the SAVED values decide: the server
  * resolves them from the stored backend match, so a match still sitting in the
@@ -59,15 +59,18 @@ interface Lora {
 }
 
 /** Per-character globs of the base-body pipeline steps — the
- *  `char_spec_field` of the occasions base_front … outfit_back
- *  (app/imagegen/occasions.py). Empty = the step's fallback field
- *  (T-pose match / T-pose views match), then the step's chain. */
+ *  `char_spec_field` of the occasions base_front … outfit_side
+ *  (app/imagegen/occasions.py). Empty = the step's fallback field(s)
+ *  (T-pose match / T-pose views match; the side steps first the matching
+ *  back step's glob), then the step's chain. */
 const BASE_BODY_FIELDS = [
   'base_front_workflow',
   'base_view_workflow',
   'outfit_front_workflow',
   'outfit_back_draft_workflow',
   'outfit_back_workflow',
+  'outfit_side_draft_workflow',
+  'outfit_side_workflow',
 ] as const
 type BaseBodyField = (typeof BASE_BODY_FIELDS)[number]
 type BaseBodyPatterns = Record<BaseBodyField, string>
@@ -101,6 +104,8 @@ interface StoredOverride {
   outfit_front_workflow?: string
   outfit_back_draft_workflow?: string
   outfit_back_workflow?: string
+  outfit_side_draft_workflow?: string
+  outfit_side_workflow?: string
   loras?: Lora[]
   tpose_loras?: Lora[]
   /** The mesh occasion this character's rig selects. */
@@ -558,6 +563,16 @@ export function ImageOverrides({
     {
       field: 'outfit_back_workflow', label: t('Outfit — back fitted onto the base (glob)'), empty: viewsFallback,
       hint: t('Edit of the base back view with the draft as second reference. Grainy results are caught by a noise check and re-rendered.'),
+    },
+    {
+      field: 'outfit_side_draft_workflow', label: t('Outfit — side draft (glob)'),
+      empty: t('Empty: back draft match, then T-pose views match, then this step\'s chain'),
+      hint: t('Rendered fresh from the dressed front in profile; only its clothing is used. Runs only with the world setting Dressed side views.'),
+    },
+    {
+      field: 'outfit_side_workflow', label: t('Outfit — side fitted onto the base (glob)'),
+      empty: t('Empty: back fit match, then T-pose views match, then this step\'s chain'),
+      hint: t('Edit of the base side view with the draft as second reference. Grainy or turned results are caught and re-rendered. Runs only with the world setting Dressed side views.'),
     },
   ]
   const globMatches = (glob: string) => {

@@ -87,8 +87,8 @@ Expected, derived by hand from the brief:
       back draft  stem tpose_back_<osig> in model_refs/drafts, reference = the
                   dressed front tpose_<osig>.png (opaque stub -> handed as is,
                   pixel = colour_of("tpose_<osig>")), bare_prompt and
-                  extra_negative = back_draft_prompt(Demo), style_character
-                  = back_draft_character(Demo) (no "no clothing"), occasion
+                  extra_negative = draft_prompt(Demo, "back"), style_character
+                  = draft_character(Demo, "back") (no "no clothing"), occasion
                   outfit_back_draft, use case base_back, back_view;
       back fit    stem tpose_back_<osig> in the staging dir attempt1,
                   the CUT-OUT pair (user decision 2026-11-09): reference
@@ -645,9 +645,9 @@ def main() -> int:
             check("front prompt", (front_r.get("bare_prompt", "").startswith("Keep the image exactly as it is"),
                                    "a fitted red cotton dress with white sneakers" in front_r.get("bare_prompt", "")),
                   (True, True))
-            check("draft prompt", draft_r.get("bare_prompt"), base_body.back_draft_prompt("Demo")[0])
-            check("draft extra negative", draft_r.get("extra_negative"), base_body.back_draft_prompt("Demo")[1])
-            check("draft character block", draft_r.get("style_character"), base_body.back_draft_character("Demo"))
+            check("draft prompt", draft_r.get("bare_prompt"), base_body.draft_prompt("Demo", "back")[0])
+            check("draft extra negative", draft_r.get("extra_negative"), base_body.draft_prompt("Demo", "back")[1])
+            check("draft character block", draft_r.get("style_character"), base_body.draft_character("Demo", "back"))
             check("character block only on the draft", [r.get("style_character") is not None
                                                         for r in dressed_renders], [False, True, False])
             check("fit prompt", fit_r.get("bare_prompt"), FIT_PROMPT)
@@ -693,7 +693,7 @@ def main() -> int:
                 check("worker image = rigged image", img, RIG)
                 argv = json.loads((first / "argv.json").read_text())
                 check("worker views = front, back", sorted(argv["views"]), ["back", "front"])
-                for v in base_body.DRESSED_VIEWS:
+                for v in base_body.dressed_views():
                     kind = "tpose" if v == "front" else f"tpose_{v}"
                     check(f"{v} dressed input", (first / f"{v}_dressed.png").read_bytes(),
                           (refs / f"{kind}_{osig}.png").read_bytes())
@@ -835,7 +835,7 @@ def main() -> int:
             check("no render for undressed", len(RENDERS), n_renders)
             check("no side copies", [(refs / f"tpose_{v}_{osig0}.png").exists() for v in ("left", "right")],
                   [False, False])
-            for v in base_body.DRESSED_VIEWS:
+            for v in base_body.dressed_views():
                 kind = "tpose" if v == "front" else f"tpose_{v}"
                 copy = refs / f"{kind}_{osig0}.png"
                 check(f"{v} copied", copy.is_file() and copy.read_bytes() == (refs / f"{kind}_{bsig}.png").read_bytes(),

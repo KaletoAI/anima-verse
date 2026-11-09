@@ -191,7 +191,7 @@ def best_attempt(results: "list[Dict[str, Any]]") -> Tuple[int, bool]:
     return min(scores)[1], False
 
 
-# --- Noise gate of the fitted dressed BACK (``base_body._dress_back``) -------
+# --- Noise gate of the fitted dressed views (``base_body._fit_attempt``) ----
 #
 # The back fit (an edit of the cut-out base back with the cut-out back draft
 # as second reference) sometimes comes back grainy: skin and cloth carry a

@@ -139,6 +139,27 @@ SECTIONS = {
                                "character can override this in its Hair tab; switching costs no generation when "
                                "the other method already has an accepted fit.",
             },
+            "dressed_side_views": {
+                "type": "bool",
+                "label": "Dressed side views",
+                "default": False,
+                "description": "Dress the left and right views of every outfit too and hand them to the body "
+                               "retexture worker (default: front and back only). Each side costs a draft and a "
+                               "fit render (occasions outfit_side_draft / outfit_side). The worker paints only "
+                               "the torso seen clear of the arm from them; the flanks gain detail, the hips may "
+                               "come out slightly worse. Applies to outfits rendered or rebuilt after the change.",
+            },
+            "side_arm_margin": {
+                "type": "float",
+                "label": "Side view arm margin",
+                "default": 0.03,
+                "min": 0,
+                "max": 0.2,
+                "step": 0.005,
+                "description": "With dressed side views: the zone around the arm a side view does not paint, as "
+                               "a fraction of the body height. 0 uses the side views unmasked (cloth on the arms). "
+                               "Measured: 0.025 and above keep the flanks as good as front and back alone.",
+            },
         },
     },
     "packages": {

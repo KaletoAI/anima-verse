@@ -1661,6 +1661,19 @@ def _migrate_base_body_routing(config: dict) -> bool:
     return _seed_routing_copies(config, _BASE_BODY_ROUTING_SEEDS)
 
 
+#: (target, source) — the dressed side views start on the chains of the
+#: back's two steps, which they mirror.
+_OUTFIT_SIDE_ROUTING_SEEDS = (("outfit_side_draft", "outfit_back_draft"),
+                              ("outfit_side", "outfit_back"))
+
+
+def _migrate_outfit_side_routing(config: dict) -> bool:
+    """Seed the two dressed-side chains from the back's once each; a key
+    already in the routing is never overwritten. Runs after
+    ``_migrate_base_body_routing`` (which may seed the back's itself)."""
+    return _seed_routing_copies(config, _OUTFIT_SIDE_ROUTING_SEEDS)
+
+
 _quadruped_chain_hints = set()
 
 
@@ -1743,6 +1756,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_garment_routing(config):
         changed = True
     if _migrate_base_body_routing(config):
+        changed = True
+    if _migrate_outfit_side_routing(config):
         changed = True
     if _seed_default_use_cases(config):
         changed = True

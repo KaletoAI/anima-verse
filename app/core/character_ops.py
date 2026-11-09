@@ -2015,9 +2015,10 @@ def _clean_lora_list(raw: Any) -> List[Dict[str, Any]]:
 
 
 #: The per-character backend globs of the base-body pipeline steps — the
-#: ``char_spec_field`` of the occasions base_front … outfit_back.
+#: ``char_spec_field`` of the occasions base_front … outfit_side.
 BASE_BODY_MATCH_FIELDS = ("base_front_workflow", "base_view_workflow", "outfit_front_workflow",
-                          "outfit_back_draft_workflow", "outfit_back_workflow")
+                          "outfit_back_draft_workflow", "outfit_back_workflow",
+                          "outfit_side_draft_workflow", "outfit_side_workflow")
 
 
 def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:

@@ -408,12 +408,12 @@ def main() -> int:
 
         print("[11] back draft")
         draft_want = ", ".join([POSE_BACK, BALD_BACK, OUTFIT])
-        prompt, negative = base_body.back_draft_prompt(name, profile=stored)
+        prompt, negative = base_body.draft_prompt(name, "back", profile=stored)
         check("draft prompt", prompt, draft_want)
-        check("draft block", base_body.back_draft_character(name, profile=stored), "sfw, " + APPEARANCE_BACK)
+        check("draft block", base_body.draft_character(name, "back", profile=stored), "sfw, " + APPEARANCE_BACK)
         check("draft negative", negative, HAIR_NEG + ", detailed anatomy, " + POSE_NEG + ", visible marking")
-        prompt, _ = base_body.back_draft_prompt(name, profile=long_tail)
-        block = base_body.back_draft_character(name, profile=long_tail)
+        prompt, _ = base_body.draft_prompt(name, "back", profile=long_tail)
+        block = base_body.draft_character(name, "back", profile=long_tail)
         check("draft drops base_body_prompt", (prompt, block), (draft_want, "sfw, " + APPEARANCE_BACK))
         check("no 'no clothing' in the draft", "no clothing" in block + prompt, False)
         check("no tail, no mannequin", ("long tail" in block + prompt, "mannequin" in block + prompt), (False, False))
@@ -450,8 +450,8 @@ def main() -> int:
                                                         "eyes") and left_final.endswith(
                                                             ", ".join([POSE_LEFT, BALD, BODY])), True)
         draft_final = final_prompt(config, "base_back", "natural",
-                                   base_body.back_draft_character("Target", profile=target),
-                                   base_body.back_draft_prompt("Target", profile=target)[0])
+                                   base_body.draft_character("Target", "back", profile=target),
+                                   base_body.draft_prompt("Target", "back", profile=target)[0])
         check("draft final", draft_final.startswith(SUBJECT + ", sfw, female, 26 years old, light skin, average "
                                                     "height, athletic build, shown from head to toe")
               and draft_final.endswith(", ".join([POSE_BACK, BALD_BACK, OUTFIT])), True)

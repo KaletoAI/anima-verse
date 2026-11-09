@@ -68,11 +68,13 @@ interface RefsInfo {
   // `info` the stored render (null = not rendered yet). They have no own
   // status lane; they ride with `tpose`.
   views?: Record<string, { enabled: boolean; info?: RefInfo | null }>
-  /** On the base-body pipeline only the front and the back are dressed: the
-   *  views carry the back (always on, no toggle) and the face view. */
+  /** On the base-body pipeline only the front and the back are dressed (plus
+   *  left and right with the world setting "Dressed side views"): the views
+   *  carry those (always on, no toggle) and the face view. */
   pipeline?: boolean
-  /** Base-body pipeline: the back draft the dressed back was fitted from. */
-  back_draft?: RefInfo | null
+  /** Base-body pipeline: per dressed back/side view, the draft it was fitted
+   *  from (served as `tpose_<view>_draft`). */
+  drafts?: Record<string, RefInfo | null>
   auto?: { tpose?: boolean; pose?: boolean }
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
@@ -83,6 +85,8 @@ interface RefsInfo {
 
 // Display order of the extra views (checkboxes and thumbnails alike).
 const VIEW_ORDER = ['front', 'back', 'left', 'right', 'face'] as const
+// Base-body views made from a draft, in display order.
+const DRAFT_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
@@ -116,8 +120,7 @@ function renderFingerprint(d: RefsInfo | null | undefined, kinds: RefKind[]): st
   return JSON.stringify([
     d?.signature || '',
     d?.face_view?.created_at || '',
-    d?.back_draft?.filename || '',
-    d?.back_draft?.created_at || '',
+    DRAFT_ORDER.map((v) => [d?.drafts?.[v]?.filename || '', d?.drafts?.[v]?.created_at || '']),
     kinds.map((k) => [d?.[k]?.filename || '', d?.[k]?.created_at || '']),
     VIEW_ORDER.map((v) => [
       d?.views?.[v]?.info?.filename || '',
@@ -336,10 +339,12 @@ export function FieldModelRefs({
   // elsewhere and localizes accordingly — a back VIEW does not.
   const viewLabel = (view: string) =>
     view === 'face' ? t('Face view') : view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
+  const draftLabel = (view: string) =>
+    view === 'back' ? t('Back draft') : view === 'left' ? t('Left draft') : t('Right draft')
   // The backend reports the available views for this character body form.
   const hasViews = kindList.includes('tpose') && !!info.views &&
     Object.keys(info.views).length > 0
-  // On the base-body pipeline the dressed back is always rendered: only the
+  // On the base-body pipeline the dressed views are always rendered: only the
   // face view keeps its toggle.
   const toggleViews = VIEW_ORDER.filter(
     (view) => view in (info.views || {}) && (!info.pipeline || view === 'face'))
@@ -448,27 +453,31 @@ export function FieldModelRefs({
                       )
                     },
                   )}
-                  {info.pipeline && info.views?.back ? (
-                    // The back's draft (rendered from the dressed front; only
-                    // its clothing is fitted onto the base back). Regenerating
-                    // the back renders draft and fit anew.
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="ga-hint">{t('Back draft')}</div>
-                      {info.back_draft ? (
-                        <RefImage
-                          key={`back-draft-${bust}`}
-                          src={`/characters/${enc}/model-refs/tpose_back_draft?v=${bust}`}
-                          height={110}
-                          radius={6}
-                          compact
-                          label={t('Back draft')}
-                          meta={info.back_draft}
-                        />
-                      ) : (
-                        <div className="ga-hint">{t('No render yet')}</div>
-                      )}
-                    </div>
-                  ) : null}
+                  {info.pipeline ? DRAFT_ORDER.filter((v) => info.views?.[v] && info.drafts && v in info.drafts).map((view) => {
+                    // The view's draft (rendered from the dressed front; only
+                    // its clothing is fitted onto the base view). Regenerating
+                    // the view renders draft and fit anew.
+                    const draft = info.drafts?.[view]
+                    const label = draftLabel(view)
+                    return (
+                      <div key={`draft-${view}`} style={{ flex: 1, minWidth: 0 }}>
+                        <div className="ga-hint">{label}</div>
+                        {draft ? (
+                          <RefImage
+                            key={`${view}-draft-${bust}`}
+                            src={`/characters/${enc}/model-refs/tpose_${view}_draft?v=${bust}`}
+                            height={110}
+                            radius={6}
+                            compact
+                            label={label}
+                            meta={draft}
+                          />
+                        ) : (
+                          <div className="ga-hint">{t('No render yet')}</div>
+                        )}
+                      </div>
+                    )
+                  }) : null}
                 </div>
               ) : null}
             </div>
