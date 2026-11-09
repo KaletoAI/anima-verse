@@ -501,9 +501,11 @@ def start_base_images(character_name: str, *, view: Optional[str] = None,
 
 def base_info(character_name: str) -> Dict[str, Any]:
     """UI info: ``{pipeline, humanoid, signature, images: {view: url|None},
-    status: {view: ...}, model, outfit}`` (``model``: see
+    status: {view: ...}, model, outfit, hair}`` (``model``: see
     ``base_model_info``; ``outfit``: the CURRENT outfit's model on the
-    pipeline, see ``outfit_info`` — None off the pipeline); the image URLs
+    pipeline, see ``outfit_info`` — None off the pipeline; ``hair``:
+    ``garments.hair_summary`` ``{item_id, status}`` — None without a worn
+    hair item or off the pipeline); the image URLs
     carry the file's mtime so a re-render is fetched anew."""
     from app.core.model_refs import find_ref_image, is_humanoid
     profile = _profile_of(character_name, None)
@@ -520,10 +522,18 @@ def base_info(character_name: str) -> Dict[str, Any]:
                         if stamp is not None else None)
     from app.core.timeutils import utc_now
     pipeline = is_base_pipeline(character_name, profile=profile)
+    hair = None
+    if pipeline and humanoid:
+        try:
+            from app.core import garments
+            hair = garments.hair_summary(character_name, profile=profile)
+        except Exception:  # noqa: BLE001 — the summary never breaks the poll
+            logger.exception("Hair summary of %s failed", character_name)
     return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "status": base_status(character_name),
             "model": base_model_info(character_name, signature),
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
+            "hair": hair,
             "now": _iso(utc_now())}
 
 
@@ -581,6 +591,11 @@ def generate_base_model(character_name: str, *, force: bool = False) -> Dict[str
                                                      signature=bsig, base=True)
         if not result.get("ok"):
             error = str(result.get("error") or "Base model generation failed")
+        else:
+            # R14: a worn garment whose fit is not on this base model starts
+            # its chain (fit only when just the model bytes changed).
+            from app.core import garments
+            garments.after_base_model(character_name)
         return result
     except Exception as e:
         error = str(e) or type(e).__name__
@@ -1259,6 +1274,23 @@ def _guard_dressed_views(character_name: str, signature: str, bsig: str,
     return record, warnings
 
 
+def _assemble_garments(character_name: str, signature: str, path: Path, meta: Dict[str, Any]) -> None:
+    """The eager assembly of a freshly built outfit model (R11): built INSIDE
+    the model's stage, so its publication carries bare file and assembly
+    together. A failure never blocks the bare model — it is published with
+    the reason in ``garment_warnings`` (and served bare)."""
+    from app.core import garment_assembly, model3d
+    try:
+        result = garment_assembly.assemble(character_name, signature, tiers=(garment_assembly.FULL,))
+        warning = "" if result.get("ok") else str(result.get("error") or "Garment assembly failed")
+    except Exception as e:  # noqa: BLE001 — the bare model stays published
+        warning = f"Garment assembly failed: {e}"
+    if warning:
+        logger.warning("Outfit model %s (%s): %s", character_name, signature, warning)
+        meta["garment_warnings"] = [warning]
+        model3d._publish_sidecar(path, meta)
+
+
 def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
     """Build the outfit model ``model3d/<signature>.glb`` of a character on
     the pipeline: the rigged base model with the outfit painted on. Called by
@@ -1284,7 +1316,9 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
     anatomy parts; then every group is rebuilt once from the clean prerig
     copy, never on top of the base's extension bones), measurement,
     sidecar (``base_signature``, ``base_model_sha256``, ``retexture_proof``,
-    ``source: "base_body"``), distance tier.
+    ``source: "base_body"``), distance tier, and the eager garment assembly
+    ``model3d/assembled/<signature>.glb`` (``_assemble_garments``; a failure
+    only adds ``garment_warnings`` to the sidecar).
 
     Errors (worker unavailable/refused, missing base model or images, an
     output that cannot be read) → ``{"ok": False, "error": <message>}``,
@@ -1388,6 +1422,7 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
         meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
         model3d._publish_sidecar(path, meta)
         model3d.request_lod(character_name, path)
+        _assemble_garments(character_name, signature, path, meta)
         logger.info("Outfit model %s (%s on %s): %s", character_name, signature, bsig,
                     "retextured" if proof is not None else "undressed base copy")
         return {"ok": True, "cached": False, "path": str(path), "filename": path.name, "proof": proof}
