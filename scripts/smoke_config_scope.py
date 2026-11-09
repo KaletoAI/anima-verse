@@ -68,7 +68,9 @@ B) The scope table of the plan (spec § 5, E3, E4, E5), written out by hand:
                image_generation (section)
      world:    chat, thoughts, intents, relationships, social_reactions,
                random_events, npc, story_engine, game, messaging_frame,
-               game_calendar, game_seasons, memory (section)
+               game_calendar, game_seasons, memory (section), base_body
+               (the hair method, plan 2026-11-09-hairdeck-hair Task 4 — a
+               world decides how its characters' hair is made)
      mixed:    skills
    plus the four deeper declarations:
      memory.fields.chat_retention_days        -> instance
@@ -561,7 +563,7 @@ TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
                   "body_retexture"]
 TABLE_WORLD = ["extension_motion", "chat", "thoughts", "intents", "relationships", "social_reactions",
                "random_events", "npc", "story_engine", "game", "messaging_frame",
-               "game_calendar", "game_seasons", "memory", "packages", "inventory"]
+               "game_calendar", "game_seasons", "memory", "packages", "inventory", "base_body"]
 TABLE_MIXED = ["skills"]
 TABLE_VIRTUAL = []
 

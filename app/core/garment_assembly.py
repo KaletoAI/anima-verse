@@ -146,7 +146,9 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
         kind = str((item.get("garment") or {}).get("kind") or "")
         if item.get("category") != "garment" or kind not in garment_store.GARMENT_VERSION:
             continue
-        fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1])
+        # The fit of the CURRENT method (garment_store.accepted_fit): a switched
+        # hair method serves that method's fit, or no hair before it has one.
+        fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
         parsed = garment_store.parse_name(fit[0]) if fit else None
         if not parsed:
             continue

@@ -120,6 +120,26 @@ SECTIONS = {
         },
     },
 
+    "base_body": {
+        "label": "Base body",
+        "scope": "world",
+        "world_group": "gameplay",
+        "fields": {
+            "hair_method": {
+                "type": "select",
+                "label": "Hair method",
+                "choices": ["edit_chain", "hairdeck"],
+                "choice_labels": {"edit_chain": "Edit chain", "hairdeck": "HairDeck"},
+                "default": "edit_chain",
+                "description": "How a base-body character's hair mesh is made. Edit chain: the base views are "
+                               "edited into hair-only images, which become a mesh (several image edits and one "
+                               "mesh job). HairDeck: one job turns the profile picture into hair cards (needs an "
+                               "img2hair backend, occasion hair_mesh). Both are fitted onto the base body. A "
+                               "character can override this in its Hair tab; switching costs no generation when "
+                               "the other method already has an accepted fit.",
+            },
+        },
+    },
     "packages": {
         "label": "Packages", "scope": "world", "world_group": "packages",
         "fields": {

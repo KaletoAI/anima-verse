@@ -102,6 +102,57 @@ def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
     return "their", "they"
 
 
+# --- The hair method (plan 2026-11-09-hairdeck-hair, Task 4) -------------------
+
+#: How the hair mesh is made: the edit chain (haired -> ghost -> cutout ->
+#: mesh -> fit) or HairDeck (one profile picture -> hair cards -> fit).
+HAIR_METHODS: Tuple[str, ...] = ("edit_chain", "hairdeck")
+DEFAULT_HAIR_METHOD = "edit_chain"
+_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _world_hair_method() -> str:
+    from app.core import config
+    from app.core.config_schema import field_default
+    value = str(config.get("base_body.hair_method", field_default("base_body", "hair_method")) or "")
+    return value if value in HAIR_METHODS else DEFAULT_HAIR_METHOD
+
+
+def hair_method_source(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+    """``(method, source)``: the character's own ``hair_method`` when it names
+    a method (source ``"character"``), else the world's
+    ``base_body.hair_method`` (source ``"world"``; an unknown world value is
+    the default ``edit_chain``). ``""`` or an unknown profile value = the world."""
+    profile = _profile_of(character_name, profile)
+    own = str(profile.get("hair_method") or "")
+    if own in HAIR_METHODS:
+        return own, "character"
+    return _world_hair_method(), "world"
+
+
+def hair_method(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """``"edit_chain"`` or ``"hairdeck"`` — see ``hair_method_source``."""
+    return hair_method_source(character_name, profile=profile)[0]
+
+
+def hair_colour_override(profile: Optional[Dict[str, Any]]) -> str:
+    """The manual hair colour of the profile key ``hair_colour`` as
+    ``"#rrggbb"`` (lower case), ``""`` = automatic (HairDeck's own vertex
+    colours). A value that is no ``#rrggbb`` counts as automatic."""
+    value = str((profile or {}).get("hair_colour") or "").strip()
+    return value.lower() if _HEX_COLOUR.fullmatch(value) else ""
+
+
+def colour_target(hex_colour: str) -> Optional[Tuple[float, float, float]]:
+    """``"#rrggbb"`` -> sRGB 0..1 (``garment_hairdeck.fit_hairdeck``'s
+    ``colour_target``); ``""`` -> None (keep HairDeck's colours)."""
+    if not hex_colour:
+        return None
+    if not _HEX_COLOUR.fullmatch(hex_colour):
+        raise ValueError(f"no #rrggbb colour: {hex_colour[:20]!r}")
+    return tuple(int(hex_colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5))  # type: ignore[return-value]
+
+
 def fsig_inputs(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What the hair kind contributes to the garment fingerprint
     (``garment_store.garment_fsig``, R10): the derived description, whether

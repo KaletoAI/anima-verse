@@ -25,6 +25,23 @@ A refusal ends the run (``{ok: False, step, error, gates}`` + the in-memory
 status); nothing downstream runs, and an already accepted fit keeps being
 served (R11 — a refused re-run never makes the figure bald).
 
+Hair made by HairDeck (``garment_hair.hair_method``; plan
+``docs/superpowers/plans/2026-11-09-hairdeck-hair.md``, Task 4) runs
+``hairdeck → fit`` instead (``garment_store.steps_for``):
+
+- ``hairdeck``: ``generate_hair`` on the profile picture, seed 42, into the
+  job folder ``raw/{item}_{hsig}/`` (cached per ``hsig``, so a base or colour
+  change runs only the fit). A job whose ``info.json`` notes "no hair found"
+  or "no person found" refuses with ``NO_HAIR_ERROR``;
+- ``fit``: ``garment_hairdeck.fit_hairdeck`` on the current rigged base, with
+  the colour override (profile ``hair_colour``) or HairDeck's own colours.
+  A gate refusal of the attempt-1 job re-runs ``hairdeck`` once with seed 43
+  and fits again; a second refusal refuses with both attempts.
+
+The served fit follows the CURRENT method (``garment_store.accepted_fit``): a
+switch never generates anything, and a method without an accepted fit yet
+serves no hair.
+
 One run per character at a time (``garment_store.char_lock``); ``run_garment``
 blocks and is called from a worker thread (``start_garment``) — every
 generation inside goes through the image service, the fit and the graft are
@@ -51,6 +68,11 @@ _active: set = set()
 # ``after_base_model`` checks again (the run may have used the old model).
 _followups: set = set()
 _ORDINALS = ("first", "second", "third")
+#: The HairDeck seed of attempt n (index n - 1).
+HAIRDECK_SEEDS = (42, 43)
+#: ``info.json`` notes of a HairDeck job that found nothing to make hair of.
+NO_HAIR_NOTES = ("no hair found", "no person found")
+NO_HAIR_ERROR = "HairDeck found no hair in the profile picture"
 
 
 class _Refused(Exception):
@@ -157,25 +179,37 @@ def _mesh_done(character_name: str, item_id: str, fsig: str) -> bool:
     return _accepted(garment_path(character_name, item_id, fsig, "prepared"))
 
 
-def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str) -> str:
+def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str,
+               method: str = "edit_chain") -> str:
     """``accepted`` (on the current base model, from the current prepared
-    mesh), ``stale`` (accepted on another base model), ``outdated``
-    (accepted, but the prepared mesh it was fitted from was replaced or
-    removed) or ``missing``."""
-    from app.core.garment_store import garment_path, read_record
+    mesh — HairDeck: from the current job's hair), ``stale`` (accepted on
+    another base model), ``outdated`` (accepted, but the prepared mesh /
+    HairDeck hair it was fitted from was replaced or removed) or
+    ``missing``."""
+    from app.core.garment_store import HAIRDECK, garment_path, read_record
     fit = garment_path(character_name, item_id, fsig, "fit")
     record = read_record(fit.with_suffix(".json"))
     if not fit.is_file() or record.get("accepted") is not True:
         return "missing"
     if not base_model_sha or record.get("base_model_sha256") != base_model_sha:
         return "stale"
+    if method == HAIRDECK:
+        inputs = record.get("inputs") or {}
+        try:
+            nohead, _proxy = _hairdeck_files(character_name, item_id, str(inputs.get("hsig") or ""))
+        except ValueError:
+            return "outdated"
+        if nohead is None or inputs.get("nohead_sha256") != _sha(nohead):
+            return "outdated"
+        return "accepted"
     prepared = garment_path(character_name, item_id, fsig, "prepared")
     if (record.get("inputs") or {}).get("prepared_sha256") != _sha(prepared) or not prepared.is_file():
         return "outdated"
     return "accepted"
 
 
-def _done(character_name: str, item_id: str, fsig: str, step: str, base_model_sha: str) -> bool:
+def _done(character_name: str, item_id: str, fsig: str, step: str, base_model_sha: str,
+          method: str = "edit_chain", hsig: str = "") -> bool:
     from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS
     if step in IMAGE_STEPS:
         if not all(_accepted(_image(character_name, item_id, fsig, step, v)) for v in GARMENT_VIEWS):
@@ -183,9 +217,106 @@ def _done(character_name: str, item_id: str, fsig: str, step: str, base_model_sh
         return step != "ghost" or _bottoms(character_name, item_id, fsig)[0]
     if step == "mesh":
         return _mesh_done(character_name, item_id, fsig)
+    if step == "hairdeck":
+        return _hairdeck_files(character_name, item_id, hsig)[0] is not None
     if step == "fit":
-        return _fit_state(character_name, item_id, fsig, base_model_sha) == "accepted"
+        return _fit_state(character_name, item_id, fsig, base_model_sha, method) == "accepted"
     return False
+
+
+# --- HairDeck job ---------------------------------------------------------------
+
+def _hairdeck_record(character_name: str, item_id: str, hsig: str) -> Dict[str, Any]:
+    from app.core import garment_store as gs
+    return gs.read_record(gs.hairdeck_dir(character_name, item_id, hsig) / gs.HAIRDECK_RECORD)
+
+
+def _hairdeck_files(character_name: str, item_id: str, hsig: str) -> Tuple[Optional[Path], Optional[Path]]:
+    """``(hair, proxy)`` of the ACCEPTED HairDeck job of ``hsig`` —
+    ``hair_seed<s>_nohead.glb`` and ``hair_seed<s>.glb`` of the record's seed
+    — or ``(None, None)`` without an accepted job or with a file missing.
+    ValueError for an invalid hsig."""
+    from app.core import garment_store as gs
+    folder = gs.hairdeck_dir(character_name, item_id, hsig)
+    record = gs.read_record(folder / gs.HAIRDECK_RECORD)
+    if record.get("accepted") is not True:
+        return None, None
+    try:
+        seed = int(record.get("seed"))
+    except (TypeError, ValueError):
+        return None, None
+    hair, proxy = folder / f"hair_seed{seed}_nohead.glb", folder / f"hair_seed{seed}.glb"
+    return (hair, proxy) if hair.is_file() and proxy.is_file() else (None, None)
+
+
+def _no_hair(notes: List[str]) -> bool:
+    return any(phrase in note.lower() for note in notes for phrase in NO_HAIR_NOTES)
+
+
+def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[str, Any], attempt: int,
+                  fit_attempts: Optional[List[Any]] = None) -> Path:
+    """Run HairDeck (attempt ``attempt`` -> seed ``HAIRDECK_SEEDS[attempt - 1]``)
+    on the profile picture into the job folder of ``hsig`` and write its
+    record ``{accepted, attempt, seed, notes, error, ...}``. The job lands in
+    a staging folder first; the record says ``accepted: False`` while the
+    files move in, so a crash never leaves an accepted record over half a
+    job. ``_Refused`` (step ``hairdeck``, ``NO_HAIR_ERROR``) when ``info.json``
+    notes no hair / no person; RuntimeError when the hair or proxy file is
+    missing from the result. Returns the job folder."""
+    import json as _json
+    import shutil
+    from app.core import base_body
+    from app.core import garment_store as gs
+    from app.core.model_refs import current_profile_image
+    from app.core.timeutils import utc_now_iso
+    from app.imagegen import service
+    image = current_profile_image(character_name, profile=profile)
+    if image is None:
+        raise base_body.MissingInput("No profile picture — HairDeck makes the hair from it")
+    seed = HAIRDECK_SEEDS[attempt - 1]
+    folder = gs.hairdeck_dir(character_name, item_id, hsig)
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    staging = folder.parent / f".{folder.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir()
+    try:
+        result = service.get_image_service().generate_hair(
+            str(image), str(staging), character_name=character_name, params={"seed": seed})
+        names = [str(f.get("name") or "") for f in result.get("files") or []]
+        try:
+            info = _json.loads((staging / "info.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            info = {}
+        notes = [str(n) for n in (info.get("notes") or [])] if isinstance(info, dict) else []
+        record: Dict[str, Any] = {
+            "accepted": False, "attempt": attempt, "seed": seed, "notes": notes, "error": "moving files",
+            "files": names, "backend": result.get("backend"), "job_id": result.get("job_id"),
+            "route": result.get("route"), "profile_image_sha256": _sha(image),
+            "fit_attempts": list(fit_attempts or []), "created_at": utc_now_iso()}
+        folder.mkdir(exist_ok=True)
+        gs.write_record(folder / gs.HAIRDECK_RECORD, record)
+        for path in sorted(staging.iterdir()):
+            if path.is_file():
+                os.replace(path, folder / path.name)
+        error: Optional[str] = None
+        if _no_hair(notes):
+            error = NO_HAIR_ERROR
+        else:
+            for name in (f"hair_seed{seed}_nohead.glb", f"hair_seed{seed}.glb"):
+                if not (folder / name).is_file():
+                    error = f"HairDeck delivered no {name}"
+                    break
+        record.update(accepted=error is None, error=error)
+        gs.write_record(folder / gs.HAIRDECK_RECORD, record)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    logger.info("HairDeck %s/%s (%s): attempt %s seed %s, %s files, %s", character_name, item_id, hsig,
+                attempt, seed, len(names), error or "accepted")
+    if error == NO_HAIR_ERROR:
+        raise _Refused("hairdeck", NO_HAIR_ERROR, {"notes": notes, "attempt": attempt, "seed": seed})
+    if error:
+        raise RuntimeError(error)
+    return folder
 
 
 def _drop_mesh(character_name: str, item_id: str, fsig: str) -> None:
@@ -215,10 +346,9 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
          profile: Dict[str, Any]) -> Path:
     """Fit the prepared mesh onto the current base model and store it (see
     the module docstring). ``_Refused`` when the fit gate refuses."""
-    from app.blender import refine
-    from app.core import base_body, garment_fit, glb_mesh
+    from app.core import base_body, garment_fit
     from app.core import garment_images as gi
-    from app.core.garment_store import GARMENT_VIEWS, garment_path, write_record
+    from app.core.garment_store import GARMENT_VIEWS, garment_path
     from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
     from app.core.timeutils import utc_now_iso
 
@@ -247,13 +377,6 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
         raise _Refused("fit", "fit refused — " + "; ".join(result.reasons),
                        {**gates, "metrics": result.metrics})
 
-    blob = glb_mesh.graft(snapshot["rigged"], result.garment, name=f"garment_{kind}_{item_id}",
-                          extras={"kind": kind, "item_id": item_id, "fsig": fsig})
-    fit = garment_path(character_name, item_id, fsig, "fit")
-    low = garment_path(character_name, item_id, fsig, "low")
-    # A distance tier of the previous fit must never pair with the new one.
-    low.unlink(missing_ok=True)
-    _write_atomic(fit, blob)
     record: Dict[str, Any] = {
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
         "metrics": result.metrics, "gates": gates, "report": result.report,
@@ -263,6 +386,24 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
                    "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                    "ghost_front_sha256": _sha(ghost)},
         "created_at": utc_now_iso()}
+    return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
+
+
+def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, rigged: bytes,
+                 result: Any, record: Dict[str, Any]) -> Path:
+    """Graft an accepted fit onto the rigged base, write the fit GLB and its
+    ``record``, decimate the distance tier to ``low/`` and schedule the
+    assembly. Shared by both hair methods."""
+    from app.blender import refine
+    from app.core import glb_mesh
+    from app.core.garment_store import garment_path, write_record
+    blob = glb_mesh.graft(rigged, result.garment, name=f"garment_{kind}_{item_id}",
+                          extras={"kind": kind, "item_id": item_id, "fsig": fsig})
+    fit = garment_path(character_name, item_id, fsig, "fit")
+    low = garment_path(character_name, item_id, fsig, "low")
+    # A distance tier of the previous fit must never pair with the new one.
+    low.unlink(missing_ok=True)
+    _write_atomic(fit, blob)
     write_record(fit.with_suffix(".json"), record)
     logger.info("Garment fit %s/%s (%s): accepted on %s, %s tris", character_name, item_id, fsig, bsig,
                 result.metrics.get("tris"))
@@ -284,6 +425,92 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     return fit
 
 
+def _fit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, hsig: str,
+                  profile: Dict[str, Any], refused: List[Dict[str, Any]]) -> Path:
+    """Fit the accepted HairDeck job of ``hsig`` onto the current base model
+    (``garment_hairdeck.fit_hairdeck``; colour = the profile's override, else
+    HairDeck's own) and store it. ``_Refused`` (step ``fit``) when the gate
+    refuses — its gates carry ``{attempt, seed, ok, reasons, limits,
+    metrics}``. ``refused``: the earlier refused attempts, kept in the
+    record."""
+    from app.core import base_body, garment_hair, garment_hairdeck
+    from app.core.garment_store import GARMENT_VIEWS, HAIRDECK
+    from app.core.model_refs import find_ref_image
+    from app.core.timeutils import utc_now_iso
+    hair, proxy = _hairdeck_files(character_name, item_id, hsig)
+    if hair is None or proxy is None:
+        raise base_body.MissingInput("The HairDeck hair is missing — run the hairdeck step first")
+    job = _hairdeck_record(character_name, item_id, hsig)
+    attempt, seed = int(job.get("attempt") or 1), job.get("seed")
+    base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in GARMENT_VIEWS}
+    snapshot = base_body._snapshot_base_model(character_name, bsig)
+    base_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
+    hair_bytes, proxy_bytes = hair.read_bytes(), proxy.read_bytes()
+    override = garment_hair.hair_colour_override(profile)
+    result = garment_hairdeck.fit_hairdeck(hair_bytes, proxy_bytes, snapshot["rigged"],
+                                           colour_target=garment_hair.colour_target(override))
+    gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
+             "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in garment_hairdeck.GATES.items()}}
+    if not result.ok:
+        raise _Refused("fit", "fit refused — " + "; ".join(result.reasons),
+                       {"attempt": attempt, "seed": seed, **gates, "metrics": result.metrics})
+    record: Dict[str, Any] = {
+        "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": HAIRDECK,
+        "metrics": result.metrics, "gates": gates, "report": result.report,
+        "base_signature": bsig, "base_model_sha256": base_sha,
+        "inputs": {**_kind_inputs(kind, character_name, profile),
+                   "base_images": {v: _sha(p) for v, p in base_views.items()},
+                   "hsig": hsig, "attempt": attempt, "seed": seed, "colour": override,
+                   "nohead_sha256": hashlib.sha256(hair_bytes).hexdigest(),
+                   "proxy_sha256": hashlib.sha256(proxy_bytes).hexdigest()},
+        "colour": {"target": override or None, "source": "override" if override else "hairdeck"},
+        "refused_attempts": list(refused),
+        "created_at": utc_now_iso()}
+    return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
+
+
+def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, hsig: str,
+                       profile: Dict[str, Any], ran: List[str]) -> Path:
+    """The ``fit`` step of HairDeck hair: fit; when the gate refuses the
+    attempt-1 job, run ``hairdeck`` once more (seed 43) and fit again. A
+    refusal of the last attempt refuses with every attempt's gates
+    (``{attempts: [...]}``, also kept as ``fit_attempts`` in the job
+    record)."""
+    from app.core import garment_store as gs
+    try:
+        return _fit_hairdeck(character_name, item_id, kind, fsig, bsig, hsig, profile, [])
+    except _Refused as e:
+        first = e
+    attempts = [first.gates]
+    job = _hairdeck_record(character_name, item_id, hsig)
+    attempt = int(job.get("attempt") or 1)
+    if attempt >= len(HAIRDECK_SEEDS):
+        gs.write_record(gs.hairdeck_dir(character_name, item_id, hsig) / gs.HAIRDECK_RECORD,
+                        {**job, "fit_attempts": attempts})
+        raise _Refused("fit", first.error, {"attempts": attempts})
+    logger.info("HairDeck fit %s/%s refused on attempt %s — HairDeck once more with seed %s",
+                character_name, item_id, attempt, HAIRDECK_SEEDS[attempt])
+    gs.start(character_name, item_id, "hairdeck")
+    try:
+        _run_hairdeck(character_name, item_id, hsig, profile, attempt + 1, fit_attempts=attempts)
+    except _Refused:
+        raise
+    except Exception as e:  # noqa: BLE001 — reported as the hairdeck step's failure (it is the running step)
+        raise _Refused("hairdeck", str(e) or type(e).__name__, None) from e
+    gs.end(character_name, item_id, "hairdeck")
+    if "hairdeck" not in ran:
+        ran.append("hairdeck")
+    gs.start(character_name, item_id, "fit")
+    try:
+        return _fit_hairdeck(character_name, item_id, kind, fsig, bsig, hsig, profile, attempts)
+    except _Refused as e:
+        attempts.append(e.gates)
+        job = _hairdeck_record(character_name, item_id, hsig)
+        gs.write_record(gs.hairdeck_dir(character_name, item_id, hsig) / gs.HAIRDECK_RECORD,
+                        {**job, "fit_attempts": attempts})
+        raise _Refused("fit", f"fit refused on both HairDeck attempts — {e.error}", {"attempts": attempts})
+
+
 # --- The run --------------------------------------------------------------------
 
 def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
@@ -297,39 +524,60 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     them; with ``force`` that step re-runs — only for ``view`` when given —
     and every later step runs again. Without ``force`` a cached step is reused.
 
+    The steps are those of the item's CURRENT method
+    (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``).
+
     Returns ``{ok: True, fsig, ran: [steps that produced output]}`` or
     ``{ok: False, fsig, step, error, gates}`` (also recorded as the item's
     failed status). ValueError for an invalid item, step or view."""
-    from app.core.garment_store import GARMENT_STEPS, GARMENT_VIEWS
-    item, kind = _item(character_name, item_id)
-    order = GARMENT_STEPS[kind]
+    from app.core.garment_store import GARMENT_VIEWS
+    item, kind, order = _item_order(character_name, item_id)
     wanted = _steps(steps, order)
     if view is not None and view not in GARMENT_VIEWS:
         raise ValueError(f"Unknown garment view {view!r}")
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
-        return _run_locked(character_name, item, kind, order, wanted, view, bool(force))
+        return _run_locked(character_name, item, kind, wanted, view, bool(force))
 
 
-def _run_locked(character_name: str, item: Dict[str, Any], kind: str, order: Tuple[str, ...],
+def _item_order(character_name: str, item_id: str,
+                profile: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], str, Tuple[str, ...]]:
+    """``(item, kind, steps of the current method)``; ValueError like ``_item``."""
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    item, kind = _item(character_name, item_id)
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    return item, kind, gs.steps_for(kind, gs.kind_method(kind, character_name, profile))
+
+
+def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 wanted: Optional[List[str]], view: Optional[str], force: bool) -> Dict[str, Any]:
     from app.core import base_body, garment_images, garment_mesh
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
     item_id = item["id"]
+    profile = get_character_profile(character_name) or {}
+    method = gs.kind_method(kind, character_name, profile)
+    order = gs.steps_for(kind, method)
     step = order[0]  # a failure before the first step is that step's
     fsig = ""
+    hsig = ""
     ran: List[str] = []
     try:
-        profile = get_character_profile(character_name) or {}
+        # The method may have changed since the steps were checked.
+        _steps(wanted, order)
         base = base_body.current_base(character_name, profile=profile)
         if base is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
         bsig, base_sha = base
         _refresh_description(character_name, item, kind, profile)
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        if method == gs.HAIRDECK:
+            hsig = gs.garment_hsig(character_name, item_id, profile=profile)
         if wanted is None:
-            first = next((s for s in order if not _done(character_name, item_id, fsig, s, base_sha)), None)
+            first = next((s for s in order
+                          if not _done(character_name, item_id, fsig, s, base_sha, method, hsig)), None)
             if first is None:
                 return {"ok": True, "fsig": fsig, "ran": []}
         else:
@@ -361,13 +609,21 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str, order: Tup
                 if f or not _mesh_done(character_name, item_id, fsig):
                     garment_mesh.generate(character_name, item_id, fsig, force=f)
                     produced = True
+            elif step == "hairdeck":
+                if forced or not _done(character_name, item_id, fsig, step, base_sha, method, hsig):
+                    _run_hairdeck(character_name, item_id, hsig, profile, 1)
+                    produced = True
             elif step == "fit":
-                if forced or dirty or _fit_state(character_name, item_id, fsig, base_sha) != "accepted":
-                    _fit(character_name, item_id, kind, fsig, bsig, profile)
+                if forced or dirty or _fit_state(character_name, item_id, fsig, base_sha, method) != "accepted":
+                    if method == gs.HAIRDECK:
+                        _hairdeck_fit_step(character_name, item_id, kind, fsig, bsig, hsig, profile, ran)
+                    else:
+                        _fit(character_name, item_id, kind, fsig, bsig, profile)
                     produced = True
             gs.end(character_name, item_id, step)
             if produced:
-                ran.append(step)
+                if step not in ran:
+                    ran.append(step)
                 dirty = True
         return {"ok": True, "fsig": fsig, "ran": ran}
     except garment_images.GateRefused as e:
@@ -400,10 +656,11 @@ def _refusal(character_name: str, item_id: str, fsig: str, step: str, error: str
 def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
               view: Optional[str] = None) -> None:
     """ValueError unless ``item_id`` is a garment of a known kind owned by
-    the character and ``steps`` / ``view`` name steps and a view of it."""
-    from app.core.garment_store import GARMENT_STEPS, GARMENT_VIEWS
-    _item_, kind = _item(character_name, item_id)
-    _steps(steps, GARMENT_STEPS[kind])
+    the character and ``steps`` / ``view`` name steps of its current method
+    and a view of it."""
+    from app.core.garment_store import GARMENT_VIEWS
+    _item_, _kind, order = _item_order(character_name, item_id)
+    _steps(steps, order)
     if view is not None and view not in GARMENT_VIEWS:
         raise ValueError(f"Unknown garment view {view!r}")
 
@@ -514,9 +771,10 @@ def after_base_model(character_name: str) -> bool:
             try:
                 _item(character_name, item_id)
                 fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+                method = gs.garment_method(character_name, item_id, profile=profile)
             except ValueError:
                 continue
-            if _fit_state(character_name, item_id, fsig, base[1]) == "accepted":
+            if _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
                 continue
             if start_garment(character_name, item_id):
                 logger.info("Garment %s/%s: base model changed, chain started", character_name, item_id)
@@ -590,18 +848,41 @@ def _mesh_info(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
             "tris": record.get("tris_prepared"), "created_at": record.get("created_at")}
 
 
-def _fit_info(character_name: str, item_id: str, fsig: str, base_model_sha: str) -> Dict[str, Any]:
+def _fit_info(character_name: str, item_id: str, fsig: str, base_model_sha: str,
+              method: str = "edit_chain") -> Dict[str, Any]:
     from app.core.garment_store import garment_path, read_record
     record = read_record(garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
     metrics = record.get("metrics") or {}
-    return {"status": _fit_state(character_name, item_id, fsig, base_model_sha),
-            "metrics": metrics, "gates": record.get("gates") or {}, "tris": metrics.get("tris"),
-            "low": record.get("low"), "base_signature": record.get("base_signature"),
+    out = {"status": _fit_state(character_name, item_id, fsig, base_model_sha, method),
+           "metrics": metrics, "gates": record.get("gates") or {}, "tris": metrics.get("tris"),
+           "low": record.get("low"), "base_signature": record.get("base_signature"),
+           "created_at": record.get("created_at")}
+    if record.get("method"):
+        out["colour"] = record.get("colour")
+        out["refused_attempts"] = record.get("refused_attempts") or []
+    return out
+
+
+def _hairdeck_info(character_name: str, item_id: str, hsig: str) -> Dict[str, Any]:
+    """The HairDeck job of ``hsig``: ``{hsig, status accepted|refused|missing,
+    attempt, seed, notes, error, files, fit_attempts, created_at}``."""
+    record = _hairdeck_record(character_name, item_id, hsig)
+    if _hairdeck_files(character_name, item_id, hsig)[0] is not None:
+        status = "accepted"
+    elif record:
+        status = "refused"
+    else:
+        status = "missing"
+    return {"hsig": hsig, "status": status, "attempt": record.get("attempt"), "seed": record.get("seed"),
+            "notes": record.get("notes") or [], "error": record.get("error"), "files": record.get("files") or [],
+            "fit_attempts": record.get("fit_attempts") or [], "backend": record.get("backend"),
             "created_at": record.get("created_at")}
 
 
-def _newest_fit(character_name: str, item_id: str) -> Optional[Tuple[Path, Dict[str, Any]]]:
-    """The newest accepted fit of the item on ANY base model."""
+def _newest_fit(character_name: str, item_id: str,
+                method: Optional[str] = None) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """The newest accepted fit of the item on ANY base model (only fits made
+    with ``method`` when given)."""
     from app.core import garment_store as gs
     root = gs._root(character_name)  # a read path never creates garments/
     best: Optional[Tuple[int, Path, Dict[str, Any]]] = None
@@ -612,6 +893,8 @@ def _newest_fit(character_name: str, item_id: str) -> Optional[Tuple[Path, Dict[
             if path.suffix != ".glb" or path.parent != root:
                 continue
             record = gs.read_record(path.with_suffix(".json"))
+            if method is not None and gs.fit_method(record) != method:
+                continue
             stamp = _stamp(path)
             if record.get("accepted") is True and stamp is not None and (best is None or stamp > best[0]):
                 best = (stamp, path, record)
@@ -630,55 +913,67 @@ def image_path(character_name: str, item_id: str, step: str, view: str, attempt:
 
 def preview_path(character_name: str, item_id: str) -> Optional[Path]:
     """The GLB the Hair tab shows: the current-fsig fit when it exists, else
-    the fit served on the current base model, else the newest accepted fit.
-    None when there is no fit at all."""
+    the fit served on the current base model, else the newest accepted fit
+    of the current method. None when there is no fit at all."""
     from app.core import base_body, garment_store as gs
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
     try:
         _item(character_name, item_id)
-        fit = gs.garment_path(character_name, item_id, gs.garment_fsig(character_name, item_id), "fit")
+        fit = gs.garment_path(character_name, item_id, gs.garment_fsig(character_name, item_id, profile=profile),
+                              "fit")
+        method = gs.garment_method(character_name, item_id, profile=profile)
     except ValueError:
         return None
     if fit.is_file():
         return fit
-    base = base_body.current_base(character_name)
-    served = gs.accepted_fit(character_name, item_id, base_model_sha=base[1]) if base else None
+    base = base_body.current_base(character_name, profile=profile)
+    served = gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile) if base else None
     if served:
         return served[0]
-    newest = _newest_fit(character_name, item_id)
+    newest = _newest_fit(character_name, item_id, method)
     return newest[0] if newest else None
 
 
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
-    """UI info of one garment (the Hair tab): fsig, description, every step's
-    files and gate numbers, why the served fit is not the current one
-    (``stale_reasons``), the run status and the preview URL. ValueError for
-    an invalid item."""
-    from app.core import base_body, garment_store as gs
+    """UI info of one garment (the Hair tab): fsig, the method and its
+    source, description, every step's files and gate numbers (the steps of
+    the CURRENT method; HairDeck adds ``hsig``), why the served fit is not
+    the current one (``stale_reasons``), the run status and the preview URL.
+    ``served_fsig`` None = no hair is served (e.g. the selected method has no
+    accepted fit yet). ValueError for an invalid item."""
+    from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version
     from app.core.model_refs import find_ref_image
     from app.models.character import get_character_profile
     _item_, kind = _item(character_name, item_id)
     profile = get_character_profile(character_name) or {}
     inputs = _kind_inputs(kind, character_name, profile)
+    method, method_source = (garment_hair.hair_method_source(character_name, profile=profile)
+                             if kind == garment_hair.HAIR_KIND else (gs.EDIT_CHAIN, "world"))
     try:
         fsig: Optional[str] = gs.garment_fsig(character_name, item_id, profile=profile)
     except ValueError:
         fsig = None
+    hsig = gs.garment_hsig(character_name, item_id, profile=profile) if fsig and method == gs.HAIRDECK else None
     base = base_body.current_base(character_name, profile=profile) or ("", "")
     steps: Dict[str, Any] = {}
     if fsig:
-        for step in gs.GARMENT_STEPS[kind]:
+        for step in gs.steps_for(kind, method):
             if step in gs.IMAGE_STEPS:
                 steps[step] = {v: _image_info(character_name, item_id, fsig, step, v) for v in gs.GARMENT_VIEWS}
             elif step == "mesh":
                 steps[step] = _mesh_info(character_name, item_id, fsig)
+            elif step == "hairdeck":
+                steps[step] = _hairdeck_info(character_name, item_id, hsig or "")
             elif step == "fit":
-                steps[step] = _fit_info(character_name, item_id, fsig, base[1])
-    served = gs.accepted_fit(character_name, item_id, base_model_sha=base[1]) if base[1] else None
+                steps[step] = _fit_info(character_name, item_id, fsig, base[1], method)
+    served = (gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
+              if base[1] else None)
     served_fsig = (gs.parse_name(served[0]) or (None, None))[1] if served else None
     stale: List[str] = []
     if not (fsig and steps.get("fit", {}).get("status") == "accepted"):
-        reference = served or _newest_fit(character_name, item_id)
+        reference = served or _newest_fit(character_name, item_id, method)
         if reference:
             record = reference[1]
             used = dict(record.get("inputs") or {})
@@ -699,7 +994,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         except OSError:
             preview_url = None
     status = gs.status(character_name, item_id)
-    return {"item_id": item_id, "kind": kind, "fsig": fsig, "description": inputs.get("description") or "",
+    return {"item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
+            "hsig": hsig, "description": inputs.get("description") or "",
             "steps": steps, "stale_reasons": stale,
             "running_step": status["running_step"], "started_at": status["started_at"],
             "failed": status["failed"], "preview_url": preview_url, "served_fsig": served_fsig}
@@ -732,11 +1028,12 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     else:
         try:
             fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+            method = gs.garment_method(character_name, item_id, profile=profile)
         except ValueError:
-            fsig = ""
-        if fsig and _fit_state(character_name, item_id, fsig, base[1]) == "accepted":
+            fsig, method = "", gs.EDIT_CHAIN
+        if fsig and _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
             state = "ready"
-        elif base[1] and gs.accepted_fit(character_name, item_id, base_model_sha=base[1]):
+        elif base[1] and gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile):
             state = "stale"
         else:
             state = "missing"

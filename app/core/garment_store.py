@@ -19,6 +19,26 @@ signature and the content of the base front + back view. The base MODEL is not
 in it: a base model regenerated under the same base signature keeps images and
 mesh and only re-fits; the fit record's ``base_model_sha256`` decides that.
 
+Hair has two methods (``garment_hair.hair_method``; plan
+``docs/superpowers/plans/2026-11-09-hairdeck-hair.md``, Task 4): the edit chain
+above, and HairDeck — steps ``("hairdeck", "fit")`` (``steps_for``). HairDeck
+turns the profile picture into hair cards; its files live in ONE folder per
+``hsig``::
+
+    raw/{item}_{hsig}/                                every file of the job +
+                                                      record.json {accepted,
+                                                      attempt, seed, notes, error}
+
+``hsig`` = md5[:12] over the profile picture's sha256, the ``extra_params`` of
+the backend the ``hair_mesh`` occasion is meant to run on and
+``HAIRDECK_VERSION`` — no base, no colour: a base change or a colour change
+re-fits from the cached job. The HairDeck fsig is the edit-chain payload plus
+``method``, ``hsig`` and the colour override (profile ``hair_colour``); the
+edit-chain fsig carries no ``method`` key, so it stays what it always was.
+The fit is the same ``{item}_{fsig}.glb`` + record (its record says
+``method: "hairdeck"``; a record without ``method`` is an edit-chain fit);
+``prepared/`` is not used by HairDeck.
+
 Run status is in memory (like ``base_body``): a restart reruns only the step
 that was in flight, every finished step is cached on disk under ``fsig``.
 """
@@ -37,6 +57,14 @@ logger = get_logger("garment_store")
 
 GARMENT_VERSION: Dict[str, int] = {"hair": 1}
 GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": ("haired", "ghost", "cutout", "mesh", "fit")}
+#: The steps of hair made by HairDeck (``steps_for``).
+HAIRDECK_STEPS: Tuple[str, ...] = ("hairdeck", "fit")
+#: Bumped when the HairDeck job's inputs change meaning (part of ``hsig``).
+HAIRDECK_VERSION = 1
+#: The record of a HairDeck job folder (``hairdeck_dir``).
+HAIRDECK_RECORD = "record.json"
+EDIT_CHAIN = "edit_chain"
+HAIRDECK = "hairdeck"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
 #: The steps that store images (the rest store meshes).
 IMAGE_STEPS: Tuple[str, ...] = ("haired", "ghost", "cutout")
@@ -109,6 +137,23 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
     return path
 
 
+def hairdeck_dir(character_name: str, item_id: str, hsig: str) -> Path:
+    """``garments/raw/{item}_{hsig}/`` — the folder of a HairDeck job (every
+    result file + ``record.json``). ValueError like ``garment_path``.
+    Creates nothing."""
+    from app.models.inventory import safe_item_id
+    iid = safe_item_id(item_id)
+    if not iid or iid != item_id:
+        raise ValueError(f"invalid garment item id {str(item_id)[:80]!r}")
+    if not isinstance(hsig, str) or not _FSIG_RE.fullmatch(hsig):
+        raise ValueError(f"invalid HairDeck fingerprint {str(hsig)[:40]!r}")
+    root = _root(character_name)
+    path = root / PART_DIRS["raw"] / f"{iid}_{hsig}"
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"garment path escapes {root}")
+    return path
+
+
 def parse_name(path: Path) -> Optional[Tuple[str, str]]:
     """``(item_id, fsig)`` of a stored garment file, None for any other name."""
     pattern = _IMAGE_NAME_RE if path.parent.name == PART_DIRS["image"] else _MESH_NAME_RE
@@ -145,25 +190,107 @@ def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any]) -> Dic
     raise ValueError(f"unknown garment kind {kind!r}")
 
 
-def garment_fsig(character_name: str, item_id: str, *,
-                 profile: Optional[Dict[str, Any]] = None) -> str:
-    """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
-    (R10). ValueError when ``item_id`` is no garment of a known kind."""
-    from app.core import base_body
-    from app.core.model_refs import find_ref_image
+def kind_method(kind: str, character_name: str, profile: Dict[str, Any]) -> str:
+    """The method a garment of ``kind`` is made with: hair follows
+    ``garment_hair.hair_method``, every other kind the edit chain."""
+    if kind == "hair":
+        from app.core import garment_hair
+        return garment_hair.hair_method(character_name, profile=profile)
+    return EDIT_CHAIN
+
+
+def steps_for(kind: str, method: str) -> Tuple[str, ...]:
+    """The step order of ``kind`` made with ``method``: hair by HairDeck is
+    ``HAIRDECK_STEPS``, anything else ``GARMENT_STEPS[kind]``. ValueError for
+    an unknown kind or method."""
+    if kind not in GARMENT_STEPS:
+        raise ValueError(f"unknown garment kind {kind!r}")
+    if method == HAIRDECK and kind == "hair":
+        return HAIRDECK_STEPS
+    if method != EDIT_CHAIN:
+        raise ValueError(f"unknown {kind} method {method!r}")
+    return GARMENT_STEPS[kind]
+
+
+def _garment_kind(item_id: str) -> str:
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
     kind = str((item.get("garment") or {}).get("kind") or "")
     if item.get("category") != "garment" or kind not in GARMENT_VERSION:
         raise ValueError(f"{item_id!r} is no garment item of a known kind")
+    return kind
+
+
+def garment_method(character_name: str, item_id: str, *,
+                   profile: Optional[Dict[str, Any]] = None) -> str:
+    """``kind_method`` of a garment item. ValueError when ``item_id`` is no
+    garment of a known kind."""
+    kind = _garment_kind(item_id)
+    return kind_method(kind, character_name, _profile_of(character_name, profile))
+
+
+def hairdeck_backend_params(character_name: str) -> Dict[str, Any]:
+    """The ``extra_params`` of the backend the ``hair_mesh`` occasion is meant
+    to run on for the character (``routing.intended_backend``: configuration
+    only, so a cooldown never changes it); {} when there is none."""
+    from app.imagegen import routing, service
+    pool = getattr(service.get_image_service(), "pool", None)
+    if pool is None:
+        return {}
+    try:
+        backend = routing.intended_backend("hair_mesh", character_name, pool=pool)
+    except Exception:  # noqa: BLE001 — a fingerprint never fails on the routing config
+        logger.exception("HairDeck backend of %s unresolvable", character_name)
+        return {}
+    params = getattr(backend, "extra_params", None) if backend is not None else None
+    return dict(params) if isinstance(params, dict) else {}
+
+
+def garment_hsig(character_name: str, item_id: str, *,
+                 profile: Optional[Dict[str, Any]] = None) -> str:
+    """md5[:12] over ``{profile_image, extra_params, version}``: the sha256
+    of the character's current profile picture ("" without one), the
+    ``extra_params`` of the intended ``hair_mesh`` backend
+    (``hairdeck_backend_params``) and ``HAIRDECK_VERSION``. Names the HairDeck
+    job folder (``hairdeck_dir``). Neither the base nor the colour override is
+    in it: changing them re-fits, never re-runs HairDeck."""
+    from app.core import base_body
+    from app.core.model_refs import current_profile_image
+    profile = _profile_of(character_name, profile)
+    payload = {"profile_image": base_body.file_sha256(current_profile_image(character_name, profile=profile)),
+               "extra_params": hairdeck_backend_params(character_name),
+               "version": HAIRDECK_VERSION}
+    digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"))
+    return digest.hexdigest()[:12]
+
+
+def garment_fsig(character_name: str, item_id: str, *,
+                 profile: Optional[Dict[str, Any]] = None) -> str:
+    """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
+    (R10); hair made by HairDeck adds ``{method, hsig, colour}`` (the colour
+    override, "" = automatic). ValueError when ``item_id`` is no garment of a
+    known kind."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
     bsig = base_body.base_signature(character_name, profile=profile)
     images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
               for view in GARMENT_VIEWS}
     payload = {"kind": kind, **_kind_inputs(kind, character_name, profile),
                "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": images}
+    if kind_method(kind, character_name, profile) == HAIRDECK:
+        from app.core import garment_hair
+        payload.update(method=HAIRDECK, hsig=garment_hsig(character_name, item_id, profile=profile),
+                       colour=garment_hair.hair_colour_override(profile))
     digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8"))
     return digest.hexdigest()[:12]
+
+
+def fit_method(record: Dict[str, Any]) -> str:
+    """The method a fit record was made with; a record without ``method``
+    (every fit from before HairDeck) is an edit-chain fit."""
+    return str(record.get("method") or EDIT_CHAIN)
 
 
 # --- Records ------------------------------------------------------------------
@@ -194,18 +321,22 @@ def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
     return record.get("accepted") is True and record.get("base_model_sha256") == base_model_sha
 
 
-def accepted_fit(character_name: str, item_id: str, *,
-                 base_model_sha: str) -> Optional[Tuple[Path, Dict[str, Any]]]:
+def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
+                 profile: Optional[Dict[str, Any]] = None) -> Optional[Tuple[Path, Dict[str, Any]]]:
     """The fit to serve for a garment item on the base model ``base_model_sha``
     (R11): the current-fsig fit when its record is accepted on that model,
-    else the newest (GLB mtime) accepted fit of the item on that model, else
-    None. An empty ``base_model_sha`` (no base model) has no fit."""
+    else the newest (GLB mtime) accepted fit of the item on that model made
+    with the CURRENT method (``fit_method``; a switched method never serves
+    the other method's hair), else None. An empty ``base_model_sha`` (no base
+    model) has no fit."""
     if not base_model_sha:
         return None
+    profile = _profile_of(character_name, profile)
     try:
-        current: Optional[str] = garment_fsig(character_name, item_id)
+        current: Optional[str] = garment_fsig(character_name, item_id, profile=profile)
+        method = garment_method(character_name, item_id, profile=profile)
     except ValueError:
-        current = None
+        current, method = None, EDIT_CHAIN
     if current is not None:
         path = garment_path(character_name, item_id, current, "fit")
         record = read_record(path.with_suffix(".json"))
@@ -220,7 +351,7 @@ def accepted_fit(character_name: str, item_id: str, *,
             if path.suffix != ".glb" or path.parent != root:
                 continue
             record = read_record(path.with_suffix(".json"))
-            if not _accepted_on(record, base_model_sha):
+            if not _accepted_on(record, base_model_sha) or fit_method(record) != method:
                 continue
             try:
                 mtime = path.stat().st_mtime_ns

@@ -290,6 +290,28 @@ def _cheapest_no_rotation(live: List[Any]) -> Any:
     return sorted(live, key=lambda b: b.effective_cost)[0] if live else None
 
 
+def intended_backend(occasion: str, character: str = "", pool: Any = None) -> Any:
+    """The backend the occasion is MEANT to run on, from the configuration
+    filters alone (availability ignored, no rotation turn consumed): the
+    cheapest backend of the intended chain entry (``intended_spec_for``), or
+    for an empty chain the cheapest fitting enabled backend. None when the
+    chain has entries but every one is a configuration skip, when the chain
+    is empty on an occasion that requires one, or when nothing fits.
+    For fingerprints that depend on a backend's configuration (the HairDeck
+    hsig), so a cooldown never changes them."""
+    p = _pool(pool)
+    backends = list(p.backends)
+    spec = intended_spec_for(occasion, character, pool=p)
+    if spec:
+        skip, allowed, _names = _config_filter(occasion, spec, backends)
+        return _cheapest_no_rotation(allowed) if skip is None else None
+    if chain_for(occasion, character) or requires_chain(occasion):
+        return None
+    return _cheapest_no_rotation([b for b in backends
+                                  if backend_fits(occasion, describe_backend(b))
+                                  and getattr(b, "instance_enabled", True)])
+
+
 def _empty_chain_pick(occasion: str, backends: List[Any],
                       exclude: set, has_ref: bool, pool: Any, rotate: bool,
                       advance_rotation: bool = True) -> Any:
