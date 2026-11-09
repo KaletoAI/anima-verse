@@ -687,12 +687,14 @@ export function FieldHair({ character, onEditAppearance }: {
             </div>
             {garment?.preview_url ? (
               <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={380}
-                freshness={garment.preview_freshness} />
+                freshness={garment.preview_freshness} collision={info.collision} />
             ) : (
               <div className="ga-hint">{t('No fitted hair yet')}</div>
             )}
             <div className="ga-hint">
-              {t('Hair has no collision yet — it can pass through arms and shoulders when they move')}
+              {info.collision?.capsules?.length
+                ? t('Collides with the base body\'s torso, arm and head capsules — “Garment collision” in the viewer compares')
+                : t('No capsule set on the base model yet — the hair is shown as skinned')}
             </div>
             {hairdeckLook}
             <OtherMethod other={info.other} method={info.method} limits={limits} />

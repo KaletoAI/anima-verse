@@ -1947,8 +1947,9 @@ def get_character_hair(character_name: str,
     world_method, hairdeck, other}`` — ``description`` is
     derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
     else the one the character owns (None: no item yet), ``garment`` its
-    ``garments.garment_info`` (None without an item), ``collision`` always
-    False in this phase (R15), ``limits`` the gate limits per step for the
+    ``garments.garment_info`` (None without an item), ``collision`` the
+    current base model's capsule set (``collision.ensure``) the preview
+    pushes the hair out of, None without a preview or base model; ``limits`` the gate limits per step for the
     tab's chips (``garment_gates.limits`` + mesh + fit + ``hairdeck_fit``,
     from the gate constants themselves; ``hairdeck_fit`` those of the hair's
     length class, ``garment_hairdeck.gates_for``). ``method`` / ``method_source``
@@ -1977,12 +1978,25 @@ def get_character_hair(character_name: str,
         except ValueError:
             info = hairdeck = other = None
     method, method_source = garment_hair.hair_method_source(character_name, profile=profile)
+    # The preview is the hair fitted on the current base model, so the base
+    # model's capsule set is what the viewer pushes the hair out of (the
+    # same set the outfit models inherit, the same push the 3D client runs).
+    hair_collision = None
+    if info and info.get("preview_url"):
+        try:
+            from app.core import collision
+            from app.core.model3d import _current_base
+            current = _current_base(character_name)
+            if current:
+                hair_collision = collision.ensure(character_name, current[0])
+        except Exception:
+            logger.exception("Hair tab: no capsule set for %s", character_name)
     payload = {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
                 "humanoid": humanoid,
                 "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
                 "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
                                                                                          profile=profile)),
-                "item_id": item_id, "equipped": equipped, "garment": info, "collision": False,
+                "item_id": item_id, "equipped": equipped, "garment": info, "collision": hair_collision,
                 "limits": {**_garment_limits("hair"),
                            "hairdeck_fit": _gate_limits(garment_hairdeck.gates_for(
                                garment_hair.hair_length_class(character_name, profile=profile)

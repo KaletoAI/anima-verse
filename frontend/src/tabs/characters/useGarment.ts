@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
+import type { CollisionPayload } from '@anima/scene-render'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
@@ -209,7 +210,8 @@ export interface HairInfo {
   item_id: string | null
   equipped: boolean
   garment: GarmentInfo | null
-  collision: boolean
+  /** The current base model's capsule set the preview pushes the hair out of; null without one. */
+  collision: CollisionPayload | null
   limits: Partial<Record<'haired' | 'ghost' | 'mesh' | 'fit' | 'hairdeck_fit', Record<string, GateLimit>>>
   /** The hair method in effect and where it comes from; the world default. */
   method: HairMethod

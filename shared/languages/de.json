@@ -4096,7 +4096,6 @@
     "Hair as its own mesh needs the base body pipeline — switch it on in the Base body tab": "Haare als eigenes Mesh brauchen die Grundkörper-Pipeline — im Tab Grundkörper einschalten",
     "Hair description": "Haarbeschreibung",
     "Hair description changed": "Haarbeschreibung geändert",
-    "Hair has no collision yet — it can pass through arms and shoulders when they move": "Haare haben noch keine Kollision — sie können bei Bewegung durch Arme und Schultern gehen",
     "Hair-only views": "Nur-Haar-Ansichten",
     "Haired views": "Ansichten mit Haaren",
     "Lanczos only (upscale failed)": "Nur Lanczos (Hochskalierung fehlgeschlagen)",
@@ -4292,7 +4291,6 @@
     "Generate the rigged base model first (Base body tab)": "Zuerst das geriggte Grundmodell erzeugen (Tab Grundkörper)",
     "Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.": "Baut das Outfit-Modell aus dem aktuellen Grundkörper neu. Angezogene Ansichten, die nicht mehr zum Grundkörper passen, werden zuerst gerendert; kein Mesh-Backend beteiligt.",
     "Rebuild from base body": "Aus Grundkörper neu bauen",
-    "The base body has no retained unrigged mesh. Generate the base model again (Base body tab).": "Der Grundkörper hat kein aufbewahrtes ungeriggtes Mesh. Das Grundmodell neu erzeugen (Tab Grundkörper).",
     "Re-rigs the base body; every outfit model is rebuilt from it.": "Riggt den Grundkörper neu; jedes Outfit-Modell wird daraus neu gebaut.",
     "Dresses the base body views and builds the outfit model for every saved outfit — the character keeps wearing what it wears.": "Zieht die Grundkörper-Ansichten an und baut das Outfit-Modell für jedes gespeicherte Outfit — der Charakter behält an, was er trägt.",
     "Outfit models are built from the base body automatically.": "Outfit-Modelle werden automatisch aus dem Grundkörper gebaut.",
@@ -4343,6 +4341,9 @@
     "from the base body": "vom Grundkörper",
     "Builds the base model anew from the four views: mesher, then face cleanup, face retexture and rig as switched on below.": "Baut das Basismodell neu aus den vier Ansichten: Mesher, dann Gesichtsbereinigung, Gesichtskorrektur und Rig, wie unten eingeschaltet.",
     "3D model (current outfit)": "3D-Modell (aktuelles Outfit)",
-    "Open 3D tab": "Tab 3D öffnen"
+    "Open 3D tab": "Tab 3D öffnen",
+    "The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).": "Der Grundkörper hat kein aufbewahrtes ungeriggtes Mesh — das Basismodell neu erzeugen („Neu generieren“ neben „Basismodell“).",
+    "Collides with the base body's torso, arm and head capsules — “Garment collision” in the viewer compares": "Kollidiert mit den Rumpf-, Arm- und Kopfkapseln des Grundkörpers — „Kleidungskollision“ im Viewer vergleicht",
+    "No capsule set on the base model yet — the hair is shown as skinned": "Das Basismodell hat noch keinen Kapselsatz — die Haare werden wie geskinnt gezeigt"
   }
 }

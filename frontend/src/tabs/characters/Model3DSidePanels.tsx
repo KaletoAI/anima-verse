@@ -26,7 +26,7 @@ export function Model3DExtensions({ character }: { character: string }) {
     canMeasure, model, setExtensionOption, setExtensionMotion, rebuildExtensions } = panel
   return <>
       {st.extension_groups?.length ? (
-        <fieldset className="ga-form">
+        <fieldset className="ga-form ga-ext-panel">
           <div className="ga-hint" aria-live="polite">
             <strong>{t('Extension bones')} · {viewTier}: </strong>
             {t(extensionResult?.status === 'applied' ? 'Applied'
@@ -46,8 +46,8 @@ export function Model3DExtensions({ character }: { character: string }) {
           </div>
 
           {st.extension_groups.map((group) => (
-            <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span>{group.id}</span>
+            <div key={group.id} className="ga-ext-row">
+              <strong>{group.id}</strong>
               <label>
                 <input type="checkbox" disabled={pending || busy || !st.model?.signature}
                   checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.enabled !== false}
@@ -71,11 +71,13 @@ export function Model3DExtensions({ character }: { character: string }) {
                 onSave={values => setExtensionMotion(group.id, values)} /> : null}
             </div>
           ))}
-        {model?.format === 'glb' && mixamo ? (
-          <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
-            onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
-        ) : null}
-          <span className="ga-hint">{t('Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.')}</span>
+          <div className="ga-ext-row">
+            {model?.format === 'glb' && mixamo ? (
+              <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
+                onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
+            ) : null}
+            <span className="ga-hint">{t('Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.')}</span>
+          </div>
         </fieldset>
       ) : <div className="ga-hint">{t('No extension bones on this model.')}</div>}
   </>

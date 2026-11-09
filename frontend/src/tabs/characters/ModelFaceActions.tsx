@@ -378,16 +378,21 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
       {!st.pending && st.face_retexture_result ? <div className="ga-hint" role="status">
         {st.face_retexture_result.ok ? t('Face retexture completed') : `${t('Face retexture failed')}: ${st.face_retexture_result.error || t('Error')}`}
       </div> : null}
-      {fr ? <div className="ga-hint" role="status">
-        {fr.status === 'applied' ? t('Face retexture applied') : fr.status === 'failed' ? t('Face retexture failed') : fr.status === 'skipped' ? t('Skipped') : t('Face retexture reverted')}
-        {fr.error || fr.reason ? ` · ${fr.error || fr.reason}` : ''}
-        {photoText}
-        {fr.reference === 'face' ? ` · ${t('Face view')}` : ''}
-        {fr.backend ? ` · ${fr.backend}` : ''}
-        {fr.job_id ? ` · ${fr.job_id}` : ''}
-        {fr.at ? ` · ${formatDateTime(fr.at, clockSettings())}` : ''}
-        {face?.face_retexture_compare_url ? <> · <a href={face.face_retexture_compare_url} target="_blank" rel="noopener noreferrer">{t('Comparison image')}</a></> : null}
-      </div> : null}
+      {fr ? (
+        // Short: status and time; every detail (photo settings, reference,
+        // backend, job) is the tooltip.
+        <div className="ga-hint" role="status" title={[
+          fr.error || fr.reason || '',
+          photoText.replace(/^ · /, ''),
+          fr.reference === 'face' ? t('Face view') : '',
+          fr.backend || '', fr.job_id || '',
+        ].filter(Boolean).join(' · ') || undefined}>
+          {fr.status === 'applied' ? t('Face retexture applied') : fr.status === 'failed' ? t('Face retexture failed') : fr.status === 'skipped' ? t('Skipped') : t('Face retexture reverted')}
+          {fr.status === 'failed' && fr.error ? ` · ${fr.error}` : ''}
+          {fr.at ? ` · ${formatDateTime(fr.at, clockSettings())}` : ''}
+          {face?.face_retexture_compare_url ? <> · <a href={face.face_retexture_compare_url} target="_blank" rel="noopener noreferrer">{t('Comparison image')}</a></> : null}
+        </div>
+      ) : null}
       {/* A face-view reference is never upscaled: the line above already says "Face view". */}
       {up && !(fr?.reference === 'face' && up.status === 'off') ? <p className="ga-hint" role="status">
         {up.status === 'failed'

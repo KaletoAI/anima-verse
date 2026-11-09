@@ -1000,60 +1000,74 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
       </div> : null}
       {model?.refined && !model.refined.retexture && model.refined.reason ? <p className="ga-hint" role="status">{t('Texture re-encoding failed — the model was published without this improvement.')}: {model.refined.reason}</p> : null}
       {model?.lod_error ? <p className="ga-hint" role="status">{t('Distance mesh rebuild failed')}: {model.lod_error}</p> : null}
-      <div role="group" aria-label={t('Model')}>
-        <div className="ga-form-section-label">{t('Model')}</div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {pipeline ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={pending || !baseReady}
-              onClick={rebuildFromBase}
-              title={!baseReady ? t('Generate the rigged base model first (Base body tab)')
-                : t('Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.')}
-            >
-              {pending ? t('Generating…') : t('Rebuild from base body')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={pending || !st.has_input}
-              onClick={openDialog}
-              title={!st.has_input ? t('No pose render for the current outfit — generate it first') : undefined}
-            >
-              {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
-            </button>
-          )}
-          {!pipeline ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={pending}
-              onClick={() => fileRef.current?.click()}
-            >
-              {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
-            </button>
-          ) : null}
-          {model ? (
-            <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file?download=true`} download>
-              {t('Download')}
-            </a>
-          ) : null}
-          {/* Delete targets the CURRENT combination's entry — a nearest
-              stand-in belongs to another combination and has none to delete. */}
-          {owned ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              style={{ marginInlineStart: 12 }}
-              disabled={pending}
-              onClick={remove}
-              onBlur={() => setConfirmDelete(false)}
-            >
-              {confirmDelete ? t('Really delete?') : t('Delete')}
-            </button>
-          ) : null}
+      {/* Model and Inspect are a few buttons each: one row. */}
+      <div className="ga-model3d-actions-row">
+        <div role="group" aria-label={t('Model')}>
+          <div className="ga-form-section-label">{t('Model')}</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {pipeline ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                disabled={pending || !baseReady}
+                onClick={rebuildFromBase}
+                title={!baseReady ? t('Generate the rigged base model first (Base body tab)')
+                  : t('Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.')}
+              >
+                {pending ? t('Generating…') : t('Rebuild from base body')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                disabled={pending || !st.has_input}
+                onClick={openDialog}
+                title={!st.has_input ? t('No pose render for the current outfit — generate it first') : undefined}
+              >
+                {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
+              </button>
+            )}
+            {!pipeline ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                disabled={pending}
+                onClick={() => fileRef.current?.click()}
+              >
+                {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
+              </button>
+            ) : null}
+            {model ? (
+              <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file?download=true`} download>
+                {t('Download')}
+              </a>
+            ) : null}
+            {/* Delete targets the CURRENT combination's entry — a nearest
+                stand-in belongs to another combination and has none to delete. */}
+            {owned ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                style={{ marginInlineStart: 12 }}
+                disabled={pending}
+                onClick={remove}
+                onBlur={() => setConfirmDelete(false)}
+              >
+                {confirmDelete ? t('Really delete?') : t('Delete')}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div role="group" aria-label={t('Inspect')}>
+          <div className="ga-form-section-label">{t('Inspect')}</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {model && canMeasure ? (
+              <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={analyze}
+                title={`${t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')} ${t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}`}>
+                {t('Analyze')}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
       <div role="group" aria-label={t('Improve')}>
@@ -1100,17 +1114,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             rerigBlocked={t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}
             onReload={load} onStarted={startPoll} />
         )}
-      </div>
-      <div role="group" aria-label={t('Inspect')}>
-        <div className="ga-form-section-label">{t('Inspect')}</div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {model && canMeasure ? (
-            <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={analyze}
-              title={`${t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')} ${t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}`}>
-              {t('Analyze')}
-            </button>
-          ) : null}
-        </div>
       </div>
       <div aria-live="polite">
         {analysisResults.map((result, index) => <div key={index} className="ga-hint" role="status"

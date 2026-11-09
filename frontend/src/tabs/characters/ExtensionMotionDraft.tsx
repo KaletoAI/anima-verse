@@ -35,7 +35,8 @@ export function ExtensionMotionDraft({ defaults, overrides, controls, disabled, 
     const next = reset ? undefined : Object.fromEntries(Object.entries(draftOverrides(draft, defaults, overrides)).filter(([key]) => controls == null || controls.includes(key)))
     if (await onSave(next)) setDraft(makeDraft({ ...defaults, ...next }))
   }
-  const content = <>
+  // Compact: label and a short number input inline, the three buttons in one row.
+  const content = <div className="ga-ext-fields">
     {visibleFields.map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key.startsWith('axis_gain_') ? 'axis_gain' : key.startsWith('squash_') ? 'squash' : key} />
       <input className="ga-input" type="text" inputMode="decimal" disabled={disabled}
         value={draft.values[key] ?? ''} aria-invalid={!valid(key)}
@@ -44,11 +45,14 @@ export function ExtensionMotionDraft({ defaults, overrides, controls, disabled, 
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void save() } }} />
       {!valid(key) && <span role="alert">{t('Enter a valid number within the allowed range.')}</span>}
     </label>)}
-    {changed && <span className="ga-hint">{t('Unsaved changes')}</span>}
-    <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => void save()}>{t('Save')}</button>
-    <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => setDraft(makeDraft({ ...defaults, ...overrides }))}>{t('Revert')}</button>
-    <button type="button" className="ga-btn ga-btn-sm" disabled={disabled} onClick={() => void save(true)}>{t('Reset')}</button>
-  </>
+    <span className="ga-ext-actions">
+      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => void save()}
+        title={changed ? t('Unsaved changes') : undefined}>{t('Save')}</button>
+      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => setDraft(makeDraft({ ...defaults, ...overrides }))}>{t('Revert')}</button>
+      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled} onClick={() => void save(true)}>{t('Reset')}</button>
+      {changed && <span className="ga-hint">{t('Unsaved changes')}</span>}
+    </span>
+  </div>
   return controls == null ? <details><summary>{t('Advanced')}</summary>{content}</details> : content
 }
 

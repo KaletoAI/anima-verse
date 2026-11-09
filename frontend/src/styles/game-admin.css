@@ -2958,6 +2958,12 @@ a.ga-btn {
 .ga-face-actions { display: flex; flex-direction: column; gap: 6px; }
 .ga-face-actions-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ga-face-actions-state { min-width: 0; }
+/* Base body tab: preview + toolbar, then the face/rig actions as a third
+   column (under the preview when the panel is narrow). */
+.ga-model3d-actions-row { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: flex-start; }
+.ga-basebody-model { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.ga-basebody-model > .ga-model3d-fit { flex: 0 1 680px; min-width: 0; }
+.ga-basebody-model > .ga-face-actions { flex: 1 1 240px; min-width: 240px; max-width: 420px; }
 /* Collision sliders in the viewer's side toolbar: label · slider · value. */
 .ga-collision-grid { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 2px 6px; align-items: center; font-size: 11px; }
 .ga-collision-grid input[type="range"] { width: 100%; margin: 0; }
@@ -2974,6 +2980,16 @@ a.ga-btn {
   font-size: 12px; color: var(--text-muted, #8b949e); margin: 0;
 }
 .ga-split-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Extension bones panel (Model3DExtensions): same text size as the other
+   model panels, short number inputs inline with their labels. */
+.ga-ext-panel { font-size: 13px; gap: 4px; padding: 8px 10px; }
+.ga-ext-panel .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
+.ga-ext-panel details > summary { font-size: 12px; cursor: pointer; }
+.ga-ext-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.ga-ext-fields { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.ga-ext-fields > label { display: inline-flex; align-items: center; gap: 6px; }
+.ga-ext-fields .ga-input { width: 7em; flex: none; padding: 2px 6px; }
+.ga-ext-actions { display: inline-flex; gap: 6px; align-items: center; }
 .ga-view-stack { display: flex; flex-direction: column; gap: 8px; }
 .ga-view-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 @media (max-width: 1300px) {
