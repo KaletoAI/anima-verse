@@ -145,6 +145,12 @@ def rebuild_from_base(character_name: str) -> Dict[str, Any]:
     if busy:
         _queue_forced(character_name, current_outfit_state(character_name)[2])
         return {"status": "queued"}
+    return _start_claimed(character_name, state)
+
+
+def _start_claimed(character_name: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    """Start the ``_rebuild`` worker; the caller has already put the
+    character into ``_rebuilding`` (the worker releases it)."""
     threading.Thread(target=_rebuild, args=[character_name, state["dressed_current"]],
                      daemon=True).start()
     return {"status": "generating", "dress": not state["dressed_current"]}
@@ -194,12 +200,20 @@ def _queue_forced(character_name: str, signature: str) -> None:
 def _wait_and_run(character_name: str) -> None:
     """Waiter of ``_queue_forced``: once neither a model job nor a rebuild
     of the character runs, take its recorded rebuilds and run the one of
-    the outfit worn now (``rebuild_from_base`` — a job that started in the
-    same instant queues it again, never drops it)."""
+    the outfit worn now. Taking the records and claiming ``_rebuilding``
+    happen in ONE step under ``_lock``, together with the guard check: there
+    is no instant in which the rebuild is neither pending nor running (a
+    status poll would see it vanish, a click would start a second worker).
+    A job that starts after the claim makes the worker's model run queue the
+    rebuild again (``_rebuild``), never drops it."""
     from app.core import model3d
     from app.core.model_refs import current_outfit_state
     while True:
         time.sleep(POLL_SECONDS)
+        try:
+            signature = current_outfit_state(character_name)[2]
+        except Exception:  # noqa: BLE001
+            signature = ""
         with _lock:
             with model3d._lock:
                 busy = character_name in model3d._generating
@@ -208,20 +222,27 @@ def _wait_and_run(character_name: str) -> None:
             wanted = {sig for name, sig in _pending if name == character_name}
             _pending.difference_update((character_name, sig) for sig in wanted)
             _waiters.discard(character_name)
+            run = signature in wanted
+            if run:
+                _rebuilding.add(character_name)
             break
-    try:
-        signature = current_outfit_state(character_name)[2]
-    except Exception:  # noqa: BLE001
-        signature = ""
     for dropped in sorted(wanted - {signature}):
         logger.info("Model3D %s: queued rebuild of %s dropped — another outfit is worn now",
                     character_name, dropped)
-    if signature not in wanted:
+    if not run:
         return
     try:
-        result = rebuild_from_base(character_name)
-        logger.info("Model3D %s: queued rebuild from the base body: %s", character_name, result.get("status"))
-    except (LookupError, ValueError) as exc:
-        logger.warning("Model3D %s: queued rebuild from the base body not started: %s", character_name, exc)
+        state = pipeline_state(character_name)
+        if state is None:
+            reason = "the character left the base-body pipeline"
+        elif state["base_model"] != "ready":
+            reason = BASE_MODEL_FIRST
+        else:
+            result = _start_claimed(character_name, state)
+            logger.info("Model3D %s: queued rebuild from the base body: %s", character_name, result["status"])
+            return
+        logger.warning("Model3D %s: queued rebuild from the base body not started: %s", character_name, reason)
     except Exception:  # noqa: BLE001
         logger.exception("Model3D %s: queued rebuild from the base body failed", character_name)
+    with _lock:
+        _rebuilding.discard(character_name)
