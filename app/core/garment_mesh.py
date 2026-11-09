@@ -5,7 +5,9 @@ R13, Task 5).
 From the two cut-outs of the garment (front + back) the routed
 ``mesh_garment`` occasion builds a raw mesh (``garments/raw/{item}_{fsig}.glb``,
 asked for ``face_num=100000`` like the spike), Blender's ``lod.py`` reduces it
-to about ``TARGET_TRIS`` triangles with UV seams kept (vertices welded at
+to about ``target_tris(kind)`` triangles (hair ``TARGET_TRIS`` 25000, clothing
+60000 — the spike dress worked on its undecimated 71k-vertex mesh, a body-sized
+piece needs more triangles than hair) with UV seams kept (vertices welded at
 the seams on import, ``merge_vertices``), and the reduced mesh
 becomes ``garments/prepared/{item}_{fsig}.glb`` — the input of the fit. The
 fit and every mesh gate run on this reduced mesh, so the gates measure what
@@ -37,8 +39,10 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_mesh")
 
-#: Triangle budget of a prepared garment mesh (R8).
+#: Triangle budget of a prepared garment mesh (R8) — hair; other kinds in ``TARGET_TRIS_BY_KIND``.
 TARGET_TRIS = 25000
+#: Per-kind triangle budgets that differ from ``TARGET_TRIS`` (phase 5: a clothing piece covers the body).
+TARGET_TRIS_BY_KIND = {"clothing": 60000}
 #: What the generator is asked for (spike ``uniforge_hair.py``).
 FACE_NUM = 100000
 #: Gate: share of the surface area the largest connected component must carry (R7).
@@ -101,6 +105,11 @@ def _kind(item_id: str) -> str:
     return kind
 
 
+def target_tris(kind: str) -> int:
+    """The decimation target of a garment kind's prepared mesh."""
+    return int(TARGET_TRIS_BY_KIND.get(kind, TARGET_TRIS))
+
+
 def _gate(share: float) -> List[str]:
     if share < MIN_COMPONENT_SHARE:
         return [f"largest component share {share:.4f} < {MIN_COMPONENT_SHARE}"]
@@ -113,7 +122,7 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     Reuses an accepted prepared mesh unless ``force``. Otherwise up to
     ``MAX_ATTEMPTS`` times: ``generate_mesh`` on the ``mesh_garment``
     occasion from the front cut-out with the back cut-out as extra view, then
-    ``refine.decimate_to(raw, TARGET_TRIS, …)`` and the component gate.
+    ``refine.decimate_to(raw, target_tris(kind), …)`` and the component gate.
 
     ``view_body`` is left at ``"humanoid"`` (the ``generate_mesh`` default):
     there it only decides the slot handling — humanoid = the main image is the
@@ -190,7 +199,7 @@ def _record(kind: str, item_id: str, fsig: str, last: Dict[str, Any], attempts: 
     """The step record; the numbers are those of ``last`` (a gated attempt)."""
     from app.core.timeutils import utc_now_iso
     record = {"accepted": accepted, "kind": kind, "item_id": item_id, "fsig": fsig,
-              "target_tris": TARGET_TRIS, "face_num": FACE_NUM,
+              "target_tris": target_tris(kind), "face_num": FACE_NUM,
               "min_component_share": MIN_COMPONENT_SHARE,
               "tris_raw": last["tris_raw"], "tris_prepared": last["tris_prepared"],
               "ratio": last["ratio"], "backend": last["backend"], "routing": last["routing"],
@@ -223,7 +232,7 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
         os.replace(delivered, raw)
     # Welded on import: split at its UV seams the mesh would tear
     # apart under the collapse (2026-11-09: share 0.982 -> 0.724).
-    dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
+    dec = refine.decimate_to(raw, target_tris(kind), candidate, merge_vertices=True)
     if not dec.get("ok"):
         raise RuntimeError(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}")
     share = largest_component_share(candidate)

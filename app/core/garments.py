@@ -33,7 +33,9 @@ downstream); one that was served from the cache does not.
   accepted image deletes the prepared mesh of the same fsig (it was built
   from the replaced images);
 - ``fit``: the CURRENT base model (rigged + unrigged, read under the
-  publication lock), ``garment_fit.fit_hair`` and its gate. On acceptance the
+  publication lock), the kind's fit and gate (hair ``garment_fit.fit_hair`` /
+  ``GATES``, clothing ``garment_fit.fit_clothing`` / ``CLOTHING_GATES`` with
+  the piece's slots). On acceptance the
   fit GLB ``garments/{item}_{fsig}.glb`` (= the rigged base with the garment
   grafted on) and its record are written, the distance tier is decimated to
   ``low/``, and the assembly of the served outfit model is scheduled.
@@ -458,9 +460,19 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
         size = gi._image_size(flat)
         bald_mask = gi._mask(flat, size)
     ghost_mask = gi._mask(ghost, size)
-    result = garment_fit.fit_hair(prepared_bytes, snapshot["unrigged"], snapshot["rigged"], bald_mask, ghost_mask)
+    from app.core import garment_set
+    if kind == garment_set.CLOTHING:
+        from app.models.inventory import get_item
+        slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
+        result = garment_fit.fit_clothing(prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
+                                          masks={"body": bald_mask, "garment": ghost_mask}, slots=slots)
+        limits = garment_fit.CLOTHING_GATES
+    else:
+        result = garment_fit.fit_hair(prepared_bytes, snapshot["unrigged"], snapshot["rigged"], bald_mask,
+                                      ghost_mask)
+        limits = garment_fit.GATES
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
-             "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in garment_fit.GATES.items()}}
+             "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
     if not result.ok:
         raise _Refused("fit", "fit refused — " + "; ".join(result.reasons),
                        {**gates, "metrics": result.metrics})

@@ -15,6 +15,14 @@ HAIR_SPREAD_DEPTH=0.07``, ``hair_metrics.py``, ``poke.py``). Facts the code reli
 Units: the unrigged base has its own units (height ~1.0); the rigged base is in metres. Every constant is declared
 in METRES (R9) and converted by ``k = rigged / unrigged``, measured by a similarity over the garment's
 carrier region (for hair: the Head-weighted vertices, the rigid part between an A-pose source and a T-pose rig).
+
+Clothing (an own-mesh outfit piece, plan ``2026-11-09-base-body-phase5-mesh-items.md`` Task 3) is a port of the dress
+spike ``fit_dress.py`` (``fit_clothing``): the same framing; depth by a torso band; the push-out without the crown
+spread; a transfer that lets sleeves ride the arms (only forearm/hand excluded above the waist, every arm/shoulder
+bone below it); weights by inverse distance from the 8 nearest rigged body vertices, restricted to the rig contract,
+and a skirt that blends its leg weights toward Hips down to the hem. Its placement constants are FRACTIONS OF THE
+BODY HEIGHT (the spike worked in units of a 1.0-high body = 1.70 m, so at that height they are the spike's numbers);
+``k`` is the height ratio rigged / unrigged (the whole body is the carrier; A- and T-pose share the height).
 """
 from __future__ import annotations
 
@@ -74,7 +82,52 @@ GATES = {
     "largest_component_share": ("min", 0.98, "area share of the largest component"),
 }
 
+# Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
+#: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
+CLOTHING_DEPTH_BAND = (0.03, 0.15)
+#: Half width of the body band the garment band is centred on (spike |x| < 0.12 units).
+CLOTHING_BODY_HALF_X = 0.12
+#: The waist of the transfer rule: garment top minus this (spike 0.20 units).
+CLOTHING_WAIST_DROP = 0.20
+# Weights, rigged metres: inverse distance over the 8 nearest rigged body vertices, w = 1 / max(d, 1e-4).
+CLOTHING_IDW_K = 8
+CLOTHING_IDW_EPS_M = 1e-4
+#: A body vertex donates weights to a garment vertex whose neighbours carry only extension bones when at least this
+#: share of its weight sits on rig-contract bones.
+CONTRACT_DONOR_MIN = 0.5
+# Skirt (spike ``SKIRT_KEEP_TOP`` / ``SKIRT_KEEP_HEM``): below crotch + ``SKIRT_ZONE_M`` a garment vertex keeps a share
+# of its leg weights — ``SKIRT_KEEP_TOP`` from the crotch up, falling linearly to ``SKIRT_KEEP_HEM`` at the hem — and
+# the rest goes to Hips. Crotch = the lowest rigged vertex within ``CROTCH_HALF_X_M`` of the centre line with Hips
+# weight > ``CROTCH_HIPS_MIN``.
+SKIRT_ZONE_M = 0.05
+SKIRT_KEEP_TOP = 0.5
+SKIRT_KEEP_HEM = 0.0
+CROTCH_HALF_X_M = 0.03
+CROTCH_HIPS_MIN = 0.3
+#: Slots whose piece may hang over the legs as a skirt (a dress is top + bottom).
+SKIRT_SLOTS = frozenset({"bottom", "legs"})
+#: ``is_skirt``: the cut through the garment between these heights below the crotch, garment vertices within
+#: ``SKIRT_CENTRE_M`` of the centre line.
+SKIRT_PROBE_M = (0.01, 0.10)
+SKIRT_CENTRE_M = 0.02
+
+# Mesh gates of a fitted clothing piece. Measured 2026-11-09 on the spike dress (UniForge ghost-s52 mesh, decimated
+# to 59721 triangles, on the spike bases kira_bald_dis_apose / s1ap_ext) through ``fit_clothing``: max push 0.0501 m
+# (spike script: 0.0293 units x 1.70 = 0.0498 m), moved share 0.929 (spike 38720 / 44950 = 0.861 — the product asks
+# its clearance from the real surface, see ``CLEAR_M``), largest component 0.9888 after ``drop_small``, rigged inside
+# share 0.0 (spike 0.0). Limits: twice the measured push; the moved share refuses only a piece pushed nearly
+# everywhere (a loose dress moves 0.93, a tight piece legitimately more); one component as for hair; at most 1 % of
+# the vertices left inside the rigged body.
+CLOTHING_GATES = {
+    "max_push_m": ("max", 0.10, "largest push-out"),
+    "moved_share": ("max", 0.99, "share of vertices moved by the push-out"),
+    "largest_component_share": ("min", 0.98, "area share of the largest component"),
+    "rigged_inside_share": ("max", 0.01, "share of vertices inside the rigged body after the transfer"),
+}
+
 _ARM_TOKENS = ("arm", "hand", "shoulder")
+_LOWER_ARM_TOKENS = ("forearm", "hand")
+_LEG_TOKENS = ("leg", "foot", "toe")
 
 
 # --- welding / components ------------------------------------------------------------------------------------------
@@ -450,10 +503,13 @@ def region_similarity(body_unrigged: BodyMesh, body_rigged: BodyMesh, corr: np.n
 
 def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int = KABSCH_K,
              res_max_m: float = KABSCH_RES_M, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
-             margin_m: float = SDF_MARGIN_M) -> Tuple[np.ndarray, Dict[str, Any]]:
+             margin_m: float = SDF_MARGIN_M, split_y: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded garment positions ``Q`` (unrigged units) into the rigged bind space (metres) -> ``(X, report)``.
 
     1. Each garment vertex takes the nearest unrigged body vertex that is not arm/hand/shoulder (weight < 0.2).
+       With ``split_y`` (clothing, unrigged units) a garment vertex at or above it excludes only forearm/hand, so a
+       sleeve rides the upper arm through the A -> T motion; below it every arm/shoulder bone is excluded (a skirt
+       next to a hanging hand stays on the hips).
     2. Per used body vertex a local similarity (Kabsch with scale) over its ``k`` nearest body vertices maps them
        onto their rigged twins; a neighbourhood whose residual exceeds ``res_max_m`` (it spans two body parts)
        is bad, and its garment vertices borrow the transform of the nearest garment vertex with a good one.
@@ -470,14 +526,22 @@ def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int
     adjacency = _adjacency(faces, len(Q))
     corr, uv_dist = uv_correspondence(body_unrigged, body_rigged)
     Wb = dense_weights(body_rigged)[corr]
-    arm_cols = [i for i, n in enumerate(body_rigged.joint_names)
-                if any(t in norm_bone_name(n) for t in _ARM_TOKENS)]
-    ok = Wb[:, arm_cols].sum(1) < 0.2 if arm_cols else np.ones(len(Pb), bool)
-    candidates = np.nonzero(ok)[0]
-    if len(candidates) == 0:
-        raise ValueError("No body vertex is eligible for the garment transfer")
-    _, nearest = cKDTree(Pb[candidates]).query(Q)
-    nearest = candidates[nearest]
+
+    def eligible(tokens) -> np.ndarray:
+        cols = [i for i, n in enumerate(body_rigged.joint_names) if any(t in norm_bone_name(n) for t in tokens)]
+        ok = Wb[:, cols].sum(1) < 0.2 if cols else np.ones(len(Pb), bool)
+        candidates = np.nonzero(ok)[0]
+        if len(candidates) == 0:
+            raise ValueError("No body vertex is eligible for the garment transfer")
+        return candidates
+
+    def nearest_of(candidates, points) -> np.ndarray:
+        return candidates[cKDTree(Pb[candidates]).query(points)[1]]
+    nearest = nearest_of(eligible(_ARM_TOKENS), Q)
+    if split_y is not None:
+        upper = Q[:, 1] >= split_y
+        if upper.any():
+            nearest[upper] = nearest_of(eligible(_LOWER_ARM_TOKENS), Q[upper])
 
     used, li = np.unique(nearest, return_inverse=True)
     # neighbourhoods over UNIQUE body positions: UV-seam and pole duplicates would make one degenerate
@@ -568,6 +632,114 @@ def hair_weights(X, body_rigged: BodyMesh, *, blend_m: float = HAIR_BLEND_M):
     W = np.zeros((len(X), 4))
     W[:, 0], W[:, 1] = 1 - t, t
     return names, J, W
+
+
+def _contract_columns(body: BodyMesh) -> np.ndarray:
+    """Bool per skin joint: a rig-contract bone (``rig_contract.BASE_JOINT_KEYS``), never an extension bone."""
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    return np.array([norm_bone_name(n) in BASE_JOINT_KEYS for n in body.joint_names], bool)
+
+
+def crotch_height(body_rigged: BodyMesh) -> float:
+    """Height of the lowest rigged vertex within ``CROTCH_HALF_X_M`` of the centre line (the median x of the
+    Hips-weighted vertices) with Hips weight > ``CROTCH_HIPS_MIN``."""
+    hips = dense_weights(body_rigged)[:, joint_index(body_rigged, "hips")] > CROTCH_HIPS_MIN
+    if not hips.any():
+        raise ValueError("The rigged body has no Hips-weighted vertex")
+    P = body_rigged.positions
+    xc = float(np.median(P[hips, 0]))
+    centre = hips & (np.abs(P[:, 0] - xc) < CROTCH_HALF_X_M)
+    if not centre.any():
+        raise ValueError("The rigged body has no Hips-weighted vertex on its centre line")
+    return float(P[centre, 1].min())
+
+
+def is_skirt(X, body_rigged: BodyMesh, slots) -> bool:
+    """Whether a fitted piece hangs over both legs as ONE surface below the crotch (a skirt or a dress).
+
+    Only a piece on a skirt slot (``SKIRT_SLOTS``) can be one. Its rigged vertices between ``SKIRT_PROBE_M`` below
+    the crotch (the hem, when it ends higher up) that lie within ``SKIRT_CENTRE_M`` of the centre line must reach in
+    front of the body's front AND behind its back at those heights: a skirt crosses the centre line on both sides of
+    the legs, trousers (one tube per leg) never cover the gap between them.
+    """
+    if not SKIRT_SLOTS & {str(s) for s in (slots or [])}:
+        return False
+    X = np.asarray(X, np.float64)
+    if len(X) == 0:
+        return False
+    crotch = crotch_height(body_rigged)
+    hi = crotch - SKIRT_PROBE_M[0]
+    lo = max(float(X[:, 1].min()), crotch - SKIRT_PROBE_M[1])
+    if lo >= hi:
+        return False
+    P = body_rigged.positions
+    hips = dense_weights(body_rigged)[:, joint_index(body_rigged, "hips")] > CROTCH_HIPS_MIN
+    xc = float(np.median(P[hips, 0]))
+    body = P[(P[:, 1] >= lo) & (P[:, 1] <= hi)]
+    garment = X[(X[:, 1] >= lo) & (X[:, 1] <= hi) & (np.abs(X[:, 0] - xc) < SKIRT_CENTRE_M)]
+    if len(body) == 0 or len(garment) == 0:
+        return False
+    return bool(garment[:, 2].max() > body[:, 2].max() and garment[:, 2].min() < body[:, 2].min())
+
+
+def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray, np.ndarray]:
+    """Skin weights of rigged clothing positions -> ``(joints (n, 4), weights (n, 4))``, joints indexing
+    ``body.joint_names``; zero-weight slots point at joint 0.
+
+    1. Inverse distance over the ``CLOTHING_IDW_K`` (8) nearest rigged body vertices, ``w = 1 / max(d, 1e-4)``
+       (spike ``fit_dress.py``), of the body weights RESTRICTED to the rig-contract bones and renormalised. A point
+       whose neighbours carry only extension bones takes the same inverse distance over the nearest body vertices
+       with at least ``CONTRACT_DONOR_MIN`` of their weight on contract bones.
+    2. ``skirt``: below crotch + ``SKIRT_ZONE_M`` a vertex with leg weight keeps ``SKIRT_KEEP_TOP`` of it from the
+       crotch up, falling linearly to ``SKIRT_KEEP_HEM`` at the hem (the lowest point); the rest goes to Hips, so the
+       skirt does not split with the legs.
+    3. The four largest weights, renormalised.
+    """
+    from scipy.spatial import cKDTree
+    from app.core.rig_contract import norm_bone_name
+    X = np.asarray(points, np.float64)
+    Wr = dense_weights(body)
+    contract = _contract_columns(body)
+    contract = np.concatenate([contract, np.zeros(Wr.shape[1] - len(contract), bool)])
+    Wc = Wr * contract[None, :]
+
+    def idw(index, positions, rows):
+        k = min(CLOTHING_IDW_K, len(index))
+        dist, nn = cKDTree(positions).query(X[rows], k=k)
+        dist, nn = dist.reshape(len(dist), -1), nn.reshape(len(nn), -1)
+        w = 1.0 / np.maximum(dist, CLOTHING_IDW_EPS_M)
+        w /= w.sum(1, keepdims=True)
+        return np.einsum("nk,nkj->nj", w, Wc[index[nn]])
+    every = np.arange(len(body.positions))
+    W = idw(every, body.positions, np.ones(len(X), bool)) if len(X) else np.zeros((0, Wr.shape[1]))
+    empty = W.sum(1) <= 1e-9
+    if empty.any():
+        total = Wr.sum(1)
+        donors = np.nonzero(Wc.sum(1) >= CONTRACT_DONOR_MIN * np.maximum(total, 1e-12))[0]
+        donors = donors[total[donors] > 0]
+        if len(donors) == 0:
+            raise ValueError("The rigged body has no vertex weighted on rig-contract bones")
+        W[empty] = idw(donors, body.positions[donors], empty)
+    W /= np.maximum(W.sum(1, keepdims=True), 1e-12)
+
+    if skirt and len(X):
+        hips = joint_index(body, "hips")
+        legs = [i for i, n in enumerate(body.joint_names)
+                if contract[i] and any(t in norm_bone_name(n) for t in _LEG_TOKENS)]
+        crotch = crotch_height(body)
+        hem = float(X[:, 1].min())
+        t = np.clip((crotch - X[:, 1]) / max(crotch - hem, 1e-6), 0, 1)
+        keep = SKIRT_KEEP_TOP + (SKIRT_KEEP_HEM - SKIRT_KEEP_TOP) * t
+        legw = W[:, legs].sum(1)
+        zone = (X[:, 1] < crotch + SKIRT_ZONE_M) & (legw > 0)
+        W[np.ix_(zone, legs)] *= keep[zone, None]
+        W[zone, hips] += legw[zone] * (1 - keep[zone])
+
+    J = np.argsort(-W, 1, kind="stable")[:, :4]
+    top = np.take_along_axis(W, J, 1)
+    top /= np.maximum(top.sum(1, keepdims=True), 1e-12)
+    J = np.where(top > 0, J, 0)
+    return J.astype(np.int64), top
 
 
 # --- metrics + gate -----------------------------------------------------------------------------------------------------
@@ -670,6 +842,22 @@ def metrics(X, Fw, Q0_pre, Q_post, body_rigged: BodyMesh) -> Dict[str, Any]:
     }
 
 
+def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> Dict[str, Any]:
+    """Mesh gate numbers of a fitted clothing piece (``CLOTHING_GATES``), positions as in ``metrics``."""
+    X = np.asarray(X, np.float64)
+    Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
+    push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
+    _, share = components(X, Fw)
+    return {
+        "max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
+        "moved_share": round(float((push > MOVED_EPS_M).mean()) if len(push) else 0.0, 4),
+        "largest_component_share": round(float(share.max()) if len(share) else 0.0, 4),
+        "rigged_inside_share": round(float(transfer_report.get("rigged_inside_share", float("nan"))), 4),
+        "rigged_clearance_p1_m": round(float(transfer_report.get("rigged_clearance_p1_m", float("nan"))), 4),
+        "tris": int(len(Fw)),
+    }
+
+
 def gate(m: Dict[str, Any], gates: Optional[Dict[str, Tuple[str, float, str]]] = None) -> Tuple[bool, List[str]]:
     """``(ok, reasons)`` against ``gates`` (default: the R7 limits ``GATES``); a missing or non-finite number
     refuses."""
@@ -711,6 +899,43 @@ def vertex_normals(X: np.ndarray, F: np.ndarray) -> np.ndarray:
     return np.where(norm > 1e-12, N / np.maximum(norm, 1e-12), np.array([0.0, 1.0, 0.0]))
 
 
+def _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material) -> GarmentMesh:
+    """The fitted garment on the prepared GLB's vertices (UV seams intact), minus the dropped components: ``X``,
+    ``J``, ``W`` are per kept welded vertex (``Fk`` their faces), ``new_of_welded`` maps welded -> kept (-1 dropped)
+    and ``inv`` prepared -> welded."""
+    vmap = new_of_welded[inv]
+    kept_v = np.nonzero(vmap >= 0)[0]
+    orig_new = np.full(len(Pd), -1, np.int64)
+    orig_new[kept_v] = np.arange(len(kept_v))
+    Fo = np.asarray(Fd, np.int64).reshape(-1, 3)
+    Fwo = inv[Fo]
+    face_ok = ((Fwo[:, 0] != Fwo[:, 1]) & (Fwo[:, 1] != Fwo[:, 2]) & (Fwo[:, 0] != Fwo[:, 2])
+               & (vmap[Fo] >= 0).all(1))
+    faces = orig_new[Fo[face_ok]]
+    used = np.unique(faces)
+    final = np.full(len(kept_v), -1, np.int64)
+    final[used] = np.arange(len(used))
+    src = vmap[kept_v[used]]
+    normals = vertex_normals(X, Fk)
+    return GarmentMesh(positions=X[src], normals=normals[src], uvs=np.asarray(Ud, np.float64)[kept_v[used]],
+                       indices=final[faces], joints=J[src], weights=W[src], joint_names=names,
+                       image=image, mime=mime, material=material)
+
+
+def _prepare(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes):
+    """Read and weld a prepared garment and both bases -> ``(static arrays, bases, welded, kept)``."""
+    from app.core.glb_mesh import body_arrays, static_arrays
+    Pd, Fd, Ud, image, mime, material = static_arrays(prepared_glb)
+    body_u, body_r = body_arrays(unrigged_base_glb), body_arrays(rigged_base_glb)
+    if not body_r.joint_names:
+        raise ValueError("The rigged base has no skin")
+    Pw, Fw0, inv = weld(Pd, Fd, Ud)
+    Pk, Fk, keep = drop_small(Pw, Fw0)
+    new_of_welded = np.full(len(Pw), -1, np.int64)
+    new_of_welded[keep] = np.arange(len(keep))
+    return (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded)
+
+
 def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes,
              bald_front_mask, ghost_front_mask) -> FitResult:
     """Fit a prepared (decimated) hair mesh onto the rigged base body.
@@ -719,19 +944,11 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     ``ghost_front_mask`` the full-frame hair mask of the hair-only front view (same framing, R6). The R9 constants
     are converted to unrigged units by ``k`` from a first global similarity pass over the head (Head weight > 0.5).
     """
-    from app.core.glb_mesh import body_arrays, static_arrays
     bald, ghost = _mask(bald_front_mask), _mask(ghost_front_mask)
     if bald.shape != ghost.shape:
         raise ValueError(f"The masks must share one image size (same framing): {bald.shape} vs {ghost.shape}")
-    Pd, Fd, Ud, image, mime, material = static_arrays(prepared_glb)
-    body_u, body_r = body_arrays(unrigged_base_glb), body_arrays(rigged_base_glb)
-    if not body_r.joint_names:
-        raise ValueError("The rigged base has no skin")
-
-    Pw, Fw0, inv = weld(Pd, Fd, Ud)
-    Pk, Fk, keep = drop_small(Pw, Fw0)
-    new_of_welded = np.full(len(Pw), -1, np.int64)
-    new_of_welded[keep] = np.arange(len(keep))
+    (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded) = \
+        _prepare(prepared_glb, unrigged_base_glb, rigged_base_glb)
 
     corr, _ = uv_correspondence(body_u, body_r)
     Wb = dense_weights(body_r)[corr]
@@ -752,33 +969,107 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     m = metrics(X, Fk, Q * k, Qp * k, body_r)
     ok, reasons = gate(m)
 
-    # back to the prepared GLB's vertices (UV seams intact), minus the dropped components
-    vmap = new_of_welded[inv]
-    kept_v = np.nonzero(vmap >= 0)[0]
-    orig_new = np.full(len(Pd), -1, np.int64)
-    orig_new[kept_v] = np.arange(len(kept_v))
-    Fo = np.asarray(Fd, np.int64).reshape(-1, 3)
-    Fwo = inv[Fo]
-    face_ok = ((Fwo[:, 0] != Fwo[:, 1]) & (Fwo[:, 1] != Fwo[:, 2]) & (Fwo[:, 0] != Fwo[:, 2])
-               & (vmap[Fo] >= 0).all(1))
-    faces = orig_new[Fo[face_ok]]
-    used = np.unique(faces)
-    final = np.full(len(kept_v), -1, np.int64)
-    final[used] = np.arange(len(used))
-    src = vmap[kept_v[used]]
-    normals = vertex_normals(X, Fk)
-    garment = GarmentMesh(positions=X[src], normals=normals[src], uvs=np.asarray(Ud, np.float64)[kept_v[used]],
-                          indices=final[faces], joints=J[src], weights=W[src], joint_names=names,
-                          image=image, mime=mime, material=material)
+    garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
     report = {
         "k": float(k),
         "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
-                     "out": int(len(used))},
+                     "out": int(len(garment.positions))},
         "dropped_components_faces": int(len(Fw0) - len(Fk)),
         "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
                  "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
         "transfer": transfer_report,
         "chin_y_m": chin_height(body_r),
         "share_below_chin": float((W[:, 1] > 0).mean()) if len(W) else 0.0,
+    }
+    return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
+
+
+def align_band_depth(Q, body_P, *, height_u: float, band=CLOTHING_DEPTH_BAND,
+                     half_x: float = CLOTHING_BODY_HALF_X) -> Tuple[np.ndarray, float]:
+    """Shift the garment in z so its band ``band`` (fractions of ``height_u`` below its top) is centred on the body
+    band at the same heights within ``half_x * height_u`` of the body's centre line (the median x) -> ``(Q, dz)``
+    (spike ``fit_dress.py``: the torso band of a dress)."""
+    Q = np.array(Q, np.float64)
+    body_P = np.asarray(body_P, np.float64)
+    top = Q[:, 1].max()
+    bq = Q[(Q[:, 1] < top - band[0] * height_u) & (Q[:, 1] > top - band[1] * height_u)]
+    if len(bq) == 0:
+        raise ValueError("No garment vertices in the depth band below its top")
+    yl, yh = bq[:, 1].min(), bq[:, 1].max()
+    xc = float(np.median(body_P[:, 0]))
+    bb = body_P[(body_P[:, 1] > yl) & (body_P[:, 1] < yh) & (np.abs(body_P[:, 0] - xc) < half_x * height_u)]
+    if len(bb) == 0:
+        raise ValueError("No body vertices at the garment's depth band")
+    dz = float((bb[:, 2].min() + bb[:, 2].max()) / 2 - (bq[:, 2].min() + bq[:, 2].max()) / 2)
+    Q[:, 2] += dz
+    return Q, dz
+
+
+def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes, *,
+                 masks, slots) -> FitResult:
+    """Fit a prepared (decimated) clothing mesh onto the rigged base body (dress spike ``fit_dress.py``).
+
+    ``masks``: ``{"body": ..., "garment": ...}`` — the full-frame body mask of the bald front view the unrigged base
+    was generated from and the full-frame garment mask of the accepted ghost front view (same framing, never the
+    cut-out). ``slots``: the piece's outfit slots (a skirt blend needs a ``SKIRT_SLOTS`` slot).
+
+    ``k`` = rigged height / unrigged height. Placement by the shared framing, depth by the torso band
+    (``align_band_depth``), push-out to ``CLEAR_M`` without the crown spread (6 smoothing passes in the first 6 of 8
+    iterations), the transfer with the waist at the garment top minus ``CLOTHING_WAIST_DROP`` of the body height
+    (sleeves ride the arms above it), ``clothing_weights`` (skirt when ``is_skirt``), the gate ``CLOTHING_GATES``.
+    The output joints are the contract bones the weights use, in skin order.
+    """
+    body_mask, garment_mask = _mask(masks["body"]), _mask(masks["garment"])
+    if body_mask.shape != garment_mask.shape:
+        raise ValueError("The masks must share one image size (same framing): "
+                         f"{body_mask.shape} vs {garment_mask.shape}")
+    (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded) = \
+        _prepare(unrigged_garment_glb, unrigged_base_glb, rigged_base_glb)
+    if len(Pk) == 0:
+        raise ValueError("The garment mesh has no faces")
+    uv_correspondence(body_u, body_r)
+    height_u = float(np.ptp(body_u.positions[:, 1]))
+    height_r = float(np.ptp(body_r.positions[:, 1]))
+    k = height_r / height_u if height_u > 0 else float("nan")
+    if not (k > 0 and math.isfinite(k)):
+        raise ValueError("Could not measure the unrigged -> rigged scale")
+
+    Q = place_by_framing(Pk, body_u.positions, body_mask, garment_mask)
+    Q, dz = align_band_depth(Q, body_u.positions, height_u=height_u)
+    margin = SDF_MARGIN_M / k
+    sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
+    Qp, disp = push_out(Q, Fk, sdf, clear=CLEAR_M / k)
+    split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
+    X, transfer_report = transfer(Qp, body_u, body_r, faces=Fk, split_y=split_y)
+    skirt = is_skirt(X, body_r, slots)
+    J, W = clothing_weights(X, body_r, skirt=skirt)
+    used = np.unique(J[W > 0])
+    remap = np.zeros(max(len(body_r.joint_names), int(J.max()) + 1 if J.size else 0), np.int64)
+    remap[used] = np.arange(len(used))
+    J = np.where(W > 0, remap[J], 0)
+    names = [body_r.joint_names[i] for i in used]
+    m = clothing_metrics(X, Fk, Q * k, Qp * k, transfer_report)
+    ok, reasons = gate(m, CLOTHING_GATES)
+
+    garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
+    crotch = crotch_height(body_r)
+    hips = names.index(body_r.joint_names[joint_index(body_r, "hips")]) if skirt else -1
+    report = {
+        "k": float(k),
+        "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
+                     "out": int(len(garment.positions))},
+        "dropped_components_faces": int(len(Fw0) - len(Fk)),
+        "depth_shift_u": dz,
+        "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
+                 "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
+        "waist_y_u": split_y,
+        "transfer": transfer_report,
+        "crotch_y_m": crotch,
+        "hem_y_m": float(X[:, 1].min()),
+        "skirt": bool(skirt),
+        "skirt_zone_share": float((X[:, 1] < crotch + SKIRT_ZONE_M).mean()) if skirt else 0.0,
+        "hem_hips_weight": (float(((J == hips) * W).sum(1)[X[:, 1] <= X[:, 1].min() + 0.01].mean())
+                            if skirt else None),
+        "joints": names,
     }
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
