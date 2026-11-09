@@ -403,10 +403,11 @@ def edit_prompt(character_name: str, step: str, view: str, *,
 
 
 def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
-         edit_rgb, edit_mask) -> Dict[str, Any]:
+         edit_rgb, edit_mask, item_id: Optional[str] = None) -> Dict[str, Any]:
     """The gate record of one attempt (``garment_gates``): ``haired`` against
     the base view; ``ghost`` against the hair of the accepted haired image
-    (``source``). All arrays share the base view's size."""
+    (``source``). All arrays share the base view's size. ``item_id`` is the
+    kind protocol's; the hair gates do not need it."""
     from app.core import garment_gates
     if step == "haired":
         return garment_gates.haired_gate(base_rgb, base_mask, edit_rgb, edit_mask, view=view)

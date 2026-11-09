@@ -293,7 +293,8 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             path = _crop_back(Path(path), target, side, offset, source_size)
             record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask,
                                source_rgb=source_rgb, source_mask=source_mask,
-                               edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size))
+                               edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
+                               item_id=item_id)
             reason = pair_check(record) if pair_check is not None else None
             if reason:
                 record = {**record, "ok": False, "reasons": [*(record.get("reasons") or []), reason]}

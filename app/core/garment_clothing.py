@@ -79,12 +79,14 @@ def garment_noun(item: Dict[str, Any]) -> str:
 def fsig_inputs(character_name: str, item: Dict[str, Any], *,
                 profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What a clothing piece contributes to the garment fingerprint
-    (``garment_store.garment_fsig``): its prompt fragment, slots, covers,
-    partially covers and the pronouns of the character's profile."""
+    (``garment_store.garment_fsig``): its prompt fragment, its noun (the
+    lower-cased name the ghost prompt says — a rename re-renders the ghost),
+    slots, covers, partially covers and the pronouns of the character's
+    profile."""
     from app.core.garment_hair import pronouns
     item = _item_of(item)
     piece = item.get("outfit_piece") or {}
-    return {"prompt_fragment": fragment(item),
+    return {"prompt_fragment": fragment(item), "noun": garment_noun(item),
             "slots": sorted(str(s) for s in piece.get("slots") or []),
             "covers": sorted(str(s) for s in piece.get("covers") or []),
             "partially_covers": sorted(str(s) for s in piece.get("partially_covers") or []),
@@ -128,13 +130,17 @@ def edit_prompt(character_name: str, step: str, view: str, *,
 
 
 def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
-         edit_rgb, edit_mask) -> Dict[str, Any]:
+         edit_rgb, edit_mask, item_id: Optional[str] = None) -> Dict[str, Any]:
     """The gate record of one attempt (``garment_gates``): ``worn`` against
-    the base view; ``ghost`` against the garment region of the accepted worn
-    image (``source``). All arrays share the base view's size."""
+    the base view — the zones the piece is worn on (its slots,
+    ``garment_gates.occupied_zones``: a hat frees the head) are not checked;
+    ``ghost`` against the garment region of the accepted worn image
+    (``source``). All arrays share the base view's size."""
     from app.core import garment_gates
     if step == "worn":
-        return garment_gates.worn_gate(base_rgb, base_mask, edit_rgb, edit_mask, view=view)
+        slots = ((_item_of(item_id).get("outfit_piece") or {}).get("slots") or []) if item_id else []
+        return garment_gates.worn_gate(base_rgb, base_mask, edit_rgb, edit_mask, view=view,
+                                       occupied=garment_gates.occupied_zones(slots))
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view)

@@ -27,7 +27,7 @@ Clothing (an own-mesh outfit piece, plan
 ``docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md``, Task 2)
 has its own two gates and its own pair check, see "Clothing" below.
 """
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -365,6 +365,18 @@ OUTSIDE_DRGB_MAX = 8.0      # mean |ΔRGB| on the figure outside the garment reg
 OUTSIDE_XOR_MAX = 0.015     # outline change outside the garment region / base body area
 HEAD_ZONE = CHIN_ROW        # the head: base figure rows above y0 + 0.13·Hb
 HEAD_GARMENT_MAX = 0.05     # share of the head zone inside the garment region
+#: The protected zones of the worn gate a piece may change because it is worn
+#: there: piece slot -> zones. ONE zone today, ``head`` (rows above the chin
+#: row y0 + 0.13·Hb); only a ``head`` piece (hat, hood) frees it. ``neck`` is
+#: not in it: the neck lies below the chin row (the shoulder row is 0.19·Hb),
+#: so a scarf or collar never reaches the head zone and needs nothing freed.
+SLOT_ZONES: Dict[str, Tuple[str, ...]] = {"head": ("head",)}
+
+
+def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
+    """The protected zones (``SLOT_ZONES``) a piece with ``slots`` occupies,
+    sorted; the worn gate does not check them."""
+    return tuple(sorted({zone for slot in slots or () for zone in SLOT_ZONES.get(str(slot), ())}))
 CLOTH_TOP_DY_MAX = 0.0055   # |top edge offset| / Hb (8 px at Hb 1452)
 CLOTH_CENTRE_DX_MAX = 0.007  # |centre offset| / Hb
 CLOTH_W_RATIO_MIN = 0.95
@@ -405,7 +417,8 @@ def _margin(region, height: int) -> np.ndarray:
     return ndimage.binary_dilation(region, iterations=_iterations(GARMENT_MARGIN, height))
 
 
-def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str) -> Dict[str, Any]:
+def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
+              occupied: Iterable[str] = ()) -> Dict[str, Any]:
     """Step 1 gate of clothing: the base view with the piece put on.
 
     The garment region G = ``garment_region``; everything of the figure
@@ -414,7 +427,9 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str) -> Dict[st
     there (< 8.0), ``outside_xor`` = (base XOR worn mask) there / base body
     area (< 0.015 — a moved limb or a re-framed figure). ``head_garment`` =
     share of the base head zone (rows above y0 + 0.13·Hb) inside G (<= 0.05:
-    a changed face joins G and must not pass as garment). ``garment_share`` =
+    a changed face joins G and must not pass as garment) — measured always,
+    gated only when the piece does not occupy the head (``occupied``, from
+    its slots via ``occupied_zones``; ``head_gated`` says which). ``garment_share`` =
     G / base body area (>= 0.01: the edit put something on). ``garment_top``
     / ``garment_bottom`` are G's rows. Limits and their calibration: see the
     "Clothing" block above."""
@@ -444,10 +459,12 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str) -> Dict[st
         reasons.append(f"body outside the garment changed colour: {_r(d_out, 2)} >= {OUTSIDE_DRGB_MAX}")
     if not xor < OUTSIDE_XOR_MAX:
         reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {OUTSIDE_XOR_MAX}")
-    if head_garment > HEAD_GARMENT_MAX:
+    head_gated = "head" not in set(occupied or ())
+    if head_gated and head_garment > HEAD_GARMENT_MAX:
         reasons.append(f"head changed: {_r(head_garment, 3)} of the head > {HEAD_GARMENT_MAX}")
     return {"view": view, "garment_share": _r(share, 4), "outside_dRGB": _r(d_out, 2),
-            "outside_xor": _r(xor, 4), "head_garment": _r(head_garment, 4), "garment_bbox": box,
+            "outside_xor": _r(xor, 4), "head_garment": _r(head_garment, 4), "head_gated": head_gated,
+            "garment_bbox": box,
             "garment_top": box[1] if box else None, "garment_bottom": box[3] if box else None,
             "body_top": y0, "body_h": hb, "ok": not reasons, "reasons": reasons}
 
@@ -631,7 +648,9 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
                 "garment_share": {"op": "ge", "value": GARMENT_MIN},
                 "outside_dRGB": {"op": "lt", "value": OUTSIDE_DRGB_MAX},
                 "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX},
-                "head_garment": {"op": "le", "value": HEAD_GARMENT_MAX},
+                # Not gated for a piece worn on one of ``free_slots`` (SLOT_ZONES).
+                "head_garment": {"op": "le", "value": HEAD_GARMENT_MAX,
+                                 "free_slots": sorted(s for s, z in SLOT_ZONES.items() if "head" in z)},
             },
             "ghost": {
                 "top_dy": {"op": "abs_le", "value": CLOTH_TOP_DY_MAX},

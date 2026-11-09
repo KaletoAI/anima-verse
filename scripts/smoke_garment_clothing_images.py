@@ -64,14 +64,19 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
         > 1.05 -> refused ("garment width changed").
   GHOST_RAISED = GHOST(759) moved up 10 rows: top_dy -10 / 999 = -0.01001,
         |..| > 0.0055 -> refused ("garment top moved").
+  HATTED = BASE with the head (rows < 300, figure pixels) in hat brown
+        (90, 60, 40): |ΔRGB| 103.3 > 20 -> G = the head, everything else
+        unchanged -> outside 0, head_garment 1.0.
 
 [1] Store: GARMENT_VERSION["clothing"] 1; steps_for("clothing", "edit_chain")
     = (worn, ghost, cutout, mesh, fit); image_steps("clothing") = (worn,
     ghost, cutout), image_steps("hair") = (haired, ghost, cutout); a "worn"
     image path is images/D_F_worn_front.png. fsig_inputs of D =
     {prompt_fragment "a knee-length green linen dress with short sleeves",
-    slots [bottom, top], covers [legs], partially_covers [], pronouns [her,
-    she]}; the fsig changes with the fragment, not with the item's name.
+    noun "green dress", slots [bottom, top], covers [legs], partially_covers
+    [], pronouns [her, she]}; the fsig changes with the fragment AND with the
+    item's name (fix round 1: the noun is a prompt input — a rename re-renders
+    the ghost).
 [2] Prompts (exact):
     worn front = "Keep the image exactly as it is. Only change their clothing:
       they now wear only a knee-length green linen dress with short sleeves."
@@ -88,6 +93,12 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
 [3] Gates as derived above (ok flags, the named reasons, the numbers of the
     good records); limits("clothing") names worn + ghost keys, limits() is
     still the hair table (keys fit/ghost/haired… untouched: [haired, ghost]).
+    Fix round 1 (slot zones, garment_gates.SLOT_ZONES = {head: (head,)}):
+    the clothing module's worn gate with item_id — Hat (slots [head]) on
+    HATTED -> ok True, head_gated False, head_garment 1.0; the dress
+    (slots [top, bottom]) on WORN_FACE -> refused "head changed", head_gated
+    True; occupied_zones([neck]) = () (the neck is below the head zone),
+    occupied_zones([head, neck]) = (head,).
 [4] hems: front GHOST(759) hem_t (759 - 100) / 999 = 0.65966; back
     GHOST(733) hem_t 0.63363 -> |Δ| 0.02603 > 0.02 -> disagree, reason
     "garment ends at another height than in the back view: |Δ| 0.026 Hb >
@@ -201,6 +212,8 @@ GHOST_LEGS = ghost()
 GHOST_LEGS[780:1100, 392:632] = SKIN
 GHOST_WIDE = ghost(x0=356, x1=668)
 GHOST_RAISED = ghost(top=310, bottom=749)
+HATTED = BASE.copy()
+HATTED[:300][mask_of(BASE)[:300]] = (90, 60, 40)
 SHORT, MATCHING = ghost(733), ghost(769)
 
 
@@ -341,10 +354,10 @@ def main() -> int:
               f"{did}_{fsig}_worn_front.png")
         check("fsig inputs", garment_clothing.fsig_inputs("Demo", inventory.get_item(did)),
               {"prompt_fragment": "a knee-length green linen dress with short sleeves",
-               "slots": ["bottom", "top"], "covers": ["legs"], "partially_covers": [],
+               "noun": "green dress", "slots": ["bottom", "top"], "covers": ["legs"], "partially_covers": [],
                "pronouns": ["her", "she"]})
         inventory.update_item(did, {"name": "Summer Dress"})
-        check("fsig ignores the name", gs.garment_fsig("Demo", did), fsig)
+        check("rename changes the fsig", gs.garment_fsig("Demo", did) != fsig, True)
         inventory.update_item(did, {"prompt_fragment": "a short green linen dress"})
         check("fsig follows the fragment", gs.garment_fsig("Demo", did) != fsig, True)
         inventory.update_item(did, {"name": "Green Dress", "prompt_fragment": FRAGMENT})
@@ -364,6 +377,24 @@ def main() -> int:
 
         kept = {}
         gates_part(gg, kept)
+        print("[3b] slot zones")
+        hat = inventory.add_item(name="Straw Hat", category="outfit_piece", prompt_fragment="a straw hat",
+                                 outfit_piece={"slots": ["head"], "own_mesh": True})["id"]
+
+        def module_worn(arr, item_id):
+            return garment_clothing.gate("worn", "front", base_rgb=BASE, base_mask=mask_of(BASE),
+                                         source_rgb=None, source_mask=None, edit_rgb=arr,
+                                         edit_mask=mask_of(arr), item_id=item_id)
+
+        hat_rec = module_worn(HATTED, hat)
+        check("hat passes worn", (hat_rec["ok"], hat_rec["head_gated"], hat_rec["head_garment"],
+                                  hat_rec["outside_dRGB"], hat_rec["outside_xor"]), (True, False, 1.0, 0.0, 0.0))
+        face = module_worn(WORN_FACE, did)
+        check("dress changing the head refused", (face["ok"], face["head_gated"],
+                                                  any("head changed" in r for r in face["reasons"])),
+              (False, True, True))
+        check("occupied zones", (gg.occupied_zones(["neck"]), gg.occupied_zones(["head", "neck"]),
+                                 gg.occupied_zones(["top", "bottom"])), ((), ("head",), ()))
 
         print("[5] run_edit_step worn front")
         renders, prompts = [], {}
