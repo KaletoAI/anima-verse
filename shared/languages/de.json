@@ -4058,6 +4058,7 @@
     "The base body is for humanoid characters only.": "Der Basiskörper ist nur für humanoide Charaktere.",
     "Use base body pipeline": "Basiskörper-Pipeline verwenden",
     "A 3D model generation is already running for this character": "Für diesen Charakter läuft bereits eine 3D-Modell-Generierung",
+    "Built before the base body pipeline — rebuild it": "Vor der Basiskörper-Pipeline gebaut — neu bauen",
     "Built on an older base body — rebuild it": "Auf einem älteren Basiskörper gebaut — neu bauen",
     "Garment coverage of the visible surface": "Kleidungsanteil der sichtbaren Oberfläche",
     "Garment filled in without a view": "Kleidung ohne Ansicht ergänzt",

@@ -67,12 +67,20 @@ Expected, derived by hand from the brief:
     fitted red cotton dress with white sneakers."; negative = style words +
     "loose clothing, baggy, skirt, jacket, socks, hair" (dress and shoes are
     named by the outfit: "dress", "sneakers"). Undressed -> ValueError.
+    back/left/right: the same text opened by the view sentence VIEW[v]
+    (wording of the e2e fix F1, written out in VIEW below) and a blank:
+    back "This is a back view seen directly from behind, the figure faces
+    away from the camera; keep it a back view, do not turn the figure toward
+    the camera. Keep the image exactly as it is: …"; left/right "This is a
+    strict left|right side profile view, the whole body in profile facing
+    the left|right edge of the frame; keep it a side profile view, do not
+    turn the figure toward the camera. Keep …". Same negative.
 [3] Chain (Demo on the pipeline, wearing dress): _run_generation(Demo,
     "tpose") (the debounce timer body) -> four render calls, one per view
     in BASE_VIEWS order: reference_image name = tpose[_<v>]_<bsig>.png (the
     base view, on grey: pixel (0,0) = (128,128,128), pixel (4,4) =
-    BASE_PX[v]); bare_prompt starts "Keep the image exactly as it is" and
-    contains the dress fragment; occasion "tpose_view"; use case tpose /
+    BASE_PX[v]); bare_prompt starts with VIEW[v] + " " (front: nothing) +
+    "Keep the image exactly as it is" and contains the dress fragment; occasion "tpose_view"; use case tpose /
     tpose_back / tpose_side / tpose_side; character_loras True; sidecar_extra
     {base_signature: bsig, dressed: true, base_image_sha256: sha256 of that
     base view file}; extra_negative = [2]'s negative;
@@ -91,7 +99,7 @@ Expected, derived by hand from the brief:
 [4] Base changes (new profile image -> bsig2 != bsig): find_model3d(Demo,
     osig) None, with include_stale the path; find_model3d_serving ->
     (path, "stale"); outfit status "stale", error "Built on an older base
-    body". A tpose pass now finds no base images for bsig2: no render, the
+    body", stale_reason "older_base" (the sidecar names a base signature). A tpose pass now finds no base images for bsig2: no render, the
     outfit status "failed" with BASE_IMAGES_MISSING, no model run. Profile
     image back -> bsig again, a pass (all cached) clears it -> "ready".
 [4b] The base model regenerated under the SAME signature (other bytes in
@@ -124,7 +132,24 @@ Expected, derived by hand from the brief:
     no reference_image; the hook with auto_generate off starts nothing; with
     auto_generate on it calls trigger_generation(prefer_cheapest=True); a
     stored model without base_signature is found by find_model3d (no stale
-    rule off the pipeline).
+    rule off the pipeline). Switched ONTO the pipeline, that model is
+    "stale" with error "Built before the base body pipeline" and
+    stale_reason "before_pipeline" (its sidecar has no base_signature).
+[11] View guard in the model run (Demo wearing dress, forced rebuilds;
+    ``base_body.view_guard`` replaced by a script — the measurement itself
+    is scripts/smoke_base_body_view_guard.py). The stub renders are opaque,
+    so in [3]..[10] the real guard skips every view (no matte).
+    (a) back fails once, left fails twice: two re-renders, in BASE_VIEWS
+        order tpose_back_<osig> then tpose_left_<osig> (each once); the
+        worker gets views front, back, right; result ok; sidecar view_guard:
+        back ok + rerendered + first.ok False, left ok False + rerendered,
+        front/right ok without "rerendered"; view_warnings = ["left view:
+        the dressed image does not keep its view (its head looks most like
+        the front base view); left out of the outfit model"]; outfit_info
+        status ready, warnings = that list.
+    (b) front fails twice: one re-render (tpose_<osig>); result ok False,
+        error starts "front view: the dressed image does not keep its view";
+        no worker call; model bytes unchanged; status failed.
 """
 import hashlib
 import io
@@ -253,6 +278,14 @@ Path(a[a.index("--proof") + 1]).write_text(json.dumps(
 PROOF_KEYS = {"garment_share_visible": 0.42, "filled_share": 0.07}
 RENDERS, SCRIPT_CALLS, LOD_CALLS, TRIGGERS = [], [], [], []
 GROUPS = {"default": [{"id": "jiggle", "op": "jiggle", "params": {}, "chains": [], "depends_on": ""}]}
+VIEW = {
+    "back": ("This is a back view seen directly from behind, the figure faces away from the camera; keep it a "
+             "back view, do not turn the figure toward the camera."),
+    "left": ("This is a strict left side profile view, the whole body in profile facing the left edge of the "
+             "frame; keep it a side profile view, do not turn the figure toward the camera."),
+    "right": ("This is a strict right side profile view, the whole body in profile facing the right edge of the "
+              "frame; keep it a side profile view, do not turn the figure toward the camera."),
+}
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
 
 
@@ -472,6 +505,10 @@ def main() -> int:
                   "fitted red cotton dress with white sneakers.")
             check("negative", negative, base_body.DRESS_STYLE_NEGATIVE
                   + ", loose clothing, baggy, skirt, jacket, socks, hair")
+            for v in ("back", "left", "right"):
+                vp, vn = base_body.dress_prompt("Demo", v, pieces={"top": dress}, items=[])
+                check(f"{v} prompt", vp, VIEW[v] + " " + prompt)
+                check(f"{v} negative", vn, negative)
             try:
                 base_body.dress_prompt("Demo", "front", pieces={}, items=[])
                 check("undressed refused", "no error", "ValueError")
@@ -493,9 +530,10 @@ def main() -> int:
             check("references = base views", [r["reference_name"] for r in dressed_renders], want_refs)
             check("references on grey", [r["reference_px"] for r in dressed_renders],
                   [((128, 128, 128), BASE_PX[v]) for v in base_body.BASE_VIEWS])
-            check("prompts", [(r["bare_prompt"].startswith("Keep the image exactly as it is"),
+            check("prompts", [(r["bare_prompt"].startswith(
+                (VIEW[v] + " " if v in VIEW else "") + "Keep the image exactly as it is"),
                                "a fitted red cotton dress with white sneakers" in r["bare_prompt"])
-                              for r in dressed_renders], [(True, True)] * 4)
+                              for v, r in zip(base_body.BASE_VIEWS, dressed_renders)], [(True, True)] * 4)
             check("occasions", [r["occasion"] for r in dressed_renders], ["tpose_view"] * 4)
             check("use cases", [r["image_use_case"] for r in dressed_renders],
                   ["tpose", "tpose_back", "tpose_side", "tpose_side"])
@@ -559,7 +597,8 @@ def main() -> int:
             check("include_stale", model3d.find_model3d("Demo", osig, include_stale=True), model)
             check("serving stale", model3d.find_model3d_serving("Demo"), (model, "stale"))
             info = base_body.outfit_info("Demo")
-            check("status stale", (info["status"], info["error"]), ("stale", "Built on an older base body"))
+            check("status stale", (info["status"], info["error"], info["stale_reason"]),
+                  ("stale", "Built on an older base body", "older_base"))
             n_renders, n_calls = len(RENDERS), len(calls())
             model_refs._run_generation("Demo", "tpose")
             wait_idle("Demo")
@@ -719,6 +758,63 @@ def main() -> int:
             (old_dir / f"{old_sig}.json").write_text(json.dumps({"rig": "mixamo"}))
             check("no stale rule off the pipeline", model3d.find_model3d("DemoOld", old_sig),
                   old_dir / f"{old_sig}.glb")
+            check("DemoOld onto the pipeline", base_body.set_pipeline("DemoOld", True), True)
+            info = base_body.outfit_info("DemoOld")
+            check("built before the pipeline", (info["status"], info["error"], info["stale_reason"]),
+                  ("stale", "Built before the base body pipeline", "before_pipeline"))
+            check("DemoOld off the pipeline", base_body.set_pipeline("DemoOld", False), True)
+
+            # --- [11] view guard ------------------------------------------------------
+            print("[11] view guard: re-render once, leave out, front fails the build")
+            real_guard = base_body.view_guard
+            fails = {}
+
+            def scripted(view, dressed, bases):
+                if fails.get(view, 0) > 0:
+                    fails[view] -= 1
+                    return {"ok": False, "scores": {"front": 0.9, view: 0.5}, "best": "front"}
+                return {"ok": True, "scores": {view: 0.9}, "best": view}
+
+            base_body.view_guard = scripted
+            try:
+                fails.update({"back": 1, "left": 2})
+                n_renders, n_calls = len(RENDERS), len(calls())
+                result = model3d.generate_for_current_outfit("Demo", force=True)
+                check("guarded run ok", result.get("ok"), True)
+                check("re-rendered once each", [r["stem"] for r in RENDERS[n_renders:]],
+                      [f"tpose_back_{osig}", f"tpose_left_{osig}"])
+                runs = calls()[n_calls:]
+                check("one worker call", len(runs), 1)
+                if runs:
+                    views = json.loads((runs[0] / "argv.json").read_text())["views"]
+                    check("left left out", sorted(views), ["back", "front", "right"])
+                meta = model3d._read_sidecar(model)
+                guard = meta.get("view_guard") or {}
+                check("guard back", (guard.get("back", {}).get("ok"), guard.get("back", {}).get("rerendered"),
+                                     (guard.get("back", {}).get("first") or {}).get("ok")), (True, True, False))
+                check("guard left", (guard.get("left", {}).get("ok"), guard.get("left", {}).get("rerendered")),
+                      (False, True))
+                check("guard front/right", [(guard.get(v, {}).get("ok"), "rerendered" in guard.get(v, {}))
+                                            for v in ("front", "right")], [(True, False)] * 2)
+                warning = ("left view: the dressed image does not keep its view (its head looks most like the "
+                           "front base view); left out of the outfit model")
+                check("sidecar warnings", meta.get("view_warnings"), [warning])
+                info = base_body.base_info("Demo")["outfit"]
+                check("outfit info warnings", (info["status"], info["warnings"]), ("ready", [warning]))
+
+                fails.clear()
+                fails.update({"front": 2})
+                before = model.read_bytes()
+                n_renders, n_calls = len(RENDERS), len(calls())
+                result = model3d.generate_for_current_outfit("Demo", force=True)
+                check("front fails the build", (result.get("ok"), (result.get("error") or "").startswith(
+                    "front view: the dressed image does not keep its view")), (False, True))
+                check("front re-rendered once", [r["stem"] for r in RENDERS[n_renders:]], [f"tpose_{osig}"])
+                check("no worker call", len(calls()), n_calls)
+                check("model untouched", model.read_bytes() == before, True)
+                check("status failed", base_body.outfit_info("Demo")["status"], "failed")
+            finally:
+                base_body.view_guard = real_guard
         finally:
             for (module, attr), value in originals.items():
                 setattr(module, attr, value)

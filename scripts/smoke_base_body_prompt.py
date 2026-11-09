@@ -12,8 +12,10 @@ and the rules of ``app/core/base_body.py``.
 Fixture character ``Demo`` (template human-default): gender female, age 30,
 height 168, body slots skin.tone olive, eyes.color green, build.type athletic,
 hair long brunette, character_appearance "wears a red scarf". Fixture package
-``fixture_marks`` (apply_to human-default) declares one slot ``marking``
-(always "{shade} marking", NOT flagged ``base_body``); Demo stores shade "faint".
+``fixture_marks`` (apply_to human-default) declares the slot ``marking``
+(always "{shade} marking", NOT flagged ``base_body``, ``base_body_negative``
+"  visible marking  ") and the slot ``spot`` (applies_to gender male only,
+``base_body_negative`` "spot"); Demo stores shade "faint".
 
 [1] base_appearance. Gender/age through the template's character_appearance
     replacement tokens, in the "{gender}, {age} years old" phrasing World-Dev
@@ -51,8 +53,12 @@ hair long brunette, character_appearance "wears a red scarf". Fixture package
     front of the shoulders" -> ends "...relaxed and slightly apart, legs
     clearly apart"; then FULL, BALD, BODY, [1] (face terms kept, a profile shows
     the face).
-[5] Negative (all views) = HAIR_NEG + ", clothing, underwear, jewellery,
-    detailed anatomy, " + POSE_NEG.
+[5] Negative (all views) = BASE = HAIR_NEG + ", clothing, underwear,
+    jewellery, detailed anatomy, " + POSE_NEG, then the ``base_body_negative``
+    of every slot that APPLIES to Demo (flag irrelevant): marking applies
+    (no applies_to) -> ", visible marking" (the loader strips the blanks);
+    spot is male-only -> nothing. human declares none. So
+    negative = BASE + ", visible marking".
 [6] base_signature: "base" + 8 hex = 12 chars, no "-"/"_"; identical on a
     second call; changes when the profile image file changes (other name and
     size) and when the skin tone changes (olive -> fair).
@@ -62,6 +68,11 @@ hair long brunette, character_appearance "wears a red scarf". Fixture package
     front prompt starts "custom pose, arms down, " + FULL.
 [8] is_base_pipeline: False by default; True with model_pipeline "base_body";
     False for an animal-template profile with the same field.
+[9] base_body_negative: the parsed slot spec carries "visible marking"; a
+    male profile (same slots) gets BASE + ", visible marking, spot"; the base
+    signature changes when the marking's text changes ("visible marking" ->
+    "bold marking") and is back to the old value once restored — the
+    signature hashes the negatives.
 """
 import json
 import os
@@ -90,6 +101,11 @@ FIXTURE = {
         "id": "marking",
         "attributes": {"shade": {"type": "select", "options": ["faint", "bold"]}},
         "prompt": {"always": "{shade} marking"},
+        "base_body_negative": "  visible marking  ",
+    }, {
+        "id": "spot",
+        "applies_to": {"gender": ["male"]},
+        "base_body_negative": "spot",
     }],
 }
 
@@ -121,7 +137,8 @@ HAIR_NEG = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, w
             "stubble on the scalp, hair on the shoulders, hair on the back")
 POSE_NEG = ("hands touching body, fists, curled fingers, fused fingers, mitten hands, cropped feet, feet cut off, "
             "cropped legs, close-up, portrait crop")
-NEGATIVE = HAIR_NEG + ", clothing, underwear, jewellery, detailed anatomy, " + POSE_NEG
+BASE = HAIR_NEG + ", clothing, underwear, jewellery, detailed anatomy, " + POSE_NEG
+NEGATIVE = BASE + ", visible marking"
 
 
 def main() -> int:
@@ -226,6 +243,23 @@ def main() -> int:
               True)
         animal = {"template": "animal-default", "model_pipeline": "base_body"}
         check("animal", base_body.is_base_pipeline("", profile=animal), False)
+
+        print("[9] base_body_negative")
+        from app.core.body_slots import slots_for_character
+        marking = next(s for s in slots_for_character(name, profile=stored) if s.id == "marking")
+        check("parsed + stripped", marking.base_body_negative, "visible marking")
+        check("BASE_NEGATIVE constant", base_body.BASE_NEGATIVE, BASE)
+        male = dict(stored, gender="male")
+        check("male negative", base_body.base_negative(name, profile=male), BASE + ", visible marking, spot")
+        sig = base_body.base_signature(name, profile=stored)
+        marking.base_body_negative = "bold marking"
+        try:
+            check("text change changes signature", base_body.base_signature(name, profile=stored) != sig, True)
+            check("changed negative", base_body.base_prompt(name, "front", profile=stored)[1],
+                  BASE + ", bold marking")
+        finally:
+            marking.base_body_negative = "visible marking"
+        check("restored signature", base_body.base_signature(name, profile=stored), sig)
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

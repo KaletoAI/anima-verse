@@ -38,6 +38,11 @@ export interface BaseOutfitInfo {
   /** stale = built on an older base body (or before the pipeline). */
   status: 'running' | 'failed' | 'stale' | 'ready' | 'missing'
   error: string
+  /** Why a stale model is stale; null unless status is stale. */
+  stale_reason: 'older_base' | 'before_pipeline' | null
+  /** View-guard warnings of the stored model: dressed views left out
+   *  because the edit turned the figure around (server English text). */
+  warnings: string[]
   /** The retexture worker's proof (None for an undressed base copy). */
   proof: Record<string, unknown> | null
   url: string | null

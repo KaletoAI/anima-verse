@@ -321,6 +321,10 @@ class BodySlotSpec:
     # Part of the base body (app/core/base_body.py): its ``always`` fragment
     # describes the bald, unclothed figure every outfit is painted onto.
     base_body: bool = False
+    # Appended to the base-body negative for every character the slot applies
+    # to, whether or not the slot is flagged ``base_body`` — a pack keeps its
+    # own anatomy out of the base views without the core naming it.
+    base_body_negative: str = ""
     rigs: List[RigSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
     # Mesh-input (T-pose) text chosen by one attribute's value:

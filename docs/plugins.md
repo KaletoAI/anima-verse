@@ -283,6 +283,7 @@ body_slots:
     applies_to: {gender: [female, girl]}  # Profil-Feld-Bedingungen
     back: false                           # von hinten sichtbar? (Default false)
     base_body: false                      # part of the base-body description? (default false)
+    base_body_negative: "tail"            # appended to the base-body negative (default "")
     attributes:
       size: {type: select, options: [small, medium, large], interest_aliases: {...}}
       lora: {type: lora_select}           # Mechanismus; das konkrete LoRA bleibt per-NPC-Config
@@ -303,6 +304,7 @@ body_slots:
 | `mesh_input_prompt` | `{attribute: <name>, values: {<option>: <text>}}` — nur für Mesh-Eingaben (T-Pose-Renders der Bild→3D-Kette, `prompt_fragments(mesh_input=True)`): der Text zum gespeicherten Wert des Attributs (Groß-/Kleinschreibung egal) kommt als zusätzliches `exposed`-Fragment dazu; ein Wert ohne Eintrag ergibt nichts. Nur solange der Slot unbedeckt ist. Die Rückansicht nimmt die optionale Tabelle `back_values` (ohne sie: nichts), damit Vorder- und Rückansicht dasselbe beschreiben — unabhängig von `back`. Beispiel: das `hair`-Slot des human-Packs legt langes Haar hinter die Schultern (vorn) bzw. den Rücken hinab (hinten), kurzes bleibt unberührt. Ungültige Deklaration verwirft das Paket |
 | `back` | Die Anatomie ist auch von HINTEN zu sehen. Rückansicht-Renders — die T-Pose-Back-Referenz der Bild→3D-Kette — behalten nur `exposed`-Fragmente solcher Slots und deren LoRAs; alles andere beschreibt die Vorderseite und zöge die Figur zur Kamera herum. `always`/`covered` sind nicht betroffen: sie beschreiben die ganze Person, nicht eine Seite. Default `false` |
 | `base_body` | The slot belongs to the base body (`app/core/base_body.py`): the bald, unclothed A-pose figure of a humanoid character on the `base_body` model pipeline, onto which the outfits are painted. Only the `always` fragment of such a slot enters the base-body description (`prompt_fragments(base_body=True)`, neutral state, no `covered`/`exposed`); a slot without the flag stays out — hair, and every anatomy pack slot unless it opts in. The human pack flags `eyes`, `skin` and `build`. Default `false` |
+| `base_body_negative` | Text appended to the base-body negative (`base_body.base_negative`) for every character the slot APPLIES to (`applies_to`, species) — independent of `base_body`. A package uses it to keep what its slot describes out of the bald base views, which the core's generic negative cannot name; e.g. a hypothetical `tail` slot declares `base_body_negative: "tail"`. The text is part of the base signature, so changing it renders a new base body. Default `""` |
 
 Werte pro Charakter liegen im Profil (`body_slots: {<slot>: {<attr>: <wert>}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes

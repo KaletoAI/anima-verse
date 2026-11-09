@@ -9,8 +9,11 @@
  * worker's proof — how much of the visible surface the garment covers and
  * how much of that garment was filled in without any view seeing it.
  *
+ * Dressed views the view guard left out (the edit turned the figure around)
+ * are listed as warnings under the status.
+ *
  * A changed base body does NOT rebuild outfit models by itself; such a model
- * reports `stale`, and "Rebuild outfit model" starts the regular generation
+ * reports `stale` (or was built before the character joined the pipeline), and "Rebuild outfit model" starts the regular generation
  * of the current outfit (POST /characters/{n}/model3d/generate?force=1 — the
  * route FieldModel3D uses; on the pipeline it builds via the base body).
  */
@@ -62,7 +65,10 @@ export function BaseBodyOutfitStatus({ character }: { character: string }) {
   const filled = texelShare(outfit.proof, 'unseen_filled_share_of_exposed_garment')
   const statusText = outfit.status === 'running' ? t('Generating…')
     : outfit.status === 'failed' ? t('Failed')
-    : outfit.status === 'stale' ? t('Built on an older base body — rebuild it')
+    : outfit.status === 'stale'
+      ? (outfit.stale_reason === 'before_pipeline'
+        ? t('Built before the base body pipeline — rebuild it')
+        : t('Built on an older base body — rebuild it'))
     : outfit.status === 'missing' ? t('Not built yet')
     : t('Ready')
 
@@ -92,6 +98,11 @@ export function BaseBodyOutfitStatus({ character }: { character: string }) {
           ].filter(Boolean).join(' · ')}
         </div>
       ) : null}
+      {outfit.status !== 'running' && (outfit.warnings ?? []).map((warning) => (
+        <div key={warning} className="ga-hint" style={{ color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }}>
+          {warning}
+        </div>
+      ))}
     </div>
   )
 }

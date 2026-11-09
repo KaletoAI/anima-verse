@@ -137,12 +137,25 @@ def _pose_text(view: str) -> str:
     return _without_hair(get_tpose_prompt() if view == "front" else get_tpose_view_prompt(view))
 
 
+def base_negative(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """``BASE_NEGATIVE`` plus the ``base_body_negative`` text of every body
+    slot that applies to the character (``body_slots.slots_for_character``,
+    in slot order; the ``base_body`` flag does not matter) — a package keeps
+    what its slots describe out of the base views."""
+    profile = _profile_of(character_name, profile)
+    from app.core.body_slots import slots_for_character
+    extra = [text for text in (str(getattr(spec, "base_body_negative", "") or "").strip()
+                               for spec in slots_for_character(character_name, profile=profile)) if text]
+    return ", ".join([BASE_NEGATIVE, *extra])
+
+
 def base_prompt(character_name: str, view: str, *,
                 profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
     """``(prompt, negative)`` of one base-body view. Front and the extra
     views share the framing and body layers; a back view drops every facial
     segment of them (``prompt_builder.strip_face_terms``), like the outfit
-    back view does — a facial word pulls the head around to the camera."""
+    back view does — a facial word pulls the head around to the camera. The
+    negative is ``base_negative`` (``BASE_NEGATIVE`` + the slots' texts)."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     profile = _profile_of(character_name, profile)
@@ -151,7 +164,7 @@ def base_prompt(character_name: str, view: str, *,
         from app.core.prompt_builder import strip_face_terms
         body = strip_face_terms(body)
     prompt = ", ".join(p for p in (_pose_text(view), FULL_FRAMING, body) if p)
-    return prompt, BASE_NEGATIVE
+    return prompt, base_negative(character_name, profile=profile)
 
 
 def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
@@ -595,10 +608,23 @@ DRESS_GARMENT_NEGATIVE = (
     ("hair", r"hair"),
 )
 
+# The view sentence that opens a dressed edit of a non-front view: without
+# it, back and side edits came out turned toward the camera (end-to-end run
+# 2026-11-09; the left wording verified there). The front needs none.
+DRESS_VIEW = {
+    "back": ("This is a back view seen directly from behind, the figure faces away from the camera; keep it a "
+             "back view, do not turn the figure toward the camera."),
+    "left": ("This is a strict left side profile view, the whole body in profile facing the left edge of the "
+             "frame; keep it a side profile view, do not turn the figure toward the camera."),
+    "right": ("This is a strict right side profile view, the whole body in profile facing the right edge of the "
+              "frame; keep it a side profile view, do not turn the figure toward the camera."),
+}
+
 BASE_IMAGES_MISSING = "Base body images missing — render them in the Pose tab"
 BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
 DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
 OLDER_BASE = "Built on an older base body"
+BEFORE_PIPELINE = "Built before the base body pipeline"
 
 
 def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
@@ -644,15 +670,18 @@ def dress_prompt(character_name: str, view: str, *, pieces: Optional[Dict[str, s
                  items: Optional[list], profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
     """``(prompt, negative)`` of the dressed edit of one base view: the
     spike's edit form "Keep the image exactly as it is: … Only change their
-    clothing: they now wear {outfit}." and its negative without the garment
-    words the outfit names. ValueError for an undressed combination (that
-    one copies the base images, there is nothing to edit)."""
+    clothing: they now wear {outfit}." — opened by the view sentence
+    ``DRESS_VIEW[view]`` for back/left/right — and its negative without the
+    garment words the outfit names. ValueError for an undressed combination
+    (that one copies the base images, there is nothing to edit)."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     text = dress_text(character_name, view, pieces=pieces, items=items, profile=profile)
     if not text:
         raise ValueError("An undressed combination has no dressed edit")
-    return f"{DRESS_KEEP} Only change their clothing: {text}.", dress_negative(text)
+    edit = f"{DRESS_KEEP} Only change their clothing: {text}."
+    view_sentence = DRESS_VIEW.get(view)
+    return (f"{view_sentence} {edit}" if view_sentence else edit), dress_negative(text)
 
 
 # Outfit status, in memory like the base status: (character, stage) ->
@@ -860,6 +889,81 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     return results
 
 
+# --- View guard -------------------------------------------------------------
+
+# An edit can turn the figure toward the camera while keeping its outline —
+# the worker's framing check then lets it through. The guard compares the
+# HEAD region of a dressed view with the four base views: it must be most
+# similar to its own. Tuned on the end-to-end run of 2026-11-09 (head = top
+# 12 % of the figure, 64x64 grey, zero-mean normalized cross-correlation):
+# good front 0.982 (next 0.657), good left 0.888 (next 0.654); the turned
+# left/right edits 0.567/0.412 against 0.750/0.495 for the front.
+VIEW_GUARD_HEAD_SHARE = 0.12
+VIEW_GUARD_SIZE = 64
+
+
+def _head_vector(path: Path):
+    """The head region of a matted figure as a unit, zero-mean vector, or
+    None when it cannot be measured (no transparent pixel = no matte, no
+    figure, a flat head region). The figure is cropped to its alpha box,
+    the top ``VIEW_GUARD_HEAD_SHARE`` of it cropped again to its own alpha
+    box (the head, not the arm span), put on neutral grey, greyscaled and
+    resized to ``VIEW_GUARD_SIZE`` squared."""
+    import numpy as np
+    from PIL import Image
+    try:
+        with Image.open(path) as opened:
+            image = opened.convert("RGBA")
+    except (OSError, ValueError):
+        return None
+    alpha = image.getchannel("A")
+    if alpha.getextrema()[0] == 255:
+        return None
+    box = alpha.getbbox()
+    if box is None:
+        return None
+    figure = image.crop(box)
+    head = figure.crop((0, 0, figure.width, max(1, round(figure.height * VIEW_GUARD_HEAD_SHARE))))
+    box = head.getchannel("A").getbbox()
+    if box is None:
+        return None
+    head = head.crop(box)
+    flat = Image.new("RGBA", head.size, (128, 128, 128, 255))
+    flat.alpha_composite(head)
+    grey = flat.convert("L").resize((VIEW_GUARD_SIZE, VIEW_GUARD_SIZE), Image.BILINEAR)
+    vector = np.asarray(grey, dtype=np.float64).ravel()
+    vector = vector - vector.mean()
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 1e-9 else None
+
+
+def view_guard(view: str, dressed: Path, base_views: Dict[str, Optional[Path]]) -> Dict[str, Any]:
+    """Whether a dressed view kept its view: ``{"ok", "scores": {base view:
+    correlation}, "best"}`` — ``ok`` when the dressed head region correlates
+    best with the base view of the same name. ``{"ok": True, "skipped":
+    <reason>}`` when it cannot be measured (an image without a matte, the
+    own base view missing): the guard never blocks what it cannot judge."""
+    vector = _head_vector(dressed)
+    if vector is None:
+        return {"ok": True, "skipped": "dressed image without a measurable head region"}
+    scores: Dict[str, float] = {}
+    for name, path in base_views.items():
+        reference = _head_vector(path) if path is not None else None
+        if reference is not None:
+            scores[name] = round(float(vector @ reference), 4)
+    if view not in scores:
+        return {"ok": True, "skipped": "base view without a measurable head region"}
+    best = max(scores, key=lambda name: scores[name])
+    return {"ok": best == view, "scores": scores, "best": best}
+
+
+def _guard_message(view: str, result: Dict[str, Any]) -> str:
+    if not result.get("best"):
+        return f"{view} view: the dressed image does not keep its view ({result.get('skipped') or 'unchecked'})"
+    return (f"{view} view: the dressed image does not keep its view (its head looks most like the "
+            f"{result['best']} base view)")
+
+
 # --- GLB base colour --------------------------------------------------------
 
 _MIME_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}
@@ -1019,6 +1123,56 @@ def _snapshot_base_model(character_name: str, bsig: str) -> Dict[str, Any]:
                 "prerig_meta": _read_sidecar(prerig) if prerig.is_file() else {}}
 
 
+def _guard_dressed_views(character_name: str, signature: str, bsig: str,
+                         dressed_views: Dict[str, Optional[Path]],
+                         registrations: Dict[str, Optional[Path]]) -> Tuple[Dict[str, Any], list]:
+    """Run ``view_guard`` on every dressed view of a DRESSED combination
+    (an undressed one is the base images themselves). A failing view is
+    re-rendered ONCE (``generate_dressed_images(view=…, force=True)`` with
+    the pieces/items of its sidecar) and checked again; still failing, it
+    is dropped from ``dressed_views`` (set None) with a warning naming the
+    view — except the front, which fails the build (``OutfitError``).
+    Returns ``(guard record per view, warnings)``; the record keeps the
+    scores of both attempts (``first`` = the replaced image's)."""
+    from app.core.model3d import _ref_manifest
+    if _ref_sidecar(dressed_views["front"]).get("dressed") is False:
+        return {}, []
+    record: Dict[str, Any] = {}
+    warnings = []
+    for v in BASE_VIEWS:
+        path = dressed_views.get(v)
+        if path is None or registrations.get(v) is None:
+            continue
+        result = view_guard(v, path, registrations)
+        if not result["ok"]:
+            logger.warning("Outfit model %s (%s): %s — rendering it once more", character_name, signature,
+                           _guard_message(v, result))
+            manifest = _ref_manifest(path) or _ref_manifest(dressed_views["front"])
+            retry: Dict[str, Any] = {"ok": False, "skipped": "no outfit manifest to re-render from"}
+            if manifest:
+                try:
+                    generate_dressed_images(character_name, pieces=manifest.get("pieces"),
+                                            items=manifest.get("items"), signature=signature,
+                                            force=True, view=v)
+                except Exception as e:  # noqa: BLE001 — the old verdict stands
+                    logger.warning("Dressed %s %s re-render failed: %s", character_name, v, e)
+                path = dressed_image(character_name, v, signature, bsig)
+                retry = (view_guard(v, path, registrations) if path is not None
+                         else {"ok": False, "skipped": "re-render failed"})
+            result = {**retry, "rerendered": True, "first": result}
+            if not result["ok"] and "best" not in result:
+                result["best"] = result["first"].get("best")
+        record[v] = result
+        if result["ok"]:
+            dressed_views[v] = path
+            continue
+        if v == "front":
+            raise OutfitError(_guard_message(v, result))
+        warnings.append(_guard_message(v, result) + "; left out of the outfit model")
+        dressed_views[v] = None
+    return record, warnings
+
+
 def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
     """Build the outfit model ``model3d/<signature>.glb`` of a character on
     the pipeline: the rigged base model with the outfit painted on. Called by
@@ -1030,7 +1184,11 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
     unrigged checkpoint ``model3d/unrigged/<bsig>.glb``, clean prerig
     source), the dressed images ``tpose[_<view>]_<signature>`` made from the
     current base and their registration images ``tpose[_<view>]_<bsig>``.
-    The worker gets the unrigged geometry carrying the rigged base's CURRENT
+    Before the worker runs, every dressed view passes the view guard
+    (``_guard_dressed_views``: a turned view is re-rendered once, then left
+    out with a warning; a turned front fails the build); the per-view
+    record and the warnings go into the sidecar (``view_guard``,
+    ``view_warnings``). The worker gets the unrigged geometry carrying the rigged base's CURRENT
     base-colour image (same UV layout) and writes the dressed GLB; its base
     colour goes into a copy of the rigged base GLB (and of its prerig
     source). An undressed combination is the base copy without a worker
@@ -1067,6 +1225,13 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
             raise OutfitError("The character is not on the base-body pipeline")
         bsig = base_signature(character_name, profile=profile)
         base = _snapshot_base_model(character_name, bsig)
+        registrations = {v: find_ref_image(character_name, _kind(v), bsig) for v in BASE_VIEWS}
+        if registrations["front"] is None:
+            raise OutfitError(BASE_IMAGES_MISSING)
+        dressed_views = {v: dressed_image(character_name, v, signature, bsig) for v in BASE_VIEWS}
+        if dressed_views["front"] is None:
+            raise OutfitError(DRESSED_IMAGES_MISSING)
+        guard, warnings = _guard_dressed_views(character_name, signature, bsig, dressed_views, registrations)
         with tempfile.TemporaryDirectory(prefix="body-retexture-") as tmp:
             work = Path(tmp)
             views: Dict[str, Tuple[Path, Path]] = {}
@@ -1074,10 +1239,8 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
             manifest: Dict[str, Any] = {}
             names: Dict[str, str] = {}
             for v in BASE_VIEWS:
-                dressed = dressed_image(character_name, v, signature, bsig)
-                registration = find_ref_image(character_name, _kind(v), bsig)
-                if v == "front" and registration is None:
-                    raise OutfitError(BASE_IMAGES_MISSING)
+                dressed = dressed_views[v]
+                registration = registrations[v]
                 if v == "front" and dressed is None:
                     raise OutfitError(DRESSED_IMAGES_MISSING)
                 if dressed is None or registration is None:
@@ -1120,7 +1283,8 @@ def build_outfit_model(character_name: str, signature: str) -> Dict[str, Any]:
                      "retexture_proof": proof,
                      "dressed": front_meta.get("dressed") is not False,
                      "source_image": names["front"],
-                     "view_images": {v: n for v, n in names.items() if v != "front"}})
+                     "view_images": {v: n for v, n in names.items() if v != "front"},
+                     "view_guard": guard, "view_warnings": warnings})
         meta.update(manifest)
         model3d._auto_retexture(character_name, path, meta)
         if base["prerig"] is not None:
@@ -1164,9 +1328,11 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     pipeline (default: the CURRENT outfit). ``status``: ``running`` (dressed
     images or model in progress), ``failed`` (the last run's error),
     ``stale`` (the stored model was built on an older base body — or before
-    the pipeline — and is rebuilt on the next trigger; ``error`` says so),
-    ``ready``, ``missing``. ``proof``: the worker's proof of the stored
-    model (None for an undressed base copy)."""
+    the pipeline — and is rebuilt on the next trigger; ``error`` says so,
+    ``stale_reason`` ``older_base`` / ``before_pipeline``), ``ready``,
+    ``missing``. ``warnings``: the stored model's view-guard warnings
+    (dressed views left out because they turned around). ``proof``: the
+    worker's proof of the stored model (None for an undressed base copy)."""
     from app.core import model3d
     from app.core.model_refs import current_outfit_state
     if signature is None:
@@ -1187,9 +1353,12 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     elif path is None:
         status, error = "missing", ""
     elif not built_on_current_base(meta, current):
-        status, error = "stale", OLDER_BASE
+        status, error = "stale", (OLDER_BASE if meta.get("base_signature") else BEFORE_PIPELINE)
     else:
         status, error = "ready", ""
     return {"signature": signature, "status": status, "error": error,
+            "stale_reason": (("older_base" if meta.get("base_signature") else "before_pipeline")
+                             if status == "stale" else None),
+            "warnings": list(meta.get("view_warnings") or []) if path else [],
             "proof": meta.get("retexture_proof") if path else None,
             "url": model3d.signature_model_url(character_name, signature) if status == "ready" else None}
