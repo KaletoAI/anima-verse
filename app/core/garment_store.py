@@ -252,10 +252,13 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
 
 
 def start(character_name: str, item_id: str, step: str) -> None:
-    """Mark ``step`` of the item running (SYSTEM time)."""
+    """Mark ``step`` of the item running (SYSTEM time). A running run
+    replaces the previous run's failure: the status never shows a step
+    running together with an older ``failed`` record."""
     from app.core.timeutils import utc_now
     with _status_lock:
         _running[(character_name, item_id)] = (step, utc_now())
+        _failed.pop((character_name, item_id), None)
 
 
 def end(character_name: str, item_id: str, step: str, error: Optional[str] = None,

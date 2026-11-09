@@ -377,6 +377,11 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str, order: Tup
         # The prepared mesh of this fsig is gone (garment_mesh); an accepted
         # fit stays on disk and keeps being served (R11).
         return _refusal(character_name, item_id, fsig, "mesh", str(e), {"attempts": e.records}, ran)
+    except garment_mesh.MeshAttemptFailed as e:
+        # An attempt failed outright (no backend, worker crash, decimation):
+        # the failure carries every attempt, an earlier refusal's numbers too.
+        logger.warning("Garment run %s/%s failed at mesh: %s", character_name, item_id, e)
+        return _refusal(character_name, item_id, fsig, "mesh", str(e), {"attempts": e.records}, ran)
     except _Refused as e:
         return _refusal(character_name, item_id, fsig, e.step, e.error, e.gates, ran)
     except Exception as e:  # noqa: BLE001 — reported as the step's failure

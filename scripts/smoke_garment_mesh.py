@@ -50,6 +50,14 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     FileNotFoundError, no service call.
 [6] The service answering {"ok": False, "error": "down"} (fsig E =
     "0000000000e6") -> RuntimeError naming "down", no record, no prepared GLB.
+[6b] BAD on attempt 1, then the service RAISING "no backend available ..."
+    on attempt 2 (fsig R = "0000000000f7"; bug C1 of the 2026-11-09 end-to-end
+    run): MeshAttemptFailed (a RuntimeError) with 2 records — [attempt 1 ok
+    False, share 0.97; attempt 2 ok False, error naming "no backend"]; the
+    message names the error and "attempt 1 refused"; record accepted False
+    with both attempts, share 0.97 (the gated attempt), error set; no
+    prepared GLB, no candidate. The service raising on attempt 1 (fsig
+    S = "0000000000f6"): MeshAttemptFailed with ONE record, no step record.
 [7] decimate_to with stubbed runner:
     - measure reports 100000 tris, target 25000 -> ratio 0.25, the lod output
       "model_lod25000.glb" is moved to the given out path, result
@@ -223,9 +231,12 @@ class Recorder:
         self.calls = []
         self.script = []
         self.answer = None
+        self.raise_at = 0
 
     def generate_mesh(self, **kw):
         self.calls.append(kw)
+        if self.raise_at and len(self.calls) == self.raise_at:
+            raise RuntimeError("no backend available for mesh_garment: FakeMesh (cooling down)")
         if self.answer is not None:
             return dict(self.answer)
         blob = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
@@ -427,6 +438,49 @@ def main() -> int:
         prep_e = gs.garment_path("Demo", hid, E, "prepared")
         check("no record", prep_e.with_suffix(".json").exists(), False)
         check("no prepared", prep_e.exists(), False)
+
+        print("[6b] attempt 2 fails at the backend")
+        R = "0000000000f7"
+        cutouts(R)
+        rec.calls.clear()
+        rec.script, rec.raise_at = [BAD], 2
+        failed = None
+        try:
+            gm.generate("Demo", hid, R)
+        except RuntimeError as e:
+            failed = e
+        rec.raise_at = 0
+        check("MeshAttemptFailed", type(failed).__name__, "MeshAttemptFailed")
+        records = list(getattr(failed, "records", []) or [])
+        check("two records", [r.get("attempt") for r in records], [1, 2])
+        if len(records) == 2:
+            check("record 1 = gate", (records[0].get("ok"), round(records[0].get("largest_component_share", -1), 6)),
+                  (False, 0.97))
+            check("record 2 = error", (records[1].get("ok"), "no backend" in (records[1].get("error") or "")),
+                  (False, True))
+        check("message names both", ("no backend" in str(failed), "attempt 1 refused" in str(failed)), (True, True))
+        prep_r = gs.garment_path("Demo", hid, R, "prepared")
+        rec_r = gs.read_record(prep_r.with_suffix(".json"))
+        check("record refused with both", (rec_r.get("accepted"), len(rec_r.get("attempts") or []),
+                                           "no backend" in (rec_r.get("error") or "")), (False, 2, True))
+        near("record share = gated attempt", rec_r.get("largest_component_share"), 0.97, 1e-6)
+        check("no prepared / candidate", (prep_r.exists(),
+                                          sorted(p.name for p in prep_r.parent.iterdir() if p.name.startswith("."))),
+              (False, []))
+        S = "0000000000f6"
+        cutouts(S)
+        rec.calls.clear()
+        rec.raise_at = 1
+        failed = None
+        try:
+            gm.generate("Demo", hid, S)
+        except RuntimeError as e:
+            failed = e
+        rec.raise_at = 0
+        check("first attempt raising", (type(failed).__name__, len(getattr(failed, "records", []) or [])),
+              ("MeshAttemptFailed", 1))
+        check("first attempt: no record",
+              gs.garment_path("Demo", hid, S, "prepared").with_suffix(".json").exists(), False)
 
         print("[7] decimate_to (stubbed)")
         work = root / "dec"

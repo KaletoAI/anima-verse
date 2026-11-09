@@ -72,6 +72,15 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
     "mesh", NO prepared GLB — but the accepted fit of F1 is still the served
     one (accepted_fit). Then a plain run (good stub): starts at mesh (1 call),
     re-fits; failure cleared.
+[4b] Forced mesh, attempt 1 refused (the two-cap stub) and attempt 2 raising
+    "no backend available ..." (bug C1 of the 2026-11-09 end-to-end run):
+    result {ok False, step "mesh"}, 2 calls, gates.attempts = [attempt 1
+    ok False with its share < 0.98, attempt 2 ok False with the error];
+    the status failure carries both and its error names the backend error
+    AND "attempt 1 refused"; the step record (accepted False) keeps both.
+[4c] Bug C2: start_garment while the failure of [4b] is recorded (run lock
+    held by the smoke): status running_step "queued" and failed None at
+    once. Released, the run rebuilds the mesh: failure None, prepared back.
 [5] Base model rewritten under the same B1 (other texture colour ->
     new sha): after_base_model starts fit only: renders 0, mesh calls 0,
     the fit record's base_model_sha256 = the new sha. Then, with the run
@@ -317,7 +326,7 @@ def main() -> int:
 
         # --- stubs -------------------------------------------------------------
         RENDERS, MESHES, DECIMATES, SCHEDULED = [], [], [], []
-        mode = {"ghost_back_bad": False, "mesh_bad": False}
+        mode = {"ghost_back_bad": False, "mesh_bad": False, "mesh_raise_at": 0}
         charmod.run_rembg = rembg_stub
 
         def recorder(character_name, *, output_stem, **kw):
@@ -347,6 +356,8 @@ def main() -> int:
         class FakeService:
             def generate_mesh(self, **kw):
                 MESHES.append(kw)
+                if mode["mesh_raise_at"] and len(MESHES) == mode["mesh_raise_at"]:
+                    raise RuntimeError("no backend available for mesh_garment: FakeMesh (cooling down)")
                 Path(kw["output_path"]).write_bytes(hair_glb(bad=mode["mesh_bad"]))
                 return {"ok": True, "path": kw["output_path"], "backend": "FakeMesh",
                         "routing": {"occasion": kw.get("occasion")}}
@@ -507,6 +518,39 @@ def main() -> int:
         res = garments.run_garment("Demo", hid)
         check("repair run", (res.get("ok"), res.get("ran"), len(MESHES)), (True, ["mesh", "fit"], 1))
         check("failure cleared", gs.status("Demo", hid)["failed"], None)
+
+        print("[4b] mesh attempt 2 fails at the backend after a refused attempt 1")
+        MESHES.clear()
+        mode["mesh_bad"], mode["mesh_raise_at"] = True, 2
+        res = garments.run_garment("Demo", hid, steps="mesh", force=True)
+        mode["mesh_bad"], mode["mesh_raise_at"] = False, 0
+        attempts = (res.get("gates") or {}).get("attempts") or []
+        check("failed at mesh", (res.get("ok"), res.get("step"), len(MESHES)), (False, "mesh", 2))
+        check("both attempts kept", [a.get("attempt") for a in attempts], [1, 2])
+        check("attempt 1 = gate numbers",
+              (attempts[0].get("ok"), (attempts[0].get("largest_component_share") or 1) < 0.98) if attempts else None,
+              (False, True))
+        check("attempt 2 = the error",
+              (attempts[1].get("ok"), "no backend available" in (attempts[1].get("error") or ""))
+              if len(attempts) > 1 else None, (False, True))
+        failed = gs.status("Demo", hid)["failed"] or {}
+        check("status carries both attempts",
+              (failed.get("step"), len((failed.get("gates") or {}).get("attempts") or [])), ("mesh", 2))
+        check("error names both", ("no backend available" in (failed.get("error") or ""),
+                                   "attempt 1 refused" in (failed.get("error") or "")), (True, True))
+        mrec = gs.read_record(prepared.with_suffix(".json"))
+        check("step record keeps both", (mrec.get("accepted"), len(mrec.get("attempts") or [])), (False, 2))
+        print("[4c] a new run clears the previous failure")
+        lock = gs.char_lock("Demo")
+        lock.acquire()
+        try:
+            check("start", garments.start_garment("Demo", hid), True)
+            st = gs.status("Demo", hid)
+            check("queued without the old failure", (st["running_step"], st["failed"]), ("queued", None))
+        finally:
+            lock.release()
+        check("idle", garments.wait_idle(120), True)
+        check("repaired", (gs.status("Demo", hid)["failed"], prepared.is_file()), (None, True))
 
         # --- [5] base model rewritten, same bsig ----------------------------------------
         print("[5] base model regenerated under the same base signature -> fit only")

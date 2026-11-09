@@ -47,6 +47,23 @@ MIN_COMPONENT_SHARE = 0.98
 MAX_ATTEMPTS = 2
 
 
+class MeshAttemptFailed(RuntimeError):
+    """An attempt of the mesh step failed outright — generation (no backend,
+    worker crash), delivery or decimation — instead of being gated.
+    ``records`` holds EVERY attempt so far, the failed one last as
+    ``{attempt, ok False, error, reasons}``, so an earlier refusal's numbers
+    are not lost. The message is the error, plus the earlier refusals."""
+
+    def __init__(self, error: str, records: List[Dict[str, Any]]):
+        self.step = "mesh"
+        self.view = None
+        self.error = error
+        self.records = list(records)
+        earlier = "; ".join(f"attempt {r.get('attempt')} refused: " + ", ".join(r.get("reasons") or [])
+                            for r in self.records[:-1])
+        super().__init__(error + (f" (after {earlier})" if earlier else ""))
+
+
 class MeshGateRefused(RuntimeError):
     """Both attempts of the mesh step failed the gate. ``records`` holds every
     attempt's numbers (shape of ``attempts`` in the step record)."""
@@ -100,15 +117,16 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     front, ``view_images`` adds back/left/right; ``"animal"`` would treat the
     main image as a LEFT profile. Props use the same default.
 
-    FileNotFoundError when a cut-out is missing; RuntimeError when the
-    generation or the decimation fails (nothing written beyond the raw file);
-    ``MeshGateRefused`` after two gate refusals; ``NoRouteError``,
-    ``BackendBusyError`` and ``MediaGenerationDisabled`` propagate unchanged.
+    FileNotFoundError when a cut-out is missing; ``MeshGateRefused`` after
+    two gate refusals; ``MeshAttemptFailed`` (a RuntimeError, chained to the
+    cause — ``NoRouteError``, ``BackendBusyError``, ``MediaGenerationDisabled``,
+    a failed generation or decimation) when an attempt fails outright: no
+    further attempt, every attempt's record rides on the exception. After an
+    earlier refused attempt the step record is written as refused (with all
+    attempts, the error last) and the prepared mesh removed; a failure of
+    the FIRST attempt writes nothing beyond the raw file.
     """
-    from app.blender import refine
     from app.core import garment_store as gs
-    from app.core.timeutils import utc_now_iso
-    from app.imagegen.service import get_image_service
 
     prepared = gs.garment_path(name, item_id, fsig, "prepared")
     record_path = prepared.with_suffix(".json")
@@ -131,47 +149,26 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     attempts: List[Dict[str, Any]] = []
     try:
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            res = get_image_service().generate_mesh(
-                source_image_path=str(cut["front"]), output_path=str(raw),
-                character_name=name, mesh_name=f"{name}-{kind}",
-                view_images={"back": str(cut["back"])}, occasion="mesh_garment",
-                face_num=FACE_NUM, material="dielectric", alpha="opaque")
-            if not res.get("ok"):
-                raise RuntimeError(f"garment mesh generation failed: {res.get('error') or 'unknown error'}")
-            delivered = Path(str(res.get("path") or ""))
-            if delivered.suffix.lower() != ".glb" or not delivered.is_file():
-                raise RuntimeError(f"garment mesh generation delivered no GLB ({delivered.name or 'nothing'})")
-            if delivered != raw:
-                os.replace(delivered, raw)
-            # Welded on import: split at its UV seams the mesh would tear
-            # apart under the collapse (2026-11-09: share 0.982 -> 0.724).
-            dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
-            if not dec.get("ok"):
-                raise RuntimeError(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}")
-            share = largest_component_share(candidate)
-            reasons = _gate(share)
-            entry = {"attempt": attempt, "ok": not reasons, "reasons": reasons,
-                     "backend": res.get("backend", ""),
-                     "routing": res.get("routing") or {},
-                     **({"fallback_from": res["fallback_from"]} if res.get("fallback_from") else {}),
-                     "tris_raw": dec.get("tris_before"), "tris_prepared": dec.get("tris"),
-                     "ratio": dec.get("ratio"), "largest_component_share": share}
+            try:
+                entry = _attempt(name, kind, cut, raw, candidate, attempt)
+            except Exception as e:  # noqa: BLE001 — recorded with the attempts before it, then re-raised
+                error = str(e) or type(e).__name__
+                attempts.append({"attempt": attempt, "ok": False, "error": error, "reasons": [error]})
+                logger.info("garment mesh %s/%s attempt %d failed: %s", name, item_id, attempt, error)
+                gated = [a for a in attempts if "largest_component_share" in a]
+                if gated:
+                    prepared.unlink(missing_ok=True)
+                    gs.write_record(record_path, _record(kind, item_id, fsig, gated[-1], attempts,
+                                                         accepted=False, error=error))
+                raise MeshAttemptFailed(error, attempts) from e
             attempts.append(entry)
             logger.info("garment mesh %s/%s attempt %d: %s tris -> %s, largest component %.4f%s",
-                        name, item_id, attempt, entry["tris_raw"], entry["tris_prepared"], share,
-                        "" if entry["ok"] else " (refused)")
+                        name, item_id, attempt, entry["tris_raw"], entry["tris_prepared"],
+                        entry["largest_component_share"], "" if entry["ok"] else " (refused)")
             if entry["ok"]:
                 break
         last = attempts[-1]
-        record = {"accepted": bool(last["ok"]), "kind": kind, "item_id": item_id, "fsig": fsig,
-                  "target_tris": TARGET_TRIS, "face_num": FACE_NUM,
-                  "min_component_share": MIN_COMPONENT_SHARE,
-                  "tris_raw": last["tris_raw"], "tris_prepared": last["tris_prepared"],
-                  "ratio": last["ratio"], "backend": last["backend"], "routing": last["routing"],
-                  "largest_component_share": last["largest_component_share"],
-                  "attempts": attempts, "created_at": utc_now_iso()}
-        if "fallback_from" in last:
-            record["fallback_from"] = last["fallback_from"]
+        record = _record(kind, item_id, fsig, last, attempts, accepted=bool(last["ok"]))
         if last["ok"]:
             os.replace(candidate, prepared)
             gs.write_record(record_path, record)
@@ -183,3 +180,55 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
         raise MeshGateRefused("mesh", None, attempts)
     finally:
         candidate.unlink(missing_ok=True)
+
+
+def _record(kind: str, item_id: str, fsig: str, last: Dict[str, Any], attempts: List[Dict[str, Any]], *,
+            accepted: bool, error: str = "") -> Dict[str, Any]:
+    """The step record; the numbers are those of ``last`` (a gated attempt)."""
+    from app.core.timeutils import utc_now_iso
+    record = {"accepted": accepted, "kind": kind, "item_id": item_id, "fsig": fsig,
+              "target_tris": TARGET_TRIS, "face_num": FACE_NUM,
+              "min_component_share": MIN_COMPONENT_SHARE,
+              "tris_raw": last["tris_raw"], "tris_prepared": last["tris_prepared"],
+              "ratio": last["ratio"], "backend": last["backend"], "routing": last["routing"],
+              "largest_component_share": last["largest_component_share"],
+              "attempts": attempts, "created_at": utc_now_iso()}
+    if "fallback_from" in last:
+        record["fallback_from"] = last["fallback_from"]
+    if error:
+        record["error"] = error
+    return record
+
+
+def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: Path,
+             attempt: int) -> Dict[str, Any]:
+    """One fresh generation + decimation + gate; the attempt's record.
+    Raises when the generation or the decimation fails."""
+    from app.blender import refine
+    from app.imagegen.service import get_image_service
+    res = get_image_service().generate_mesh(
+        source_image_path=str(cut["front"]), output_path=str(raw),
+        character_name=name, mesh_name=f"{name}-{kind}",
+        view_images={"back": str(cut["back"])}, occasion="mesh_garment",
+        face_num=FACE_NUM, material="dielectric", alpha="opaque")
+    if not res.get("ok"):
+        raise RuntimeError(f"garment mesh generation failed: {res.get('error') or 'unknown error'}")
+    delivered = Path(str(res.get("path") or ""))
+    if delivered.suffix.lower() != ".glb" or not delivered.is_file():
+        raise RuntimeError(f"garment mesh generation delivered no GLB ({delivered.name or 'nothing'})")
+    if delivered != raw:
+        os.replace(delivered, raw)
+    # Welded on import: split at its UV seams the mesh would tear
+    # apart under the collapse (2026-11-09: share 0.982 -> 0.724).
+    dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
+    if not dec.get("ok"):
+        raise RuntimeError(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}")
+    share = largest_component_share(candidate)
+    reasons = _gate(share)
+    entry = {"attempt": attempt, "ok": not reasons, "reasons": reasons,
+             "backend": res.get("backend", ""),
+             "routing": res.get("routing") or {},
+             **({"fallback_from": res["fallback_from"]} if res.get("fallback_from") else {}),
+             "tris_raw": dec.get("tris_before"), "tris_prepared": dec.get("tris"),
+             "ratio": dec.get("ratio"), "largest_component_share": share}
+    return entry
