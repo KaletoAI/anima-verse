@@ -33,8 +33,12 @@ Fixture (expected values derived by hand):
     recorder sees no call.
 [2] GET /characters/Demo/hair before any item: {pipeline True, humanoid
     True, description "medium blonde hair", behind_shoulders True, item_id
-    None, equipped False, garment None, collision False}; Pet: humanoid
-    False, description "", garment None; Nobody: 404.
+    None, equipped False, garment None, collision False, method
+    "edit_chain", method_source "world", world_method "edit_chain",
+    hairdeck None, other None} (the method keys: plan
+    2026-11-09-hairdeck-hair Task 5, schema default edit_chain; the limits
+    also carry "hairdeck_fit"); Pet: humanoid False, description "", garment
+    None; Nobody: 404.
 [3] POST /hair: Pet 400, Offline 400 ("base-body pipeline"), Bald 400
     ("No hair set"); none of them gets an item or a run.
 [4] POST /characters/Demo/hair -> 202 {item_id "hair_demo", started True};
@@ -193,7 +197,8 @@ def main() -> int:
             check("demo hair", (r.status_code, body if r.status_code == 200 else r.text),
                   (200, {"pipeline": True, "humanoid": True, "description": "medium blonde hair",
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
-                         "collision": False}))
+                         "collision": False, "method": "edit_chain", "method_source": "world",
+                         "world_method": "edit_chain", "hairdeck": None, "other": None}))
             # The chip limits come from the gate constants (R7): haired XOR < 0.015,
             # ghost |top_dy| <= 0.0052 H, mesh component share >= 0.98, fit bib <= 50 cm².
             check("hair limits", (sorted(limits), limits.get("haired", {}).get("body_xor"),
@@ -201,7 +206,7 @@ def main() -> int:
                                   limits.get("mesh", {}).get("largest_component_share"),
                                   limits.get("fit", {}).get("bib_cm2"),
                                   limits.get("fit", {}).get("largest_component_share")),
-                  (["fit", "ghost", "haired", "mesh"], {"op": "lt", "value": 0.015},
+                  (["fit", "ghost", "hairdeck_fit", "haired", "mesh"], {"op": "lt", "value": 0.015},
                    {"op": "abs_le", "value": 0.0052, "per_height": True},
                    {"op": "ge", "value": 0.98}, {"op": "le", "value": 50.0},
                    {"op": "ge", "value": 0.98}))

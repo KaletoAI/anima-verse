@@ -911,18 +911,27 @@ def image_path(character_name: str, item_id: str, step: str, view: str, attempt:
     return _image(character_name, item_id, gs.garment_fsig(character_name, item_id), step, view, attempt)
 
 
-def preview_path(character_name: str, item_id: str) -> Optional[Path]:
+def preview_path(character_name: str, item_id: str, method: str = "") -> Optional[Path]:
     """The GLB the Hair tab shows: the current-fsig fit when it exists, else
     the fit served on the current base model, else the newest accepted fit
-    of the current method. None when there is no fit at all."""
+    of the current method. None when there is no fit at all.
+
+    ``method`` naming ANOTHER method than the current one: that method's
+    newest accepted fit (on the current base model first, else on any) —
+    the tab's "Other method" preview. ValueError for an unknown method."""
     from app.core import base_body, garment_store as gs
     from app.models.character import get_character_profile
+    if method and method not in (gs.EDIT_CHAIN, gs.HAIRDECK):
+        raise ValueError(f"unknown method {method[:40]!r}")
     profile = get_character_profile(character_name) or {}
     try:
         _item(character_name, item_id)
+        current = gs.garment_method(character_name, item_id, profile=profile)
+        if method and method != current:
+            other = _other_fit(character_name, item_id, method, profile)
+            return other[0] if other else None
         fit = gs.garment_path(character_name, item_id, gs.garment_fsig(character_name, item_id, profile=profile),
                               "fit")
-        method = gs.garment_method(character_name, item_id, profile=profile)
     except ValueError:
         return None
     if fit.is_file():
@@ -931,8 +940,141 @@ def preview_path(character_name: str, item_id: str) -> Optional[Path]:
     served = gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile) if base else None
     if served:
         return served[0]
-    newest = _newest_fit(character_name, item_id, method)
+    newest = _newest_fit(character_name, item_id, current)
     return newest[0] if newest else None
+
+
+def _other_fit(character_name: str, item_id: str, method: str,
+               profile: Dict[str, Any]) -> Optional[Tuple[Path, Dict[str, Any], bool]]:
+    """``(fit GLB, record, on the current base model)`` of the fit ``method``
+    would serve if it were selected (``garment_store.accepted_fit`` with the
+    method put into a profile copy: its current-fsig fit, else its newest
+    accepted fit on the current base model), else its newest accepted fit on
+    any base model; None without one."""
+    from app.core import base_body, garment_store as gs
+    base = base_body.current_base(character_name, profile=profile)
+    if base and base[1]:
+        hit = gs.accepted_fit(character_name, item_id, base_model_sha=base[1],
+                              profile={**profile, "hair_method": method})
+        if hit and gs.fit_method(hit[1]) == method:
+            return hit[0], hit[1], True
+    hit = gs.newest_accepted_fits(character_name, item_id).get(method)
+    return (hit[0], hit[1], False) if hit else None
+
+
+def other_method_info(character_name: str, item_id: str, *,
+                      profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The Hair tab's collapsed "Other method": the last result of the hair
+    method NOT selected — ``{method, preview_url, created_at, metrics,
+    colour, on_current_base}`` of its newest accepted fit — or None when that
+    method has none (or the item is no hair)."""
+    from app.core import garment_hair, garment_store as gs
+    from app.core.http_files import content_version
+    from app.models.character import get_character_profile
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    _item_, kind = _item(character_name, item_id)
+    if kind != garment_hair.HAIR_KIND:
+        return None
+    current = garment_hair.hair_method(character_name, profile=profile)
+    other = gs.HAIRDECK if current == gs.EDIT_CHAIN else gs.EDIT_CHAIN
+    hit = _other_fit(character_name, item_id, other, profile)
+    if hit is None:
+        return None
+    path, record, on_base = hit
+    try:
+        url: Optional[str] = _url(character_name, item_id, "model", content_version(path), f"&method={other}")
+    except OSError:
+        url = None
+    return {"method": other, "preview_url": url, "created_at": record.get("created_at"),
+            "metrics": record.get("metrics") or {}, "colour": record.get("colour"),
+            "on_current_base": on_base}
+
+
+#: The HairDeck images the Hair tab shows: the input (the profile picture
+#: the job was made from) and two files of the job.
+HAIRDECK_IMAGES: Tuple[str, ...] = ("input", "prep", "model_input")
+
+
+def _rgb_hex(value: Any) -> Optional[str]:
+    """sRGB 0..1 triple -> ``#rrggbb``; None for anything else."""
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        rgb = [max(0, min(255, round(float(v) * 255))) for v in value[:3]]
+    except (TypeError, ValueError):
+        return None
+    return "#" + "".join(f"{c:02x}" for c in rgb)
+
+
+def hairdeck_image_path(character_name: str, item_id: str, which: str) -> Optional[Path]:
+    """The file behind one HairDeck tile of the CURRENT ``hsig``: ``input`` =
+    the current profile picture (the ``hsig`` is made from it), ``prep`` /
+    ``model_input`` = ``prep.png`` / ``model_input.png`` of the job folder.
+    None when the file is not there. ValueError for an unknown ``which`` or
+    an item that is no garment of the character."""
+    from app.core import garment_store as gs
+    from app.core.model_refs import current_profile_image
+    from app.models.character import get_character_profile
+    if which not in HAIRDECK_IMAGES:
+        raise ValueError(f"image must be one of {', '.join(HAIRDECK_IMAGES)}")
+    _item(character_name, item_id)
+    profile = get_character_profile(character_name) or {}
+    if which == "input":
+        return current_profile_image(character_name, profile=profile)
+    path = gs.hairdeck_dir(character_name, item_id,
+                           gs.garment_hsig(character_name, item_id, profile=profile)) / f"{which}.png"
+    return path if path.is_file() else None
+
+
+def hairdeck_panel(character_name: str, item_id: str, *,
+                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The Hair tab's HairDeck section for the CURRENT ``hsig`` (whichever
+    method is selected): ``{hsig, status, attempt, seed, backend, created_at,
+    error, notes, attempts, images, colour}``.
+
+    - ``attempts``: the refused fit attempts of the job (gate records);
+    - ``images``: ``input`` / ``prep`` / ``model_input`` -> ``{url, model,
+      created_at}`` (tile meta for ``RefImage``) or None when absent;
+    - ``colour``: ``{target, source, auto}`` — ``target`` the manual
+      ``#rrggbb`` or None, ``source`` ``"override"`` or ``"hairdeck"`` (R4:
+      automatic = HairDeck's own vertex colours), ``auto`` HairDeck's own
+      hair colour from the job's ``info.json`` as ``#rrggbb`` (None without).
+
+    None for an item that is no hair."""
+    import json as _json
+    from app.core import garment_hair, garment_store as gs
+    from app.core.model_refs import current_profile_image, image_tile_meta
+    from app.models.character import get_character_profile
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    _item_, kind = _item(character_name, item_id)
+    if kind != garment_hair.HAIR_KIND:
+        return None
+    hsig = gs.garment_hsig(character_name, item_id, profile=profile)
+    job = _hairdeck_info(character_name, item_id, hsig)
+    folder = gs.hairdeck_dir(character_name, item_id, hsig)
+    images: Dict[str, Optional[Dict[str, Any]]] = {}
+    source = current_profile_image(character_name, profile=profile)
+    for which in HAIRDECK_IMAGES:
+        path = source if which == "input" else folder / f"{which}.png"
+        stamp = _stamp(path) if path is not None else None
+        if stamp is None:
+            images[which] = None
+            continue
+        meta = (image_tile_meta(path) if which == "input"
+                else image_tile_meta(path, {"model": job.get("backend") or "", "created_at": job.get("created_at")}))
+        images[which] = {"url": _url(character_name, item_id, f"hairdeck/{which}", stamp), **meta}
+    try:
+        info = _json.loads((folder / "info.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        info = {}
+    override = garment_hair.hair_colour_override(profile)
+    colour = {"target": override or None, "source": "override" if override else "hairdeck",
+              "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None}
+    return {"hsig": hsig, "status": job["status"], "attempt": job["attempt"], "seed": job["seed"],
+            "backend": job["backend"], "created_at": job["created_at"], "error": job["error"],
+            "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour}
 
 
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
@@ -941,7 +1083,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     the CURRENT method; HairDeck adds ``hsig``), why the served fit is not
     the current one (``stale_reasons``), the run status and the preview URL.
     ``served_fsig`` None = no hair is served (e.g. the selected method has no
-    accepted fit yet). ValueError for an invalid item."""
+    accepted fit yet). HairDeck hair adds the stale reasons
+    ``hairdeck_changed`` (another profile picture or HairDeck setting than
+    the served fit's job) and ``colour_changed`` (another colour override).
+    ValueError for an invalid item."""
     from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version
     from app.core.model_refs import find_ref_image
@@ -986,6 +1131,11 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                 stale.append("base_changed")
             elif record.get("base_model_sha256") != base[1]:
                 stale.append("base_model_changed")
+            if method == gs.HAIRDECK and gs.fit_method(record) == gs.HAIRDECK:
+                if used.get("hsig") != hsig:
+                    stale.append("hairdeck_changed")
+                if (used.get("colour") or "") != garment_hair.hair_colour_override(profile):
+                    stale.append("colour_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:

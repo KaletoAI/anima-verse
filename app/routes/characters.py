@@ -1810,6 +1810,16 @@ class GarmentEquippedRequest(BaseModel):
     equipped: bool
 
 
+class HairMethodRequest(BaseModel):
+    # Plain string, validated by garment_hair.set_hair_method (400, not 422).
+    method: str = ""
+
+
+class HairColourRequest(BaseModel):
+    # "#rrggbb" or "" (automatic); validated by garment_hair.set_hair_colour.
+    hex: str = ""
+
+
 class GarmentRunRequest(BaseModel):
     # Plain strings, validated by garments.start_garment: an unknown step or
     # view is a 400 with its message, not a schema 422.
@@ -1822,14 +1832,21 @@ class GarmentRunRequest(BaseModel):
 def get_character_hair(character_name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Hair tab: ``{pipeline, humanoid, description, behind_shoulders,
-    item_id, equipped, garment, collision, limits}`` — ``description`` is
+    item_id, equipped, garment, collision, limits, method, method_source,
+    world_method, hairdeck, other}`` — ``description`` is
     derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
     else the one the character owns (None: no item yet), ``garment`` its
     ``garments.garment_info`` (None without an item), ``collision`` always
     False in this phase (R15), ``limits`` the gate limits per step for the
-    tab's chips (``garment_gates.limits`` + mesh + fit, from the gate
-    constants themselves)."""
-    from app.core import base_body, garment_fit, garment_gates, garment_hair, garment_mesh, garments
+    tab's chips (``garment_gates.limits`` + mesh + fit + ``hairdeck_fit``,
+    from the gate constants themselves). ``method`` / ``method_source``
+    (``"character"`` | ``"world"``) the hair method in effect, ``world_method``
+    the world default; ``hairdeck`` the HairDeck section of the current
+    ``hsig`` (``garments.hairdeck_panel``) and ``other`` the last result of
+    the method not selected (``garments.other_method_info``), both None
+    without an item."""
+    from app.core import (base_body, garment_fit, garment_gates, garment_hair, garment_hairdeck, garment_mesh,
+                          garments)
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
     _require_character(character_name)
@@ -1839,12 +1856,15 @@ def get_character_hair(character_name: str,
     item_id = item["id"] if item else None
     worn = profile.get("equipped_mesh_pieces")
     equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
-    info = None
+    info = hairdeck = other = None
     if item_id:
         try:
             info = garments.garment_info(character_name, item_id)
+            hairdeck = garments.hairdeck_panel(character_name, item_id, profile=profile)
+            other = garments.other_method_info(character_name, item_id, profile=profile)
         except ValueError:
-            info = None
+            info = hairdeck = other = None
+    method, method_source = garment_hair.hair_method_source(character_name, profile=profile)
     return {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
             "humanoid": humanoid,
             "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
@@ -1855,7 +1875,55 @@ def get_character_hair(character_name: str,
                        "mesh": {"largest_component_share": {"op": "ge",
                                                             "value": garment_mesh.MIN_COMPONENT_SHARE}},
                        "fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
-                               for key, (kind, limit, _label) in garment_fit.GATES.items()}}}
+                               for key, (kind, limit, _label) in garment_fit.GATES.items()},
+                       "hairdeck_fit": {key: {"op": "le" if kind == "max" else "ge", "value": limit}
+                                        for key, (kind, limit, _label) in garment_hairdeck.GATES.items()}},
+            "method": method, "method_source": method_source,
+            "world_method": garment_hair.world_hair_method(),
+            "hairdeck": hairdeck, "other": other}
+
+
+@router.post("/{character_name}/hair/method")
+def set_character_hair_method(character_name: str, body: HairMethodRequest,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Choose how the character's hair mesh is made: ``""`` (the world
+    default ``base_body.hair_method``), ``"edit_chain"`` or ``"hairdeck"``.
+    400 for anything else. No GPU work starts: the served hair follows the
+    method's newest accepted fit, so the served model is re-assembled."""
+    from app.core import garment_assembly, garment_hair
+    _require_character(character_name)
+    try:
+        saved = garment_hair.set_hair_method(character_name, body.method)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    try:
+        garment_assembly.schedule(character_name)
+    except Exception as e:  # noqa: BLE001 — a failed schedule must not undo the stored choice
+        logger.warning("garment assembly schedule for %s failed: %s", character_name, e)
+    method, source = garment_hair.hair_method_source(character_name)
+    return {"method": method, "method_source": source}
+
+
+@router.post("/{character_name}/hair/colour")
+def set_character_hair_colour(character_name: str, body: HairColourRequest,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set the manual HairDeck hair colour (``"#rrggbb"``) or ``""`` for
+    automatic (HairDeck's own colours). 400 on an invalid value. Only the fit
+    fingerprint changes: the next run re-fits from the cached HairDeck job,
+    without a HairDeck call (no run starts here)."""
+    from app.core import garment_hair
+    _require_character(character_name)
+    try:
+        saved = garment_hair.set_hair_colour(character_name, body.hex)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    from app.models.character import get_character_profile
+    override = garment_hair.hair_colour_override(get_character_profile(character_name) or {})
+    return {"target": override or None, "source": "override" if override else "hairdeck"}
 
 
 @router.post("/{character_name}/hair", status_code=202)
@@ -1953,18 +2021,46 @@ def get_character_garment_image(character_name: str, item_id: str, step: str, vi
     return etag_file_response(path, request, "image/png")
 
 
+@router.get("/{character_name}/garments/{item_id}/hairdeck/{image}")
+def get_character_garment_hairdeck_image(character_name: str, item_id: str, image: str, request: Request,
+                                         _: Dict[str, Any] = Depends(require_admin)):
+    """One HairDeck tile of the CURRENT hsig (``garments.hairdeck_image_path``):
+    ``input`` (the profile picture), ``prep`` or ``model_input``. 400 for
+    another name, 404 for an item that is no garment of this character or a
+    file that is not there."""
+    from fastapi.responses import Response
+    from app.core import garments
+    if image not in garments.HAIRDECK_IMAGES:
+        raise HTTPException(status_code=400,
+                            detail=f"image must be one of {', '.join(garments.HAIRDECK_IMAGES)}")
+    _require_character(character_name)
+    try:
+        path = garments.hairdeck_image_path(character_name, item_id, image)
+    except ValueError:
+        path = None
+    if path is None or not path.is_file():
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _encoding = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request, media_type or "image/png")
+
+
 @router.get("/{character_name}/garments/{item_id}/model")
-def get_character_garment_model(character_name: str, item_id: str, request: Request,
+def get_character_garment_model(character_name: str, item_id: str, request: Request, method: str = "",
                                 _: Dict[str, Any] = Depends(require_admin)):
     """The Hair tab's preview GLB (the rigged base with the garment grafted
-    on, ``garments.preview_path``), versioned by content; 404 without a fit
-    or for an item that is no garment of this character."""
+    on, ``garments.preview_path``), versioned by content; ``method`` naming
+    the method NOT selected = that method's newest accepted fit (the "Other
+    method" preview). 400 for an unknown method; 404 without a fit or for an
+    item that is no garment of this character."""
+    from app.core import garment_store as gs
     from app.core import garments
     from app.core.http_files import snapshot_response
+    if method not in ("", gs.EDIT_CHAIN, gs.HAIRDECK):
+        raise HTTPException(status_code=400, detail=f"method must be {gs.EDIT_CHAIN} or {gs.HAIRDECK}")
     _require_character(character_name)
     return snapshot_response(None, request, media_type="model/gltf-binary",
                              version=request.query_params.get("v"),
-                             resolve=lambda: garments.preview_path(character_name, item_id))
+                             resolve=lambda: garments.preview_path(character_name, item_id, method))
 
 
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---

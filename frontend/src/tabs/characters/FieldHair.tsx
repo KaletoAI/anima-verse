@@ -17,6 +17,15 @@
  * The hair description is DERIVED from Appearance (R3) — read-only here.
  * Changing it does not start GPU work (R14): the tab shows "Hair description
  * changed" and the old hair stays served until Regenerate.
+ *
+ * Two hair methods (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md,
+ * Task 5): the edit chain above, or HairDeck (the profile picture -> hair
+ * cards in one Hub call -> fit). The method selector at the top stores the
+ * character's choice (POST /characters/{n}/hair/method, "" = world default);
+ * the selected method's section is shown, the other method's last result is
+ * collapsed below ("Other method"). A switch generates nothing. The HairDeck
+ * colour (POST /characters/{n}/hair/colour) only re-fits from the stored
+ * HairDeck result.
  */
 import { useCallback, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -28,7 +37,8 @@ import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, garmentRunning, useGarment } from './useGarment'
 import type {
-  GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, HairInfo,
+  GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, HairDeckPanel, HairInfo,
+  HairMethod, OtherMethodInfo,
 } from './useGarment'
 
 const TILE_HEIGHT = 200
@@ -57,13 +67,33 @@ const STEP_LABELS: Record<string, string> = {
   ghost: 'Hair-only views',
   cutout: 'Cut-outs',
   mesh: 'Mesh',
+  hairdeck: 'HairDeck',
   fit: 'Fit',
 }
+
+const METHOD_LABELS: Record<HairMethod, string> = {
+  edit_chain: 'Edit chain',
+  hairdeck: 'HairDeck',
+}
+
+const HAIRDECK_STATUS: Record<string, string> = {
+  accepted: 'Accepted',
+  refused: 'Refused',
+  missing: 'Not run yet',
+}
+
+const HAIRDECK_TILES: Array<['input' | 'prep' | 'model_input', string]> = [
+  ['input', 'Input (profile picture)'],
+  ['prep', 'Prepared'],
+  ['model_input', 'Model input'],
+]
 
 const STALE_LABELS: Record<string, string> = {
   description_changed: 'Hair description changed',
   base_changed: 'Base body changed',
   base_model_changed: 'Base model changed',
+  hairdeck_changed: 'Profile picture or HairDeck settings changed',
+  colour_changed: 'Hair colour changed',
 }
 
 const FIT_STATUS: Record<string, string> = {
@@ -110,6 +140,15 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'largest_component_share', label: 'Largest part', scale: 100, unit: '%', digits: 1 },
   // Reported, not gated (R7): its plausible range depends on the hair length.
   { key: 'drop_below_chin_m', label: 'Drop below chin', scale: 100, unit: 'cm', digits: 1 },
+]
+
+const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
+  { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
+  { key: 'moved_share', label: 'Moved', scale: 100, unit: '%', digits: 1 },
+  { key: 'icp_resid_p95_m', label: 'Head match (p95)', scale: 1000, unit: 'mm', digits: 1 },
+  // Reported, not gated.
+  { key: 'icp_scale', label: 'Scale', scale: 1, unit: '', digits: 3 },
+  { key: 'cap_tris', label: 'Scalp cap triangles', scale: 1, unit: '', digits: 0 },
 ]
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -209,7 +248,7 @@ function RecordNumbers({ label, record }: { label: string; record: unknown }) {
 function failureRecords(gates: Record<string, unknown> | null, t: (s: string) => string): Array<[string, unknown]> {
   if (!gates) return []
   if (Array.isArray(gates.attempts)) {
-    return (gates.attempts as GateRecord[]).map((r, i) => [`${t('Attempt')} ${num(r?.attempt) ?? i + 1}`, r])
+    return (gates.attempts as GateRecord[]).map((r, i) => [`${t('Attempt')} ${num(r?.attempt) ?? i + 1}`, flatFit(r)])
   }
   if (gates.front || gates.back) {
     return [[t('Front view'), gates.front], [t('Back view'), gates.back]]
@@ -218,6 +257,126 @@ function failureRecords(gates: Record<string, unknown> | null, t: (s: string) =>
     return [[t('Fit'), { ...(gates.metrics as object), reasons: gates.reasons }]]
   }
   return [[t('Gate'), gates]]
+}
+
+/** A HairDeck fit attempt `{attempt, seed, ok, reasons, limits, metrics}`
+ *  with its metrics lifted beside attempt/seed, so RecordNumbers lists them. */
+function flatFit(r: GateRecord | null | undefined): unknown {
+  if (!r || typeof r.metrics !== 'object' || r.metrics === null) return r
+  return { attempt: r.attempt, seed: r.seed, ...(r.metrics as object), reasons: r.reasons }
+}
+
+function Swatch({ hex }: { hex: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: 'inline-block', width: 18, height: 18, borderRadius: 4, background: hex,
+        border: '1px solid var(--border, #30363d)', verticalAlign: 'middle',
+      }}
+    />
+  )
+}
+
+/** The HairDeck hair colour: HairDeck's own (automatic) or a manual one.
+ *  Keyed by the server values, so the draft starts from them after a save. */
+function HairColour({ colour, busy, onApply }: {
+  colour: HairDeckPanel['colour']
+  busy: boolean
+  onApply: (hex: string) => void
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState(colour.target || colour.auto || '#7f6248')
+  return (
+    <>
+      <div style={ROW}>
+        <span className="ga-hint">{t('Automatic')}:</span>
+        {colour.auto ? <Swatch hex={colour.auto} /> : null}
+        <span className="ga-hint">{colour.auto ? t("HairDeck's own colours") : t('HairDeck has not run yet')}</span>
+        <span className="ga-hint">·</span>
+        <span className="ga-hint">{t('In use')}:</span>
+        {colour.target ? <Swatch hex={colour.target} /> : null}
+        <span className="ga-hint">{colour.target ? `${t('Manual')} ${colour.target}` : t('Automatic')}</span>
+      </div>
+      <div style={ROW}>
+        <input
+          type="color"
+          value={draft}
+          disabled={busy}
+          aria-label={t('Hair colour')}
+          onChange={(e) => setDraft(e.target.value.toLowerCase())}
+        />
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || draft === colour.target}
+          onClick={() => onApply(draft)}
+        >
+          {t('Apply')}
+        </button>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || !colour.target}
+          onClick={() => onApply('')}
+        >
+          {t('Reset to automatic')}
+        </button>
+      </div>
+      <div className="ga-hint">
+        {t('A colour change re-fits the hair from the stored HairDeck result — HairDeck does not run again.')}
+      </div>
+    </>
+  )
+}
+
+/** The collapsed last result of the method that is not selected. */
+function OtherMethod({ other, method, limits }: {
+  other: OtherMethodInfo | null
+  method: HairMethod
+  limits: HairInfo['limits']
+}) {
+  useClockSettings()
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const otherMethod: HairMethod = method === 'hairdeck' ? 'edit_chain' : 'hairdeck'
+  if (!other) {
+    return (
+      <div className="ga-hint">
+        {t('Other method')} ({t(METHOD_LABELS[otherMethod])}): {t('no result yet')}
+      </div>
+    )
+  }
+  const hairdeck = other.method === 'hairdeck'
+  return (
+    <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="ga-hint" style={{ cursor: 'pointer' }}>
+        {t('Other method')} ({t(METHOD_LABELS[other.method])}): {t('last result')}
+        {other.created_at ? ` · ${formatDateTime(other.created_at, clockSettings())}` : ''}
+      </summary>
+      {!other.on_current_base ? (
+        <div className="ga-hint" style={WARN_STYLE}>{t('Fitted on an older base model')}</div>
+      ) : null}
+      {other.colour?.target ? (
+        <div style={ROW}>
+          <span className="ga-hint">{t('Hair colour')}:</span>
+          <Swatch hex={other.colour.target} />
+          <span className="ga-hint">{other.colour.target}</span>
+        </div>
+      ) : null}
+      <GateChips
+        specs={hairdeck ? HAIRDECK_FIT_CHIPS : FIT_CHIPS}
+        record={other.metrics}
+        limits={hairdeck ? limits.hairdeck_fit : limits.fit}
+      />
+      {open && other.preview_url ? (
+        <Model3DViewer key={other.preview_url} url={other.preview_url} format="glb" height={300} />
+      ) : null}
+      <div className="ga-hint">
+        {t('Select this method above to use it again — its files stay, the switch generates nothing.')}
+      </div>
+    </details>
+  )
 }
 
 /** The record the tile's chips show: the accepted final's (last of its
@@ -325,12 +484,12 @@ export function FieldHair({ character, onEditAppearance }: {
   const [posting, setPosting] = useState(false)
 
   const call = useCallback(
-    async (path: string, body: unknown, after?: (d: unknown) => void) => {
+    async (path: string, body: unknown, after?: (d: unknown) => void | Promise<unknown>) => {
       if (posting) return
       setPosting(true)
       try {
         const d = await apiPost(path, body)
-        after?.(d)
+        await after?.(d)
         startPoll(300)
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -363,6 +522,21 @@ export function FieldHair({ character, onEditAppearance }: {
       setInfo((prev: HairInfo | null) => (prev ? { ...prev, equipped } : prev))
     }),
     [call, enc, setInfo],
+  )
+
+  const setMethod = useCallback(
+    (method: '' | HairMethod) => call(`/characters/${enc}/hair/method`, { method }),
+    [call, enc],
+  )
+
+  // Store the colour, then re-fit (only the fit runs: the HairDeck result is cached).
+  const applyColour = useCallback(
+    (hex: string) => call(`/characters/${enc}/hair/colour`, { hex }, () => (
+      itemId && info?.method === 'hairdeck'
+        ? apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, {})
+        : undefined
+    )),
+    [call, enc, info?.method, itemId],
   )
 
   if (!info) return <div className="ga-hint">{t('Loading…')}</div>
@@ -435,9 +609,168 @@ export function FieldHair({ character, onEditAppearance }: {
       ? (garment.failed.gates.metrics as Record<string, unknown>)
       : null
   const failures = garment?.failed ? failureRecords(garment.failed.gates, t) : []
+  const hd = info.hairdeck
+  const isHairDeck = info.method === 'hairdeck'
+  const noHair = !!garment && !garment.served_fsig && !garment.running_step && fit?.status !== 'accepted'
+
+  const fitBlock = (chips: ChipSpec[], fitLimits: Record<string, GateLimit> | undefined, ready: boolean) => (
+    <>
+      <div className="ga-fieldset-title">{t('Fit')}</div>
+      <div style={ROW}>
+        <span className="ga-hint">
+          {t(FIT_STATUS[fit?.status || 'missing'])}
+          {fit?.tris ? ` · ${t('Triangles')} ${fit.tris.toLocaleString()}` : ''}
+          {fit?.created_at ? ` · ${formatDateTime(fit.created_at, clockSettings())}` : ''}
+        </span>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || !garment || !ready}
+          title={garment && !ready ? t('Run the previous step first') : undefined}
+          onClick={() => { void run({ step: 'fit', force: true }) }}
+        >
+          {t('Re-fit')}
+        </button>
+      </div>
+      <GateChips specs={chips} record={fitRecord} limits={fitLimits} />
+      {fit?.low && fit.low.ok === false ? (
+        <div className="ga-hint" style={WARN_STYLE}>
+          {t('Distance tier failed — the full hair is used')}: {fit.low.error}
+        </div>
+      ) : null}
+      {garment ? <StepState garment={garment} step="fit" /> : null}
+    </>
+  )
+
+  const editChainSection = (
+    <>
+      {imageRow('haired', HAIRED_CHIPS)}
+      {imageRow('ghost', GHOST_CHIPS)}
+      {imageRow('cutout')}
+
+      <div className="ga-fieldset-title">{t('Mesh')}</div>
+      <div style={ROW}>
+        <span className="ga-hint">
+          {!mesh || mesh.status === 'missing' ? t('Not built yet')
+            : mesh.status === 'refused' ? t('Refused')
+            : t('Accepted')}
+          {mesh?.metrics.tris_raw != null && mesh.metrics.tris_prepared != null
+            ? ` · ${t('Triangles')} ${mesh.metrics.tris_raw.toLocaleString()} → ${mesh.metrics.tris_prepared.toLocaleString()}`
+            : ''}
+          {mesh?.metrics.backend ? ` · ${mesh.metrics.backend}` : ''}
+          {mesh?.created_at ? ` · ${formatDateTime(mesh.created_at, clockSettings())}` : ''}
+        </span>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || !garment || !GARMENT_VIEWS.every((v) => accepted('cutout', v))}
+          title={garment && !GARMENT_VIEWS.every((v) => accepted('cutout', v)) ? t('Run the previous step first') : undefined}
+          onClick={() => { void run({ step: 'mesh', force: true }) }}
+        >
+          {mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
+        </button>
+      </div>
+      <GateChips specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} />
+      {mesh?.status === 'refused' && mesh.gates.length ? (
+        <details>
+          <summary className="ga-hint" style={{ cursor: 'pointer' }}>{t('Attempts')} ({mesh.gates.length})</summary>
+          {mesh.gates.map((g, i) => (
+            <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={g} />
+          ))}
+        </details>
+      ) : null}
+      {garment ? <StepState garment={garment} step="mesh" /> : null}
+
+      {fitBlock(FIT_CHIPS, limits.fit, mesh?.status === 'accepted')}
+    </>
+  )
+
+  const hairdeckSection = hd ? (
+    <>
+      <div className="ga-fieldset-title">{t('HairDeck')}</div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        {HAIRDECK_TILES.map(([key, label]) => {
+          const img = hd.images[key]
+          return (
+            <div key={key} style={{ flex: 1, minWidth: 0 }}>
+              <div className="ga-hint">{t(label)}</div>
+              {img ? (
+                <RefImage key={img.url} src={img.url} height={TILE_HEIGHT} label={t(label)} meta={img} />
+              ) : (
+                <div className="ga-hint" style={EMPTY_TILE}>
+                  {key === 'input' ? t('No profile picture') : t('No render yet')}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div style={ROW}>
+        <span className="ga-hint">
+          {t(HAIRDECK_STATUS[hd.status] || hd.status)}
+          {hd.attempt ? ` · ${t('Attempt')} ${hd.attempt}` : ''}
+          {hd.seed != null ? ` · ${t('Seed')} ${hd.seed}` : ''}
+          {hd.backend ? ` · ${hd.backend}` : ''}
+          {hd.created_at ? ` · ${formatDateTime(hd.created_at, clockSettings())}` : ''}
+        </span>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || !garment || !hd.images.input}
+          title={!hd.images.input ? t('Set a profile picture first') : undefined}
+          onClick={() => { void run({ step: 'hairdeck', force: true }) }}
+        >
+          {t('Regenerate hair (HairDeck)')}
+        </button>
+      </div>
+      {hd.notes.length ? <div className="ga-hint">{t('Notes')}: {hd.notes.join(' · ')}</div> : null}
+      {hd.status === 'refused' && hd.error ? <div className="ga-hint" style={ERROR_STYLE}>{hd.error}</div> : null}
+      {garment ? <StepState garment={garment} step="hairdeck" /> : null}
+
+      <div className="ga-fieldset-title">{t('Hair colour')}</div>
+      <HairColour
+        key={`${hd.colour.target || ''}|${hd.colour.auto || ''}`}
+        colour={hd.colour}
+        busy={busy}
+        onApply={(hex) => { void applyColour(hex) }}
+      />
+
+      {fitBlock(HAIRDECK_FIT_CHIPS, limits.hairdeck_fit, hd.status === 'accepted')}
+      {hd.attempts.length ? (
+        <details>
+          <summary className="ga-hint" style={{ cursor: 'pointer' }}>
+            {t('Refused fit attempts')} ({hd.attempts.length})
+          </summary>
+          {hd.attempts.map((g, i) => (
+            <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={flatFit(g)} />
+          ))}
+        </details>
+      ) : null}
+    </>
+  ) : null
 
   return (
     <div className="ga-form">
+      <div className="ga-fieldset-title">{t('Hair method')}</div>
+      <div style={ROW}>
+        <select
+          className="ga-input"
+          value={info.method_source === 'character' ? info.method : ''}
+          disabled={posting}
+          aria-label={t('Hair method')}
+          onChange={(e) => { void setMethod(e.target.value as '' | HairMethod) }}
+        >
+          <option value="">{t('World default')} ({t(METHOD_LABELS[info.world_method])})</option>
+          <option value="edit_chain">{t('Edit chain')}</option>
+          <option value="hairdeck">{t('HairDeck')}</option>
+        </select>
+        <span className="ga-hint">
+          {isHairDeck
+            ? t('HairDeck makes hair cards from the profile picture in one step.')
+            : t('The edit chain renders the hair views and builds a mesh from them.')}
+        </span>
+      </div>
+
       <div className="ga-fieldset-title">{t('Hair description')}</div>
       {info.description ? (
         <div style={ROW}>
@@ -457,7 +790,11 @@ export function FieldHair({ character, onEditAppearance }: {
             <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={posting} onClick={() => { void create() }}>
               {t('Create hair')}
             </button>
-            <span className="ga-hint">{t('Renders the hair views, builds the mesh and fits it onto the base model.')}</span>
+            <span className="ga-hint">
+              {isHairDeck
+                ? t('Makes hair cards from the profile picture and fits them onto the base model.')
+                : t('Renders the hair views, builds the mesh and fits it onto the base model.')}
+            </span>
           </div>
         ) : null
       ) : (
@@ -509,67 +846,16 @@ export function FieldHair({ character, onEditAppearance }: {
             </div>
           ) : null}
 
-          {imageRow('haired', HAIRED_CHIPS)}
-          {imageRow('ghost', GHOST_CHIPS)}
-          {imageRow('cutout')}
-
-          <div className="ga-fieldset-title">{t('Mesh')}</div>
-          <div style={ROW}>
-            <span className="ga-hint">
-              {!mesh || mesh.status === 'missing' ? t('Not built yet')
-                : mesh.status === 'refused' ? t('Refused')
-                : t('Accepted')}
-              {mesh?.metrics.tris_raw != null && mesh.metrics.tris_prepared != null
-                ? ` · ${t('Triangles')} ${mesh.metrics.tris_raw.toLocaleString()} → ${mesh.metrics.tris_prepared.toLocaleString()}`
-                : ''}
-              {mesh?.metrics.backend ? ` · ${mesh.metrics.backend}` : ''}
-              {mesh?.created_at ? ` · ${formatDateTime(mesh.created_at, clockSettings())}` : ''}
-            </span>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={busy || !garment || !GARMENT_VIEWS.every((v) => accepted('cutout', v))}
-              title={garment && !GARMENT_VIEWS.every((v) => accepted('cutout', v)) ? t('Run the previous step first') : undefined}
-              onClick={() => { void run({ step: 'mesh', force: true }) }}
-            >
-              {mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
-            </button>
-          </div>
-          <GateChips specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} />
-          {mesh?.status === 'refused' && mesh.gates.length ? (
-            <details>
-              <summary className="ga-hint" style={{ cursor: 'pointer' }}>{t('Attempts')} ({mesh.gates.length})</summary>
-              {mesh.gates.map((g, i) => (
-                <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={g} />
-              ))}
-            </details>
-          ) : null}
-          {garment ? <StepState garment={garment} step="mesh" /> : null}
-
-          <div className="ga-fieldset-title">{t('Fit')}</div>
-          <div style={ROW}>
-            <span className="ga-hint">
-              {t(FIT_STATUS[fit?.status || 'missing'])}
-              {fit?.tris ? ` · ${t('Triangles')} ${fit.tris.toLocaleString()}` : ''}
-              {fit?.created_at ? ` · ${formatDateTime(fit.created_at, clockSettings())}` : ''}
-            </span>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={busy || !garment || mesh?.status !== 'accepted'}
-              title={garment && mesh?.status !== 'accepted' ? t('Run the previous step first') : undefined}
-              onClick={() => { void run({ step: 'fit', force: true }) }}
-            >
-              {t('Re-fit')}
-            </button>
-          </div>
-          <GateChips specs={FIT_CHIPS} record={fitRecord} limits={limits.fit} />
-          {fit?.low && fit.low.ok === false ? (
-            <div className="ga-hint" style={WARN_STYLE}>
-              {t('Distance tier failed — the full hair is used')}: {fit.low.error}
+          {noHair ? (
+            <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
+              <span style={WARN_STYLE}>{t('No hair from this method yet')}</span>
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => { void run({}) }}>
+                {t('Regenerate')}
+              </button>
             </div>
           ) : null}
-          {garment ? <StepState garment={garment} step="fit" /> : null}
+
+          {isHairDeck ? hairdeckSection : editChainSection}
 
           <div className="ga-fieldset-title">{t('Preview')}</div>
           {garment?.preview_url ? (
@@ -592,6 +878,8 @@ export function FieldHair({ character, onEditAppearance }: {
               {garmentRunning(info) ? t('Generating…') : t('Run all')}
             </button>
           </div>
+
+          <OtherMethod other={info.other} method={info.method} limits={limits} />
         </>
       )}
     </div>

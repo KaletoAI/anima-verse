@@ -111,7 +111,8 @@ DEFAULT_HAIR_METHOD = "edit_chain"
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 
-def _world_hair_method() -> str:
+def world_hair_method() -> str:
+    """The world default ``base_body.hair_method`` (an unknown value = ``edit_chain``)."""
     from app.core import config
     from app.core.config_schema import field_default
     value = str(config.get("base_body.hair_method", field_default("base_body", "hair_method")) or "")
@@ -127,7 +128,7 @@ def hair_method_source(character_name: str, *, profile: Optional[Dict[str, Any]]
     own = str(profile.get("hair_method") or "")
     if own in HAIR_METHODS:
         return own, "character"
-    return _world_hair_method(), "world"
+    return world_hair_method(), "world"
 
 
 def hair_method(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
@@ -141,6 +142,40 @@ def hair_colour_override(profile: Optional[Dict[str, Any]]) -> str:
     colours). A value that is no ``#rrggbb`` counts as automatic."""
     value = str((profile or {}).get("hair_colour") or "").strip()
     return value.lower() if _HEX_COLOUR.fullmatch(value) else ""
+
+
+def _set_profile_key(character_name: str, key: str, value: str) -> bool:
+    """Store one hair key of the profile (read-modify-write under the
+    profile lock). The save result; True without a save when unchanged."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if str(profile.get(key) or "") == value:
+            return True
+        profile[key] = value
+        return bool(save_character_profile(character_name, profile))
+
+
+def set_hair_method(character_name: str, method: str) -> bool:
+    """Store the character's own hair method (profile key ``hair_method``);
+    ``""`` = the world default. ValueError for anything else than ``""`` or a
+    ``HAIR_METHODS`` entry. Returns the save result. Starts no run: the
+    served hair follows the method's newest accepted fit (Task 4)."""
+    if method not in ("", *HAIR_METHODS):
+        raise ValueError(f"hair method must be one of: \"\", {', '.join(HAIR_METHODS)}")
+    return _set_profile_key(character_name, "hair_method", method)
+
+
+def set_hair_colour(character_name: str, hex_colour: str) -> bool:
+    """Store the manual hair colour (profile key ``hair_colour``, lower-case
+    ``#rrggbb``); ``""`` = automatic (HairDeck's own colours). ValueError for
+    anything else. Only the HairDeck fit fingerprint changes: the next run
+    re-fits from the cached HairDeck job."""
+    value = str(hex_colour or "").strip()
+    if value and not _HEX_COLOUR.fullmatch(value):
+        raise ValueError("hair colour must be #rrggbb or empty")
+    return _set_profile_key(character_name, "hair_colour", value.lower())
 
 
 def colour_target(hex_colour: str) -> Optional[Tuple[float, float, float]]:

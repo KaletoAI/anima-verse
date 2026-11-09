@@ -16,7 +16,7 @@ export type GarmentView = typeof GARMENT_VIEWS[number]
 
 export const GARMENT_IMAGE_STEPS = ['haired', 'ghost', 'cutout'] as const
 export type GarmentImageStep = typeof GARMENT_IMAGE_STEPS[number]
-export type GarmentStep = GarmentImageStep | 'mesh' | 'fit'
+export type GarmentStep = GarmentImageStep | 'mesh' | 'hairdeck' | 'fit'
 
 /** One gate record (`garment_gates.haired_gate` / `ghost_gate`, a mesh
  *  attempt, the fit gates) — numbers plus `ok` and `reasons`. */
@@ -55,11 +55,52 @@ export interface GarmentFitInfo {
   /** accepted (current) · stale / outdated (older inputs) · missing */
   status: 'accepted' | 'stale' | 'outdated' | 'missing'
   metrics: Record<string, number>
+  /** HairDeck fits: the colour the fit used. */
+  colour?: { target: string | null; source: string } | null
   gates: { ok?: boolean; reasons?: string[] }
   tris: number | null
   low: { ok: boolean; tris?: number; ratio?: number; error?: string } | null
   base_signature: string | null
   created_at: string | null
+}
+
+/** How the hair mesh is made (`garment_hair.HAIR_METHODS`). */
+export type HairMethod = 'edit_chain' | 'hairdeck'
+
+/** One HairDeck tile (`garments.hairdeck_panel` images): null = no file. */
+export type HairDeckImage = (ImageTileMeta & { url: string }) | null
+
+/** The HairDeck section of the CURRENT hsig (`garments.hairdeck_panel`). */
+export interface HairDeckPanel {
+  hsig: string
+  /** accepted · refused (no hair found / a file missing) · missing (not run) */
+  status: 'accepted' | 'refused' | 'missing'
+  attempt: number | null
+  seed: number | null
+  backend: string | null
+  created_at: string | null
+  error: string | null
+  notes: string[]
+  /** The refused fit attempts of the job (gate records with `metrics`). */
+  attempts: GateRecord[]
+  images: Record<'input' | 'prep' | 'model_input', HairDeckImage>
+  colour: {
+    /** The manual `#rrggbb`, null = automatic. */
+    target: string | null
+    source: 'override' | 'hairdeck'
+    /** HairDeck's own hair colour (info.json), null when unknown. */
+    auto: string | null
+  }
+}
+
+/** The last result of the method NOT selected (`garments.other_method_info`). */
+export interface OtherMethodInfo {
+  method: HairMethod
+  preview_url: string | null
+  created_at: string | null
+  metrics: Record<string, number>
+  colour?: { target: string | null; source: string } | null
+  on_current_base: boolean
 }
 
 export interface GarmentFailure {
@@ -75,6 +116,9 @@ export interface GarmentInfo {
   item_id: string
   kind: string
   fsig: string | null
+  method: HairMethod
+  method_source: 'character' | 'world'
+  hsig: string | null
   description: string
   steps: {
     haired?: Partial<Record<GarmentView, GarmentImageInfo>>
@@ -83,7 +127,8 @@ export interface GarmentInfo {
     mesh?: GarmentMeshInfo
     fit?: GarmentFitInfo
   }
-  stale_reasons: Array<'description_changed' | 'base_changed' | 'base_model_changed' | string>
+  stale_reasons: Array<'description_changed' | 'base_changed' | 'base_model_changed' | 'hairdeck_changed'
+    | 'colour_changed' | string>
   /** The step in flight, `queued` between the click and the first step. */
   running_step: string | null
   started_at: string | null
@@ -111,7 +156,15 @@ export interface HairInfo {
   equipped: boolean
   garment: GarmentInfo | null
   collision: boolean
-  limits: Partial<Record<'haired' | 'ghost' | 'mesh' | 'fit', Record<string, GateLimit>>>
+  limits: Partial<Record<'haired' | 'ghost' | 'mesh' | 'fit' | 'hairdeck_fit', Record<string, GateLimit>>>
+  /** The hair method in effect and where it comes from; the world default. */
+  method: HairMethod
+  method_source: 'character' | 'world'
+  world_method: HairMethod
+  /** The HairDeck section (null without a hair item). */
+  hairdeck: HairDeckPanel | null
+  /** The other method's last result (null without one). */
+  other: OtherMethodInfo | null
 }
 
 const POLL_MS = 3000
