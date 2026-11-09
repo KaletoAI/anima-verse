@@ -4169,6 +4169,7 @@
     "HairDeck makes hair cards from the profile picture in one step.": "HairDeck erzeugt in einem Schritt Haarkarten aus dem Profilbild.",
     "The edit chain renders the hair views and builds a mesh from them.": "Die Bearbeitungskette rendert die Haaransichten und baut daraus ein Mesh.",
     "Makes hair cards from the profile picture and fits them onto the base model.": "Erzeugt Haarkarten aus dem Profilbild und passt sie an das Basismodell an.",
-    "No hair from this method yet": "Noch kein Haar aus dieser Methode"
+    "No hair from this method yet": "Noch kein Haar aus dieser Methode",
+    "Wait for the running hair job": "Warte auf den laufenden Haar-Auftrag"
   }
 }

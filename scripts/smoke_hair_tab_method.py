@@ -66,6 +66,16 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     the F1 bytes, the plain model route and ?method=edit_chain are 404,
     ?method=bogus is 400. Counts stay (1, 2): the switch generated nothing.
     Back to "hairdeck": served_fsig F1, other None.
+[8] Fix round 1 — a forced regenerate gives a NEW result: two POST run
+    {step "hairdeck", force true} send seeds 43 and 44 (the next seed after
+    the highest the job record has seen: 42 -> 43 -> 44) to generate_hair;
+    each re-fits (the job's hair changed): counts (1, 2) -> (2, 3) -> (3, 4).
+    The hsig stays the same (it does not depend on the seed), the job
+    record says seed 44, seeds [42, 43, 44]; the fsig stays F1 and the
+    served fit is the F1 fit whose record has inputs.seed 44 and
+    inputs.nohead_sha256 = sha256 of the job's hair_seed44_nohead.glb (the
+    stub wrote "hair_seed44_nohead.glb-call3"); garment fit "accepted",
+    hairdeck panel seed 44.
 """
 import hashlib
 import json
@@ -373,6 +383,32 @@ def main() -> int:
             client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
             h = hair()
             check("back to hairdeck", ((h.get("garment") or {}).get("served_fsig"), h.get("other")), (f1, None))
+
+            # --- [8] forced regenerate: next seed ----------------------------------
+            print("[8] forced HairDeck regenerate takes the next seed")
+            hsig_before = (h.get("hairdeck") or {}).get("hsig")
+            for n, want in ((1, (2, 3)), (2, (3, 4))):
+                r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "hairdeck", "force": True})
+                check(f"forced {n} 202", r.status_code, 202)
+                wait_idle()
+                check(f"forced {n} counts", counts(), want)
+            check("seeds sent", [c["seed"] for c in HAIR_CALLS], [42, 43, 44])
+            folder = gs.hairdeck_dir("Demo", "hair_demo", hsig_before)
+            job = gs.read_record(folder / gs.HAIRDECK_RECORD)
+            check("job record", (job.get("accepted"), job.get("seed"), job.get("seeds"), job.get("attempt")),
+                  (True, 44, [42, 43, 44], 1))
+            check("nohead bytes", (folder / "hair_seed44_nohead.glb").read_bytes(), b"hair_seed44_nohead.glb-call3")
+            h = hair()
+            g = h.get("garment") or {}
+            served = gs.accepted_fit("Demo", "hair_demo", base_model_sha=base_body.current_base("Demo")[1])
+            rec = served[1] if served else {}
+            check("served after regenerate",
+                  ((h.get("hairdeck") or {}).get("hsig"), g.get("fsig"), g.get("served_fsig"),
+                   (g.get("steps") or {}).get("fit", {}).get("status"), (h.get("hairdeck") or {}).get("seed"),
+                   served[0].name if served else None, (rec.get("inputs") or {}).get("seed"),
+                   (rec.get("inputs") or {}).get("nohead_sha256")),
+                  (hsig_before, f1, f1, "accepted", 44, f"hair_demo_{f1}.glb", 44,
+                   hashlib.sha256(b"hair_seed44_nohead.glb-call3").hexdigest()))
 
         garments.wait_idle(30)
 

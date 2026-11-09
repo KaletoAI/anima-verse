@@ -31,12 +31,14 @@ Hair made by HairDeck (``garment_hair.hair_method``; plan
 
 - ``hairdeck``: ``generate_hair`` on the profile picture, seed 42, into the
   job folder ``raw/{item}_{hsig}/`` (cached per ``hsig``, so a base or colour
-  change runs only the fit). A job whose ``info.json`` notes "no hair found"
+  change runs only the fit). A forced regenerate replaces the job with the
+  next seed after the highest one the record has seen (43, 44, …), so it
+  gives a new result. A job whose ``info.json`` notes "no hair found"
   or "no person found" refuses with ``NO_HAIR_ERROR``;
 - ``fit``: ``garment_hairdeck.fit_hairdeck`` on the current rigged base, with
   the colour override (profile ``hair_colour``) or HairDeck's own colours.
-  A gate refusal of the attempt-1 job re-runs ``hairdeck`` once with seed 43
-  and fits again; a second refusal refuses with both attempts.
+  A gate refusal of the attempt-1 job re-runs ``hairdeck`` once with that
+  job's seed + 1 and fits again; a second refusal refuses with both attempts.
 
 The served fit follows the CURRENT method (``garment_store.accepted_fit``): a
 switch never generates anything, and a method without an accepted fit yet
@@ -68,8 +70,12 @@ _active: set = set()
 # ``after_base_model`` checks again (the run may have used the old model).
 _followups: set = set()
 _ORDINALS = ("first", "second", "third")
-#: The HairDeck seed of attempt n (index n - 1).
-HAIRDECK_SEEDS = (42, 43)
+#: The seed of the first HairDeck job of an hsig. A forced regenerate takes
+#: the next seed after the highest one the job record has seen
+#: (``_next_seed``); the refused-fit retry takes the attempt's seed + 1.
+HAIRDECK_FIRST_SEED = 42
+#: HairDeck jobs per run: the job and one retry after a refused fit.
+HAIRDECK_ATTEMPTS = 2
 #: ``info.json`` notes of a HairDeck job that found nothing to make hair of.
 NO_HAIR_NOTES = ("no hair found", "no person found")
 NO_HAIR_ERROR = "HairDeck found no hair in the profile picture"
@@ -253,11 +259,31 @@ def _no_hair(notes: List[str]) -> bool:
     return any(phrase in note.lower() for note in notes for phrase in NO_HAIR_NOTES)
 
 
+def _job_seeds(record: Dict[str, Any]) -> List[int]:
+    """Every seed the job record of an hsig has seen (``seeds`` + ``seed``)."""
+    out = set()
+    for value in [*(record.get("seeds") or []), record.get("seed")]:
+        try:
+            out.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return sorted(out)
+
+
+def _next_seed(record: Dict[str, Any]) -> int:
+    """The seed of a forced regenerate: one after the highest seed the job
+    record has seen, ``HAIRDECK_FIRST_SEED`` without a job (42 -> 43 -> 44 …)."""
+    seeds = _job_seeds(record)
+    return seeds[-1] + 1 if seeds else HAIRDECK_FIRST_SEED
+
+
 def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[str, Any], attempt: int,
-                  fit_attempts: Optional[List[Any]] = None) -> Path:
-    """Run HairDeck (attempt ``attempt`` -> seed ``HAIRDECK_SEEDS[attempt - 1]``)
-    on the profile picture into the job folder of ``hsig`` and write its
-    record ``{accepted, attempt, seed, notes, error, ...}``. The job lands in
+                  seed: int, fit_attempts: Optional[List[Any]] = None) -> Path:
+    """Run HairDeck with ``seed`` (``attempt`` 1 = the job, 2 = the retry
+    after a refused fit) on the profile picture into the job folder of
+    ``hsig`` — replacing the job there — and write its record ``{accepted,
+    attempt, seed, seeds (every seed of the hsig so far), notes, error,
+    ...}``. The hsig does not depend on the seed. The job lands in
     a staging folder first; the record says ``accepted: False`` while the
     files move in, so a crash never leaves an accepted record over half a
     job. ``_Refused`` (step ``hairdeck``, ``NO_HAIR_ERROR``) when ``info.json``
@@ -273,8 +299,8 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
     image = current_profile_image(character_name, profile=profile)
     if image is None:
         raise base_body.MissingInput("No profile picture — HairDeck makes the hair from it")
-    seed = HAIRDECK_SEEDS[attempt - 1]
     folder = gs.hairdeck_dir(character_name, item_id, hsig)
+    seeds = sorted(set(_job_seeds(gs.read_record(folder / gs.HAIRDECK_RECORD))) | {int(seed)})
     folder.parent.mkdir(parents=True, exist_ok=True)
     staging = folder.parent / f".{folder.name}.{os.getpid()}.{threading.get_ident()}.tmp"
     shutil.rmtree(staging, ignore_errors=True)
@@ -289,7 +315,8 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
             info = {}
         notes = [str(n) for n in (info.get("notes") or [])] if isinstance(info, dict) else []
         record: Dict[str, Any] = {
-            "accepted": False, "attempt": attempt, "seed": seed, "notes": notes, "error": "moving files",
+            "accepted": False, "attempt": attempt, "seed": seed, "seeds": seeds, "notes": notes,
+            "error": "moving files",
             "files": names, "backend": result.get("backend"), "job_id": result.get("job_id"),
             "route": result.get("route"), "profile_image_sha256": _sha(image),
             "fit_attempts": list(fit_attempts or []), "created_at": utc_now_iso()}
@@ -472,7 +499,7 @@ def _fit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig:
 def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, hsig: str,
                        profile: Dict[str, Any], ran: List[str]) -> Path:
     """The ``fit`` step of HairDeck hair: fit; when the gate refuses the
-    attempt-1 job, run ``hairdeck`` once more (seed 43) and fit again. A
+    attempt-1 job, run ``hairdeck`` once more (the job's seed + 1) and fit again. A
     refusal of the last attempt refuses with every attempt's gates
     (``{attempts: [...]}``, also kept as ``fit_attempts`` in the job
     record)."""
@@ -484,15 +511,16 @@ def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, 
     attempts = [first.gates]
     job = _hairdeck_record(character_name, item_id, hsig)
     attempt = int(job.get("attempt") or 1)
-    if attempt >= len(HAIRDECK_SEEDS):
+    retry_seed = int(job.get("seed") or HAIRDECK_FIRST_SEED) + 1
+    if attempt >= HAIRDECK_ATTEMPTS:
         gs.write_record(gs.hairdeck_dir(character_name, item_id, hsig) / gs.HAIRDECK_RECORD,
                         {**job, "fit_attempts": attempts})
         raise _Refused("fit", first.error, {"attempts": attempts})
     logger.info("HairDeck fit %s/%s refused on attempt %s — HairDeck once more with seed %s",
-                character_name, item_id, attempt, HAIRDECK_SEEDS[attempt])
+                character_name, item_id, attempt, retry_seed)
     gs.start(character_name, item_id, "hairdeck")
     try:
-        _run_hairdeck(character_name, item_id, hsig, profile, attempt + 1, fit_attempts=attempts)
+        _run_hairdeck(character_name, item_id, hsig, profile, attempt + 1, retry_seed, fit_attempts=attempts)
     except _Refused:
         raise
     except Exception as e:  # noqa: BLE001 — reported as the hairdeck step's failure (it is the running step)
@@ -611,7 +639,10 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     produced = True
             elif step == "hairdeck":
                 if forced or not _done(character_name, item_id, fsig, step, base_sha, method, hsig):
-                    _run_hairdeck(character_name, item_id, hsig, profile, 1)
+                    # A forced regenerate must give a NEW result: the next seed.
+                    seed = (_next_seed(_hairdeck_record(character_name, item_id, hsig)) if forced
+                            else HAIRDECK_FIRST_SEED)
+                    _run_hairdeck(character_name, item_id, hsig, profile, 1, seed)
                     produced = True
             elif step == "fit":
                 if forced or dirty or _fit_state(character_name, item_id, fsig, base_sha, method) != "accepted":

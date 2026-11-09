@@ -280,9 +280,11 @@ function Swatch({ hex }: { hex: string }) {
 
 /** The HairDeck hair colour: HairDeck's own (automatic) or a manual one.
  *  Keyed by the server values, so the draft starts from them after a save. */
-function HairColour({ colour, busy, onApply }: {
+function HairColour({ colour, busy, running, onApply }: {
   colour: HairDeckPanel['colour']
   busy: boolean
+  /** A hair run is active: the colour waits for it. */
+  running: boolean
   onApply: (hex: string) => void
 }) {
   const { t } = useI18n()
@@ -322,6 +324,7 @@ function HairColour({ colour, busy, onApply }: {
         >
           {t('Reset to automatic')}
         </button>
+        {running ? <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span> : null}
       </div>
       <div className="ga-hint">
         {t('A colour change re-fits the hair from the stored HairDeck result — HairDeck does not run again.')}
@@ -732,6 +735,7 @@ export function FieldHair({ character, onEditAppearance }: {
         key={`${hd.colour.target || ''}|${hd.colour.auto || ''}`}
         colour={hd.colour}
         busy={busy}
+        running={garmentRunning(info)}
         onApply={(hex) => { void applyColour(hex) }}
       />
 
@@ -756,7 +760,8 @@ export function FieldHair({ character, onEditAppearance }: {
         <select
           className="ga-input"
           value={info.method_source === 'character' ? info.method : ''}
-          disabled={posting}
+          disabled={busy}
+          title={garmentRunning(info) ? t('Wait for the running hair job') : undefined}
           aria-label={t('Hair method')}
           onChange={(e) => { void setMethod(e.target.value as '' | HairMethod) }}
         >
@@ -769,6 +774,9 @@ export function FieldHair({ character, onEditAppearance }: {
             ? t('HairDeck makes hair cards from the profile picture in one step.')
             : t('The edit chain renders the hair views and builds a mesh from them.')}
         </span>
+        {garmentRunning(info) ? (
+          <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span>
+        ) : null}
       </div>
 
       <div className="ga-fieldset-title">{t('Hair description')}</div>
