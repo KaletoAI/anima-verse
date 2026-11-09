@@ -180,10 +180,15 @@ export function capsuleLineSegments(r: number, length: number, meridians = 8, ca
 
 interface JointRef { mesh: SkinnedMesh; index: number }
 
-/** A capsule bound to a figure; `now` is refreshed by `update()`. */
+/**
+ * A capsule bound to a figure; `now` is refreshed by `update()`. `bind` = the
+ * same capsule in the BIND pose, in the world frame the body was bound in
+ * (its `bindMatrix`) — fixed; the garment push's bind rule reads it.
+ */
 export interface BoundCapsule {
   capsule: CollisionCapsule
   now: CapsuleNow
+  bind: CapsuleNow
 }
 
 export interface CollisionBinding {
@@ -201,7 +206,7 @@ export interface CollisionBinding {
  * garment's (`inGarment`), since a bind position lives in the body's
  * POSITION space. Null for a payload of another version or without capsules.
  */
-export function bindCollision(_three: Three, root: Object3D, payload: CollisionPayload | null | undefined): CollisionBinding | null {
+export function bindCollision(three: Three, root: Object3D, payload: CollisionPayload | null | undefined): CollisionBinding | null {
   if (!payload || payload.version !== COLLISION_VERSION || !payload.capsules?.length) return null
   const joints = new Map<string, JointRef>()
   root.traverse(o => {
@@ -212,13 +217,19 @@ export function bindCollision(_three: Three, root: Object3D, payload: CollisionP
       if (!joints.has(key)) joints.set(key, { mesh, index })
     })
   })
+  // A joint in the bind pose: the bone's world matrix IS inverse(boneInverse) and the mesh's world matrix its
+  // bindMatrix, so a vertex fixed to it goes through `bindMatrix` (the endpoint rule with the bind matrices).
+  const jointAtBind = (ref: JointRef): JointNow => jointNowFrom(ref.mesh.bindMatrix.elements,
+    ref.mesh.bindMatrixInverse.elements, new three.Matrix4().copy(ref.mesh.skeleton.boneInverses[ref.index]).invert().elements,
+    ref.mesh.skeleton.boneInverses[ref.index].elements, ref.mesh.bindMatrix.elements)
   const bound: Array<BoundCapsule & { ja: JointRef; jb: JointRef }> = []
   const missing: string[] = []
   for (const capsule of payload.capsules) {
     const ja = joints.get(normBoneName(capsule.a))
     const jb = joints.get(normBoneName(capsule.b))
     if (!ja || !jb || !(capsule.r > 0)) { missing.push(capsule.id); continue }
-    bound.push({ capsule, ja, jb, now: { a: [0, 0, 0], b: [0, 0, 0], r: capsule.r } })
+    bound.push({ capsule, ja, jb, now: { a: [0, 0, 0], b: [0, 0, 0], r: capsule.r },
+      bind: capsuleNow(capsule, jointAtBind(ja), jointAtBind(jb)) })
   }
   const jointNow = (ref: JointRef): JointNow => jointNowFrom(ref.mesh.matrixWorld.elements,
     ref.mesh.bindMatrixInverse.elements, ref.mesh.skeleton.bones[ref.index].matrixWorld.elements,

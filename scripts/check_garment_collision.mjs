@@ -9,7 +9,7 @@
  *   node scripts/check_garment_collision.mjs MODEL.glb [MODEL2.glb …]
  *        [--collision PAYLOAD.json]   collision payload (default: fitted from the GLB by
  *                                     app/core/collision.py::fit_capsules via ./.venv/bin/python)
- *        [--clips walk,run,sit]       clip kinds (default walk,run,sit)
+ *        [--clips walk,run,sit]       clip kinds (default walk,run,sit; hair: sit,celebrating,walk)
  *        [--set female]               clip set tried before the root set
  *        [--samples 4]                samples per clip at t = k/N · duration
  *        [--spike-sampling]           the spike's fixed 10 points per triangle (comparison only)
@@ -30,7 +30,8 @@
  * per sample its `update()` takes the capsules into each garment mesh's local
  * space and every garment vertex goes through `pushOutOfCapsules` there — the
  * TypeScript twin of the shader (`scripts/smoke_garment_collision.mjs` proves
- * the twin), weighted by `_collide` when the mesh carries it.
+ * the twin), weighted by `_collide` when the mesh carries it, with the
+ * vertex's unskinned position as the bind point (the hair's bind rule).
  *
  * METRIC — the S1 spike's `motion_pen.py`, ported: the body's triangles
  * (every skinned mesh outside a garment subtree) are sampled on a barycentric
@@ -50,6 +51,19 @@
  * sit in. A sample whose body volume LEAKS (the hole fill finds no inside —
  * a one-voxel gap lets the border flood in, so every depth reads ~0) is marked `!` and `body_volume_closed: false`; its share is meaningless (the
  * spike's walk s3 = 0.45 % was such a sample: 1.4 % on a closed volume).
+ *
+ * BIND POSE. Card hair is rooted INTO the scalp and a fit may tuck an edge
+ * under, so part of a garment is inside the body already in the bind pose
+ * ("bind pose: x % … inside"). Per sample `excess` = the share deeper than
+ * max(5 mm, the vertex's own bind depth + 5 mm) — the penetration the POSE
+ * adds, the number a push can be judged on; `before`/`after` stay the plain
+ * share. BIND LIFT = how far the push moves the garment in the bind pose
+ * (share > 1 mm, p99, max, and per capsule alone): whatever moves there
+ * moves in every frame — hair lifted off the scalp or the shoulders.
+ * `after_gap_cm` = for the vertices still inside after the push, how far
+ * they lie outside the nearest capsule (p50/p90, cm; ≤ 0 = inside its
+ * nominal radius — held there by the bind rule) and which capsule that is:
+ * the reach a capsule would need.
  *
  * HIP SIDES. The torso capsules are deliberately thin (hips p2). The hip band
  * = garment vertices whose BIND height lies between the UpLeg joints − 5 cm
@@ -388,24 +402,31 @@ async function main() {
       return pos
     }
     /** The renderers' push, on the CPU: per garment mesh in ITS local space. */
-    const push = (src) => {
+    /** `only` = {entry, k}: push only that entry's mesh, out of its k-th capsule alone — the bind-lift attribution. */
+    const push = (src, only = null) => {
       gc.update()
       const out = Float32Array.from(src)
       const inv = new THREE.Matrix4(), v = new THREE.Vector3()
       let moved = 0
+      const shift = []
       for (const p of parts) {
-        if (!p.entry) continue
+        if (!p.entry || (only && p.entry !== only.entry)) continue
         inv.copy(p.mesh.matrixWorld).invert()
         for (let i = 0; i < p.count; i++) {
           const o = (p.offset + i) * 3
           v.set(src[o], src[o + 1], src[o + 2]).applyMatrix4(inv)
-          const q = pushOutOfCapsules([v.x, v.y, v.z], p.entry.local, p.weight ? p.weight.getX(i) : 1)
+          const caps = only ? p.entry.local.slice(only.k, only.k + 1) : p.entry.local
+          // the unskinned position = the bind rule's bind point (geometry space, as the shader's `position`)
+          const q = pushOutOfCapsules([v.x, v.y, v.z], caps, p.weight ? p.weight.getX(i) : 1,
+            [p.pos.getX(i), p.pos.getY(i), p.pos.getZ(i)])
           v.set(q[0], q[1], q[2]).applyMatrix4(p.mesh.matrixWorld)
-          if (Math.hypot(v.x - src[o], v.y - src[o + 1], v.z - src[o + 2]) > 1e-6) moved++
+          const dist = Math.hypot(v.x - src[o], v.y - src[o + 1], v.z - src[o + 2])
+          if (dist > 1e-6) moved++
+          shift.push(dist)
           out[o] = v.x; out[o + 1] = v.y; out[o + 2] = v.z
         }
       }
-      return { out, moved }
+      return { out, moved, shift }
     }
     // skin cross-check against three's own skinning
     skin()
@@ -419,6 +440,16 @@ async function main() {
       worst = Math.max(worst, Math.hypot(v.x - pos[o], v.y - pos[o + 1], v.z - pos[o + 2]))
     }
     const bind = Float32Array.from(pos)
+    // BIND LIFT: the push in the bind pose. The fit put the garment where it is; whatever the push moves in the
+    // bind pose it moves in every frame — for hair that is lifting it off the scalp. Reported, not judged here.
+    const bindShift = push(bind).shift.sort((x, y) => x - y)
+    const quant = (q) => bindShift.length ? bindShift[Math.min(bindShift.length - 1, Math.floor(q * bindShift.length))] : 0
+    const bindLift = { moved_over_1mm: bindShift.filter((d) => d > 0.001).length / Math.max(1, bindShift.length),
+      p99_mm: +(quant(0.99) * 1000).toFixed(2), max_mm: +((bindShift.at(-1) ?? 0) * 1000).toFixed(2), by_capsule: {} }
+    for (const e of gc.entries) e.capsules.forEach((c, k) => {
+      const n = push(bind, { entry: e, k }).shift.filter((d) => d > 0.001).length
+      if (n) bindLift.by_capsule[c.capsule.id] = (bindLift.by_capsule[c.capsule.id] ?? 0) + n
+    })
     // body faces
     const bf = []
     for (let f = 0; f < faces.length; f += 3) {
@@ -445,17 +476,38 @@ async function main() {
       skin_crosscheck_m: worst,
       capsules: gc.entries.map((e) => ({ mesh: e.mesh.name, kind: e.kind, count: e.capsules.length })),
       capsules_missing: gc.binding.missing,
+      bind_lift: bindLift,
       radii_cm: Object.fromEntries(gc.binding.capsules.map((c) => [c.capsule.id, +(c.capsule.r * 100).toFixed(1)])),
       hip_band: { y: [+bandLo.toFixed(3), +bandHi.toFixed(3)], vertices: hipBand.length, side_vertices: hipSides.length },
       split: { lower_vertices: lower.length, upper_vertices: upper.length },
       clips: {},
     }
     console.log(`== ${name}: ${total} verts (${garmentIdx.length} garment), skin check ${worst.toExponential(2)} m, `
-      + `capsules ${mm.capsules.map((c) => `${c.mesh}:${c.count}`).join(' ')}, hip band ${hipBand.length} (sides ${hipSides.length})`)
+      + `capsules ${mm.capsules.map((c) => `${c.mesh}:${c.count}`).join(' ')}, hip band ${hipBand.length} (sides ${hipSides.length}), `
+      + `bind lift > 1 mm ${(bindLift.moved_over_1mm * 100).toFixed(2)}% (p99 ${bindLift.p99_mm} mm, max ${bindLift.max_mm} mm)`)
     if (opts.ply) {
       fs.mkdirSync(path.join(opts.ply, 'meshes'), { recursive: true })
       writePly(path.join(opts.ply, 'meshes', `${name}_bind.ply`), bind, faces)
       plyMeta.models[name] = { parts: parts.map((p) => ({ name: p.garment ? `garment:${p.mesh.name}` : 'mesh', offset: p.offset, count: p.count })) }
+    }
+    // Depth of every garment vertex in the BIND pose: card hair is rooted INTO the scalp on purpose and a fit
+    // may tuck an edge under — what lies inside already in the bind pose is the fit's, not the motion's.
+    // `excess` = share deeper than max(5 mm, its bind depth + 5 mm): the penetration the POSE adds.
+    const bindField = depthField(bind, bodyFaces, opts.spikeSampling)
+    const bindDepth = new Float32Array(total)
+    for (const i of garmentIdx) bindDepth[i] = bindField.depthAt(bind[i * 3], bind[i * 3 + 1], bind[i * 3 + 2])
+    const bindShare = garmentIdx.filter((i) => bindDepth[i] > DEPTH).length / Math.max(1, garmentIdx.length)
+    mm.bind_penetration = bindShare
+    mm.bind_volume_closed = bindField.closed
+    console.log(`  bind pose: ${(bindShare * 100).toFixed(2)}% of the garment > 5 mm inside${bindField.closed ? '' : ' !'}`)
+    const excess = (field, P, idx) => {
+      if (!idx.length) return null
+      let n = 0
+      for (const i of idx) {
+        const d = field.depthAt(P[i * 3], P[i * 3 + 1], P[i * 3 + 2])
+        if (d > DEPTH && d > bindDepth[i] + DEPTH) n++
+      }
+      return n / idx.length
     }
     const share = (field, P, idx) => {
       if (!idx.length) return null
@@ -477,6 +529,7 @@ async function main() {
         const row = {
           t: +t.toFixed(3),
           before: share(field, before, garmentIdx), after: share(field, after, garmentIdx),
+          excess_before: excess(field, before, garmentIdx), excess_after: excess(field, after, garmentIdx),
           hip_sides_before: share(field, before, hipSides), hip_sides_after: share(field, after, hipSides),
           hip_band_after: share(field, after, hipBand), moved_share: moved / garmentIdx.length,
           // the garment split at the Spine1 joint's bind height: below = skirt/hips, above = bodice/sleeves
@@ -494,7 +547,8 @@ async function main() {
           const k = key(before[i * 3], before[i * 3 + 1], before[i * 3 + 2])
           let list = hash.get(k); if (!list) hash.set(k, list = []); list.push(i)
         }
-        const where = {}
+        const where = {}, nearestCap = {}, gaps = []
+        gc.binding.update()
         for (const i of garmentIdx) {
           const x = after[i * 3], y = after[i * 3 + 1], z = after[i * 3 + 2]
           if (field.depthAt(x, y, z) <= DEPTH) continue
@@ -508,8 +562,23 @@ async function main() {
           }
           const region = bi < 0 ? '?' : dominant[bi]
           where[region] = (where[region] ?? 0) + 1
+          // How far the rest lies OUTSIDE the nearest capsule (world space): the reach a capsule would need.
+          let gap = Infinity, gid = '?'
+          for (const c of gc.binding.capsules) {
+            const { a, b, r } = c.now
+            const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [x - a[0], y - a[1], z - a[2]]
+            const l2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
+            const t = l2 > 1e-12 ? Math.min(1, Math.max(0, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / l2)) : 0
+            const g = Math.hypot(ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t) - r
+            if (g < gap) { gap = g; gid = c.capsule.id }
+          }
+          gaps.push(gap)
+          nearestCap[gid] = (nearestCap[gid] ?? 0) + 1
         }
         row.after_inside = Object.fromEntries(Object.entries(where).sort((x, y) => y[1] - x[1]).slice(0, 8))
+        gaps.sort((x, y) => x - y)
+        row.after_gap_cm = gaps.length ? { p50: +(gaps[Math.floor(gaps.length / 2)] * 100).toFixed(1),
+          p90: +(gaps[Math.floor(gaps.length * 0.9)] * 100).toFixed(1), nearest: nearestCap } : null
         rows.push(row)
         if (opts.ply) {
           writePly(path.join(opts.ply, 'meshes', `${name}_${clip.name}_s${s}.ply`), before, faces)
@@ -518,12 +587,14 @@ async function main() {
       }
       const max = (k) => Math.max(...rows.map((r) => r[k] ?? 0))
       mm.clips[clip.name] = { before_max: max('before'), after_max: max('after'),
+        excess_before_max: max('excess_before'), excess_after_max: max('excess_after'),
         lower_before_max: max('lower_before'), lower_after_max: max('lower_after'),
         upper_before_max: max('upper_before'), upper_after_max: max('upper_after'),
         hip_sides_before_max: max('hip_sides_before'), hip_sides_after_max: max('hip_sides_after'), samples: rows }
       const pct = (v) => v === null || v === undefined ? '—' : `${(v * 100).toFixed(2)}%`
       const open = (r) => (r.body_volume_closed ? '' : '!')
       console.log(`  ${clip.name.padEnd(12)} before ${rows.map((r) => pct(r.before) + open(r)).join(' ')} | after ${rows.map((r) => pct(r.after) + open(r)).join(' ')}`
+        + ` | excess ${pct(max('excess_before'))} → ${pct(max('excess_after'))}`
         + ` | lower ${pct(max('lower_before'))} → ${pct(max('lower_after'))} | upper ${pct(max('upper_before'))} → ${pct(max('upper_after'))}`
         + ` | hip sides ${pct(max('hip_sides_before'))} → ${pct(max('hip_sides_after'))} | moved ${pct(Math.max(...rows.map((r) => r.moved_share)))}`)
     }

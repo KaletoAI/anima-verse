@@ -36,10 +36,20 @@
  * [5] COLLIDE_MAX: 16 far capsules + a 17th containing p → p unchanged
  *     (only the first 16 are applied); with the containing one FIRST → pushed.
  * [6] capsuleInFrame with m = T(1,0,0)·S(2): C → a (1,0,0), b (1,2,0), r 0.2.
+ * [6b] BIND RULE: radius capped at the bind distance d0 of the vertex's bind
+ *     point q to the bind capsule. C with bind capsule = C's own axis:
+ *     q (0.06, 0.5, 0): d0 = 0.06 → p (0.03, 0.5, 0) pushed to (0.06, 0.5, 0)
+ *       (not to 0.1); p (0.08, 0.5, 0): d = 0.08 ≥ 0.06 → unchanged;
+ *     q = p = (0.05, 0.5, 0) (the bind pose itself) → unchanged;
+ *     q (0.3, 0.5, 0): d0 = 0.3 ≥ r → the plain push, (0.05,0.5,0) → (0.1, 0.5, 0);
+ *     bind capsule (1,0,0)→(1,1,0), q (1.02, 0.5, 0): d0 = 0.02 → p (0.05, 0.5, 0)
+ *       has d = 0.05 ≥ 0.02 → unchanged (the bind capsule is its own frame);
+ *     no bind point given → the plain push (0.1, 0.5, 0).
  * [7] ONE SOURCE: COLLIDE_GLSL_FUNCTION run as JS on 3000 random points ×
  *     random capsule sets of 0–20 capsules (incl. degenerate ones; half the
- *     points near a capsule axis, so > 600 of them are pushed) gives the
- *     same point as pushOutOfCapsules (≤ 1e-12 m).
+ *     points near a capsule axis, so > 600 of them are pushed; about half the
+ *     capsules under the bind rule with a random bind point and bind capsule)
+ *     gives the same point as pushOutOfCapsules (≤ 1e-12 m).
  * [8] The patch on three's real sources (standard, depth, distance): the
  *     declarations once after `#include <common>`, the push once right after
  *     `#include <skinning_vertex>` (before `#include <project_vertex>`), the
@@ -62,7 +72,17 @@
  *       - a garment carrying `_collide` gets the COLLIDE_WEIGHT define;
  *       - dispose(): original material back, hooks gone (prototype again),
  *         custom depth/distance cleared, the 3 owned clones disposed;
- *       - inert: no garment / null payload / hair only → null.
+ *       - inert: no garment / null payload → null.
+ *     The hair `garment_hair_y` sits at (0, 0, 0.25) when bound, so its
+ *     geometry space is world − (0, 0, 0.25):
+ *       - its entry holds torso AND sleeve (hair: torso/arm/head regions),
+ *         local torso a (0, 0, −0.25), b (0, 1, −0.25), r 0.1, and the BIND
+ *         capsule the same a/b (bind pose = current pose at bind time);
+ *       - after Spine → (0, 2, 0): local b (0, 2, −0.25), bind b still
+ *         (0, 1, −0.25); uniforms collideBindA[0] = (0, 0, −0.25, 0) (w ≥ 0 =
+ *         rule on), collideBindB[0] = (0, 1, −0.25, 0);
+ *       - the clothing has no bind rule: its collideBindA[0].w = −1;
+ *       - hair only → one entry (no longer inert).
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -82,8 +102,8 @@ export function glslPushToJs(glsl, defines) {
   if (/\bvec[234]\b|\bmat[234]\b/.test(body)) throw new Error('GLSL push uses vector types — not scalar any more')
   const names = Object.keys(defines)
   // eslint-disable-next-line no-new-func
-  return new Function(...names, 'collideA', 'collideB', 'collideCount', 'clamp', 'sqrt',
-    `${body}\nreturn collidePush;`)
+  return new Function(...names, 'collideA', 'collideB', 'collideBindA', 'collideBindB', 'collideCount', 'position',
+    'clamp', 'sqrt', 'min', `${body}\nreturn collidePush;`)
 }
 
 async function main() {
@@ -166,34 +186,58 @@ async function main() {
   check('a (1,0,0), b (1,2,0), r 0.2', vnear(f.a, [1, 0, 0]) && vnear(f.b, [1, 2, 0]) && near(f.r, 0.2),
     `${fmt(f.a)} ${fmt(f.b)} ${f.r}`)
 
+  console.log('--- [6b] bind rule ---')
+  const Cb = { ...C, bind: { a: [0, 0, 0], b: [0, 1, 0] } }
+  q = pushOutOfCapsules([0.03, 0.5, 0], [Cb], 1, [0.06, 0.5, 0])
+  check('d0 0.06: (0.03, 0.5, 0) → (0.06, 0.5, 0)', vnear(q, [0.06, 0.5, 0]), fmt(q))
+  q = pushOutOfCapsules([0.08, 0.5, 0], [Cb], 1, [0.06, 0.5, 0])
+  check('d0 0.06: (0.08, 0.5, 0) unchanged', vnear(q, [0.08, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [Cb], 1, [0.05, 0.5, 0])
+  check('bind pose itself → unchanged', vnear(q, [0.05, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [Cb], 1, [0.3, 0.5, 0])
+  check('d0 ≥ r → plain push (0.1, 0.5, 0)', vnear(q, [0.1, 0.5, 0]), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [{ ...C, bind: { a: [1, 0, 0], b: [1, 1, 0] } }], 1, [1.02, 0.5, 0])
+  check('bind capsule in its own frame, d0 0.02 → unchanged', vnear(q, [0.05, 0.5, 0], 0), fmt(q))
+  q = pushOutOfCapsules([0.05, 0.5, 0], [Cb])
+  check('no bind point → plain push', vnear(q, [0.1, 0.5, 0]), fmt(q))
+
   console.log('--- [7] ONE SOURCE: the shader text executed ---')
   const defines = { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D }
   const factory = glslPushToJs(COLLIDE_GLSL_FUNCTION, defines)
   let seed = 12345
   const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
-  let worst = 0, moved = 0
+  let worst = 0, moved = 0, bindLimited = 0
+  const jitter = (v, s) => v.map((x) => x + (rnd() - 0.5) * s)
   for (let n = 0; n < 3000; n++) {
     const count = Math.floor(rnd() * 21)
     const caps = Array.from({ length: count }, () => {
       const a = [rnd() - 0.5, rnd() * 2, rnd() - 0.5]
       const b = rnd() < 0.15 ? [...a] : [a[0] + (rnd() - 0.5) * 0.6, a[1] + (rnd() - 0.5) * 0.6, a[2] + (rnd() - 0.5) * 0.6]
-      return { a, b, r: 0.02 + rnd() * 0.2 }
+      const c = { a, b, r: 0.02 + rnd() * 0.2 }
+      if (rnd() < 0.5) c.bind = { a: jitter(a, 0.1), b: jitter(b, 0.1) }
+      return c
     })
     // half the points near a random capsule's axis, so the sample pushes a lot
     const near0 = count && rnd() < 0.5 ? caps[Math.floor(rnd() * count)] : null
     const p = near0 ? near0.a.map((v, i) => v + (near0.b[i] - v) * rnd() + (rnd() - 0.5) * 0.2)
       : [rnd() - 0.5, rnd() * 2, rnd() - 0.5]
+    const bindP = jitter(p, 0.15)
     const used = caps.slice(0, COLLIDE_MAX)
     const A = used.map((c) => ({ x: c.a[0], y: c.a[1], z: c.a[2], w: c.r }))
     const B = used.map((c) => ({ x: c.b[0], y: c.b[1], z: c.b[2], w: 0 }))
-    const glsl = factory(COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, A, B, used.length,
-      (v, lo, hi) => Math.min(hi, Math.max(lo, v)), Math.sqrt)(p)
-    const ts = pushOutOfCapsules(p, caps)
+    const BA = used.map((c) => (c.bind ? { x: c.bind.a[0], y: c.bind.a[1], z: c.bind.a[2], w: 0 } : { x: 0, y: 0, z: 0, w: -1 }))
+    const BB = used.map((c) => (c.bind ? { x: c.bind.b[0], y: c.bind.b[1], z: c.bind.b[2], w: 0 } : { x: 0, y: 0, z: 0, w: 0 }))
+    const glsl = factory(COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, A, B, BA, BB, used.length,
+      { x: bindP[0], y: bindP[1], z: bindP[2] }, (v, lo, hi) => Math.min(hi, Math.max(lo, v)), Math.sqrt, Math.min)(p)
+    const ts = pushOutOfCapsules(p, caps, 1, bindP)
+    const plain = pushOutOfCapsules(p, caps)
+    if (Math.hypot(plain[0] - ts[0], plain[1] - ts[1], plain[2] - ts[2]) > 1e-9) bindLimited++
     worst = Math.max(worst, Math.hypot(glsl[0] - ts[0], glsl[1] - ts[1], glsl[2] - ts[2]))
     if (Math.hypot(ts[0] - p[0], ts[1] - p[1], ts[2] - p[2]) > 1e-9) moved++
   }
   check('GLSL text and TS function agree on 3000 points', worst <= 1e-12, `worst ${worst}`)
   check('the sample actually pushes (> 600 points moved)', moved > 600, `${moved} moved`)
+  check('the bind rule actually limits (> 300 points differ from the plain push)', bindLimited > 300, `${bindLimited} limited`)
 
   console.log('--- [8] shader patch on three\'s sources ---')
   const count = (s, needle) => s.split(needle).length - 1
@@ -204,7 +248,7 @@ async function main() {
     const iCall = out.indexOf('collidePush( transformed )')
     const iProj = out.indexOf('#include <project_vertex>')
     check(`${name}: declarations once, function once`, count(out, 'uniform vec4 collideA') === 1
-      && count(out, 'vec3 collidePush( vec3 p )') === 1)
+      && count(out, 'uniform vec4 collideBindA') === 1 && count(out, 'vec3 collidePush( vec3 p )') === 1)
     check(`${name}: push after skinning, before projection`, iSkin >= 0 && iCall > iSkin && iProj > iCall)
     check(`${name}: weight attribute only under COLLIDE_WEIGHT`,
       /#ifdef COLLIDE_WEIGHT\nattribute float _collide;\n#endif/.test(out))
@@ -241,6 +285,7 @@ async function main() {
       meshes.hair = new THREE.SkinnedMesh(geo(), new THREE.MeshStandardMaterial())
       meshes.hair.name = 'garment_hair_y'
       meshes.hair.userData.garment = { kind: 'hair', item_id: 'y', fsig: 'z' }
+      meshes.hair.position.set(0, 0, 0.25)
       figure.add(meshes.hair)
     }
     figure.updateMatrixWorld(true)
@@ -258,8 +303,9 @@ async function main() {
   templateMaterial.onBeforeCompile = (shader) => { shader.vertexShader = `// template hook\n${shader.vertexShader}` }
   const disposed = []
   const gc = createGarmentCollision(THREE, fig.figure, payload)
-  check('one entry (clothing; hair has no capsules)', gc?.entries.length === 1
-    && gc.entries[0].mesh === fig.meshes.clothing && gc.entries[0].kind === 'clothing', String(gc?.entries.length))
+  check('two entries (clothing, hair)', gc?.entries.length === 2
+    && gc.entries[0].mesh === fig.meshes.clothing && gc.entries[0].kind === 'clothing'
+    && gc.entries[1].mesh === fig.meshes.hair && gc.entries[1].kind === 'hair', String(gc?.entries.length))
   check('clothing: torso only, the arm capsule is not applied',
     gc?.entries[0].capsules.map((c) => c.capsule.id).join() === 'torso', gc?.entries[0].capsules.map((c) => c.capsule.id).join())
   check('missing joint reported by the binding', JSON.stringify(gc?.binding.missing) === '["ghost"]')
@@ -275,7 +321,17 @@ async function main() {
     && chained.vertexShader.includes('collidePush('))
   check('cache key: the template hook\'s source + |collide', own.customProgramCacheKey()
     === `${templateMaterial.onBeforeCompile.toString()}|collide`)
-  check('hair material untouched', !String(fig.meshes.hair.material.customProgramCacheKey()).includes('collide'))
+  const hairEntry = gc.entries[1]
+  check('hair: torso AND sleeve (arm region)', hairEntry.capsules.map((c) => c.capsule.id).join() === 'torso,sleeve',
+    hairEntry.capsules.map((c) => c.capsule.id).join())
+  const hl = hairEntry.local[0]
+  check('hair local torso a (0,0,−0.25), b (0,1,−0.25), r 0.1', vnear(hl.a, [0, 0, -0.25]) && vnear(hl.b, [0, 1, -0.25])
+    && near(hl.r, 0.1), `${fmt(hl.a)} ${fmt(hl.b)} ${hl.r}`)
+  check('hair bind capsule a (0,0,−0.25), b (0,1,−0.25)', !!hl.bind && vnear(hl.bind.a, [0, 0, -0.25]) && vnear(hl.bind.b, [0, 1, -0.25]),
+    hl.bind ? `${fmt(hl.bind.a)} ${fmt(hl.bind.b)}` : 'none')
+  check('clothing: no bind rule', gc.entries[0].local.every((c) => !c.bind))
+  const hairMat = fig.meshes.hair.material
+  check('hair material patched (a clone)', String(hairMat.customProgramCacheKey()).includes('collide'))
   for (const [name, mat] of [['material', own], ['depth', fig.meshes.clothing.customDepthMaterial],
     ['distance', fig.meshes.clothing.customDistanceMaterial]]) {
     mat.addEventListener('dispose', () => disposed.push(name))
@@ -301,6 +357,15 @@ async function main() {
   check('same frame again → unchanged', near(B.y, 2), String(B.y))
   fig.meshes.clothing.onBeforeShadow(fakeRenderer(2), null, null, null, null, null, null)
   check('onBeforeShadow frame 2 → b y 3', near(B.y, 3), String(B.y))
+  check('clothing uniform collideBindA[0].w = −1', near(uniformsOf.collideBindA.value[0].w, -1))
+  fig.spine.position.set(0, 2, 0)
+  fig.figure.updateMatrixWorld(true)
+  fig.meshes.hair.onBeforeRender(fakeRenderer(3), null, null, null, hairMat, null)
+  const hu = shaderOf(hairMat).uniforms
+  const hb = hu.collideB.value[0], hba = hu.collideBindA.value[0], hbb = hu.collideBindB.value[0]
+  check('hair after Spine → (0,2,0): b (0, 2, −0.25)', vnear([hb.x, hb.y, hb.z], [0, 2, -0.25]), fmt([hb.x, hb.y, hb.z]))
+  check('hair bind uniforms fixed: A (0,0,−0.25,0), B (0,1,−0.25)', vnear([hba.x, hba.y, hba.z], [0, 0, -0.25]) && near(hba.w, 0)
+    && vnear([hbb.x, hbb.y, hbb.z], [0, 1, -0.25]), `${fmt([hba.x, hba.y, hba.z, hba.w])} ${fmt([hbb.x, hbb.y, hbb.z])}`)
   const A = uniformsOf.collideA.value[0]
   check('collideA.w carries r', near(A.w, 0.1), String(A.w))
   gc.dispose()
@@ -320,9 +385,9 @@ async function main() {
   check('inert: no garment → null', createGarmentCollision(THREE, build({ clothing: false, hair: false }).figure, payload) === null)
   check('inert: null payload → null', createGarmentCollision(THREE, build().figure, null) === null)
   const hairOnly = build({ clothing: false })
-  const hairMat = hairOnly.meshes.hair.material
-  check('inert: hair only → null, untouched', createGarmentCollision(THREE, hairOnly.figure, payload) === null
-    && hairOnly.meshes.hair.material === hairMat && hairOnly.meshes.hair.customDepthMaterial === undefined)
+  const ho = createGarmentCollision(THREE, hairOnly.figure, payload)
+  check('hair only → one hair entry', ho?.entries.length === 1 && ho.entries[0].kind === 'hair')
+  ho?.dispose()
 
   if (failures.length) {
     console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)
