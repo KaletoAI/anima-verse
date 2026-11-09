@@ -10,7 +10,11 @@ Usage: ./.venv/bin/python scripts/smoke_rp_cases_fixture.py
    answered by reply 1) and point at the passive lines.
 2. Anchors name their character and player and only ask questions that exist
    (a common check or a case check); prose and character are calibrated too.
-3. Freshness: rebuilding with scripts/rp_test_build_cases.py gives the SAME
+3. The prompts the cases froze carry no authoring comment (<!-- … -->), and
+   the cat (template feature humanoid off) gets the non-verbal identity line,
+   never "You ARE this person … Speak in the first person" (review 2026-11-09:
+   that line is how an animal ended up talking).
+4. Freshness: rebuilding with scripts/rp_test_build_cases.py gives the SAME
    cases — when a chat template changes, the stored prompts are stale and
    this fails until the builder is run again.
 """
@@ -53,6 +57,14 @@ for anchor in data['anchors']:
     assert set(anchor['answers'].values()) <= {'yes', 'no'}, anchor['id']
 calibrated = {dimension_of[q] for a in data['anchors'] for q in a['answers']}
 assert {'prose', 'character', 'logic', 'discipline'} <= calibrated, calibrated
+for case in data['cases']:
+    for m in case['messages']:
+        assert '<!--' not in m['content'], (case['id'], m['role'])
+    system = case['messages'][0]['content']
+    if case.get('cat_voice'):
+        assert 'you have no human speech' in system and 'You ARE this person' not in system, case['id']
+    else:
+        assert 'You ARE this person' in system and 'no human speech' not in system, case['id']
 print(f"Shape OK: {len(ids)} cases, {len(data['anchors'])} anchors")
 
 # Freshness: rebuild into memory and compare the cases.

@@ -804,8 +804,11 @@ def strip_empty_sections(text: str) -> str:
     """
     try:
         import re as _re
-        # Strip markers (HTML comments such as <!-- EDITABLE -->)
-        text = _re.sub(r"<!--\s*[A-Z]+\s*-->\s*\n?", "", text or "")
+        # Strip every HTML comment: lock markers (<!-- EDITABLE -->) and the
+        # writing hints the soul scaffolds carry. Neither is content — a
+        # section holding only a hint is empty, and a hint must never reach
+        # a prompt (a fresh character used to send them to the model).
+        text = _re.sub(r"<!--.*?-->[ \t]*\n?", "", text or "", flags=_re.S)
 
         # Split into sections, drop empty ones, drop the top heading.
         lines = text.splitlines()

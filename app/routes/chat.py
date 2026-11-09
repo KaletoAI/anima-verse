@@ -1604,9 +1604,13 @@ def _build_chat_prompt(character_name: str,
         else "chat/chat_stream.md")
 
     from app.core.linked_characters import leader_of
+    from app.models.character_template import is_feature_enabled
     system = render(
         system_template,
         character_name=character_name,
+        # A non-humanoid template (an animal) has no human speech: its own
+        # identity line instead of "you ARE this person, speak ...".
+        nonverbal=not is_feature_enabled(character_name, "humanoid", profile=char_profile),
         # A linked body's one-mind line (stable — the system part).
         linked_leader=leader_of(character_name) or "",
         world_setup=world_setup,

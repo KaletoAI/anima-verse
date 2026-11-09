@@ -1,7 +1,7 @@
 # Presence
 
 ## First impression
-<!-- Was Andere im ersten Moment wahrnehmen — Stimme, Haltung, Energie. Mehr als nur das Aussehen, aber kein Persoenlichkeitsprofil. -->
+<!-- What others notice in the first moment — voice, posture, energy. More than looks, but not a personality profile. -->
 
 ## Underlying vibe
-<!-- Die Ausstrahlung, die laenger wirkt — was Menschen intuitiv "spueren". Atmosphaere, Aura, Gefuehlsabdruck. -->
+<!-- The aura that lingers — what people sense intuitively. Atmosphere, presence, the feeling someone leaves behind. -->
