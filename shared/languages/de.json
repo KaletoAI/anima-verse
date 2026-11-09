@@ -4290,6 +4290,7 @@
     "Dresses the base body views and builds the outfit model for every saved outfit — the character keeps wearing what it wears.": "Zieht die Grundkörper-Ansichten an und baut das Outfit-Modell für jedes gespeicherte Outfit — der Charakter behält an, was er trägt.",
     "On the base-body pipeline every outfit model is built from the base body automatically — this option applies only off the pipeline.": "In der Grundkörper-Pipeline wird jedes Outfit-Modell automatisch aus dem Grundkörper gebaut — diese Option gilt nur außerhalb der Pipeline.",
     "Outfit models are built from the base body automatically.": "Outfit-Modelle werden automatisch aus dem Grundkörper gebaut.",
-    "The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.": "Das Grundkörper-Modell bekommt die Gesichtskorrektur (Upscaler + Gesichts-Retexture) vor dem ersten Rig; Outfit-Modelle übernehmen das Gesicht von ihm."
+    "The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.": "Das Grundkörper-Modell bekommt die Gesichtskorrektur (Upscaler + Gesichts-Retexture) vor dem ersten Rig; Outfit-Modelle übernehmen das Gesicht von ihm.",
+    "Rebuild queued — it starts when the running model job ends": "Neubau vorgemerkt — er startet, sobald der laufende Modell-Job endet"
   }
 }

@@ -48,6 +48,8 @@ export function BaseBodyOutfitStatus({ character }: { character: string }) {
       const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/generate?force=1`, {})
       if (d?.status === 'already_running') {
         toast(t('A 3D model generation is already running for this character'))
+      } else if (d?.status === 'queued') {
+        toast(t('Rebuild queued — it starts when the running model job ends'))
       } else {
         toast(t('Generating…'))
       }

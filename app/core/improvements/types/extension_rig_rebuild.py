@@ -17,22 +17,25 @@ class ExtensionRigRebuild(ImprovementType):
         return out
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
-        from app.core.model3d import get_model3d_dir
-        from app.core.model_refs import is_state_fork
+        from app.core.model3d import extension_rebuild_targets
         name = params["character"]
-        if not any(not is_state_fork(path.stem) for path in get_model3d_dir(name).glob("*.glb")):
+        if not extension_rebuild_targets(name)[0]:
             return []
         candidate = Candidate(f"character:{name}", name)
         return [] if self.is_done(candidate, params) else [candidate]
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
+        """Done when every model the rebuild TARGETS
+        (``model3d.extension_rebuild_targets`` — on the base-body pipeline
+        the current base and the current outfit models, never a stale outfit
+        or an older base) carries a current extension state with the groups
+        it carries itself (``model3d.extension_state_current``), and a
+        humanoid outfit/whole-body model a current distance tier (a base body
+        has none)."""
         import json
-        from app.core.extension_rig import (extension_rig_fingerprint, rig_groups_for,
-                                           model_extension_overrides)
-        from app.core.model3d import get_model3d_dir
-        from app.models.character import get_character_profile
+        from app.core.model3d import extension_rebuild_targets, extension_state_current
         name = params["character"]
-        profile = get_character_profile(name) or {}
+
         def read_meta(path):
             try:
                 value = json.loads(path.with_suffix(".json").read_text())
@@ -40,29 +43,24 @@ class ExtensionRigRebuild(ImprovementType):
             except (OSError, ValueError):
                 return {}
 
-        from app.core.model_refs import is_state_fork
-        for path in get_model3d_dir(name).glob("*.glb"):
-            if is_state_fork(path.stem):
-                continue
+        for path in extension_rebuild_targets(name)[0]:
             meta = read_meta(path)
-            declarations = rig_groups_for(name, profile=profile, mesh_variant=meta.get("mesh_variant") or "")
-            fingerprint = extension_rig_fingerprint(
-                declarations, model_extension_overrides(profile, path.stem))
-            state = meta.get("extension_rig") or {}
-            if not state.get("attempted") or state.get("fingerprint") != fingerprint or state.get("status") not in (
-                    "applied", "not_found", "none_applicable"):
+            if not extension_state_current(name, path, meta):
                 return False
+            state = meta.get("extension_rig") or {}
             tier_state = (state.get("per_tier") or {}).get("low") or {}
             if tier_state.get("status") == "failed":
                 return False
-            # Terminal detection outcomes require no derived tier.
-            if state.get("status") in ("not_found", "none_applicable") or meta.get("rig") != "mixamo":
+            # Terminal detection outcomes require no derived tier; a base body
+            # has no distance tier at all.
+            if (state.get("status") in ("not_found", "none_applicable") or meta.get("rig") != "mixamo"
+                    or meta.get("base")):
                 continue
             low = path.parent / "low" / path.name
             if not low.exists():
                 return False
             low_state = read_meta(low).get("extension_rig") or {}
-            if (not low_state.get("attempted") or low_state.get("fingerprint") != fingerprint
+            if (not low_state.get("attempted") or low_state.get("fingerprint") != state.get("fingerprint")
                     or low_state.get("status") not in ("applied", "not_found", "none_applicable")):
                 return False
         return True

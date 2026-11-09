@@ -418,7 +418,9 @@ export function FieldModel3D({ character }: { character: string }) {
     try {
       const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/generate`, {})
       toast(d?.status === 'already_running'
-        ? t('A 3D model generation is already running for this character') : t('Rebuilding from the base body…'))
+        ? t('A 3D model generation is already running for this character')
+        : d?.status === 'queued' ? t('Rebuild queued — it starts when the running model job ends')
+          : t('Rebuilding from the base body…'))
       startPoll()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')

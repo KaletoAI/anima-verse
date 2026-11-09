@@ -40,11 +40,21 @@ Expected, derived by hand from the rules in the module docstring:
     current).
 [4] Same, the trigger_now recorder now writes both dressed views: generate ->
     {dress: true}; trigger_now once, then trigger_generation(Demo,
-    force=True, followup=True) — a forced rebuild, not the cached check.
+    force=True) — a forced rebuild, not the cached check (recorded as
+    (Demo, True, "", followup False)).
 [5] Dressed views current: generate (also ?force=0) -> {dress: false}; no
-    trigger_now; trigger_generation(Demo, force=True, followup=True).
-[6] Demo in model3d._generating -> {status: already_running}, nothing
-    triggered.
+    trigger_now; trigger_generation(Demo, force=True).
+[6] A forced rebuild is never lost (ruling 2026-11-09). Demo in
+    model3d._generating (another model job runs; POLL_SECONDS 0.02):
+    two clicks -> {status: queued} twice, _pending == {(Demo, OSIG)},
+    pipeline_state queued True, nothing triggered while busy (0.2 s).
+    Job ends (guard released) -> exactly ONE trigger_generation(Demo,
+    force=True), _pending empty, no waiter left.
+    [6b] the model run itself finds a job started meanwhile (recorder
+    answers False once): the rebuild queues itself -> the waiter runs it
+    again -> two recorded calls, both forced, the second accepted.
+    [6c] a queued rebuild of an outfit no longer worn (signature
+    "deadbeef") is dropped when the job ends: no trigger.
 [7] Refusals on the pipeline (409, REFUSED with the action):
     upload "Uploading a model", fetch-job "Fetching a mesh job",
     rig "Changing the rig label". Plain: upload of an invalid GLB -> 422
@@ -63,8 +73,19 @@ Expected, derived by hand from the rules in the module docstring:
     built on base00000000) -> rebuilt in this order: [BSIG, 0aaaaaaa];
     base00000000 and 1bbbbbbb {ok: True, skipped: "stale"}. Plain with
     1ccccccc.glb and 0ddddddd.glb -> [0ddddddd, 1ccccccc] (sorted, all).
-[11] GET /model3d: Demo carries pipeline {base_signature BSIG, base_model
-    "ready", rerig_source True, dressed_current True, rebuilding False};
+[12] Improvements "extension_rig_rebuild" completion (is_done) on the same
+    Demo models: before any extension state -> False. After the rebuild
+    wrote states on its TARGETS only — BSIG.glb (base, rig mixamo,
+    status applied, fingerprint of the groups a base carries, no distance
+    tier: a base body has none) and 0aaaaaaa.glb (applied + low/0aaaaaaa.glb
+    with the same fingerprint) -> True, find_candidates -> [], although the
+    stale 1bbbbbbb.glb and the older base00000000.glb carry no state at all
+    (the old check looked at every *.glb and wanted a low tier for the base
+    too, so it never reported done). Without low/0aaaaaaa.glb -> False.
+[11] GET /model3d (get_model3d_info stubbed — it probes the mesh backends
+    over the network): Demo carries pipeline {base_signature BSIG, base_model
+    "ready", rerig_source True, dressed_current True, rebuilding False,
+    queued False};
     Plain carries pipeline None.
 """
 import hashlib
@@ -115,9 +136,11 @@ def main() -> int:
         GENERATIONS, DRESS, RERIGS = [], [], []
         dress_writes = {"on": False}
 
+        GEN_ANSWERS = []  # queued answers of the recorder; True when empty
+
         def fake_generation(name, **kw):
             GENERATIONS.append((name, kw.get("force", False), kw.get("backend_glob", ""), kw.get("followup", False)))
-            return True
+            return GEN_ANSWERS.pop(0) if GEN_ANSWERS else True
 
         def fake_trigger_now(name, kinds=None, **kw):
             DRESS.append((name, tuple(kinds or ()), kw.get("force"), kw.get("blocking")))
@@ -225,7 +248,7 @@ def main() -> int:
                   (200, {"status": "generating", "dress": True}))
             settle()
             check("dressed first", DRESS, [("Demo", ("tpose",), False, True)])
-            check("forced model run", GENERATIONS, [("Demo", True, "", True)])
+            check("forced model run", GENERATIONS, [("Demo", True, "", False)])
             DRESS.clear()
             GENERATIONS.clear()
 
@@ -235,17 +258,54 @@ def main() -> int:
                   (200, {"status": "generating", "dress": False}))
             settle()
             check("no dressing", DRESS, [])
-            check("forced model run", GENERATIONS, [("Demo", True, "", True)])
+            check("forced model run", GENERATIONS, [("Demo", True, "", False)])
             GENERATIONS.clear()
 
-            print("[6] a model job runs")
+            print("[6] a model job runs: the forced rebuild waits, never lost")
+            model3d_pipeline.POLL_SECONDS = 0.02
+
+            def idle():
+                for _ in range(300):
+                    with model3d_pipeline._lock:
+                        if (not model3d_pipeline._waiters and not model3d_pipeline._rebuilding
+                                and not model3d_pipeline._pending):
+                            return
+                    time.sleep(0.02)
+                FAILS.append("waiter did not finish")
+
             with model3d._lock:
                 model3d._generating.add("Demo")
-            check("already running", call("POST", "/characters/Demo/model3d/generate"),
-                  (200, {"status": "already_running"}))
+            for click in (1, 2):
+                check(f"click {click}", call("POST", "/characters/Demo/model3d/generate"),
+                      (200, {"status": "queued"}))
+            check("pending", set(model3d_pipeline._pending), {("Demo", osig)})
+            check("state queued", model3d_pipeline.pipeline_state("Demo")["queued"], True)
+            time.sleep(0.2)
+            check("nothing while busy", (GENERATIONS, DRESS), ([], []))
             with model3d._lock:
                 model3d._generating.discard("Demo")
-            check("nothing triggered", (GENERATIONS, DRESS), ([], []))
+            idle()
+            check("one forced run after the job", GENERATIONS, [("Demo", True, "", False)])
+            check("nothing pending", (set(model3d_pipeline._pending), set(model3d_pipeline._waiters)),
+                  (set(), set()))
+            GENERATIONS.clear()
+
+            print("[6b] a job starts between the check and the model run")
+            GEN_ANSWERS.append(False)
+            check("rebuild", call("POST", "/characters/Demo/model3d/generate"),
+                  (200, {"status": "generating", "dress": False}))
+            idle()
+            check("re-run forced", GENERATIONS, [("Demo", True, "", False), ("Demo", True, "", False)])
+            GENERATIONS.clear()
+
+            print("[6c] a queued rebuild of an outfit no longer worn")
+            with model3d._lock:
+                model3d._generating.add("Demo")
+            model3d_pipeline._queue_forced("Demo", "deadbeef")
+            with model3d._lock:
+                model3d._generating.discard("Demo")
+            idle()
+            check("dropped", (GENERATIONS, DRESS), ([], []))
 
             print("[7] refusals")
             glb = {"file": ("x.glb", b"not a glb", "model/gltf-binary")}
@@ -272,11 +332,14 @@ def main() -> int:
                   (409, "No retained unrigged mesh source. Generate a new model to enable re-rigging."))
 
             print("[11] status payload")
+            # The model part of the payload probes the mesh backends (network):
+            # stubbed — only the route's pipeline annotation is under test.
+            model3d.get_model3d_info = lambda name, preview_states=None: {"pending": False, "model": None}
             status = call("GET", "/characters/Demo/model3d")
             check("Demo GET", status[0], 200)
             check("Demo pipeline", (status[1] or {}).get("pipeline"),
                   {"base_signature": bsig, "base_model": "ready", "rerig_source": True,
-                   "dressed_current": True, "rebuilding": False})
+                   "dressed_current": True, "rebuilding": False, "queued": False})
             plain = call("GET", "/characters/Plain/model3d")
             check("Plain pipeline", (plain[0], "pipeline" in (plain[1] or {}), (plain[1] or {}).get("pipeline")),
                   (200, True, None))
@@ -319,6 +382,35 @@ def main() -> int:
         (pmodels / "0ddddddd.glb").write_bytes(b"glTF")
         real.rebuild_character_extension_rigs("Plain")
         check("Plain order", ORDER, [("Plain", "0ddddddd"), ("Plain", "1ccccccc")])
+
+        print("[12] extension_rig_rebuild completion on the pipeline")
+        from app.core.extension_rig import extension_rig_fingerprint, rig_groups_for
+        from app.core.improvements.base import Candidate
+        from app.core.improvements.types.extension_rig_rebuild import ExtensionRigRebuild
+        improvement = ExtensionRigRebuild()
+        params = {"character": "Demo"}
+        candidate = Candidate("character:Demo", "Demo")
+        check("not done before", improvement.is_done(candidate, params), False)
+        groups = rig_groups_for("Demo")
+        base_groups = [g for g in groups if g["op"] not in model3d.PART_OPS]
+
+        def state(declared):
+            return {"attempted": True, "status": "applied",
+                    "fingerprint": extension_rig_fingerprint(declared, {})}
+
+        (models / f"{bsig}.json").write_text(json.dumps({"rig": "mixamo", "base": True,
+                                                          "extension_rig": state(base_groups)}))
+        outfit_meta = {"base_signature": bsig, "base_model_sha256": base_sha, "rig": "mixamo",
+                       "extension_rig": state(groups)}
+        (models / "0aaaaaaa.json").write_text(json.dumps(outfit_meta))
+        (models / "low").mkdir(exist_ok=True)
+        (models / "low" / "0aaaaaaa.glb").write_bytes(b"glTF-low")
+        (models / "low" / "0aaaaaaa.json").write_text(json.dumps({"extension_rig": state(groups)}))
+        check("targets", [p.stem for p in model3d.extension_rebuild_targets("Demo")[0]], [bsig, "0aaaaaaa"])
+        check("done after the rebuild", improvement.is_done(candidate, params), True)
+        check("no candidates", improvement.find_candidates(params), [])
+        (models / "low" / "0aaaaaaa.glb").unlink()
+        check("outfit needs its distance tier", improvement.is_done(candidate, params), False)
 
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))

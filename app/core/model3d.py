@@ -1671,26 +1671,48 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
     return result
 
 
-def rebuild_character_extension_rigs(character_name: str) -> Dict[str, Any]:
-    """Rebuild every stored full model of one character for the Improvements queue.
-
-    Base-body pipeline: the CURRENT base model goes first — every outfit
-    model is built from it, so an outfit rebuilt before it would be stale
-    the moment the base changes. A base model of an older base signature
-    and an outfit model that is stale anyway (``find_model3d`` does not
-    find it; rebuilt on its next trigger) are skipped, not failed."""
+def extension_rebuild_targets(character_name: str) -> tuple[List[Path], List[Path]]:
+    """``(targets, skipped)``: the stored full models (``*.glb``, no state
+    forks) that "Rebuild extension bones for all models" rebuilds, in that
+    order, and the ones it leaves alone. Off the pipeline every model is a
+    target, sorted by name. Base-body pipeline: the CURRENT base model goes
+    first — every outfit model is built from it, so an outfit rebuilt before
+    it would be stale the moment the base changes; a base model of an older
+    base signature and an outfit model that is stale anyway (``find_model3d``
+    does not find it; rebuilt on its next trigger) are skipped. The
+    Improvements type ``extension_rig_rebuild`` checks completion on the
+    same targets."""
     from app.core.base_body import is_base_signature
     from app.core.model_refs import is_state_fork
     current = _current_base(character_name)
     paths = sorted((path for path in get_model3d_dir(character_name).glob("*.glb")
                     if not is_state_fork(path.stem)),
                    key=lambda path: (not current or path.stem != current[0], path.stem))
-    results = {}
+    targets: List[Path] = []
+    skipped: List[Path] = []
     for path in paths:
-        if current and (is_base_signature(path.stem) and path.stem != current[0]
-                        or find_model3d(character_name, path.stem) is None):
-            results[path.stem] = {"ok": True, "skipped": "stale"}
-            continue
+        stale = bool(current) and (is_base_signature(path.stem) and path.stem != current[0]
+                                   or find_model3d(character_name, path.stem) is None)
+        (skipped if stale else targets).append(path)
+    return targets, skipped
+
+
+def extension_state_current(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
+    """Public form of ``_extension_state_current`` (the Improvements type's
+    completion check): the stored extension state of ``path`` matches what a
+    rebuild would produce now — with the groups THIS model carries (a base
+    body without the anatomy parts, a covered variant without the
+    exposed-only groups)."""
+    return _extension_state_current(character_name, path, meta)
+
+
+def rebuild_character_extension_rigs(character_name: str) -> Dict[str, Any]:
+    """Rebuild every stored full model of one character for the Improvements
+    queue — the targets of ``extension_rebuild_targets``; skipped models
+    report ``{"ok": True, "skipped": "stale"}``, never a failure."""
+    targets, skipped = extension_rebuild_targets(character_name)
+    results: Dict[str, Any] = {path.stem: {"ok": True, "skipped": "stale"} for path in skipped}
+    for path in targets:
         results[path.stem] = rebuild_extension_rig(character_name, path.stem, force=True)
     return {"ok": all(result.get("ok") for result in results.values()), "models": results}
 

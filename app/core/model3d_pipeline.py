@@ -13,7 +13,15 @@ job). The 3D tab's actions therefore split three ways (audit 2026-11-09):
   are rendered first in the T-pose lane (``model_refs.trigger_now`` blocking,
   ``force=False``: current views are kept, only the stale ones cost a GPU
   edit); then the outfit model is built with ``force`` — a model that is
-  already current is rebuilt as well (the admin asked for it).
+  already current is rebuilt as well (the admin asked for it). A rebuild
+  asked for while another model job of the character runs is never lost:
+  it is recorded per (character, outfit signature) — repeated clicks keep
+  one — and runs, forced, once the character's model jobs have ended
+  (``_wait_and_run``; every job kind holds ``model3d._generating``, the
+  re-rig and face jobs included, so the waiter watches that guard rather
+  than the outfit follow-up of ``model3d._run``). If the character wears
+  another outfit by then, the recorded rebuild is dropped with a log line:
+  the outfit change builds the new outfit's model itself.
 * **Act on the base body**: re-rig, face retexture and its revert. The base
   model is the only rigged mesh with a retained unrigged source; changing it
   marks every outfit model stale (``base_model_sha256``), and they are
@@ -28,6 +36,7 @@ file the same way on both paths.
 """
 import logging
 import threading
+import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -43,6 +52,12 @@ BASE_MODEL_FIRST = "Generate the rigged base model first (Base body tab)"
 
 _lock = threading.Lock()
 _rebuilding: set = set()
+# Forced rebuilds asked for while a model job ran: {(character, outfit
+# signature)}, and the characters whose waiter thread is alive.
+_pending: set = set()
+_waiters: set = set()
+#: How often a waiter looks at the generation guard (seconds).
+POLL_SECONDS = 2.0
 
 
 def pipeline_state(character_name: str) -> Optional[Dict[str, Any]]:
@@ -52,7 +67,9 @@ def pipeline_state(character_name: str) -> Optional[Dict[str, Any]]:
     when there is none), ``rerig_source`` whether its unrigged source is
     retained (what a re-rig needs), ``dressed_current`` whether every
     dressed view of the current outfit lines up with the current base,
-    ``rebuilding`` whether a ``rebuild_from_base`` run is in progress."""
+    ``rebuilding`` whether a ``rebuild_from_base`` run is in progress,
+    ``queued`` whether a forced rebuild of the current outfit waits for a
+    running model job."""
     from app.core import base_body
     from app.core.model3d import get_model3d_dir
     from app.core.model_refs import current_outfit_state
@@ -71,11 +88,13 @@ def pipeline_state(character_name: str) -> Optional[Dict[str, Any]]:
         for view in base_body.dressed_views())
     with _lock:
         rebuilding = character_name in _rebuilding
+        queued = (character_name, signature) in _pending
     return {"base_signature": bsig,
             "base_model": (model or {}).get("status"),
             "rerig_source": (get_model3d_dir(character_name) / "unrigged" / f"{bsig}.glb").is_file(),
             "dressed_current": dressed,
-            "rebuilding": rebuilding}
+            "rebuilding": rebuilding,
+            "queued": queued}
 
 
 def annotate(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
@@ -103,11 +122,14 @@ def refusal(character_name: str, action: str) -> str:
 
 def rebuild_from_base(character_name: str) -> Dict[str, Any]:
     """Rebuild the CURRENT outfit's model from the base body (see the module
-    docstring). Starts a worker thread; ``{"status": "generating"}``, or
-    ``{"status": "already_running"}`` while a rebuild or any model job of
-    the character runs. ``ValueError`` off the pipeline, ``LookupError``
-    (``BASE_MODEL_FIRST``) without a ready base model."""
+    docstring). Starts a worker thread; ``{"status": "generating"}``;
+    ``{"status": "already_running"}`` while a rebuild is in progress (it
+    does this one); ``{"status": "queued"}`` while another model job of the
+    character runs (the rebuild runs, forced, once it has ended).
+    ``ValueError`` off the pipeline, ``LookupError`` (``BASE_MODEL_FIRST``)
+    without a ready base model."""
     from app.core import model3d
+    from app.core.model_refs import current_outfit_state
     state = pipeline_state(character_name)
     if state is None:
         raise ValueError("The character is not on the base-body pipeline")
@@ -117,9 +139,12 @@ def rebuild_from_base(character_name: str) -> Dict[str, Any]:
         if character_name in _rebuilding:
             return {"status": "already_running"}
         with model3d._lock:
-            if character_name in model3d._generating:
-                return {"status": "already_running"}
-        _rebuilding.add(character_name)
+            busy = character_name in model3d._generating
+        if not busy:
+            _rebuilding.add(character_name)
+    if busy:
+        _queue_forced(character_name, current_outfit_state(character_name)[2])
+        return {"status": "queued"}
     threading.Thread(target=_rebuild, args=[character_name, state["dressed_current"]],
                      daemon=True).start()
     return {"status": "generating", "dress": not state["dressed_current"]}
@@ -142,11 +167,61 @@ def _rebuild(character_name: str, dressed_current: bool) -> None:
             logger.warning("Model3D %s: rebuild from the base body stopped — dressed views not current",
                            character_name)
             return
-        if not model3d.trigger_generation(character_name, force=True, followup=True):
-            logger.info("Model3D %s: rebuild from the base body queued behind the running job",
-                        character_name)
+        if not model3d.trigger_generation(character_name, force=True):
+            # A job started meanwhile: the forced rebuild waits for it.
+            from app.core.model_refs import current_outfit_state
+            _queue_forced(character_name, current_outfit_state(character_name)[2])
     except Exception:  # noqa: BLE001
         logger.exception("Model3D %s: rebuild from the base body failed", character_name)
     finally:
         with _lock:
             _rebuilding.discard(character_name)
+
+
+def _queue_forced(character_name: str, signature: str) -> None:
+    """Record a forced rebuild of ``signature`` for when the character's
+    running model job ends; one waiter thread per character."""
+    with _lock:
+        _pending.add((character_name, signature))
+        if character_name in _waiters:
+            return
+        _waiters.add(character_name)
+    logger.info("Model3D %s: rebuild from the base body queued behind the running model job",
+                character_name)
+    threading.Thread(target=_wait_and_run, args=[character_name], daemon=True).start()
+
+
+def _wait_and_run(character_name: str) -> None:
+    """Waiter of ``_queue_forced``: once neither a model job nor a rebuild
+    of the character runs, take its recorded rebuilds and run the one of
+    the outfit worn now (``rebuild_from_base`` — a job that started in the
+    same instant queues it again, never drops it)."""
+    from app.core import model3d
+    from app.core.model_refs import current_outfit_state
+    while True:
+        time.sleep(POLL_SECONDS)
+        with _lock:
+            with model3d._lock:
+                busy = character_name in model3d._generating
+            if busy or character_name in _rebuilding:
+                continue
+            wanted = {sig for name, sig in _pending if name == character_name}
+            _pending.difference_update((character_name, sig) for sig in wanted)
+            _waiters.discard(character_name)
+            break
+    try:
+        signature = current_outfit_state(character_name)[2]
+    except Exception:  # noqa: BLE001
+        signature = ""
+    for dropped in sorted(wanted - {signature}):
+        logger.info("Model3D %s: queued rebuild of %s dropped — another outfit is worn now",
+                    character_name, dropped)
+    if signature not in wanted:
+        return
+    try:
+        result = rebuild_from_base(character_name)
+        logger.info("Model3D %s: queued rebuild from the base body: %s", character_name, result.get("status"))
+    except (LookupError, ValueError) as exc:
+        logger.warning("Model3D %s: queued rebuild from the base body not started: %s", character_name, exc)
+    except Exception:  # noqa: BLE001
+        logger.exception("Model3D %s: queued rebuild from the base body failed", character_name)
