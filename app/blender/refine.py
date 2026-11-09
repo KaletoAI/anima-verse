@@ -66,7 +66,8 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
                  keep_original: bool = True,
                  base_joints_only: bool = False,
                  frame_allowance: Optional[Callable[[Dict[str, Any]], Dict[str, float]]] = None,
-                 timeout_s: int = 0
+                 timeout_s: int = 0,
+                 extra_inputs: Optional[Dict[str, Path]] = None
                  ) -> Dict[str, Any]:
     """Runs a mesh-modifying script and swaps its result in ONLY if it earns it.
 
@@ -83,7 +84,9 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
     without it a bad refinement would be final.
 
     Returns ``{"ok", "applied", "data", "error"}``. ``ok`` says the script ran,
-    ``applied`` says the file on disk changed.
+    ``applied`` says the file on disk changed. ``extra_inputs`` are further
+    read-only files handed to the script under their slot names (normalize's
+    ``source``, the unrigged mesh); the model itself stays slot ``model``.
     """
     import shutil
     import tempfile
@@ -92,7 +95,7 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
     path = Path(path)
     out: Dict[str, Any] = {"ok": False, "applied": False, "data": {}, "error": ""}
     with tempfile.TemporaryDirectory(prefix="av-refine-") as tmp:
-        res = runner.run(script, inputs={"model": path}, params=params,
+        res = runner.run(script, inputs={"model": path, **(extra_inputs or {})}, params=params,
                          out_dir=Path(tmp), timeout_s=timeout_s)
         out["data"] = res.get("data") or {}
         if not res.get("ok"):
@@ -226,7 +229,8 @@ def auto_normalize_enabled() -> bool:
 
 def normalize(path: Path, target_height_m: float,
               validator: Optional[Callable[[bytes], Dict[str, Any]]] = None,
-              repair_limb_weights: bool = False
+              repair_limb_weights: bool = False,
+              posture_source: Optional[Path] = None
               ) -> Dict[str, Any]:
     """Scales a model to its real height, grounds it and bakes the transforms.
 
@@ -235,15 +239,24 @@ def normalize(path: Path, target_height_m: float,
     (crown joint vs bounding box) is the script's call; what comes back in
     ``data`` (basis, scale, before/after) is what the sidecar keeps against a
     second run.
+
+    ``posture_source`` is the UNRIGGED mesh the rigger was given: with it the
+    script turns the trunk/neck/head chain back into that mesh's posture
+    (the rigger re-poses into its own canonical rest and leans the chain by a
+    noisy amount — ``normalize._restore_posture``); the pitch it applies per
+    bone is reported under ``data["posture"]["applied"]`` and is, like the
+    head untwist, the ONLY joint-frame change the frame gate lets through.
     """
     from app.core import config
+    source = Path(posture_source) if posture_source else None
     return apply_script(path, "normalize",
                         {"target_height_m": float(target_height_m),
                          "repair_limb_weights": bool(repair_limb_weights)},
                         validator=validator, require_smaller=False,
                         keep_original=bool(config.get(
                             "image_generation.blender_keep_original", True)),
-                        frame_allowance=head_twist_allowance)
+                        frame_allowance=normalize_allowance,
+                        extra_inputs={"source": source} if source and source.is_file() else None)
 
 
 def limb_weights(path: Path,
@@ -280,6 +293,39 @@ def head_twist_allowance(data: Dict[str, Any]) -> Dict[str, float]:
             continue
         if math.isfinite(deg):
             out[joint] = deg
+    return out
+
+
+def posture_allowance(data: Dict[str, Any]) -> Dict[str, float]:
+    """The joint-frame pitch normalize's posture restore applied ON PURPOSE —
+    per trunk/neck/head bone the angle under ``posture.applied``, same rule
+    as ``head_twist_allowance``: nothing without a correction, nothing for a
+    joint outside the chain, nothing non-finite."""
+    import math
+    posture = data.get("posture") or {}
+    if not posture.get("corrected"):
+        return {}
+    out: Dict[str, float] = {}
+    for joint, value in (posture.get("applied") or {}).items():
+        if joint not in ("spine", "spine1", "spine2", "neck", "head"):
+            continue
+        try:
+            deg = abs(float(value))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(deg):
+            out[joint] = deg
+    return out
+
+
+def normalize_allowance(data: Dict[str, Any]) -> Dict[str, float]:
+    """Everything normalize moved on purpose: the untwist (about the joint's
+    own axis) and the posture pitch (about the medio-lateral axis) may both
+    touch Neck and Head, and two rotations compose to at most the SUM of
+    their angles — so a joint named by both gets the sum."""
+    out = head_twist_allowance(data)
+    for joint, deg in posture_allowance(data).items():
+        out[joint] = out.get(joint, 0.0) + deg
     return out
 
 

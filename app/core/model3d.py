@@ -1885,9 +1885,15 @@ def _auto_normalize(character_name: str, path: Path,
             logger.warning("Model3D %s: weight repair failed (%s)", character_name, report["error"])
         return
     target = _target_height_m(character_name)
+    # The unrigged mesh the rigger was given is the ground truth of the
+    # posture: the rigger re-poses into its own rest and leans the trunk by a
+    # noisy amount (normalize._restore_posture) — nothing without the source.
+    unrigged = path.parent / "unrigged" / f"{path.stem}.glb"
     res = refine.normalize(path, target,
                            repair_limb_weights=(meta.get("rig") == "mixamo"),
-                           validator=_validator_for(meta.get("rig") or "", character_name))
+                           validator=_validator_for(meta.get("rig") or "", character_name),
+                           posture_source=unrigged if (meta.get("rig") == "mixamo"
+                                                       and unrigged.is_file()) else None)
     data = res.get("data") or {}
     if not res.get("applied"):
         if required or fail_on_error:
@@ -1908,6 +1914,8 @@ def _auto_normalize(character_name: str, path: Path,
     }
     if "head_twist" in data:
         meta["blender"]["head_twist"] = data["head_twist"]
+    if "posture" in data:
+        meta["blender"]["posture"] = data["posture"]
     if "limb_weights" in data:
         meta["blender"]["limb_weights"] = data["limb_weights"]
         if not data["limb_weights"].get("error"):

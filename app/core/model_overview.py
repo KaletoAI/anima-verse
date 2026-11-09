@@ -162,6 +162,31 @@ def _head_twist_step(blender: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 f"straight ({abs(head):.1f}°)" if head is not None else "straight", numbers)
 
 
+def _posture_step(blender: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """normalize's posture restore against the unrigged mesh: the forward
+    excess of the head band over the source before/after, in cm."""
+    posture = _dict(blender.get("posture"))
+    if not posture:
+        return None
+    before = _dict(posture.get("before"))
+    after = _dict(posture.get("after"))
+    numbers = {"head_before_cm": _num(before.get("head_mid")), "head_after_cm": _num(after.get("head_mid"))}
+    if posture.get("error"):
+        return step("posture", "Posture", FAILED, str(posture["error"]), numbers)
+    head_before = _num(before.get("head_mid"))
+    head_after = _num(after.get("head_mid"))
+    if posture.get("corrected"):
+        applied = _dict(posture.get("applied"))
+        largest = max((abs(_num(v) or 0.0) for v in applied.values()), default=0.0)
+        detail = f"head {head_before:+.1f} → {head_after:+.1f} cm" if head_before is not None and head_after is not None \
+            else "corrected"
+        if largest:
+            detail += f" · up to {largest:.1f}°"
+        return step("posture", "Posture", DONE, detail, numbers)
+    return step("posture", "Posture", DONE,
+                f"as the source ({head_before:+.1f} cm)" if head_before is not None else "as the source", numbers)
+
+
 def _normalize_step(blender: Dict[str, Any]) -> Dict[str, Any]:
     if "normalize" not in (blender.get("steps") or []):
         return step("normalize", "Normalize", NOT_RECORDED, "Not run")
@@ -424,7 +449,7 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
     rows = [_hand_gate_step(front_meta), _mesh_step(meta), _face_cleanup_step(meta),
             *_face_steps(_dict(meta.get("face_retexture"))),
             _rig_step(meta)]
-    for row in (_head_twist_step(blender), _normalize_step(blender),
+    for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _covered_step(_dict(meta.get("covered_variant")), exists=covered_exists, current=covered_current),
