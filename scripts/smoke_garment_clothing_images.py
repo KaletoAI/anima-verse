@@ -54,10 +54,12 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
         neckline rows [320, 340) grey (open), rows [340, 350) cols [472, 552)
         the inside of the back (25, 60, 35): bbox [380, 320, 643, bottom] ->
         top_dy 0, centre_dx 0, w_ratio 1.0, skin_left 0, outside 0 (for
-        bottom <= 759 + 6), neck_fill <= 10 / 30 rows ~ 0.33 <= 0.70 -> ok.
+        bottom <= 759 + 6), neck_fill <= 10 / 30 rows ~ 0.33 (reported) -> ok.
         hem_t = (bottom - 100) / 999.
   GHOST_CLOSED = GHOST(759) with the neckline filled in dress green: neck_fill
-        1.0 > 0.70 -> refused ("neckline closed").
+        1.0, reported but NOT gated (the 0.70 gate was retired 2026-11-09: a
+        ghost refused at 0.832 still meshed into an open neckline) -> ok,
+        no reasons; outside stays 0 (the notch is left out of it).
   GHOST_LEGS   = GHOST(759) + the torso rows [780, 1100) in skin: skin far
         outside G -> skin_left > 0.005 -> refused ("skin left in the image").
   GHOST_WIDE   = GHOST(759) with cols [356, 668): w_ratio 311 / 263 = 1.183
@@ -266,14 +268,16 @@ def gates_part(gg, kept):
                        good["outside"], good["neckline_depth"], good["bottom"], good["hem_t"]),
           (True, 0.0, 0.0, 1.0, 0.0, 0.0, 0.03, 759, 0.65966))
     check("ghost neck_fill <= 0.4", good["neck_fill"] is not None and good["neck_fill"] <= 0.4, True)
-    check("closed refused", reason(ghost_gate(GHOST_CLOSED), "neckline closed"), (False, True))
+    closed = ghost_gate(GHOST_CLOSED)
+    check("closed neckline reported, not refused", (closed["ok"], closed["reasons"], closed["neck_fill"],
+                                                     closed["outside"]), (True, [], 1.0, 0.0))
     check("legs refused", reason(ghost_gate(GHOST_LEGS), "skin left in the image"), (False, True))
     check("wide refused", reason(ghost_gate(GHOST_WIDE), "garment width changed"), (False, True))
     raised = ghost_gate(GHOST_RAISED)
     check("raised refused", (reason(raised, "garment top moved"), raised["top_dy"]), ((False, True), -0.01001))
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
           {"worn": ["garment_share", "head_garment", "outside_dRGB", "outside_xor"],
-           "ghost": ["centre_dx", "neck_fill", "outside", "skin_left", "top_dy", "w_ratio"]})
+           "ghost": ["centre_dx", "outside", "skin_left", "top_dy", "w_ratio"]})
     check("limits hair unchanged", sorted(gg.limits()), ["ghost", "haired"])
 
     print("[4] hems")

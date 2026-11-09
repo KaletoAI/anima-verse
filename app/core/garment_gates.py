@@ -340,15 +340,24 @@ def bottoms_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Opt
 #   s52 + legs    +0.00069   -0.00413   1.207    0.2223     0.3065   0.542
 #   worn front    -0.146     +0.00069   1.580    0.4389     0.5829   0.998
 #   back (taken)  -0.0028    +0.00035   1.007    0.0        0.0002   (no neckline)
-#   limit       |..|<=0.0055 |..|<=0.007 [0.95,1.05] <=0.005 <=0.05  <=0.70
-# s51 and s53 are told from s52 by the neckline: the inside of the back
-# fills 77 % / 80 % of the worn neckline opening instead of 54 % (the
-# opening shrinks) — NECK_FILL_MAX lies between them. Their shoulders also
-# sit 6 and 7 px higher (top_dy -0.0041 / -0.0048 against +0.0007), but the
-# accepted BACK ghost moved 4 px (-0.0028), so top_dy keeps the hair gate's
-# 8 px (0.0055 Hb) instead of a cut between 4 and 6 px on one sample.
+#   limit       |..|<=0.0055 |..|<=0.007 [0.95,1.05] <=0.005 <=0.05  (reported)
+# s51 and s53 differ from s52 at the neckline: the inside of the back
+# fills 77 % / 80 % of the worn neckline opening instead of 54 %. A gate at
+# 0.70 was cut between them and RETIRED after the first end-to-end run
+# (2026-11-09, Kira, a green linen dress): the ghost front refused at
+# neck_fill 0.832 was meshed and fitted anyway (UniForge3D-Multiview, fit on
+# the same base) against the accepted ghost (0.411) — the neck opening of
+# the prepared mesh, seen from above, was 144 cm² against 166 cm² (both
+# wider than the neck), no face within 1 cm of the neck in the 3 cm below the
+# neckline in either fit, 0/63 throat rays covered, fit accepted (max push
+# 5.4 cm against 4.9 cm). The generator closes no sheet over a filled
+# notch, so ``neck_fill`` is recorded and shown, never refused. The s51/s53
+# shoulders also sit 6 and 7 px higher (top_dy -0.0041 / -0.0048 against
+# +0.0007), but the accepted BACK ghost moved 4 px (-0.0028), so top_dy keeps
+# the hair gate's 8 px (0.0055 Hb) instead of a cut between 4 and 6 px on
+# one sample.
 # The front neckline is 31 px deep (0.0213 Hb), the back's 13 px (0.0091 Hb):
-# a neckline counts from NECKLINE_MIN_DEPTH, so only the front is checked.
+# a neckline counts from NECKLINE_MIN_DEPTH, so only the front reports neck_fill.
 # ``outside`` leaves the neckline opening out (s52 shows the inside of the
 # back there: 0.0036 with it, 0.0010 without).
 #
@@ -387,7 +396,6 @@ SKIN_LEFT_MAX = 0.005       # skin outside the garment region / garment area
 CLOTH_OUTSIDE_MAX = 0.05    # ghost pixels outside the garment region / garment area
 NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
 NECKLINE_BAND = 0.03        # ± this share of the garment width around its centre column
-NECK_FILL_MAX = 0.70        # share of the worn neckline opening the ghost may cover
 HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
 
 
@@ -535,8 +543,9 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     there except in the neckline opening (the inside of the back shows
     there), over the region's area (<= 0.05: no stand, hanger or wider
     garment). When the region has a neckline (``neckline`` depth >= 0.012·Hb)
-    ``neck_fill`` = the share of its opening the ghost mask covers (<= 0.70:
-    the opening stays; the inside of the back is seen through it).
+    ``neck_fill`` = the share of its opening the ghost mask covers — reported,
+    not gated (a filled notch still meshes into an open neckline, see the
+    calibration block).
     ``bottom`` (row) and ``hem_t`` = (bottom − y0) / Hb feed ``hems_agree``.
     Calibration: the "Clothing" block above."""
     _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
@@ -588,8 +597,6 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
         reasons.append(f"skin left in the image: {_r(skin_left, 4)} > {SKIN_LEFT_MAX}")
     if outside > CLOTH_OUTSIDE_MAX:
         reasons.append(f"more than the garment in the image: {_r(outside, 4)} > {CLOTH_OUTSIDE_MAX}")
-    if neck_fill is not None and neck_fill > NECK_FILL_MAX:
-        reasons.append(f"neckline closed: {_r(neck_fill, 3)} of the opening covered > {NECK_FILL_MAX}")
     return {**out, "top_dy": _r(top_dy, 5), "centre_dx": _r(centre_dx, 5), "w_ratio": round(w_ratio, 3),
             "h_ratio": round(h_ratio, 3), "iou": round(iou, 3), "skin_left": _r(skin_left, 5),
             "outside": _r(outside, 5), "neckline_depth": _r(depth, 4), "neck_fill": _r(neck_fill, 3),
@@ -658,7 +665,6 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
                 "w_ratio": {"op": "range", "value": [CLOTH_W_RATIO_MIN, CLOTH_W_RATIO_MAX]},
                 "skin_left": {"op": "le", "value": SKIN_LEFT_MAX},
                 "outside": {"op": "le", "value": CLOTH_OUTSIDE_MAX},
-                "neck_fill": {"op": "le", "value": NECK_FILL_MAX},
             },
         }
     if kind != "hair":
