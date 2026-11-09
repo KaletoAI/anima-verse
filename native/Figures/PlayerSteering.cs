@@ -104,6 +104,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     }
 
     /// <summary>Task 49: ordering matches main.ts; held bridges suppress both goal and facing until the snap on release.</summary>
+    private bool _sprintLogged;
+
     public void Step(double dt, IReadOnlySet<string> keys, double yaw)
     {
         using var hitch = AnimaNative.Ui.HitchLog.Time("PlayerSteering");
@@ -137,6 +139,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         var keyDir=Walk.WalkDir(keys,yaw);
         // SHIFT RUNS — only while the keys walk the figure; a click order walks (walk.ts sprintHeld).
         bool sprint=Walk.SprintHeld(keys,keyDir);
+        if (sprint!=_sprintLogged)
+        { _sprintLogged=sprint; Godot.GD.Print($"[steer] run {(sprint ? "on" : "off")} keys=[{string.Join(",",keys)}]"); }
         P2? dir=keyDir;
         if (dir is not null) CancelRoute();
         double reach=double.PositiveInfinity;

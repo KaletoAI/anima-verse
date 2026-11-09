@@ -111,7 +111,11 @@ public partial class OverviewCamera : Camera3D
     public override void _Process(double delta)
     {
         using var hitch = AnimaNative.Ui.HitchLog.Time("OverviewCamera/OverviewControl");
-        if (KeysBlocked?.Invoke() == true) Control.ReleaseKeys();
+        if (KeysBlocked?.Invoke() == true)
+        {
+            if (Control.KeysDown.Count > 0) GD.Print($"[keys] released [{string.Join(",", Control.KeysDown)}]: the HUD owns the keyboard");
+            Control.ReleaseKeys();
+        }
         Step(delta);
     }
 
@@ -252,6 +256,8 @@ public partial class OverviewCamera : Camera3D
             case InputEventKey k:
             {
                 if (KeyName(k) is not { } name) break;
+                if (k.Keycode != Key.Shift && Control.SyncShift(k.ShiftPressed))
+                    GD.Print($"[keys] shift {(k.ShiftPressed ? "restored" : "dropped")} from the modifier state of '{name}'");
                 if (k.Pressed) Control.KeyDown(name);
                 else Control.KeyUp(name);
                 break;
@@ -263,7 +269,11 @@ public partial class OverviewCamera : Camera3D
     {
         if (what == NotificationWMMouseExit) Hovered?.Invoke(null);
         // The key-ups of a window that lost the focus never arrive.
-        if (what == NotificationApplicationFocusOut) { Control.ReleaseKeys(); Photo.ReleaseKeys(); _photoDrag = false; }
+        if (what == NotificationApplicationFocusOut)
+        {
+            if (Control.KeysDown.Count > 0) GD.Print($"[keys] released [{string.Join(",", Control.KeysDown)}]: the window lost the focus");
+            Control.ReleaseKeys(); Photo.ReleaseKeys(); _photoDrag = false;
+        }
     }
 
     private static PointerButton ButtonOf(MouseButton b) => b switch

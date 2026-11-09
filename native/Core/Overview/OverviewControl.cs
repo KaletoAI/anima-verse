@@ -201,6 +201,15 @@ public sealed class OverviewControl
 
     public void KeyUp(string key) => _keys.Remove(key);
 
+    /// <summary>
+    /// The OS modifier state every tracked key event carries (Godot's <c>ShiftPressed</c>, the DOM's <c>shiftKey</c>):
+    /// a Shift press or release this set never saw — the keys were released on a focus loss or a HUD hand-over while
+    /// Shift stayed down, or an input method swallowed the press — is corrected by the next W/arrow event, its
+    /// auto-repeat included. Without it a held W came back on its next repeat and a held Shift (which does not repeat)
+    /// stayed lost, so the avatar walked. True when the set changed.
+    /// </summary>
+    public bool SyncShift(bool held) => held ? _keys.Add("shift") : _keys.Remove("shift");
+
     /// <summary>Forget every held key (the keyboard went to another surface; its key-ups will not arrive here).</summary>
     public void ReleaseKeys() => _keys.Clear();
 

@@ -288,4 +288,22 @@ public class OverviewControlTests
         Assert.Null(Of("""{"world_bounds": {"min_x": 0, "max_x": 1, "min_z": 0}}"""));
         Assert.Null(Of("""{"world_bounds": {"min_x": "0", "max_x": 1, "min_z": 0, "max_z": 1}}"""));
     }
+
+    [Fact]
+    public void ShiftFollowsTheModifierStateOfTheWalkingKeys()
+    {
+        // The keys were released (focus loss / HUD hand-over) while Shift and W stayed down: W's auto-repeat comes
+        // back with ShiftPressed = true and must bring "shift" back; a later W event without the modifier drops it.
+        var c = new OverviewControl();
+        c.KeyDown("shift"); c.KeyDown("w");
+        c.ReleaseKeys();
+        Assert.True(c.SyncShift(true));
+        c.KeyDown("w");
+        Assert.Contains("shift", c.KeysDown);
+        Assert.Contains("w", c.KeysDown);
+        Assert.False(c.SyncShift(true));          // already held: no change, no log line
+        Assert.True(c.SyncShift(false));          // Shift released while its key-up was lost
+        Assert.DoesNotContain("shift", c.KeysDown);
+        Assert.Contains("w", c.KeysDown);
+    }
 }
