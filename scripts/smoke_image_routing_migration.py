@@ -7,7 +7,7 @@ Spec: development_instructions/plan-image-routing.md § 2 + review notes
 ("Konfiguration + Migration"): the chains come from the old per-occasion
 default fields, empty/duplicate entries dropped, a pattern that matches no
 backend is kept (the overview marks it), the mesh default goes to
-all four mesh occasions of any matching img2mesh backend. Pure dict work — no server, no world.
+all five mesh occasions of any matching img2mesh backend. Pure dict work — no server, no world.
 
 PART A — SEED
 Mapping (§ 2, with the review's frame/photo correction):
@@ -20,7 +20,7 @@ Mapping (§ 2, with the review's frame/photo correction):
   photo       <- [story_engine.imagegen_default]
   frame       <- [messaging_frame.target]
   instagram   <- [skills.instagram.imagegen_default]
-  mesh        -> all four mesh occasions if any img2mesh matches;
+  mesh        -> all five mesh occasions if any img2mesh matches;
                  mesh2mesh/mesh2rig never count, no match -> dropped
   empty chains are not written; `routing` itself is always written (marker).
 
@@ -38,7 +38,7 @@ A2 fixture B = a real world's values (2026-09-29, world name withheld):
     "tpose": ["Qwen2.1*T*"], "location": ["Flux2*"],
     "timevariant": ["Qwen 2511"], "prop": ["Flux2*Normal"],
     "scene_view": ["Qwen BL", "Flux2*"], "event": ["Flux*", "Qwen BL", "Flux2*"],
-    "frame": ["Flux2*"], plus all four mesh occasions ["Trellis2-Object-Low"]}
+    "frame": ["Flux2*"], plus all five mesh occasions ["Trellis2-Object-Low"]}
 A3 fixture C = legacy prefixes (the migration normalises them itself):
    outfit/expression/location "workflow:Z-Image*", event "workflow:",
    story "backend:CivitAI-General", instagram "workflow:Qwen*",
@@ -48,7 +48,7 @@ A3 fixture C = legacy prefixes (the migration normalises them itself):
     "photo": ["CivitAI-General"], "instagram": ["Qwen*"], "frame": ["Z-Image"]}
 A4 mesh "Nope*" matches no img2mesh backend -> no mesh key at all.
 A5 mesh "Mesh*" over two img2mesh entries and one mesh2mesh entry seeds
-   all four mesh occasions with ["Mesh*"]. The mesh2mesh alias does not count.
+   all five mesh occasions with ["Mesh*"]. The mesh2mesh alias does not count.
 A6 returns True on the first run, False on the second, dict unchanged.
 A7 an existing routing (even {}) is never touched (still {}); it returns
    True only because the old field next to it is removed (Part B).
@@ -85,7 +85,7 @@ B6 the admin schema declares none of the removed fields, and the
 
 C) Configuration kinds: categories are trimmed and lowercased, and neither
 config descriptors nor live mesh backends expose a rig property. A matching
-img2mesh default seeds all four mesh occasions; mesh2mesh never counts.
+img2mesh default seeds all five mesh occasions; mesh2mesh never counts.
 Missing backend lists seed eleven entries: eight original aliases, the P1
 face alias and the two P2 upscalers, without backend rig declarations;
 explicit lists (including empty lists) are retained.
@@ -189,7 +189,7 @@ def part_a():
            "timevariant": ["Qwen 2511"], "prop": ["Flux2*Normal"],
            "scene_view": ["Qwen BL", "Flux2*"],
            "event": ["Flux*", "Qwen BL", "Flux2*"], "frame": ["Flux2*"],
-           **{o: ["Trellis2-Object-Low"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")}})
+           **{o: ["Trellis2-Object-Low"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building", "mesh_garment")}})
 
     _ch, cfg = seeded(FIXTURE_C)
     check("A3 legacy prefixes", cfg["image_generation"]["routing"],
@@ -208,7 +208,7 @@ def part_a():
         mesh("Mesh-Shrink", "mesh2mesh")]}}
     cfgmod._migrate_image_routing(e)
     check("A5 mesh rigs", e["image_generation"]["routing"],
-          {o: ["Mesh*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")})
+          {o: ["Mesh*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building", "mesh_garment")})
 
     f = {"image_generation": {"routing": {}, "outfit_imagegen_default": "X"}}
     check("A7 existing routing: only the old field removed", cfgmod._migrate_image_routing(f), True)
@@ -304,12 +304,12 @@ def part_c():
         mesh("Obj-A")]}}
     cfgmod._migrate_image_routing(c)
     check("C2 rig with a trailing space migrates", c["image_generation"]["routing"],
-          {o: ["Obj*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")})
+          {o: ["Obj*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building", "mesh_garment")})
     c = {"image_generation": {"mesh_imagegen_default": "Obj*", "backends": [
         mesh("Obj-H"), mesh("Obj-Shrink", "mesh2mesh ")]}}
     cfgmod._migrate_image_routing(c)
     check("C2 mesh2mesh with a trailing space never counts", c["image_generation"]["routing"],
-          {o: ["Obj*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")})
+          {o: ["Obj*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building", "mesh_garment")})
     c = {"image_generation": {"backends": [
         {"name": "Mx", "api_type": " OpenAI_Mesh ", "enabled": True}]}}
     check("C3 mesh recognised by kind", (cfgmod._seed_default_mesh_backends(c),

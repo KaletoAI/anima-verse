@@ -9,27 +9,29 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 25 occasions (§ 1 table, minus `mesh_low` which the review
+A1. Exactly these 28 occasions (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
-    plan-tier-animationen.md P1):
-      photo instagram profile expression tpose tpose_view scene_view location
-      timevariant event prop surface_texture item regenerate frame video
-      mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture mesh_object
-      mesh_building pose_animation
+    plan-tier-animationen.md P1, plus `garment_view` and `mesh_garment` from
+    the base-body phase-4 plan, R4):
+      photo instagram profile expression tpose tpose_view garment_view scene_view
+      location timevariant event prop surface_texture item regenerate frame video
+      mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture
+      mesh_object mesh_building mesh_garment pose_animation pose_transition
 A2. `mesh_low` is unknown: get_occasion("mesh_low") raises
     UnknownOccasionError, which is a ValueError.
 P2 adds upscale (image/upscale), P1 adds face_retexture (mesh/face_retexture).
-A3. media: video -> "video"; the four mesh_* -> "mesh"; pose_animation -> "animation"; all others "image".
+A3. media: video -> "video"; the five mesh_* -> "mesh"; pose_animation -> "animation"; all others "image".
 A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
     requires mesh2rig/mixamo; rig_creature mesh2rig/generic.
     pose_animation requires mesh2anim; image/video occasions use category render.
 A5. character_scoped exactly: photo, instagram, profile, expression, tpose, tpose_view,
-    regenerate (§ 1 column "figurbez." = ja; frame is a product shot without
+    garment_view (same position-0 field as tpose_view), regenerate (§ 1 column "figurbez." = ja; frame is a product shot without
     a figure — review note), plus the two CHARACTER mesh occasions
     mesh_humanoid + mesh_creature (user request 2026-10-21: a per-character
     mesh match; both read outfit_imagegen.mesh_workflow). Objects, buildings
     and both rigs stay world-only (rig: user decision, no per-character rig).
-A7. needs_ref_slot only on timevariant (§ 1 "nur Backends mit >= 1 Ref-Slot").
+A7. needs_ref_slot only on timevariant (§ 1 "only backends with >= 1 ref slot") and
+    garment_view (an edit of the stored base view, R4).
 A8. backend_fits, one line each (kind = media/category/rig/ref_slot_count):
       photo    + image/img2img/ref 1          -> True
       photo    + image/inpaint                -> False  (render = all but inpaint)
@@ -51,8 +53,9 @@ A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     review carry-over: guessing mesh_humanoid for it would mesh with a
     skeleton nobody asked for). Fails on commit 4893221f, which answered
     "mesh_humanoid" for "bogus".
-A10. catalog_payload() has 24 rows in catalog order, each with the keys
-    id, label, media, category, rig, character_scoped, needs_ref_slot, covers;
+A10. catalog_payload() has 28 rows in catalog order, each with the keys
+    id, label, media, category, rig, character_scoped, needs_ref_slot, covers,
+    pose_check, default_chain;
     every label is a non-empty English string.
 
 PART B — THE STRING-PATH CALLERS NAME THEIR OCCASION (AST, no import)
@@ -151,11 +154,11 @@ def part_a():
     from app.imagegen import occasions as occ
 
     expected_ids = ["photo", "instagram", "profile", "expression", "tpose", "tpose_view",
-                    "scene_view", "location", "timevariant", "event", "prop",
+                    "garment_view", "scene_view", "location", "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
                     "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "upscale", "face_retexture", "mesh_object",
-                    "mesh_building", "pose_animation", "pose_transition"]
-    check("A1 the 25 occasions in catalog order", occ.occasion_ids(), expected_ids)
+                    "mesh_building", "mesh_garment", "pose_animation", "pose_transition"]
+    check("A1 the 28 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -166,13 +169,14 @@ def part_a():
     media = {i: occ.get_occasion(i)["media"] for i in expected_ids}
     check("A3 video media", media["video"], "video")
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
-          ["face_retexture", "mesh_building", "mesh_creature", "mesh_humanoid", "mesh_object", "rig_creature", "rig_humanoid"])
-    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 16)
+          ["face_retexture", "mesh_building", "mesh_creature", "mesh_garment", "mesh_humanoid", "mesh_object", "rig_creature", "rig_humanoid"])
+    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 17)
 
     check("A4 rigs", {i: occ.get_occasion(i).get("rig") for i in
-                      ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")},
+                      ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building",
+                       "mesh_garment")},
           {"mesh_humanoid": "none", "mesh_creature": "none",
-           "mesh_object": "none", "mesh_building": "none"})
+           "mesh_object": "none", "mesh_building": "none", "mesh_garment": "none"})
     check("A4 categories",
           sorted({occ.get_occasion(i)["category"] for i in expected_ids}),
           ["face_retexture", "img2mesh", "mesh2anim", "mesh2rig", "motion2transition", "render", "upscale"])
@@ -182,8 +186,8 @@ def part_a():
 
     check("A5 character scoped",
           [i for i in expected_ids if occ.get_occasion(i)["character_scoped"]],
-          ["photo", "instagram", "profile", "expression", "tpose", "tpose_view", "regenerate",
-           "mesh_humanoid", "mesh_creature"])
+          ["photo", "instagram", "profile", "expression", "tpose", "tpose_view",
+           "garment_view", "regenerate", "mesh_humanoid", "mesh_creature"])
     check("A5 mesh spec field",
           {i: occ.get_occasion(i)["char_spec_field"]
            for i in ("mesh_humanoid", "mesh_creature")},
@@ -191,7 +195,7 @@ def part_a():
 
     check("A7 needs_ref_slot",
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],
-          ["timevariant"])
+          ["garment_view", "timevariant"])
 
     def k(media_, cat, ref=1):
         return {"media": media_, "category": cat, "ref_slot_count": ref}
@@ -246,7 +250,8 @@ def part_a():
     check("A10 payload order", [r["id"] for r in rows], expected_ids)
     check("A10 payload keys", {tuple(sorted(r)) for r in rows},
           {tuple(sorted(["id", "label", "media", "category", "rig",
-                         "character_scoped", "needs_ref_slot", "covers", "default_chain"]))})
+                         "character_scoped", "needs_ref_slot", "covers", "pose_check",
+                         "default_chain"]))})
     check("A10 labels non-empty", all(isinstance(r["label"], str) and r["label"].strip()
                                       for r in rows), True)
 

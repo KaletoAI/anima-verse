@@ -194,6 +194,9 @@ _NEG_OUTDOOR_SCENE = ("illustration, anime, cartoon, drawing, sketch, painting, 
 _NEG_VIEW_BACK = ", front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera"
 _NEG_VIEW_SIDE = ", front view, back view, three-quarter view, facing the camera, mirrored"
 _NEG_PROP = "scene, environment, floor shadow, people, hands, text, watermark"
+_NEG_GARMENT_EDIT = ("illustration, anime, cgi, painting, cartoon, drawing, sketch, "
+                     "watermark, signature, text, logo, deformed, blurry, low quality, "
+                     "overexposed, glossy, dramatic lighting")
 
 # Built-in defaults per use_case × family. These values are NOT seeded into
 # config.json — they are the resolver default AND the grey placeholder in the
@@ -635,6 +638,23 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, both feet entirely inside the frame, margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+    },
+    # Garment edits of the base-body views (Hair tab, base-body phase 4). The
+    # step prompt carries the whole instruction and the framing comes from the
+    # reference view, so the style stays empty; the negative is the spike's
+    # NEG (the measured hair chain, base-body phase-4 plan R4). The step
+    # negatives are added on top by the caller.
+    "garment_edit": {
+        "keywords": {
+            "prompt_style": "",
+            "prompt_negative": _NEG_GARMENT_EDIT,
+            "prompt_instruction": "",
+        },
+        "natural": {
+            "prompt_style": "",
+            "prompt_negative": _NEG_GARMENT_EDIT,
+            "prompt_instruction": "",
         },
     },
     "expression": {
@@ -1433,7 +1453,7 @@ def _legacy_route_spec(value: Any) -> str:
 
 
 def _mesh_routing_occasions(glob: str, backends: Any) -> list:
-    """A matching img2mesh backend serves all four mesh occasions."""
+    """A matching img2mesh backend serves all five mesh occasions."""
     import fnmatch
     from app.imagegen.routing import describe_config_backend
     for b in backends or []:
@@ -1442,7 +1462,8 @@ def _mesh_routing_occasions(glob: str, backends: Any) -> list:
         kind = describe_config_backend(b)
         if (kind["media"] == "mesh" and kind["category"] == "img2mesh"
                 and fnmatch.fnmatch(kind["name"].lower(), glob.lower())):
-            return ["mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building"]
+            return ["mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building",
+                    "mesh_garment"]
     return []
 
 
@@ -1497,6 +1518,29 @@ def _migrate_tpose_view_routing(config: dict) -> bool:
         return False
     routing["tpose_view"] = copy.deepcopy(routing["tpose"])
     return True
+
+
+#: (target, source) — the garment chains start as copies of the chains whose
+#: backends already serve the same kind of work (base-body phase 4, R4).
+_GARMENT_ROUTING_SEEDS = (("garment_view", "tpose_view"),
+                          ("mesh_garment", "mesh_humanoid"))
+
+
+def _migrate_garment_routing(config: dict) -> bool:
+    """Copy the T-pose view chain to ``garment_view`` and the humanoid mesh chain
+    to ``mesh_garment`` once each; an existing target owns its value and a
+    missing source seeds nothing."""
+    import copy
+    routing = (config.get("image_generation") or {}).get("routing")
+    if not isinstance(routing, dict):
+        return False
+    changed = False
+    for target, source in _GARMENT_ROUTING_SEEDS:
+        if target in routing or source not in routing:
+            continue
+        routing[target] = copy.deepcopy(routing[source])
+        changed = True
+    return changed
 
 
 _quadruped_chain_hints = set()
@@ -1577,6 +1621,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_image_routing(config):
         changed = True
     if _migrate_tpose_view_routing(config):
+        changed = True
+    if _migrate_garment_routing(config):
         changed = True
     if _seed_default_use_cases(config):
         changed = True

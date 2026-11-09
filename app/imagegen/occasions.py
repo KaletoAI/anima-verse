@@ -89,6 +89,15 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         ["tpose_back", "tpose_side", "face_view", "tpose_animal_view"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}),
+    # Garment edits (base-body phase 4): the haired and hair-only views are
+    # edits of the stored base view, so a reference slot is mandatory. Kept
+    # apart from tpose_view on purpose — that occasion triggers the mesh-input
+    # matte, which trims the image sides and breaks the shared framing.
+    "garment_view": _image(
+        "Garment & hair edits", "Hair tab: haired and hair-only views",
+        ["garment_edit"],
+        {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
+         "char_spec_fallback": ""}, needs_ref_slot=True),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",
                          ["scene"], _WORLD, **_PEOPLE),
     "location": _image(
@@ -128,6 +137,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                        "category": "face_retexture", "requires_chain": False},
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
+    "mesh_garment": _mesh("3D mesh — garment", "Hair and garment meshes", "none"),
     "pose_animation": {"label": "3D animation — pose clip", "media": "animation",
                        "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
                        "style_use_cases": [], "covers": "Poses tab: generate animation",
