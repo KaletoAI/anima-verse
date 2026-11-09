@@ -91,6 +91,29 @@ export interface HairDeckPanel {
     /** HairDeck's own hair colour (info.json), null when unknown. */
     auto: string | null
   }
+  /** The placement correction after the head match (`garments.hairdeck_panel`). */
+  placement: HairPlacement
+}
+
+/** HairDeck placement: forward shift (metres, +z) and forward tilt (degrees). */
+export interface HairPlacement {
+  /** The manual values; null = automatic. */
+  forward_m: number | null
+  tilt_deg: number | null
+  /** The forward shift used when none is set. */
+  default_forward_m: number
+  /** |value| bounds of a manual value. */
+  limits: { forward_m: number; tilt_deg: number }
+  /** What the newest HairDeck fit applied; null without one (or from before the correction). */
+  fitted: {
+    forward_m: number | null
+    forward_source: 'default' | 'manual' | null
+    tilt_deg: number | null
+    tilt_source: 'auto' | 'manual' | null
+    tilt_solve: string | null
+    hairline_target_y: number | null
+    hairline_y: number | null
+  } | null
 }
 
 /** The last result of the method NOT selected (`garments.other_method_info`). */

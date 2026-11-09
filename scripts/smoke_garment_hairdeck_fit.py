@@ -5,6 +5,8 @@ Usage: ./.venv/bin/python scripts/smoke_garment_hairdeck_fit.py
 
 No world, no server, no hub: a throwaway storage dir (``paths.init`` first), every GLB is built in this file.
 Plan 2026-11-09-hairdeck-hair, Task 3 (+ fix round 1: no colour sampling from an image; inner-wall cap filter).
+Every fit passes forward_m 0 and tilt_deg 0, so [1]-[5] see the plain head match (the placement correction of the
+user test 2026-11-09 has its own smoke, smoke_hairdeck_placement.py).
 
 Fixture (metres, +y up, the body faces +z)
 - Rigged body, skin joints [mixamorig:Hips, mixamorig:Spine2, mixamorig:Head], no node transform:
@@ -81,6 +83,9 @@ sys.path.insert(0, str(ROOT))
 import numpy as np  # noqa: E402
 
 FAILS = []
+# Every fit here checks the placement of the plain head match: no forward shift, no tilt (the placement correction
+# has its own smoke, scripts/smoke_hairdeck_placement.py).
+NO_PLACEMENT = {"forward_m": 0.0, "tilt_deg": 0.0}
 
 
 def check(cond, label):
@@ -273,7 +278,7 @@ def main() -> int:
         body = body_glb()
         nohead, proxy = hair_glbs()
         target = (0.8, 0.6, 0.3)
-        res = gh.fit_hairdeck(nohead, proxy, body, colour_target=target)
+        res = gh.fit_hairdeck(nohead, proxy, body, colour_target=target, **NO_PLACEMENT)
         m, rep = res.metrics, res.report
         g = res.garment
         n_hair = len(hair_arrays()[0])
@@ -308,11 +313,11 @@ def main() -> int:
         check(m["colour_target"] == list(target), f"colour_target recorded {m['colour_target']}")
         Cc = np.asarray(g.colors[n_hair:])
         check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin) <= 0.01)), "cap colour = 20th percentile = target")
-        plain = gh.fit_hairdeck(nohead, proxy, body, colour_target=None)
+        plain = gh.fit_hairdeck(nohead, proxy, body, colour_target=None, **NO_PLACEMENT)
         check(bool(np.all(np.abs(np.asarray(plain.garment.colors[:n_hair])[:, :3] - 0.25) <= 1e-9))
               and plain.metrics["colour_target"] is None, "no target: colours untouched, colour_target None")
         try:
-            gh.fit_hairdeck(nohead, proxy, body, colour_target=(1.2, 0.5, 0.5))
+            gh.fit_hairdeck(nohead, proxy, body, colour_target=(1.2, 0.5, 0.5), **NO_PLACEMENT)
             check(False, "target outside 0..1 refused")
         except ValueError as e:
             check(True, f"target outside 0..1 refused: {e}")
@@ -369,7 +374,7 @@ def main() -> int:
         check(not res.ok and len(res.reasons) == 1 and res.reasons[0].startswith("moved_share")
               and m["moved_share"] > 0.9, f"the inner-layer fit refuses on moved_share: {res.reasons}")
         plain_nohead, plain_proxy = hair_glbs(inner=False)
-        pf = gh.fit_hairdeck(plain_nohead, plain_proxy, body, colour_target=None)
+        pf = gh.fit_hairdeck(plain_nohead, plain_proxy, body, colour_target=None, **NO_PLACEMENT)
         check(pf.metrics["max_push_m"] == 0 and pf.metrics["moved_share"] == 0 and pf.ok and not pf.reasons,
               f"the plain shell is not pushed and passes ({pf.metrics['max_push_m']}, "
               f"{pf.metrics['moved_share']}, {pf.reasons})")

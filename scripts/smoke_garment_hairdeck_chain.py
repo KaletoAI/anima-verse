@@ -205,7 +205,7 @@ def main() -> int:
 
         service.get_image_service = lambda: FakeService()
 
-        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target):
+        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None):
             import smoke_garment_fit as fx
             FIT_CALLS.append({"nohead": nohead_glb, "proxy": proxy_glb, "colour_target": colour_target})
             ok = mode["fit_ok"].pop(0) if mode["fit_ok"] else True

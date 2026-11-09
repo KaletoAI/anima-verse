@@ -460,11 +460,21 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     return fit
 
 
+def _placement_summary(placement: Any) -> Optional[Dict[str, Any]]:
+    """The fit record's ``placement``: what the fit's ``report.placement`` applied (forward/tilt and where they
+    came from) and the hairline it reached against its target. None without a report section."""
+    if not isinstance(placement, dict):
+        return None
+    keys = ("forward_m", "forward_source", "tilt_deg", "tilt_source", "tilt_solve", "hairline_target_y")
+    return {**{k: placement.get(k) for k in keys}, "hairline_y": placement.get("hairline_pushed_y")}
+
+
 def _fit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, hsig: str,
                   profile: Dict[str, Any], refused: List[Dict[str, Any]]) -> Path:
     """Fit the accepted HairDeck job of ``hsig`` onto the current base model
     (``garment_hairdeck.fit_hairdeck``; colour = the profile's override, else
-    HairDeck's own) and store it. ``_Refused`` (step ``fit``) when the gate
+    HairDeck's own; placement = the profile's manual forward/tilt, else
+    automatic) and store it. ``_Refused`` (step ``fit``) when the gate
     refuses — its gates carry ``{attempt, seed, ok, reasons, limits,
     metrics}``. ``refused``: the earlier refused attempts, kept in the
     record."""
@@ -482,8 +492,9 @@ def _fit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig:
     base_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
     hair_bytes, proxy_bytes = hair.read_bytes(), proxy.read_bytes()
     override = garment_hair.hair_colour_override(profile)
+    placement = garment_hair.hair_placement(profile)
     result = garment_hairdeck.fit_hairdeck(hair_bytes, proxy_bytes, snapshot["rigged"],
-                                           colour_target=garment_hair.colour_target(override))
+                                           colour_target=garment_hair.colour_target(override), **placement)
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in garment_hairdeck.GATES.items()}}
     if not result.ok:
@@ -496,9 +507,11 @@ def _fit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig:
         "inputs": {**_kind_inputs(kind, character_name, profile),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "hsig": hsig, "attempt": attempt, "seed": seed, "colour": override,
+                   "placement": placement,
                    "nohead_sha256": hashlib.sha256(hair_bytes).hexdigest(),
                    "proxy_sha256": hashlib.sha256(proxy_bytes).hexdigest()},
         "colour": {"target": override or None, "source": "override" if override else "hairdeck"},
+        "placement": _placement_summary(result.report.get("placement")),
         "refused_attempts": list(refused),
         "created_at": utc_now_iso()}
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
@@ -1070,7 +1083,7 @@ def hairdeck_panel(character_name: str, item_id: str, *,
                    profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The Hair tab's HairDeck section for the CURRENT ``hsig`` (whichever
     method is selected): ``{hsig, status, attempt, seed, backend, created_at,
-    error, notes, attempts, images, colour}``.
+    error, notes, attempts, images, colour, placement}``.
 
     - ``attempts``: the refused fit attempts of the job (gate records);
     - ``images``: ``input`` / ``prep`` / ``model_input`` -> ``{url, model,
@@ -1078,11 +1091,17 @@ def hairdeck_panel(character_name: str, item_id: str, *,
     - ``colour``: ``{target, source, auto}`` — ``target`` the manual
       ``#rrggbb`` or None, ``source`` ``"override"`` or ``"hairdeck"`` (R4:
       automatic = HairDeck's own vertex colours), ``auto`` HairDeck's own
-      hair colour from the job's ``info.json`` as ``#rrggbb`` (None without).
+      hair colour from the job's ``info.json`` as ``#rrggbb`` (None without);
+    - ``placement``: ``{forward_m, tilt_deg, default_forward_m, limits,
+      fitted}`` — the manual values (None = automatic,
+      ``garment_hair.hair_placement``), the automatic forward shift, the
+      bounds of a manual value and what the newest HairDeck fit applied
+      (its record's ``placement``; None without a fit or from a fit before
+      the placement correction).
 
     None for an item that is no hair."""
     import json as _json
-    from app.core import garment_hair, garment_store as gs
+    from app.core import garment_hair, garment_hairdeck, garment_store as gs
     from app.core.model_refs import current_profile_image, image_tile_meta
     from app.models.character import get_character_profile
     if profile is None:
@@ -1111,9 +1130,16 @@ def hairdeck_panel(character_name: str, item_id: str, *,
     override = garment_hair.hair_colour_override(profile)
     colour = {"target": override or None, "source": "override" if override else "hairdeck",
               "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None}
+    newest = _newest_fit(character_name, item_id, gs.HAIRDECK)
+    placement = {**garment_hair.hair_placement(profile),
+                 "default_forward_m": garment_hairdeck.DEFAULT_FORWARD_M,
+                 "limits": {"forward_m": garment_hairdeck.FORWARD_LIMIT_M,
+                            "tilt_deg": garment_hairdeck.TILT_LIMIT_DEG},
+                 "fitted": newest[1].get("placement") if newest else None}
     return {"hsig": hsig, "status": job["status"], "attempt": job["attempt"], "seed": job["seed"],
             "backend": job["backend"], "created_at": job["created_at"], "error": job["error"],
-            "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour}
+            "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour,
+            "placement": placement}
 
 
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
@@ -1124,7 +1150,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     ``served_fsig`` None = no hair is served (e.g. the selected method has no
     accepted fit yet). HairDeck hair adds the stale reasons
     ``hairdeck_changed`` (another profile picture or HairDeck setting than
-    the served fit's job) and ``colour_changed`` (another colour override).
+    the served fit's job), ``colour_changed`` (another colour override) and
+    ``placement_changed`` (another manual forward/tilt, or a fit from before
+    the placement correction).
     ValueError for an invalid item."""
     from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version
@@ -1175,6 +1203,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                     stale.append("hairdeck_changed")
                 if (used.get("colour") or "") != garment_hair.hair_colour_override(profile):
                     stale.append("colour_changed")
+                if used.get("placement") != garment_hair.hair_placement(profile):
+                    stale.append("placement_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:

@@ -33,7 +33,8 @@ turns the profile picture into hair cards; its files live in ONE folder per
 the backend the ``hair_mesh`` occasion is meant to run on and
 ``HAIRDECK_VERSION`` — no base, no colour: a base change or a colour change
 re-fits from the cached job. The HairDeck fsig is the edit-chain payload plus
-``method``, ``hsig`` and the colour override (profile ``hair_colour``); the
+``method``, ``hsig``, the colour override (profile ``hair_colour``) and the
+placement (profile ``hair_forward_m`` / ``hair_tilt_deg``); the
 edit-chain fsig carries no ``method`` key, so it stays what it always was.
 The fit is the same ``{item}_{fsig}.glb`` + record (its record says
 ``method: "hairdeck"``; a record without ``method`` is an edit-chain fit);
@@ -273,9 +274,10 @@ def garment_hsig(character_name: str, item_id: str, *,
 def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
-    (R10); hair made by HairDeck adds ``{method, hsig, colour}`` (the colour
-    override, "" = automatic). ValueError when ``item_id`` is no garment of a
-    known kind."""
+    (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
+    (the colour override, "" = automatic; the manual placement
+    ``garment_hair.hair_placement``, None = automatic). ValueError when
+    ``item_id`` is no garment of a known kind."""
     from app.core import base_body
     from app.core.model_refs import find_ref_image
     kind = _garment_kind(item_id)
@@ -288,7 +290,8 @@ def garment_fsig(character_name: str, item_id: str, *,
     if kind_method(kind, character_name, profile) == HAIRDECK:
         from app.core import garment_hair
         payload.update(method=HAIRDECK, hsig=garment_hsig(character_name, item_id, profile=profile),
-                       colour=garment_hair.hair_colour_override(profile))
+                       colour=garment_hair.hair_colour_override(profile),
+                       placement=garment_hair.hair_placement(profile))
     digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8"))
     return digest.hexdigest()[:12]
 

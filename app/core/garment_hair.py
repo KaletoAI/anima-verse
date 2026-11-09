@@ -15,6 +15,7 @@ every clause of the free-text appearance that mentions hair. The item's
 ``prompt_fragment`` is refreshed from it whenever ``ensure_hair_item`` runs,
 so the 2D body slot and the 3D item never diverge.
 """
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -176,6 +177,66 @@ def set_hair_colour(character_name: str, hex_colour: str) -> bool:
     if value and not _HEX_COLOUR.fullmatch(value):
         raise ValueError("hair colour must be #rrggbb or empty")
     return _set_profile_key(character_name, "hair_colour", value.lower())
+
+
+#: The profile keys of the HairDeck placement correction (``garment_hairdeck.fit_hairdeck``'s ``forward_m`` /
+#: ``tilt_deg``); empty = automatic.
+PLACEMENT_KEYS: Dict[str, str] = {"forward_m": "hair_forward_m", "tilt_deg": "hair_tilt_deg"}
+
+
+def _placement_limit(name: str) -> float:
+    from app.core import garment_hairdeck
+    return garment_hairdeck.FORWARD_LIMIT_M if name == "forward_m" else garment_hairdeck.TILT_LIMIT_DEG
+
+
+def _placement_value(name: str, raw: Any) -> Optional[float]:
+    """A manual placement value as float, None for empty. ValueError for a non-number or one beyond its limit."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"hair {name} must be a number or empty")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"hair {name} must be a number or empty") from None
+    limit = _placement_limit(name)
+    if not math.isfinite(value) or abs(value) > limit:
+        raise ValueError(f"hair {name} must be within +-{limit:g}")
+    return value
+
+
+def hair_placement(profile: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+    """``{forward_m, tilt_deg}``: the manual HairDeck placement of the profile keys ``hair_forward_m`` (metres
+    along +z) and ``hair_tilt_deg`` (forward pitch, degrees); None = automatic (forward
+    ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line). A stored value that is no number or
+    lies beyond its limit counts as automatic."""
+    out: Dict[str, Optional[float]] = {}
+    for name, key in PLACEMENT_KEYS.items():
+        try:
+            out[name] = _placement_value(name, (profile or {}).get(key))
+        except ValueError:
+            out[name] = None
+    return out
+
+
+def set_hair_placement(character_name: str, forward_m: Any, tilt_deg: Any) -> bool:
+    """Store the manual HairDeck placement (profile keys ``hair_forward_m`` / ``hair_tilt_deg``; None or "" =
+    automatic, stored as ""). ValueError for a non-number or a value beyond ``garment_hairdeck.FORWARD_LIMIT_M`` /
+    ``TILT_LIMIT_DEG`` — nothing is stored then. Both keys are written in ONE read-modify-write under the profile
+    lock. Only the HairDeck fit fingerprint changes: the next run re-fits from the cached HairDeck job."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    values = {"forward_m": _placement_value("forward_m", forward_m),
+              "tilt_deg": _placement_value("tilt_deg", tilt_deg)}
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        changed = False
+        for name, key in PLACEMENT_KEYS.items():
+            wanted = "" if values[name] is None else values[name]
+            if profile.get(key, "") != wanted:
+                profile[key] = wanted
+                changed = True
+        return bool(save_character_profile(character_name, profile)) if changed else True
 
 
 def colour_target(hex_colour: str) -> Optional[Tuple[float, float, float]]:

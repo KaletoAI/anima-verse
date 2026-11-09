@@ -76,6 +76,19 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     inputs.nohead_sha256 = sha256 of the job's hair_seed44_nohead.glb (the
     stub wrote "hair_seed44_nohead.glb-call3"); garment fit "accepted",
     hairdeck panel seed 44.
+[9] Placement (user test 2026-11-09, finding 5): the panel shows
+    hairdeck.placement {forward_m None, tilt_deg None, default_forward_m
+    0.006 (garment_hairdeck.DEFAULT_FORWARD_M), limits {0.03, 15.0}} and the
+    newest fit's placement as the stub reported it (auto: forward 0.006
+    default, tilt 2.5 auto, hairline 1.636 against 1.635). forward "abc",
+    0.031 (> 0.03), tilt 15.5 (> 15), true, "nan" -> 400 each, nothing
+    stored. {forward_m 0.004, tilt_deg "3"} -> 200 {0.004, 3.0}, profile
+    hair_forward_m 0.004 / hair_tilt_deg 3.0; fsig F3 (neither F1 nor F2),
+    hsig unchanged, fit "missing", stale ["placement_changed"], F1 served.
+    POST run {} -> one more fit, no HairDeck call, called with forward_m
+    0.004 / tilt_deg 3.0; the served F3 record holds inputs.placement
+    {0.004, 3.0} and placement.tilt_source "manual"; stale []. Reset {null,
+    null} -> {None, None}, both keys stored as "", fsig F1 again (accepted).
 """
 import hashlib
 import json
@@ -165,9 +178,9 @@ def main() -> int:
 
         service.get_image_service = lambda: FakeService()
 
-        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target):
+        def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None):
             import smoke_garment_fit as fx
-            FIT_CALLS.append({"colour_target": colour_target})
+            FIT_CALLS.append({"colour_target": colour_target, "forward_m": forward_m, "tilt_deg": tilt_deg})
             body = glb_mesh.body_arrays(rigged_base_glb)
             P, F = fx.cap(0.19, np.array([0.0, 1.58, 0.0]), n_el=9, nlon=24)
             names, J, W = garment_fit.hair_weights(P, body)
@@ -177,7 +190,15 @@ def main() -> int:
                 material={"doubleSided": True}, colors=np.tile([0.3, 0.2, 0.1, 1.0], (len(P), 1)))
             m = {"max_push_m": 0.01, "moved_share": 0.3, "icp_resid_p95_m": 0.004}
             ok, reasons = garment_hairdeck.gate(m)
-            return garment_fit.FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report={})
+            # The real fit's report section (garment_hairdeck._place_and_push), values echoed from the call.
+            placement = {"forward_m": 0.006 if forward_m is None else forward_m,
+                         "forward_source": "default" if forward_m is None else "manual",
+                         "tilt_deg": 2.5 if tilt_deg is None else tilt_deg,
+                         "tilt_source": "auto" if tilt_deg is None else "manual",
+                         "tilt_solve": "solved" if tilt_deg is None else "manual", "rounds": 1,
+                         "hairline_target_y": 1.635, "hairline_pushed_y": 1.636, "landmarks": None}
+            return garment_fit.FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons,
+                                         report={"placement": placement})
 
         garment_hairdeck.fit_hairdeck = fit_stub
 
@@ -253,11 +274,13 @@ def main() -> int:
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
             for method, url, body in (("POST", "/characters/Demo/hair/method", {"method": "hairdeck"}),
                                       ("POST", "/characters/Demo/hair/colour", {"hex": "#ff8000"}),
+                                      ("POST", "/characters/Demo/hair/placement", {"forward_m": 0.01}),
                                       ("GET", "/characters/Demo/garments/hair_demo/hairdeck/prep", None),
                                       ("GET", "/characters/Demo/garments/hair_demo/model?method=hairdeck", None)):
                 r = client.request(method, url, json=body) if body is not None else client.request(method, url)
                 check(f"player {method} {url}", r.status_code, 403)
-            check("player stored nothing", ("hair_method" in profile(), "hair_colour" in profile()), (False, False))
+            check("player stored nothing", ("hair_method" in profile(), "hair_colour" in profile(),
+                                            "hair_forward_m" in profile()), (False, False, False))
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
 
             # --- [2] GET before the item -----------------------------------------
@@ -303,7 +326,8 @@ def main() -> int:
             check("create 202", (r.status_code, r.json()), (202, {"item_id": "hair_demo", "started": True}))
             wait_idle()
             check("counts", counts(), (1, 1))
-            check("first call", (HAIR_CALLS[0]["seed"], FIT_CALLS[0]["colour_target"]), (42, None))
+            check("first call", (HAIR_CALLS[0]["seed"], FIT_CALLS[0]["colour_target"], FIT_CALLS[0]["forward_m"],
+                                 FIT_CALLS[0]["tilt_deg"]), (42, None, None, None))
             f1 = gs.garment_fsig("Demo", "hair_demo")
             h = hair()
             g = h.get("garment") or {}
@@ -409,6 +433,52 @@ def main() -> int:
                    (rec.get("inputs") or {}).get("nohead_sha256")),
                   (hsig_before, f1, f1, "accepted", 44, f"hair_demo_{f1}.glb", 44,
                    hashlib.sha256(b"hair_seed44_nohead.glb-call3").hexdigest()))
+
+            # --- [9] placement: forward / tilt re-fit without HairDeck --------------
+            print("[9] placement re-fits from the cached job")
+            pl = (hair().get("hairdeck") or {}).get("placement") or {}
+            check("placement auto", (pl.get("forward_m"), pl.get("tilt_deg"), pl.get("default_forward_m"),
+                                     pl.get("limits")),
+                  (None, None, 0.006, {"forward_m": 0.03, "tilt_deg": 15.0}))
+            check("fitted (auto)", pl.get("fitted"),
+                  {"forward_m": 0.006, "forward_source": "default", "tilt_deg": 2.5, "tilt_source": "auto",
+                   "tilt_solve": "solved", "hairline_target_y": 1.635, "hairline_y": 1.636})
+            for bad in ({"forward_m": "abc"}, {"forward_m": 0.031}, {"tilt_deg": 15.5}, {"tilt_deg": True},
+                        {"tilt_deg": "nan"}):
+                r = client.post("/characters/Demo/hair/placement", json=bad)
+                check(f"placement {bad} 400", r.status_code, 400)
+            check("nothing stored", ("hair_forward_m" in profile(), "hair_tilt_deg" in profile()), (False, False))
+            r = client.post("/characters/Demo/hair/placement", json={"forward_m": 0.004, "tilt_deg": "3"})
+            check("placement 200", (r.status_code, r.json()), (200, {"forward_m": 0.004, "tilt_deg": 3.0}))
+            check("stored placement", (profile().get("hair_forward_m"), profile().get("hair_tilt_deg")), (0.004, 3.0))
+            h = hair()
+            g = h.get("garment") or {}
+            f3 = g.get("fsig")
+            check("fsig changed, hsig same", (f3 not in (f1, f2), (h.get("hairdeck") or {}).get("hsig") == hsig1),
+                  (True, True))
+            check("before placement re-fit", ((g.get("steps") or {}).get("fit", {}).get("status"),
+                                              g.get("stale_reasons"), g.get("served_fsig")),
+                  ("missing", ["placement_changed"], f1))
+            before = counts()
+            r = client.post("/characters/Demo/garments/hair_demo/run", json={})
+            check("run 202", r.status_code, 202)
+            wait_idle()
+            check("no HairDeck call, one fit", counts(), (before[0], before[1] + 1))
+            check("fit got the placement", (FIT_CALLS[-1]["forward_m"], FIT_CALLS[-1]["tilt_deg"]), (0.004, 3.0))
+            h = hair()
+            g = h.get("garment") or {}
+            served = gs.accepted_fit("Demo", "hair_demo", base_model_sha=base_body.current_base("Demo")[1])
+            rec = served[1] if served else {}
+            check("after placement re-fit", ((g.get("steps") or {}).get("fit", {}).get("status"),
+                                             g.get("stale_reasons"), g.get("served_fsig"),
+                                             (rec.get("inputs") or {}).get("placement"),
+                                             (rec.get("placement") or {}).get("tilt_source")),
+                  ("accepted", [], f3, {"forward_m": 0.004, "tilt_deg": 3.0}, "manual"))
+            r = client.post("/characters/Demo/hair/placement", json={"forward_m": None, "tilt_deg": None})
+            check("placement reset", (r.status_code, r.json()), (200, {"forward_m": None, "tilt_deg": None}))
+            check("reset stored as empty", (profile().get("hair_forward_m"), profile().get("hair_tilt_deg")), ("", ""))
+            g = hair().get("garment") or {}
+            check("back to F1", (g.get("fsig"), (g.get("steps") or {}).get("fit", {}).get("status")), (f1, "accepted"))
 
         garments.wait_idle(30)
 

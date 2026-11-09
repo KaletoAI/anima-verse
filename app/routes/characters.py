@@ -1820,6 +1820,13 @@ class HairColourRequest(BaseModel):
     hex: str = ""
 
 
+class HairPlacementRequest(BaseModel):
+    # Numbers or null (automatic); plain Any so garment_hair.set_hair_placement
+    # validates (400 with its message, not a schema 422).
+    forward_m: Any = None
+    tilt_deg: Any = None
+
+
 class GarmentRunRequest(BaseModel):
     # Plain strings, validated by garments.start_garment: an unknown step or
     # view is a 400 with its message, not a schema 422.
@@ -1924,6 +1931,27 @@ def set_character_hair_colour(character_name: str, body: HairColourRequest,
     from app.models.character import get_character_profile
     override = garment_hair.hair_colour_override(get_character_profile(character_name) or {})
     return {"target": override or None, "source": "override" if override else "hairdeck"}
+
+
+@router.post("/{character_name}/hair/placement")
+def set_character_hair_placement(character_name: str, body: HairPlacementRequest,
+                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set the HairDeck hair placement: ``forward_m`` (metres along +z) and
+    ``tilt_deg`` (forward pitch, degrees), each a number or null for
+    automatic (forward ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to
+    the brow line). 400 for a non-number or a value beyond its limit. Only
+    the fit fingerprint changes: the next run re-fits from the cached
+    HairDeck job, without a HairDeck call (no run starts here)."""
+    from app.core import garment_hair
+    _require_character(character_name)
+    try:
+        saved = garment_hair.set_hair_placement(character_name, body.forward_m, body.tilt_deg)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    from app.models.character import get_character_profile
+    return garment_hair.hair_placement(get_character_profile(character_name) or {})
 
 
 @router.post("/{character_name}/hair", status_code=202)
