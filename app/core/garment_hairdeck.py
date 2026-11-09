@@ -12,15 +12,16 @@ in the same space (the "with head" result file). Facts the code relies on:
 - Cards are separate pieces: no component is dropped and there is no largest-component gate.
 - Everything is in the rigged body's metres (k = 1); the push-out uses the garment-fit SDF and spread constants.
 
-``fit_hairdeck`` reads no file and no profile: the colour target is decided by the caller (the override, else
-``hair_colour_from_image`` on the profile picture — ruling R1).
+Colour: HairDeck samples its vertex colours from the character image itself; they are used unchanged. The only
+correction is a manual override (``colour_target``, sRGB), decided by the caller — ``fit_hairdeck`` reads no file
+and no profile. (A plan-time sampler of the hair colour from the profile picture was dropped after the spike
+renders: its skin reference landed on the shadowed neck in HairDeck's long-hair box and it turned blond hair pink.)
 """
 from __future__ import annotations
 
 import copy
 import math
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -39,6 +40,9 @@ PCA_NORMAL_K = 12
 # Scalp cap: body triangles within CAP_REACH_M of a hair vertex, offset CAP_OFFSET_M along the outward normal.
 CAP_OFFSET_M = 0.0015
 CAP_REACH_M = 0.03
+# A cap triangle whose centroid lies deeper than this inside the body solid belongs to an inner wall (the generator
+# body is double-walled: on the spike's head 43 % of the candidate triangles sat ~4.5 mm inside) and is dropped.
+CAP_INNER_DEPTH_M = VOX_M
 # Front hairline region: z > head centre z + 0.25 * head depth and |x - head cx| < 0.15 * head width. The plan said
 # 0.3 * width (+-5.1 cm on the spike's head): that strip reaches the face-framing strands, whose tips hang at eye
 # level (x +-4.5..5.6 cm, y 1.572), and the cap then covered forehead and temples (seen in the render, and 52 cap
@@ -46,11 +50,6 @@ CAP_REACH_M = 0.03
 HAIRLINE_FRONT_DEPTH = 0.25
 HAIRLINE_HALF_WIDTH = 0.15
 CAP_COLOUR_PERCENTILE = 20
-# hair_colour_from_image: skin disk at (box centre x, box top + 0.55 h), radius 0.04 w; skin = dE76 < 20.
-SKIN_DISK_Y = 0.55
-SKIN_DISK_R = 0.04
-SKIN_DELTA_E = 20.0
-MATTE_THRESHOLD = 128
 
 GATES = {
     "max_push_m": ("max", 0.12, "largest push-out"),
@@ -69,67 +68,6 @@ def gate(m: Dict[str, Any]) -> Tuple[bool, List[str]]:
 def srgb_to_linear(c) -> np.ndarray:
     c = np.asarray(c, np.float64)
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-
-
-def _lab(rgb: np.ndarray) -> np.ndarray:
-    """CIE Lab (D65) of sRGB values in [0, 1], shape (..., 3)."""
-    m = np.array([[0.4124564, 0.3575761, 0.1804375],
-                  [0.2126729, 0.7151522, 0.0721750],
-                  [0.0193339, 0.1191920, 0.9503041]])
-    xyz = srgb_to_linear(rgb) @ m.T / np.array([0.95047, 1.0, 1.08883])
-    eps = (6 / 29) ** 3
-    f = np.where(xyz > eps, np.cbrt(xyz), xyz / (3 * (6 / 29) ** 2) + 4 / 29)
-    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
-
-
-def hair_colour_from_image(image_path: Path, box: Sequence[float]) -> Tuple[float, float, float]:
-    """The hair colour (sRGB, 0..1) of a character image inside ``box = (x0, y0, x1, y1)`` (pixels, HairDeck's
-    head+hair box).
-
-    Foreground = the portrait matte (``run_rembg`` with ``PORTRAIT_REMBG_MODEL``, >= 128; an alpha channel, if any,
-    must be >= 128 too). Skin reference = median of the disk at ``(box centre x, y0 + 0.55 h)``, radius ``0.04 w``
-    (its foreground pixels; all of them if none is foreground). Pixels within dE76 < 20 of it are dropped; the
-    median of the rest is returned. ValueError when no foreground or no non-skin pixel is left.
-    """
-    import io
-    from PIL import Image
-    from app.models.character import PORTRAIT_REMBG_MODEL, run_rembg
-    data = Path(image_path).read_bytes()
-    with Image.open(io.BytesIO(data)) as im:
-        im.load()
-        rgb = np.asarray(im.convert("RGB"), np.float64) / 255.0
-        alpha = np.asarray(im.getchannel("A")) if "A" in im.getbands() else None
-    h_img, w_img = rgb.shape[:2]
-    with Image.open(io.BytesIO(run_rembg(data, PORTRAIT_REMBG_MODEL, only_mask=True))) as mk:
-        matte = mk.convert("L")
-        if matte.size != (w_img, h_img):
-            matte = matte.resize((w_img, h_img), Image.Resampling.BILINEAR)
-        fg = np.asarray(matte) >= MATTE_THRESHOLD
-    if alpha is not None:
-        fg &= alpha >= MATTE_THRESHOLD
-    if len(box) != 4 or not all(math.isfinite(float(v)) for v in box):
-        raise ValueError(f"The hair box must be four finite numbers, got {box!r}")
-    x0, y0, x1, y1 = (float(v) for v in box)
-    w, h = x1 - x0, y1 - y0
-    if w <= 0 or h <= 0:
-        raise ValueError(f"The hair box is empty: {box!r}")
-    yy, xx = np.mgrid[0:h_img, 0:w_img]
-    inside = (xx >= x0) & (xx < x1) & (yy >= y0) & (yy < y1)
-    pick = inside & fg
-    if not pick.any():
-        raise ValueError("No foreground pixel inside the hair box")
-    cx, cy, r = x0 + w / 2, y0 + SKIN_DISK_Y * h, max(SKIN_DISK_R * w, 1.0)
-    disk = (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r
-    skin_px = rgb[disk & fg] if (disk & fg).any() else rgb[disk]
-    if len(skin_px) == 0:
-        raise ValueError("The skin sample disk lies outside the image")
-    skin_lab = _lab(np.median(skin_px, 0))
-    px = rgb[pick]
-    hair = px[np.linalg.norm(_lab(px) - skin_lab, axis=1) >= SKIN_DELTA_E]
-    if len(hair) == 0:
-        raise ValueError("No hair-coloured pixel inside the hair box (everything matches the skin)")
-    med = np.median(hair, 0)
-    return float(med[0]), float(med[1]), float(med[2])
 
 
 def _correct_colours(C: np.ndarray, colour_target) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -216,7 +154,8 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf) -> Tuple[np.nd
     """``(positions, faces, normals, hairline_y, info)`` of the scalp cap (faces index the returned positions).
 
     Rigged body triangles whose three vertices carry Head weight > 0.5, whose centroid lies above the front hairline
-    and whose nearest hair vertex is within ``CAP_REACH_M``; offset ``CAP_OFFSET_M`` along the outward vertex normals.
+    and whose nearest hair vertex is within ``CAP_REACH_M``, minus the inner-wall ones (centroid deeper than
+    ``CAP_INNER_DEPTH_M`` inside the body SDF); offset ``CAP_OFFSET_M`` along the outward vertex normals.
     The front hairline is the lowest hair vertex with ``z > head cz + 0.25 depth`` and ``|x - head cx| < 0.15 width``
     (head bbox = the Head-weighted vertices). Face normals are oriented by the SDF gradient at the centroid before
     they are accumulated into vertex normals — the generator body's winding is never trusted — and the winding is
@@ -238,6 +177,8 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf) -> Tuple[np.nd
     centroid = P[F].mean(1)
     near, _ = cKDTree(hair_X).query(centroid, distance_upper_bound=CAP_REACH_M * 1.0001)
     sel = head_v[F].all(1) & (centroid[:, 1] > hairline) & (near <= CAP_REACH_M)
+    candidates = int(sel.sum())
+    sel[sel] = sdf.sample(centroid[sel]) > -CAP_INNER_DEPTH_M
     if not sel.any():
         return (*empty, hairline, {"note": "no scalp triangle above the hairline near the hair"})
     Fc = F[sel]
@@ -258,7 +199,8 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf) -> Tuple[np.nd
     V = V + CAP_OFFSET_M * N
     info = {"head_centre_xz": [round(float(cx), 5), round(float(cz), 5)],
             "head_width_m": round(float(width), 5), "head_depth_m": round(float(depth), 5),
-            "front_hair_vertices": int(front.sum()), "flipped_faces": int(flip.sum())}
+            "front_hair_vertices": int(front.sum()), "flipped_faces": int(flip.sum()),
+            "inner_wall_dropped": candidates - int(sel.sum())}
     return V, Fl, N, hairline, info
 
 

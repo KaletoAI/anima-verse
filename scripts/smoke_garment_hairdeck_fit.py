@@ -3,8 +3,8 @@
 
 Usage: ./.venv/bin/python scripts/smoke_garment_hairdeck_fit.py
 
-No world, no server, no hub: a throwaway storage dir (``paths.init`` before ``app.models.character`` is imported),
-every GLB and image is built in this file, ``run_rembg`` is a stub. Plan 2026-11-09-hairdeck-hair, Task 3.
+No world, no server, no hub: a throwaway storage dir (``paths.init`` first), every GLB is built in this file.
+Plan 2026-11-09-hairdeck-hair, Task 3 (+ fix round 1: no colour sampling from an image; inner-wall cap filter).
 
 Fixture (metres, +y up, the body faces +z)
 - Rigged body, skin joints [mixamorig:Hips, mixamorig:Spine2, mixamorig:Head], no node transform:
@@ -22,7 +22,9 @@ Fixture (metres, +y up, the body faces +z)
   * outer shell radius 0.055 centred (0, 0.4, 0): rings at local heights h = 0.010, 0.013, ..., 0.052 above the
     centre (ring radius sqrt(0.055^2 - h^2)) + a pole, 96 segments;
   * an inner card layer radius 0.048, rings at h = 0.030 .. 0.046 + a pole (a separate piece), so the push-out has
-    something to do. The [6] "plain" fit leaves it out (the brief's shell alone).
+    something to do. The [5] "plain" fit leaves it out (the brief's shell alone).
+- Two-wall body (for [4] only): the body above plus an INNER head sphere radius 0.094 (6 mm inside the outer one,
+  the generator's double wall), same 61 x 120 sampling, Head weight 1.
 
 [1] Placement. Proxy upper half (hemisphere r 0.05 at y 0.4) onto the cranium (hemisphere r 0.1 at y 1.6), scale +
     translation: s * 0.05 = 0.1 -> s = 2.0; s * 0.4 + t_y = 1.6 -> t_y = 0.8; x and z centred -> t = (0, 0.8, 0).
@@ -40,29 +42,28 @@ Fixture (metres, +y up, the body faces +z)
     The median of COLOR_0 is 0.25 per channel, gains 2.415 / 1.274 / 0.293 -> every corrected hair colour (hence
     the median) = (0.6038, 0.3185, 0.0732) +- 0.01, alpha 1. The scalp cap's colour is the 20th percentile of the
     corrected colours = the same value. Without a target the colours stay 0.25 (+- 1e-9) and colour_target None.
-[4] hair_colour_from_image. 200 x 200 RGB image: background grey (128, 128, 128); a blond (232, 200, 96) filled
-    ellipse centre (100, 105) semi-axes 70 (x) / 90 (y); inside it a skin (224, 172, 140) ellipse, same centre,
-    semi-axes 40 / 55. The rembg stub mattes "every pixel that is not the background grey". box = (0, 0, 200, 200):
-    w = h = 200, skin disk centre (100, 0 + 0.55 * 200) = (100, 110), radius 0.04 * 200 = 8 -> fully inside the
-    skin ellipse ((0/40)^2 + ((110 - 105 + 8) / 55)^2 = 0.056 < 1) -> skin reference (224, 172, 140).
-    CIE Lab (D65): skin (74.35, 14.81, 23.81), blond (81.46, -0.81, 55.19), grey (53.59, 0, 0);
-    dE76 skin-blond = sqrt(7.11^2 + 15.62^2 + 31.38^2) = 35.77 >= 20 (kept), skin-skin 0 (dropped).
-    Remaining = the blond ring only -> (232, 200, 96) / 255 = (0.9098, 0.7843, 0.3765) +- 0.02.
-    The matte matters: grey (dE 34.89 to skin) has 40000 - pi*70*90 = 20208 pixels against the ring's
-    pi*(70*90 - 40*55) = 12881; without the matte the median would be grey's. A box holding only skin raises
-    ValueError (nothing left).
-[5] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
+[4] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
     h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push may lift
     it a little (smoothing carries the inner layer's push along the shell) -> hairline in [1.62, 1.625].
     Cap = head-sphere triangles (all three vertices Head > 0.5) with centroid above the hairline and a hair vertex
-    within 0.03 (the shell is 0.01 away) -> cap_tris > 0, cap_tris_below_hairline == 0, every cap centroid above
-    the hairline; the cap vertices are offset 0.0015 along the outward normal -> radius 0.1015 +- 0.0005 from the
-    head centre; every cap vertex weighted Head 1.
-[6] Gate. GATES = max_push_m <= 0.12, moved_share <= 0.90, icp_resid_p95_m <= 0.012 and no largest-component gate.
+    within 0.03 (the shell is 0.01 away), whose centroid is not deeper than CAP_INNER_DEPTH_M = VOX_M 0.0034 inside
+    the body SDF. Centroids of the outer sphere's triangles: band k (polar angles pi k/61 .. pi (k+1)/61) has two
+    triangles per segment at y = 1.6 + 0.1 (2 cos a + cos b) / 3 and 1.6 + 0.1 (cos a + 2 cos b) / 3; a chord
+    centroid lies < 0.1 mm inside the sphere, so the depth filter keeps all of them. Band 25: 1.62629 / 1.62463,
+    band 26: 1.62129 / 1.61961. With the observed hairline 1.62134 (pushed 1.3 mm up) that is the pole band 120 +
+    bands 1..25 x 240 = 6120 triangles; the smoke recounts it by this rule from the fixture arrays and the reported
+    hairline. cap_tris_below_hairline == 0, every cap centroid above the hairline, inner_wall_dropped 0; the cap
+    vertices are offset 0.0015 along the outward normal -> radius 0.1015 +- 0.0005; every cap vertex Head 1.
+    Two-wall body, ``_scalp_cap`` called with the same hair positions and that body's SDF: the outer sphere's
+    triangles are the same set (cap count unchanged, every cap vertex at radius 0.1015); every inner-sphere triangle
+    above the hairline passes the other three tests (Head 1, nearest hair >= 0.104 - 0.094 = 0.010 <= 0.03) but
+    lies ~0.006 > 0.0034 inside the solid -> all of them are dropped: inner_wall_dropped = their count by the same
+    centroid rule (6120 again: same sampling), > 0.
+[5] Gate. GATES = max_push_m <= 0.12, moved_share <= 0.90, icp_resid_p95_m <= 0.012 and no largest-component gate.
     {max_push_m 0.13, moved_share 0.5, icp_resid_p95_m 0.005} refuses with a reason naming max_push_m; at 0.12 it
     passes; fit metrics hold every key of the brief.
     On fits: the plain fixture (outer shell only, clearance 0.010 > 0.004 everywhere) is not pushed at all ->
-    max_push_m 0, moved_share 0, passes. The fixture of [1]-[5] refuses, naming moved_share: the whole shell lies
+    max_push_m 0, moved_share 0, passes. The fixture of [1]-[4] refuses, naming moved_share: the whole shell lies
     within the crown band (spread_depth 0.119 > its 0.09 height) and is ONE connected mesh smoothed 6 passes in
     each of the first 6 iterations, so the inner layer's push reaches every shell vertex above MOVED_EPS_M
     0.00017 m -> moved_share 1.0 > 0.90. (The real spike hair, 97 separate cards: 0.685.)
@@ -180,8 +181,11 @@ def cap_shell(r, heights, segs, c):
     return np.array(P) + np.asarray(c, float), np.array(F)
 
 
-def body_glb():
+def body_glb(inner_wall=False):
     Ps, Fs = uv_sphere(0.1, (0, 1.6, 0), 61, 120)
+    if inner_wall:
+        Pi, Fi = uv_sphere(0.094, (0, 1.6, 0), 61, 120)
+        Ps, Fs = np.vstack([Ps, Pi]), np.vstack([Fs, Fi + len(Ps)])
     ys = [1.30, 1.35, 1.40, 1.45, 1.50, 1.55]
     Pc, Fc = cylinder(0.04, ys, 48)
     P = np.vstack([Ps, Pc])
@@ -246,30 +250,10 @@ def hair_glbs(inner=True):
     return out[0], out[1]
 
 
-# --- [4] image -------------------------------------------------------------------------------------------------------
-
-GREY, BLOND, SKIN = (128, 128, 128), (232, 200, 96), (224, 172, 140)
-
-
-def portrait_png(path):
-    from PIL import Image
-    yy, xx = np.mgrid[0:200, 0:200]
-    img = np.empty((200, 200, 3), np.uint8)
-    img[:] = GREY
-    img[((xx - 100) / 70.0) ** 2 + ((yy - 105) / 90.0) ** 2 <= 1] = BLOND
-    img[((xx - 100) / 40.0) ** 2 + ((yy - 105) / 55.0) ** 2 <= 1] = SKIN
-    Image.fromarray(img).save(path)
-
-
-def rembg_stub(data, model="u2net", **kwargs):
-    import io
-    from PIL import Image
-    with Image.open(io.BytesIO(data)) as im:
-        arr = np.asarray(im.convert("RGB")).astype(np.int16)
-    mask = (np.abs(arr - np.array(GREY)) > 0).any(2)
-    out = io.BytesIO()
-    Image.fromarray((mask * 255).astype(np.uint8)).save(out, "PNG")
-    return out.getvalue()
+def centroid_count(r, hairline):
+    """Triangles of the fixture head sphere of radius ``r`` whose centroid lies above ``hairline``."""
+    P, F = uv_sphere(r, (0, 1.6, 0), 61, 120)
+    return int((P[F].mean(1)[:, 1] > hairline).sum())
 
 
 def main() -> int:
@@ -277,15 +261,13 @@ def main() -> int:
         root = Path(tmp)
         from app.core import paths
         paths.init(root / "world")
-        from app.models import character as charmod
-        charmod.run_rembg = rembg_stub
         try:
             from app.core import garment_hairdeck as gh
         except ImportError as e:
             check(False, f"garment_hairdeck importable ({e})")
             print("FAILED: " + ", ".join(FAILS))
             return 1
-        from app.core.garment_fit import dense_weights, joint_index
+        from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, dense_weights, joint_index
         from app.core.glb_mesh import body_arrays
 
         body = body_glb()
@@ -335,25 +317,14 @@ def main() -> int:
         except ValueError as e:
             check(True, f"target outside 0..1 refused: {e}")
 
-        # [4] hair colour from an image
-        print("[4] hair_colour_from_image")
-        png = root / "portrait.png"
-        portrait_png(png)
-        got = np.asarray(gh.hair_colour_from_image(png, (0, 0, 200, 200)))
-        want = np.array(BLOND) / 255
-        check(bool(np.all(np.abs(got - want) <= 0.02)),
-              f"blond {got.round(4).tolist()} = {want.round(4).tolist()} +- 0.02")
-        try:
-            gh.hair_colour_from_image(png, (80, 90, 120, 130))
-            check(False, "a skin-only box raises")
-        except ValueError as e:
-            check(True, f"a skin-only box raises: {e}")
-
-        # [5] scalp cap
-        print("[5] scalp cap")
+        # [4] scalp cap
+        print("[4] scalp cap")
         hl = rep["cap"]["hairline_y"]
         check(1.62 - 1e-6 <= hl <= 1.625, f"hairline {hl} in [1.62, 1.625]")
-        check(m["cap_tris"] > 0, f"cap_tris {m['cap_tris']} > 0")
+        want = centroid_count(0.1, hl)
+        check(m["cap_tris"] == want and want > 0,
+              f"cap_tris {m['cap_tris']} == {want} (outer triangles above the hairline)")
+        check(rep["cap"]["inner_wall_dropped"] == 0, "single wall: nothing dropped as inner wall")
         check(m["cap_tris_below_hairline"] == 0, f"cap_tris_below_hairline {m['cap_tris_below_hairline']} == 0")
         I = np.asarray(g.indices)
         cap_f = I[I.min(1) >= n_hair]
@@ -369,9 +340,22 @@ def main() -> int:
         B = body_arrays(body)
         check(abs(rep["cranium"]["chin_y"] - 1.45) < 1e-6
               and int((dense_weights(B)[:, joint_index(B, "head")] > 0.5).sum()) > 0, "chin 1.45")
+        B2 = body_arrays(body_glb(inner_wall=True))
+        Xh = np.asarray(g.positions[:n_hair])
+        sdf2 = body_sdf(B2.positions, B2.faces, vox=VOX_M,
+                        bounds=(Xh.min(0) - SDF_MARGIN_M, Xh.max(0) + SDF_MARGIN_M))
+        V2, F2, _, hl2, info2 = gh._scalp_cap(B2, dense_weights(B2)[:, joint_index(B2, "head")], Xh, sdf2)
+        r2 = np.linalg.norm(V2 - [0, 1.6, 0], axis=1)
+        inner_want = centroid_count(0.094, hl2)
+        check(abs(hl2 - hl) <= 1e-5 and len(F2) == want, f"two walls: cap {len(F2)} == {want} outer triangles")
+        check(bool(np.all(np.abs(r2 - 0.1015) <= 0.0005)), f"two walls: every cap vertex on the outer wall "
+              f"(radius {r2.min():.5f}..{r2.max():.5f})")
+        check(info2["inner_wall_dropped"] == inner_want and inner_want > 0,
+              f"two walls: inner_wall_dropped {info2['inner_wall_dropped']} == {inner_want}")
+        check(int((V2[F2].mean(1)[:, 1] < hl2).sum()) == 0, "two walls: no cap triangle below the hairline")
 
-        # [6] gate
-        print("[6] gate")
+        # [5] gate
+        print("[5] gate")
         keys = ("max_push_m", "moved_share", "icp_scale", "icp_resid_median_m", "icp_resid_p95_m", "cap_tris",
                 "cap_tris_below_hairline", "colour_target")
         check(all(k in m for k in keys), "fit metrics hold every key")
