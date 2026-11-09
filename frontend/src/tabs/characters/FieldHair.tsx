@@ -23,26 +23,22 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { useEnlarge } from '../../components/ZoomButton'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { Model3DViewer } from './Model3DViewer'
+import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, garmentRunning, useGarment } from './useGarment'
 import type {
   GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, HairInfo,
 } from './useGarment'
 
-const TILE_STYLE: CSSProperties = {
-  display: 'block',
+const TILE_HEIGHT = 200
+
+const EMPTY_TILE: CSSProperties = {
   width: '100%',
-  height: 200,
-  objectFit: 'contain',
+  height: TILE_HEIGHT,
   borderRadius: 6,
   border: '1px solid var(--border, #30363d)',
   background: 'rgba(255, 255, 255, 0.04)',
-}
-
-const EMPTY_TILE: CSSProperties = {
-  ...TILE_STYLE,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -247,18 +243,16 @@ function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle,
   extra?: ReactNode
 }) {
   const { t } = useI18n()
-  const enlarge = useEnlarge()
   const url = img?.url || null
-  const zoom = url ? enlarge({ src: url, alt: label }) : null
-  const tile = small ? { ...TILE_STYLE, height: 120 } : TILE_STYLE
+  const height = small ? 120 : TILE_HEIGHT
   const attempts = img?.attempts ?? []
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div className="ga-hint">{label}</div>
-      {url && zoom ? (
-        <img key={url} src={url} alt="" {...zoom} style={{ ...zoom.style, ...tile }} />
+      {url ? (
+        <RefImage key={url} src={url} height={height} label={label} meta={img} compact={small} />
       ) : (
-        <div className="ga-hint" style={{ ...EMPTY_TILE, height: tile.height }}>{t('No render yet')}</div>
+        <div className="ga-hint" style={{ ...EMPTY_TILE, height }}>{t('No render yet')}</div>
       )}
       {url && img && !img.accepted ? <div className="ga-hint" style={WARN_STYLE}>{t('Not accepted')}</div> : null}
       {chips ? <GateChips specs={chips} record={shownRecord(img)} limits={limits} view={view} /> : null}
@@ -270,7 +264,8 @@ function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle,
           </summary>
           {attempts.map((a) => (
             <div key={a.attempt} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 4 }}>
-              <img src={a.url} alt="" style={{ ...TILE_STYLE, width: 72, height: 72, flex: 'none' }} />
+              <RefImage src={a.url} width={96} height={96} label={`${label} · ${t('Attempt')} ${a.attempt}`}
+                meta={a} compact />
               <div style={{ minWidth: 0 }}>
                 {chips ? <GateChips specs={chips} record={a.gate} limits={limits} view={view} /> : null}
                 <RecordNumbers label={`${t('Attempt')} ${a.attempt}`} record={a.gate} />

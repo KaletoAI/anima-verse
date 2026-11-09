@@ -22,24 +22,20 @@ import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { useEnlarge } from '../../components/ZoomButton'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { Model3DViewer } from './Model3DViewer'
+import { RefImage } from './RefImage'
 import { BASE_VIEWS, modelRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 
-const TILE_STYLE: CSSProperties = {
-  display: 'block',
+const TILE_HEIGHT = 200
+
+const EMPTY_TILE: CSSProperties = {
   width: '100%',
-  height: 200,
-  objectFit: 'contain',
+  height: TILE_HEIGHT,
   borderRadius: 6,
   border: '1px solid var(--border, #30363d)',
   background: 'rgba(255, 255, 255, 0.04)',
-}
-
-const EMPTY_TILE: CSSProperties = {
-  ...TILE_STYLE,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -58,17 +54,15 @@ function ViewTile({ info, view, label, busy, onRender }: {
   onRender: (view: BaseView, force: boolean) => void
 }) {
   const { t } = useI18n()
-  const enlarge = useEnlarge()
   const url = info.images?.[view] || null
   const st = info.status?.[view]
   // A side/back view edits the front: it cannot render before the front exists.
   const needsFront = view !== 'front' && !info.images?.front
-  const zoom = url ? enlarge({ src: url, alt: label }) : null
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div className="ga-hint">{label}</div>
-      {url && zoom ? (
-        <img key={url} src={url} alt="" {...zoom} style={{ ...zoom.style, ...TILE_STYLE }} />
+      {url ? (
+        <RefImage key={url} src={url} height={TILE_HEIGHT} label={label} meta={info.image_meta?.[view]} />
       ) : (
         <div className="ga-hint" style={EMPTY_TILE}>
           {st?.running ? t('Generating…') : t('No render yet')}

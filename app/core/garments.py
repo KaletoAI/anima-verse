@@ -543,6 +543,7 @@ def _stamp(path: Path) -> Optional[int]:
 def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Dict[str, Any]:
     from app.core.garment_images import ATTEMPTS
     from app.core.garment_store import read_record
+    from app.core.model_refs import image_tile_meta
     final = _image(character_name, item_id, fsig, step, view)
     record = read_record(final.with_suffix(".json")) if final.is_file() else {}
     stamp = _stamp(final)
@@ -552,13 +553,16 @@ def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: s
         a_stamp = _stamp(path)
         if a_stamp is None:
             continue
-        attempts.append({"attempt": n, "gate": read_record(path.with_suffix(".json")).get("gate"),
-                         "url": _url(character_name, item_id, f"images/{step}/{view}", a_stamp, f"&attempt={n}")})
+        a_record = read_record(path.with_suffix(".json"))
+        attempts.append({"attempt": n, "gate": a_record.get("gate"),
+                         "url": _url(character_name, item_id, f"images/{step}/{view}", a_stamp, f"&attempt={n}"),
+                         **image_tile_meta(path, a_record)})
     gates = record.get("gates")
     if not isinstance(gates, dict):
         gates = {_ORDINALS[i]: a["gate"] for i, a in enumerate(attempts) if a.get("gate") is not None}
     out = {"url": _url(character_name, item_id, f"images/{step}/{view}", stamp) if stamp is not None else None,
-           "accepted": record.get("accepted") is True, "gates": gates, "attempts": attempts}
+           "accepted": record.get("accepted") is True, "gates": gates, "attempts": attempts,
+           **(image_tile_meta(final, record) if stamp is not None else {})}
     if step == "cutout" and record:
         out["upscale"] = record.get("upscale")
         out["side"] = record.get("side")

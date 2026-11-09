@@ -9,6 +9,7 @@
  * The face view's own button opens the image dialog (backend, LoRAs, prompt
  * for that one run); every other button fires directly.
  * The pair is also generated automatically after outfit changes (debounced).
+ * Every picture is a shared RefImage tile (creation time, model · size).
  * ``refreshKey`` (e.g. the equipped signature) reloads + cache-busts when the
  * outfit changes, so the preview follows the current combination.
  *
@@ -20,18 +21,19 @@
  * clock), so a quick equip/unequip never flashes a hint at all.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { useEnlarge } from '../../components/ZoomButton'
-import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { ImageGenDialog } from '../../components/ImageGenDialog'
 import type { ImageGenSubmit } from '../../components/ImageGenDialog'
+import { RefImage } from './RefImage'
 
 interface RefInfo {
   filename?: string
+  /** Sidecar stamp, else the file's mtime (server, `image_tile_meta`). */
   created_at?: string
+  /** Sidecar `model`, else `service`; absent on older renders. */
+  model?: string
   backend?: string
 }
 
@@ -115,94 +117,6 @@ function renderFingerprint(d: RefsInfo | null | undefined, kinds: RefKind[]): st
   ])
 }
 
-/**
- * Preview image with the render's pixel size as a corner badge. The size is
- * read from the loaded bitmap itself (naturalWidth/Height) — what the file
- * actually is, not what the config asked for. A click opens the render in
- * the shared Lightbox — the ONE place for all instances (T-pose + extra views).
- */
-/** The corner badges on a reference image (size, date). */
-const BADGE_STYLE: CSSProperties = {
-  position: 'absolute',
-  bottom: 6,
-  padding: '1px 5px',
-  borderRadius: 4,
-  background: 'rgba(0, 0, 0, 0.55)',
-  color: '#fff',
-  fontSize: 11,
-  lineHeight: '16px',
-  pointerEvents: 'none',
-}
-
-/** Badge overrides for the small view tiles. */
-const COMPACT_BADGE: CSSProperties = { bottom: 3, padding: '0 3px', fontSize: 10, lineHeight: '14px' }
-
-function RefImage({
-  src,
-  height,
-  radius,
-  showSize = false,
-  label,
-  caption,
-  action,
-  compact = false,
-}: {
-  src: string
-  height: number
-  radius: number
-  showSize?: boolean
-  /** Lightbox alt text (which render this is). */
-  label?: string
-  /** Text in the lower left corner, styled like the size badge. */
-  caption?: string
-  /** Control in the upper right corner (e.g. the regenerate button). */
-  action?: ReactNode
-  /** Small tile: smaller badges, a long caption is cut with an ellipsis. */
-  compact?: boolean
-}) {
-  const [size, setSize] = useState('')
-  const [hidden, setHidden] = useState(false)
-  const enlarge = useEnlarge()
-  const zoom = enlarge({ src, alt: label || '' })
-  return (
-    <div style={{ position: 'relative' }}>
-      <img
-        src={src}
-        alt=""
-        {...zoom}
-        style={{
-          ...zoom.style,
-          display: 'block',
-          width: '100%',
-          height,
-          objectFit: 'contain',
-          borderRadius: radius,
-          border: '1px solid var(--border, #30363d)',
-          background: 'rgba(255, 255, 255, 0.04)',
-          visibility: hidden ? 'hidden' : undefined,
-        }}
-        onLoad={(e) => {
-          const im = e.target as HTMLImageElement
-          setSize(`${im.naturalWidth}×${im.naturalHeight}`)
-        }}
-        onError={() => setHidden(true)}
-      />
-      {showSize && size && !hidden ? (
-        <span style={{ ...BADGE_STYLE, ...(compact ? COMPACT_BADGE : {}), right: compact ? 3 : 6 }}>{size}</span>
-      ) : null}
-      {caption && !hidden ? (
-        <span title={caption} style={{ ...BADGE_STYLE, left: compact ? 3 : 6,
-          ...(compact ? { ...COMPACT_BADGE, maxWidth: '48%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : {}) }}>
-          {caption}
-        </span>
-      ) : null}
-      {action ? (
-        <div style={{ position: 'absolute', top: compact ? 3 : 6, right: compact ? 3 : 6 }}>{action}</div>
-      ) : null}
-    </div>
-  )
-}
-
 export function FieldModelRefs({
   character,
   kinds = ['pose', 'tpose'],
@@ -212,9 +126,6 @@ export function FieldModelRefs({
   kinds?: RefKind[]
   refreshKey?: string
 }) {
-  // Subscribe to the shared clock settings so the stamps above re-render
-  // once the server-configured format and timezone arrive.
-  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
@@ -431,9 +342,8 @@ export function FieldModelRefs({
                   src={`/characters/${enc}/model-refs/${kind}?v=${bust}`}
                   height={320}
                   radius={8}
-                  showSize={kind === 'tpose'}
                   label={label(kind)}
-                  caption={ri.created_at ? formatDateTime(ri.created_at, clockSettings()) : undefined}
+                  meta={ri}
                   action={kind === 'tpose' ? (
                     <button
                       type="button"
@@ -482,10 +392,9 @@ export function FieldModelRefs({
                               src={`${view === 'face' ? info.face_view?.url : `/characters/${enc}/model-refs/tpose_${view}`}?v=${bust}`}
                               height={110}
                               radius={6}
-                              showSize
                               compact
                               label={viewLabel(view)}
-                              caption={vi.created_at ? formatDateTime(vi.created_at, clockSettings()) : undefined}
+                              meta={vi}
                               action={(
                                 <button
                                   type="button"

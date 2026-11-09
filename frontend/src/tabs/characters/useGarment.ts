@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
+import type { ImageTileMeta } from './RefImage'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
@@ -21,14 +22,15 @@ export type GarmentStep = GarmentImageStep | 'mesh' | 'fit'
  *  attempt, the fit gates) — numbers plus `ok` and `reasons`. */
 export type GateRecord = Record<string, unknown> & { ok?: boolean; reasons?: string[] }
 
-export interface GarmentImageInfo {
+export interface GarmentImageInfo extends ImageTileMeta {
   /** The accepted final (or the last stored file), versioned; null = none. */
   url: string | null
   accepted: boolean
   /** Every attempt's gate record of the final, keyed first/second. */
   gates: Record<string, GateRecord> | null
-  /** Attempt files on disk (refused or replaced attempts). */
-  attempts: Array<{ attempt: number; gate: GateRecord | null; url: string }>
+  /** Attempt files on disk (refused or replaced attempts), each with the
+   *  tile meta (model, creation time) of its own sidecar. */
+  attempts: Array<ImageTileMeta & { attempt: number; gate: GateRecord | null; url: string }>
   /** Cut-out only: the routed upscale (`status` applied · lanczos · not_needed). */
   upscale?: Record<string, unknown> | null
   side?: number | null

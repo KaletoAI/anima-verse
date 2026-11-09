@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
+import type { ImageTileMeta } from './RefImage'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -53,6 +54,8 @@ export interface BaseBodyInfo {
   humanoid: boolean
   signature: string
   images: Partial<Record<BaseView, string | null>>
+  /** Per stored view: model + creation time for the image tile. */
+  image_meta?: Partial<Record<BaseView, ImageTileMeta | null>>
   status: Partial<Record<BaseView, BaseViewStatus>>
   model: BaseModelInfo | null
   outfit: BaseOutfitInfo | null

@@ -501,17 +501,20 @@ def start_base_images(character_name: str, *, view: Optional[str] = None,
 
 def base_info(character_name: str) -> Dict[str, Any]:
     """UI info: ``{pipeline, humanoid, signature, images: {view: url|None},
-    status: {view: ...}, model, outfit, hair}`` (``model``: see
+    image_meta: {view: {model?, created_at?}|None}, status: {view: ...},
+    model, outfit, hair}`` (``image_meta``: ``model_refs.image_tile_meta``
+    of each stored view; ``model``: see
     ``base_model_info``; ``outfit``: the CURRENT outfit's model on the
     pipeline, see ``outfit_info`` — None off the pipeline; ``hair``:
     ``garments.hair_summary`` ``{item_id, status}`` — None without a worn
     hair item or off the pipeline); the image URLs
     carry the file's mtime so a re-render is fetched anew."""
-    from app.core.model_refs import find_ref_image, is_humanoid
+    from app.core.model_refs import find_ref_image, image_tile_meta, is_humanoid
     profile = _profile_of(character_name, None)
     humanoid = bool(is_humanoid(character_name, profile=profile))
     signature = base_signature(character_name, profile=profile) if humanoid else ""
     images: Dict[str, Optional[str]] = {}
+    image_meta: Dict[str, Optional[Dict[str, Any]]] = {}
     for view in BASE_VIEWS:
         path = find_ref_image(character_name, _kind(view), signature) if signature else None
         try:
@@ -520,6 +523,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
             stamp = None
         images[view] = (f"/characters/{quote(character_name, safe='')}/base-body/images/{view}?v={stamp}"
                         if stamp is not None else None)
+        image_meta[view] = image_tile_meta(path) if stamp is not None else None
     from app.core.timeutils import utc_now
     pipeline = is_base_pipeline(character_name, profile=profile)
     hair = None
@@ -530,7 +534,8 @@ def base_info(character_name: str) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001 — the summary never breaks the poll
             logger.exception("Hair summary of %s failed", character_name)
     return {"pipeline": pipeline, "humanoid": humanoid,
-            "signature": signature, "images": images, "status": base_status(character_name),
+            "signature": signature, "images": images, "image_meta": image_meta,
+            "status": base_status(character_name),
             "model": base_model_info(character_name, signature),
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
             "hair": hair,

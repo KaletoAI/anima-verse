@@ -672,21 +672,51 @@ def invalidate_refs_for_item(character_name: str, item_id: str) -> Set[str]:
     return out
 
 
-def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:
-    """UI info for one stored render: filename plus what its sidecar knows."""
+def _read_sidecar(path: Path) -> Dict[str, Any]:
     import json
+    try:
+        meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def image_tile_meta(path: Optional[Path], meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What an image tile of the character tabs shows beside the picture:
+    ``model`` — the sidecar's ``model``, else its ``service``; left out when
+    neither is there (an older render) — and ``created_at`` — the sidecar's
+    stamp, else the file's mtime as an aware UTC ISO stamp; left out when
+    the file is gone. ``meta``: the sidecar when the caller already read it.
+    The pixel size is not here: the tile reads it off the loaded bitmap."""
+    if path is None:
+        return {}
+    if meta is None:
+        meta = _read_sidecar(path)
+    out: Dict[str, Any] = {}
+    model = str(meta.get("model") or meta.get("service") or "").strip()
+    if model:
+        out["model"] = model
+    created = str(meta.get("created_at") or "").strip()
+    if not created:
+        try:
+            from datetime import timezone
+            created = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
+        except OSError:
+            created = ""
+    if created:
+        out["created_at"] = created
+    return out
+
+
+def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """UI info for one stored render: filename, what its sidecar knows and
+    the tile meta (``image_tile_meta``: model, creation time)."""
     if not path:
         return None
-    info: Dict[str, Any] = {"filename": path.name}
-    meta_path = path.with_suffix(".json")
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            info["created_at"] = meta.get("created_at", "")
-            info["prompt"] = meta.get("prompt", "")
-            info["backend"] = meta.get("service", "")
-        except (OSError, ValueError):
-            pass
+    meta = _read_sidecar(path)
+    info: Dict[str, Any] = {"filename": path.name, "created_at": "",
+                            "prompt": meta.get("prompt", ""), "backend": meta.get("service", "")}
+    info.update(image_tile_meta(path, meta))
     return info
 
 
@@ -1224,7 +1254,7 @@ def face_view_info(character_name: str) -> dict:
     info = {"exists": path is not None,
             "stale": bool(path and (not profile_hash or meta.get("reference_sha256") != profile_hash)),
             "rendering": get_render_status(character_name)["face_view"]["running"],
-            "created_at": meta.get("created_at", ""), "width": None, "height": None,
+            "created_at": "", "width": None, "height": None,
             "url": f"/characters/{quote(character_name, safe='')}/model-refs/face_view",
             # Prefill of the image dialog: the prompt a render would use and
             # the reference it slots.
@@ -1232,6 +1262,7 @@ def face_view_info(character_name: str) -> dict:
             "profile_url": (f"/characters/{quote(character_name, safe='')}/images/"
                             f"{quote(profile.name, safe='')}" if profile else "")}
     if path:
+        info.update(image_tile_meta(path, meta))
         try:
             with Image.open(path) as image:
                 info["width"], info["height"] = image.size
