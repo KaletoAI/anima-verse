@@ -129,7 +129,8 @@ SECTIONS = {
                 "type": "select",
                 "label": "Hair method",
                 "choices": ["edit_chain", "hairdeck"],
-                "choice_labels": {"edit_chain": "Edit chain", "hairdeck": "HairDeck"},
+                "choice_labels": {"edit_chain": "Edit chain (image edits + mesh)",
+                                  "hairdeck": "HairDeck (one image → hair cards)"},
                 "default": "edit_chain",
                 "description": "How a base-body character's hair mesh is made. Edit chain: the base views are "
                                "edited into hair-only images, which become a mesh (several image edits and one "

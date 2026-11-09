@@ -4,7 +4,7 @@ import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { deleteAt, getAt, originOf, setAt, type Json } from './schemaValues'
+import { deleteAt, getAt, originOf, selectOptions, setAt, type Json } from './schemaValues'
 
 export type SchemaFieldDef = {
   type: string
@@ -16,6 +16,7 @@ export type SchemaFieldDef = {
   max?: number
   step?: number
   choices?: (string | number)[]
+  choice_labels?: Record<string, string>
   visible_when?: Record<string, Json>
   endpoint?: string
   method?: string
@@ -118,14 +119,15 @@ export function SchemaField({ field, fieldKey, revision, refresh, ...props }: Sc
       confirmLabel={t('Run')} onConfirm={() => void run()} onClose={() => setConfirm(false)} />
   </Field>
   const scalarDefault = defaultValue !== undefined && defaultValue !== null && typeof defaultValue !== 'object'
-    ? String(defaultValue) : ''
+    ? field.choice_labels?.[String(defaultValue)] ?? String(defaultValue) : ''
   const hint = <>{field.description}{scalarDefault.length > 0 && scalarDefault.length <= 80 &&
     <div>{t('Default')}: {scalarDefault}</div>}</>
   let control
   if (field.type === 'bool') control = <input type="checkbox" aria-label={field.label} checked={Boolean(value ?? defaultValue)} onChange={event => change(event.target.checked)} />
   else if (field.type === 'select') control = <select className="ga-input" aria-label={field.label} value={String(value ?? defaultValue ?? '')}
     onChange={event => change(field.choices?.find(choice => String(choice) === event.target.value) ?? event.target.value)}>
-    {(field.choices ?? []).map(choice => <option key={choice} value={choice}>{choice}</option>)}
+    {selectOptions(field.choices, field.choice_labels).map(option =>
+      <option key={option.value} value={option.value}>{option.label}</option>)}
   </select>
   else if (field.type === 'text') control = <textarea className="ga-textarea" aria-label={field.label} rows={4} value={String(value ?? '')}
     placeholder={scalarDefault} onChange={event => change(event.target.value)} />

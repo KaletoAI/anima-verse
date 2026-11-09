@@ -1,6 +1,13 @@
 /** Immutable dotted paths; numeric segments address array entries. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
+/** The options of a schema select: every choice with its schema `choice_labels` entry
+ *  as the label, else the choice itself. The stored value stays the raw choice. */
+export function selectOptions(choices?: (string | number)[], labels?: Record<string, string>
+): { value: string | number; label: string }[] {
+  return (choices ?? []).map(choice => ({ value: choice, label: labels?.[String(choice)] ?? String(choice) }))
+}
+
 export function getAt(root: Json, path: string): Json | undefined {
   let current: Json | undefined = root
   for (const segment of path.split('.')) {

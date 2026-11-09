@@ -305,7 +305,11 @@ def _garment_files(character_name: str) -> Dict[str, List[Path]]:
 
 def _garment_keep(character_name: str) -> Optional[Set[str]]:
     """The garment groups that stay: per equipped garment item the current
-    fsig and the fit served on the current base model. None when that cannot
+    fsig, the fit served on the current base model, and per method (hair:
+    edit chain / HairDeck) the newest accepted fit on the current base model
+    and the newest accepted fit at all — so switching the hair method back
+    never costs a generation (plan 2026-11-09-hairdeck-hair, Review Focus 3).
+    An older accepted fit of the same method is stale. None when that cannot
     be computed (then nothing is judged — never delete on a guess)."""
     try:
         from app.core import base_body, garment_store
@@ -319,6 +323,14 @@ def _garment_keep(character_name: str) -> Optional[Set[str]]:
             if base and base[1]:
                 fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1])
                 parsed = garment_store.parse_name(fit[0]) if fit else None
+                if parsed:
+                    keep.add(_garment_key(*parsed))
+            newest = list(garment_store.newest_accepted_fits(character_name, item_id).values())
+            if base and base[1]:
+                newest += garment_store.newest_accepted_fits(
+                    character_name, item_id, base_model_sha=base[1]).values()
+            for path, _record in newest:
+                parsed = garment_store.parse_name(path)
                 if parsed:
                     keep.add(_garment_key(*parsed))
         return keep

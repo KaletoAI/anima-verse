@@ -86,6 +86,17 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     serves E (= its current fsig). E removed: wanted_garments == {} (no
     hair), garment_info served_fsig None, preview_url None, steps = the
     five edit-chain steps. Method hairdeck again: the [5a] fit, no call.
+[7] Fix round 1 — cache GC (outfit_cache_gc) keeps, per hair item, the
+    current fsig, the served fit and the newest accepted fit of EACH method.
+    Two synthetic edit-chain fits accepted on the current base model:
+    E_old = H_aaaaaaaaaaaa (written first) and E = H_<edit fsig> (written
+    second, newer). Method hairdeck: current fsig = the [5b] fsig (no
+    garment files: the HairDeck job folders are not garment groups), served
+    = newest hairdeck = [5a]. Stale garment keys = exactly the superseded
+    fits: the [2]/[3] hairdeck fit H_<f_hd>, the [3] colour fit H_<f_col>
+    and E_old. purge_stale(those + E + [5a]) skips 2 (E, [5a]) and removes
+    the three; the four HairDeck job folders stay; switching to edit_chain
+    serves E and back serves [5a], no generation call.
 """
 import hashlib
 import importlib.util
@@ -447,6 +458,35 @@ def main() -> int:
         set_profile(hair_method="hairdeck")
         check("hairdeck again serves [5a]", served(), f"{hid}_{f5a}.glb")
         check("no generation in [6]", counts(), before)
+
+        # --- [7] cache GC keeps the newest fit of EACH method -----------------------
+        print("[7] cache GC keeps each method's newest fit")
+        from app.core import outfit_cache_gc as gc
+        sha_now = base_body.current_base("Demo")[1]
+        e_old = "aaaaaaaaaaaa"
+        for fsig in (e_old, f_edit):  # written in this order: E is the newer one
+            path = gs.garment_path("Demo", hid, fsig, "fit")
+            shutil.copyfile(gs.garment_path("Demo", hid, f5a, "fit"), path)
+            gs.write_record(path.with_suffix(".json"), {
+                "accepted": True, "kind": "hair", "item_id": hid, "fsig": fsig, "base_signature": b1,
+                "base_model_sha256": sha_now, "inputs": {}})
+        rep = gc.verify_cache("Demo")
+        stale = sorted(k for k in rep["stale_signatures"] if k.startswith("garment:"))
+        want = sorted(f"garment:{hid}_{f}" for f in (f_hd, f_col, e_old))
+        check("stale = superseded fits only", stale, want)
+        res = gc.purge_stale("Demo", stale + [f"garment:{hid}_{f_edit}", f"garment:{hid}_{f5a}"])
+        check("purge skips both kept fits", res["skipped"], 2)
+        check("kept on disk", [gs.garment_path("Demo", hid, f, "fit").is_file() for f in (f5a, f_edit)],
+              [True, True])
+        check("removed", [gs.garment_path("Demo", hid, f, "fit").is_file() for f in (f_hd, f_col, e_old)],
+              [False, False, False])
+        check("HairDeck job folders untouched",
+              [gs.hairdeck_dir("Demo", hid, h).is_dir() for h in (h1, h4, h5a, h5b)], [True] * 4)
+        set_profile(hair_method="edit_chain")
+        check("switch back serves E", served(), f"{hid}_{f_edit}.glb")
+        set_profile(hair_method="hairdeck")
+        check("and back to [5a]", served(), f"{hid}_{f5a}.glb")
+        check("no generation in [7]", counts(), before)
 
     print()
     if FAILS:

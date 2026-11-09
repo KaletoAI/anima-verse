@@ -342,7 +342,16 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
         record = read_record(path.with_suffix(".json"))
         if path.is_file() and _accepted_on(record, base_model_sha):
             return path, record
-    best: Optional[Tuple[int, Path, Dict[str, Any]]] = None
+    return newest_accepted_fits(character_name, item_id, base_model_sha=base_model_sha).get(method)
+
+
+def newest_accepted_fits(character_name: str, item_id: str, *,
+                         base_model_sha: str = "") -> Dict[str, Tuple[Path, Dict[str, Any]]]:
+    """method -> ``(fit GLB, record)`` of the item's newest (GLB mtime)
+    accepted fit made with that method (``fit_method``); with
+    ``base_model_sha`` only fits accepted on that base model. Read-only:
+    never creates ``garments/``."""
+    best: Dict[str, Tuple[int, Path, Dict[str, Any]]] = {}
     root = _root(character_name)
     for (iid, _fsig), files in stored_groups(character_name).items():
         if iid != item_id:
@@ -351,15 +360,18 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
             if path.suffix != ".glb" or path.parent != root:
                 continue
             record = read_record(path.with_suffix(".json"))
-            if not _accepted_on(record, base_model_sha) or fit_method(record) != method:
+            if record.get("accepted") is not True:
+                continue
+            if base_model_sha and not _accepted_on(record, base_model_sha):
                 continue
             try:
                 mtime = path.stat().st_mtime_ns
             except OSError:
                 continue
-            if best is None or mtime > best[0]:
-                best = (mtime, path, record)
-    return (best[1], best[2]) if best else None
+            method = fit_method(record)
+            if method not in best or mtime > best[method][0]:
+                best[method] = (mtime, path, record)
+    return {method: (path, record) for method, (_mtime, path, record) in best.items()}
 
 
 # --- Run status (in memory) ---------------------------------------------------
