@@ -26,18 +26,18 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
              model_refs/.handgate_<random>/attempt1/tpose_<bsig> (the hand
              gate's staging dir; the recorder's 8x8 image has no figure to
              measure, so attempt 1 passes and lands on model_refs/tpose_<bsig>);
-      back:  occasion "base_view", use case "base_back"
+      back:  occasion "base_view", use case "base_view_back"
              (base_body.BASE_USE_CASES — the base views' own use cases, the
              whole-body T-pose path keeps tpose*), back_view True, stem
              tpose_back_<bsig>,
              reference_image NAMED tpose_<bsig>.png (neutral_view_reference
              keeps the file name) but NOT the front file itself: a grey
              copy, whose transparent corner pixel reads (128, 128, 128);
-      left/right: use case "base_side", stems tpose_left_<bsig> /
+      left/right: use case "base_view_side", stems tpose_left_<bsig> /
              tpose_right_<bsig>.
     Every call: bare_prompt/extra_negative = base_prompt(view) (prompt,
     negative), style_character = base_character(view) (the block for the
-    style's {character} slot), NO negative_prompt (it would REPLACE the use-case negative),
+    style's {character} slot on the front, None on back/left/right), NO negative_prompt (it would REPLACE the use-case negative),
     equipped {} / [], apply_state_modifiers False, size _tpose_size() =
     (1024, 1024) (no config override), sidecar_extra {"base_signature": bsig}.
     While the front renders, base_info status front.running is True.
@@ -65,8 +65,8 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
       base_character(front), negative_prompt_extra == BASE_NEGATIVE, no
       "negative_prompt" key, profile_only True, no reference_image_override,
       clothed False (no fabric clause in the use-case style);
-      back payload: use case "base_back", occasion "base_view",
-      style_character == base_character(back),
+      back payload: use case "base_view_back", occasion "base_view", NO
+      style_character key (the edit view sends its short prompt alone),
       reference_image_override ends with "/tpose_<bsig>.png";
       postprocess called with mesh_input=True for both (BiRefNet matte path —
       base_front/base_view are mesh-input occasions like tpose/tpose_view);
@@ -219,7 +219,7 @@ def main() -> int:
             check("staging gone", [p.name for p in refs.iterdir() if p.is_dir()], [])
             check("occasions", [c["occasion"] for c in CALLS], ["base_front", "base_view", "base_view", "base_view"])
             check("use cases", [c["image_use_case"] for c in CALLS],
-                  ["base_front", "base_back", "base_side", "base_side"])
+                  ["base_front", "base_view_back", "base_view_side", "base_view_side"])
             check("front reference", CALLS[0]["ref"], None)
             check("view reference names", [c["ref"].name for c in CALLS[1:]], [f"tpose_{bsig}.png"] * 3)
             check("view reference is a copy", any(c["ref"] == refs / f"tpose_{bsig}.png" for c in CALLS[1:]), False)
@@ -346,8 +346,8 @@ def main() -> int:
         check("front profile_only", front["profile_only"], True)
         check("front no reference override", "reference_image_override" in front, False)
         check("front clothed", front["clothed"], False)
-        check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("base_back", "base_view"))
-        check("back style_character", back.get("style_character"), base_body.base_character("Demo", "back"))
+        check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("base_view_back", "base_view"))
+        check("back no style_character", "style_character" in back, False)
         check("back reference override", back["reference_image_override"].endswith(f"/tpose_{bsig}.png"), True)
         check("matte path", mattes, [True] * 4)
         meta = json.loads((refs / f"tpose_{bsig}.json").read_text())

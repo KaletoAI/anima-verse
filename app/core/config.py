@@ -640,23 +640,25 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
-    # The base-body views (app/core/base_body.py, occasions base_front /
-    # base_view / outfit_back_draft). Their own use cases so the whole-body
+    # The base-body front and the outfit drafts (app/core/base_body.py,
+    # occasions base_front / outfit_back_draft / outfit_side_draft; the edit
+    # views use base_view_back / base_view_side below). Their own use cases so the whole-body
     # T-pose path (animals, characters not on the pipeline) keeps "tpose*".
     # Character details come FIRST (user directive 2026-11-09): the
     # ``{character}`` slot right after the subject clause takes the caller's
     # character block (``style_character``, filled in get_use_case_prompts),
     # and the base prompt (pose, bald head, body text) follows the style
-    # after a comma. No feet/margin clause: the user's shortened front works
-    # better without it. Negatives as their T-pose counterparts.
+    # after a comma. The front keeps one short feet/margin clause after the
+    # head-to-toe phrase (user test 2026-11-09: without it the feet were cut
+    # off). Negatives as their T-pose counterparts.
     "base_front": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, both feet entirely inside the frame, with empty margin above the head and below the feet, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, both feet entirely inside the frame, with empty margin above the head and below the feet, the full arm span visible with both hands entirely inside the frame, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -684,6 +686,19 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
+    },
+    # The base-body EDIT views (back/left/right, occasion base_view): an edit
+    # of the front whose whole prompt is one short sentence
+    # (base_body.BASE_VIEW_PROMPTS) — no style and no character block (user
+    # test 2026-11-09: the long style and pose texts made Qwen invent
+    # things). Negatives as their T-pose counterparts.
+    "base_view_back": {
+        "keywords": {"prompt_style": "", "prompt_negative": _NEG_TPOSE_BACK, "prompt_instruction": ""},
+        "natural": {"prompt_style": "", "prompt_negative": _NEG_TPOSE_BACK, "prompt_instruction": ""},
+    },
+    "base_view_side": {
+        "keywords": {"prompt_style": "", "prompt_negative": _NEG_TPOSE_SIDE, "prompt_instruction": ""},
+        "natural": {"prompt_style": "", "prompt_negative": _NEG_TPOSE_SIDE, "prompt_instruction": ""},
     },
     # Garment edits of the base-body views (Hair tab, base-body phase 4). The
     # step prompt carries the whole instruction and the framing comes from the

@@ -36,7 +36,7 @@ What describes the body:
   packs stay out unless they opt in.
 
 The prompt layout (user directive 2026-11-09, "character details always
-first"): the base use cases' style (``BASE_USE_CASES``) opens with its subject
+first"): the front's style (``base_front``) opens with its subject
 clause, then its ``{character}`` slot takes the CHARACTER BLOCK
 (``base_character``: "sfw, no clothing, " + ``base_appearance``), then the rest
 of the style; the base prompt (``base_prompt``: pose, bald head, body text)
@@ -44,10 +44,14 @@ follows after a comma. The image service fills the slot
 (``config.fill_character_slot``, payload key ``style_character``).
 
 The pose texts: the front is ``model_refs.BASE_FRONT_POSE_PROMPT`` (the
-A-pose front without the palms and hair clauses); back/left/right are the
-mesh-input view texts of ``app/core/model_refs.py`` (admin overrides
-included) with their hair clauses taken out: a bald figure has no hair to
-keep off the chest or to match to the reference.
+A-pose front without the palms and hair clauses). Back/left/right are edits
+of the front and carry ONE short sentence each (``BASE_VIEW_PROMPTS``), no
+style and no character block (use cases ``base_view_back`` /
+``base_view_side``; user test 2026-11-09: the long texts made Qwen invent
+things). The outfit drafts keep the mesh-input view texts of
+``app/core/model_refs.py`` (admin overrides included) with their hair
+clauses taken out, under the long ``base_back`` / ``base_side`` styles
+(``DRAFT_USE_CASES``).
 """
 import hashlib
 import json
@@ -81,8 +85,25 @@ BASE_BLOCK_HEAD = "sfw, no clothing"
 DRAFT_BLOCK_HEAD = "sfw"
 #: Use case (style, negative) per base view — their own, so the whole-body
 #: T-pose path keeps "tpose" / "tpose_back" / "tpose_side" untouched. The
-#: outfit back draft renders with the back's.
-BASE_USE_CASES = {"front": "base_front", "back": "base_back", "left": "base_side", "right": "base_side"}
+#: edit views' use cases carry no style: their whole prompt is the short
+#: ``BASE_VIEW_PROMPTS`` text.
+BASE_USE_CASES = {"front": "base_front", "back": "base_view_back", "left": "base_view_side",
+                  "right": "base_view_side"}
+#: Use case per two-step draft (back, left, right): the long base styles with
+#: the draft's character block in their slot.
+DRAFT_USE_CASES = {"back": "base_back", "left": "base_side", "right": "base_side"}
+#: The WHOLE prompt of each edit view of the base front (user test
+#: 2026-11-09: the long pose texts and the style made Qwen invent things; a
+#: short sentence that names the turn and keeps the rest from the front does
+#: not). No character block, no style, no admin override — one text per view.
+BASE_VIEW_PROMPTS = {
+    "back": ("The same person turned around, seen directly from behind, back view, same A-pose, same "
+             "framing, completely bald, the whole figure from head to feet in the frame."),
+    "left": ("The same person turned to a strict left side profile view, same A-pose, same framing, "
+             "completely bald, the whole figure from head to feet in the frame."),
+    "right": ("The same person turned to a strict right side profile view, same A-pose, same framing, "
+              "completely bald, the whole figure from head to feet in the frame."),
+}
 
 HAIR_NEGATIVE = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "
                  "stubble on the scalp, hair on the shoulders, hair on the back")
@@ -180,28 +201,32 @@ def base_negative(character_name: str, *, profile: Optional[Dict[str, Any]] = No
 
 
 def base_character(character_name: str, view: str, *,
-                   profile: Optional[Dict[str, Any]] = None) -> str:
+                   profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """The CHARACTER BLOCK of one base view, for the style's ``{character}``
-    slot: ``BASE_BLOCK_HEAD`` + ``base_appearance``. A back view drops every
-    facial segment of it (``prompt_builder.strip_face_terms``) — a facial
-    word pulls the head around to the camera."""
+    slot: ``BASE_BLOCK_HEAD`` + ``base_appearance`` on the front; None on
+    back/left/right — an edit of the front takes the body from the image,
+    and its prompt is the short ``BASE_VIEW_PROMPTS`` text alone (user test
+    2026-11-09: the block changed nothing)."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
+    if view != "front":
+        return None
     return _character_block(character_name, view, BASE_BLOCK_HEAD,
                             profile=_profile_of(character_name, profile), base_fragments=True)
 
 
 def base_prompt(character_name: str, view: str, *,
                 profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
-    """``(prompt, negative)`` of one base-body view: the pose text, the bald
-    head and the body text — what follows the style (``base_character`` is
-    the block inside it). A back view drops every facial segment of the head
-    and body layers too, like the outfit back view does. The negative is
+    """``(prompt, negative)`` of one base-body view. Front: the pose text,
+    the bald head and the body text — what follows the style
+    (``base_character`` is the block inside it). Back/left/right: the
+    ``BASE_VIEW_PROMPTS`` text, the whole prompt of the edit. The negative is
     ``base_negative`` (``BASE_NEGATIVE`` + the slots' texts)."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     profile = _profile_of(character_name, profile)
-    return _view_prompt(view, BODY_TEXT), base_negative(character_name, profile=profile)
+    prompt = _view_prompt(view, BODY_TEXT) if view == "front" else BASE_VIEW_PROMPTS[view]
+    return prompt, base_negative(character_name, profile=profile)
 
 
 def _character_block(character_name: str, view: str, head: str, *,
@@ -408,9 +433,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
     Front first (the ``tpose`` render path: use case ``base_front``, occasion
     ``base_front``, the profile image as identity reference), then
     back/left/right as edits of the front on grey (occasion ``base_view``,
-    use cases ``base_back`` / ``base_side``; ``BASE_USE_CASES``). Every view
-    hands its ``base_character`` block to the style's ``{character}`` slot
-    (``style_character``). Stored as ``tpose_<bsig>`` and
+    use cases ``base_view_back`` / ``base_view_side``; ``BASE_USE_CASES``).
+    The front hands its ``base_character`` block to the style's
+    ``{character}`` slot (``style_character``); the edit views send their
+    ``BASE_VIEW_PROMPTS`` text alone (no style, no block). Stored as ``tpose_<bsig>`` and
     ``tpose_<view>_<bsig>`` in ``model_refs/``; every sidecar records
     ``base_signature``. The mesh-input matte applies because the occasion
     is a mesh-input one (``render_character_image``).
@@ -1266,7 +1292,7 @@ def _dress_common(view: str, *, pieces: Optional[Dict[str, str]], items: Optiona
                   profile: Dict[str, Any], size: Tuple[int, int]) -> Dict[str, Any]:
     """The render arguments a two-step view's draft and fit share."""
     return dict(equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
-                pose_prompt="", expression_prompt="", image_use_case=BASE_USE_CASES[view],
+                pose_prompt="", expression_prompt="", image_use_case=DRAFT_USE_CASES[view],
                 override_width=size[0], override_height=size[1], apply_state_modifiers=False,
                 mesh_input_profile=profile, back_view=view == "back", character_loras=True)
 

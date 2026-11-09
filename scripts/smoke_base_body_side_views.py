@@ -91,7 +91,9 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     outfit_side_draft, outfit_side], use cases [tpose, base_back,
     outfit_fit, base_side, outfit_fit, base_side, outfit_fit], back_view
     [None, True, True, False, False, False, False]. The left draft: prompt
-    = the base left prompt with BODY_TEXT replaced by DRAFT_OUTFIT_TEXT,
+    = model_refs.TPOSE_LEFT_PROMPT_DEFAULT without its hair clauses, then
+    BALD_HEAD and DRAFT_OUTFIT_TEXT (the base left view's short edit text
+    is not the draft's),
     character block "sfw, " + base_appearance(base_fragments=False),
     reference = the dressed front tpose_<sig2>.png. The left fit: reference
     tpose_left_<bsig>.png cut out ((0,0) black, (4,4) BASE_PX left), extra
@@ -578,9 +580,10 @@ def main() -> int:
                    f"tpose_left_{sig2}", f"tpose_right_{sig2}", f"tpose_right_{sig2}"])
             if len(rs) == 7:
                 ld, lf = rs[3], rs[4]
-                base_left = base_body.base_prompt("Demo", "left")[0]
+                from app.core.model_refs import TPOSE_LEFT_PROMPT_DEFAULT
                 check("left draft prompt", ld.get("bare_prompt"),
-                      base_left.replace(base_body.BODY_TEXT, base_body.DRAFT_OUTFIT_TEXT))
+                      ", ".join([base_body._without_hair(TPOSE_LEFT_PROMPT_DEFAULT), base_body.BALD_HEAD,
+                                 base_body.DRAFT_OUTFIT_TEXT]))
                 check("left draft prompt ends with the outfit text",
                       ld.get("bare_prompt", "").endswith(base_body.BALD_HEAD + ", " + base_body.DRAFT_OUTFIT_TEXT),
                       True)

@@ -52,16 +52,11 @@ frag text — an unfilled placeholder drops the fragment.
     body without anatomical detail" ("sfw, no clothing" moved into the block),
     no framing sentence. base_character(front) = "sfw, no clothing, " + [1].
     The word "hair" occurs once in the prompt (BALD's "with no hair at all").
-[3] Back: base_prompt = POSE_BACK, BALD_BACK, BODY — POSE_BACK the back text
-    minus "the same hairstyle, hair length and hair volume as the reference"
-    (ends "...legs clearly apart with open space visible between them"),
-    BALD_BACK = BALD minus "natural eyebrows" (strip_face_terms). The block
-    is face-stripped too: "sfw, no clothing, " + APPEARANCE_BACK (no "green
-    eyes").
-[4] Left/right: POSE_LEFT (side text, side=left, minus the reference and the
-    chest hair clauses, ends "...relaxed and slightly apart, legs clearly
-    apart"), BALD, BODY; right = the same with "right"; the block keeps the
-    face terms (a profile shows the face): "sfw, no clothing, " + [1].
+[3] Back (user test 2026-11-09: the long texts made Qwen invent things):
+    base_prompt = VIEW_BACK, the whole prompt of the edit, written out
+    below; no character block (base_character -> None).
+[4] Left/right: VIEW_LEFT / VIEW_RIGHT (written out below), no block;
+    use cases base_front / base_view_back / base_view_side / base_view_side.
 [5] Negative (all views) = BASE = HAIR_NEG + ", clothing, underwear,
     jewellery, detailed anatomy, " + POSE_NEG, then the ``base_body_negative``
     of every slot that APPLIES to Demo (flag irrelevant): marking applies
@@ -74,10 +69,11 @@ frag text — an unfilled placeholder drops the fragment.
     sits in the character block, so the block is hashed.
 [7] Admin pose overrides: the base FRONT is a constant, so an override of
     image_generation.tpose_prompt changes neither the front prompt nor the
-    signature. A view override keeps working with hair-clause removal:
-    tpose_back_prompt = "custom back pose, arms down, hair tied back" ->
-    the "hair tied back" clause is dropped, back prompt = "custom back pose,
-    arms down, " + BALD_BACK + ", " + BODY, and the signature changes.
+    signature. The base back is a constant too: tpose_back_prompt = "custom
+    back pose, arms down, hair tied back" leaves base_prompt(back) ==
+    VIEW_BACK and the signature unchanged; the back DRAFT follows the
+    override with hair-clause removal: "custom back pose, arms down, " +
+    BALD_BACK + ", " + OUTFIT.
 [8] is_base_pipeline: False by default; True with model_pipeline "base_body";
     False for an animal-template profile with the same field.
 [9] base_body_negative: the parsed slot spec carries "visible marking"; a
@@ -95,10 +91,14 @@ frag text — an unfilled placeholder drops the fragment.
     with length "long": the description ends ", pale spot, long tail" (slot
     order marking, spot, tail; spot applies to males and has no
     placeholder) — the female one has no "spot".
-[11] Back DRAFT (user decisions 2026-11-09): prompt = POSE_BACK, BALD_BACK,
-    OUTFIT with OUTFIT = "wearing exactly the same outfit as the person in
-    the reference image, the same garments, lengths, cut, colours and shoes"
-    in BODY's place; block = "sfw, " + APPEARANCE_BACK — no "no clothing",
+[11] Back DRAFT (user decisions 2026-11-09; it keeps the long view text,
+    unlike the base back): prompt = POSE_BACK, BALD_BACK, OUTFIT — POSE_BACK
+    the mesh-input back text minus "the same hairstyle, hair length and hair
+    volume as the reference" (ends "...legs clearly apart with open space
+    visible between them"), BALD_BACK = BALD minus "natural eyebrows"
+    (strip_face_terms), OUTFIT = "wearing exactly the same outfit as the
+    person in the reference image, the same garments, lengths, cut, colours
+    and shoes" in BODY's place; block = "sfw, " + APPEARANCE_BACK — no "no clothing",
     no ``base_body_prompt`` text. For the long-tail profile of [10] the same
     block (its "long tail" is a base_body_prompt fragment), and neither
     "long tail" nor "mannequin" appears in prompt or block. Negative = HAIR_NEG +
@@ -115,12 +115,17 @@ frag text — an unfilled placeholder drops the fragment.
     appearance "female, 26 years old, blue eyes, light skin, average height,
     athletic build, slot fragment a, slot fragment b", and the final prompt
     is exactly TARGET below (written out by hand: the user's shortened text
-    of 2026-11-09 with clean ", " separators). Order checks: the block
-    follows the subject clause directly, the pose follows "sharp focus, ".
-    Back final prompt: subject clause, then "sfw, no clothing, female, 26
-    years old, light skin, ..." (no "blue eyes"), then the rest of the
-    base_back style, then POSE_BACK. Keywords family: the block also
-    follows "lifelike skin textures, ".
+    of 2026-11-09 with clean ", " separators, plus FEET = "both feet
+    entirely inside the frame, with empty margin above the head and below
+    the feet" right after "shown from head to toe against a plain neutral
+    background" — without it the feet were cut off, user test 2026-11-09).
+    Order checks: the block follows the subject clause directly, the pose
+    follows "sharp focus, ". Back/left/right final prompt: the use cases
+    base_view_back / base_view_side have an EMPTY style in both families,
+    no block is sent, so the service sends VIEW_BACK / VIEW_LEFT /
+    VIEW_RIGHT verbatim. Keywords family of the front: the block also
+    follows "lifelike skin textures, ", FEET follows "head to toe, ".
+    base_back / base_side (the outfit drafts) carry no feet/margin clause.
     Slot mechanics (config.fill_character_slot): no block (None) on a style
     without the slot -> unchanged; a slot without a block -> removed with
     its separator ("a, {character}, b" -> "a, b"); a block for a style
@@ -131,7 +136,8 @@ frag text — an unfilled placeholder drops the fragment.
     (before this change): config.py of bda7bd17 executed as a separate
     module (``git show bda7bd17:app/core/config.py``, its own empty config ->
     built-in styles) gives the same get_use_case_prompts result as today's
-    for EVERY use case it shipped × family × clothed — the new use cases are
+    for EVERY use case it shipped × family × clothed — the new use cases
+    (base_back, base_front, base_side, base_view_back, base_view_side) are
     additions only — and the T-pose pose constants of model_refs.py at
     bda7bd17 (TPOSE_PROMPT_DEFAULT, TPOSE_VIEW_PROMPT_DEFAULTS, read from the
     old source by exec of their assignments) equal today's. A tpose payload
@@ -195,11 +201,13 @@ POSE_BACK = ("the same figure turned around, back view, seen directly from behin
              "down and away from the body, not touching the body, palms facing the thighs, hands in natural "
              "proportion to the body, all five fingers straight, relaxed and slightly apart, legs clearly apart "
              "with open space visible between them")
-POSE_LEFT = ("the same figure turned sideways, strict left side profile view, the whole body in profile facing the "
-             "left edge of the frame, standing upright in A-pose, the far arm partly hidden behind the body, the "
-             "near arm straight and angled down and away from the body, not touching the body, not foreshortened "
-             "toward the camera, palms facing the thighs, hands in natural proportion to the body, all five "
-             "fingers straight, relaxed and slightly apart, legs clearly apart")
+VIEW_BACK = ("The same person turned around, seen directly from behind, back view, same A-pose, same framing, "
+             "completely bald, the whole figure from head to feet in the frame.")
+VIEW_LEFT = ("The same person turned to a strict left side profile view, same A-pose, same framing, completely "
+             "bald, the whole figure from head to feet in the frame.")
+VIEW_RIGHT = ("The same person turned to a strict right side profile view, same A-pose, same framing, completely "
+              "bald, the whole figure from head to feet in the frame.")
+FEET = "both feet entirely inside the frame, with empty margin above the head and below the feet"
 BALD = ("completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of the "
         "head fully visible, natural eyebrows")
 BALD_BACK = ("completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of "
@@ -219,7 +227,8 @@ OUTFIT = ("wearing exactly the same outfit as the person in the reference image,
 # clean separators and the neutral stand-in fragments of frag_a / frag_b.
 TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, sfw, no "
           "clothing, female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
-          "slot fragment b, shown from head to toe against a plain neutral background, the full arm span visible "
+          "slot fragment b, shown from head to toe against a plain neutral background, both feet entirely inside the "
+          "frame, with empty margin above the head and below the feet, the full arm span visible "
           "with both hands entirely inside the frame, flat even shadowless lighting, the face evenly lit from the "
           "front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of "
           "the reference image, uniform illumination, sharp focus, standing upright facing the camera, A-pose, "
@@ -236,7 +245,7 @@ BEFORE = "bda7bd17"
 def final_prompt(config, use_case, family, block, prompt):
     """What ImageService.generate_on_backend sends for a caller-built render."""
     style = config.get_use_case_prompts(use_case, family, clothed=False, character=block)["prompt_style"]
-    return config.join_style_prompt(style, prompt, block)
+    return config.join_style_prompt(style, prompt, block) if style else prompt
 
 
 def old_source(path: str) -> str:
@@ -310,22 +319,21 @@ def main() -> int:
 
         print("[3] back")
         prompt, negative = base_body.base_prompt(name, "back", profile=stored)
-        check("back prompt", prompt, ", ".join([POSE_BACK, BALD_BACK, BODY]))
-        check("back block face-stripped", base_body.base_character(name, "back", profile=stored),
-              "sfw, no clothing, " + APPEARANCE_BACK)
+        check("back prompt", prompt, VIEW_BACK)
+        check("back: no block", base_body.base_character(name, "back", profile=stored), None)
         check("back negative", negative, NEGATIVE)
 
         print("[4] left / right")
         prompt, _ = base_body.base_prompt(name, "left", profile=stored)
-        check("left prompt", prompt, ", ".join([POSE_LEFT, BALD, BODY]))
+        check("left prompt", prompt, VIEW_LEFT)
         prompt, _ = base_body.base_prompt(name, "right", profile=stored)
-        check("right prompt", prompt, ", ".join([POSE_LEFT.replace("left", "right"), BALD, BODY]))
-        check("side blocks keep the face", {v: base_body.base_character(name, v, profile=stored)
-                                            for v in ("left", "right")},
-              {"left": "sfw, no clothing, " + APPEARANCE, "right": "sfw, no clothing, " + APPEARANCE})
+        check("right prompt", prompt, VIEW_RIGHT)
+        check("sides: no block", {v: base_body.base_character(name, v, profile=stored) for v in ("left", "right")},
+              {"left": None, "right": None})
         check("views", base_body.BASE_VIEWS, ("front", "back", "left", "right"))
         check("use cases", base_body.BASE_USE_CASES,
-              {"front": "base_front", "back": "base_back", "left": "base_side", "right": "base_side"})
+              {"front": "base_front", "back": "base_view_back", "left": "base_view_side",
+               "right": "base_view_side"})
 
         print("[6] signature")
         sig = base_body.base_signature(name, profile=stored)
@@ -351,9 +359,11 @@ def main() -> int:
                   ", ".join([POSE_FRONT, BALD, BODY]))
             check("signature unchanged", base_body.base_signature(name, profile=stored), sig)
             overrides["tpose_back_prompt"] = "custom back pose, arms down, hair tied back"
-            check("back override", base_body.base_prompt(name, "back", profile=stored)[0],
-                  ", ".join(["custom back pose, arms down", BALD_BACK, BODY]))
-            check("back override changes signature", base_body.base_signature(name, profile=stored) != sig, True)
+            check("base back ignores the override", base_body.base_prompt(name, "back", profile=stored)[0],
+                  VIEW_BACK)
+            check("signature still unchanged", base_body.base_signature(name, profile=stored), sig)
+            check("draft follows the override", base_body.draft_prompt(name, "back", profile=stored)[0],
+                  ", ".join(["custom back pose, arms down", BALD_BACK, OUTFIT]))
         finally:
             model_refs._cfg = real_cfg
 
@@ -434,21 +444,12 @@ def main() -> int:
         check("front final == TARGET", front_final, TARGET)
         check("block right after the subject", front_final.startswith(SUBJECT + ", sfw, no clothing, female"), True)
         check("pose right after the style", ", sharp focus, standing upright facing the camera" in front_final, True)
-        back_final = final_prompt(config, "base_back", "natural",
-                                  base_body.base_character("Target", "back", profile=target),
-                                  base_body.base_prompt("Target", "back", profile=target)[0])
-        check("back final", back_final, ", ".join([
-            SUBJECT, "sfw, no clothing, female, 26 years old, light skin, average height, athletic build, "
-            "slot fragment a, slot fragment b",
-            "shown from head to toe against a plain neutral background, the full arm span visible with both hands "
-            "entirely inside the frame, flat even shadowless lighting, uniform illumination, sharp focus",
-            POSE_BACK, BALD_BACK, BODY]))
-        left_final = final_prompt(config, "base_side", "natural",
-                                  base_body.base_character("Target", "left", profile=target),
-                                  base_body.base_prompt("Target", "left", profile=target)[0])
-        check("left final order", left_final.startswith(SUBJECT + ", sfw, no clothing, female, 26 years old, blue "
-                                                        "eyes") and left_final.endswith(
-                                                            ", ".join([POSE_LEFT, BALD, BODY])), True)
+        for view, want in (("back", VIEW_BACK), ("left", VIEW_LEFT), ("right", VIEW_RIGHT)):
+            for family in ("natural", "keywords"):
+                final = final_prompt(config, base_body.BASE_USE_CASES[view], family,
+                                     base_body.base_character("Target", view, profile=target),
+                                     base_body.base_prompt("Target", view, profile=target)[0])
+                check(f"{view}/{family} final", final, want)
         draft_final = final_prompt(config, "base_back", "natural",
                                    base_body.draft_character("Target", "back", profile=target),
                                    base_body.draft_prompt("Target", "back", profile=target)[0])
@@ -459,13 +460,17 @@ def main() -> int:
         check("keywords: block after the subject", kw.startswith(
             "render of a realistic 3D character model, lifelike skin textures, " + front_block + ", full body view"),
             True)
-        for uc in ("base_front", "base_back", "base_side"):
+        check("keywords: feet after head to toe", ", head to toe, " + FEET + ", full arm span" in kw, True)
+        check("natural: feet after the background", "against a plain neutral background, " + FEET + ", the full "
+              "arm span" in front_final, True)
+        for uc in ("base_front", "base_back", "base_side", "base_view_back", "base_view_side"):
             for family in ("natural", "keywords"):
                 style = config.get_use_case_prompts(uc, family, clothed=False)["prompt_style"]
                 check(f"{uc}/{family}: no raw slot without a block",
                       ("{character}" in style, ", ," in style), (False, False))
-                check(f"{uc}/{family}: no feet/margin clause",
-                      ("feet" in style, "margin" in style), (False, False))
+                check(f"{uc}/{family}: feet clause only on the front", FEET in style, uc == "base_front")
+                if uc.startswith("base_view_"):
+                    check(f"{uc}/{family}: empty style", style, "")
         fill, join = config.fill_character_slot, config.join_style_prompt
         check("no block, no slot", fill("a, b", None), "a, b")
         check("slot without block", fill("a, {character}, b", None), "a, b")
@@ -483,7 +488,8 @@ def main() -> int:
         old_ucs = sorted(old_cfg._DEFAULT_IMAGE_USE_CASES)
         check("old use cases are all still shipped", set(old_ucs) <= set(config._DEFAULT_IMAGE_USE_CASES), True)
         check("new use cases are additions",
-              sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)), ["base_back", "base_front", "base_side"])
+              sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)),
+              ["base_back", "base_front", "base_side", "base_view_back", "base_view_side"])
         diffs = [(uc, fam, clothed) for uc in old_ucs for fam in ("natural", "keywords") for clothed in (True, False)
                  if old_cfg.get_use_case_prompts(uc, fam, clothed=clothed)
                  != config.get_use_case_prompts(uc, fam, clothed=clothed)]

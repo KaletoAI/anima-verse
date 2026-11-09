@@ -117,7 +117,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
              "model is recommended."),
     "base_view": _image(
         "Base body — back/side views", "Pose tab: base-body back, left and right (edits of the front)",
-        ["base_back", "base_side"],
+        ["base_view_back", "base_view_side"],
         {"character_scoped": True, "char_spec_field": "base_view_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
