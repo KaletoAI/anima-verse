@@ -195,8 +195,9 @@ def _apply_package_fragments(name: str, tmpl: Dict[str, Any]) -> Dict[str, Any]:
     its fields (e.g. package-owned status_effects stats) with it.
     """
     try:
-        from app.plugins.registry import character_fragments
-        frags = character_fragments()
+        # Declared view: the same fragments with or without plugin discovery.
+        from app.plugins.loader import declared_character_fragments
+        frags = declared_character_fragments()
     except Exception:
         return tmpl
     for frag in frags:

@@ -456,6 +456,47 @@ def is_discovered() -> bool:
 
 
 _manifest_schemas: Optional[Dict[str, Dict[str, Any]]] = None
+# (enabled ids, packages) of the manifest-only view ``declared_packages``.
+_declared: Optional[Tuple[FrozenSet[str], List[Package]]] = None
+
+
+def declared_packages() -> List[Package]:
+    """The packages whose DECLARATIONS (body slots, character-template
+    fragments) a running server sees — for pure-data readers whose answer
+    must not depend on whether this process ran ``discover_packages``. A
+    script or CLI that opens a world without discovery used to see an empty
+    registry: no species body slots, no template fragments, so a render
+    signature such as ``base_body.base_signature`` came out different from
+    the server's.
+
+    After a discovery, or with packages registered by hand (a smoke): the
+    registry. Before: the world's ``packages.enabled`` set read from the
+    manifests only (``_collect_packages`` — no package code imported, no
+    ``on_load`` run, the registry untouched), cached per enabled set until
+    the next discovery. No ``packages.enabled`` (config not loaded) -> []."""
+    global _declared
+    current = registry.packages()
+    if _discovered or current:
+        return current
+    from app.core import config
+    enabled = frozenset(package_id.strip()
+                        for package_id in (config.get("packages.enabled", "") or "").split(",")
+                        if package_id.strip())
+    if not enabled:
+        return []
+    cached = _declared
+    if cached is None or cached[0] != enabled:
+        cached = (enabled, _collect_packages(PLUGIN_DIR, warn=False, enabled_ids=enabled))
+        _declared = cached
+    return list(cached[1])
+
+
+def declared_character_fragments() -> List[Dict[str, Any]]:
+    """``registry.character_fragments`` over ``declared_packages``."""
+    frags: List[Dict[str, Any]] = []
+    for pkg in declared_packages():
+        frags.extend(pkg.character_fragments)
+    return frags
 
 
 def manifest_config_schemas() -> Dict[str, Dict[str, Any]]:
@@ -540,9 +581,10 @@ def discover_packages(plugin_dir: Optional[Path] = None,
     prompt-template search path and template caches. Whole-package activation
     is fixed at the first runtime discovery and changes only after restart.
     """
-    global _discovered, _activation_enabled_ids, _manifest_schemas
+    global _discovered, _activation_enabled_ids, _manifest_schemas, _declared
     if _discovered and not force and plugin_dir is None:
         return registry.packages()
+    _declared = None
 
     # Installation/removal changes dormant settings metadata too. Invalidate
     # only on a real rebuild, never on ordinary reads or cached discovery.

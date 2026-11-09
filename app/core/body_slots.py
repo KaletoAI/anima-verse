@@ -71,7 +71,9 @@ def _species_packages_for(profile: Dict[str, Any]) -> List[Any]:
     if not tmpl_name:
         return []
     try:
-        from app.plugins.registry import packages
+        # The declared view, not the bare registry: a process without plugin
+        # discovery (a script, a CLI) must see the same slots as the server.
+        from app.plugins.loader import declared_packages as packages
         from app.models.character_template import template_features
     except Exception:
         return []
@@ -680,7 +682,7 @@ def all_interest_alias_phrases() -> List[str]:
     interest_aliases — for the romantic-interests help panel. SFW basics
     (human: hair/build) plus, when installed, the NSFW pack's explicit
     slang. Deduped, one representative phrase per canonical value."""
-    from app.plugins.registry import packages
+    from app.plugins.loader import declared_packages as packages
     out: List[str] = []
     seen = set()
     for pkg in packages():
