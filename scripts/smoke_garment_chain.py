@@ -329,9 +329,16 @@ def main() -> int:
                 arr = BODY_GHOST
             else:
                 arr = GHOST
+            # The edit renders on the square canvas (side max(W, H) = 1200,
+            # the source centred at x offset (1200 - 1024) // 2 = 88): the
+            # stub answers with the planned image placed the same way.
+            side = kw["override_width"]
+            canvas = np.full((kw["override_height"], side, 3), 128, dtype=np.uint8)
+            dy, dx = (canvas.shape[0] - arr.shape[0]) // 2, (side - arr.shape[1]) // 2
+            canvas[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
             out = Path(str(output_stem) + ".png")
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(png(arr))
+            out.write_bytes(png(canvas))
             out.with_suffix(".json").write_text(json.dumps({"seed": 1000 + g["attempt"], **kw["sidecar_extra"]}))
             return out
 
