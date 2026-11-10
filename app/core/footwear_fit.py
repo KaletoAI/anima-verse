@@ -59,6 +59,10 @@ the ball rigid on Foot, 4–5 mm off on the real material), ``lift_asymmetry_mm`
 number; floor contact under clips is the renderer's shared ground measure, ``packages/scene-render``
 ``clipGround.ts``), ``boot`` (mm by which the shoe's topline stands above the shod ankle +
 ``footwear_insole.BOOT_MARGIN_M``; refused with ``footwear_insole.BOOT_REFUSED``).
+
+The record's ``insole`` block also carries ``wall_top_raw`` — the shoe's wall top per station (raw units; the
+lower of the two sides' top edges, every point farther than ``WALL_SIDE_M`` from the midline counted) — which
+``footwear_cut.cut_description`` turns into the cut's cap; insole.json keeps only the analysis' topline.
 """
 import math
 from dataclasses import dataclass, field
@@ -132,6 +136,9 @@ BALL_WIDTH_BAND_M = 0.01
 TOE_ROOM_HEIGHT_M = 0.05
 #: Version of the ``foot_pose`` payload (spec § 6.1).
 FOOT_POSE_VERSION = 1
+#: Shoe points farther than this (metres) from the shoe's midline count as a side wall for the wall top the cut
+#: and its gates read (the spike's 4 mm; ``record["insole"]["wall_top_raw"]``).
+WALL_SIDE_M = 0.004
 
 SIDES = ("left", "right")
 _UP = np.array([0.0, 1.0, 0.0])
@@ -429,7 +436,7 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float) -> FootwearFit:
     from app.core.footwear_insole import BOOT_MARGIN_M, BOOT_REFUSED, BALL_SHARE, HEEL_SEAT_M, \
-        PITCH_HEEL_SHARE, insole_map
+        PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
     floor = float(P[:, 1].min())
@@ -640,6 +647,12 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     ball_h = float(ins.z(BALL_SHARE * ins.length))
     heel_h = float(ins.z(PITCH_HEEL_SHARE * ins.length))
     used = Q[np.unique(S_idx)]
+    # the wall top per station (raw units, None where absent), for the cut (footwear_cut.cut_description;
+    # insole.json keeps only the analysis' topline and the cut must be derivable from the record): the lower
+    # of the two sides' top edges, every point farther than WALL_SIDE_M from the midline counted — the spike's
+    # wall top, not the analysis' topline whose 75 % lateral filter reads a leaning heel counter 2 cm low
+    wall_top = topline_stations(Q, S_idx, gx, side_share=0.0, min_abs=WALL_SIDE_M / k)[0]
+    wall_top_raw = [None if math.isnan(v) else float(v) for v in wall_top]
     record = {
         "version": FOOTWEAR_FIT_VERSION,
         "scale": {
@@ -656,6 +669,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "insole_cover": insole.get("insole_cover"), "cavity_end_x_m": x_end * k,
             "shaft_h_m": None if shaft_raw is None else float(shaft_raw) * k,
             "open_share": None if insole.get("vamp_cover") is None else 1.0 - float(insole["vamp_cover"]),
+            "wall_top_raw": wall_top_raw,
         },
         "gates": gates,
         "diagnostics": {s: {

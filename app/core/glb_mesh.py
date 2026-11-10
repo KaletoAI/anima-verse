@@ -50,6 +50,24 @@ class BodyMesh:
 
 
 @dataclass
+class Prim:
+    """One body primitive as arrays (``body_primitive_arrays``): raw accessor space, its own vertex order.
+
+    ``attributes`` holds every vertex attribute except POSITION / JOINTS_0 / WEIGHTS_0 (NORMAL, TANGENT,
+    TEXCOORD_n, COLOR_n, ...) as float64 (normalized integers converted to [0, 1] / [-1, 1]); ``targets`` the
+    morph targets as ``{attribute: delta}`` dicts in the primitive's target order; ``joint_names`` = skin 0 in
+    skin order (what ``joints`` index). ``rewrite_body_primitives`` writes it back.
+    """
+    positions: np.ndarray            # (n, 3) float64
+    faces: np.ndarray                # (m, 3) int64
+    attributes: Dict[str, np.ndarray] = field(default_factory=dict)
+    joints: np.ndarray = field(default_factory=lambda: np.zeros((0, 4), np.int64))     # (n, 4) int64
+    weights: np.ndarray = field(default_factory=lambda: np.zeros((0, 4), np.float64))  # (n, 4) float64
+    targets: List[Dict[str, np.ndarray]] = field(default_factory=list)
+    joint_names: List[str] = field(default_factory=list)
+
+
+@dataclass
 class GarmentMesh:
     """One garment primitive: geometry, skinning (indices into ``joint_names``) and its base-colour image."""
     positions: np.ndarray            # (n, 3)
@@ -193,14 +211,10 @@ def _primitive_image(parsed: dict, primitive: dict) -> Tuple[bytes, str, Dict[st
     return bytes(parsed["bin"][start:start + int(view["byteLength"])]), image.get("mimeType", ""), material
 
 
-def body_arrays(glb: bytes) -> BodyMesh:
-    """The body primitives (``face_retexture._body_primitives`` rule, garment nodes excluded), concatenated.
-
-    Positions are raw accessor values: a skinned mesh lives in bind space, where its node transform does not apply,
-    so the body and a garment grafted with the body node's TRS share one space.
-    """
+def _body_prims(parsed: dict) -> List[dict]:
+    """The body primitives of ``parsed`` (``face_retexture._body_primitives`` rule, garment nodes excluded), in
+    ``_body_primitives`` order; the dicts of ``parsed['gltf']`` itself. ValueError without one."""
     from app.core.face_retexture import _body_primitives
-    parsed = _parse(glb, "Body")
     gltf = parsed["gltf"]
     garment_meshes = {node["mesh"] for node in gltf.get("nodes") or []
                       if "mesh" in node and _is_garment_node(node)}
@@ -209,6 +223,18 @@ def body_arrays(glb: bytes) -> BodyMesh:
     primitives = [p for p in _body_primitives(parsed) if id(p) not in garment_prims]
     if not primitives:
         raise ValueError("The GLB has no body primitive")
+    return primitives
+
+
+def body_arrays(glb: bytes) -> BodyMesh:
+    """The body primitives (``face_retexture._body_primitives`` rule, garment nodes excluded), concatenated.
+
+    Positions are raw accessor values: a skinned mesh lives in bind space, where its node transform does not apply,
+    so the body and a garment grafted with the body node's TRS share one space.
+    """
+    parsed = _parse(glb, "Body")
+    gltf = parsed["gltf"]
+    primitives = _body_prims(parsed)
     P, F, U, J, W, base = [], [], [], [], [], 0
     for prim in primitives:
         pos = np.asarray(accessor_array(parsed, prim["attributes"]["POSITION"]), np.float64)
@@ -221,6 +247,247 @@ def body_arrays(glb: bytes) -> BodyMesh:
         base += n
     return BodyMesh(positions=np.concatenate(P), faces=np.concatenate(F), uvs=np.concatenate(U),
                     joints=np.concatenate(J), weights=np.concatenate(W), joint_names=_skin_joint_names(gltf, 0))
+
+
+_PRIM_FIXED = ("POSITION", "JOINTS_0", "WEIGHTS_0")
+
+
+def body_primitive_arrays(glb: bytes) -> List[Prim]:
+    """The body primitives of ``glb`` as ``Prim`` arrays, one per primitive, in ``_body_primitives`` order (the
+    same primitives ``body_arrays`` concatenates). Every attribute is read as float64 (normalized integers
+    converted), morph targets as delta dicts; ``joint_names`` = skin 0."""
+    parsed = _parse(glb, "Body")
+    gltf = parsed["gltf"]
+    names = _skin_joint_names(gltf, 0)
+    out: List[Prim] = []
+    for prim in _body_prims(parsed):
+        pos = np.asarray(accessor_array(parsed, prim["attributes"]["POSITION"]), np.float64)
+        n = len(pos)
+        attributes: Dict[str, np.ndarray] = {}
+        for name, index in prim.get("attributes", {}).items():
+            if name in _PRIM_FIXED:
+                continue
+            attributes[name] = np.asarray(accessor_array(parsed, index), np.float64)
+        targets = [{name: np.asarray(accessor_array(parsed, index), np.float64) for name, index in target.items()}
+                   for target in prim.get("targets") or []]
+        out.append(Prim(positions=pos, faces=_triangles(parsed, prim, n), attributes=attributes,
+                        joints=_vertex_attr(parsed, prim, "JOINTS_0", n, 4, np.int64),
+                        weights=_vertex_attr(parsed, prim, "WEIGHTS_0", n, 4, np.float64),
+                        targets=targets, joint_names=list(names)))
+    return out
+
+
+_COMPONENT_DTYPE = {5120: "i1", 5121: "u1", 5122: "<i2", 5123: "<u2", 5125: "<u4", 5126: "<f4"}
+_TYPE_WIDTH = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+
+
+def _encode(array: np.ndarray, component: int, normalized: bool) -> np.ndarray:
+    """``array`` (float64 / int64) as the accessor's component type; normalized integers are scaled back."""
+    dtype = np.dtype(_COMPONENT_DTYPE[component])
+    if dtype.kind == "f":
+        return np.ascontiguousarray(array, dtype=dtype)
+    if normalized:
+        limits = np.iinfo(dtype)
+        return np.ascontiguousarray(np.round(np.clip(array, -1.0 if dtype.kind == "i" else 0.0, 1.0) * limits.max),
+                                    dtype=dtype)
+    return np.ascontiguousarray(np.rint(array), dtype=dtype)
+
+
+def _int_component(values: np.ndarray, original: Optional[int]) -> int:
+    """The original unsigned component type when every value fits it, else the smallest that does."""
+    top = int(values.max()) if values.size else 0
+    for component in ((original,) if original in (5121, 5123, 5125) else ()) + (5121, 5123, 5125):
+        if top <= np.iinfo(_COMPONENT_DTYPE[component]).max:
+            return component
+    raise ValueError("An index exceeds 32 bits")
+
+
+def _walk_accessor_refs(gltf: dict):
+    """Yield ``(container, key)`` of every accessor reference in ``gltf`` (primitives, targets, skins, animations)."""
+    for mesh in gltf.get("meshes") or []:
+        for prim in mesh.get("primitives") or []:
+            for key in list(prim.get("attributes") or {}):
+                yield prim["attributes"], key
+            if "indices" in prim:
+                yield prim, "indices"
+            for target in prim.get("targets") or []:
+                for key in list(target):
+                    yield target, key
+    for skin in gltf.get("skins") or []:
+        if "inverseBindMatrices" in skin:
+            yield skin, "inverseBindMatrices"
+    for animation in gltf.get("animations") or []:
+        for sampler in animation.get("samplers") or []:
+            for key in ("input", "output"):
+                if key in sampler:
+                    yield sampler, key
+
+
+def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
+    """``glb`` with the body primitives ``replaced[i]`` (``i`` = the index in ``body_primitive_arrays`` order)
+    rewritten from their ``Prim`` arrays. A primitive not in ``replaced`` keeps its accessors, and their bytes stay
+    identical (only offsets move); the accessors used only by replaced primitives are dropped together with the
+    bufferViews only they used, and the buffer is repacked. Attributes keep their accessor's component type
+    (joint and index widths widen when the new values need it); a replaced primitive must carry the same
+    attribute and target names as before."""
+    parsed = _parse(glb, "Body")
+    source = parsed["gltf"]
+    binary = parsed["bin"]
+    buffers = source.get("buffers") or []
+    if len(buffers) != 1 or "uri" in buffers[0]:
+        raise ValueError("The GLB must keep all data in its one embedded buffer")
+    prims = _body_prims(parsed)
+    located: Dict[int, Tuple[int, int]] = {}
+    for mi, mesh in enumerate(source.get("meshes") or []):
+        for pi, prim in enumerate(mesh.get("primitives") or []):
+            for order, body_prim in enumerate(prims):
+                if prim is body_prim:
+                    located[order] = (mi, pi)
+    for order in replaced:
+        if order not in located:
+            raise ValueError(f"No body primitive {order}")
+
+    gltf = copy.deepcopy(source)
+    views: List[dict] = gltf.setdefault("bufferViews", [])
+    accessors: List[dict] = gltf.setdefault("accessors", [])
+    old_views, old_accessors = len(views), len(accessors)
+    new_blobs: List[bytes] = []            # one per new view, in view order
+    freed: set = set()                     # accessors referenced by a replaced primitive before the rewrite
+
+    def add_view(raw: bytes, target: Optional[int]) -> int:
+        view = {"buffer": 0, "byteOffset": 0, "byteLength": len(raw)}
+        if target:
+            view["target"] = target
+        views.append(view)
+        new_blobs.append(raw)
+        return len(views) - 1
+
+    def add_accessor(array: np.ndarray, component: int, kind: str, target: int, *, minmax: bool,
+                     normalized: bool) -> int:
+        entry: Dict[str, Any] = {"bufferView": add_view(array.tobytes(), target), "componentType": component,
+                                 "count": int(array.shape[0]), "type": kind}
+        if normalized:
+            entry["normalized"] = True
+        if minmax and len(array):
+            entry["min"] = [v.item() for v in array.reshape(len(array), -1).min(0)]
+            entry["max"] = [v.item() for v in array.reshape(len(array), -1).max(0)]
+        accessors.append(entry)
+        return len(accessors) - 1
+
+    def encode_attr(name: str, array: np.ndarray, original: Optional[dict]) -> int:
+        arr = np.asarray(array)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        kind = {1: "SCALAR", 2: "VEC2", 3: "VEC3", 4: "VEC4"}[arr.shape[1]]
+        if original is not None and _TYPE_WIDTH.get(original.get("type")) != arr.shape[1]:
+            raise ValueError(f"{name} changed its component count")
+        if name == "JOINTS_0":
+            component, normalized = _int_component(np.asarray(arr, np.int64), original and original.get("componentType")), False
+        elif original is None:
+            component, normalized = 5126, False
+        else:
+            component, normalized = int(original["componentType"]), bool(original.get("normalized"))
+        has_minmax = name == "POSITION" or (original is not None and "min" in original)
+        return add_accessor(_encode(arr, component, normalized), component, kind, _ARRAY_BUFFER,
+                            minmax=has_minmax, normalized=normalized)
+
+    for order, prim in replaced.items():
+        mi, pi = located[order]
+        target_prim = gltf["meshes"][mi]["primitives"][pi]
+        old_attrs = dict(target_prim.get("attributes") or {})
+        old_targets = list(target_prim.get("targets") or [])
+        freed.update(old_attrs.values())
+        if "indices" in target_prim:
+            freed.add(target_prim["indices"])
+        for target in old_targets:
+            freed.update(target.values())
+        P = np.asarray(prim.positions, np.float64)
+        n = len(P)
+        F = np.asarray(prim.faces, np.int64).reshape(-1, 3)
+        if n == 0 or (len(F) and (F.min() < 0 or F.max() >= n)):
+            raise ValueError("A replaced primitive has no vertices or faces out of range")
+        wanted = {"POSITION"} | set(prim.attributes)
+        if len(prim.joints) == n and "JOINTS_0" in old_attrs:
+            wanted |= {"JOINTS_0", "WEIGHTS_0"}
+        if wanted != set(old_attrs):
+            raise ValueError(f"Replaced primitive {order} must keep the attributes {sorted(old_attrs)}")
+        new_attrs: Dict[str, int] = {}
+        for name in old_attrs:
+            if name == "POSITION":
+                array = P
+            elif name == "JOINTS_0":
+                array = np.asarray(prim.joints, np.int64)
+            elif name == "WEIGHTS_0":
+                array = np.asarray(prim.weights, np.float64)
+            else:
+                array = np.asarray(prim.attributes[name], np.float64)
+            if len(array) != n:
+                raise ValueError(f"{name} has {len(array)} rows for {n} vertices")
+            new_attrs[name] = encode_attr(name, array, source["accessors"][old_attrs[name]])
+        target_prim["attributes"] = new_attrs
+        if len(prim.targets) != len(old_targets):
+            raise ValueError(f"Replaced primitive {order} must keep its {len(old_targets)} morph targets")
+        new_targets = []
+        for old_target, target in zip(old_targets, prim.targets):
+            if set(target) != set(old_target):
+                raise ValueError("A morph target must keep its attribute names")
+            new_targets.append({name: encode_attr(name, np.asarray(target[name], np.float64),
+                                                  source["accessors"][old_target[name]]) for name in old_target})
+        if new_targets:
+            target_prim["targets"] = new_targets
+        component = _int_component(F, source["accessors"][target_prim["indices"]]["componentType"]
+                                   if "indices" in target_prim else None)
+        target_prim["indices"] = add_accessor(_encode(F.reshape(-1, 1), component, False), component, "SCALAR",
+                                              _ELEMENT_ARRAY_BUFFER, minmax=False, normalized=False)
+
+    used_accessors = {container[key] for container, key in _walk_accessor_refs(gltf)}
+    drop_accessors = {i for i in freed if i not in used_accessors}
+    view_users: Dict[int, set] = {}
+    for i, accessor in enumerate(accessors):
+        if "bufferView" in accessor:
+            view_users.setdefault(accessor["bufferView"], set()).add(i)
+    for image in gltf.get("images") or []:
+        if "bufferView" in image:
+            view_users.setdefault(image["bufferView"], set()).add(-1)
+    drop_views = {v for v, users in view_users.items() if v < old_views and users and users <= drop_accessors}
+
+    # repack: kept old views in order (bytes identical), then the new ones
+    blob = bytearray()
+    view_map: Dict[int, int] = {}
+    kept_views: List[dict] = []
+    for i, view in enumerate(views):
+        if i in drop_views:
+            continue
+        if i < old_views:
+            start = int(view.get("byteOffset", 0))
+            raw = bytes(binary[start:start + int(view["byteLength"])])
+        else:
+            raw = new_blobs[i - old_views]
+        blob.extend(b"\0" * (-len(blob) % 4))
+        entry = dict(view)
+        entry["byteOffset"] = len(blob)
+        blob.extend(raw)
+        view_map[i] = len(kept_views)
+        kept_views.append(entry)
+    accessor_map: Dict[int, int] = {}
+    kept_accessors: List[dict] = []
+    for i, accessor in enumerate(accessors):
+        if i in drop_accessors:
+            continue
+        entry = dict(accessor)
+        if "bufferView" in entry:
+            entry["bufferView"] = view_map[entry["bufferView"]]
+        accessor_map[i] = len(kept_accessors)
+        kept_accessors.append(entry)
+    for container, key in _walk_accessor_refs(gltf):
+        container[key] = accessor_map[container[key]]
+    for image in gltf.get("images") or []:
+        if "bufferView" in image:
+            image["bufferView"] = view_map[image["bufferView"]]
+    gltf["bufferViews"], gltf["accessors"] = kept_views, kept_accessors
+    blob.extend(b"\0" * (-len(blob) % 4))
+    gltf["buffers"] = [{"byteLength": len(blob)}]
+    return pack_glb(gltf, bytes(blob))
 
 
 def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX) -> GarmentMesh:

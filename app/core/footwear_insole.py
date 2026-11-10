@@ -293,13 +293,15 @@ def _edges(F: np.ndarray) -> np.ndarray:
     return np.unique(np.sort(e, axis=1), axis=0)
 
 
-def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray) -> Tuple[np.ndarray, np.ndarray,
-                                                                                       np.ndarray]:
+def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, *,
+                     side_share: float = TOPLINE_SIDE_SHARE, min_abs: float = 0.0) -> Tuple[np.ndarray, np.ndarray,
+                                                                                            np.ndarray]:
     """``(topline, z_pos, z_neg)`` per station: every triangle edge cut by the plane x = gx[i]
     (an edge lying in the plane gives both its ends); per side (z > 0 / z < 0) the highest cut point
-    with |z| >= ``TOPLINE_SIDE_SHARE`` x that side's max |z|; ``topline`` = the lower of the two
-    sides' heights, ``z_pos`` / ``z_neg`` = the lateral position of each side's point. NaN where a
-    side has no cut point."""
+    with |z| >= ``side_share`` x that side's max |z| (default ``TOPLINE_SIDE_SHARE``) and |z| > ``min_abs``;
+    ``topline`` = the lower of the two sides' heights, ``z_pos`` / ``z_neg`` = the lateral position of each
+    side's point. NaN where a side has no cut point. (``side_share=0`` with a ``min_abs`` of a few mm is the
+    spike's wall top — the true top edge of each side, a leaning heel counter included — which the cut uses.)"""
     P = np.asarray(p_frame, np.float64).reshape(-1, 3)
     E = _edges(np.asarray(faces, np.int64).reshape(-1, 3))
     nx = len(gx)
@@ -331,7 +333,10 @@ def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray) -> 
                 heights.append(np.nan)
                 continue
             lat = sign * side[:, 2]
-            side = side[lat >= TOPLINE_SIDE_SHARE * lat.max()]
+            side = side[(lat >= side_share * lat.max()) & (lat > min_abs)]
+            if not len(side):
+                heights.append(np.nan)
+                continue
             k = int(np.argmax(side[:, 1]))
             heights.append(float(side[k, 1]))
             zarr[i] = float(side[k, 2])
