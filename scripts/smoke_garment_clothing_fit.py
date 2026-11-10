@@ -63,10 +63,16 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
     turn of a point 0.4 m from the shoulder moves it 0.4 x 2 sin(22.5 deg) = 0.31 m).
     A second, separate ring r 0.06 around the A-pose forearm entirely BELOW the waist (a panel beside a hanging hand,
     connected to nothing above): nearest the arm, but no sleeve -> ``sleeve_vertices`` False for every vertex.
-[3] No extension bone. In front of the LeftBreast-only patch (0.05, 1.30, 0.16): all 8 nearest body vertices carry
-    only the extension bone -> the weights come from the nearest vertices with >= 0.5 contract weight -> Spine2 1.
-    In front of the right patch (-0.05, 1.30, 0.16): RightBreast 0.6 + Spine2 0.4 restricted to Spine2 0.4,
-    renormalised -> Spine2 1. No output joint outside the rig contract.
+[3] Extension bones (2026-11-10: a blazer let the jiggling chest through). The torso tube's vertex V at y 1.30 and
+    angle t = 285 deg (left patch, x = 0.15 cos t = 0.0388, z = -0.15 sin t = 0.1449; the tube's u = +x, v = -z) and
+    its mirror at t = 255 deg (right patch); points V + o n, n the outward radial normal, so V is the nearest body
+    vertex at distance o and the 8 nearest all lie in the patch (j 75..77 / 67..69 of 96, rings 1.29..1.31).
+    Contract part: left patch has no contract weight -> the nearest vertices with >= 0.5 contract weight -> Spine2 1;
+    right RightBreast 0.6 + Spine2 0.4 -> Spine2 0.4 renormalised -> Spine2 1. Extension share E: left LeftBreast 1,
+    right RightBreast 0.6, times f = clip((0.05 - o) / (0.05 - 0.025), 0, 1); weights (1 - e) contract + E:
+      o 0.020 (f 1)    left LeftBreast 1                  right RightBreast 0.6 / Spine2 0.4 (as the skin)
+      o 0.0375 (f 0.5) left LeftBreast 0.5 / Spine2 0.5   right RightBreast 0.3 / Spine2 0.7
+      o 0.060 (f 0)    left Spine2 1                      right Spine2 1 (no extension bone)
 [4] Gates: the keys are max_push_m / deep_push_share / largest_component_share / rigged_inside_share (moved_share is
     reported, not gated — 2026-11-10); the spike dress numbers (max push 0.0293 units x 1.70 = 0.0498 m, one
     component, inside 0.0, deep push share 0.079 as measured through the product) and the product's on the same dress
@@ -358,14 +364,25 @@ def test_extension(rig):
     from app.core import garment_fit as gf
     from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
     names = rig.joint_names
-    pts = np.array([[0.05, 1.30, 0.16], [-0.05, 1.30, 0.16]])
-    Jx, Wx = gf.clothing_weights(pts, rig, skirt=False)
-    D = dense(Jx, Wx, names)
-    for i in range(2):
-        check(abs(weight_of(D, names, i, "Spine2") - 1) < 1e-3,
-              f"[3] chest point {pts[i].tolist()} -> Spine2 1 (got {D[i].round(3).tolist()})")
-    used = {names[j] for j, w in zip(Jx.ravel(), Wx.ravel()) if w > 0}
-    check(all(norm_bone_name(n) in BASE_JOINT_KEYS for n in used), f"[3] only contract bones weighted ({used})")
+    check((gf.EXTENSION_FULL_M, gf.EXTENSION_ZERO_M) == (0.025, 0.05), "[3] extension distances 0.025 / 0.05 m")
+    want = {0.02: ((1.0, 0.0), (0.6, 0.4)), 0.0375: ((0.5, 0.5), (0.3, 0.7)), 0.06: ((0.0, 1.0), (0.0, 1.0))}
+    for o, (left, right) in want.items():
+        pts = []
+        for deg in (285.0, 255.0):
+            t = math.radians(deg)
+            n = np.array([math.cos(t), 0.0, -math.sin(t)])
+            pts.append(np.array([0.0, 1.30, 0.0]) + (0.15 + o) * n)
+        Jx, Wx = gf.clothing_weights(np.array(pts), rig, skirt=False)
+        D = dense(Jx, Wx, names)
+        for i, (side, (ext, spine)) in enumerate((("Left", left), ("Right", right))):
+            got = (weight_of(D, names, i, side + "Breast"), weight_of(D, names, i, "Spine2"))
+            check(abs(got[0] - ext) < 1e-3 and abs(got[1] - spine) < 1e-3,
+                  f"[3] {side.lower()} chest point {o * 1000:.1f} mm out -> {side}Breast {ext} / Spine2 {spine} "
+                  f"(got {got[0]:.3f} / {got[1]:.3f})")
+        if o >= gf.EXTENSION_ZERO_M:
+            used = {names[j] for j, w in zip(Jx.ravel(), Wx.ravel()) if w > 0}
+            check(all(norm_bone_name(n) in BASE_JOINT_KEYS for n in used),
+                  f"[3] beyond {gf.EXTENSION_ZERO_M} m only contract bones ({used})")
 
 
 # --- [4] gates ---------------------------------------------------------------------------------------------------
@@ -436,6 +453,8 @@ def test_fit_clothing(unrig, rig):
           f"[5] nothing pushed ({res.metrics})")
     check(res.ok, f"[5] gate passes ({res.reasons}; {res.metrics})")
     check(res.report.get("skirt") is True, f"[5] the dress is a skirt (report skirt {res.report.get('skirt')})")
+    # The dress top (y 1.20, r 0.18) is >= sqrt(0.06^2 + 0.03^2) = 0.067 m from the chest patch (y > 1.25, r 0.15):
+    # beyond EXTENSION_ZERO_M, so no extension bone.
     check(all(norm_bone_name(x) in BASE_JOINT_KEYS for x in g.joint_names), f"[5] contract joints ({g.joint_names})")
     D = dense(g.joints, g.weights, g.joint_names)
     i = int(np.argmin(np.linalg.norm(P - np.array([0.20, 0.75, 0.0]), axis=1)))

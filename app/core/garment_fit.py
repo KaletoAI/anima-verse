@@ -90,7 +90,9 @@ RIGGED_SMOOTH_UNTIL = 7
 #: Head -> Neck -> Spine2 ramp between the ear line and the shoulder top.
 #: 3 (2026-11-10): clothing — long sleeves below the waist ride the arm (``sleeve_vertices``); the deep push share
 #: replaces the moved share in the gate.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 3}
+#: 4 (2026-11-10): clothing — the garment over extension-bone tissue takes the extension share of its weights
+#: (``EXTENSION_FULL_M``), so it moves with the chest instead of letting the chest jiggle through it.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 4}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
@@ -115,6 +117,18 @@ CLOTHING_IDW_EPS_M = 1e-4
 #: A body vertex donates weights to a garment vertex whose neighbours carry only extension bones when at least this
 #: share of its weight sits on rig-contract bones.
 CONTRACT_DONOR_MIN = 0.5
+# Extension bones (a pack's secondary-motion chains, e.g. the chest pair) carry the garment over their tissue: a
+# garment vertex takes the EXTENSION SHARE of the inverse-distance blend of its 8 nearest body vertices' full weights
+# — all of it up to ``EXTENSION_FULL_M`` from the nearest body vertex, falling linearly to none at
+# ``EXTENSION_ZERO_M`` (fabric bridging away from the tissue stays on the torso) — and the contract blend fills the
+# rest. Towards the torso the body's own weight gradient is the falloff. Measured 2026-11-10 on Kira's Black Blazer
+# (fit 2966, base20d5701a; 8123 garment vertices with an extension share > 0.05): distance to the nearest body vertex
+# 10-15 mm 7258 (mean share 0.76), 15-20 mm 702 (0.46), 20-30 mm 144 (0.46), 30-40 mm 19 (0.20), none beyond 40 mm
+# — twice the clearance (``CLEAR_M``) keeps every fitted layer whole. Contract-only weights left the chest jiggling
+# under a static blazer: run clip with the secondary motion, 21 % of the covered chest skin in front of the fabric on
+# average, 44 % at the worst sample (``scripts/check_garment_collision.mjs --motion``); the capsule push changed none.
+EXTENSION_FULL_M = 0.025
+EXTENSION_ZERO_M = 0.05
 # Skinned transfer (clothing): a bone gets its own rigid transform from its RIGID CORE — the body vertices carrying
 # at least ``BONE_CORE_WEIGHT`` of their weight on it — when that core has ``BONE_CORE_MIN`` vertices (measured on
 # the e2e base: every core fits to < 1 mm median, the upper arm's deltoid to 13.6 mm at p99); a blend-only bone (Spine,
@@ -1068,7 +1082,12 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
        (``SKIRT_SMOOTH_M``) and a vertex keeps ``SKIRT_KEEP_TOP`` of them from the crotch up, falling linearly to
        ``SKIRT_KEEP_HEM`` at the hem (the lowest point); the rest goes to Hips. The skirt follows the thighs when
        sitting and spans the gap between the legs smoothly when they scissor.
-    3. The four largest weights, renormalised.
+    3. Extension bones: the same inverse distance over the 8 nearest body vertices, of their FULL weights (rows
+       normalised), restricted to the extension bones = ``E`` (row sum ``e``); times the distance factor
+       ``clip((EXTENSION_ZERO_M - d) / (EXTENSION_ZERO_M - EXTENSION_FULL_M), 0, 1)``, ``d`` = distance to the
+       nearest body vertex. The weights are ``(1 - e) * contract + E``: over the tissue the garment rides the
+       extension bone as the skin does, beside it the contract blend of steps 1-2 is unchanged.
+    4. The four largest weights, renormalised.
     """
     from scipy.spatial import cKDTree
     from app.core.rig_contract import norm_bone_name
@@ -1078,12 +1097,15 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
     contract = np.concatenate([contract, np.zeros(Wr.shape[1] - len(contract), bool)])
     Wc = Wr * contract[None, :]
 
-    def idw(index, positions, rows):
-        k = min(CLOTHING_IDW_K, len(index))
+    def neighbours(positions, rows):
+        k = min(CLOTHING_IDW_K, len(positions))
         dist, nn = cKDTree(positions).query(X[rows], k=k)
         dist, nn = dist.reshape(len(dist), -1), nn.reshape(len(nn), -1)
         w = 1.0 / np.maximum(dist, CLOTHING_IDW_EPS_M)
-        w /= w.sum(1, keepdims=True)
+        return dist, nn, w / w.sum(1, keepdims=True)
+
+    def idw(index, positions, rows):
+        _dist, nn, w = neighbours(positions, rows)
         return np.einsum("nk,nkj->nj", w, Wc[index[nn]])
     every = np.arange(len(body.positions))
     W = idw(every, body.positions, np.ones(len(X), bool)) if len(X) else np.zeros((0, Wr.shape[1]))
@@ -1101,6 +1123,13 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
         legs = [i for i, n in enumerate(body.joint_names)
                 if contract[i] and any(t in norm_bone_name(n) for t in _LEG_TOKENS)]
         W = skirt_leg_weights(X, W, legs=legs, hips=joint_index(body, "hips"), crotch=crotch_height(body))
+
+    if len(X) and not contract.all():
+        dist, nn, w = neighbours(body.positions, np.ones(len(X), bool))
+        full = Wr / np.maximum(Wr.sum(1, keepdims=True), 1e-12)
+        E = np.einsum("nk,nkj->nj", w, full[nn]) * ~contract[None, :]
+        E *= np.clip((EXTENSION_ZERO_M - dist[:, 0]) / (EXTENSION_ZERO_M - EXTENSION_FULL_M), 0, 1)[:, None]
+        W = W * (1 - E.sum(1, keepdims=True)) + E
 
     J = np.argsort(-W, 1, kind="stable")[:, :4]
     top = np.take_along_axis(W, J, 1)
@@ -1431,8 +1460,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     (``align_band_depth``), push-out to ``CLEAR_M`` without the crown spread (6 smoothing passes in the first 6 of 8
     iterations), the skinned transfer (``transfer_skinned``) with the waist at the garment top minus
     ``CLOTHING_WAIST_DROP`` of the body height (sleeves ride the arms above it), ``clothing_weights`` (skirt when
-    ``is_skirt``), the gate ``CLOTHING_GATES``. The output joints are the contract bones the weights use, in skin
-    order.
+    ``is_skirt``), the gate ``CLOTHING_GATES``. The output joints are the bones the weights use (contract bones and,
+    over their tissue, extension bones), in skin order.
     """
     body_mask, garment_mask = _mask(masks["body"]), _mask(masks["garment"])
     if body_mask.shape != garment_mask.shape:

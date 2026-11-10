@@ -15,6 +15,8 @@
  *        [--spike-sampling]           the spike's fixed 10 points per triangle (comparison only)
  *        [--ply DIR]                  also write the posed meshes (PLY, Blender axes) + render_meta.json
  *        [--json FILE]                write the numbers as JSON
+ *        [--motion MOTION.json]       also run every clip WITH the secondary motion (see SECONDARY MOTION)
+ *        [--fps 60] [--loops 2]       simulation rate and loops of a motion run; the LAST loop is sampled
  *   Clips come from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget
  *   reference from ANIMATION_RIG_FILE (default shared/models/rig/reference.fbx) — read only.
  *   Self-bundling via esbuild; runs without the server and without a world.
@@ -70,6 +72,26 @@
  * and the Spine1 joint; "sides" = that band with |x − Hips.x| ≥ 8 cm. Its
  * penetration is reported separately, and so is the garment split at the
  * Spine1 joint's bind height (lower = skirt/hips, upper = bodice/sleeves).
+ *
+ * SECONDARY MOTION (`--motion`, the `motion` payload of `GET /characters/{name}/model3d`). Every clip runs
+ * twice: `-motion` = the plain pose (extension bones ride their parents rigidly, as above, sampled with
+ * `mixer.setTime`), `+motion` = the client's frame order — the mixer stepped at `--fps` from t = 0, then
+ * `createSecondaryMotion(...).update(dt)` of scene-render with the body's collision payload set (its
+ * tip contact on, as `figures.ts` does), `--loops` loops, the samples taken in the last one.
+ *
+ * SHOW-THROUGH — the body coming out THROUGH the garment (the other direction of the metric above). The
+ * TISSUE = body vertices with more than half their weight on a bone of the motion payload's groups
+ * (`--motion`; without it every body vertex). A tissue vertex is COVERED when the ray from it along its
+ * VIEW direction hits a garment triangle within `COVER_RAY_M`: its outward bind-pose vertex normal
+ * (area-weighted face normals), turned with the posed rotation of the bone the tissue hangs from (the
+ * first non-tissue ancestor of its heaviest bone) — the same line of sight relative to the torso in
+ * every frame, so a swinging tissue normal that grazes out under the fabric is no show-through, a skin
+ * point in front of the fabric is. Only the vertices covered in the BIND pose are judged (an open front
+ * or a bare neckline is no show-through). Per sample `show_through` = share of those no longer covered — the
+ * skin is in front of every fabric layer along its normal — with the garment before and after the
+ * capsule push; `show_depth_mm` = p95 / max of how far such a vertex lies in front of the fabric (the
+ * nearest garment hit along the reversed normal). `bind_clearance_mm` = p5 / p50 of the covered
+ * tissue's distance to the first fabric layer in the bind pose.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -82,7 +104,7 @@ const __dirname = path.dirname(__filename)
 const REPO = process.env.SMOKE_BUNDLED ? process.cwd() : path.join(__dirname, '..')
 
 function parseArgs(argv) {
-  const opts = { models: [], clips: ['walk', 'run', 'sit'], set: '', samples: 4 }
+  const opts = { models: [], clips: ['walk', 'run', 'sit'], set: '', samples: 4, fps: 60, loops: 2 }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--collision') opts.collision = argv[++i]
@@ -92,6 +114,9 @@ function parseArgs(argv) {
     else if (a === '--spike-sampling') opts.spikeSampling = true
     else if (a === '--ply') opts.ply = argv[++i]
     else if (a === '--json') opts.json = argv[++i]
+    else if (a === '--motion') opts.motion = argv[++i]
+    else if (a === '--fps') opts.fps = Math.max(10, Number(argv[++i]))
+    else if (a === '--loops') opts.loops = Math.max(1, Number(argv[++i]))
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else opts.models.push(a)
   }
@@ -260,6 +285,90 @@ function depthField(pos, bodyFaces, spikeSampling = false) {
   return { depthAt, voxels: N, closed }
 }
 
+// ---------------------------------------------------------------- show-through (module docstring)
+const COVER_RAY_M = 0.10
+const RAY_CELL = 0.015
+const quantileOf = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : 0)
+const mm1 = (m) => +(m * 1000).toFixed(1)
+
+/** Area-weighted vertex normals of `faces` over `pos` (n vertices). */
+function vertexNormals(pos, faces, n) {
+  const N = new Float64Array(n * 3)
+  for (let f = 0; f < faces.length; f += 3) {
+    const a = faces[f] * 3, b = faces[f + 1] * 3, c = faces[f + 2] * 3
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2]
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2]
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx
+    for (const o of [a, b, c]) { N[o] += nx; N[o + 1] += ny; N[o + 2] += nz }
+  }
+  for (let i = 0; i < n * 3; i += 3) {
+    const l = Math.hypot(N[i], N[i + 1], N[i + 2]) || 1
+    N[i] /= l; N[i + 1] /= l; N[i + 2] /= l
+  }
+  return N
+}
+
+/**
+ * For the body vertices `idx` of posed positions `pos`: the nearest garment hit along the direction `N`
+ * (n × 3, per vertex; `ahead`, metres, Infinity = none within COVER_RAY_M) and along the reversed one
+ * (`behind`); `covered[k]` = idx[k] has a hit ahead. Two-sided Möller–Trumbore over a uniform grid of the
+ * garment triangles near the probed vertices.
+ */
+function showThrough(pos, N, garmentFaces, idx) {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
+  for (const i of idx) for (let k = 0; k < 3; k++) {
+    lo[k] = Math.min(lo[k], pos[i * 3 + k] - COVER_RAY_M); hi[k] = Math.max(hi[k], pos[i * 3 + k] + COVER_RAY_M)
+  }
+  const cell = (x, k) => Math.floor((x - lo[k]) / RAY_CELL)
+  const grid = new Map()
+  for (let f = 0; f < garmentFaces.length; f += 3) {
+    const v = [garmentFaces[f] * 3, garmentFaces[f + 1] * 3, garmentFaces[f + 2] * 3]
+    const a = [0, 1, 2].map((k) => Math.min(...v.map((o) => pos[o + k])))
+    const b = [0, 1, 2].map((k) => Math.max(...v.map((o) => pos[o + k])))
+    if (a.some((x, k) => x > hi[k]) || b.some((x, k) => x < lo[k])) continue
+    for (let x = cell(a[0], 0); x <= cell(b[0], 0); x++) for (let y = cell(a[1], 1); y <= cell(b[1], 1); y++)
+      for (let z = cell(a[2], 2); z <= cell(b[2], 2); z++) {
+        const key = `${x},${y},${z}`
+        let list = grid.get(key); if (!list) grid.set(key, list = []); list.push(f)
+      }
+  }
+  const hit = (o, d) => {
+    const seen = new Set()
+    let best = Infinity
+    for (let s = 0; s <= COVER_RAY_M; s += RAY_CELL / 3) {
+      const key = `${cell(o[0] + d[0] * s, 0)},${cell(o[1] + d[1] * s, 1)},${cell(o[2] + d[2] * s, 2)}`
+      for (const f of grid.get(key) ?? []) {
+        if (seen.has(f)) continue
+        seen.add(f)
+        const a = garmentFaces[f] * 3, b = garmentFaces[f + 1] * 3, c = garmentFaces[f + 2] * 3
+        const e1 = [pos[b] - pos[a], pos[b + 1] - pos[a + 1], pos[b + 2] - pos[a + 2]]
+        const e2 = [pos[c] - pos[a], pos[c + 1] - pos[a + 1], pos[c + 2] - pos[a + 2]]
+        const p = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]]
+        const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2]
+        if (Math.abs(det) < 1e-14) continue
+        const tv = [o[0] - pos[a], o[1] - pos[a + 1], o[2] - pos[a + 2]]
+        const u = (tv[0] * p[0] + tv[1] * p[1] + tv[2] * p[2]) / det
+        if (u < 0 || u > 1) continue
+        const q = [tv[1] * e1[2] - tv[2] * e1[1], tv[2] * e1[0] - tv[0] * e1[2], tv[0] * e1[1] - tv[1] * e1[0]]
+        const w = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) / det
+        if (w < 0 || u + w > 1) continue
+        const t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) / det
+        if (t >= 0 && t <= COVER_RAY_M && t < best) best = t
+      }
+    }
+    return best
+  }
+  const ahead = new Map(), behind = new Map(), covered = []
+  for (const i of idx) {
+    const o = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]], d = [N[i * 3], N[i * 3 + 1], N[i * 3 + 2]]
+    const fwd = hit(o, d)
+    ahead.set(i, fwd)
+    covered.push(Number.isFinite(fwd))
+    if (!Number.isFinite(fwd)) behind.set(i, hit(o, [-d[0], -d[1], -d[2]]))
+  }
+  return { ahead, behind, covered }
+}
+
 async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/check_garment_collision_bundled.mjs'
@@ -280,6 +389,7 @@ async function main() {
     process.exit(run.status ?? 1)
   }
   const opts = parseArgs(process.argv.slice(2))
+  const motion = opts.motion ? JSON.parse(fs.readFileSync(opts.motion, 'utf8')) : null
   stubBrowser()
   const THREE = await import('three')
   const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
@@ -515,88 +625,184 @@ async function main() {
       for (const i of idx) if (field.depthAt(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]) > DEPTH) n++
       return n / idx.length
     }
+    // SHOW-THROUGH: the tissue (module docstring) and which of it the garment covers in the bind pose.
+    const tissueBones = new Set(Object.values(motion?.groups ?? {}).flatMap((g) => g.bones.map(normBoneName)))
+    const tissue = []
+    for (const p of parts) {
+      if (p.garment) continue
+      const names = p.mesh.skeleton.bones.map((b) => normBoneName(b.name))
+      for (let i = 0; i < p.count; i++) {
+        let w = 0
+        for (let j = 0; j < 4; j++) if (!tissueBones.size || tissueBones.has(names[p.si.getComponent(i, j)])) w += p.sw.getComponent(i, j)
+        if (w > 0.5) tissue.push(p.offset + i)
+      }
+    }
+    const garmentFaces = Uint32Array.from(faces.filter((_, k) => !isBody[faces[k - (k % 3)]]))
+    // The view direction of each tissue vertex: its bind normal, carried by the bone the tissue hangs from.
+    const bindNormals = vertexNormals(bind, bodyFaces, total)
+    const carrier = new Map()   // vertex -> { mesh, bone index } of that bone
+    for (const p of parts) {
+      if (p.garment) continue
+      const bonesOf = p.mesh.skeleton.bones
+      for (let i = 0; i < p.count; i++) {
+        let best = 0
+        for (let j = 1; j < 4; j++) if (p.sw.getComponent(i, j) > p.sw.getComponent(i, best)) best = j
+        let bone = bonesOf[p.si.getComponent(i, best)]
+        while (bone && tissueBones.has(normBoneName(bone.name)) && bone.parent?.isBone) bone = bone.parent
+        carrier.set(p.offset + i, { mesh: p.mesh, index: bonesOf.indexOf(bone) })
+      }
+    }
+    const viewDirs = () => {
+      const D = new Float64Array(total * 3)
+      const rot = new Map()
+      const m = new THREE.Matrix4(), v = new THREE.Vector3()
+      for (const i of tissue) {
+        const c = carrier.get(i)
+        const key = `${c.mesh.uuid}:${c.index}`
+        if (!rot.has(key)) {
+          rot.set(key, new THREE.Matrix3().setFromMatrix4(m.multiplyMatrices(c.mesh.skeleton.bones[c.index].matrixWorld,
+            c.mesh.skeleton.boneInverses[c.index])))
+        }
+        v.set(bindNormals[i * 3], bindNormals[i * 3 + 1], bindNormals[i * 3 + 2]).applyMatrix3(rot.get(key)).normalize()
+        D[i * 3] = v.x; D[i * 3 + 1] = v.y; D[i * 3 + 2] = v.z
+      }
+      return D
+    }
+    const bindCover = showThrough(bind, bindNormals, garmentFaces, tissue)
+    const covered = tissue.filter((_, k) => bindCover.covered[k])
+    const clear = covered.map((i) => bindCover.ahead.get(i)).sort((a, b) => a - b)
+    mm.show_through = { tissue_bones: [...tissueBones], tissue_vertices: tissue.length, covered_in_bind: covered.length,
+      bind_clearance_mm: { p5: mm1(quantileOf(clear, 0.05)), p50: mm1(quantileOf(clear, 0.5)) } }
+    console.log(`  tissue ${tissue.length} vertices (${tissueBones.size ? [...tissueBones].join(' ') : 'whole body'}), `
+      + `covered in the bind pose ${covered.length}, clearance to the fabric p5/p50 `
+      + `${mm.show_through.bind_clearance_mm.p5}/${mm.show_through.bind_clearance_mm.p50} mm`)
+
+    /** Every number of one posed sample (the template is posed). */
+    const measure = (t) => {
+      const before = Float32Array.from(skin())
+      const { out: after, moved } = push(before)
+      const field = depthField(before, bodyFaces, opts.spikeSampling)
+      const row = {
+        t: +t.toFixed(3),
+        before: share(field, before, garmentIdx), after: share(field, after, garmentIdx),
+        excess_before: excess(field, before, garmentIdx), excess_after: excess(field, after, garmentIdx),
+        hip_sides_before: share(field, before, hipSides), hip_sides_after: share(field, after, hipSides),
+        hip_band_after: share(field, after, hipBand), moved_share: moved / garmentIdx.length,
+        // the garment split at the Spine1 joint's bind height: below = skirt/hips, above = bodice/sleeves
+        lower_before: share(field, before, lower), lower_after: share(field, after, lower),
+        upper_before: share(field, before, upper), upper_after: share(field, after, upper),
+        body_volume_closed: field.closed,
+      }
+      // Where the rest sits: for the garment vertices still > 5 mm inside, the dominant bone of the NEAREST
+      // body vertex (whose part of the body it is in) — e.g. "leftarm" = inside the arm, "spine2" = the chest.
+      const CELL = 0.03
+      const hash = new Map()
+      const key = (x, y, z) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)},${Math.floor(z / CELL)}`
+      for (let i = 0; i < total; i++) {
+        if (!isBody[i]) continue
+        const k = key(before[i * 3], before[i * 3 + 1], before[i * 3 + 2])
+        let list = hash.get(k); if (!list) hash.set(k, list = []); list.push(i)
+      }
+      const where = {}, nearestCap = {}, gaps = []
+      gc.binding.update()
+      for (const i of garmentIdx) {
+        const x = after[i * 3], y = after[i * 3 + 1], z = after[i * 3 + 2]
+        if (field.depthAt(x, y, z) <= DEPTH) continue
+        let best = Infinity, bi = -1
+        const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL), cz = Math.floor(z / CELL)
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+          for (const j of hash.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? []) {
+            const d = (before[j * 3] - x) ** 2 + (before[j * 3 + 1] - y) ** 2 + (before[j * 3 + 2] - z) ** 2
+            if (d < best) { best = d; bi = j }
+          }
+        }
+        const region = bi < 0 ? '?' : dominant[bi]
+        where[region] = (where[region] ?? 0) + 1
+        // How far the rest lies OUTSIDE the nearest capsule (world space): the reach a capsule would need.
+        let gap = Infinity, gid = '?'
+        for (const c of gc.binding.capsules) {
+          const { a, b, r } = c.now
+          const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [x - a[0], y - a[1], z - a[2]]
+          const l2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
+          const t = l2 > 1e-12 ? Math.min(1, Math.max(0, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / l2)) : 0
+          const g = Math.hypot(ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t) - r
+          if (g < gap) { gap = g; gid = c.capsule.id }
+        }
+        gaps.push(gap)
+        nearestCap[gid] = (nearestCap[gid] ?? 0) + 1
+      }
+      row.after_inside = Object.fromEntries(Object.entries(where).sort((x, y) => y[1] - x[1]).slice(0, 8))
+      gaps.sort((x, y) => x - y)
+      row.after_gap_cm = gaps.length ? { p50: +(gaps[Math.floor(gaps.length / 2)] * 100).toFixed(1),
+        p90: +(gaps[Math.floor(gaps.length * 0.9)] * 100).toFixed(1), nearest: nearestCap } : null
+      const dirs = viewDirs()
+      const sb = showThrough(before, dirs, garmentFaces, covered)
+      const sa = showThrough(after, dirs, garmentFaces, covered)
+      const through = (r) => covered.length ? r.covered.filter((c) => !c).length / covered.length : null
+      const depths = covered.filter((_, k) => !sa.covered[k]).map((i) => sa.behind.get(i)).filter(Number.isFinite).sort((a, b) => a - b)
+      row.show_before = through(sb)
+      row.show_after = through(sa)
+      row.show_depth_mm = { p95: mm1(quantileOf(depths, 0.95)), max: mm1(depths.at(-1) ?? 0) }
+      return { row, before, after }
+    }
     const mixer = new THREE.AnimationMixer(template)
     for (const clip of adapted) {
-      mixer.stopAllAction()
-      mixer.clipAction(clip).reset().play()
-      const rows = []
-      for (let s = 0; s < opts.samples; s++) {
-        const t = (s / opts.samples) * clip.duration
-        mixer.setTime(t)
-        const before = Float32Array.from(skin())
-        const { out: after, moved } = push(before)
-        const field = depthField(before, bodyFaces, opts.spikeSampling)
-        const row = {
-          t: +t.toFixed(3),
-          before: share(field, before, garmentIdx), after: share(field, after, garmentIdx),
-          excess_before: excess(field, before, garmentIdx), excess_after: excess(field, after, garmentIdx),
-          hip_sides_before: share(field, before, hipSides), hip_sides_after: share(field, after, hipSides),
-          hip_band_after: share(field, after, hipBand), moved_share: moved / garmentIdx.length,
-          // the garment split at the Spine1 joint's bind height: below = skirt/hips, above = bodice/sleeves
-          lower_before: share(field, before, lower), lower_after: share(field, after, lower),
-          upper_before: share(field, before, upper), upper_after: share(field, after, upper),
-          body_volume_closed: field.closed,
+      for (const on of motion ? [false, true] : [null]) {
+        const label = on === null ? clip.name : `${clip.name}${on ? '+motion' : '-motion'}`
+        mixer.stopAllAction()
+        mixer.clipAction(clip).reset().play()
+        const rows = []
+        const keep = (s, sample) => {
+          rows.push(sample.row)
+          if (opts.ply) {
+            writePly(path.join(opts.ply, 'meshes', `${name}_${label}_s${s}.ply`), sample.before, faces)
+            writePly(path.join(opts.ply, 'meshes', `${name}c_${label}_s${s}.ply`), sample.after, faces)
+          }
         }
-        // Where the rest sits: for the garment vertices still > 5 mm inside, the dominant bone of the NEAREST
-        // body vertex (whose part of the body it is in) — e.g. "leftarm" = inside the arm, "spine2" = the chest.
-        const CELL = 0.03
-        const hash = new Map()
-        const key = (x, y, z) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)},${Math.floor(z / CELL)}`
-        for (let i = 0; i < total; i++) {
-          if (!isBody[i]) continue
-          const k = key(before[i * 3], before[i * 3 + 1], before[i * 3 + 2])
-          let list = hash.get(k); if (!list) hash.set(k, list = []); list.push(i)
-        }
-        const where = {}, nearestCap = {}, gaps = []
-        gc.binding.update()
-        for (const i of garmentIdx) {
-          const x = after[i * 3], y = after[i * 3 + 1], z = after[i * 3 + 2]
-          if (field.depthAt(x, y, z) <= DEPTH) continue
-          let best = Infinity, bi = -1
-          const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL), cz = Math.floor(z / CELL)
-          for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-            for (const j of hash.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? []) {
-              const d = (before[j * 3] - x) ** 2 + (before[j * 3 + 1] - y) ** 2 + (before[j * 3 + 2] - z) ** 2
-              if (d < best) { best = d; bi = j }
+        if (!on) {
+          for (let s = 0; s < opts.samples; s++) {
+            const t = (s / opts.samples) * clip.duration
+            mixer.setTime(t)
+            keep(s, measure(t))
+          }
+        } else {
+          // The client's frame order: mixer, world matrices, secondary motion (its tip contact on).
+          const sm = SR.createSecondaryMotion(THREE, template, motion, template)
+          sm.setCollision(payload)
+          mixer.setTime(0)
+          const dt = 1 / opts.fps
+          const frames = Math.max(1, Math.round(clip.duration * opts.fps))
+          const at = new Map(Array.from({ length: opts.samples }, (_, s) => [Math.round((s / opts.samples) * frames), s]))
+          for (let loop = 0; loop < opts.loops; loop++) {
+            for (let f = 0; f < frames; f++) {
+              if (f > 0 || loop > 0) mixer.update(dt)
+              template.updateMatrixWorld(true)
+              sm.update(dt)
+              if (loop === opts.loops - 1 && at.has(f)) keep(at.get(f), measure(f * dt))
             }
           }
-          const region = bi < 0 ? '?' : dominant[bi]
-          where[region] = (where[region] ?? 0) + 1
-          // How far the rest lies OUTSIDE the nearest capsule (world space): the reach a capsule would need.
-          let gap = Infinity, gid = '?'
-          for (const c of gc.binding.capsules) {
-            const { a, b, r } = c.now
-            const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [x - a[0], y - a[1], z - a[2]]
-            const l2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
-            const t = l2 > 1e-12 ? Math.min(1, Math.max(0, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / l2)) : 0
-            const g = Math.hypot(ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t) - r
-            if (g < gap) { gap = g; gid = c.capsule.id }
-          }
-          gaps.push(gap)
-          nearestCap[gid] = (nearestCap[gid] ?? 0) + 1
+          sm.dispose()
+          template.updateMatrixWorld(true)
         }
-        row.after_inside = Object.fromEntries(Object.entries(where).sort((x, y) => y[1] - x[1]).slice(0, 8))
-        gaps.sort((x, y) => x - y)
-        row.after_gap_cm = gaps.length ? { p50: +(gaps[Math.floor(gaps.length / 2)] * 100).toFixed(1),
-          p90: +(gaps[Math.floor(gaps.length * 0.9)] * 100).toFixed(1), nearest: nearestCap } : null
-        rows.push(row)
-        if (opts.ply) {
-          writePly(path.join(opts.ply, 'meshes', `${name}_${clip.name}_s${s}.ply`), before, faces)
-          writePly(path.join(opts.ply, 'meshes', `${name}c_${clip.name}_s${s}.ply`), after, faces)
-        }
+        const max = (k) => Math.max(...rows.map((r) => r[k] ?? 0))
+        mm.clips[label] = { before_max: max('before'), after_max: max('after'),
+          excess_before_max: max('excess_before'), excess_after_max: max('excess_after'),
+          lower_before_max: max('lower_before'), lower_after_max: max('lower_after'),
+          upper_before_max: max('upper_before'), upper_after_max: max('upper_after'),
+          hip_sides_before_max: max('hip_sides_before'), hip_sides_after_max: max('hip_sides_after'),
+          show_before_max: max('show_before'), show_after_max: max('show_after'),
+          show_before_mean: rows.reduce((a, r) => a + (r.show_before ?? 0), 0) / rows.length,
+          show_after_mean: rows.reduce((a, r) => a + (r.show_after ?? 0), 0) / rows.length,
+          show_depth_max_mm: Math.max(...rows.map((r) => r.show_depth_mm.max)), samples: rows }
+        const pct = (v) => v === null || v === undefined ? '—' : `${(v * 100).toFixed(2)}%`
+        const open = (r) => (r.body_volume_closed ? '' : '!')
+        console.log(`  ${label.padEnd(16)} before ${rows.map((r) => pct(r.before) + open(r)).join(' ')} | after ${rows.map((r) => pct(r.after) + open(r)).join(' ')}`
+          + ` | excess ${pct(max('excess_before'))} → ${pct(max('excess_after'))}`
+          + ` | lower ${pct(max('lower_before'))} → ${pct(max('lower_after'))} | upper ${pct(max('upper_before'))} → ${pct(max('upper_after'))}`
+          + ` | hip sides ${pct(max('hip_sides_before'))} → ${pct(max('hip_sides_after'))} | moved ${pct(Math.max(...rows.map((r) => r.moved_share)))}`)
+        console.log(`  ${''.padEnd(16)} show-through before ${rows.map((r) => pct(r.show_before)).join(' ')} | after ${rows.map((r) => pct(r.show_after)).join(' ')}`
+          + ` | mean ${pct(mm.clips[label].show_before_mean)} → ${pct(mm.clips[label].show_after_mean)} | depth max ${mm.clips[label].show_depth_max_mm} mm`)
       }
-      const max = (k) => Math.max(...rows.map((r) => r[k] ?? 0))
-      mm.clips[clip.name] = { before_max: max('before'), after_max: max('after'),
-        excess_before_max: max('excess_before'), excess_after_max: max('excess_after'),
-        lower_before_max: max('lower_before'), lower_after_max: max('lower_after'),
-        upper_before_max: max('upper_before'), upper_after_max: max('upper_after'),
-        hip_sides_before_max: max('hip_sides_before'), hip_sides_after_max: max('hip_sides_after'), samples: rows }
-      const pct = (v) => v === null || v === undefined ? '—' : `${(v * 100).toFixed(2)}%`
-      const open = (r) => (r.body_volume_closed ? '' : '!')
-      console.log(`  ${clip.name.padEnd(12)} before ${rows.map((r) => pct(r.before) + open(r)).join(' ')} | after ${rows.map((r) => pct(r.after) + open(r)).join(' ')}`
-        + ` | excess ${pct(max('excess_before'))} → ${pct(max('excess_after'))}`
-        + ` | lower ${pct(max('lower_before'))} → ${pct(max('lower_after'))} | upper ${pct(max('upper_before'))} → ${pct(max('upper_after'))}`
-        + ` | hip sides ${pct(max('hip_sides_before'))} → ${pct(max('hip_sides_after'))} | moved ${pct(Math.max(...rows.map((r) => r.moved_share)))}`)
     }
     gc.dispose()
   }

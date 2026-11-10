@@ -29,6 +29,14 @@ After ``graft(name="garment_hair_hair_demo")``:
 - A target without Spine2 raises KeyError naming ``mixamorig:Spine2``; joints the target lacks but no vertex
   weights (> 0) map to index 0 with weight 0 (rows by hand in the code), a weighted one still raises KeyError;
   a meshopt/draco-flagged target is refused;
+- A weighted EXTENSION joint the target lacks folds onto its nearest ancestor the target has, by the garment's
+  ``joint_parents`` (2026-11-10, a chest-weighted garment fitted on a base whose tip bones the covered outfit
+  model left out): row 0 [Head, ExtraTip, Head, Head] / (0.7, 0.3, 0, 0) with ExtraTip -> breast_L becomes
+  [6, 5, 6, 6] (breast_L sits right after Neck 4, Head moved to 6) with the weights unchanged; through a missing
+  middle link ExtraTip -> ExtraMid -> breast_L the same; ExtraTip -> mixamorig:Spine2 gives [6, 3, 6, 6]. A
+  missing CONTRACT joint never folds: the target without Spine2 still raises KeyError although Spine2 names
+  Hips as its parent. ``garment_arrays`` reads ``joint_parents`` from the file's node tree: breast_L ->
+  mixamorig:Spine2, mixamorig:Hips -> Armature.
   a WebP garment image adds ``EXT_texture_webp`` to ``extensionsUsed``; a second graft under the same name is
   refused.
 - ``static_arrays`` concatenates two primitives (indices of the second shifted by the first's vertex count 3).
@@ -267,6 +275,39 @@ def main():
         check(False, "graft: a WEIGHTED missing joint raises KeyError")
     except KeyError as exc:
         check("mixamorig:ExtraTip" in str(exc), f"graft: KeyError names the weighted missing joint ({exc})")
+    # Fold of a weighted extension joint onto its nearest ancestor in the target (module docstring).
+    def folded_rows(parents):
+        tip = garment()
+        tip.joint_names = [*tip.joint_names, "mixamorig:ExtraTip"]
+        tip.joints = np.array([[0, 2, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
+        tip.joint_parents = parents
+        pf = parse_glb(gm.graft(bare, tip, name=NAME, extras=EXTRAS))
+        nf = next(n for n in pf["gltf"]["nodes"] if n.get("name") == NAME)
+        pr = pf["gltf"]["meshes"][nf["mesh"]]["primitives"][0]
+        return (gm.accessor_array(pf, pr["attributes"]["JOINTS_0"]).astype(int)[0].tolist(),
+                gm.accessor_array(pf, pr["attributes"]["WEIGHTS_0"])[0])
+    for parents, want, label in (
+            ({"mixamorig:ExtraTip": "breast_L"}, [6, 5, 6, 6], "onto its parent breast_L"),
+            ({"mixamorig:ExtraTip": "mixamorig:ExtraMid", "mixamorig:ExtraMid": "breast_L"}, [6, 5, 6, 6],
+             "through a missing middle link"),
+            ({"mixamorig:ExtraTip": "mixamorig:Spine2"}, [6, 3, 6, 6], "onto a contract parent")):
+        try:
+            rows, wrow = folded_rows(parents)
+            check(rows == want and np.allclose(wrow, [0.7, 0.3, 0, 0]),
+                  f"graft: a weighted missing extension joint folds {label} ({rows}, {wrow.tolist()})")
+        except KeyError as exc:
+            check(False, f"graft: a weighted missing extension joint folds {label} ({exc})")
+    contract_missing = garment()
+    contract_missing.joint_parents = {"mixamorig:Spine2": "mixamorig:Hips"}
+    try:
+        gm.graft(no_spine, contract_missing, name=NAME, extras=EXTRAS)
+        check(False, "graft: a missing contract joint never folds")
+    except KeyError as exc:
+        check("mixamorig:Spine2" in str(exc), f"graft: a missing contract joint never folds ({exc})")
+    jp = gm.garment_arrays(grafted).joint_parents
+    check(jp.get("breast_L") == "mixamorig:Spine2" and jp.get("mixamorig:Hips") == "Armature",
+          f"garment_arrays: joint_parents from the node tree (breast_L -> {jp.get('breast_L')}, "
+          f"Hips -> {jp.get('mixamorig:Hips')})")
     for flag in ("EXT_meshopt_compression", "KHR_draco_mesh_compression"):
         flagged, _ = body_fixture(extensions=[flag])
         try:

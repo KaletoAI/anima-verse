@@ -274,13 +274,13 @@ def main() -> int:
     print(f"[3] no colours: byte-identical to {BASELINE_COMMIT}")
     old = old_glb_mesh()
     new_png = gm.graft(bare, fx.garment(), name=fx.NAME, extras=fx.EXTRAS)
-    old_png = old.graft(bare, old.GarmentMesh(**{k: v for k, v in vars(fx.garment()).items() if k != "colors"}),
+    old_png = old.graft(bare, old.GarmentMesh(**{k: v for k, v in vars(fx.garment()).items() if k not in ("colors", "joint_parents")}),
                         name=fx.NAME, extras=fx.EXTRAS)
     check("graft new == old (PNG)", new_png == old_png, True)
     check("graft sha pinned", hashlib.sha256(new_png).hexdigest(), PIN_GRAFT)
     gw = fx.garment("WEBP")
     new_webp = gm.graft(bare, gw, name=fx.NAME, extras=fx.EXTRAS)
-    old_webp = old.graft(bare, old.GarmentMesh(**{k: v for k, v in vars(gw).items() if k != "colors"}),
+    old_webp = old.graft(bare, old.GarmentMesh(**{k: v for k, v in vars(gw).items() if k not in ("colors", "joint_parents")}),
                          name=fx.NAME, extras=fx.EXTRAS)
     check("graft new == old (WebP)", new_webp == old_webp, True)
     re_new = gm.garment_arrays(new_png)

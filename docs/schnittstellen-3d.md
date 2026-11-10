@@ -2042,6 +2042,21 @@ Basiskörper-Pipeline.
   three.js' GLTFLoader legt das als `userData.garment` ab. Material deckend
   (`alphaMode: OPAQUE`). Die Fernstufe (`low_url`) trägt die reduzierte
   Fassung desselben Garments.
+- **Gewichte von Kleidung (`kind` `clothing`):** die Körperknochen unter dem
+  Stück — und über Gewebe mit Zusatz-Bones (Extension-Bones einer Paket-Kette,
+  z. B. das Brustpaar) auch diese Zusatz-Bones, mit demselben Anteil wie die Haut
+  darunter bis 2,5 cm Abstand, linear auslaufend bis 5 cm
+  (`garment_fit.EXTENSION_FULL_M` / `EXTENSION_ZERO_M`, Fit-Version clothing 4).
+  Die Sekundärbewegung beider Renderer treibt diese Knochen — das Stück bewegt
+  sich mit dem Gewebe, statt dass es durch das Stück schwingt; kein Renderer
+  braucht dafür eine eigene Regel. Fehlt dem Ziel-Modell ein gewichteter
+  Zusatz-Bone (die bedeckte Variante lässt `exposed_only`-Gruppen wie die
+  Spitzen weg, ein abgeschalteter Gruppen-Schalter), übernimmt beim Pfropfen
+  sein nächster vorhandener Vorfahr das Gewicht (`glb_mesh.graft`, Hierarchie
+  der Fit-Datei). Beweis: `scripts/smoke_garment_clothing_fit.py` [3],
+  `scripts/smoke_glb_graft.py` (Fold), Messung
+  `node scripts/check_garment_collision.mjs MODEL.glb --motion MOTION.json`
+  (Durchscheinen, unten).
 - **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
   (`model3d/assembled/{sig}.glb` = nacktes Outfit-Modell + gepfropfte
   Garments); das gespeicherte `{sig}.glb` bleibt immer nackt. Ändert sich die
@@ -12160,7 +12175,13 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   deeper. The body is never pushed. Shadows use patched
   depth/distance materials with the same capsules. Without a garment mesh or capsules nothing is patched. The shader and the TypeScript `pushOutOfCapsules` are one rule
   (`scripts/smoke_garment_collision.mjs` executes the shader text); `scripts/check_garment_collision.mjs`
-  measures the penetration of a garment through the body on the real clips before/after the push.
+  measures the penetration of a garment through the body on the real clips before/after the push, and with
+  `--motion` (the `motion` payload) every clip also with the secondary motion running plus the SHOW-THROUGH of
+  the moving tissue through the garment (share of the bind-covered tissue vertices in front of every fabric layer
+  along their torso-fixed line of sight). The capsules never reach a chest under a jacket (the `chest` capsule
+  around Spine2 → Neck, r ≈ 6 cm, lies far behind the fabric): what keeps the chest inside is the garment's own
+  extension-bone weights (§ A3a). Kira's Black Blazer, run clip: 18.6 % mean / 44.4 % worst sample shown through
+  with contract-only weights, 0.86 % / 1.51 % with them (plain pose without the motion 0.28 % / 0.09 %).
 - **Extension-bone contact** (`SecondaryMotion.setCollision(payload)`, `packages/scene-render/src/secondaryMotion.ts`;
   both the 3D client's figures and the admin viewer — toggle "Extension collision", on by default). Every driven
   link with a swing budget (`max_deg` or `sag_max_deg` > 0) has a TIP in its bone frame: the next joint of its

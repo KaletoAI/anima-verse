@@ -8,6 +8,10 @@ keeps every rig/face/base-colour property of its bare source except that it now 
 Node identity of a grafted garment (R12): node and mesh are named ``garment_<kind>_<item_id>``, the node carries
 ``extras.garment = {kind, item_id, fsig}``, is skinned to skin 0 and copies the body mesh node's parent and local
 TRS. Joints are remapped by ``rig_contract.norm_bone_name`` onto the target's own skin order, never by index.
+A weighted EXTENSION joint (not a rig-contract bone) the target lacks — a tip group the covered outfit model left
+out, a group switched off for that signature — hands its weight to its nearest ancestor the target has, by the
+garment source's own hierarchy (``GarmentMesh.joint_parents``, read by ``garment_arrays``); a missing contract
+joint stays an error.
 
 Vertex colours (HairDeck card hair, plan 2026-11-09-hairdeck-hair): a garment may carry ``colors`` — linear RGBA in
 [0, 1] as glTF stores them. ``graft`` writes them as ``COLOR_0`` (UNSIGNED_BYTE normalized VEC4) and
@@ -59,6 +63,7 @@ class GarmentMesh:
     mime: str = ""
     material: Dict[str, Any] = field(default_factory=dict)
     colors: Optional[np.ndarray] = None   # (n, 4) linear RGBA in [0, 1] -> COLOR_0; None = no vertex colours
+    joint_parents: Dict[str, str] = field(default_factory=dict)   # joint name -> its parent node's name (source GLB)
 
 
 def accessor_array(parsed: dict, index: int) -> np.ndarray:
@@ -110,6 +115,16 @@ def _parse(glb: bytes, side: str) -> dict:
 def _is_garment_node(node: dict) -> bool:
     return (str(node.get("name") or "").startswith(GARMENT_NODE_PREFIX)
             or "garment" in (node.get("extras") or {}))
+
+
+def _joint_parents(gltf: dict, skin_index: int = 0) -> Dict[str, str]:
+    """Joint name -> the name of its parent node, for the joints of skin ``skin_index`` that have a parent."""
+    skins, nodes = gltf.get("skins") or [], gltf.get("nodes") or []
+    if not 0 <= skin_index < len(skins):
+        return {}
+    parent = {child: i for i, node in enumerate(nodes) for child in node.get("children") or []}
+    return {str(nodes[j].get("name", "")): str(nodes[parent[j]].get("name", ""))
+            for j in skins[skin_index].get("joints") or [] if j in parent}
 
 
 def _skin_joint_names(gltf: dict, skin_index: int = 0) -> List[str]:
@@ -231,7 +246,8 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX) -> Gar
                        joints=_vertex_attr(parsed, prim, "JOINTS_0", n, 4, np.int64),
                        weights=_vertex_attr(parsed, prim, "WEIGHTS_0", n, 4, np.float64),
                        joint_names=_skin_joint_names(gltf, node["skin"]) if "skin" in node else [],
-                       image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n))
+                       image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n),
+                       joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {})
 
 
 def _local_matrix(node: dict) -> np.ndarray:
@@ -392,10 +408,12 @@ def _check_colors(g: GarmentMesh, n: int) -> Optional[np.ndarray]:
 
 
 def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -> bytes:
-    """``target_glb`` + one skinned garment node ``name`` (see the module docstring). Raises ``KeyError`` naming a
-    WEIGHTED garment joint the target skin lacks (a listed joint without weight > 0 maps to target index 0 with
-    weight 0), ``ValueError`` for compressed geometry, a name already present or broken garment arrays."""
-    from app.core.rig_contract import norm_bone_name
+    """``target_glb`` + one skinned garment node ``name`` (see the module docstring). A weighted extension joint the
+    target lacks hands its weight to its nearest ancestor (``joint_parents``) the target has. Raises ``KeyError``
+    naming a WEIGHTED garment joint the target skin lacks and that has no such ancestor (a listed joint without
+    weight > 0 maps to target index 0 with weight 0), ``ValueError`` for compressed geometry, a name already present
+    or broken garment arrays."""
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
     if not name or not isinstance(extras, dict):
         raise ValueError("graft needs a node name and an extras dict")
     parsed = _parse(target_glb, "Target")
@@ -420,12 +438,28 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -
     weighted = set(np.unique(J[W > 0]).tolist())
     remap = []
     unused = []
+    parents = {norm_bone_name(str(k)): str(v) for k, v in (garment.joint_parents or {}).items()}
+
+    def ancestor(key: str) -> Optional[int]:
+        """The target index of the nearest ancestor of an extension joint the target has."""
+        seen = {key}
+        while key not in BASE_JOINT_KEYS and key in parents:
+            key = norm_bone_name(parents[key])
+            if key in seen:
+                return None
+            seen.add(key)
+            if key in lookup:
+                return lookup[key]
+        return None
     for index, joint in enumerate(garment.joint_names):
         key = norm_bone_name(str(joint))
         if key in lookup:
             remap.append(lookup[key])
         elif index in weighted:
-            raise KeyError(f"Garment joint {joint} is missing from the target skin")
+            folded = ancestor(key) if key not in BASE_JOINT_KEYS else None
+            if folded is None:
+                raise KeyError(f"Garment joint {joint} is missing from the target skin")
+            remap.append(folded)
         else:
             remap.append(0)
             unused.append(index)
