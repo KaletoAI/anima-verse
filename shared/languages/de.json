@@ -4619,6 +4619,8 @@
     "Painted bodies are built in the retexture mode only": "Bemalte Körper werden nur im Retexture-Modus gebaut",
     "Not the worn outfit's body — Generate builds the worn outfit only": "Nicht der Körper des getragenen Outfits — Generieren baut nur das getragene Outfit",
     "The worn outfit's model is built and current — Regenerate renders its views and paints it anew": "Das Modell des getragenen Outfits ist gebaut und aktuell — Neu generieren rendert seine Ansichten und bemalt es neu",
-    "Nothing to regenerate yet — Generate renders the worn outfit's dressed views and paints its body": "Noch nichts neu zu generieren — Generieren rendert die bekleideten Ansichten des getragenen Outfits und bemalt seinen Körper"
+    "Nothing to regenerate yet — Generate renders the worn outfit's dressed views and paints its body": "Noch nichts neu zu generieren — Generieren rendert die bekleideten Ansichten des getragenen Outfits und bemalt seinen Körper",
+    "Show markers": "Markierungen zeigen",
+    "Hide the dots to look at the built tips; moving a slider shows them again.": "Punkte ausblenden, um die gebauten Spitzen anzusehen; ein Regler blendet sie wieder ein."
   }
 }

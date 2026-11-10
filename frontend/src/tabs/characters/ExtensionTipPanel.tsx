@@ -56,6 +56,8 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
     setDraft(stored)
   }
   const changed = keyOf(draft) !== storedKey
+  // The dots cover the very tips they mark: hidden on request, back on as soon as a slider moves.
+  const [showDots, setShowDots] = useState(true)
   const limit = panel.limits.offset_max_mm
   const busy = disabled || posting || panel.running
 
@@ -74,16 +76,16 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
         color: moved ? DRAFT_COLOR : BUILT_COLOR,
       })
     })
-    onPreview(panel.id, dots.length ? dots : null)
-  }, [draft, onPreview, panel.id, panel.sides])
+    onPreview(panel.id, showDots && dots.length ? dots : null)
+  }, [draft, onPreview, panel.id, panel.sides, showDots])
   useEffect(() => () => onPreview(panel.id, null), [onPreview, panel.id])
 
-  const setOffset = (i: number, key: 'up' | 'out', value: number) => setDraft((previous) => {
+  const setOffset = (i: number, key: 'up' | 'out', value: number) => { setShowDots(true); setDraft((previous) => {
     const offsets = previous.offsets.map((row) => ({ ...row }))
     offsets[i][key] = value
     if (previous.mirror) offsets[1 - i][key] = value
     return { ...previous, offsets }
-  })
+  }) }
 
   const send = async (tip: ExtensionTipOverride | null) => {
     setPosting(true)
@@ -130,6 +132,11 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
           </label>
         )))}
       </div>
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+        title={t('Hide the dots to look at the built tips; moving a slider shows them again.')}>
+        <input type="checkbox" checked={showDots} onChange={(event) => setShowDots(event.target.checked)} />
+        {t('Show markers')}
+      </label>
       <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
         <input type="checkbox" checked={draft.mirror} disabled={busy}
           onChange={(event) => setDraft((previous) => ({ ...previous, mirror: event.target.checked,
