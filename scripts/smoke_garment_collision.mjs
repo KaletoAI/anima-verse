@@ -306,7 +306,7 @@ async function main() {
     for (const mesh of Object.values(meshes)) mesh.bind(skeleton)
     return { figure, hips, spine, meshes }
   }
-  const payload = { version: 1, capsules: [
+  const payload = { version: 2, capsules: [
     { id: 'torso', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.1, region: 'torso' },
     { id: 'ghost', a: 'mixamorig:Hips', b: 'mixamorig:Missing', r: 0.1, region: 'torso' },
     { id: 'sleeve', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.2, region: 'arm' }] }

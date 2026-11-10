@@ -7,14 +7,16 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 1,
+    {"version": 2,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
-                   "b_pos": [0.0, 1.62, 0.13], "r": 0.075, "region": "head"}, ...],
+                   "b_pos": [0.0, 1.62, 0.13], "r": 0.075, "region": "head"}, ...,
+                  {"id": "<group>:<bone>", "a": "<chain bone>", "b": "<chain bone>",
+                   "b_pos": [...], "r": 0.018, "region": "chest"}, ...],
      "skipped":  [{"id": "left_shin", "a": "mixamorig:LeftLeg", "b": "LeftFoot",
                    "reason": "joint LeftFoot missing"}],
-     "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0},
+     "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "chest": 1.0, "attached_part": 1.0},
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
      "sha256":   "<file the set describes>",
@@ -47,6 +49,12 @@ A record is CURRENT when ``version``, ``sha256`` (the identity above) and ``scal
 scales, ``model3d_opts.collision_scales``) all match. ``ensure`` / ``ensure_path`` recompute and store anything
 else; the post-rig chain (``model3d._auto_collision``) refreshes it right after the extension rig.
 
+EXTENSION CAPSULES (version 2). The spring-driven extension bones a package declares get capsules too — one per
+chain bone of every group whose OP is in ``EXTENSION_CAPSULES`` (never by group or bone name), region by op
+(``chest`` for ``pair_protrusion``, ``attached_part`` for ``attached_part``), each with its own region scale. They
+follow the table's capsules in the payload. Which renderer pushes what out of them is the renderers' call
+(``garmentCollision.ts`` ``garmentCapsules``; ``secondaryMotion.ts`` never pushes a chain out of its own).
+
 FITTING (``fit_capsules``) — the S1 spike's method: for each capsule the body vertices whose DOMINANT skin
 weight is the capsule's start bone, their distances to the bone segment ``a→b`` (bind pose; joint positions =
 inverse bind matrices), radius = quantile of those distances + margin, times the region scale. No normals: the
@@ -64,8 +72,9 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 1
-REGIONS = ("leg", "arm", "torso", "head")
+VERSION = 2
+#: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``).
+REGIONS = ("leg", "arm", "torso", "head", "chest", "attached_part")
 SCALE_MIN, SCALE_MAX = 0.5, 1.5
 #: A start bone owning fewer body vertices than this gives no capsule (a quantile of a handful is noise).
 MIN_VERTICES = 16
@@ -120,6 +129,43 @@ CROWN_AXIS_FROM = "Hips"
 #: Head joint 18.9 / 20.3 / 19.4 / 16.1 / 18.7 cm; p50 radius 7.1 / 7.8 / 7.5 / 6.9 / 8.1 cm; ``b_pos`` 11.7 /
 #: 12.5 / 11.9 / 9.3 / 10.6 cm above the Head joint; the capsule's top lands within 6 mm of the body's top
 #: (1.694–1.701 m on 1.700-m bodies).
+
+#: EXTENSION CAPSULES — one per chain bone of an extension group whose OP is a key here (never by group or bone
+#: name): ``op → (region, quantile, margin m)``. The groups come from the model's sidecar (``extension_rig``:
+#: ``groups``/``group_ops``, status ``applied``), their chains from the package declarations
+#: (``extension_chains``). No such group → no capsule. Per chain bone ``L`` (``a`` = ``L``):
+#:  - the chain continues → the segment ends at the next link's joint (``b`` = that joint);
+#:  - the chain's last link → the TIP rule (the crown rule with a local axis): axis ``u`` = previous link's joint →
+#:    ``L`` (a one-link chain: ``L`` → the centroid of its own vertices); tip = the farthest own vertex along ``u``;
+#:    radius from the segment ``L``→tip; ``b`` = ``L`` with ``b_pos`` = tip − r·u, so the cap ends AT the tip.
+#: Radius = quantile of the distances of the vertices whose dominant weight is ``L``, + margin, × the region scale.
+#: Both endpoints ride ``L`` (or its child joint), so the capsule follows the spring-driven bone every frame.
+#: EXTENSION_MEASURED below has the numbers the quantiles were chosen on.
+EXTENSION_CAPSULES: Dict[str, Tuple[str, float, float]] = {
+    "pair_protrusion": ("chest", 0.50, 0.0),
+    "attached_part": ("attached_part", 0.75, 0.0),
+}
+
+#: Share of a last link's own vertices (farthest along its axis) whose mean is its tip.
+TIP_SHARE = 0.01
+
+#: EXTENSION_MEASURED (2026-11-10, read-only copies of stored models; the bind-pose capsule surface sampled, each
+#: sample's distance OUTSIDE the body volume — body + part meshes voxelised at 3 mm, dilated once, holes filled;
+#: "max" is the worst sample, "%" the share of samples more than 3 mm outside; a body whose volume does not close
+#: is left out — Rosi, Rurik, both Kai models):
+#:   pair_protrusion, six bodies (Kira's and Lirien's base bodies, Gelina, Tilda, Vallerie, Ylva), left/right:
+#:     p50 r 1.8/1.9, 3.8/3.6, 3.0/3.2, 2.8/2.9, 4.4/4.1, 4.0/3.1 cm; max outside 0 / 4.2 / 9.5 / 3.0–6.0 /
+#:         6.7–3.0 / 0 mm; > 3 mm 0 / ≤ 0.3 / ≤ 2.4 / ≤ 0.3 / ≤ 1.4 / 0 %   → p50
+#:     p40 the same bodies ≤ 1.8 % (Gelina keeps its 9 mm: a local dent, not the radius); p60 ≤ 3.1 %, max 11.2 mm;
+#:     p75 ≤ 9.7 % (Gelina), max 15.3 mm; p90 ≤ 28.7 %, max 21.4 mm. The own vertices are the double-walled
+#:     surface of the whole protrusion down to its base, so the distances spread (Kira p50 1.8 cm, p90 5.1 cm) —
+#:     p50 is the largest that keeps every closed body within the 5-mm penetration threshold but two (Gelina
+#:     2.4 %, Vallerie 1.4 % of the surface, ≤ 9.5 mm).
+#:   attached_part, three bodies (Dario, Hannibal Krumb, Stefan Grahl), five links each: the links are tubes, the
+#:     distances tight (p50…p90 within 2 mm, the base link ≤ 7 mm): p75 r 2.4–2.6 / 1.7–1.8 / 2.4–2.6 cm, max
+#:     outside ≤ 3.0 mm (one voxel) on every link → p75; p85 the base link 3.6 % > 3 mm, p90 37 %.
+#:   Margin 0 for both: like the torso, an extension capsule keeps hair and cloth from sinking DEEP, it must never
+#:   float them (the renderers' bind rule also caps each push at the bind-pose distance).
 
 
 # --- region scales (per character) ---------------------------------------------------------------------------------
@@ -200,9 +246,11 @@ def _segment_distances(points: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.n
     return np.linalg.norm(points - (a + t[:, None] * ab), axis=1)
 
 
-def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None,
+                 extension: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The capsule set of a rigged humanoid GLB: ``{version, capsules, skipped, scales}`` (pure; module
-    docstring). ValueError for a file without a skinned body."""
+    docstring). ``extension`` = the model's extension groups (``extension_chains``): their capsules follow the
+    table's, in that order. ValueError for a file without a skinned body."""
     from app.core import glb_mesh
     from app.core.rig_contract import norm_bone_name
     scales = validate_scales(scales)
@@ -280,7 +328,136 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None) 
             # The cap ends at the crown: the segment end lies r below it (never below the Head joint).
             capsule["b_pos"] = [round(float(v), 4) for v in a + axis * max(height - radius / unit, 0.0)]
         capsules.append(capsule)
+    if any(str(group.get("op") or "") in EXTENSION_CAPSULES for group in extension or []):
+        figure_positions, figure_dominant = _figure_vertices(parsed, names)
+        _fit_extension_capsules(extension, index_of=index_of, names=names, positions=positions,
+                                body_positions=figure_positions, dominant=figure_dominant, unit=unit,
+                                scales=scales, capsules=capsules, skipped=skipped)
     return {"version": VERSION, "capsules": capsules, "skipped": skipped, "scales": scales}
+
+
+def _fit_extension_capsules(extension: Optional[List[Dict[str, Any]]], *, index_of: Dict[str, int],
+                            names: List[str], positions: np.ndarray, body_positions: np.ndarray,
+                            dominant: np.ndarray, unit: float, scales: Dict[str, float],
+                            capsules: List[Dict[str, Any]], skipped: List[Dict[str, Any]]) -> None:
+    """The capsules of the extension groups (``EXTENSION_CAPSULES``), appended in group then chain order."""
+    from app.core.rig_contract import norm_bone_name
+    seen = {c["id"] for c in capsules} | {c["id"] for c in skipped}
+    for group in extension or []:
+        spec = EXTENSION_CAPSULES.get(str(group.get("op") or ""))
+        if spec is None:
+            continue
+        region, quantile, margin = spec
+        group_id = str(group.get("group") or "")
+        for chain in group.get("chains") or []:
+            chain = [str(bone) for bone in chain if bone]
+            for k, bone in enumerate(chain):
+                key = norm_bone_name(bone)
+                capsule_id = f"{group_id}:{key}"
+                if capsule_id in seen:
+                    continue
+                seen.add(capsule_id)
+                a_index = index_of.get(key)
+                a_name = names[a_index] if a_index is not None else bone
+                next_index = index_of.get(norm_bone_name(chain[k + 1])) if k + 1 < len(chain) else None
+                if a_index is None:
+                    skipped.append({"id": capsule_id, "a": a_name, "b": a_name, "reason": f"joint {bone} missing"})
+                    continue
+                owned = body_positions[dominant == a_index]
+                if len(owned) < MIN_VERTICES:
+                    skipped.append({"id": capsule_id, "a": a_name, "b": a_name,
+                                    "reason": f"too few vertices on {bone} ({len(owned)})"})
+                    continue
+                a = positions[a_index]
+                if next_index is not None:
+                    b, axis, height = positions[next_index], None, 0.0
+                else:
+                    previous = index_of.get(norm_bone_name(chain[k - 1])) if k > 0 else None
+                    axis = a - positions[previous] if previous is not None else owned.mean(axis=0) - a
+                    if float(np.linalg.norm(axis)) < 1e-4:
+                        skipped.append({"id": capsule_id, "a": a_name, "b": a_name, "reason": "no bone axis"})
+                        continue
+                    along = (owned - a) @ (axis / np.linalg.norm(axis))
+                    # The tip: the mean of the own vertices reaching farthest along the axis (top TIP_SHARE) — the
+                    # apex region, not one stray vertex; the axis is re-aimed at it, so the cap ends there even
+                    # where the tissue leans off the first guess.
+                    tip = owned[along >= np.quantile(along, 1.0 - TIP_SHARE)].mean(axis=0)
+                    height = float(np.linalg.norm(tip - a))
+                    if height < 1e-3 or float(along.max()) < 1e-3:
+                        skipped.append({"id": capsule_id, "a": a_name, "b": a_name,
+                                        "reason": f"no vertices beyond {bone}"})
+                        continue
+                    axis = (tip - a) / height
+                    b = tip
+                if float(np.linalg.norm(b - a)) < 1e-4:
+                    skipped.append({"id": capsule_id, "a": a_name, "b": a_name, "reason": "degenerate segment"})
+                    continue
+                distance = float(np.quantile(_segment_distances(owned, a, b), quantile))
+                radius = (distance * unit + margin) * scales[region]
+                if axis is None:
+                    capsules.append({"id": capsule_id, "a": a_name, "b": names[next_index], "r": round(radius, 4),
+                                     "region": region})
+                else:
+                    end = a + axis * max(height - radius / unit, 0.0)
+                    capsules.append({"id": capsule_id, "a": a_name, "b": a_name, "r": round(radius, 4),
+                                     "region": region, "b_pos": [round(float(v), 4) for v in end]})
+
+
+def _figure_vertices(parsed: dict, joint_names: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    """Every vertex of every skinned NON-garment mesh node — the body plus the meshes built onto it (an attached
+    part is its own node, which ``glb_mesh.body_arrays`` leaves out) — as ``(positions, dominant joint)``; the
+    dominant joint indexes ``joint_names`` (skin 0's list; another skin's joints are matched by name, −1 when
+    absent or unweighted). Raw accessor values: bind space, like ``body_arrays``."""
+    from app.core import glb_mesh
+    from app.core.rig_contract import norm_bone_name
+    gltf = parsed["gltf"]
+    lookup: Dict[str, int] = {}
+    for i, name in enumerate(joint_names):
+        lookup.setdefault(norm_bone_name(name), i)
+    positions, dominant = [], []
+    for node in gltf.get("nodes") or []:
+        if "mesh" not in node or "skin" not in node or glb_mesh._is_garment_node(node):
+            continue
+        skin_names = glb_mesh._skin_joint_names(gltf, node["skin"])
+        remap = np.array([lookup.get(norm_bone_name(n), -1) for n in skin_names] + [-1], np.int64)
+        for prim in gltf["meshes"][node["mesh"]].get("primitives") or []:
+            attributes = prim.get("attributes") or {}
+            if not {"POSITION", "JOINTS_0", "WEIGHTS_0"} <= set(attributes):
+                continue
+            pos = np.asarray(glb_mesh.accessor_array(parsed, attributes["POSITION"]), np.float64)
+            n = len(pos)
+            joints = glb_mesh._vertex_attr(parsed, prim, "JOINTS_0", n, 4, np.int64)
+            weights = glb_mesh._vertex_attr(parsed, prim, "WEIGHTS_0", n, 4, np.float64)
+            rows = np.arange(n)
+            strongest = weights.argmax(axis=1)
+            local = np.clip(joints[rows, strongest], 0, len(skin_names))
+            positions.append(pos)
+            dominant.append(np.where(weights[rows, strongest] > 0, remap[local], -1))
+    if not positions:
+        return np.zeros((0, 3)), np.zeros(0, np.int64)
+    return np.concatenate(positions), np.concatenate(dominant)
+
+
+def extension_chains(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The extension groups of a model that get capsules: ``[{"group", "op", "chains": [[bone, …], …]}]`` in
+    group-id order — every group the sidecar's ``extension_rig`` lists as built (status ``applied``) whose op is in
+    ``EXTENSION_CAPSULES``, with its chains as the package declares them (``loader.declared_packages`` — the
+    sidecar records groups, not bones). A group no loaded package declares has no chains (no capsule)."""
+    record = meta.get("extension_rig")
+    if not isinstance(record, dict) or record.get("status") != "applied":
+        return []
+    ops = record.get("group_ops") or {}
+    wanted = {str(g): str(ops.get(g)) for g in record.get("groups") or [] if ops.get(g) in EXTENSION_CAPSULES}
+    if not wanted:
+        return []
+    from app.plugins.loader import declared_packages
+    declared: Dict[str, List[List[str]]] = {}
+    for package in declared_packages():
+        for slot in package.body_slots:
+            for rig in slot.rigs:
+                declared.setdefault(rig.id, [[str(link.get("bone") or "") for link in chain]
+                                             for chain in rig.chains])
+    return [{"group": g, "op": wanted[g], "chains": declared.get(g, [])} for g in sorted(wanted)]
 
 
 # --- the stored record ---------------------------------------------------------------------------------------------
@@ -344,7 +521,7 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
         meta["collision"] = relabelled
         return True
     try:
-        fitted = fit_capsules(path.read_bytes(), scales=scales)
+        fitted = fit_capsules(path.read_bytes(), scales=scales, extension=extension_chains(meta))
     except Exception as exc:  # noqa: BLE001 — a model without capsules is still a model
         logger.warning("Collision capsules of %s (%s) failed: %s", character_name, path.name, exc)
         fitted = {"version": VERSION, "capsules": [], "skipped": [], "scales": scales, "error": str(exc)}

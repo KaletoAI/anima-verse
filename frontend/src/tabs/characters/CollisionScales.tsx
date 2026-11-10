@@ -1,6 +1,7 @@
 /**
  * CollisionScales — the character's collision-capsule radius scale per body
- * region (leg / arm / torso / head, 0.5–1.5), saved to
+ * region (leg / arm / torso / head, and the extension regions chest /
+ * attached part, 0.5–1.5), saved to
  * `POST /characters/{c}/model3d/collision/scales`. The server stores the
  * override (`model3d_opts.collision_scales`) and recomputes the capsule set of
  * every stored model — on the base-body pipeline the base body's set first,
@@ -13,6 +14,11 @@
  * shown set with each radius scaled by draft ÷ fitted scale, for the viewer's
  * capsule overlay. It is only that — the saved set is fitted by the server
  * (the head capsule's crown end also moves with its radius there).
+ *
+ * The extension regions (capsules on the spring-driven extension bones,
+ * `app/core/collision.py` `EXTENSION_CAPSULES`) get a slider only where the
+ * shown set has such capsules or a stored scale differs from 1 — a body
+ * without the group has nothing to scale there.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { CollisionPayload } from '@anima/scene-render'
@@ -20,13 +26,15 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
-const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head'] as const
+const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'chest', 'attached_part'] as const
 type CollisionScaleMap = Record<(typeof COLLISION_REGIONS)[number], number>
+/** Regions shown only where the set has capsules in them (module docstring). */
+const EXTENSION_REGIONS: ReadonlySet<string> = new Set(['chest', 'attached_part'])
 
 const REGION_LABELS: Record<(typeof COLLISION_REGIONS)[number], string> = {
-  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head',
+  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', chest: 'Chest', attached_part: 'Attached part',
 }
-const DEFAULTS: CollisionScaleMap = { leg: 1, arm: 1, torso: 1, head: 1 }
+const DEFAULTS: CollisionScaleMap = { leg: 1, arm: 1, torso: 1, head: 1, chest: 1, attached_part: 1 }
 
 const full = (scales?: Partial<Record<string, number>> | null): CollisionScaleMap =>
   Object.fromEntries(COLLISION_REGIONS.map(region => [region, scales?.[region] ?? 1])) as CollisionScaleMap
@@ -94,6 +102,9 @@ export function CollisionScales({ character, collision, scales, disabled, onPrev
   }
 
   const count = collision?.capsules?.length ?? 0
+  const present = new Set((collision?.capsules ?? []).map(capsule => capsule.region))
+  const shown = COLLISION_REGIONS.filter(region => !EXTENSION_REGIONS.has(region) || present.has(region)
+    || stored[region] !== 1 || draft[region] !== 1)
   const busy = disabled || saving
   const help = t("Radius per body region. Saving recomputes the capsules of every stored model of this character; outfit models on the base body inherit the base body's set. The viewer shows them with “Collision capsules”.")
   const stateText = collision?.error ? `${t('Fitting failed')}: ${collision.error}`
@@ -113,7 +124,7 @@ export function CollisionScales({ character, collision, scales, disabled, onPrev
         {stateText}
       </div>
       <div className="ga-collision-grid">
-        {COLLISION_REGIONS.map(region => (
+        {shown.map(region => (
           <label key={region} style={{ display: 'contents' }}>
             <span>{t(REGION_LABELS[region])}</span>
             <input type="range" min={0.5} max={1.5} step={0.05} value={draft[region]} disabled={busy}

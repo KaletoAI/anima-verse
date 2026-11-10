@@ -63,6 +63,27 @@ Expected, derived by hand:
       9.0 cm", numbers count 12; on the outfit "… · from the base model"; none → missing "Not computed";
       error → failed with the error; a skipped capsule → warning "… · skipped left_shin (joint LeftFoot
       missing)".
+[8] Extension capsules (collision v2, ``EXTENSION_CAPSULES``; generic joint names, no package needed):
+    BUMP — op ``pair_protrusion`` (p50, margin 0, region chest), one-link chain [TestBump], joint H = (0, 1.30,
+      0.05); its own vertices = a Fibonacci sphere of N = 4000 points, radius R = 0.05 around c = (0, 1.30, 0.10)
+      (z_i = 1 − (2i+1)/N: the axial coordinate is uniform). Axis u = H → centroid = +z. Tip = the mean of the top
+      1 % along u = the cap z ≥ 0.98 R, mean 0.99 R → tip = (0, 1.30, 0.1495), height |tip − H| = 0.0995. A point at
+      z = R·ζ lies R·sqrt(1 − ζ²) from the axis (ζ ≤ 0.99, inside the segment; the 0.5 % beyond it are nearer
+      still), and sqrt(1 − ζ²) ≤ sqrt(0.75) ⇔ |ζ| ≥ 0.5 — half the points → p50 = R·sqrt(0.75) = 0.043301.
+      a = b = TestBump, b_pos = H + u·(0.0995 − 0.043301) = (0, 1.30, 0.106199), region chest.
+    PART — op ``attached_part`` (p75, margin 0, region attached_part), chain [TestPart1, TestPart2] in a SECOND
+      node marked ``extras.attached_part`` (an attached part's own mesh — ``body_arrays`` leaves it out, the fit
+      must not): TestPart1 (0, 0.9, 0.12) → TestPart2 (0, 0.9, 0.22), a ring r 0.03 around it weighted TestPart1
+      → capsule a TestPart1, b TestPart2 (the next link's joint), r = 0.030 (a ring has one distance); TestPart2
+      = the last link: a ring r 0.025 around (0, 0.9, 0.22) → (0, 0.9, 0.30) weighted TestPart2; axis = the
+      previous joint → TestPart2 = +z; the top 1 % are ties of the top station z = 0.292 → tip (0, 0.9, 0.292),
+      height 0.072, r = 0.025, b_pos = (0, 0.9, 0.22 + 0.072 − 0.025) = (0, 0.9, 0.267).
+    Payload order: the 12 table capsules, then BUMP, PART1, PART2 (ids "<group>:<normalised bone>").
+    No group (``extension`` None / only an op outside the table, e.g. ``pair_tip``) → the 12 capsules only.
+    Scale chest 1.2 → BUMP r = 0.051962, b_pos z = 0.05 + 0.0995 − 0.051962 = 0.097538; PART unchanged.
+    A chain joint the model lacks → skipped "joint … missing".
+    ``extension_chains(meta)``: status "applied", groups [bump, tip], ops {bump: pair_protrusion, tip: pair_tip}
+    → [{group bump, op pair_protrusion, chains from the declaration}]; status "failed" → []; no record → [].
 """
 import hashlib
 import json
@@ -120,6 +141,17 @@ def ring(a, b, rx, rz=None):
     return np.concatenate(out)
 
 
+def ring_z(a, b, r):
+    """Rings of radius r around a segment along z (circle in x/y), at the usual stations."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    th = np.arange(N_THETA) * 2 * np.pi / N_THETA
+    out = []
+    for t in STATIONS:
+        c = a + t * (b - a)
+        out.append(np.stack([c[0] + r * np.cos(th), c[1] + r * np.sin(th), np.full_like(th, c[2])], 1))
+    return np.concatenate(out)
+
+
 def head_surface(a, b, r):
     a, b = np.asarray(a, float), np.asarray(b, float)
     pts = [ring(a, b, r)]
@@ -144,9 +176,12 @@ def body_parts(joints):
     return [(j, p) for j, p in parts if j in joints]
 
 
-def make_body(*, drop=(), garment=False):
+def make_body(*, drop=(), garment=False, extra_joints=None, extra_parts=(), part_parts=()):
+    """``extra_joints`` {name: position} join the skin; ``extra_parts`` [(joint, points)] join the body mesh,
+    ``part_parts`` form a second skinned node marked ``extras.attached_part`` (an attached part's own node)."""
     from app.core.glb_mesh import pack_glb
-    names = [n for n in JOINTS if n not in drop]
+    joints = {**JOINTS, **(extra_joints or {})}
+    names = [n for n in joints if n not in drop]
     blob = bytearray()
     accessors, views = [], []
 
@@ -181,16 +216,20 @@ def make_body(*, drop=(), garment=False):
                                "WEIGHTS_0": add(wgt, 5126, "VEC4", 34962)},
                 "indices": add(idx, 5125, "SCALAR", 34963)}
 
-    nodes = [{"name": f"mixamorig:{n}", "translation": list(map(float, JOINTS[n]))} for n in names]
+    nodes = [{"name": f"mixamorig:{n}", "translation": list(map(float, joints[n]))} for n in names]
     ibm = np.stack([np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [-x, -y, -z, 1]], "<f4")
-                    for x, y, z in (JOINTS[n] for n in names)]).reshape(-1, 16)
+                    for x, y, z in (joints[n] for n in names)]).reshape(-1, 16)
     skin = {"joints": list(range(len(names))), "inverseBindMatrices": add(ibm, 5126, "MAT4")}
-    meshes = [{"name": "Body", "primitives": [primitive(body_parts(names))]}]
+    meshes = [{"name": "Body", "primitives": [primitive(body_parts(names) + list(extra_parts))]}]
     nodes.append({"name": "Body", "mesh": 0, "skin": 0})
+    if part_parts:
+        meshes.append({"name": "Part", "primitives": [primitive(list(part_parts))]})
+        nodes.append({"name": "Part", "mesh": len(meshes) - 1, "skin": 0, "extras": {"attached_part": "g"}})
     if garment:
         meshes.append({"name": "garment_dress_x", "primitives": [primitive(
             [("LeftUpLeg", ring(JOINTS["LeftUpLeg"], JOINTS["LeftLeg"], 0.30))])]})
-        nodes.append({"name": "garment_dress_x", "mesh": 1, "skin": 0, "extras": {"garment": {"kind": "dress"}}})
+        nodes.append({"name": "garment_dress_x", "mesh": len(meshes) - 1, "skin": 0,
+                      "extras": {"garment": {"kind": "dress"}}})
     gltf = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": list(range(len(nodes)))}],
             "nodes": nodes, "meshes": meshes, "skins": [skin], "accessors": accessors, "bufferViews": views,
             "buffers": [{"byteLength": len(blob) + (-len(blob) % 4)}]}
@@ -214,7 +253,7 @@ def main() -> int:
     full = collision.fit_capsules(body, scales=None)
     r = radii(full)
     check("12 capsules, none skipped", (len(full["capsules"]), full["skipped"]), (12, []))
-    check("version", full["version"], 1)
+    check("version", full["version"], 2)
     for cid in ("left_thigh", "right_thigh", "left_shin", "right_shin"):
         near(cid, r.get(cid), 0.066, 0.0003)
     for cid in ("left_upper_arm", "right_upper_arm", "left_forearm", "right_forearm"):
@@ -261,7 +300,7 @@ def main() -> int:
         except ValueError:
             check(f"refused {bad!r}", "ValueError", "ValueError")
     check("defaults filled", collision.validate_scales({"head": 0.8}),
-          {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 0.8})
+          {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 0.8, "chest": 1.0, "attached_part": 1.0})
 
     print("[4] garment nodes are not body")
     near("left_thigh with a garment", radii(collision.fit_capsules(make_body(garment=True))).get("left_thigh"),
@@ -271,9 +310,9 @@ def main() -> int:
     calls = []
     real_fit = collision.fit_capsules
 
-    def counting_fit(data, *, scales=None):
+    def counting_fit(data, *, scales=None, extension=None):
         calls.append(len(data))
-        return real_fit(data, scales=scales)
+        return real_fit(data, scales=scales, extension=extension)
 
     collision.fit_capsules = counting_fit
     d = tmp / "model3d"
@@ -285,7 +324,7 @@ def main() -> int:
     rec = collision.ensure_path("Demo", own, scales=defaults)
     sha = hashlib.sha256(body).hexdigest()
     check("own record", (rec["version"], rec["source"], rec["sha256"], rec["scales"], len(rec["capsules"])),
-          (1, "own", sha, defaults, 12))
+          (2, "own", sha, defaults, 12))
     stored = json.loads(own.with_suffix(".json").read_text())
     check("written into the sidecar, rest kept", (stored["collision"]["sha256"], stored["rig"]), (sha, "mixamo"))
     check("fitted once", len(calls), 1)
@@ -380,6 +419,65 @@ def main() -> int:
     got = row(mo.outfit_model_steps(outfit_meta, base=None, base_meta=None, wanted_variant=None, deciders=[],
                                     shown=[], dressed_records={}, garments=[], tiers=["full"]))
     check("outfit: inherited", got and got[:2], ("done", want + " · from the base model"))
+
+    print("[8] extension capsules")
+    from app.core.glb_mesh import pack_glb  # noqa: F401 — make_body's dependency, imported once
+    n_sphere = 4000
+    zeta = 1 - (2 * np.arange(n_sphere) + 1) / n_sphere
+    phi = np.arange(n_sphere) * math.pi * (3 - math.sqrt(5))
+    rho = np.sqrt(1 - zeta ** 2)
+    sphere = np.stack([0.05 * rho * np.cos(phi), 1.30 + 0.05 * rho * np.sin(phi), 0.10 + 0.05 * zeta], 1)
+    ext_joints = {"TestBump": (0, 1.30, 0.05), "TestPart1": (0, 0.9, 0.12), "TestPart2": (0, 0.9, 0.22)}
+    part_rings = [("TestPart1", ring_z((0, 0.9, 0.12), (0, 0.9, 0.22), 0.03)),
+                  ("TestPart2", ring_z((0, 0.9, 0.22), (0, 0.9, 0.30), 0.025))]
+    ext_body = make_body(extra_joints=ext_joints, extra_parts=[("TestBump", sphere)], part_parts=part_rings)
+    groups = [{"group": "bump", "op": "pair_protrusion", "chains": [["mixamorig:TestBump"]]},
+              {"group": "part", "op": "attached_part", "chains": [["mixamorig:TestPart1", "mixamorig:TestPart2"]]}]
+    fit = collision.fit_capsules(ext_body, extension=groups)
+    ids = [c["id"] for c in fit["capsules"]]
+    check("table first, then bump, part1, part2", ids[12:], ["bump:testbump", "part:testpart1", "part:testpart2"])
+    check("the table's 12 unchanged", radii({"capsules": fit["capsules"][:12]}), r)
+    bump, part1, part2 = fit["capsules"][12:15]
+    near("bump r = R·sqrt(0.75)", bump["r"], 0.043301, 0.0002)
+    check("bump endpoints / region", (bump["a"], bump["b"], bump["region"]),
+          ("mixamorig:TestBump", "mixamorig:TestBump", "chest"))
+    near("bump b_pos z (cap ends at the tip)", bump["b_pos"][2], 0.106199, 0.0002)
+    near("bump b_pos x", bump["b_pos"][0], 0.0, 0.0002)
+    near("bump b_pos y", bump["b_pos"][1], 1.30, 0.0002)
+    near("part1 r (ring)", part1["r"], 0.030, 0.0002)
+    check("part1 ends at the next link", (part1["a"], part1["b"], "b_pos" in part1, part1["region"]),
+          ("mixamorig:TestPart1", "mixamorig:TestPart2", False, "attached_part"))
+    near("part2 r (ring)", part2["r"], 0.025, 0.0002)
+    check("part2 tip rule", part2.get("b_pos"), [0.0, 0.9, 0.267])
+    check("no group: 12 capsules", len(collision.fit_capsules(ext_body)["capsules"]), 12)
+    check("op outside the table: 12 capsules", len(collision.fit_capsules(
+        ext_body, extension=[{"group": "t", "op": "pair_tip", "chains": [["mixamorig:TestBump"]]}])["capsules"]), 12)
+    scaled = collision.fit_capsules(ext_body, scales={"chest": 1.2}, extension=groups)["capsules"]
+    near("chest × 1.2", scaled[12]["r"], 0.051962, 0.0002)
+    near("chest × 1.2: b_pos z", scaled[12]["b_pos"][2], 0.097538, 0.0002)
+    near("attached_part unchanged", scaled[13]["r"], 0.030, 0.0002)
+    missing = collision.fit_capsules(ext_body, extension=[{"group": "x", "op": "pair_protrusion",
+                                                             "chains": [["mixamorig:Absent"]]}])
+    check("missing chain joint: skipped", [(x["id"], x["reason"]) for x in missing["skipped"]],
+          [("x:absent", "joint mixamorig:Absent missing")])
+
+    from types import SimpleNamespace
+    from app.plugins import loader
+    fake = [SimpleNamespace(body_slots=[SimpleNamespace(rigs=[
+        SimpleNamespace(id="bump", chains=[[{"bone": "mixamorig:TestBump", "parent": "Spine2"}]]),
+        SimpleNamespace(id="tip", chains=[[{"bone": "mixamorig:TestTip", "parent": "mixamorig:TestBump"}]])])])]
+    real_declared = loader.declared_packages
+    loader.declared_packages = lambda: fake
+    try:
+        rig = {"status": "applied", "groups": ["bump", "tip"], "group_ops": {"bump": "pair_protrusion", "tip": "pair_tip"}}
+        check("extension_chains: the table's ops only, chains from the declaration",
+              collision.extension_chains({"extension_rig": rig}),
+              [{"group": "bump", "op": "pair_protrusion", "chains": [["mixamorig:TestBump"]]}])
+        check("extension_chains: not applied → none",
+              collision.extension_chains({"extension_rig": {**rig, "status": "failed"}}), [])
+        check("extension_chains: no record → none", collision.extension_chains({}), [])
+    finally:
+        loader.declared_packages = real_declared
 
     print("FAIL" if FAILS else "OK", f"({len(FAILS)} failures)" if FAILS else "")
     return 1 if FAILS else 0

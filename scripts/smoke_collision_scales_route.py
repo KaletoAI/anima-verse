@@ -138,16 +138,16 @@ def main() -> int:
     fits = []
     real_fit = collision.fit_capsules
 
-    def counting_fit(data, *, scales=None):
+    def counting_fit(data, *, scales=None, extension=None):
         fits.append(scales)
-        return real_fit(data, scales=scales)
+        return real_fit(data, scales=scales, extension=extension)
 
     collision.fit_capsules = counting_fit
 
     print("[1] save leg 1.2")
     out = routes._set_character_collision_scales_sync("demo", {"scales": {"leg": 1.2}})
-    check("options: all four regions", out["options"]["collision_scales"],
-          {"leg": 1.2, "arm": 1.0, "torso": 1.0, "head": 1.0})
+    check("options: every region", out["options"]["collision_scales"],
+          {"leg": 1.2, "arm": 1.0, "torso": 1.0, "head": 1.0, "chest": 1.0, "attached_part": 1.0})
     profile = get_character_profile("demo")
     check("profile stores the deviation only", profile["model3d_opts"].get("collision_scales"), {"leg": 1.2})
     check("other model options kept", profile["model3d_opts"].get("auto_generate"), True)

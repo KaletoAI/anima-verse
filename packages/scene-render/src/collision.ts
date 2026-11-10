@@ -53,15 +53,21 @@ export interface CollisionPayload {
   capsules: CollisionCapsule[]
   skipped?: Array<{ id: string; a?: string; b?: string; reason: string }>
   scales?: Record<string, number>
-  source?: 'own' | 'base'
+  source?: 'own' | 'base' | 'body'
   base_signature?: string
   sha256?: string
   computed_at?: string
   error?: string
 }
 
-/** The payload version this module understands; anything else is ignored. */
-export const COLLISION_VERSION = 1
+/**
+ * The payload version this module understands; anything else is ignored.
+ * 2: the extension capsules (regions `chest` / `attached_part`, one per
+ * chain bone of an extension group, `app/core/collision.py`
+ * `EXTENSION_CAPSULES`) — a stored set of version 1 lacks them and is
+ * refitted by the server on its next read.
+ */
+export const COLLISION_VERSION = 2
 
 /** A capsule in the current frame, world space. */
 export interface CapsuleNow { a: Vec3; b: Vec3; r: number }
@@ -246,6 +252,7 @@ export function bindCollision(three: Three, root: Object3D, payload: CollisionPa
 /** Region colours of the debug wireframe. */
 export const CAPSULE_REGION_COLORS: Record<string, number> = {
   leg: 0xff9f1c, arm: 0x2ec4b6, torso: 0x7bd389, head: 0xe0aaff,
+  chest: 0xff6b9a, attached_part: 0x5ab0ff,
 }
 
 interface WireState { r: number; length: number }

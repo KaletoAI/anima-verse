@@ -37,6 +37,15 @@
  *     sag_max_deg, 45°). Distance² = 0.17 + 0.08 cosθ (θ = the remaining sag) is largest at θ = 0, so
  *     the only outside window is around the bind tip: depth ≈ 0.04 θ² < the 1e-6 m slack for
  *     |θ| < 0.005 rad → tip within 0.4 × 0.005 = 2 mm of (0,1,0.5) and ≥ 0.5 − 1e-6 from (0,1,0).
+ * [4b] OWN CHAIN (the chain's own bone and its child bones are never pushers): extra bones Low under Hips
+ *     at (0,0.8,0.5), Twin under Spine2 at local (0,0,0.1) = Ext's joint, Kid under Ext at local (0,0,0)
+ *     (all after Ext in the skin, so the fixture's indices hold). Capsule X → Low, r 0.3, X at (0,1,0.1):
+ *     axis (0,−0.2,0.4); bind tip (0,1,0.5): t = 0.16/0.2 = 0.8 → closest (0,0.84,0.42), d0 = 0.178885 →
+ *     effective radius 0.178885 (bind rule). Sagged tip (0,0.881347,0.481997): t = 0.882810 → closest
+ *     (0,0.823438,0.453124), d = 0.064737 < 0.178885 → inside. X = Ext (the chain bone) and X = Kid (its child;
+ *     it sits on Ext's joint, so the capsule is the same) → EXCLUDED, the sag stays exactly as without a
+ *     payload. Control X = Twin (same place, not in the chain) → the tip is turned back to the effective
+ *     surface: distance to the axis ≥ 0.178885 − 1e-6, and it moved off the free sag.
  * [5] INERT: no extension bone → `setCollision` binds nothing (no capsule joint lookups: the root is
  *     never traversed after creation); a null payload → bit-identical to never calling it; far LOD →
  *     no contact (tip as without payload).
@@ -71,7 +80,7 @@ const check = (label, ok, detail = '') => {
 }
 const fmt = (v) => `(${v.toArray().map((x) => x.toFixed(6)).join(', ')})`
 
-function rig({ armAt = [1, 1.05, 0.5], extension = true } = {}) {
+function rig({ armAt = [1, 1.05, 0.5], extension = true, extras = false } = {}) {
   const root = new THREE.Group()
   const bone = (name, parent, at) => {
     const b = new THREE.Bone(); b.name = name; b.position.set(...at); (parent ?? root).add(b); return b
@@ -85,6 +94,10 @@ function rig({ armAt = [1, 1.05, 0.5], extension = true } = {}) {
   const bones = [hips, spine2, neck, arm, fore, probe]
   let ext = null
   if (extension) { ext = bone('mixamorig:Ext', spine2, [0, 0, 0.1]); bones.push(ext) }
+  if (extension && extras) {
+    bones.push(bone('mixamorig:Low', hips, [0, 0.8, 0.5]), bone('mixamorig:Twin', spine2, [0, 0, 0.1]),
+      bone('mixamorig:Kid', ext, [0, 0, 0]))
+  }
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 1, 0.1, 0, 1, 0.5], 3))
   const own = extension ? 6 : 1
@@ -99,7 +112,7 @@ const tipOf = (ext) => { ext.updateWorldMatrix(true, false); return new THREE.Ve
 const headOf = (ext) => new THREE.Vector3().setFromMatrixPosition(ext.matrixWorld)
 const group = (over = {}) => ({ rev: 'fixture', groups: { g: { ...defaults, bones: ['Ext'], ...over } } })
 const armCapsule = { id: 'left_upper_arm', a: 'mixamorig:LeftArm', b: 'mixamorig:LeftForeArm', r: 0.1, region: 'arm' }
-const payload = (...capsules) => ({ version: 1, capsules })
+const payload = (...capsules) => ({ version: 2, capsules })
 
 console.log('--- [1] pure helpers ---')
 {
@@ -170,6 +183,31 @@ console.log('--- [4] ancestor capsule ---')
     `${fmt(control)}, ${control.distanceTo(new THREE.Vector3(0, 1, 0)).toFixed(7)} from (0,1,0)`)
 }
 
+console.log('--- [4b] own chain ---')
+{
+  const sag = { gravity: 1, gravity_scale: 2 }
+  const run = (a) => {
+    const f = rig({ extras: true })
+    const motion = createSecondaryMotion(THREE, f.root, group(sag))
+    if (a) motion.setCollision(payload({ id: 'x', a, b: 'mixamorig:Low', r: 0.3, region: 'chest' }))
+    motion.update(1 / 60)
+    const tip = tipOf(f.ext)
+    motion.dispose()
+    return tip
+  }
+  const free = run(null)
+  const own = run('mixamorig:Ext')
+  check('capsule from the chain bone itself: excluded', own.distanceTo(free) < 1e-9, fmt(own))
+  const kid = run('mixamorig:Kid')
+  check('capsule from a child bone of the chain: excluded', kid.distanceTo(free) < 1e-9, fmt(kid))
+  const control = run('mixamorig:Twin')
+  const a = new THREE.Vector3(0, 1, 0.1), ab = new THREE.Vector3(0, -0.2, 0.4)
+  const t = Math.min(1, Math.max(0, control.clone().sub(a).dot(ab) / ab.lengthSq()))
+  const d = control.distanceTo(a.clone().addScaledVector(ab, t))
+  check('control (Twin, not in the chain): turned out to the effective surface',
+    d >= Math.sqrt(0.032) - 1e-6 && control.distanceTo(free) > 1e-3, `${fmt(control)}, d ${d.toFixed(6)}`)
+}
+
 console.log('--- [5] inert ---')
 {
   const f = rig({ extension: false })
@@ -196,4 +234,4 @@ if (failures) {
   console.error(`FAIL smoke_extension_collision: ${failures} check(s) failed`)
   process.exit(1)
 }
-console.log('PASS smoke_extension_collision: arm contact turns the tip to the surface, bind rule, ancestor capsules excluded, inert')
+console.log('PASS smoke_extension_collision: arm contact turns the tip to the surface, bind rule, ancestor and own-chain capsules excluded, inert')

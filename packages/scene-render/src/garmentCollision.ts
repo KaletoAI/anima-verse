@@ -14,11 +14,13 @@
  * whole push of a vertex (`mix(p, pushed(p), w)`); absent = 1.
  *
  * WHICH CAPSULES. `garmentCapsules` decides per garment kind: hair the
- * torso, arm and head capsules (`HAIR_REGIONS`), every other kind all but
- * the arm capsules (an arm passes through cloth; pushing the cloth out of
- * the arm drives it into the body — the numbers are on the function). At
- * most `COLLIDE_MAX` per mesh, the FIRST ones in payload order —
- * deterministic, and the server table has 12 (`app/core/collision.py`).
+ * torso, arm, head and chest capsules (`HAIR_REGIONS`), footwear the cloth
+ * regions without the spring-driven extension regions, every other kind all
+ * but `CLOTH_EXCLUDED_REGIONS` (an arm passes through cloth; pushing the
+ * cloth out of the arm drives it into the body — the numbers are on the
+ * constants). At most `COLLIDE_MAX` per mesh, the FIRST ones in payload
+ * order — deterministic: the server's table (12) comes first, the extension
+ * capsules (one per chain bone, `app/core/collision.py`) after it.
  *
  * BIND RULE (every garment). A vertex is never pushed further from a
  * capsule than it lay in the BIND pose: the radius is capped per vertex and
@@ -77,7 +79,14 @@ import { isGarmentNode } from './figure'
 
 type Three = typeof import('three')
 
-/** Capsules one garment mesh's shader holds (uniform array length). */
+/**
+ * Capsules one garment mesh's shader holds (uniform array length). Kept at
+ * 16 with collision v2: the most a kind selects today is cloth 8 (table
+ * without the arms) + 2 chest + 5 attached-part links = 15, hair 3 + 4 + 1 +
+ * 2 = 10, footwear 8. A body with more extension links than fit keeps the
+ * FIRST in payload order (`garmentCapsules`) — deterministic, the table's
+ * capsules never drop.
+ */
 export const COLLIDE_MAX = 16
 /** Passes over all capsules (a vertex pushed out of one capsule into a neighbour is pushed again). */
 export const COLLIDE_PASSES = 2
@@ -263,24 +272,63 @@ export function garmentKind(o: Object3D): string | null {
  * spike walk 0.77 → 0.77 / → 0.13 %. Under the bind rule they lift nothing
  * in the bind pose (without it: 5.6 % of Kira's hair lifted up to 27 mm off
  * the shoulders by the upper-arm caps).
+ * `chest` (the `pair_protrusion` capsules, collision v2): long hair lying
+ * in front sinks into the protruding chest region in motion. CHEST_MEASURED
+ * (2026-11-11, Kira's base with the long S1 spike hair, walk/sit/celebrating
+ * with the secondary motion, hair vertices over the chest region = nearest
+ * bind body vertex dominated by the chest chain, share > 5 mm inside beyond
+ * the bind depth, worst sample): the p50 chest capsules (r 1.8/1.9 cm) change
+ * walk 29.9 → 29.9 %, sit 6.2 → 5.5 %, celebrating 28.2 → 28.2 % — small,
+ * because a capsule inside the surface only catches what sinks deeper than
+ * the tissue's inner half; a radius out to the surface (p95, 5.8 cm) would
+ * give walk 11.9 %, but it lies outside the skin (EXTENSION_MEASURED in
+ * collision.py) and is not taken. Bind lift 0.00 % in every variant (bind
+ * rule). Kept because it never hurts and it scales: the per-character
+ * `chest` scale enlarges it.
+ * Never `attached_part` (hair does not reach it).
  */
-export const HAIR_REGIONS: readonly string[] = ['torso', 'arm', 'head']
+export const HAIR_REGIONS: readonly string[] = ['torso', 'arm', 'head', 'chest']
+
+/** The extension regions (`app/core/collision.py` `EXTENSION_CAPSULES`): capsules on spring-driven bones. */
+export const EXTENSION_REGIONS: readonly string[] = ['chest', 'attached_part']
 
 /**
- * Which bound capsules push a garment of `kind`, in payload order, at most
- * `COLLIDE_MAX`.
+ * Capsule regions that never push CLOTH (every kind but hair; footwear
+ * further below). The arms: cloth lies ON the body, and an arm that swings
+ * or rests against it is the arm passing through the cloth, not the cloth
+ * through the arm: pushed out of the arm capsule the cloth goes INTO the
+ * body. Measured on the S1 dress (`scripts/check_garment_collision.mjs`):
+ * walk 0.87 → 0.99 % with the arm capsules (armpit cloth driven into the
+ * chest), sit hip sides 1.4 → 4.7 % (the forearms on the lap press the skirt
+ * into the thighs). The extension regions push cloth — CLOTH_MEASURED
+ * (2026-11-11, share of the cloth over the region > 5 mm inside beyond its
+ * bind depth, worst of 8 samples, with the secondary motion; bind lift > 1 mm
+ * 0.00 % with and without them):
+ *  - `attached_part`: the S1 dress placed on Stefan Grahl's generated model
+ *    (an `attached_part` chain of 5 links): walk 19.7 → 8.8 %, run 14.3 →
+ *    8.3 % (without motion 19.8 → 4.8 / 15.4 → 4.6 %), sit 0 → 0 %;
+ *  - `chest`: the phase-5 dress on Kira's base: run 19.5 → 18.8 %, walk /
+ *    sit / celebrating unchanged (7.7 / 0 / 19.4 %) — the dress carries no
+ *    chest weights, its fabric lies 10.6 mm (p5) off the tissue.
+ * Neither floats cloth fitted over it at bind (the bind rule caps the radius
+ * at the vertex's bind distance).
+ */
+export const CLOTH_EXCLUDED_REGIONS: readonly string[] = ['arm']
+
+/**
+ * Which bound capsules push a garment of `kind`, in payload order (the
+ * server's table first, then the extension capsules), at most `COLLIDE_MAX`
+ * — deterministic:
  *  - hair: the `HAIR_REGIONS`;
- *  - every other kind: all regions EXCEPT the arms. Cloth lies ON the body,
- *    and an arm that swings or rests against it is the arm passing through
- *    the cloth, not the cloth through the arm: pushed out of the arm capsule
- *    the cloth goes INTO the body. Measured on the S1 dress
- *    (`scripts/check_garment_collision.mjs`): walk 0.87 → 0.99 % with the arm
- *    capsules (armpit cloth driven into the chest), sit hip sides 1.4 → 4.7 %
- *    (the forearms on the lap press the skirt into the thighs).
+ *  - footwear: the cloth regions WITHOUT the extension regions (a shoe is
+ *    never pushed by a spring-driven capsule);
+ *  - every other kind: all regions except `CLOTH_EXCLUDED_REGIONS`.
  */
 export function garmentCapsules<T extends { capsule: { region: string } }>(kind: string | null, bound: readonly T[]): T[] {
   if (kind === 'hair') return bound.filter(entry => HAIR_REGIONS.includes(entry.capsule.region)).slice(0, COLLIDE_MAX)
-  return bound.filter(entry => entry.capsule.region !== 'arm').slice(0, COLLIDE_MAX)
+  const cloth = bound.filter(entry => !CLOTH_EXCLUDED_REGIONS.includes(entry.capsule.region))
+  if (kind === 'footwear') return cloth.filter(entry => !EXTENSION_REGIONS.includes(entry.capsule.region)).slice(0, COLLIDE_MAX)
+  return cloth.slice(0, COLLIDE_MAX)
 }
 
 /** The skinned garment meshes under `root` that collide at all (`garmentCapsules` gives their kind capsules). */

@@ -17,6 +17,7 @@
  *        [--json FILE]                write the numbers as JSON
  *        [--motion MOTION.json]       also run every clip WITH the secondary motion (see SECONDARY MOTION)
  *        [--fps 60] [--loops 2]       simulation rate and loops of a motion run; the LAST loop is sampled
+ *        [--area BONE,BONE]       also report the AREA share (see AREA) for these bones (normalised names)
  *   Clips come from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget
  *   reference from ANIMATION_RIG_FILE (default shared/models/rig/reference.fbx) — read only.
  *   Self-bundling via esbuild; runs without the server and without a world.
@@ -73,6 +74,12 @@
  * penetration is reported separately, and so is the garment split at the
  * Spine1 joint's bind height (lower = skirt/hips, upper = bodice/sleeves).
  *
+ * AREA (`--area BONES`). The garment vertices whose nearest body vertex IN THE BIND POSE is dominated by one of
+ * BONES (e.g. the bones of an extension group — the chest region in front of them) form the area; per sample
+ * `area_before` / `area_after` / `area_excess_before` / `area_excess_after` are the shares above, over the area only.
+ * The area depends on the model, never on the capsule set — two runs with different payloads compare the same
+ * vertices.
+ *
  * SECONDARY MOTION (`--motion`, the `motion` payload of `GET /characters/{name}/model3d`). Every clip runs
  * twice: `-motion` = the plain pose (extension bones ride their parents rigidly, as above, sampled with
  * `mixer.setTime`), `+motion` = the client's frame order — the mixer stepped at `--fps` from t = 0, then
@@ -117,6 +124,7 @@ function parseArgs(argv) {
     else if (a === '--motion') opts.motion = argv[++i]
     else if (a === '--fps') opts.fps = Math.max(10, Number(argv[++i]))
     else if (a === '--loops') opts.loops = Math.max(1, Number(argv[++i]))
+    else if (a === '--area') opts.area = argv[++i].split(',').filter(Boolean)
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else opts.models.push(a)
   }
@@ -581,6 +589,30 @@ async function main() {
       hipBand.push(i)
       if (hipsP && Math.abs(bind[i * 3] - hipsP.x) >= 0.08) hipSides.push(i)
     }
+    // AREA (module docstring): garment vertices whose nearest BIND body vertex is dominated by one of `--area`.
+    const area = []
+    if (opts.area?.length) {
+      const wanted = new Set(opts.area.map(normBoneName))
+      const CELL = 0.03
+      const hash = new Map()
+      for (let i = 0; i < total; i++) {
+        if (!isBody[i]) continue
+        const k = `${Math.floor(bind[i * 3] / CELL)},${Math.floor(bind[i * 3 + 1] / CELL)},${Math.floor(bind[i * 3 + 2] / CELL)}`
+        let list = hash.get(k); if (!list) hash.set(k, list = []); list.push(i)
+      }
+      for (const i of garmentIdx) {
+        const x = bind[i * 3], y = bind[i * 3 + 1], z = bind[i * 3 + 2]
+        let best = Infinity, bi = -1
+        const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL), cz = Math.floor(z / CELL)
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+          for (const j of hash.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? []) {
+            const d = (bind[j * 3] - x) ** 2 + (bind[j * 3 + 1] - y) ** 2 + (bind[j * 3 + 2] - z) ** 2
+            if (d < best) { best = d; bi = j }
+          }
+        }
+        if (bi >= 0 && wanted.has(dominant[bi])) area.push(i)
+      }
+    }
     const mm = report.models[name] = {
       file: modelPath, vertices: total, garment_vertices: garmentIdx.length, body_faces: bodyFaces.length / 3,
       skin_crosscheck_m: worst,
@@ -590,6 +622,7 @@ async function main() {
       radii_cm: Object.fromEntries(gc.binding.capsules.map((c) => [c.capsule.id, +(c.capsule.r * 100).toFixed(1)])),
       hip_band: { y: [+bandLo.toFixed(3), +bandHi.toFixed(3)], vertices: hipBand.length, side_vertices: hipSides.length },
       split: { lower_vertices: lower.length, upper_vertices: upper.length },
+      area: opts.area?.length ? { bones: opts.area, vertices: area.length } : null,
       clips: {},
     }
     console.log(`== ${name}: ${total} verts (${garmentIdx.length} garment), skin check ${worst.toExponential(2)} m, `
@@ -691,6 +724,8 @@ async function main() {
         // the garment split at the Spine1 joint's bind height: below = skirt/hips, above = bodice/sleeves
         lower_before: share(field, before, lower), lower_after: share(field, after, lower),
         upper_before: share(field, before, upper), upper_after: share(field, after, upper),
+        area_before: share(field, before, area), area_after: share(field, after, area),
+        area_excess_before: excess(field, before, area), area_excess_after: excess(field, after, area),
         body_volume_closed: field.closed,
       }
       // Where the rest sits: for the garment vertices still > 5 mm inside, the dominant bone of the NEAREST
@@ -790,6 +825,8 @@ async function main() {
           lower_before_max: max('lower_before'), lower_after_max: max('lower_after'),
           upper_before_max: max('upper_before'), upper_after_max: max('upper_after'),
           hip_sides_before_max: max('hip_sides_before'), hip_sides_after_max: max('hip_sides_after'),
+          area_before_max: max('area_before'), area_after_max: max('area_after'),
+          area_excess_before_max: max('area_excess_before'), area_excess_after_max: max('area_excess_after'),
           show_before_max: max('show_before'), show_after_max: max('show_after'),
           show_before_mean: rows.reduce((a, r) => a + (r.show_before ?? 0), 0) / rows.length,
           show_after_mean: rows.reduce((a, r) => a + (r.show_after ?? 0), 0) / rows.length,
@@ -799,7 +836,8 @@ async function main() {
         console.log(`  ${label.padEnd(16)} before ${rows.map((r) => pct(r.before) + open(r)).join(' ')} | after ${rows.map((r) => pct(r.after) + open(r)).join(' ')}`
           + ` | excess ${pct(max('excess_before'))} → ${pct(max('excess_after'))}`
           + ` | lower ${pct(max('lower_before'))} → ${pct(max('lower_after'))} | upper ${pct(max('upper_before'))} → ${pct(max('upper_after'))}`
-          + ` | hip sides ${pct(max('hip_sides_before'))} → ${pct(max('hip_sides_after'))} | moved ${pct(Math.max(...rows.map((r) => r.moved_share)))}`)
+          + ` | hip sides ${pct(max('hip_sides_before'))} → ${pct(max('hip_sides_after'))} | moved ${pct(Math.max(...rows.map((r) => r.moved_share)))}`
+          + (area.length ? ` | area ${pct(max('area_before'))} → ${pct(max('area_after'))} (excess ${pct(max('area_excess_before'))} → ${pct(max('area_excess_after'))})` : ''))
         console.log(`  ${''.padEnd(16)} show-through before ${rows.map((r) => pct(r.show_before)).join(' ')} | after ${rows.map((r) => pct(r.show_after)).join(' ')}`
           + ` | mean ${pct(mm.clips[label].show_before_mean)} → ${pct(mm.clips[label].show_after_mean)} | depth max ${mm.clips[label].show_depth_max_mm} mm`)
       }

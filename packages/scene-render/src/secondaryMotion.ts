@@ -17,11 +17,17 @@
  * the rest inside rather than folding the link away. The oscillator state is not touched —
  * the contact is a constraint on the rendered frame, so it can neither inject
  * energy nor stall the spring.
- *  - ANCESTOR CAPSULES are excluded per chain: a capsule whose start joint
- *    `a` is an ancestor of the chain root (or a bone in its `anchor_blend`)
- *    carries the chain itself — a chest chain hanging from Spine2 is never
- *    pushed out of the Hips/Spine/chest capsules it sits in, only out of the
- *    arms, legs and head (Review Focus 2 of the collision plan).
+ *  - OWN CAPSULES are excluded per chain: a capsule whose start joint `a` is
+ *    an ancestor of the chain root (or a bone in its `anchor_blend`), the
+ *    chain root itself or any bone below it carries the chain itself — a
+ *    chain hanging from Spine2 is never pushed out of the Hips/Spine/chest
+ *    capsules it sits in, nor out of the extension capsules riding its own
+ *    links, and a child group hanging from it (a tip link) not out of them
+ *    either; only out of the arms, legs, head and OTHER chains' extension
+ *    capsules (Review Focus 2 of the collision plan). An extension capsule of
+ *    another chain is read where its bones were at the start of the frame
+ *    (the capsules are updated once, before the links move) — one frame
+ *    behind that chain's own swing.
  *  - BIND RULE, as for garments: per tip and capsule the radius is capped at
  *    the tip's distance to that capsule in the bind pose (bind-pose tip from
  *    the bone's `boneInverse`, bind-pose capsule `BoundCapsule.bind`), so the
@@ -106,9 +112,10 @@ const COLLIDE_SLACK = 1e-6
 
 /**
  * Which capsules a chain may collide with: every bound capsule whose start
- * joint `a` is NOT one of `ancestors` (normalised names of the bones the
- * chain hangs from — its root's ancestors and `anchor_blend` bones). Pure;
- * payload order is kept.
+ * joint `a` is NOT one of `ancestors` (normalised names of the bones that
+ * carry the chain — its root's ancestors and `anchor_blend` bones — and of
+ * its own subtree: the root, its links and any child group below them).
+ * Pure; payload order is kept.
  */
 export function extensionCapsules<T extends { capsule: { a: string } }>(bound: readonly T[], ancestors: ReadonlySet<string>): T[] {
   return bound.filter(entry => !ancestors.has(normBoneName(entry.capsule.a)))
@@ -242,7 +249,7 @@ interface Particle {
   anchorRotation: Quaternion | null
   /** The link's tip in its bone frame: the next chain joint, else its most protruding own vertex. */
   tipLocal: Vector3
-  /** Normalised names of the bones the chain hangs from (its ancestor capsules are excluded). */
+  /** Normalised names of the bones the chain hangs from and of its own subtree (their capsules are excluded). */
   ancestors: Set<string>
   /** The capsules this tip is kept outside of, with the bind-rule radius factor; empty = no contact. */
   contacts: { bound: BoundCapsule; factor: number }[]
@@ -625,6 +632,8 @@ export function createSecondaryMotion(
         for (const blend of [chainRoot.anchorBlend, bind.anchorBlend]) {
           for (const e of blend ?? []) particle.ancestors.add(normBoneName(e.bind.bone.name))
         }
+        // Its own chain and what hangs from it (a child group's links): their capsules ride this chain.
+        chainRoot.bone.traverse(o => { if ((o as Bone).isBone) particle.ancestors.add(normBoneName(o.name)) })
         if (BLENDED_FIELDS.some(field => particle.paramsTo[field] !== params[field])) {
           particle.paramsFrom = { ...particle.params }
           // Preserve an interrupted static transition's frequency and weight.

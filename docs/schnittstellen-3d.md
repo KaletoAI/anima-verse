@@ -12137,15 +12137,23 @@ by `/characters/{name}/model/meta`, next to `extension_rig` (not in the worldmap
 model meta when `model_sig` changes). `null` for a model that gets none.
 
 ```
-{"version": 1,
+{"version": 2,
  "capsules": [{"id", "a", "b", "r", "region", "a_pos"?, "b_pos"?}],
  "skipped":  [{"id", "a", "b", "reason"}],
- "scales": {"leg", "arm", "torso", "head"}, "source": "own" | "base", "base_signature"?, "sha256",
- "computed_at", "error"?}
+ "scales": {"leg", "arm", "torso", "head", "chest", "attached_part"}, "source": "own" | "base",
+ "base_signature"?, "sha256", "computed_at", "error"?}
 ```
 
 - `a`/`b` — joint names as in the model (compare with `normBoneName`); `r` — metres of the bind space;
-  `region` — `leg` / `arm` / `torso` / `head`.
+  `region` — `leg` / `arm` / `torso` / `head` (the fixed table, 12 capsules) or an extension region.
+- **Extension capsules (version 2).** After the table, one capsule per chain bone of every APPLIED extension
+  group (`extension_rig.status "applied"`) whose op is in `EXTENSION_CAPSULES` (`app/core/collision.py`):
+  `pair_protrusion` → region `chest` (radius = p50 of the bone's dominant-weighted vertex distances, margin 0),
+  `attached_part` → region `attached_part` (p75, margin 0) — both stay inside the skin (numbers in
+  `EXTENSION_MEASURED`). `id` = `"<group>:<normalised bone>"`; a link with a next link ends at that joint, the
+  last link is `a == b` = the bone with `b_pos` so the cap ends at its tip (the mean of its outermost 1 % of
+  vertices). No such group → no extension capsule; a missing joint or too few vertices → `skipped`. A renderer
+  that does not know version 2 binds nothing (`bindCollision` returns `null` for an unknown version).
 - **Endpoint rule.** An endpoint WITHOUT `a_pos`/`b_pos` is the joint's position. An endpoint WITH one is a
   bind-space point (the space of the body's POSITION accessor) fixed to that joint: it moves like a body vertex
   skinned 100 % to the joint, `p_now = boneWorld · inverse(boneBindWorld) · p_bind`. The head capsule uses it
@@ -12166,8 +12174,9 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   shader patched: after skinning, the position is pushed radially out of each capsule it lies inside (closest
   axis point → radius), capsules in payload order, two passes, at most 16 per mesh (the first in payload order).
   The optional glTF vertex attribute `_COLLIDE` (0..1) scales a vertex's whole push; absent = 1. Which capsules
-  push which garment is decided per garment `kind` (node extras `garment.kind`, § A3a): `hair` the `torso`, `arm`
-  and `head` regions, every other kind all regions except `arm` (an arm passes through cloth; pushed out of the
+  push which garment is decided per garment `kind` (node extras `garment.kind`, § A3a): `hair` the `torso`, `arm`,
+  `head` and `chest` regions, `footwear` the cloth regions without `chest`/`attached_part`, every other kind all
+  regions except `arm` (an arm passes through cloth; pushed out of the
   arm capsule the cloth goes into the body). Every garment is pushed under the BIND RULE: per vertex and capsule
   the radius is capped at the vertex's distance to that capsule in the bind pose (unskinned `position` against the
   capsule's bind-pose endpoints), so hair rooted into the scalp or lying on the shoulders is never lifted and cloth
@@ -12192,7 +12201,9 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   shallowest angle. The lever length is kept, children ride the corrected frame, the spring state is untouched.
   ANCESTOR CAPSULES are excluded per chain: a capsule whose start joint `a` is an ancestor of the chain root (or a
   bone of its `anchor_blend`) — a chest chain hanging from Spine2 collides with the arms, legs and head only, never
-  with the Hips/Spine/chest capsules that carry it. The BIND RULE holds as for garments (radius capped at the tip's
+  with the Hips/Spine/chest capsules that carry it. Likewise the chain's OWN capsules: `a` on the chain root or any
+  bone below it (its links and child groups) never pushes that chain; the capsules of OTHER chains do (read in
+  the current frame, so they lag one frame behind those chains' own update). The BIND RULE holds as for garments (radius capped at the tip's
   bind-pose distance). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
   tip offset from rest on the real clips, contact off/on).
