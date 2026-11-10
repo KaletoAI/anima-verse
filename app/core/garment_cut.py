@@ -17,14 +17,20 @@ rigged, ``k_h`` the same for H's own units):
 2. Labels on H in H's own frame (H was generated from exactly these views): the mesh bbox maps onto the haired
    silhouette's bbox (``garment_fit._frame``); a vertex votes "hair" when it is visible from the view (depth
    buffer, ``CELL_M`` cells, 3 x 3 neighbourhood, ``VIS_TOL_M``) and projects into the view's hair mask.
-3. Registration H -> B: the shared image framing (``garment_fit.place_by_framing``), then a similarity ICP on
-   the NON-hair vertices of H's top ``REGISTER_TOP_M`` (correspondences farther than ``NONHAIR_MAX_M`` dropped,
-   ``ICP_ITERATIONS``).
-4. Hair label: H's outer wall (frontmost within ``OUTER_TOL_M`` from five directions); seeds = votes on the
-   outer wall not deeper than ``DEEP_M`` inside B; growth over the outer wall more than ``LOOSE_EPS_M`` outside
-   B (``GROW_RINGS``); closing; specks dropped; the boundary smoothed by a neighbour majority
-   (``LABEL_SMOOTH_PASSES``); enclosed non-hair islands up to ``HOLE_FILL_MAX_M2`` filled; components below 2 %
-   of the label's faces dropped.
+3. Registration H -> B, pass 1: the shared image framing (``garment_fit.place_by_framing``), then a similarity
+   ICP on the vertices of H's top ``REGISTER_TOP_M`` the masks do not vote (correspondences farther than
+   ``NONHAIR_MAX_M`` dropped, ``ICP_ITERATIONS``).
+4. Hair label by GEOMETRY first (``label_hair``; the 2D masks miss blonde hair over light skin — Kira e2e
+   2026-11-10, haired vs bald 15 RGB at the back of the head), on H's outer wall (frontmost within
+   ``OUTER_TOL_M`` from five directions), distances to B's outer wall exact (``garment_fit.ExactNearSdf``):
+   on the head (nearest B vertex Head-weighted) more than ``GEO_MIN_M`` outside B is hair — except in the face
+   zone (below the 2D hairline, facing forward or near the eyes / ears), where only the masks decide; the
+   masks' votes and the old growth (``LOOSE_EPS_M``, ``GROW_RINGS``, never into the face zone) add the rest;
+   the crown, which can lie INSIDE B, is filled when hair encloses it (``fill_enclosed``); holes up to
+   ``HOLE_FILL_MAX_M2``; the largest component only (it must reach the head). Long hair on the shoulders and
+   back lies ON the body: there only the masks' votes and the growth from them count. Then registration pass 2
+   on the non-hair HEAD only (the hair sits on it; one similarity does not fit head and shoulders of two
+   mesher outputs at once), starting from pass 1, and the label again (off the head with pass 1's distances).
 5. ``cut`` (longer hair): H's hair faces with H's texture as the outer sheet, an inner sheet SNAPPED onto B
    (``INNER_OFFSET_M`` outside, never across the outer sheet; a free strand farther than ``SNAP_MAX_M`` keeps a
    sheet ``FREE_INNER_M`` inward), the two sheets joined at the cut edge -> one closed part. ``shell`` (short
@@ -38,9 +44,10 @@ rigged, ``k_h`` the same for H's own units):
    along its loops (``EDGE_SMOOTH_PASSES``) and feathered — ring 0 is
    where both sheets meet (no rim strip), ring 1 halfway — so the hairline thins out instead of ending in a
    wall. The edge is found on H's WELDED topology: H carries UV-seam duplicates, and an edge on a UV seam is no
-   cut edge (the spike's rims along UV seams were its white streaks).
-6. Gates (``CUT_GATES``, numbers § B5a style): registration p95 of the non-hair outer wall (top 35 cm) below
-   1 cm, the hairline (front centre strip, 3D label vs 2D mask) within 1.5 cm, no small hole left in the hair
+   cut edge (the spike's rims along UV seams were its white streaks). A hole in the hair sheet shorter than
+   ``CAP_LOOP_MAX_M`` is capped with a fan (a groove between strands, not an island of vertices).
+6. Gates (``CUT_GATES``, numbers § B5a style): registration p95 of the non-hair outer wall of the head below
+   1 cm (the top 35 cm are reported as ``top_p95_cm``), the hairline (front centre strip, 3D label vs 2D mask) within 1.5 cm, no small hole left in the hair
    sheet (boundary loops shorter than ``HOLE_LOOP_MAX_M``), hair area at least 1 cm².
 
 ``CUT_VERSION`` is part of the subtract fsig: bump it whenever the cut's output changes.
@@ -62,7 +69,7 @@ from app.core.log import get_logger
 logger = get_logger("garment_cut")
 
 #: Bump whenever the cut's output changes (part of the subtract fsig, ``garment_store``).
-CUT_VERSION = 3   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended
+CUT_VERSION = 4   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label
 
 SHAPES: Tuple[str, ...] = ("cut", "shell")
 #: Default / allowed shell thickness (profile ``hair_shell_mm``).
@@ -104,10 +111,27 @@ WHITE_DL = 8.0              # recolour: "white" = lighter than the hair by this 
 WHITE_CHROMA = 15.0         # ... and greyer than this chroma (C*ab) and than half the hair's chroma + 3
 PALE_CHROMA_SHARE = 0.6     # recolour: "pale" = not darker than the hair, chroma below this share of the hair's ...
 PALE_MIN_HAIR_CHROMA = 12.0  # ... on coloured hair only (grey / white hair has no chroma to lose)
+# Geometry label (``label_hair``). GEO_MIN_M from the signed distance of H to B's outer wall after the final
+# registration, 2026-11-10 (~/claude-out/hair-subtract-geometry/runs/thresholds_after.txt): skin outside the face
+# zone on the head — Kai, whose every non-face head vertex off the label is skin — max 0.42 cm (p99.9 0.40); the
+# face zone itself reaches 1.51 cm (Kai), 0.96 (Kira spike), 1.37 (Kira e2e: brows, eye sockets — hence no
+# geometry there; p95 0.58-0.86 = the registration noise); the hair the blonde back mask missed lies 2-5 cm out
+# (Kira e2e back of the head, p50 3.5-4.5 cm). 1.2 cm = the skin's max + more than that noise, under the hair.
+GEO_MIN_M = 0.012
+GEO_EXACT_M = 0.03          # the signed distance is exact (outer wall triangles) within this band
+PROTECT_BEHIND_M = 0.03     # the face zone reaches this far behind the head's centre plane (the ears) ...
+PROTECT_BROW_M = 0.03       # ... up to this far above the 2D eye row (the brows, the ear tops); higher only
+PROTECT_FACING = 0.7        # ... where B faces forward (normal z above this: the forehead, not the temples)
+ENCLOSE_LEAK_SHARE = 0.05   # a scalp patch is enclosed by hair when its face-zone contact is at most this share
+                            # of its hair contact (Kira e2e crown: 4 of 155, through the temple's thin hair)
+REREG_DILATE = 2            # registration pass 2 leaves out the pass-1 label dilated by this many rings
+CAP_LOOP_MAX_M = 0.25       # a boundary loop of the hair sheet shorter than this is capped (the face opening and
+                            # the hair's outer edge are 90-190 cm; Kira e2e's gaps between strands 1.6-21 cm)
+CAP_ROUNDS = 3              # rounds of capping the hair sheet's small holes (loops touching at a vertex: 2)
 
 #: The cut's gates: (kind, limit, label) like ``garment_fit.GATES``.
 CUT_GATES: Dict[str, Tuple[str, float, str]] = {
-    "registration_p95_cm": ("max", 1.0, "registration p95 of the non-hair top"),
+    "registration_p95_cm": ("max", 1.0, "registration p95 of the non-hair head"),
     "hairline_cm": ("max", 1.5, "hairline 3D vs 2D"),
     "label_holes": ("max", 0, "holes left in the hair sheet"),
     "hair_area_cm2": ("min", 1.0, "hair area"),
@@ -461,7 +485,7 @@ def smooth_edge(P: np.ndarray, B: np.ndarray, passes: int) -> np.ndarray:
 # --- registration -----------------------------------------------------------------------------------------------------
 
 def register(Q0: np.ndarray, Pb: np.ndarray, Fb: np.ndarray, exclude: np.ndarray, k: float, *,
-             iterations: int = ICP_ITERATIONS):
+             iterations: int = ICP_ITERATIONS, scale: bool = True):
     """Similarity ICP of ``Q0`` (H placed in B's frame) onto B over the vertices not ``exclude``d within the top
     ``REGISTER_TOP_M`` of H, point-to-plane: each vertex pairs with its nearest dense surface sample of B within
     ``NONHAIR_MAX_M`` and that sample's triangle normal; one step solves the linearised small similarity
@@ -487,8 +511,12 @@ def register(Q0: np.ndarray, Pb: np.ndarray, Fb: np.ndarray, exclude: np.ndarray
         c = Q[use].mean(0)
         x, p, n = Q[use] - c, tree.data[j[use]] - c, normals[j[use]]
         A = np.concatenate([np.cross(x, n), (x * n).sum(1, keepdims=True), n], 1)
+        if not scale:
+            A = np.delete(A, 3, axis=1)
         r = -((x - p) * n).sum(1)
         sol, *_ = np.linalg.lstsq(A, r, rcond=None)
+        if not scale:
+            sol = np.insert(sol, 3, 0.0)
         w, ds, t = sol[:3], float(sol[3]), sol[3 + 1:]
         R = Rotation.from_rotvec(w).as_matrix()
         Q = (1.0 + ds) * (Q - c) @ R.T + c + t
@@ -502,6 +530,105 @@ def register(Q0: np.ndarray, Pb: np.ndarray, Fb: np.ndarray, exclude: np.ndarray
 def _apply(T, P: np.ndarray) -> np.ndarray:
     s, R, a, b = T
     return (s * (np.asarray(P, np.float64) - a) @ R.T) + b
+
+
+def fill_enclosed(label: np.ndarray, allowed: np.ndarray, barrier: np.ndarray, adj,
+                  leak_share: float = 0.0) -> Tuple[np.ndarray, int, List[Dict[str, Any]]]:
+    """Components of ``allowed`` non-label vertices enclosed by the label become label, whatever their size ->
+    ``(label, components filled, [{n, hair, barrier}] of the largest components)``. A component is enclosed when
+    the non-label ``barrier`` vertices it touches (the face zone, the body) number at most ``leak_share`` of the
+    label vertices it touches — a gap of a few vertices where the hairline's mask ran thin does not open a scalp
+    to the face. Vertices neither allowed nor barrier (H's grooves between strands that the outer-wall test
+    leaves out) are walls: never crossed, never a leak. The crown of a haired mesh can lie INSIDE the bald head
+    (the mesher's skull is smaller under flat hair: Kira's crown p50 1.0 cm inside B) — no distance test calls
+    it hair, but the hair outside B surrounds it on the scalp."""
+    from scipy.sparse.csgraph import connected_components
+    label = np.asarray(label, bool).copy()
+    cand = np.asarray(allowed, bool) & ~label
+    idx = np.nonzero(cand)[0]
+    if len(idx) == 0:
+        return label, 0, []
+    A = adj[0].tocsr()
+    count, comp = connected_components(A[idx][:, idx], directed=False)
+    hair_n = np.zeros(count)
+    leak_n = np.zeros(count)
+    # every (candidate, neighbour) edge: count distinct neighbours per component
+    rows, cols = A[idx].nonzero()
+    ci, nb = comp[rows], cols
+    pairs = np.unique(np.stack([ci, nb], 1), axis=0)
+    is_hair = label[pairs[:, 1]]
+    is_leak = np.asarray(barrier, bool)[pairs[:, 1]] & ~label[pairs[:, 1]]
+    np.add.at(hair_n, pairs[:, 0], is_hair)
+    np.add.at(leak_n, pairs[:, 0], is_leak)
+    fill = (hair_n > 0) & (leak_n <= leak_share * hair_n)
+    if fill.any():
+        label[idx[fill[comp]]] = True
+    sizes = np.bincount(comp, minlength=count)
+    top = [{"n": int(sizes[c]), "hair": int(hair_n[c]), "barrier": int(leak_n[c]), "filled": bool(fill[c])}
+           for c in np.argsort(-sizes)[:6]]
+    return label, int(fill.sum()), top
+
+
+def small_loops(F: np.ndarray, P_m: np.ndarray, max_m: float) -> List[Tuple[np.ndarray, np.ndarray, float]]:
+    """``[(directed boundary edges, loop vertices, perimeter)]`` of the boundary loops of ``F`` shorter than
+    ``max_m`` (``P_m`` in metres); each edge in the direction its one face runs it."""
+    if len(F) == 0:
+        return []
+    D = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    _u, inv, cnt = np.unique(np.sort(D, 1), axis=0, return_inverse=True, return_counts=True)
+    Db = D[cnt[inv.ravel()] == 1]
+    out = []
+    for verts, per in boundary_loops(F, P_m):
+        if per < max_m:
+            on = np.isin(Db, verts).all(1)
+            out.append((Db[on], verts, per))
+    return out
+
+
+def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: np.ndarray, voted: np.ndarray,
+               loose: np.ndarray, hairline_y: Optional[float], eye_y: float,
+               facing: np.ndarray, centre_z: float, k: float, F: np.ndarray) -> Dict[str, Any]:
+    """The hair label of H (registered into B's frame as ``Q``; ``sd`` its signed distance to B's outer wall in
+    METRES, + outside) -> ``{"hair": vertex mask, "report": {...}}``. GEOMETRY first, colour at the face:
+
+    - ``protect`` (the face zone, colour decides): H's outer wall on the head, below the 2D hairline (front
+      centre strip, ``hairline_y``) and in front of ``PROTECT_BEHIND_M`` behind the head's centre plane — the
+      face, the brows, the ears; above ``PROTECT_BROW_M`` over the eye row only where B faces forward
+      (``facing`` > ``PROTECT_FACING``: the forehead, not the temples). No geometry seed or growth there — a brow
+      or an ear stands out of B by up to 2 cm (Kira e2e, Kai), as far as thin hair; the masks' votes still
+      count there (the hairline band is colour's).
+    - Geometry seeds: the outer wall on the head (nearest B vertex Head-weighted) outside ``protect`` more than
+      ``GEO_MIN_M`` outside B. The skin outside the face zone stays within it (derivation at ``GEO_MIN_M``);
+      the hair the blonde back mask missed lies 2-5 cm out (Kira e2e back of the head, p50 3.5-4.5 cm).
+    - With the mask votes (the loose ones only that far outside B, ``LOOSE_EPS_M``): seeds (eroded + dilated
+      once), growth over the outer wall more than ``LOOSE_EPS_M`` outside B (never into ``protect``), closing,
+      opening, majority (the old label steps).
+    - The crown: candidates enclosed by hair on the head outside ``protect`` are filled (``fill_enclosed``), then
+      holes up to ``HOLE_FILL_MAX_M2`` anywhere (``fill_label_holes``).
+    - Long hair on the shoulders and the back lies ON the body (no distance test separates it): there only the
+      mask votes and the growth from them count; the largest label component is kept (connectivity from the
+      scalp — a strand piece or an inner sheet under the crown on its own is dropped; the fit gates one
+      component anyway)."""
+    deep = sd < -DEEP_M
+    y_line = float(hairline_y) if hairline_y is not None else float(Q[:, 1].max())
+    below = Q[:, 1] < y_line
+    low = below & (Q[:, 1] < eye_y + PROTECT_BROW_M / k) & (Q[:, 2] > centre_z - PROTECT_BEHIND_M / k)
+    protect = outer & head & (low | (below & (facing > PROTECT_FACING)))
+    geo = outer & head & ~protect & (sd > GEO_MIN_M)
+    guess = voted | (loose & (sd > LOOSE_EPS_M)) | geo
+    seed = dilate(erode(guess & outer & ~deep, adj, 1), adj, 1)
+    grown = seed | (dilate(seed, adj, GROW_RINGS) & outer & (sd > LOOSE_EPS_M) & ~protect)
+    hair = erode(dilate(grown, adj, 3), adj, 3) & outer & ~deep
+    hair = dilate(erode(hair, adj, 1), adj, 1)
+    hair = majority(hair, adj, LABEL_SMOOTH_PASSES) & outer & ~deep
+    hair, enclosed, enclosure = fill_enclosed(hair, outer & head & ~protect, outer & (protect | ~head), adj,
+                                              ENCLOSE_LEAK_SHARE)
+    hair, filled = fill_label_holes(F, Q * k, hair, adj, HOLE_FILL_MAX_M2)
+    hair &= largest_components(faces_all(F, hair), len(Q), 0.5)
+    return {"hair": hair, "report": {
+        "geo_seeds": int(geo.sum()), "geo_only": int((geo & ~voted & ~loose).sum()), "protect": int(protect.sum()),
+        "seeds": int(seed.sum()), "grown": int(grown.sum()), "enclosed_filled": enclosed, "enclosure": enclosure, "holes_filled": filled,
+        "hairline_y_m": None if hairline_y is None else round(float(hairline_y) * k, 4)}}
 
 
 # --- result -----------------------------------------------------------------------------------------------------------
@@ -822,10 +949,56 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     votes_loose = {view: mask_vote(Ph, frames_h[view], loose[view], cell_h, vis_h) for view in _VIEW_SIGN}
     guess = votes["front"] | votes["back"]
 
-    # 3. registration
+    # 3. registration, pass 1: the similarity ICP on what the masks do not call hair
     Q0 = gf.place_by_framing(Ph, Pb, front_place, views["front"].haired_mask)
     Q, treeB, dist_u, icp = register(Q0, Pb, Fb, guess, k)
     voted = guess.copy()            # the mask votes the ICP left out: never a registration sample
+    loose_v = (votes_loose["front"] | votes_loose["back"])
+
+    # 4. label (geometry first, ``label_hair``), then pass 2 of the registration without the labelled hair (the
+    # hair the masks missed pulled pass 1 outward), then the label again on the re-registered mesh
+    adj = gf._adjacency(Fh, len(Ph))
+    outer_h = outer_wall(Ph, cell_h, OUTER_TOL_M / k_h)
+    margin = gf.SDF_MARGIN_M / k
+    ytop0 = float(Q[:, 1].max())
+    region = guess | (Q[:, 1] > ytop0 - REGISTER_TOP_M / k)
+    lo = np.minimum(Q[region].min(0), Pb.min(0)) - margin
+    hi = np.maximum(Q[region].max(0), Pb.max(0)) + margin
+    lo[1] = max(lo[1], min(float(Q[region, 1].min()), ytop0 - 0.45 / k) - margin)
+    sdf = gf.body_sdf(Pb, Fb, vox=gf.VOX_M / k, bounds=(lo, hi))
+    exact = gf.ExactNearSdf(sdf, Pb, Fb, GEO_EXACT_M / k)
+    zc_q = float(np.median(Pb[head_b, 2])) if head_b.any() else float(np.median(Q[:, 2]))
+    from scipy.spatial import cKDTree
+    tree_vb = cKDTree(Pb)
+    vn_b = gf.vertex_normals(Pb, Fb)
+
+    def label_pass(Qp, sd_body=None):
+        T = gf.similarity(Ph, Qp)
+        y_top = float(Qp[:, 1].max())
+        zc_hp = float(_apply(gf.similarity(Qp, Ph), np.array([[0.0, y_top, zc_q]]))[0, 2])
+        line_p = _hairline(views, masks, frames_h["front"], k_h, lambda P: _apply(T, P), zc_hp)
+        head_h = head_b[tree_vb.query(Qp)[1]] if head_b.any() else (Qp[:, 1] > y_top - 0.25 / k)
+        sd_p = exact.sample(Qp) * k
+        if sd_body is not None:         # off the head: the distance under the body's own registration (pass 1)
+            sd_p = np.where(head_h, sd_p, sd_body)
+        facing = vn_b[tree_vb.query(Qp)[1], 2]
+        labelled = label_hair(Qp, sd_p, adj, outer=outer_h, head=head_h, voted=voted, loose=loose_v,
+                              hairline_y=line_p["y"], eye_y=line_p["y_eye"],
+                              facing=facing, centre_z=zc_q, k=k, F=Fh)
+        return labelled, sd_p, head_h
+
+    lab1, sd1, head1 = label_pass(Q)
+    # pass 2: the HEAD only (nearest B vertex Head-weighted), from pass 1 — the hair sits on the head, and one
+    # similarity cannot fit head and shoulders of two mesher outputs at once (Kira e2e: head p95 1.44 cm when the
+    # top 35 cm are fitted, 0.91 cm when the head is; the head's own scale is stable: Kira 0.936 / 0.937 on two
+    # meshes, Kai 0.999 from either start, where the top 35 cm gave 0.945 / 0.963 / 1.037)
+    exclude = voted | dilate(lab1["hair"], adj, REREG_DILATE) | ~head1
+    Q, treeB, dist_u, icp2 = register(Q, Pb, Fb, exclude, k)
+    # the label off the head (long hair on the shoulders: votes + growth over "outside B") keeps pass 1's
+    # distances: under the head similarity Kira e2e's neck and chest stood up to 2.6 cm out of B (p95 of the
+    # top 35 cm) and the growth took them (a 67 cm² bib in front of the neck)
+    labelled, sd_h, head_h = label_pass(Q, sd_body=sd1)
+    hair_v = labelled["hair"]
     T_hq = gf.similarity(Ph, Q)
     T_qh = gf.similarity(Q, Ph)
 
@@ -835,30 +1008,12 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     def to_h(P):
         return _apply(T_qh, P)
 
-    # 4. label
-    adj = gf._adjacency(Fh, len(Ph))
-    outer_h = outer_wall(Ph, cell_h, OUTER_TOL_M / k_h)
-    margin = gf.SDF_MARGIN_M / k
     ytop = float(Q[:, 1].max())
-    region = guess if guess.any() else np.ones(len(Q), bool)
-    lo = np.minimum(Q[region].min(0), Pb.min(0)) - margin
-    hi = np.maximum(Q[region].max(0), Pb.max(0)) + margin
-    lo[1] = max(lo[1], min(float(Q[region, 1].min()), ytop - 0.45 / k) - margin)
-    sdf = gf.body_sdf(Pb, Fb, vox=gf.VOX_M / k, bounds=(lo, hi))
-    sd_h = sdf.sample(Q) * k
-    deep = sd_h < -DEEP_M
-    guess = guess | ((votes_loose["front"] | votes_loose["back"]) & (sd_h > LOOSE_EPS_M))
-    seed = dilate(erode(guess & outer_h & ~deep, adj, 1), adj, 1)
-    grown = seed | (dilate(seed, adj, GROW_RINGS) & outer_h & (sd_h > LOOSE_EPS_M))
-    hair_v = erode(dilate(grown, adj, 3), adj, 3) & outer_h & ~deep
-    hair_v = dilate(erode(hair_v, adj, 1), adj, 1)
-    hair_v = majority(hair_v, adj, LABEL_SMOOTH_PASSES) & outer_h & ~deep
-    hair_v, filled = fill_label_holes(Fh, Q * k, hair_v, adj, HOLE_FILL_MAX_M2)
-    hair_v &= largest_components(faces_all(Fh, hair_v), len(Q), 0.02)
     # colour reference: H's texture per welded vertex; the skin colour from H's own non-hair head, the hair
     # colour from the label CORE_RINGS inside its border
     tex_h = _rgb_of(img_h)
     hair_lab = skin_lab = None
+    cap_uv = None               # the UV of the hair texel nearest the hair colour (the caps of the sheet's holes)
     if tex_h is not None and len(Uh) == len(Ph0) and hair_v.any():
         rgb_v = np.zeros((len(Ph), 3))
         np.add.at(rgb_v, inv_h, sample_texture(tex_h, Uh))
@@ -868,21 +1023,29 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
         skin_lab = np.median(lab_v[face], 0) if face.sum() >= 20 else None
         core = erode(hair_v, adj, CORE_RINGS)
         hair_lab = np.median(lab_v[core if core.any() else hair_v], 0)
+        pool = np.nonzero(core if core.any() else hair_v)[0]
+        best = pool[np.argmin(np.linalg.norm(lab_v[pool] - hair_lab, axis=1))]
+        cap_uv = Uh[np.nonzero(inv_h == best)[0][0]]
     Fhair_w = faces_all(Fh, hair_v)
-    report["label"] = {"votes": int(guess.sum()), "outer": int(outer_h.sum()), "seeds": int(seed.sum()),
-                       "grown": int(grown.sum()), "vertices": int(hair_v.sum()), "faces": int(len(Fhair_w)),
-                       "holes_filled": filled,
+    report["label"] = {**labelled["report"], "votes": int(voted.sum()), "outer": int(outer_h.sum()),
+                       "vertices": int(hair_v.sum()), "faces": int(len(Fhair_w)),
+                       "pass1_vertices": int(lab1["hair"].sum()),
                        "thickness_p50_cm": round(float(np.median(sd_h[hair_v])) * 100, 2) if hair_v.any() else None}
+    icp = {**icp2, "pass1_used": icp["used"]}
 
     # registration numbers (the outer wall's non-hair top; H's inner wall has no counterpart on B): neither labelled
     # nor voted hair — a voted vertex the label left out (a loose strand end, the hair edge) is still hair, not a
     # misregistered head (Kira: p95 1.31 cm with them, 0.7 cm without, as the spike's K1)
     dist_m = dist_u * k
-    upper = (~hair_v) & (~voted) & outer_h & (Q[:, 1] > ytop - REGISTER_TOP_M / k)
+    top = (~hair_v) & (~voted) & outer_h & (Q[:, 1] > ytop - REGISTER_TOP_M / k)
+    upper = top & head_h          # the gate: the head the hair sits on (the shoulders are reported, not gated)
     reg_p95 = float(np.percentile(dist_m[upper], 95)) * 100 if upper.any() else float("nan")
-    report["registration"] = {**icp, "outer_nonhair_p50_cm": round(float(np.percentile(dist_m[upper], 50)) * 100, 3)
+    report["registration"] = {**icp, "region": "head",
+                              "outer_nonhair_p50_cm": round(float(np.percentile(dist_m[upper], 50)) * 100, 3)
                               if upper.any() else None,
                               "outer_nonhair_p95_cm": _finite(reg_p95, 3), "n": int(upper.sum()),
+                              "top_p95_cm": round(float(np.percentile(dist_m[top], 95)) * 100, 3)
+                              if top.any() else None,
                               "scale_h_to_b": round(float(T_hq[0]), 5)}
 
     # hairline: 2D (front centre strip, mapped into B's frame) vs the 3D label
@@ -900,9 +1063,42 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
                           "delta_cm": None if not math.isfinite(hairline_cm) else round(hairline_cm, 2)}
 
     # 5. build: the hair faces of the ORIGINAL H (UV seams kept), the topology from the welded one
-    Fo = Fh0[hair_v[inv_h[Fh0]].all(1)]
-    Fo_w = inv_h[Fo]
-    Fo = Fo[(Fo_w[:, 0] != Fo_w[:, 1]) & (Fo_w[:, 1] != Fo_w[:, 2]) & (Fo_w[:, 0] != Fo_w[:, 2])]
+    def hair_faces():
+        Fo_ = Fh0[hair_v[inv_h[Fh0]].all(1)]
+        Fw_ = inv_h[Fo_]
+        return Fo_[(Fw_[:, 0] != Fw_[:, 1]) & (Fw_[:, 1] != Fw_[:, 2]) & (Fw_[:, 0] != Fw_[:, 2])]
+
+    Fo = hair_faces()
+    # a hole in the hair SHEET shorter than CAP_LOOP_MAX_M is capped: a fan from the loop's centroid. Its inside is
+    # a groove between strands that the outer-wall test leaves out and that runs on under the hair to the rest of
+    # H, so no vertex island explains it (Kira e2e: loops of 1.6-21 cm over the back, the larger ones showed the
+    # back through the hair; adding the groove's vertices instead grew a 4 cm one to 12 cm). The cap has its own
+    # copies of the loop vertices, all on ONE hair texel (``cap_uv``): the loop's own UVs jump across texture
+    # islands and painted skin streaks over the cap
+    caps_done = []
+    for _round in range(CAP_ROUNDS):          # loops that touch at a vertex come out as one; a second round
+        caps = small_loops(inv_h[Fo], Q * k, CAP_LOOP_MAX_M) if len(Fo) else []
+        if not caps:
+            break
+        rep = np.full(len(Q), -1, np.int64)
+        rep[inv_h] = np.arange(len(inv_h))
+        new_faces = []
+        for edges, verts, _per in caps:
+            uv = cap_uv if cap_uv is not None else Uh[rep[verts[0]]]
+            own = np.full(len(Q) + 1, -1, np.int64)
+            own[verts] = len(Ph0) + np.arange(len(verts))       # the cap's copies of the loop vertices
+            n0, nw = len(Ph0) + len(verts), len(Q)
+            Ph0 = np.vstack([Ph0, Ph0[rep[verts]], Ph0[rep[verts[:1]]]])
+            Uh = np.vstack([Uh, np.repeat(np.asarray(uv)[None, :], len(verts) + 1, 0)])
+            inv_h = np.concatenate([inv_h, verts, [nw]])
+            Q = np.vstack([Q, Q[verts].mean(0)])
+            hair_v = np.append(hair_v, True)
+            new_faces.append(np.stack([own[edges[:, 1]], own[edges[:, 0]], np.full(len(edges), n0)], 1))
+        Fh0 = np.vstack([Fh0] + new_faces)
+        Fo = hair_faces()
+        caps_done += caps
+    caps = caps_done
+    report["edge_caps"] = {"capped": len(caps), "perimeters_cm": sorted(round(p * 100, 1) for _e, _v, p in caps)}
     if len(Fo) == 0:
         metrics = {"registration_p95_cm": _finite(reg_p95, 3), "hairline_cm": None, "label_holes": 0,
                    "hair_area_cm2": 0.0}

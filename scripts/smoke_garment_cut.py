@@ -36,12 +36,16 @@ EXPECTED, BY HAND
 [c] register: the truth perturbed by 2 deg about x, 1.5 deg about y, scale 1.01 about C and a shift of
     (4, -3, 5) mm / 1.7: after ICP_ITERATIONS every vertex within 1 mm of the truth (x k) and the scale of the
     recovered placement vs the truth within 0.1 %.
-[d] cut_hair (cut): registration p95 0.0 cm (the non-hair vertices ARE B's vertices); label = the 2401 cap
-    vertices, every outer-sheet vertex at theta <= 60 deg + one grid step (the edge rings feather inward, never
-    outward); hairline: 2D last hair row 143 -> y_of_row(143) = 0.506 + (594 - 143) x 0.001 = 0.957, 3D the
-    theta-60 ring y 0.956 -> |0.001| x 1.7 = 0.17 cm (< 0.4: +-1 px of morphology); holes 0; hair area
-    2 pi r^2 (1 - cos 60) = pi (0.112 x 1.7)^2 = 1138.8 cm^2 (+-2 %: chordal grid); the result is ONE closed
-    component (welded: no open edge); gates pass; fit params (0.006 m, SPREAD_M).
+[d] cut_hair (cut): registration p95 0.0 cm (the non-hair vertices ARE B's vertices; the gate measures the
+    Head-weighted part); label = the 2401 cap vertices minus the 25 front-facing theta-60 vertices in the face
+    zone that neither mask keeps (derivation at [k]) = 2376, every outer-sheet vertex at theta <= 60 deg + one
+    grid step (the edge rings feather inward, never outward); hairline: 2D last hair row 143 -> y_of_row(143) =
+    0.506 + (594 - 143) x 0.001 = 0.957, 3D the theta-57 ring in the front strip y 0.9 + 0.112 cos 57 = 0.9610
+    -> 0.0040 x 1.7 = 0.68 cm (+-0.1); holes 0; hair area 2 pi r^2 (1 - cos 60) = pi (0.112 x 1.7)^2 =
+    1138.8 cm^2 minus the 57..60-degree band cells at the 25 vertices: the band is 2 pi R^2 (cos 57 - cos 60) =
+    101.7 cm^2 = 0.847 per longitude, a removed vertex takes the cell to its left whole and the last one half ->
+    25.5 cells = 21.6 cm^2 -> 1117.2 cm^2 (+-2 %: chordal grid); the result is ONE closed component (welded: no
+    open edge); gates pass; fit params (0.006 m, SPREAD_M).
 [e] cut_hair (shell, 5 mm): outer sheet median distance to the head sphere 5.0 mm (+-0.3), max <= 5.3 mm; inner
     sheet median 1.0 mm (+-0.3); a 512 x 512 PNG base colour; closed; gates pass; fit params (0.001 m, 0).
 [f] fill_label_holes: the cap minus a 2 x 4 patch of rows 5..6 -> one island filled, label == cap again; a
@@ -58,6 +62,29 @@ EXPECTED, BY HAND
     none of the inner wall's faces and the outer wall's (its pole rows' degenerate faces may drop, at most
     2 x 120); ExactNearSdf: a point at R 0.093 (2 mm inside the INNER wall) reads 0.093 - 0.100 = -7.0 mm (not
     +2 mm), a point at R 0.101 reads +1.0 mm (+-0.2: the chordal grid).
+[k] geometry label (blonde over light skin, Kira e2e 2026-11-10): the [d] case with the hair painted in SKIN
+    colour in the BACK view only -> the back mask finds no colour change on the head, the front view still votes
+    the front of the cap. The cap stands 0.012 x 1.7 = 2.04 cm outside B everywhere > GEO_MIN_M 1.2 cm, on
+    Head-weighted B -> every cap vertex outside the face zone is a geometry seed. The face zone: below the 2D
+    hairline y 0.957 (only the theta-60 ring, y 0.956) AND facing forward (B's normal z = sin 60 cos phi > 0.7
+    -> |phi| < 36.1 deg: phi = 0, +-3 .. +-36 = 25 vertices; the low zone ends 3 cm / 1.7 above the eye row
+    y 0.93, at 0.948 < 0.956). Those 25 lie on the 2D mask's lowest row: the front mask's opening does not keep
+    them, so colour does not call them hair either -> label 2401 - 25 = 2376; the 3D hairline in the front
+    strip is the theta-57 ring, y 0.9 + 0.112 cos 57 = 0.9610 vs 2D 0.957 -> 0.0040 x 1.7 = 0.68 cm (+-0.1);
+    holes 0; gates pass. With the geometry off (GEO_MIN_M 10 m) and no growth (GROW_RINGS 0) the label is what
+    the masks see: fewer than 2376.
+[l] fill_enclosed on the [k] cap grid (weld: the pole's 120 duplicates -> 1): the crown patch rows 3..14 x
+    longitudes 0..29 (360 vertices, far over HOLE_FILL_MAX_M2) taken out of the cap label; barrier = the rows
+    >= 40 (the body). The lower head (rows 21..39) touches the barrier -> stays; the patch touches the label only
+    -> filled. Its outside 1-ring (neighbours (i, j+-1), (i+-1, j), (i+1, j+1), (i-1, j-1)): row 2 j -1..29 =
+    31, row 15 j 0..30 = 31, columns -1 and 30 rows 3..14 = 2 x 12 -> 86 label contacts. One barrier vertex on
+    row 2 (j 10): 85 label contacts + 1 barrier -> leak share 0: open; 0.05 x 85 = 4.25 >= 1: enclosed.
+[m] small_loops (the caps of the hair sheet's holes): the cap's faces minus the 6 faces around vertex (5, 7) ->
+    one loop of its 6 neighbours, 6 boundary edges, each in its face's direction (its reverse is no face edge,
+    so a cap face (b, a, centre) continues the winding). Perimeter on R = 0.112 x 1.7 = 0.1904 m, a row step
+    R pi / 60 = 0.997 cm, a longitude step R sin(theta) pi / 60: loop (4,6)-(4,7)-(5,8)-(6,8)-(6,7)-(5,6) ->
+    0.207 (row 4) + sqrt(0.997^2 + 0.233^2) 1.024 + 0.997 + 0.308 (row 6) + sqrt(0.997^2 + 0.283^2) 1.036 +
+    0.997 = 4.57 cm (+-0.05) < CAP_LOOP_MAX_M 25 cm.
 """
 import io
 import math
@@ -247,10 +274,10 @@ def test_cut():
     print(f"       hairline {res.report['hairline']}; closed {res.report['closed']}")
     check("ok", (res.ok, res.reasons), (True, []))
     near("registration p95 (cm)", res.metrics["registration_p95_cm"], 0.0, 0.05)
-    check("label = the 2401 cap vertices", res.report["label"]["vertices"], 2401)
-    near("hairline (cm)", res.metrics["hairline_cm"], 0.17, 0.25)
+    check("label = 2401 cap vertices - 25 in the face zone", res.report["label"]["vertices"], 2376)
+    near("hairline (cm)", res.metrics["hairline_cm"], 0.68, 0.1)
     check("holes", res.metrics["label_holes"], 0)
-    near("hair area (cm2)", res.metrics["hair_area_cm2"], 1138.8, 1138.8 * 0.02)
+    near("hair area (cm2)", res.metrics["hair_area_cm2"], 1117.2, 1117.2 * 0.02)
     check("closed: no open edge, one component", (res.report["closed"]["open_edges"],
                                                   res.report["closed"]["components"]), (0, 1))
     check("fit params", (res.clearance_m, res.spread_m), (0.006, gf.SPREAD_M))
@@ -385,6 +412,85 @@ def test_args():
             check(f"{kw} refused", "ValueError", "ValueError")
 
 
+def test_geometry_label():
+    print("[k] geometry label: skin-coloured hair in the back view")
+    from app.core import garment_cut as gc
+    import smoke_garment_fit as fx
+    import smoke_garment_chain as cx
+    unrigged, rigged, Pb, Fb = glbs()
+    Pt, Ft, cap = haired_truth()
+    Hfile = 2.0 * Pt + np.array([0.3, -0.2, 0.1])
+    U = np.stack([(np.arange(len(Pt)) % 997) / 997.0, (np.arange(len(Pt)) // 997) / 997.0], 1)
+    haired_glb = fx.make_glb(Hfile, Ft, U, image=cx.solid_png(HAIR))
+    bald, bald_mask, haired, haired_mask = images()
+    blonde = haired.copy()
+    blonde[np.all(haired == np.array(HAIR, np.float32), axis=2)] = SKIN
+    vs = {"front": gc.View(haired, haired_mask, bald, bald_mask), "back": gc.View(blonde, haired_mask, bald, bald_mask)}
+    res = gc.cut_hair(haired_glb, unrigged, rigged, vs, shape="cut")
+    print(f"       metrics {res.metrics}; label {res.report['label']}")
+    check("ok", (res.ok, res.reasons), (True, []))
+    check("label = 2401 cap vertices - 25 front-facing theta-60 vertices", res.report["label"]["vertices"], 2376)
+    check("geometry seeds beyond the votes", res.report["label"]["geo_only"] > 0, True)
+    check("holes", res.metrics["label_holes"], 0)
+    near("hairline (cm)", res.metrics["hairline_cm"], 0.68, 0.1)
+    old = gc.GEO_MIN_M, gc.GROW_RINGS
+    gc.GEO_MIN_M, gc.GROW_RINGS = 10.0, 0
+    try:
+        off = gc.cut_hair(haired_glb, unrigged, rigged, vs, shape="cut")
+    finally:
+        gc.GEO_MIN_M, gc.GROW_RINGS = old
+    print(f"       masks only: label {off.report['label']['vertices']}")
+    check("the masks alone label less", off.report["label"]["vertices"] < 2376, True)
+
+
+def test_fill_enclosed():
+    print("[l] fill_enclosed")
+    from app.core import garment_cut as gc, garment_fit as gf
+    P, F, rows, nlon = head_grid(lambda i: 0.112 if i <= 20 else 0.100)
+    Pw, Fw, inv = gf.weld(P, F)
+    adj = gf._adjacency(Fw, len(Pw))
+    cap_w = np.zeros(len(Pw), bool)
+    cap_w[inv[: 21 * nlon]] = True
+    patch = np.zeros(len(Pw), bool)
+    patch[inv[[i * nlon + j for i in range(3, 15) for j in range(30)]]] = True
+    body = np.zeros(len(Pw), bool)
+    body[inv[40 * nlon:]] = True
+    label = cap_w & ~patch
+    filled, n, top = gc.fill_enclosed(label, ~body, body, adj)
+    print(f"       components {top}")
+    check("crown patch filled, the lower head not", (n, bool((filled == cap_w).all())), (1, True))
+    check("patch contacts", [(c["n"], c["hair"], c["barrier"]) for c in top if c["filled"]], [(360, 86, 0)])
+    barrier = body.copy()
+    barrier[inv[2 * nlon + 10]] = True
+    label_b = label & ~barrier
+    _f, n0, top0 = gc.fill_enclosed(label_b, ~barrier, barrier, adj)
+    check("one barrier contact, share 0 -> open", n0, 0)
+    check("contacts with the barrier vertex", [(c["n"], c["hair"], c["barrier"]) for c in top0 if c["n"] == 360],
+          [(360, 85, 1)])
+    _f, n1, _t = gc.fill_enclosed(label_b, ~barrier, barrier, adj, 0.05)
+    check("share 0.05 -> enclosed", n1, 1)
+
+
+def test_small_loops():
+    print("[m] small_loops")
+    from app.core import garment_cut as gc, garment_fit as gf
+    P, F, rows, nlon = head_grid(lambda i: 0.112 if i <= 20 else 0.100)
+    Pw, Fw, inv = gf.weld(P, F)
+    cap = np.zeros(len(Pw), bool)
+    cap[inv[: 21 * nlon]] = True
+    patch = gc.faces_all(Fw, cap)
+    v = inv[5 * nlon + 7]
+    patch = patch[~(patch == v).any(1)]
+    loops = gc.small_loops(patch, Pw * K, gc.CAP_LOOP_MAX_M)
+    check("one small loop", len(loops), 1)
+    edges, verts, per = loops[0]
+    check("6 vertices, 6 edges", (len(verts), len(edges)), (6, 6))
+    face_edges = {tuple(e) for f in patch.tolist() for e in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0]))}
+    check("edges run as their faces do", all(tuple(e) in face_edges and (e[1], e[0]) not in face_edges
+                                           for e in edges.tolist()), True)
+    near("perimeter (cm)", round(per * 100, 3), 4.57, 0.05)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="garment-cut-") as tmp:
         os.environ["STORAGE_DIR"] = str(Path(tmp) / "world")
@@ -399,6 +505,9 @@ def main() -> int:
         test_colour_mend()
         test_outer_wall()
         test_fill_and_majority()
+        test_geometry_label()
+        test_fill_enclosed()
+        test_small_loops()
         test_args()
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0
