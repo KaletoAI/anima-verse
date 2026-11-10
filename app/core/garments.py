@@ -191,6 +191,23 @@ def _item(character_name: str, item_id: str) -> Tuple[Dict[str, Any], str]:
     return item, kind
 
 
+#: Until the shoe chain is wired into the garment run (plan 2026-11-10-footwear-rigid-shoes Task 6, which
+#: replaces ``_footwear_unavailable``), no run of a footwear piece starts: the clothing chain must never run for
+#: it, and no failure may be stored under its fsig (automatic triggers would skip it after Task 6).
+FOOTWEAR_NOT_AVAILABLE = "the shoe chain is not available yet"
+
+
+def _footwear_unavailable(item_id: str) -> Optional[Dict[str, Any]]:
+    """The result of a run of a footwear piece that does not start (``FOOTWEAR_NOT_AVAILABLE``: no job, no
+    status mark, no failure record); None for any other item."""
+    from app.core import garment_set
+    from app.models.inventory import get_item
+    item = get_item(item_id) if isinstance(item_id, str) and item_id else None
+    if garment_set.garment_kind_of(item) != garment_set.FOOTWEAR:
+        return None
+    return {"ok": False, "fsig": "", "error": FOOTWEAR_NOT_AVAILABLE, "unavailable": True, "ran": []}
+
+
 def _steps(steps: Union[None, str, Iterable[str]], order: Tuple[str, ...]) -> Optional[List[str]]:
     if steps is None:
         return None
@@ -1268,6 +1285,9 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     wanted = _steps(steps, order)
     if view is not None and view not in GARMENT_VIEWS:
         raise ValueError(f"Unknown garment view {view!r}")
+    unavailable = _footwear_unavailable(item_id)
+    if unavailable is not None:
+        return unavailable
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
         result = _run_locked(character_name, item, kind, wanted, view, bool(force))
@@ -1673,9 +1693,14 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     counts as running (``queued``) from THIS moment (the UI polls), unless it
     is in a step right now. Returns ``{started, queued, position, behind}``
     (``_position_locked``). ValueError for an invalid item, step or view
-    (checked before anything is queued)."""
+    (checked before anything is queued). A footwear piece is not queued
+    (``FOOTWEAR_NOT_AVAILABLE``): ``{started: False, queued: False,
+    position: None, behind: None, unavailable}``."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view)
+    if _footwear_unavailable(item_id) is not None:
+        return {"started": False, "queued": False, "position": None, "behind": None,
+                "unavailable": FOOTWEAR_NOT_AVAILABLE}
     wanted = _Job(item_id, steps, view, bool(force))
     with _lock:
         queue = _queues.setdefault(character_name, deque())
@@ -1705,9 +1730,17 @@ def enqueue_garment(character_name: str, item_id: str) -> "_Job":
     character's other runs — the per-character FIFO the triggers use
     (``after_base_model``, the outfit build). A default run of the same
     item that has not started yet is reused, never queued twice. Returns
-    the job (``done`` / ``result``). ValueError like ``check_run``."""
+    the job (``done`` / ``result``). ValueError like ``check_run``. A
+    footwear piece gets a job that is done at once and never queued
+    (``FOOTWEAR_NOT_AVAILABLE``)."""
     from app.core import garment_store as gs
     check_run(character_name, item_id)
+    unavailable = _footwear_unavailable(item_id)
+    if unavailable is not None:
+        job = _Job(item_id, None, None, False)
+        job.result = unavailable
+        job.done.set()
+        return job
     with _lock:
         queue = _queues.setdefault(character_name, deque())
         for job in queue:
@@ -1874,6 +1907,8 @@ def after_base_model(character_name: str) -> bool:
             profile = get_character_profile(character_name) or {}
         started = False
         for item_id in _worn_garments(character_name, profile):
+            if _footwear_unavailable(item_id) is not None:
+                continue  # no shoe chain yet (FOOTWEAR_NOT_AVAILABLE)
             try:
                 _item(character_name, item_id)
                 fsig = gs.garment_fsig(character_name, item_id, profile=profile)

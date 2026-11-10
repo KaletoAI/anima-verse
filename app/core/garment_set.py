@@ -12,11 +12,13 @@ Two kinds of item become a fitted garment mesh on a base-body character:
   the flag lives on the ITEM, so it applies to every wearer, and a wearer is
   whoever holds it (inventory) or wears it. Its fits are per wearer, under
   ``characters/<n>/garments/`` like the hair fits;
-- ``footwear`` — an own-mesh outfit piece worn in slot ``feet`` (plan
+- ``footwear`` — an own-mesh outfit piece worn in slot ``feet`` ONLY (plan
   ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``): a rigid
   shoe meshed once per item from its item image (``footwear_source``) and
   fitted per wearer × body on the CPU (method ``shoe``,
-  ``garment_footwear``). It takes no part in layering.
+  ``garment_footwear``). It takes no part in layering. A multi-slot piece
+  that also covers ``feet`` (own-mesh tights ``[legs, feet]``) stays
+  clothing (controller ruling 2026-11-10).
 
 ``OWN_MESH_PIECE_KINDS`` answers "is this an own-mesh outfit piece" (the
 flag, the worn set, the mesh-items token); ``GRAFTED_PIECE_KINDS`` the kinds
@@ -36,14 +38,15 @@ OWN_MESH_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
 #: The own-mesh piece kinds whose accepted fit is grafted into the served model
 #: (footwear joins with the body cut, plan 2026-11-10-footwear-rigid-shoes Task 16).
 GRAFTED_PIECE_KINDS: Tuple[str, ...] = (CLOTHING,)
-#: The slot that makes an own-mesh piece footwear.
+#: The slot an own-mesh piece is worn in ALONE to be footwear.
 FOOTWEAR_SLOT = "feet"
 
 
 def garment_kind_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     """``"hair"`` for a hair garment; for an outfit piece with the own-mesh
-    flag ``"footwear"`` when it is worn in slot ``feet``, else
-    ``"clothing"``; None for anything else."""
+    flag ``"footwear"`` when its slots are ``feet`` alone (a multi-slot piece
+    with ``feet`` stays clothing), else ``"clothing"``; None for anything
+    else."""
     if not isinstance(item, dict):
         return None
     category = item.get("category")
@@ -53,7 +56,7 @@ def garment_kind_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
     if category == "outfit_piece" and piece.get("own_mesh") is True:
         slots = piece.get("slots") if isinstance(piece.get("slots"), (list, tuple)) else []
-        return FOOTWEAR if FOOTWEAR_SLOT in {str(s) for s in slots} else CLOTHING
+        return FOOTWEAR if {str(s) for s in slots} == {FOOTWEAR_SLOT} else CLOTHING
     return None
 
 

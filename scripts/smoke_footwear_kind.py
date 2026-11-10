@@ -16,11 +16,14 @@ and ``Mira`` (human-roleplay, male, 190 cm, on the pipeline — another base
 signature). Items, inserted through ``app.models.inventory``:
 ``heels`` (slots [feet], own_mesh true, item image = 64 fixed bytes),
 ``dress`` (slots [top], own_mesh true), ``boots`` (slots [feet], own_mesh
-absent = false). Kira holds and wears heels + dress; Mira holds heels.
+absent = false), ``tights`` (slots [feet, legs], own_mesh true). Kira holds
+and wears heels + dress; Mira holds heels.
 
 [K1] Kind and steps.
-     garment_kind_of: heels -> "footwear" (own_mesh and "feet" in slots);
-     dress -> "clothing" (own_mesh, no feet); boots -> None (no own_mesh).
+     garment_kind_of: heels -> "footwear" (own_mesh, slots exactly [feet]);
+     dress -> "clothing" (own_mesh, no feet); boots -> None (no own_mesh);
+     tights -> "clothing" (own_mesh, feet among other slots — controller
+     ruling 2026-11-10: footwear is a piece worn in feet ALONE).
      OWN_MESH_PIECE_KINDS == ("clothing", "footwear"), GRAFTED_PIECE_KINDS ==
      ("clothing",) (footwear is grafted from Task 16 on).
      steps_for("footwear", "shoe") == FOOTWEAR_STEPS == ("source", "empty",
@@ -78,6 +81,33 @@ absent = false). Kira holds and wears heels + dress; Mira holds heels.
      FOOTWEAR_PREVIEW_ONLY)] (dress has its fit -> not missing; the reason is
      the transition reason whatever the record says); in retexture mode
      mesh_items_off_rule of that record == [heels] (it belongs painted on).
+[K5] No entry point runs a chain for footwear until Task 6 wires the shoe
+     chain (fix round 1; the REAL queue functions, run_queued restored).
+     R = {ok: False, fsig: "", error: FOOTWEAR_NOT_AVAILABLE, unavailable:
+     True, ran: []}, FOOTWEAR_NOT_AVAILABLE = "the shoe chain is not
+     available yet".
+       run_garment(Kira, heels) == R; run_garment(…, steps="mesh",
+       force=True) == R;
+       start_garment(Kira, heels) == {started False, queued False, position
+       None, behind None, unavailable FOOTWEAR_NOT_AVAILABLE}; same with
+       steps="empty", force=True;
+       enqueue_garment(Kira, heels): job.done set, job.result == R;
+       run_queued(Kira, [heels]) == {heels: R};
+       the Wardrobe run route run_character_garment(Kira, heels, {}) answers
+       the start_garment dict above;
+       after_base_model(Kira) (hair creation stubbed off, enqueue_garment
+       wrapped to record its ids and answer a done job): the ids == [dress]
+       (dress has no prepared mesh -> its fit is "outdated"), never heels;
+       refit sweep: an old clothing-era fit of heels under fsig
+       "0123456789ab" (kind clothing, fit_version 6 < 7, accepted on SHA) and
+       a too-small "fit" failure under "0123456789cd" (scale_retry absent,
+       base SHA) -> outdated_fits / refused_fits name no heels group (its
+       current fsig is the footwear one, its method "shoe"), and
+       refit_character(Kira) calls garments._fit 0 times for heels.
+     After all of it: the character's queue is idle and empty
+     (queue_running None, queue []), status(Kira, heels) has no running
+     step, cached_failure(Kira, heels) is None and no file
+     garments/failed/<heels>_<current fsig>.json exists.
 """
 import hashlib
 import json
@@ -140,6 +170,7 @@ def main() -> int:
         model_refs.schedule_outfit_render = lambda *a, **k: None
         garment_assembly.schedule = lambda name, signature=None: True
         QUEUED = []
+        real_run_queued = garments.run_queued
 
         def run_queued(character_name, item_ids):
             ids = list(item_ids)
@@ -163,6 +194,7 @@ def main() -> int:
         heels = piece("Heels", ["feet"], True)
         dress = piece("Dress", ["top"], True)
         boots = piece("Boots", ["feet"])
+        tights = piece("Tights", ["feet", "legs"], True)
         image_bytes = bytes(range(64))
         item_dir = inventory._get_item_dir(heels, create=True)
         (item_dir / "image.png").write_bytes(image_bytes)
@@ -177,6 +209,7 @@ def main() -> int:
         check("kind heels", garment_set.garment_kind_of(get(heels)), "footwear")
         check("kind dress", garment_set.garment_kind_of(get(dress)), "clothing")
         check("kind boots", garment_set.garment_kind_of(get(boots)), None)
+        check("kind tights (feet + legs)", garment_set.garment_kind_of(get(tights)), "clothing")
         check("FOOTWEAR", garment_set.FOOTWEAR, "footwear")
         check("OWN_MESH_PIECE_KINDS", garment_set.OWN_MESH_PIECE_KINDS, ("clothing", "footwear"))
         check("GRAFTED_PIECE_KINDS", garment_set.GRAFTED_PIECE_KINDS, ("clothing",))
@@ -295,6 +328,66 @@ def main() -> int:
         profile["outfit_body_mode"] = base_body.RETEXTURE_MODE
         check("retexture mode on", save_character_profile("Kira", profile), True)
         check("off rule in retexture", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [heels])
+
+        print("[K5] no chain for footwear before Task 6")
+        from app.core import garment_refit
+        garments.run_queued = real_run_queued
+        unavailable = "the shoe chain is not available yet"
+        check("FOOTWEAR_NOT_AVAILABLE", garments.FOOTWEAR_NOT_AVAILABLE, unavailable)
+        R = {"ok": False, "fsig": "", "error": unavailable, "unavailable": True, "ran": []}
+        S = {"started": False, "queued": False, "position": None, "behind": None, "unavailable": unavailable}
+        check("run_garment", garments.run_garment("Kira", heels), R)
+        check("run_garment forced mesh", garments.run_garment("Kira", heels, steps="mesh", force=True), R)
+        check("start_garment", garments.start_garment("Kira", heels), S)
+        check("start_garment forced empty", garments.start_garment("Kira", heels, steps="empty", force=True), S)
+        job = garments.enqueue_garment("Kira", heels)
+        check("enqueue_garment done", (job.done.is_set(), job.result), (True, R))
+        check("run_queued", garments.run_queued("Kira", [heels]), {heels: R})
+        from app.routes.characters import GarmentRunRequest, run_character_garment
+        check("run route", run_character_garment("Kira", heels, GarmentRunRequest(), {}), S)
+        ENQUEUED = []
+        real_enqueue = garments.enqueue_garment
+        real_ensure_hair = garments._ensure_hair
+
+        def recording_enqueue(character_name, item_id):
+            ENQUEUED.append(item_id)
+            done = garments._Job(item_id, None, None, False)
+            done.result = {"ok": True, "ran": []}
+            done.done.set()
+            return done
+        garments.enqueue_garment = recording_enqueue
+        garments._ensure_hair = lambda name, profile: False
+        try:
+            garments.after_base_model("Kira")
+        finally:
+            garments.enqueue_garment = real_enqueue
+            garments._ensure_hair = real_ensure_hair
+        check("after_base_model enqueues", ENQUEUED, [dress])
+        old_fit = gs.garment_path("Kira", heels, "0123456789ab", "fit")
+        old_fit.write_bytes(b"clothing-era fit of the heels")
+        gs.write_record(old_fit.with_suffix(".json"), {
+            "accepted": True, "kind": "clothing", "item_id": heels, "fsig": "0123456789ab",
+            "base_signature": kira_bsig, "base_model_sha256": sha, "fit_version": 6})
+        old_failed = gs.garment_path("Kira", heels, "0123456789cd", "failed")
+        old_failed.parent.mkdir(parents=True, exist_ok=True)
+        gs.write_record(old_failed, {"step": "fit", "error": "fit — the garment is too small; x",
+                                     "base_model_sha256": sha, "fsig": "0123456789cd"})
+        check("outdated_fits: no heels", [g for g in garment_refit.outdated_fits("Kira") if g[0] == heels], [])
+        check("refused_fits: no heels", [g for g in garment_refit.refused_fits("Kira") if g[0] == heels], [])
+        FITS = []
+        real_fit = garments._fit
+        garments._fit = lambda name, item_id, *a, **k: FITS.append(item_id)
+        try:
+            garment_refit.refit_character("Kira")
+        finally:
+            garments._fit = real_fit
+        check("refit sweep fits no heels", [i for i in FITS if i == heels], [])
+        check("wait idle", garments.wait_idle(10.0), True)
+        check("queue empty", garments.queue_state("Kira"), {"queue_running": None, "queue": []})
+        check("no running step", gs.status("Kira", heels).get("running_step"), None)
+        check("no cached failure", garments.cached_failure("Kira", heels), None)
+        current = gs.garment_fsig("Kira", heels)
+        check("no failed record", gs.garment_path("Kira", heels, current, "failed").exists(), False)
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0
