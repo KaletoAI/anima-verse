@@ -140,6 +140,27 @@ class HubJobLost(RuntimeError):
         super().__init__(text if text.startswith(self.PREFIX) else self.PREFIX + text)
 
 
+class GatewayJobFailed(RuntimeError):
+    """A started gateway job FAILED on the backend: the poll answered HTTP 200
+    with job status ``failed`` / ``error`` and the error was neither load, nor
+    an input verdict, nor a cancel (``_gateway_job.poll_job``). A defect —
+    the runner cools the backend down and wraps it into ``BackendFailedError``.
+
+    Classified by this TYPE (the structured job status), never by its text:
+    the text is the gateway's own error, kept for display only, and it may
+    quote anything ("HTTP 404" of a model download inside a crashed worker is
+    still a crashed worker). A real 404 is the poll's own HTTP status and
+    raises ``GatewayRejectedError`` instead. ``str()`` = "<backend>: job <id>
+    failed: <detail>"; ``job_status`` / ``detail`` / ``job_id`` carry the parts."""
+
+    def __init__(self, backend_name: str, job_id: str, job_status: str, detail: str):
+        self.backend_name = str(backend_name or "")
+        self.job_id = str(job_id or "")
+        self.job_status = str(job_status or "")
+        self.detail = str(detail or "")
+        super().__init__(f"{self.backend_name}: job {self.job_id} failed: {self.detail}")
+
+
 class GatewayOutputError(RuntimeError):
     """A completed gateway job delivered invalid output (terminal backend defect)."""
 

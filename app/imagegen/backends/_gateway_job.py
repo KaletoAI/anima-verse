@@ -25,8 +25,8 @@ Failure semantics mirror the busy/cooldown contract in ``base.py``:
   * a started job fails with "park timeout" / "backend busy" ->
     ``BackendBusyError`` (load, no cooldown)
   * a started job fails for any other reason -> ``GatewayJobFailed`` with
-    the gateway's own error text (a defect -> cooldown, like an empty
-    result; the text reaches the caller through ``BackendFailedError``
+    the gateway's own error text (a defect -> cooldown by its TYPE, whatever
+    the text says; like an empty result; the text reaches the caller through ``BackendFailedError``
     instead of dying in the log — the Wardrobe used to show the routing's
     follow-up "no backend available … (cooling down)" for a CUDA OOM)
   * gateway loses the job (repeated 404) or keeps failing the poll (5xx /
@@ -47,7 +47,8 @@ import requests
 
 from app.core.log import get_logger
 from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
-                               GatewayInputMismatchError, GatewayRejectedError, GatewayOutputError,
+                               GatewayInputMismatchError, GatewayJobFailed, GatewayRejectedError,
+                               GatewayOutputError,
                                GenerationCancelled, HubJobLost,
                                ImageBackend, is_gateway_busy_502,
                                retry_after_seconds)
@@ -82,13 +83,6 @@ _TERMINAL_JOB_HINT = ("the input mesh has no UVs/texture, so the re-bake step "
 # with this error instead of status "cancelled" (2026-10-31: a user cancel put
 # the backend in cooldown and re-ran the occasion on the next one).
 _CANCELLED_JOB_ERROR = re.compile(r"\s*cancel+ed\b", re.IGNORECASE)
-
-
-class GatewayJobFailed(RuntimeError):
-    """A started gateway job FAILED on the backend (not load, not the input,
-    not a cancel): "<backend>: job <id> failed: <the gateway's error>". A
-    defect — the runner cools the backend down and wraps it into
-    ``BackendFailedError``, exactly like the empty result it replaces."""
 
 
 def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
@@ -328,7 +322,7 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                         f"{backend.name}: job {job_id} parked out: {detail[:200]}")
                 logger.error("%s: Job %s failed: %s", backend.name, job_id,
                              detail[:300])
-                raise GatewayJobFailed(f"{backend.name}: job {job_id} failed: {detail[:300]}")
+                raise GatewayJobFailed(backend.name, job_id, status, detail[:300])
             if status == "running" and not started:
                 # The GPU took the job — only now does max_wait start.
                 started = True

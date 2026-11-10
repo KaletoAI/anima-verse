@@ -983,7 +983,7 @@ class ImageService:
                             application['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
                         if hub_stage is not None:
                             hub_stage.op.update_state(lambda st: st.update(face_photo_application=application))
-                    from app.imagegen.backends._gateway_job import GatewayJobFailed
+                    from app.imagegen.base import GatewayJobFailed
                     try:
                         blobs = bb.generate("", "", actual_request,
                                             log_meta={"agent_name": character_name, "media": "mesh"})
@@ -1088,7 +1088,7 @@ class ImageService:
         def render(b):
             def op(bb):
                 def generate():
-                    from app.imagegen.backends._gateway_job import GatewayJobFailed
+                    from app.imagegen.base import GatewayJobFailed
                     try:
                         blobs = bb.generate("", "", dict(request),
                                             log_meta={"agent_name": character_name, "media": "mesh"})
@@ -1449,7 +1449,7 @@ class ImageService:
                 # cancellation and empty blobs through it without a cooldown.
                 # The verdicts and job ID are thread-local on the backend, so they
                 # are read here, on the channel worker that ran the job.
-                from app.imagegen.backends._gateway_job import GatewayJobFailed
+                from app.imagegen.base import GatewayJobFailed
                 try:
                     if should_cancel and should_cancel():
                         raise GenerationCancelled("cancelled before submission")

@@ -10,7 +10,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
 from app.imagegen.base import (BackendBusyError, BackendFailedError, ChannelOverflow,
-                               GatewayRejectedError, GpuTaskCancelled, GenerationCancelled,
+                               GatewayJobFailed, GatewayRejectedError, GpuTaskCancelled,
+                               GenerationCancelled,
                                HubJobLost, ImageBackend, MediaGenerationDisabled,
                                BackendNotApplicableError)
 
@@ -290,6 +291,9 @@ class BackendPool:
         - GpuTaskCancelled = the user cancelled the job in the queue panel:
           no cooldown, re-raised. (The queue watchdog's GpuTaskTimeout is a
           BackendBusyError and takes the busy branch.)
+        - GatewayJobFailed = a started gateway job failed (structured job
+          status ``failed``): a defect by its TYPE — never sent to the 4xx
+          text match, its text is display only.
         - Other exceptions / empty result: cooldown +
           ``BackendFailedError(backend, cause)`` — the signal
           ``routing.run_routed`` re-runs on.
@@ -354,7 +358,11 @@ class BackendPool:
             raise
         except Exception as e:
             _err_str = str(e)
-            if isinstance(e, GatewayRejectedError) or _re_4xx.search(_err_str):
+            # A failed gateway job is classified by its structured job status
+            # (its type), never by the gateway's error text, which may quote
+            # any status code of whatever failed inside the worker.
+            if isinstance(e, GatewayRejectedError) or (
+                    not isinstance(e, GatewayJobFailed) and _re_4xx.search(_err_str)):
                 # 4xx (workflow validation & co.) and every other rejected
                 # INPUT — a payload the gateway refuses, or a job that dies on
                 # the mesh we uploaded: service reachable, request broken — the
