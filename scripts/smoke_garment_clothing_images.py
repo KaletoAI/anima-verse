@@ -543,12 +543,13 @@ def main() -> int:
         check("A refused at ghost front", (res.get("ok"), res.get("step"), gates.get("view")),
               (False, "ghost", "front"))
         check("A reasons", [a.get("reasons") for a in gates.get("attempts") or []], [[HEM_REASON], [HEM_REASON]])
-        check("A back fit prompt names the piece", (prompts["worn b1"]["bare_prompt"],
+        check("A back fit prompt names the fragment", (prompts["worn b1"]["bare_prompt"],
                                                      prompts["worn b1"].get("bare_prompt_keywords")),
-              ("edit the first image with the green dress from the second image: the person wears only the "
-               "green dress, add no other clothing, the rest of the body stays exactly as in the first image",
-               "green dress from the second image, only the green dress, no other clothing, body unchanged "
-               "from the first image"))
+              ("edit the first image with the clothes from the second image: the person wears only a knee-length "
+               "green linen dress with short sleeves, add no other clothing beyond that, the rest of the body "
+               "stays exactly as in the first image",
+               "a knee-length green linen dress with short sleeves, only these clothes, no other clothing, body "
+               "unchanged from the first image"))
         check("A ghost prompt", prompts["ghost f1"]["bare_prompt"], GHOST_PROMPT)
         check("A fragment untouched", inventory.get_item(did).get("prompt_fragment"), FRAGMENT)
         del renders[:]

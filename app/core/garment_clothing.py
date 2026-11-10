@@ -17,8 +17,8 @@ shortened and said positively (Qwen2.1-Turbo ignores negatives):
   FRONT first; the BACK in the outfit's two steps (``base_body`` draft + fit,
   shared through ``garment_images``): a DRAFT from the accepted worn front
   (``draft_prompt``: the base back prompt wearing only the piece), then the
-  FIT of the draft onto the base back (``fit_prompt``: the piece named, no
-  other clothing). A single edit of the back view turned
+  FIT of the draft onto the base back (``fit_prompt``: the piece's dress
+  text, no other clothing). A single edit of the back view turned
   the body toward the camera (S1 spike; live "Black Blazer" 2026-11-09:
   lapels, buttons and the open V on a back view under a back-of-head), and
   ``back_reasons`` refuses a back that does not follow its front;
@@ -50,15 +50,19 @@ WORN = "Keep the image exactly as it is. Only change their clothing: they now we
 #: (the accepted worn front) shows how it looks.
 DRAFT = ("wearing only {fragment} and no other clothing, the same garment as on the person in the reference "
          "image, with the same length, cut and colour")
-#: The FIT of the worn back (``base_body.render_fit``): the piece by name and
-#: nothing else put on. The outfit's ``base_body.FIT_PROMPT`` ("the clothes
-#: from the second image") let the edit model dress the bare draft of a small
-#: piece — Black Stilettos 2026-11-10: a body suit or a top and briefs in 5 of
-#: 5 fits.
-FIT = ("edit the first image with the {noun} from the second image: the person wears only the {noun}, "
-       "add no other clothing, the rest of the body stays exactly as in the first image")
+#: The FIT of the worn back (``base_body.render_fit``): what the piece puts
+#: on, in its own dress text (``fit_text``), and nothing else. The outfit's
+#: ``base_body.FIT_PROMPT`` alone let the edit model dress the bare draft of
+#: a small piece (Black Stilettos 2026-11-10: a body suit or a top and briefs
+#: in 5 of 5 fits). Never the item NAME: a name may be in any language or a
+#: shorthand for several garments (Kai's "Black Lederjacket", 2026-11-10:
+#: the fit put nothing on in 4 of 4 attempts).
+FIT = ("edit the first image with the clothes from the second image: the person wears only {fragment}, "
+       "add no other clothing beyond that, the rest of the body stays exactly as in the first image")
 #: ``FIT`` as comma tags, for a keywords-family backend.
-FIT_KEYWORDS = "{noun} from the second image, only the {noun}, no other clothing, body unchanged from the first image"
+FIT_KEYWORDS = "{fragment}, only these clothes, no other clothing, body unchanged from the first image"
+#: The longest dress text a fit prompt names (``fit_text``).
+FIT_FRAGMENT_MAX = 120
 GHOST = ("The same {noun} alone, as if worn by an invisible person (ghost mannequin): no head, no arms, no "
          "hands, no legs, no feet, no skin; where the neck opening, sleeves and hem are, the inside of the "
          "garment is visible. Same position, size and framing, plain grey background.")
@@ -176,14 +180,33 @@ def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, 
     return prompt, ", ".join(p for p in (negative, _worn_negative(text)) if p)
 
 
+def fit_text(text: str, limit: int = FIT_FRAGMENT_MAX) -> str:
+    """The dress text a fit names: ``text`` (the piece's fragment, as the
+    worn front says it) when it has at most ``limit`` characters, else its
+    leading comma-separated parts that fit — at least the first part, cut
+    at a word boundary when it alone is longer."""
+    if len(text) <= limit:
+        return text
+    kept = ""
+    for part in (p.strip() for p in text.split(",")):
+        joined = f"{kept}, {part}" if kept else part
+        if len(joined) > limit:
+            break
+        kept = joined
+    if kept:
+        return kept
+    return text[:limit + 1].rsplit(" ", 1)[0].rstrip(" ,;")
+
+
 def fit_prompt(step: str, *, item_id: Optional[str] = None) -> Tuple[str, str]:
     """``(prompt, keywords prompt)`` of the FIT of the worn back: ``FIT`` /
-    ``FIT_KEYWORDS`` with the item's noun (``garment_noun``). ValueError for
-    a step without a drafted back or a missing item."""
+    ``FIT_KEYWORDS`` with the piece's dress text (``fit_text`` of its
+    fragment). ValueError for a step without a drafted back, a missing item
+    or a piece without a prompt fragment."""
     if EDIT_STEPS.get(step, {}).get("back") != "draft":
         raise ValueError(f"the clothing step {step!r} has no drafted back")
-    noun = garment_noun(_item_of(item_id))
-    return FIT.format(noun=noun), FIT_KEYWORDS.format(noun=noun)
+    text = fit_text(_fragment_of(_item_of(item_id)))
+    return FIT.format(fragment=text), FIT_KEYWORDS.format(fragment=text)
 
 
 def back_reasons(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> list:

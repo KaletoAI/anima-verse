@@ -77,20 +77,29 @@ the planned image again.
     negative "loose clothing, baggy, skirt, dress, shoes, socks, hair" —
     "jacket" is dropped: its pattern (base_body.DRESS_GARMENT_NEGATIVE,
     r"jackets?|coats?|blazers?") names the fragment's "blazer". Fit prompt
-    (garment_clothing.FIT with the noun = the name lower-cased, "black
-    blazer") = "edit the first image with the black blazer from the second
-    image: the person wears only the black blazer, add no other clothing,
-    the rest of the body stays exactly as in the first image"; its keywords
-    form (FIT_KEYWORDS) = "black blazer from the second image, only the black
-    blazer, no other clothing, body unchanged from the first image" — not
-    the outfit's FIT_PROMPT "edit the first image with the clothes from the
-    second image" (live 2026-11-10, Black Stilettos: the fit put a body suit
-    or a top and briefs on the bare draft in 5 of 5 fits). A shoe ("Black
-    Stilettos", slots [feet], fragment "shiny black leather stiletto heels,
-    high pointed toe") -> noun "black stilettos" in the same two sentences;
-    its draft text "wearing only shiny black leather stiletto heels, high
-    pointed toe and no other clothing, the same garment …". fit_prompt(ghost)
-    -> ValueError. edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn
+    (garment_clothing.FIT with the piece's fragment, never its name) =
+    "edit the first image with the clothes from the second image: the
+    person wears only a black tailored blazer with silver buttons, add no
+    other clothing beyond that, the rest of the body stays exactly as in the
+    first image"; its keywords form (FIT_KEYWORDS) = "a black tailored
+    blazer with silver buttons, only these clothes, no other clothing, body
+    unchanged from the first image" — not the outfit's bare FIT_PROMPT (live
+    2026-11-10, Black Stilettos: the fit put a body suit or a top and briefs
+    on the bare draft in 5 of 5 fits). A shoe ("Black Stilettos", slots
+    [feet], fragment "shiny black leather stiletto heels, high pointed toe")
+    -> that fragment in the same two sentences; its draft text "wearing only
+    shiny black leather stiletto heels, high pointed toe and no other
+    clothing, the same garment …". A piece whose NAME is a shorthand in
+    another language ("Black Lederjacket", live 2026-11-10: the name in the
+    prompt put nothing on in 4 of 4 fits) with the multi-garment fragment
+    "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
+    (68 chars <= FIT_FRAGMENT_MAX 120) -> the whole fragment, "lederjacket"
+    nowhere. fit_text of a long fragment: "a long black wool coat with a wide
+    shawl collar and deep pockets" (64) + ", " + "double-breasted with six
+    horn buttons" (37) = 103 <= 120, + ", belted at the waist" = 124 > 120
+    -> the first two parts; one part of 30 words "aaaa" (149 chars) -> cut
+    at the last space within 121 chars -> 24 words (119 chars).
+    fit_prompt(ghost) -> ValueError. edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn
     views (front, back), back "draft"; ghost keeps the default order.
 [2] gate numbers (worn_gate + back_follows_front) as derived above.
 [3] chain run from scratch, fits [BACK_FRONT, BACK_OK]: render order worn f1,
@@ -140,13 +149,22 @@ W, H = 1024, 1200
 FRAGMENT = "a black tailored blazer with silver buttons"
 DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons and no other clothing, the same garment "
               "as on the person in the reference image, with the same length, cut and colour")
-FIT_BLAZER = ("edit the first image with the black blazer from the second image: the person wears only the black "
-              "blazer, add no other clothing, the rest of the body stays exactly as in the first image")
-KW_BLAZER = "black blazer from the second image, only the black blazer, no other clothing, body unchanged from the first image"
-FIT_SHOE = ("edit the first image with the black stilettos from the second image: the person wears only the black "
-            "stilettos, add no other clothing, the rest of the body stays exactly as in the first image")
-KW_SHOE = ("black stilettos from the second image, only the black stilettos, no other clothing, body unchanged "
-           "from the first image")
+FIT_BLAZER = ("edit the first image with the clothes from the second image: the person wears only a black tailored "
+              "blazer with silver buttons, add no other clothing beyond that, the rest of the body stays exactly "
+              "as in the first image")
+KW_BLAZER = ("a black tailored blazer with silver buttons, only these clothes, no other clothing, body unchanged "
+             "from the first image")
+FIT_SHOE = ("edit the first image with the clothes from the second image: the person wears only shiny black "
+            "leather stiletto heels, high pointed toe, add no other clothing beyond that, the rest of the body "
+            "stays exactly as in the first image")
+KW_SHOE = ("shiny black leather stiletto heels, high pointed toe, only these clothes, no other clothing, body "
+           "unchanged from the first image")
+MULTI = "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
+FIT_MULTI = ("edit the first image with the clothes from the second image: the person wears only blue t-shirt, "
+             "jeans, black lether jacket, slim fit, zipper, Sneekers, add no other clothing beyond that, the rest "
+             "of the body stays exactly as in the first image")
+LONG = ("a long black wool coat with a wide shawl collar and deep pockets, double-breasted with six horn buttons, "
+        "belted at the waist, ankle length")
 SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe and no other clothing, the "
                    "same garment as on the person in the reference image, with the same length, cut and colour")
 WORN_NEG = "loose clothing, baggy, skirt, dress, shoes, socks, hair"
@@ -295,6 +313,16 @@ def main() -> int:
         check("shoe draft text", (SHOE_DRAFT_TEXT in shoe_draft,
                                   shoe_draft == base_body.draft_prompt("Demo", "back", outfit_text=SHOE_DRAFT_TEXT)[0]),
               (True, True))
+        mid = inventory.add_item(name="Black Lederjacket", category="outfit_piece", prompt_fragment=MULTI,
+                                 outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+        multi = garment_clothing.fit_prompt("worn", item_id=mid)
+        check("multi-garment piece: the fragment, not the name", (multi[0], "lederjacket" in " ".join(multi).lower()),
+              (FIT_MULTI, False))
+        check("long fragment: whole leading parts",
+              garment_clothing.fit_text(LONG),
+              "a long black wool coat with a wide shawl collar and deep pockets, double-breasted with six horn buttons")
+        check("one long part: cut at a word", garment_clothing.fit_text(" ".join(["aaaa"] * 30)),
+              " ".join(["aaaa"] * 24))
         raises("ghost has no fit", lambda: garment_clothing.fit_prompt("ghost", item_id=jid),
                ValueError, "no drafted back")
         raises("worn back is no edit", lambda: garment_clothing.edit_prompt("Demo", "worn", "back", item_id=jid),
