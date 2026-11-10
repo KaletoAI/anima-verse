@@ -717,6 +717,21 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "",
         },
     },
+    # The empty-shoe edit of an inventory item image (occasion footwear_empty,
+    # plan 2026-11-10-footwear-rigid-shoes): one shoe, no foot or wearer, on a
+    # plain background so the mesh backend sees a clean product shot.
+    "footwear_source": {
+        "keywords": {
+            "prompt_style": "product photo, single shoe, plain white background, even studio light",
+            "prompt_negative": "foot, leg, skin, person, pair of shoes, second shoe, shadow clutter",
+            "prompt_instruction": "",
+        },
+        "natural": {
+            "prompt_style": "product photo, single shoe, plain white background, even studio light",
+            "prompt_negative": "foot, leg, skin, person, pair of shoes, second shoe, shadow clutter",
+            "prompt_instruction": "",
+        },
+    },
     # The base-body back FIT (occasion outfit_back): an edit of the cut-out
     # base back with the cut-out back draft as second reference, prompted by
     # one sentence and nothing else (user decision 2026-11-09, measured: a
@@ -1672,6 +1687,20 @@ def _migrate_hair_mesh_routing(config: dict) -> bool:
     return _seed_routing_copies(config, _HAIR_MESH_ROUTING_SEEDS)
 
 
+#: (target, source) — the footwear shoe mesh starts on the garment mesh chain,
+#: the empty-shoe edit on the existing reference-slot edit chain (garment_view).
+_FOOTWEAR_ROUTING_SEEDS = (("mesh_footwear", "mesh_garment"),
+                           ("footwear_empty", "garment_view"))
+
+
+def _migrate_footwear_routing(config: dict) -> bool:
+    """Copy the garment mesh chain to ``mesh_footwear`` and the garment edit
+    chain to ``footwear_empty`` once each; an existing target owns its value
+    and a missing source seeds nothing. Runs after ``_migrate_garment_routing``
+    (which may seed both sources itself)."""
+    return _seed_routing_copies(config, _FOOTWEAR_ROUTING_SEEDS)
+
+
 #: (target, source) — the base-body pipeline steps start on the chains they
 #: rendered on before they had their own occasion (the front on tpose, every
 #: edit on tpose_view), so nothing changes until the admin edits them.
@@ -1784,6 +1813,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_garment_routing(config):
         changed = True
     if _migrate_hair_mesh_routing(config):
+        changed = True
+    if _migrate_footwear_routing(config):
         changed = True
     if _migrate_base_body_routing(config):
         changed = True

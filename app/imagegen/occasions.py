@@ -209,6 +209,15 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                              {"character_scoped": True,
                               "char_spec_field": "hair_views_mesh_workflow",
                               "char_spec_fallback": ""}),
+    # Footwear (plan 2026-11-10-footwear-rigid-shoes): one rigid shoe per item,
+    # meshed from the empty-shoe edit of the inventory item image. Both are
+    # world-scoped — the source belongs to the item, not to whoever wears it;
+    # config._migrate_footwear_routing seeds them from mesh_garment /
+    # garment_view once.
+    "mesh_footwear": _mesh("3D mesh — footwear", "Wardrobe: shoe from the item image", "none"),
+    "footwear_empty": _image("Footwear — empty shoe edit",
+                             "Wardrobe: the item image as one empty shoe",
+                             ["footwear_source"], _WORLD, needs_ref_slot=True),
     # HairDeck (plan 2026-11-09-hairdeck-hair): hair cards straight from one
     # character image — its own category so no img2mesh occasion ever picks it.
     "hair_mesh": {**_mesh("3D mesh — hair cards", "Hair tab: HairDeck method", "none",
