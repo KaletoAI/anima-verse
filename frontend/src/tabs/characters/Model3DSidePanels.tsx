@@ -45,14 +45,19 @@ export function Model3DExtensions({ character }: { character: string }) {
             ) : null}
           </div>
 
-          {st.extension_groups.map((group) => (
+          {st.extension_groups.map((group) => {
+            // An outfit model on the base body: a group the base switched off
+            // is off here too, whatever this model's own switch says.
+            const inherited = st.extension_inherited?.[group.id]
+            return (
             <div key={group.id} className="ga-ext-row">
               <strong>{group.id}</strong>
-              <label>
-                <input type="checkbox" disabled={pending || busy || !st.model?.signature}
-                  checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.enabled !== false}
+              <label title={inherited ? t(inherited.reason) : undefined}>
+                <input type="checkbox" disabled={pending || busy || !st.model?.signature || !!inherited}
+                  checked={!inherited && st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.enabled !== false}
                   onChange={(event) => setExtensionOption(group.id, 'enabled', event.target.checked)} />
                 {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
+                {inherited ? <span className="ga-hint" style={{ marginLeft: 4 }}>{t(inherited.reason)}</span> : null}
               </label>
               {group.op === 'appendage_chain' ? (
                 <label>
@@ -70,7 +75,8 @@ export function Model3DExtensions({ character }: { character: string }) {
                 disabled={pending || busy || rigless}
                 onSave={values => setExtensionMotion(group.id, values)} /> : null}
             </div>
-          ))}
+            )
+          })}
           <div className="ga-ext-row">
             {model?.format === 'glb' && mixamo ? (
               <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}

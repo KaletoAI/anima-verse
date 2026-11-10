@@ -1205,11 +1205,15 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     out["motion"] = motion_payload(character_name, profile=profile, preview_states=preview_states)
     draft_profile = {**profile, "model3d_opts": {**(profile.get("model3d_opts") or {}), "extension_motion": {}}}
     out["motion_defaults"] = motion_payload(character_name, profile=draft_profile, apply_clothing=False, apply_states=False)["groups"]
-    from app.core.extension_rig import rig_groups_for
+    from app.core.extension_rig import inherited_extension_switches, rig_groups_for
     # The served model's own mesh variant decides its part groups.
+    served_meta = _read_sidecar(path) if path else {}
     out["extension_groups"] = rig_groups_for(
         character_name, profile=profile,
-        mesh_variant=(_read_sidecar(path).get("mesh_variant") or "") if path else None)
+        mesh_variant=(served_meta.get("mesh_variant") or "") if path else None)
+    # Switches an outfit model takes from its base model (shown locked).
+    out["extension_inherited"] = inherited_extension_switches(
+        profile, path.stem, served_meta, _extension_groups_for(served_meta, out["extension_groups"])) if path else {}
     out["options"] = get_model3d_options(character_name)
     from app.blender import runner
     out["blender"] = runner.status()
@@ -1566,7 +1570,7 @@ def _extension_rig_once(character_name: str, path: Path,
     # this rig with its jiggle/secondary bones. A covered variant (and an
     # outfit built from it) leaves the exposed-only groups out as well.
     declarations = _extension_groups_for(meta, declarations)
-    overrides = effective_extension_overrides(profile, path.stem, meta)
+    overrides = effective_extension_overrides(profile, path.stem, meta, declarations)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
     source_blender = _read_sidecar(path.parent / "prerig" / path.name).get("blender") or {}
@@ -1733,7 +1737,7 @@ def _extension_state_current(character_name: str, path: Path, meta: Dict[str, An
     return bool(previous.get("attempted")
                 and previous.get("status") in ("applied", "not_found", "none_applicable")
                 and previous.get("fingerprint") == extension_rig_fingerprint(
-                    declarations, effective_extension_overrides(profile, path.stem, meta)))
+                    declarations, effective_extension_overrides(profile, path.stem, meta, declarations)))
 
 
 @_serial_model

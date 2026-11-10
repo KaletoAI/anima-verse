@@ -201,7 +201,7 @@ def set_tip_override(character_name: str, signature: str, group_id: str,
 def _tip_groups(character_name: str, signature: str, *, profile=None, meta=None) -> List[Dict[str, Any]]:
     """The ``pair_tip`` groups the stored model ``signature`` carries, each
     with its effective ``tip_override``."""
-    from app.core.extension_rig import effective_extension_overrides, resolved_extension_groups
+    from app.core.extension_rig import effective_extension_overrides, resolved_extension_groups, rig_groups_for
     from app.core.model3d import _extension_groups_for, _read_sidecar, find_model3d
     from app.models.character import get_character_profile
     if meta is None:
@@ -211,9 +211,12 @@ def _tip_groups(character_name: str, signature: str, *, profile=None, meta=None)
         meta = _read_sidecar(path)
     if profile is None:
         profile = get_character_profile(character_name) or {}
+    mesh_variant = meta.get("mesh_variant") or ""
+    declarations = _extension_groups_for(meta, rig_groups_for(character_name, profile=profile,
+                                                              mesh_variant=mesh_variant))
     groups = resolved_extension_groups(
-        character_name, profile=profile, signature=signature, mesh_variant=meta.get("mesh_variant") or "",
-        overrides=effective_extension_overrides(profile, signature, meta))
+        character_name, profile=profile, signature=signature, mesh_variant=mesh_variant,
+        overrides=effective_extension_overrides(profile, signature, meta, declarations))
     return [group for group in _extension_groups_for(meta, groups) if group["op"] == "pair_tip"]
 
 

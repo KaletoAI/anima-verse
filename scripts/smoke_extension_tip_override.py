@@ -52,6 +52,15 @@ markers rejected -> geometry):
     Blender: the fixture built from the enabled list. Off -> no TipLeft /
     TipRight bone and no Tip metrics; on again -> the same tip rows and bone
     heads as the first build, and the same output GLB bytes.
+[10] Outfit models on that base (meta base_signature "sig", no base flag):
+    with the base on, the outfit's build list is [Pair, Tip] and its stored
+    state (fingerprint taken then) is current. Base off -> the outfit's
+    effective overrides carry Tip enabled False (reason "Switched off on the
+    base body"), an outfit built now gets [Pair] (= [9]'s Blender off build:
+    no tip bones), the existing outfit's state is no longer current (stale,
+    rebuilt through the usual path), and its own enabled True does not turn
+    Tip back on. Base on again -> the overrides, the list and the state are
+    the ones of before. Only pair_tip switches are inherited ([3]: Other).
 """
 import argparse
 import io
@@ -152,6 +161,48 @@ def switch_part():
         check("[9] on again: the fingerprint of before", fingerprint() == first)
         check("[9] a non-bool switch is refused", raises(lambda: extension_tip.set_tip_override(
             "X", "sig", "Tip", enabled="no")))
+        outfit_part(er, extension_tip, store, declared)
+
+
+def outfit_part(er, extension_tip, store, declared):
+    """[10] Outfit models on the base "sig" (Python; the Blender build of the
+    resulting enabled list is [9]'s)."""
+    from app.core import model3d
+    outfit_meta = {"source": "base_body", "base_signature": "sig"}
+    path = Path("/nonexistent/osig.glb")
+
+    def effective():
+        return er.effective_extension_overrides(store, "osig", outfit_meta, declared)
+
+    def enabled_ids():
+        with patch.object(er, "rig_groups_for", lambda *a, **k: [dict(g) for g in declared]):
+            groups = er.resolved_extension_groups("X", profile=store, signature="osig", overrides=effective())
+        return [g["id"] for g in groups if g["enabled"]]
+
+    def current(meta):
+        with patch.object(er, "rig_groups_for", lambda *a, **k: [dict(g) for g in declared]):
+            return model3d._extension_state_current("X", path, meta)
+
+    built_on = {**outfit_meta, "extension_rig": {"attempted": True, "status": "applied",
+                                                 "fingerprint": er.extension_rig_fingerprint(declared, effective())}}
+    before = effective()
+    check("[10] base on: the outfit builds Tip, its state is current",
+          enabled_ids() == ["Pair", "Tip"] and current(built_on))
+    extension_tip.set_tip_override("X", "sig", "Tip", enabled=False)
+    check("[10] base off: the outfit inherits the switch",
+          effective()["Tip"].get("enabled") is False and er.inherited_extension_switches(
+              store, "osig", outfit_meta, declared) == {"Tip": {"enabled": False, "reason": er.BASE_OFF_REASON}})
+    check("[10] base off: an outfit built now leaves Tip out", enabled_ids() == ["Pair"], enabled_ids())
+    check("[10] base off: the existing outfit is stale", not current(built_on))
+    models = store["model3d_opts"]["extension_rig_models"]
+    models["osig"] = {"Tip": {"enabled": True}}
+    check("[10] the outfit's own switch cannot turn it back on", enabled_ids() == ["Pair"], enabled_ids())
+    del models["osig"]
+    check("[10] a base's own switch is never inherited onto itself",
+          er.inherited_extension_switches(store, "sig", {"base": True, "base_signature": "sig"}, declared) == {})
+    extension_tip.set_tip_override("X", "sig", "Tip", enabled=True)
+    check("[10] base on again: overrides, build list and state as before",
+          effective() == before and enabled_ids() == ["Pair", "Tip"] and current(built_on))
 
 
 def python_part():
@@ -190,13 +241,14 @@ def python_part():
     profile = {"model3d_opts": {"extension_rig_models": {
         "basesig": {"Tip": {"tip": cleaned}, "Other": {"enabled": False}},
         "own": {"Tip": {"tip": mirrored, "enabled": False}}}}}
-    check("[3] outfit inherits the base tip", er.effective_extension_overrides(
-        profile, "outfit", {"base_signature": "basesig"}) == {"Tip": {"tip": cleaned}})
+    decl = [{"id": "Tip", "op": "pair_tip"}, {"id": "Other", "op": "pair_protrusion"}]
+    check("[3] outfit inherits the base tip (not Other's switch)", er.effective_extension_overrides(
+        profile, "outfit", {"base_signature": "basesig"}, decl) == {"Tip": {"tip": cleaned}})
     check("[3] own tip wins", er.effective_extension_overrides(
-        profile, "own", {"base_signature": "basesig"}) == {"Tip": {"tip": mirrored, "enabled": False}})
+        profile, "own", {"base_signature": "basesig"}, decl) == {"Tip": {"tip": mirrored, "enabled": False}})
     check("[3] a base keeps its own", er.effective_extension_overrides(
-        profile, "outfit", {"base_signature": "basesig", "base": True}) == {})
-    check("[3] no base_signature, own only", er.effective_extension_overrides(profile, "outfit", {}) == {})
+        profile, "outfit", {"base_signature": "basesig", "base": True}, decl) == {})
+    check("[3] no base_signature, own only", er.effective_extension_overrides(profile, "outfit", {}, decl) == {})
     # [4]
     pristine = png([(200, 100, 50)] * 16, (4, 4))
     painted, count = paint_texels(pristine, "image/png", [{"size": [4, 4], "texels": [1, 2, 128], "color": "#ff0000"}])

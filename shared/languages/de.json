@@ -4636,6 +4636,7 @@
     "Regenerate face view": "Gesichtsansicht neu erzeugen",
     "Renders the face close-up from the current profile picture (model refs, face view) — the next face retexture projects from it.": "Rendert die Gesichts-Nahaufnahme aus dem aktuellen Profilbild (Modell-Referenzen, Gesichtsansicht) — die nächste Gesichtskorrektur projiziert daraus.",
     "Face view requested": "Gesichtsansicht angefordert",
-    "Dark fill": "Dunkelfüllung"
+    "Dark fill": "Dunkelfüllung",
+    "Switched off on the base body": "Am Basiskörper abgeschaltet"
   }
 }

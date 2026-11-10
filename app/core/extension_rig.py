@@ -174,21 +174,54 @@ def model_extension_overrides(profile, signature):
     return ((profile.get("model3d_opts") or {}).get("extension_rig_models") or {}).get(signature) or {}
 
 
-def effective_extension_overrides(profile, signature, meta=None):
-    """``model_extension_overrides`` of ``signature``, plus — for an outfit
-    model on the base body (``meta`` names a ``base_signature`` and is no base
-    itself) — the base model's ``tip`` overrides of every group the outfit
-    sets none for: its tips and colour discs are those of the body it was
-    painted onto, so its extension state stays the base's."""
-    own = model_extension_overrides(profile, signature)
+#: Shown wherever an outfit model's group is off because the base is.
+BASE_OFF_REASON = "Switched off on the base body"
+
+
+def _base_signature_of(signature, meta):
+    """The base model an outfit model ``signature`` is built on, or None
+    (no base pipeline outfit, or a base itself)."""
     meta = meta or {}
     base = meta.get("base_signature")
     if not base or meta.get("base") or base == signature:
+        return None
+    return base
+
+
+def inherited_extension_switches(profile, signature, meta, declarations):
+    """``{group_id: {"enabled": False, "reason": BASE_OFF_REASON}}`` for each
+    ``pair_tip`` group of ``declarations`` the base model switched off, when
+    ``signature`` is an outfit model on the base body (``meta``) — that
+    switch is the outfit's whatever its own says. {} otherwise."""
+    base = _base_signature_of(signature, meta)
+    if not base:
+        return {}
+    tips = {group["id"] for group in declarations or () if group.get("op") == "pair_tip"}
+    return {group_id: {"enabled": False, "reason": BASE_OFF_REASON}
+            for group_id, values in model_extension_overrides(profile, base).items()
+            if group_id in tips and isinstance(values, dict) and values.get("enabled") is False}
+
+
+def effective_extension_overrides(profile, signature, meta, declarations):
+    """``model_extension_overrides`` of ``signature``, plus — for an outfit
+    model on the base body (``meta`` names a ``base_signature`` and is no base
+    itself) — what it takes from the base model for its ``pair_tip`` groups
+    (``declarations``: the groups the model carries): the base's ``tip``
+    override of every group the outfit sets none for (its tips and colour
+    discs are those of the body it was painted onto), and the base's
+    ``enabled: False`` (``inherited_extension_switches``), which the
+    outfit's own switch cannot turn back on — one source of truth, so a
+    base switched off is off on every outfit, built before or after."""
+    own = model_extension_overrides(profile, signature)
+    base = _base_signature_of(signature, meta)
+    if not base:
         return own
     merged = {group_id: dict(values) for group_id, values in own.items() if isinstance(values, dict)}
     for group_id, values in model_extension_overrides(profile, base).items():
         if isinstance(values, dict) and "tip" in values and "tip" not in merged.get(group_id, {}):
             merged.setdefault(group_id, {})["tip"] = values["tip"]
+    for group_id in inherited_extension_switches(profile, signature, meta, declarations):
+        merged.setdefault(group_id, {})["enabled"] = False
     return merged
 
 

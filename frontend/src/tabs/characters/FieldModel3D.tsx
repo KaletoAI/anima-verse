@@ -181,6 +181,8 @@ export interface Model3DStatus {
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
     collision_scales?: Record<string, number> }
   extension_groups?: ExtensionRigDeclaration[]
+  /** Switches the served outfit model takes from its base model (locked here). */
+  extension_inherited?: Record<string, { enabled: boolean; reason: string }>
   rig_backends?: MeshBackend[]
   upscale_backends?: MeshBackend[]
   upscale_runnable?: boolean
