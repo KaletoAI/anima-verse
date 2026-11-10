@@ -137,8 +137,9 @@ frag text — an unfilled placeholder drops the fragment.
     module (``git show bda7bd17:app/core/config.py``, its own empty config ->
     built-in styles) gives the same get_use_case_prompts result as today's
     for EVERY use case it shipped × family × clothed — the new use cases
-    (base_back, base_front, base_side, base_view_back, base_view_side) are
-    additions only — and the T-pose pose constants of model_refs.py at
+    (base_back, base_front, base_side, base_view_back, base_view_side, plus
+    footwear_source — the empty-shoe edit of occasion footwear_empty, footwear
+    plan 2026-11-10 Task 2) are additions only — and the T-pose pose constants of model_refs.py at
     bda7bd17 (TPOSE_PROMPT_DEFAULT, TPOSE_VIEW_PROMPT_DEFAULTS, read from the
     old source by exec of their assignments) equal today's. A tpose payload
     without "style_character" joins as f"{style} {prompt}".
@@ -489,7 +490,8 @@ def main() -> int:
         check("old use cases are all still shipped", set(old_ucs) <= set(config._DEFAULT_IMAGE_USE_CASES), True)
         check("new use cases are additions",
               sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)),
-              ["base_back", "base_front", "base_side", "base_view_back", "base_view_side"])
+              ["base_back", "base_front", "base_side", "base_view_back", "base_view_side",
+               "footwear_source"])
         diffs = [(uc, fam, clothed) for uc in old_ucs for fam in ("natural", "keywords") for clothed in (True, False)
                  if old_cfg.get_use_case_prompts(uc, fam, clothed=clothed)
                  != config.get_use_case_prompts(uc, fam, clothed=clothed)]
