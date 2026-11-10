@@ -1740,9 +1740,11 @@ def _base_body_model_extras(character_name: str, info: Dict[str, Any]) -> Dict[s
     """What the Base body tab acts on besides the views: the base model's
     face fields (``model3d.face_info``) and collision capsules
     (``collision.ensure`` — the set the outfit models inherit), the stored
-    region scales (``collision_scales``) and the face cleanup of the base
-    source (``face_cleanup``, ``model3d.face_cleanup_state``). Never raises."""
-    from app.core import collision
+    region scales (``collision_scales``), the face cleanup of the base
+    source (``face_cleanup``, ``model3d.face_cleanup_state``) and the tip
+    panels of its ``pair_tip`` groups (``extension_tips``,
+    ``extension_tip.tip_panels``). Never raises."""
+    from app.core import collision, extension_tip
     from app.core.model3d import face_cleanup_state, face_info, find_model3d, get_model3d_options
     try:
         bsig = info.get("signature") or ""
@@ -1750,9 +1752,11 @@ def _base_body_model_extras(character_name: str, info: Dict[str, Any]) -> Dict[s
         info["face_cleanup"] = face_cleanup_state(character_name, bsig) if bsig and info.get("humanoid") else None
         model = info.get("model")
         path = find_model3d(character_name, bsig) if bsig and isinstance(model, dict) else None
+        info["extension_tips"] = []
         if path is not None and model.get("status") != "running":
             model.update(face_info(character_name, path))
             model["collision"] = collision.ensure(character_name, bsig)
+            info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
     except Exception:  # noqa: BLE001 — the poll never fails on the extras
         logger.exception("Base body extras of %s failed", character_name)
     return info
@@ -1905,12 +1909,16 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     (``garment_gates.limits``), the mesh component share and the fit gates
     (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``). Footwear: the
     empty-shoe, mesh and insole gates of the shoe source (``footwear_gates``,
-    ``footwear_insole``) and the fit gates (``footwear_fit.FIT_GATES``)."""
+    ``footwear_insole``) and the fit gates (``footwear_fit.FIT_GATES`` plus
+    the body-cut gates ``footwear_cut.CUT_GATES``, which the fit step runs
+    and records under the same ``gates``)."""
     from app.core import garment_fit, garment_gates, garment_mesh
     if kind == "footwear":
-        from app.core import footwear_fit, footwear_gates, footwear_insole
+        from app.core import footwear_cut, footwear_fit, footwear_gates, footwear_insole
         fit_gates = {key: (kind_, limit, footwear_fit.GATE_LABELS[key])
                      for key, (kind_, limit) in footwear_fit.FIT_GATES.items()}
+        fit_gates.update({key: (kind_, limit, footwear_cut.GATE_LABELS[key])
+                          for key, (kind_, limit) in footwear_cut.CUT_GATES.items()})
         return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),
                 "mesh": _footwear_gate_limits(footwear_gates.MESH_GATES),
                 "insole": _footwear_gate_limits(footwear_insole.INSOLE_GATES),
@@ -1965,13 +1973,14 @@ def get_character_garment(character_name: str, item_id: str,
     mesh_pieces = profile.get("equipped_mesh_pieces") if isinstance(profile.get("equipped_mesh_pieces"), dict) else {}
     worn = item_id in pieces.values() or item_id in mesh_pieces.values()
     # Only clothing is painted on while it has no fit (hair is simply absent);
-    # in outfit body mode mesh it is missing instead (ruling 2026-11-10).
-    painted_when_unfitted = bool(pipeline and worn and kind == garment_set.CLOTHING)
+    # in outfit body mode mesh it is missing instead (ruling 2026-11-10), and
+    # footwear is missing in either mode (``piece_status``, spec § 9.1).
+    worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
     mesh_mode = bool(pipeline and base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE)
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "own_mesh": kind in garment_set.OWN_MESH_PIECE_KINDS, "worn": bool(worn),
                "status": garment_set.piece_status(
-                   info, worn=painted_when_unfitted, base_model_ready=bool(base and base[1]),
+                   info, worn=worn_piece, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,
                                                   base_model_sha=base[1] if base else "").get(item_id),
                    mesh_mode=mesh_mode),
@@ -3042,6 +3051,42 @@ def rebuild_character_model3d_extension_rig(
         raise HTTPException(400, str(exc)) from exc
 
 
+class ExtensionTipRequest(BaseModel):
+    signature: str
+    group: str
+    tip: Optional[Dict[str, Any]] = None
+
+
+@router.post("/{character_name}/model3d/extension-tip", status_code=202)
+def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTipRequest,
+                                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Store a ``pair_tip`` group's tip override on one stored model
+    (``tip``: offsets per side, mirror, colour disc — None resets it; see
+    ``extension_rig.validate_tip_override``) and rebuild that model's
+    extension rig in a worker thread (CPU, no hub job). ``{tip, started}``;
+    the Base body poll reports the run (``extension_tips[].running``). 400
+    for a malformed value or a group the model does not carry, 409 while the
+    base model or another tip rebuild of the character runs."""
+    from app.core import base_body, extension_tip
+    from app.core.face_retexture import safe_signature
+    _require_character(character_name)
+    try:
+        signature = safe_signature(body.signature)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if (base_body.base_model_info(character_name, signature) or {}).get("status") == "running":
+        raise HTTPException(409, "The base model is being generated")
+    try:
+        stored = extension_tip.set_tip_override(character_name, signature, body.group, body.tip)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+    if not extension_tip.start_apply(character_name, signature):
+        raise HTTPException(409, "A tip rebuild is already running for this character")
+    return {"tip": stored, "started": True}
+
+
 @router.post("/{character_name}/model3d/collision")
 def recompute_character_model3d_collision(
         character_name: str, signature: str = "",
@@ -3156,10 +3201,12 @@ def _set_character_model3d_options_sync(character_name: str,
             raise HTTPException(400, "extension_rig requires a model signature")
         updates["signature"] = body["signature"]
         overrides = body["extension_rig"]
+        # ``tip`` (a pair_tip group's position/disc override) is validated by
+        # ``set_model3d_options``; it rides along so a switch never drops it.
         if not isinstance(overrides, dict) or any(
                 not isinstance(group_id, str) or not group_id
                 or not isinstance(values, dict)
-                or any(key not in ("enabled", "flip") or not isinstance(value, bool)
+                or any(key != "tip" and (key not in ("enabled", "flip") or not isinstance(value, bool))
                        for key, value in values.items())
                 for group_id, values in overrides.items()):
             raise HTTPException(400, "extension_rig must map group ids to enabled/flip booleans")

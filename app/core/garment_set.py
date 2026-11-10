@@ -18,12 +18,14 @@ Two kinds of item become a fitted garment mesh on a base-body character:
   fitted per wearer × body on the CPU (method ``shoe``,
   ``garment_footwear``). It takes no part in layering. A multi-slot piece
   that also covers ``feet`` (own-mesh tights ``[legs, feet]``) stays
-  clothing (controller ruling 2026-11-10).
+  clothing (controller ruling 2026-11-10). It is NEVER painted onto the
+  body, in either outfit body mode (spec § 9.1): without an accepted fit on
+  the current body it is missing (bare feet) until the fit is accepted.
 
 ``OWN_MESH_PIECE_KINDS`` answers "is this an own-mesh outfit piece" (the
 flag, the worn set, the mesh-items token); ``GRAFTED_PIECE_KINDS`` the kinds
-whose accepted fit is grafted into the served model today (footwear joins
-once the body cut lands — until then a shoe fit is a Wardrobe preview).
+whose accepted fit is grafted into the served model (clothing and, since
+Task 16 of the footwear plan, footwear).
 
 Only characters on the base-body pipeline (``base_body.is_base_pipeline``)
 wear garments; everyone else ignores the flag (``worn_garments`` is empty).
@@ -35,9 +37,8 @@ CLOTHING = "clothing"
 FOOTWEAR = "footwear"
 #: The kinds of an outfit piece with the own-mesh flag.
 OWN_MESH_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
-#: The own-mesh piece kinds whose accepted fit is grafted into the served model
-#: (footwear joins with the body cut, plan 2026-11-10-footwear-rigid-shoes Task 16).
-GRAFTED_PIECE_KINDS: Tuple[str, ...] = (CLOTHING,)
+#: The own-mesh piece kinds whose accepted fit is grafted into the served model.
+GRAFTED_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
 #: The slot an own-mesh piece is worn in ALONE to be footwear.
 FOOTWEAR_SLOT = "feet"
 
@@ -160,7 +161,9 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
     the same worn piece without an accepted fit is NOT painted (never meshed
     into the outfit body) — it is missing from the outfit model until its
     mesh is accepted (``base_body.MESH_ITEM_NOT_READY``); ``painted`` is then
-    False and ``reason`` says why it is not ready.
+    False and ``reason`` says why it is not ready. A FOOTWEAR piece
+    (``info["kind"]``) is never painted in either mode (spec § 9.1): worn
+    without a fit it is ``missing`` in retexture mode too.
     ``body`` — mesh mode only: ``{body_id, status, error}`` of the piece's
     fit on the outfit body worn now (``garment_info["body"]``).
     ``queue_position`` — the 1-based place of the piece's next waiting run
@@ -187,7 +190,8 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
         state = STATE_MISSING
     fitted = bool(info.get("fsig") and fit.get("status") == "accepted")
     absent = bool(worn and not fitted)
-    painted = absent and not mesh_mode
+    footwear = str(info.get("kind") or "") == FOOTWEAR
+    painted = absent and not mesh_mode and not footwear
     reason = None
     if absent:
         failed = info.get("failed") if isinstance(info.get("failed"), dict) else None
@@ -197,7 +201,7 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
             reason = base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING
     out = {"state": state, "step": running, "painted": painted, "reason": reason,
            "queue_position": info.get("queue_position")}
-    if mesh_mode:
+    if mesh_mode or footwear:
         out["missing"] = absent
     if isinstance(info.get("body"), dict):
         # Mesh mode: the piece's fit on the outfit body worn now (garments.body_fit_info).

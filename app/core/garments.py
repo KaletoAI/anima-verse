@@ -1331,9 +1331,10 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     with gs.char_lock(character_name):
         result = _run_locked(character_name, item, kind, wanted, view, bool(force))
         _note_outcome(character_name, item_id, result)
-    if result.get("ok") and "fit" in (result.get("ran") or []) and kind == _clothing():
+    if result.get("ok") and "fit" in (result.get("ran") or []) and kind in _grafted_kinds():
         # Outside the run lock: an outfit whose model left this piece painted
-        # on (no fit then) is rebuilt without it (``mesh_item_ready``).
+        # on (no fit then) is rebuilt without it (``mesh_item_ready``); a
+        # piece it left out (footwear, mesh mode) is only assembled onto it.
         try:
             from app.core import base_body
             base_body.after_mesh_item_ready(character_name, item_id)
@@ -1381,6 +1382,11 @@ def cached_failure(character_name: str, item_id: str, *,
 def _clothing() -> str:
     from app.core.garment_set import CLOTHING
     return CLOTHING
+
+
+def _grafted_kinds() -> Tuple[str, ...]:
+    from app.core.garment_set import GRAFTED_PIECE_KINDS
+    return GRAFTED_PIECE_KINDS
 
 
 def _item_order(character_name: str, item_id: str,

@@ -24,8 +24,8 @@ and wears heels + dress; Mira holds heels.
      dress -> "clothing" (own_mesh, no feet); boots -> None (no own_mesh);
      tights -> "clothing" (own_mesh, feet among other slots — controller
      ruling 2026-11-10: footwear is a piece worn in feet ALONE).
-     OWN_MESH_PIECE_KINDS == ("clothing", "footwear"), GRAFTED_PIECE_KINDS ==
-     ("clothing",) (footwear is grafted from Task 16 on).
+     OWN_MESH_PIECE_KINDS == ("clothing", "footwear") == GRAFTED_PIECE_KINDS
+     (footwear is grafted since Task 16).
      steps_for("footwear", "shoe") == FOOTWEAR_STEPS == ("source", "empty",
      "cutout", "mesh", "insole", "fit"); steps_for("footwear", "edit_chain") ->
      ValueError; steps_for("clothing", "shoe") -> ValueError (no method choice
@@ -59,29 +59,27 @@ and wears heels + dress; Mira holds heels.
      kind produced before footwear existed (the feet piece was flagged as
      clothing then), so no outfit signature moves in P1.
      mesh_items_token(Kira, pieces={"feet": boots}) == "" (not own-mesh).
-[K4] Transition rule (P1–P2: a shoe fit is a Wardrobe preview, the body cut
-     lands in Task 16). Kira's base model b"model-2", SHA = its sha256. Both
-     heels and dress get an accepted fit record on SHA under their current
-     fsig (dress: kind clothing; heels: kind footwear, method shoe).
+[K4] Delivery rule (Task 16, spec § 9.1: footwear is grafted like clothing,
+     never painted; smoke_footwear_delivery.py has the unfitted cases).
+     Kira's base model b"model-2", SHA = its sha256. Both heels and dress get
+     an accepted fit record on SHA under their current fsig (dress: kind
+     clothing; heels: kind footwear, method shoe, fit_version 3).
      Retexture mode, pieces {top: dress, feet: heels}:
-       resolve_mesh_items -> intended == sorted([dress, heels]),
-       effective == [dress] (heels is not grafted although it has a fit),
-       warnings == [MESH_ITEM_PAINTED.format(item="Heels",
-       reason=FOOTWEAR_PREVIEW_ONLY)], no "unpainted"/"missing" key;
-       run_queued was asked for [dress] only (the shoe chain is no part of the
-       outfit build while its fit is a preview).
-     Mesh mode (profile outfit_body_mode "mesh"):
-       unpainted == intended, effective == [dress],
-       missing == {heels: FOOTWEAR_PREVIEW_ONLY}, warnings ==
-       [MESH_ITEM_NOT_READY.format(item="Heels", reason=FOOTWEAR_PREVIEW_ONLY)].
+       resolve_mesh_items -> {intended sorted([dress, heels]), effective
+       sorted([dress, heels]) (the heels' fit is grafted), warnings [], mode
+       "retexture", unpainted sorted([dress, heels]), missing {}};
+       run_queued was asked for sorted([dress, heels]) (the shoe chain is
+       part of the outfit build, spec § 12).
+     Mesh mode (profile outfit_body_mode "mesh"): the same but mode "mesh".
      A retexture-mode record that painted heels (intended [dress, heels],
-     effective [dress]): mesh_items_ready(Kira, record, base_sha=SHA) == []
-     (accepted fit, but footwear is not grafted — never stale for it).
-     The mesh-mode record above (missing {heels: "other"}):
-     mesh_items_missing(Kira, record, base_sha=SHA) == [(heels,
-     FOOTWEAR_PREVIEW_ONLY)] (dress has its fit -> not missing; the reason is
-     the transition reason whatever the record says); in retexture mode
-     mesh_items_off_rule of that record == [heels] (it belongs painted on).
+     effective [dress], no unpainted): mesh_items_ready(Kira, record,
+     base_sha=SHA) == [heels] (its fit landed: the rebuild drops it from the
+     texture) and, in retexture mode, mesh_items_off_rule == [heels] too
+     (footwear is never painted). A mesh-mode record that left both out
+     (unpainted [dress, heels], missing {heels: "other"}):
+     mesh_items_missing(Kira, record, base_sha=SHA) == [] (both have their
+     fit — judged now, whatever the record says) and mesh_items_off_rule in
+     retexture mode == [] (nothing of it belongs painted on).
 [K5] Every entry point runs the SHOE chain for footwear, never the clothing
      chain (Task 6 replaced the temporary skip; the REAL queue functions,
      run_queued restored). ``garment_footwear.run_chain`` is a recorder
@@ -219,7 +217,7 @@ def main() -> int:
         check("kind tights (feet + legs)", garment_set.garment_kind_of(get(tights)), "clothing")
         check("FOOTWEAR", garment_set.FOOTWEAR, "footwear")
         check("OWN_MESH_PIECE_KINDS", garment_set.OWN_MESH_PIECE_KINDS, ("clothing", "footwear"))
-        check("GRAFTED_PIECE_KINDS", garment_set.GRAFTED_PIECE_KINDS, ("clothing",))
+        check("GRAFTED_PIECE_KINDS", garment_set.GRAFTED_PIECE_KINDS, ("clothing", "footwear"))
         check("SHOE", gs.SHOE, "shoe")
         check("FOOTWEAR_STEPS", gs.FOOTWEAR_STEPS, ("source", "empty", "cutout", "mesh", "insole", "fit"))
         check("steps_for footwear shoe", gs.steps_for("footwear", "shoe"), gs.FOOTWEAR_STEPS)
@@ -290,7 +288,7 @@ def main() -> int:
               "|meshitems:" + heels + "|worn:feet=" + heels)
         check("token unflagged feet piece", model_refs.mesh_items_token("Kira", pieces={"feet": boots}), "")
 
-        print("[K4] transition rule")
+        print("[K4] delivery rule: a fitted shoe is grafted like clothing")
         sha = hashlib.sha256(b"model-2").hexdigest()
         check("base sha", base_body.base_model_sha256("Kira", kira_bsig), sha)
         for item_id, kind, method in ((dress, "clothing", "edit_chain"), (heels, "footwear", "shoe")):
@@ -304,37 +302,29 @@ def main() -> int:
                 "fit_version": garment_fit.FIT_VERSION.get(kind)})
             check(f"accepted fit {item_id}", gs.accepted_fit("Kira", item_id, base_model_sha=sha) is not None, True)
         pieces = {"top": dress, "feet": heels}
-        preview = base_body.FOOTWEAR_PREVIEW_ONLY
-        check("FOOTWEAR_PREVIEW_ONLY", preview, "shoe fits are Wardrobe previews until the body cut lands")
+        check("no FOOTWEAR_PREVIEW_ONLY", hasattr(base_body, "FOOTWEAR_PREVIEW_ONLY"), False)
+        both = sorted([dress, heels])
         QUEUED.clear()
         out = base_body.resolve_mesh_items("Kira", pieces)
-        check("retexture intended", out.get("intended"), sorted([dress, heels]))
-        check("retexture effective", out.get("effective"), [dress])
-        check("retexture warnings", out.get("warnings"),
-              [base_body.MESH_ITEM_PAINTED.format(item="Heels", reason=preview)])
-        check("retexture no unpainted/missing", ("unpainted" in out, "missing" in out), (False, False))
-        check("run_queued only grafted kinds", QUEUED, [[dress]])
+        check("retexture record", out, {"intended": both, "effective": both, "warnings": [],
+                                        "mode": base_body.RETEXTURE_MODE, "unpainted": both, "missing": {}})
+        check("run_queued: both grafted kinds", QUEUED, [both])
         profile = get_character_profile("Kira")
         profile["outfit_body_mode"] = base_body.MESH_MODE
         check("mesh mode on", save_character_profile("Kira", profile), True)
         out = base_body.resolve_mesh_items("Kira", pieces)
-        check("mesh unpainted", out.get("unpainted"), sorted([dress, heels]))
-        check("mesh effective", out.get("effective"), [dress])
-        check("mesh missing", out.get("missing"), {heels: preview})
-        check("mesh warnings", out.get("warnings"),
-              [base_body.MESH_ITEM_NOT_READY.format(item="Heels", reason=preview)])
-        painted = {"mesh_items": {"intended": sorted([dress, heels]), "effective": [dress]},
-                   "base_signature": kira_bsig}
-        check("mesh_items_ready painted heels", base_body.mesh_items_ready("Kira", painted, base_sha=sha), [])
-        left_out = {"mesh_items": {"intended": sorted([dress, heels]), "effective": [dress],
-                                   "unpainted": sorted([dress, heels]), "missing": {heels: "other"}},
-                    "base_signature": kira_bsig}
-        check("mesh_items_missing", base_body.mesh_items_missing("Kira", left_out, base_sha=sha),
-              [(heels, preview)])
+        check("mesh record", out, {"intended": both, "effective": both, "warnings": [],
+                                   "mode": base_body.MESH_MODE, "unpainted": both, "missing": {}})
+        painted = {"mesh_items": {"intended": both, "effective": [dress]}, "base_signature": kira_bsig}
+        check("mesh_items_ready painted heels", base_body.mesh_items_ready("Kira", painted, base_sha=sha), [heels])
+        left_out = {"mesh_items": {"intended": both, "effective": [dress], "unpainted": both,
+                                   "missing": {heels: "other"}}, "base_signature": kira_bsig}
+        check("mesh_items_missing", base_body.mesh_items_missing("Kira", left_out, base_sha=sha), [])
         profile = get_character_profile("Kira")
         profile["outfit_body_mode"] = base_body.RETEXTURE_MODE
         check("retexture mode on", save_character_profile("Kira", profile), True)
-        check("off rule in retexture", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [heels])
+        check("off rule: painted heels", base_body.mesh_items_off_rule("Kira", painted, base_sha=sha), [heels])
+        check("off rule: left out", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [])
 
         print("[K5] footwear runs the shoe chain, never the clothing chain")
         from app.core import garment_footwear, garment_images, garment_refit

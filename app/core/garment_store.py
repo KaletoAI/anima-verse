@@ -616,7 +616,18 @@ def write_record(path: Path, record: Dict[str, Any]) -> None:
 
 
 def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
-    return record.get("accepted") is True and record.get("base_model_sha256") == base_model_sha
+    """Accepted on the base model ``base_model_sha``. A FOOTWEAR fit must also
+    be of the current ``footwear_fit.FOOTWEAR_FIT_VERSION``: an older one is
+    never served as accepted (R11 ruling, plan 2026-11-10-footwear-rigid-shoes
+    Task 10 carry — the version is part of the footwear fsig, so the newest
+    accepted fit of an older fsig could be an older fit; the piece is then
+    missing until the refit, never a fit the cut gates did not pass)."""
+    if record.get("accepted") is not True or record.get("base_model_sha256") != base_model_sha:
+        return False
+    if str(record.get("kind") or "") == "footwear":
+        from app.core.footwear_fit import FOOTWEAR_FIT_VERSION
+        return record.get("fit_version") == FOOTWEAR_FIT_VERSION
+    return True
 
 
 def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
@@ -626,7 +637,8 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     else the newest (GLB mtime) accepted fit of the item on that model made
     with the CURRENT method (``fit_method``; a switched method never serves
     the other method's hair), else None. An empty ``base_model_sha`` (no base
-    model) has no fit."""
+    model) has no fit. A footwear fit of an older fit version is never
+    served (``_accepted_on``)."""
     if not base_model_sha:
         return None
     profile = _profile_of(character_name, profile)

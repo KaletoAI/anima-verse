@@ -460,7 +460,7 @@ def main() -> int:
         check("front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": True, "shoes": True})
         want_mesh = {"intended": ["coat", "dress"], "effective": ["dress"],
-                     "warnings": [COAT_WARN]}
+                     "warnings": [COAT_WARN], "mode": "retexture", "unpainted": ["dress"], "missing": {}}
         front_meta = json.loads((refs / f"tpose_{sig_x}.json").read_text())
         check("front mesh_items", front_meta.get("mesh_items"), want_mesh)
         check("front mesh_token", front_meta.get("mesh_token"), token_x)
@@ -493,7 +493,8 @@ def main() -> int:
         check("off: second render starts no chain (coat failed)", [r[1] for r in RUNS], [])
         off_meta = json.loads((refs / f"tpose_{sig_off}.json").read_text())
         check("off: coat painted, dress not intended", off_meta.get("mesh_items"),
-              {"intended": ["coat"], "effective": [], "warnings": [COAT_WARN]})
+              {"intended": ["coat"], "effective": [], "warnings": [COAT_WARN], "mode": "retexture",
+               "unpainted": [], "missing": {}})
         flag("dress", True)
         check("flag on: key of X", model_refs.current_outfit_state("Demo")[2], sig_x)
 
@@ -547,7 +548,8 @@ def main() -> int:
         check("re-render names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": False, "shoes": True})
         check("re-render record", json.loads((refs / f"tpose_{sig_x}.json").read_text()).get("mesh_items"),
-              {"intended": ["coat", "dress"], "effective": ["coat", "dress"], "warnings": []})
+              {"intended": ["coat", "dress"], "effective": ["coat", "dress"], "warnings": [], "mode": "retexture",
+               "unpainted": ["coat", "dress"], "missing": {}})
         check("back re-rendered too", any(r["occasion"] == "outfit_back" for r in RENDERS), True)
 
         print("[3c] every piece its own mesh")

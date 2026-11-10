@@ -228,7 +228,7 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     if not hair and not clothing:
         return []
     from app.core import base_body, garment_store
-    from app.core.garment_set import CLOTHING
+    from app.core.garment_set import CLOTHING, FOOTWEAR, garment_kind_of
     from app.models.inventory import get_item
     base = base_body.current_base(character_name, profile=profile)
     if not base or not base[1]:
@@ -243,6 +243,12 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             # even when the flag was switched off since (that state has a
             # signature of its own; this model needs its garment).
             if item.get("category") != "outfit_piece":
+                continue
+            if garment_kind_of(item) == FOOTWEAR:
+                # Footwear is left out of every record since Task 16 of plan
+                # 2026-11-10-footwear-rigid-shoes; its fit GLB (the cut body +
+                # two shoe nodes) is grafted by Task 17 — until then it is
+                # not wanted here (``garment_arrays`` wants ONE node).
                 continue
             kind = CLOTHING
         else:
