@@ -68,6 +68,9 @@ DRESSED_VIEWS_CHANGED = "Dressed views changed"
 OLDER_BODY_VERSION = "Built by an older outfit body version"
 NO_OUTFIT_ON_IT = "No outfit model stands on it"
 NOT_BUILT = "Not built"
+#: A body of the other hair rule (``hair_stale``) is regenerated as its successor from the views rendered
+#: under the rule now — they must exist first (each view's own Regenerate; image jobs, never automatic).
+RENDER_VIEWS_FIRST = "Render the dressed views anew first (each view's Regenerate) — the body is rebuilt from them"
 # A body from before the posture match, or matched to another base model (outfit_body_posture.py):
 # the next "Re-fit all", outfit build on it or server start matches it (CPU).
 POSTURE_NOT_MATCHED = "Posture not matched to the base body yet"
@@ -220,14 +223,31 @@ def _body_record(character_name: str, body_id: str) -> Dict[str, Any]:
     return artefact_graph._body_record(get_character_dir(character_name), body_id)
 
 
+def hair_stale(character_name: str, record: Dict[str, Any], *,
+               profile: Optional[Dict[str, Any]] = None) -> str:
+    """``base_body.hair_rule_off`` of a body's parent record ("" without one)."""
+    from app.core import base_body
+    if not record:
+        return ""
+    return base_body.hair_rule_off(character_name, record, profile=profile)
+
+
 def source_outfit(character_name: str, body_id: str, *, profile: Optional[Dict[str, Any]] = None,
                   outfit_models: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     """An outfit whose dressed views stand for ``body_id`` NOW (the record's
     ``built_for`` first, then every outfit model on the body, the worn
-    outfit last) — what a regeneration meshes from; "" when none does."""
+    outfit last) — what a regeneration meshes from; "" when none does.
+
+    A body built under the other hair rule (``hair_stale``: hair baked in
+    while the outfit body is bald now, or the reverse) is the former body
+    of its outfits: an outfit stands for it when its body under the body's
+    OWN rule is ``body_id`` — the regeneration then builds the successor
+    under the rule now (``base_body.outfit_body_of_outfit(bald=…)``)."""
     from app.core import base_body
     from app.core.model_refs import current_outfit_state
     record = _body_record(character_name, body_id)
+    former = bool(hair_stale(character_name, record, profile=profile))
+    rule = {"bald": record.get("bald") is True} if former else {}
     models = outfit_models if outfit_models is not None else _outfit_models(character_name)
     candidates = [str(record.get("built_for") or "")]
     candidates += [sig for sig, meta in models.items() if meta.get("body_id") == body_id]
@@ -240,9 +260,26 @@ def source_outfit(character_name: str, body_id: str, *, profile: Optional[Dict[s
         if not sig or sig in seen:
             continue
         seen.add(sig)
-        if base_body.outfit_body_of_outfit(character_name, sig, profile=profile) == body_id:
+        if base_body.outfit_body_of_outfit(character_name, sig, profile=profile, **rule) == body_id:
             return sig
     return ""
+
+
+def successor(character_name: str, body_id: str, *, profile: Optional[Dict[str, Any]] = None,
+              source: Optional[str] = None) -> str:
+    """The body a regeneration of ``body_id`` builds: ``body_id`` itself,
+    or — for a body of the other hair rule (``hair_stale``) — the body its
+    source outfit stands for under the rule now; "" without a source."""
+    from app.core import base_body
+    source = source if source is not None else source_outfit(character_name, body_id, profile=profile)
+    if not source:
+        return ""
+    if not hair_stale(character_name, _body_record(character_name, body_id), profile=profile):
+        return body_id
+    # Under the rule now, whatever rule the source's stored front was rendered under (it is rendered anew
+    # before the regeneration, ``regenerate_blocked``; its texture does not depend on the view's content).
+    return base_body.outfit_body_of_outfit(character_name, source, profile=profile,
+                                           bald=base_body.outfit_body_bald(character_name, profile=profile))
 
 
 # --- the fits on a body -----------------------------------------------------------
@@ -432,6 +469,26 @@ def match_stale_postures(character_name: str) -> List[str]:
 
 # --- the dressed views of a body -----------------------------------------------------
 
+def regenerate_blocked(character_name: str, body_id: str, *, profile: Optional[Dict[str, Any]] = None,
+                       source: Optional[str] = None) -> str:
+    """Why the body cannot be regenerated now (server English the tab
+    translates), "" when it can: not mesh mode, no source outfit
+    (``NO_SOURCE``), or — a body of the other hair rule — a dressed view of
+    the source not rendered under the rule now yet (``RENDER_VIEWS_FIRST``)."""
+    from app.core import base_body
+    profile = profile if profile is not None else _profile(character_name)
+    if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+        return NOT_MESH_MODE
+    source = source if source is not None else source_outfit(character_name, body_id, profile=profile)
+    if not source:
+        return NO_SOURCE
+    if hair_stale(character_name, _body_record(character_name, body_id), profile=profile):
+        bsig = base_body.base_signature(character_name, profile=profile)
+        if any(base_body.dressed_image(character_name, v, source, bsig) is None for v in base_body.dressed_views()):
+            return RENDER_VIEWS_FIRST
+    return ""
+
+
 def view_blocked(character_name: str, body_id: str, view: str, *, profile: Optional[Dict[str, Any]] = None,
                  source: Optional[str] = None) -> str:
     """Why the dressed ``view`` of the body cannot be rendered anew now
@@ -480,6 +537,21 @@ def _texts_now(character_name: str, candidates: List[str], *, bsig: str,
             continue
         return {str(k): str(v) for k, v in (texts or {}).items()}
     return None
+
+
+def _texture_now(character_name: str, source: str, *, bsig: str, profile: Dict[str, Any]) -> str:
+    """The texture signature the outfit ``source`` computes NOW (its stored
+    front's manifest, whatever hair rule that front was rendered under) —
+    the views a regeneration of its body meshes from; "" when none."""
+    from app.core import base_body
+    front = base_body.dressed_image(character_name, "front", source, bsig, hair_rule=False)
+    if front is None:
+        return ""
+    try:
+        return str(base_body._outfit_texture(character_name, front, bsig=bsig, profile=profile)["tsig"])
+    except Exception:  # noqa: BLE001 — a display hint, never a failure
+        logger.debug("Texture of %s / %s not computable", character_name, source, exc_info=True)
+        return ""
 
 
 def _view_runs(character_name: str, body_id: str) -> Dict[str, Tuple[str, Optional[int]]]:
@@ -540,7 +612,9 @@ def view_infos(character_name: str, body_id: str, *, record: Dict[str, Any], tsi
                 meta, bsig=bsig,
                 base_view_sha=base_body.file_sha256(find_ref_image(character_name, base_body._kind(v), bsig)),
                 mesh_ready=bool(base_body.mesh_items_ready(character_name, meta, bsig=bsig)),
-                follows_front=follows, text_now=(texts or {}).get(v) if texts is not None else None)}
+                follows_front=follows, text_now=(texts or {}).get(v) if texts is not None else None,
+                off_rule=base_body.hair_rule_text(base_body.hair_rule_off(character_name, meta, profile=profile),
+                                                  view=True))}
         run, position = runs.get(v, ("", None))
         failed = (not run and last.get("kind") == "view" and last.get("view") == v and not last.get("ok"))
         gate = meta.get("fit_gate") if isinstance(meta.get("fit_gate"), dict) else {}
@@ -570,7 +644,10 @@ def render_view(character_name: str, body_id: str, view: str) -> Dict[str, Any]:
     if blocked:
         return {"ok": False, "error": blocked}
     bsig = base_body.base_signature(character_name, profile=profile)
-    front = base_body.dressed_image(character_name, "front", source, bsig)
+    # A front made under the other hair rule still names the outfit's pieces (``view_blocked`` lets
+    # only the front itself be rendered from it).
+    front = (base_body.dressed_image(character_name, "front", source, bsig)
+             or base_body.dressed_image(character_name, "front", source, bsig, hair_rule=False))
     if front is None:
         return {"ok": False, "error": NO_SOURCE}
     texture = base_body._outfit_texture(character_name, front, bsig=bsig, profile=profile)
@@ -650,11 +727,14 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         dress = str(base_body._ref_sidecar(base_body._texture_view(character_name, "front", tsig))
                     .get("dress_text") or "")
     reasons = []
+    hair = hair_stale(character_name, record, profile=profile)
+    if hair:
+        reasons.append(base_body.hair_rule_text(hair))
     if record.get("base_signature") and bsig and record.get("base_signature") != bsig:
         reasons.append(base_body.OLDER_BASE)
     if record and record.get("version") != base_body.OUTFIT_BODY_VERSION:
         reasons.append(OLDER_BODY_VERSION)
-    if source and record.get("views") != base_body.texture_view_shas(character_name, source, bsig):
+    if source and not hair and record.get("views") != base_body.texture_view_shas(character_name, source, bsig):
         reasons.append(DRESSED_VIEWS_CHANGED)
     if meta and stale_posture(character_name, meta):
         reasons.append(POSTURE_NOT_MATCHED)
@@ -685,8 +765,11 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
     overview = outfit_body_overview(character_name, body_id) if path.is_file() else None
     unrigged = path.parent / "unrigged" / path.name
     candidates = [source, str(record.get("built_for") or "")] + [e["signature"] for e in on_body]
-    view_info = view_infos(character_name, body_id, record=record, tsig=tsig, source=source, bsig=bsig,
+    # A body of the other hair rule shows the views its regeneration meshes from: its successor's texture.
+    view_tsig = (_texture_now(character_name, source, bsig=bsig, profile=profile) or tsig) if hair and source else tsig
+    view_info = view_infos(character_name, body_id, record=record, tsig=view_tsig, source=source, bsig=bsig,
                            profile=profile, candidates=candidates, last=last)
+    blocked = regenerate_blocked(character_name, body_id, profile=profile, source=source)
     return {
         "body_id": body_id, "texture_signature": tsig or None, "status": status, "error": error,
         "run_kind": kind, "queue_position": position, "last_run": last or None,
@@ -699,7 +782,10 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         "steps": (overview or {}).get("steps") or [],
         "collision": meta.get("collision") if path.is_file() else None,
         "fits": fits_on_body(character_name, body_id, profile=profile, on_body=on_body),
-        "can_regenerate": bool(source), "regenerate_from": source or None,
+        "can_regenerate": not blocked, "regenerate_blocked": blocked or None,
+        "regenerate_from": source or None,
+        "hair_stale": hair or None,
+        "successor": (successor(character_name, body_id, profile=profile, source=source) or None) if hair else None,
         "can_rerig": unrigged.is_file(),
     }
 
@@ -798,10 +884,9 @@ def check_run(character_name: str, kind: str, body_id: str, item_id: str = "", v
         if blocked:
             raise LookupError(blocked)
     elif kind == "regenerate":
-        if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
-            raise LookupError(NOT_MESH_MODE)
-        if not source_outfit(character_name, body_id, profile=profile):
-            raise LookupError(NO_SOURCE)
+        blocked = regenerate_blocked(character_name, body_id, profile=profile)
+        if blocked:
+            raise LookupError(blocked)
     elif kind == "rerig":
         if not (path.parent / "unrigged" / path.name).is_file():
             raise LookupError(NO_UNRIGGED)
@@ -943,13 +1028,20 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
     try:
         if job.kind == "regenerate":
             source = source_outfit(character_name, job.body_id)
+            # A body of the other hair rule is regenerated as its successor under the rule now.
+            target = successor(character_name, job.body_id, source=source)
             built = base_body.prepare_outfit_body(character_name, source, rebuild=True)
             if built is None:
                 result = {"ok": False, "error": NO_SOURCE}
-            elif built.get("body_id") != job.body_id:
+            elif built.get("body_id") != target:
                 result = {"ok": False, "error": f"the outfit's views stand for {built.get('body_id')} now"}
             else:
                 result = {"ok": bool(built.get("ok")), "error": str(built.get("error") or "")}
+                if target != job.body_id:
+                    result["successor"] = target
+                    if result["ok"]:
+                        # The worn outfit on it moves over (a CPU copy; the old body is GC'd once unnamed).
+                        rebuild_worn_on(character_name, target)
         elif job.kind == "view":
             result = render_view(character_name, job.body_id, job.view)
         elif job.kind == "rerig":

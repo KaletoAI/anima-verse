@@ -40,7 +40,7 @@ export interface BodyOutfit {
   name: string
   worn: boolean
   /** Why this outfit's model is older than the body (`outfit_body_stale`). */
-  stale_reason: 'body_mode' | 'outfit_body' | null
+  stale_reason: 'body_mode' | 'outfit_body' | 'baked_hair' | 'bald_body' | null
   /** Own-mesh pieces it wears that are missing from it: no accepted fit yet, never meshed into the body
    *  (`base_body.mesh_items_missing`, ruling 2026-11-10). Absent from an older server. */
   missing_mesh_items?: { item_id: string; name: string; reason: string }[]
@@ -81,7 +81,13 @@ export interface OutfitBody {
   collision?: CollisionPayload | null
   fits: BodyFit[]
   can_regenerate: boolean
+  /** Why Regenerate is not possible now (server English), null when it is. Absent from an older server. */
+  regenerate_blocked?: string | null
   regenerate_from: string | null
+  /** Built under the other hair rule (`base_body.hair_rule_off`): hair baked in while outfit bodies are meshed
+   *  bald now (`baked_hair`), or the reverse. Its Regenerate builds `successor`. Absent from an older server. */
+  hair_stale?: 'baked_hair' | 'bald_body' | 'body_mode' | null
+  successor?: string | null
   can_rerig: boolean
 }
 

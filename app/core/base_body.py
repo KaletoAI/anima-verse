@@ -1009,26 +1009,33 @@ def dress_negative(text: str) -> str:
 
 def dress_prompt(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
                  items: Optional[list], profile: Optional[Dict[str, Any]] = None,
-                 mesh_items: Iterable[str] = ()) -> Tuple[str, str]:
+                 mesh_items: Iterable[str] = (), bald: bool = False) -> Tuple[str, str]:
     """``(prompt, negative)`` of the dressed edit of one base view: the
     spike's edit form "Keep the image exactly as it is: … Only change their
     clothing: they now wear {outfit}." — opened by the view sentence
     ``DRESS_VIEW[view]`` for back/left/right — and its negative without the
     garment words the outfit names. ValueError for an undressed combination
     (that one copies the base images, there is nothing to edit).
-    ``mesh_items`` as in ``dress_text``."""
+    ``mesh_items`` as in ``dress_text``. ``bald`` (``outfit_body_bald``: the
+    mesh mode under an own hair mesh) closes the edit with the base body's
+    bald head (``BALD_HEAD``) and adds its hair negative (``HAIR_NEGATIVE``)."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     text = dress_text(character_name, view, pieces=pieces, items=items, profile=profile,
                       mesh_items=mesh_items)
     if not text:
         raise ValueError("An undressed combination has no dressed edit")
-    return _edit_prompt(view, text), dress_negative(text)
+    negative = dress_negative(text)
+    return _edit_prompt(view, text, bald=bald), (f"{negative}, {HAIR_NEGATIVE}" if bald else negative)
 
 
-def _edit_prompt(view: str, text: str) -> str:
-    """The dressed edit's prompt of one view for the dress text ``text``."""
+def _edit_prompt(view: str, text: str, *, bald: bool = False) -> str:
+    """The dressed edit's prompt of one view for the dress text ``text``;
+    ``bald`` appends the base body's bald head (``BALD_HEAD``, the same
+    words the base front is rendered with)."""
     edit = f"{DRESS_KEEP} Only change their clothing: {text}."
+    if bald:
+        edit = f"{edit} {BALD_HEAD[:1].upper()}{BALD_HEAD[1:]}."
     view_sentence = DRESS_VIEW.get(view)
     return f"{view_sentence} {edit}" if view_sentence else edit
 
@@ -1545,7 +1552,8 @@ def draft_path(character_name: str, view: str, signature: str) -> Optional[Path]
     return None
 
 
-def dressed_image(character_name: str, view: str, signature: str, bsig: str) -> Optional[Path]:
+def dressed_image(character_name: str, view: str, signature: str, bsig: str, *,
+                  hair_rule: bool = True) -> Optional[Path]:
     """The stored dressed image of one view of an outfit, or None — only one
     edited from the CURRENT base view counts (base signature ``bsig`` and
     the base view file's content; an edit of an older base body, or of a
@@ -1555,7 +1563,10 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str) -> 
     (``mesh_items_ready``) does not count either, nor one whose own-mesh
     pieces follow the other outfit body mode's rule (``mesh_items_off_rule``:
     in mesh mode a piece painted on, in retexture mode a mesh-mode view that
-    left out a piece still without a fit)."""
+    left out a piece still without a fit), nor — unless ``hair_rule`` is
+    False (an outfit's former body, ``outfit_body_of_outfit(bald=…)``) — one
+    made under the other hair rule (``hair_rule_off``: rendered with or
+    without the bald head while ``outfit_body_bald`` says otherwise)."""
     from app.core.model_refs import find_ref_image
     if view not in dressed_views():
         return None
@@ -1570,6 +1581,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str) -> 
         return None  # an own-mesh piece painted on here has its garment mesh now
     if mesh_items_off_rule(character_name, meta, bsig=bsig):
         return None  # made under the other mode's own-mesh rule
+    if hair_rule and hair_rule_off(character_name, meta):
+        return None  # made with / without the bald head while the rule says otherwise
     return path
 
 
@@ -1923,22 +1936,27 @@ def texture_variant(character_name: str, pieces: Optional[Dict[str, str]], *, dr
 
 def texture_inputs(character_name: str, *, pieces: Optional[Dict[str, str]], items: Optional[list],
                    variant: str, mesh_effective: Iterable[str] = (), bsig: Optional[str] = None,
-                   profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   profile: Optional[Dict[str, Any]] = None, bald: bool = False) -> Dict[str, Any]:
     """What a painted body is made of (the ``tsig`` inputs): the base
     signature, the base variant, the effective dress text of every dressed
     view (``dress_text(mesh_items=<unpainted>)``, ``mesh_items_unpainted``;
     ``dressed_views()``), the
     side-view switch and ``TEXTURE_BODY_VERSION``. NOT the outfit
     signature, NOT the own-mesh token: a piece that is its own garment mesh
-    is not painted, so it changes nothing here."""
+    is not painted, so it changes nothing here. ``bald`` (``outfit_body_bald``:
+    the dressed views are rendered with the bald head) adds ``"bald": true``
+    — only then, so every texture without the rule keeps its signature."""
     profile = _profile_of(character_name, profile)
     meshed = sorted({str(i) for i in mesh_effective or ()})
-    return {"version": TEXTURE_BODY_VERSION,
-            "base_signature": bsig or base_signature(character_name, profile=profile),
-            "base_variant": variant,
-            "side_views": side_views_dressed(),
-            "dress_text": {v: dress_text(character_name, v, pieces=pieces, items=items, profile=profile,
-                                         mesh_items=meshed) for v in dressed_views()}}
+    inputs = {"version": TEXTURE_BODY_VERSION,
+              "base_signature": bsig or base_signature(character_name, profile=profile),
+              "base_variant": variant,
+              "side_views": side_views_dressed(),
+              "dress_text": {v: dress_text(character_name, v, pieces=pieces, items=items, profile=profile,
+                                           mesh_items=meshed) for v in dressed_views()}}
+    if bald:
+        inputs["bald"] = True
+    return inputs
 
 
 def texture_signature(inputs: Dict[str, Any]) -> str:
@@ -2113,6 +2131,8 @@ def _adopt_texture_views(character_name: str, *, tsig: str, bsig: str, texts: Di
         meta = _ref_sidecar(sidecar)
         if meta.get("dressed") is not True or not _view_current(meta, bsig, base_views.get("front")):
             continue
+        if hair_rule_off(character_name, meta):
+            continue  # rendered under the other hair rule (bald head or not)
         recorded = meta.get("dress_text")
         if not (recorded == front_text if isinstance(recorded, str) else meta.get("prompt") == prompt):
             continue
@@ -2413,11 +2433,14 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
         dressed = bool(dress_text(character_name, "front", pieces=pieces, items=items, profile=mesh_profile,
                                   mesh_items=meshed))
         mesh_extra = {"mesh_items": mesh} if mesh else {}
+        # Mesh mode under an own hair mesh: rendered with the base body's bald head.
+        bald = outfit_body_bald(character_name, profile=profile)
+        bald_extra = {"bald": True} if bald else {}
         # The painted body this outfit shares with every outfit of the same
         # texture (``texture_inputs``): views of it are copied, not rendered.
         inputs = texture_inputs(character_name, pieces=pieces, items=items, mesh_effective=meshed, bsig=bsig,
                                 variant=texture_variant(character_name, pieces, dressed=dressed, mesh=mesh,
-                                                        profile=profile), profile=mesh_profile)
+                                                        profile=profile), profile=mesh_profile, bald=bald)
         tsig = texture_signature(inputs)
         texts = inputs["dress_text"]
         if not dressed:
@@ -2449,7 +2472,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                 todo = [v for v in todo if v not in reused]
             if "front" in todo:
                 prompt, negative = dress_prompt(character_name, "front", pieces=pieces, items=items,
-                                                profile=mesh_profile, mesh_items=meshed)
+                                                profile=mesh_profile, mesh_items=meshed, bald=bald)
                 try:
                     with neutral_view_reference(base_views["front"], refs_dir) as reference:
                         path = expression_regen.render_character_image(
@@ -2467,7 +2490,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                             sidecar_extra={"base_signature": bsig, "dressed": True,
                                            "base_image_sha256": file_sha256(base_views["front"]),
                                            **mesh_extra, "texture_signature": tsig,
-                                           "dress_text": texts.get("front", "")},
+                                           "dress_text": texts.get("front", ""), **bald_extra},
                             character_loras=True)
                     if path is None:
                         errors.append("Dressed front edit failed")
@@ -2487,7 +2510,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                             character_name, v, signature=signature, bsig=bsig, pieces=pieces, items=items,
                             profile=mesh_profile, front=front, base_views=base_views, refs_dir=refs_dir,
                             size=(width, height), mesh_items=_ref_sidecar(front).get("mesh_items") or None,
-                            texture={"texture_signature": tsig, "dress_text": texts.get(v, "")})
+                            texture={"texture_signature": tsig, "dress_text": texts.get(v, ""), **bald_extra})
                         if warning:
                             logger.warning("Dressed %s %s (%s): %s", v, character_name, signature, warning)
                     except Exception as e:  # noqa: BLE001 — the front stays
@@ -3241,6 +3264,85 @@ BODY_MODE_CHANGED = "Built for the other outfit body mode"
 OUTFIT_BODY_CHANGED = "Built on an older outfit body"
 NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
 
+# Bald outfit bodies (user decision 2026-11-10). In the mesh mode a character
+# with its OWN hair mesh (``outfit_body_bald``: it wears its hair item —
+# ``garment_hair.worn_hair_id`` —, whatever the hair method or fit state, the
+# way an own-mesh piece is left out before its fit exists) gets its outfit
+# body meshed BALD, exactly like the base body: the dressed front edit closes
+# with the base front's ``BALD_HEAD`` and carries its ``HAIR_NEGATIVE``
+# (``dress_prompt(bald=True)``; the back/side drafts already use the base
+# view prompt with the bald head). The hair is then fitted per outfit body on
+# top (``garments.body_fit``) like every own-mesh garment. The rule is part
+# of the texture signature (``texture_inputs(bald=True)`` adds ``"bald":
+# true``), so a bald texture is a new tsig and a new body id: a body meshed
+# before the rule (hair baked into its mesh) is never reused. Records name
+# the rule as ``"bald": true`` — the dressed views (and drafts) rendered
+# under it, the outfit body's parent record and the outfit model on it.
+# ``hair_rule_off`` judges a record against the rule NOW: a dressed view
+# made under the other rule does not count (``dressed_image``); an outfit
+# body / outfit model of the mesh mode built under it is stale
+# (``BAKED_HAIR`` / ``BALD_WITHOUT_HAIR``). Nothing is rebuilt automatically:
+# the Outfit body tab offers the old body's view Regenerate (renders the
+# views bald) and its Regenerate, which builds its bald successor
+# (``outfit_bodies``); the artefact GC drops the old body once no live outfit
+# names it. The retexture mode never renders with the rule (the painted base
+# is bald); a view made under it is "for the other mode" there.
+#: Outfit body / outfit model of the mesh mode built without the bald rule.
+BAKED_HAIR = "Built with baked-in hair"
+#: ... built bald while the character wears no own hair mesh (any more).
+BALD_WITHOUT_HAIR = "Made bald, but no own hair mesh is worn"
+#: A dressed view rendered without the bald head under the rule.
+VIEW_NOT_BALD = "Rendered without the bald head — the own hair mesh goes on top"
+
+
+def outfit_body_bald(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the outfit bodies of the character are meshed bald (block
+    above): on the pipeline, in the mesh mode, wearing its own hair item."""
+    profile = _profile_of(character_name, profile)
+    if outfit_body_mode(character_name, profile=profile) != MESH_MODE:
+        return False
+    if not is_base_pipeline(character_name, profile=profile):
+        return False
+    from app.core.garment_hair import worn_hair_id
+    return bool(worn_hair_id(character_name, profile))
+
+
+def hair_rule_off(character_name: str, record: Dict[str, Any], *,
+                  profile: Optional[Dict[str, Any]] = None) -> str:
+    """Why a dressed view / outfit body parent record / outfit model sidecar
+    ``record`` was made under the other hair rule (block above), "" when it
+    follows the rule now (or is undressed, or the character is off the
+    pipeline): ``"baked_hair"`` (the rule says bald, the record is not),
+    ``"bald_body"`` (made bald, the mesh mode without an own hair mesh now),
+    ``"body_mode"`` (made bald, the retexture mode now)."""
+    if not isinstance(record, dict) or record.get("dressed") is False:
+        return ""
+    profile = _profile_of(character_name, profile)
+    made = record.get("bald") is True
+    mode = outfit_body_mode(character_name, profile=profile)
+    if not made and mode != MESH_MODE:
+        return ""  # the retexture mode never renders bald (cheap: no pipeline / item read)
+    if not is_base_pipeline(character_name, profile=profile):
+        return ""
+    rule = outfit_body_bald(character_name, profile=profile)
+    if made == rule:
+        return ""
+    if rule:
+        return "baked_hair"
+    return "bald_body" if mode == MESH_MODE else "body_mode"
+
+
+def hair_rule_text(reason: str, *, view: bool = False) -> str:
+    """The English phrase of a ``hair_rule_off`` reason ("" for none); a
+    dressed view says ``VIEW_NOT_BALD`` for ``baked_hair``."""
+    if reason == "baked_hair":
+        return VIEW_NOT_BALD if view else BAKED_HAIR
+    if reason == "bald_body":
+        return BALD_WITHOUT_HAIR
+    if reason == "body_mode":
+        return BODY_MODE_CHANGED
+    return ""
+
 
 def is_outfit_body_signature(value: Optional[str]) -> bool:
     return bool(value) and OUTFIT_BODY_RE.fullmatch(str(value)) is not None
@@ -3270,10 +3372,11 @@ def outfit_body_path(character_name: str, body_id: str) -> Path:
 
 
 def _outfit_texture(character_name: str, front: Path, *, bsig: str,
-                    profile: Dict[str, Any]) -> Dict[str, Any]:
+                    profile: Dict[str, Any], bald: Optional[bool] = None) -> Dict[str, Any]:
     """The texture an outfit's dressed front stands for: ``{manifest,
-    dressed, variant, inputs, tsig, mesh_profile}`` (``texture_inputs`` of
-    the front's manifest and own-mesh record)."""
+    dressed, variant, inputs, tsig, mesh_profile, bald}`` (``texture_inputs``
+    of the front's manifest and own-mesh record; ``bald``: the hair rule,
+    default ``outfit_body_bald`` now)."""
     from app.core import model3d
     manifest = model3d._ref_manifest(front)
     mesh = _dict_of(manifest.get("mesh_items"))
@@ -3283,27 +3386,32 @@ def _outfit_texture(character_name: str, front: Path, *, bsig: str,
     mesh_profile["equipped_items"] = list(manifest.get("items") or [])
     variant = texture_variant(character_name, manifest.get("pieces") or {}, dressed=dressed, mesh=mesh,
                               profile=profile)
+    if bald is None:
+        bald = outfit_body_bald(character_name, profile=profile)
     inputs = texture_inputs(character_name, pieces=manifest.get("pieces") or {}, items=manifest.get("items") or [],
                             variant=variant, mesh_effective=mesh_items_unpainted({"mesh_items": mesh}), bsig=bsig,
-                            profile=mesh_profile)
+                            profile=mesh_profile, bald=bool(bald))
     return {"manifest": manifest, "dressed": dressed, "variant": variant, "inputs": inputs,
-            "tsig": texture_signature(inputs), "mesh_profile": mesh_profile}
+            "tsig": texture_signature(inputs), "mesh_profile": mesh_profile, "bald": bool(bald)}
 
 
 def outfit_body_of_outfit(character_name: str, signature: str, *,
-                          profile: Optional[Dict[str, Any]] = None) -> str:
+                          profile: Optional[Dict[str, Any]] = None, bald: Optional[bool] = None) -> str:
     """The outfit body id the outfit ``signature`` stands on NOW in mesh
     mode — computed from its dressed front of the current base (the tsig
     ``prepare_outfit_body`` would build) — or "" (no dressed front of the
     current base, an undressed combination, or any error). Read-only; the
-    Outfit body tab asks it to find an outfit to regenerate a body from."""
+    Outfit body tab asks it to find an outfit to regenerate a body from.
+    ``bald`` set: the body of the same outfit under THAT hair rule (a body
+    built under the other rule — its successor is the one of the rule now);
+    its front then counts whatever rule it was rendered under."""
     try:
         profile = _profile_of(character_name, profile)
         bsig = base_signature(character_name, profile=profile)
-        front = dressed_image(character_name, "front", signature, bsig)
+        front = dressed_image(character_name, "front", signature, bsig, hair_rule=bald is None)
         if front is None:
             return ""
-        texture = _outfit_texture(character_name, front, bsig=bsig, profile=profile)
+        texture = _outfit_texture(character_name, front, bsig=bsig, profile=profile, bald=bald)
         return outfit_body_id(texture["tsig"]) if texture["dressed"] else ""
     except Exception:  # noqa: BLE001 — a lookup, never a failure
         logger.debug("Outfit body of %s / %s not computable", character_name, signature, exc_info=True)
@@ -3334,7 +3442,9 @@ def outfit_body_stale(character_name: str, meta: Dict[str, Any], *,
     ``"outfit_body"`` (mesh mode: its outfit body was rebuilt or is gone —
     ``body_sha256`` —, or it was built before the ruling of 2026-11-10 with
     an own-mesh piece without a fit painted into its body: the body of its
-    painted pieces alone is another one), else ``""``. An undressed copy is
+    painted pieces alone is another one), ``"baked_hair"`` / ``"bald_body"``
+    (mesh mode: built on a body of the other hair rule, ``hair_rule_off``),
+    else ``""``. An undressed copy is
     the base body in both modes; a model from before the pipeline is judged
     elsewhere."""
     if meta.get("dressed") is False or not meta.get("base_signature"):
@@ -3343,6 +3453,9 @@ def outfit_body_stale(character_name: str, meta: Dict[str, Any], *,
     if built != outfit_body_mode(character_name, profile=profile):
         return "body_mode"
     if built == MESH_MODE:
+        hair = hair_rule_off(character_name, meta, profile=profile)
+        if hair:
+            return hair
         body_id = meta.get("body_id")
         if (not is_outfit_body_signature(body_id)
                 or file_sha256(outfit_body_path(character_name, str(body_id))) != meta.get("body_sha256")):
@@ -3442,6 +3555,7 @@ def prepare_outfit_body(character_name: str, signature: Optional[str] = None, *,
                                  inputs["dress_text"])
             used = {v: p for v, p in paths.items() if p is not None}
             parent = {"body_id": body_id, "mode": MESH_MODE, "version": OUTFIT_BODY_VERSION,
+                      **({"bald": True} if texture["bald"] else {}),
                       "texture_signature": tsig, "base_signature": bsig, "base_variant": texture["variant"],
                       "built_for": signature, "views": texture_view_shas(character_name, signature, bsig),
                       "used_views": [v for v in BASE_VIEWS if v in used], "view_guard": guard,
@@ -3537,6 +3651,10 @@ def _build_on_outfit_body(character_name: str, signature: str, *, bsig: str, bas
                  "texture_signature": tsig, "outfit_body_mode": MESH_MODE, "body_id": body_id,
                  "body_sha256": hashlib.sha256(body["rigged"]).hexdigest()})
     meta.update(manifest)
+    # The hair rule its body was meshed under (``hair_rule_off``).
+    meta.pop("bald", None)
+    if record.get("bald") is True:
+        meta["bald"] = True
     mesh = _dict_of(manifest.get("mesh_items"))
     # A mesh-mode record's "not ready" warnings are judged live (outfit_info,
     # mesh_items_missing): an accepted fit later must not leave them behind.
@@ -3599,8 +3717,8 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     the pipeline, or from the other base variant than its pieces call for
     now (``variant_current``) — and is rebuilt on the next trigger; ``error``
     says so, ``stale_reason`` ``older_base`` / ``before_pipeline`` /
-    ``detail_changed`` / ``body_mode`` / ``outfit_body``
-    (``outfit_body_stale``) / ``mesh_item_ready`` — an own-mesh piece it left
+    ``detail_changed`` / ``body_mode`` / ``outfit_body`` / ``baked_hair`` /
+    ``bald_body`` (``outfit_body_stale``) / ``mesh_item_ready`` — an own-mesh piece it left
     painted on has its garment mesh now), ``ready``,
     ``missing``. ``warnings``: the stored model's view-guard warnings
     (dressed views left out because they turned around) and own-mesh pieces
@@ -3633,7 +3751,8 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     elif not variant_current(character_name, meta):
         status, error = "stale", DETAIL_CHANGED
     elif body_reason := outfit_body_stale(character_name, meta):
-        status, error = "stale", BODY_MODE_CHANGED if body_reason == "body_mode" else OUTFIT_BODY_CHANGED
+        status, error = "stale", (BODY_MODE_CHANGED if body_reason == "body_mode"
+                                  else hair_rule_text(body_reason) or OUTFIT_BODY_CHANGED)
     elif mesh_items_ready(character_name, meta, base_sha=current[1]):
         status, error = "stale", MESH_ITEM_READY
     else:
@@ -3643,6 +3762,8 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
                               else "detail_changed" if error == DETAIL_CHANGED
                               else "body_mode" if error == BODY_MODE_CHANGED
                               else "outfit_body" if error == OUTFIT_BODY_CHANGED
+                              else "baked_hair" if error == BAKED_HAIR
+                              else "bald_body" if error == BALD_WITHOUT_HAIR
                               else "mesh_item_ready" if error == MESH_ITEM_READY else "older_base")
                              if status == "stale" else None),
             "warnings": (list(meta.get("view_warnings") or []) + _mesh_warnings(character_name, meta, current[1])

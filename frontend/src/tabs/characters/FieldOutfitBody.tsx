@@ -413,9 +413,12 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
             </button>
           ) : null}
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.can_regenerate}
-            title={body.can_regenerate
-              ? t('Meshes and rigs this body anew from its dressed views (mesh, face, rig, normalize, extension rig, capsules — hub jobs).')
-              : t('No outfit stands on this body\'s dressed views any more — nothing to mesh from.')}
+            title={!body.can_regenerate
+              ? (body.regenerate_blocked ? t(body.regenerate_blocked)
+                : t('No outfit stands on this body\'s dressed views any more — nothing to mesh from.'))
+              : body.hair_stale && body.successor && body.successor !== body.body_id
+                ? t('Builds its successor {id} from the dressed views rendered anew (mesh, face, rig, normalize, extension rig, capsules — hub jobs).').replace('{id}', body.successor)
+                : t('Meshes and rigs this body anew from its dressed views (mesh, face, rig, normalize, extension rig, capsules — hub jobs).')}
             onClick={() => run(body, 'regenerate')}>{t('Regenerate')}</button>
           {body.freshness ? <FreshnessBadge freshness={body.freshness} compact /> : null}
           {info.generation_running && body.status === 'running' ? (
@@ -470,7 +473,10 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
                 <div key={o.signature}>
                   <div className="ga-model3d-status-row ga-obody-line"
                     title={[o.signature, o.stale_reason === 'outfit_body' ? t('Built on an older outfit body')
-                      : o.stale_reason === 'body_mode' ? t('Built for the other outfit body mode') : ''].filter(Boolean).join('\n')}>
+                      : o.stale_reason === 'body_mode' ? t('Built for the other outfit body mode')
+                        : o.stale_reason === 'baked_hair' ? t('Built with baked-in hair')
+                          : o.stale_reason === 'bald_body' ? t('Made bald, but no own hair mesh is worn') : '']
+                      .filter(Boolean).join('\n')}>
                     <span className={`ga-model3d-status-dot ga-model3d-status-${o.stale_reason ? 'yellow' : 'green'}`} />
                     <span className="ga-model3d-status-text">
                       {o.name || o.signature}{o.worn ? ` · ${t('worn')}` : ''}{o.stale_reason ? ` · ${t('outdated')}` : ''}

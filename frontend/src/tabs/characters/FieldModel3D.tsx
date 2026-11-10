@@ -119,7 +119,8 @@ export interface Model3DInfo {
   steps?: ModelStep[]
   /** Current / outdated / no data — the viewer's corner badge. */
   freshness?: Freshness | null
-  stale_reason?: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready'
+  stale_reason?: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready' | 'body_mode' | 'outfit_body'
+    | 'baked_hair' | 'bald_body'
   /** Base-body pipeline: the face belongs to the base body — the face
    *  dialog and its status act on this signature. */
   face_signature?: string
@@ -898,7 +899,11 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
                   ? t('Built for another body detail under the clothing — rebuild it')
                   : model.stale_reason === 'mesh_item_ready'
                     ? t('An own-mesh piece painted on here has its garment mesh now — rebuild it')
-                    : t('Built on an older base body — rebuild it')}
+                    : model.stale_reason === 'baked_hair'
+                      ? t('Built with baked-in hair')
+                      : model.stale_reason === 'bald_body'
+                        ? t('Made bald, but no own hair mesh is worn')
+                        : t('Built on an older base body — rebuild it')}
             </div>
           ) : null}
           {model.match === 'nearest' ? (

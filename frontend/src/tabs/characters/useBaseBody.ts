@@ -59,7 +59,8 @@ export interface BaseOutfitInfo {
   status: 'running' | 'failed' | 'stale' | 'ready' | 'missing'
   error: string
   /** Why a stale model is stale; null unless status is stale. */
-  stale_reason: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready' | null
+  stale_reason: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready' | 'body_mode' | 'outfit_body'
+    | 'baked_hair' | 'bald_body' | null
   /** Warnings of the stored model: dressed views left out because the
    *  edit turned the figure around, own-mesh pieces left painted on
    *  (server English text). */

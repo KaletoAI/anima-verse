@@ -620,15 +620,26 @@ def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
                 and (item.get("garment") or {}).get("kind") == HAIR_KIND)
 
 
+def worn_hair_id(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The id of the character's OWN hair item it wears in the hair slot of
+    ``equipped_mesh_pieces`` (a garment of kind hair owned by it), "" without
+    one — the hair that is its own mesh, whatever its method or fit state."""
+    profile = _profile_of(character_name, profile)
+    worn = profile.get("equipped_mesh_pieces")
+    item_id = worn.get(HAIR_KIND) if isinstance(worn, dict) else None
+    if not item_id:
+        return ""
+    from app.models import inventory
+    return str(item_id) if _is_own_hair(inventory.get_item(str(item_id)), character_name) else ""
+
+
 def find_hair_item(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The character's hair item: the one worn in the hair slot, else the
     first (by id) item it owns whose garment kind is hair."""
     from app.models import inventory
-    worn = (profile.get("equipped_mesh_pieces") or {}).get(HAIR_KIND)
+    worn = worn_hair_id(character_name, profile)
     if worn:
-        item = inventory.get_item(worn)
-        if _is_own_hair(item, character_name):
-            return item
+        return inventory.get_item(worn)
     owned = [item for item in inventory.list_items() if _is_own_hair(item, character_name)]
     return min(owned, key=lambda item: item.get("id") or "") if owned else None
 
