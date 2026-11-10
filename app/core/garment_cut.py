@@ -33,13 +33,15 @@ rigged, ``k_h`` the same for H's own units):
    on the non-hair HEAD only (the hair sits on it; one similarity does not fit head and shoulders of two
    mesher outputs at once), starting from pass 1, and the label again (off the head with pass 1's distances).
 5. ``cut`` (longer hair): H's hair faces with H's texture as the outer sheet, an inner sheet SNAPPED onto B
-   (``INNER_OFFSET_M`` outside = the placed fit's clearance, so the fit pushes nothing; hair thinner than that has
-   its outer sheet lifted to ``INNER_GAP_M`` above the inner one; a free strand farther than ``SNAP_MAX_M`` keeps a
-   sheet ``FREE_INNER_M`` inward), the two sheets joined at the cut edge -> one closed part. ``shell`` (short
-   hair): the hair patch snapped onto the scalp, outer sheet at the shell thickness, inner at ``SHELL_INNER_M``,
-   colour baked from the haired views into a ``TEXTURE_SIDE``² texture (seamless azimuthal UVs from the head
-   top), the shell's rim re-seated on the scalp after the smoothing (a smoothed rim cuts chords into the curved
-   head). Body distances are taken to B's OUTER wall only (``garment_fit.outer_faces``). Colour mend
+   (``INNER_OFFSET_M`` outside, so the fit pushes nothing; hair thinner than that has its outer sheet lifted to
+   ``INNER_GAP_M`` above the inner one; a free strand farther than ``SNAP_MAX_M`` keeps a sheet ``FREE_INNER_M``
+   inward), the two sheets joined at the cut edge -> one closed part. The edge is ROLLED onto the scalp: ring 0 on
+   it at ``RIM_M`` (= the placed fit's clearance), the inner sheet rising to ``INNER_OFFSET_M`` over ``RIM_RINGS``
+   rings and the outer sheet with it (``FEATHER``) — no open step under the hairline that shows the gap.
+   ``shell`` (short hair): the hair patch snapped onto the scalp, outer sheet at the shell thickness, inner at
+   ``SHELL_INNER_M``, colour baked from the haired views into a ``TEXTURE_SIDE``² texture (seamless azimuthal UVs
+   from the head top), the shell's rim re-seated on the scalp after the smoothing (a smoothed rim cuts chords into
+   the curved head). Body distances are taken to B's OUTER wall only (``garment_fit.outer_faces``). Colour mend
    (``recolour_texture``): texels nearer to the skin colour than to the hair colour, and white ones, are painted
    over with the nearest hair texel (CIELAB; the hair colour = the label ``CORE_RINGS`` inside its border, the
    skin = H's non-hair head for ``cut``, the bald front view's face for ``shell``). Both: the cut edge is smoothed
@@ -71,8 +73,9 @@ from app.core.log import get_logger
 logger = get_logger("garment_cut")
 
 #: Bump whenever the cut's output changes (part of the subtract fsig, ``garment_store``).
-CUT_VERSION = 5   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label;
-                  # 5: colour label from H's texture, the cut's inner sheet at the fit's clearance
+CUT_VERSION = 6   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label;
+                  # 5: colour label from H's texture, the cut's inner sheet at the fit's clearance;
+                  # 6: temples / sideburns by colour into the face zone, the cut's edge rolled onto the scalp
 
 SHAPES: Tuple[str, ...] = ("cut", "shell")
 #: Default / allowed shell thickness (profile ``hair_shell_mm``).
@@ -85,14 +88,14 @@ GROW_RINGS = 10             # label growth from the seeds over the far-outside o
 LOOSE_EPS_M = 0.015         # growth / loose-mask votes only this far outside the bald base
 DEEP_M = 0.012              # deeper than this inside the bald base = H's inner wall, never hair
 OUTER_TOL_M = 0.010         # H's outer wall: frontmost in its depth cell within this, from one of five directions
-CLEAR_CUT_M = 0.006         # push-out clearance of the cut hair (its inner sheet sits there)
+RIM_M = 0.001               # the cut's edge (ring 0) above the scalp = the placed fit's clearance of a cut
 VIS_TOL_M = 0.050           # mask vote: within this depth of the frontmost vertex of the cell
 CELL_M = 0.004              # depth-buffer cell size
 NONHAIR_MAX_M = 0.02        # ICP correspondences farther than this from B are outliers
 REGISTER_TOP_M = 0.35       # ICP + registration gate region: the top of H
 ICP_ITERATIONS = 12
 SNAP_MAX_M = 0.03           # inner sheet of the cut: snapped onto B within this distance
-INNER_OFFSET_M = 0.006      # inner sheet of the cut: this far outside the scalp (= the push-out clearance)
+INNER_OFFSET_M = 0.006      # inner sheet of the cut: this far outside the scalp (inside the rolled edge)
 FREE_INNER_M = 0.01         # a free strand's inner sheet: this far inward
 INNER_GAP_M = 0.001         # the inner sheet stays at least this far below the outer one
 SHELL_INNER_M = 0.001       # the shell's inner sheet above the scalp (= its push-out clearance)
@@ -107,6 +110,10 @@ HOLE_FILL_MAX_M2 = 0.0025   # enclosed non-hair islands up to 25 cm² become hai
 HOLE_LOOP_MAX_M = 0.12      # a boundary loop of the hair sheet shorter than this is a hole
 EDGE_SMOOTH_PASSES = 3      # Laplacian passes along the cut edge
 FEATHER = (0.0, 0.5)        # outer-sheet thickness kept on ring 0 / ring 1 of the cut edge
+# The cut's edge stood INNER_OFFSET_M (6 mm) off the scalp with the hair's full height one ring in: an open step
+# whose underside and gap show from the front (Kai 2026-11-10: "you can look into the shell", rim p50 6 mm).
+# Rolled: the inner sheet rises RIM_M -> INNER_OFFSET_M over rings 0..RIM_RINGS - 1 (linear).
+RIM_RINGS = 3
 TEXTURE_SIDE = 512          # the shell's baked colour texture
 CORE_RINGS = 3              # recolour: the hair colour is the median of the label this many rings inside
 OFF_MIN_DE = 12.0           # recolour: never off-colour within this CIELAB distance of the hair colour
@@ -140,6 +147,14 @@ CAP_ROUNDS = 3              # rounds of capping the hair sheet's small holes (lo
 TINT_MARGIN_DE = 3.0        # a vertex is hair-coloured when nearer to the hair than to the skin by this much
 TINT_MIN_SEPARATION_DE = 10.0  # ... and only when hair and skin reference lie this far apart (one-colour textures)
 TINT_MIN_N = 20             # vertices each reference needs
+# The temples and sideburns lie in the face zone (below the eye row + PROTECT_BROW_M, in front of the ears) and as
+# flat as the skin (Kai: the cut ended 2.5 cm above the ear, both shapes bald in front of it;
+# ~/claude-out/kai-hair-gap). Colour reaches into the face zone there: hair-coloured vertices that do not face
+# forward (the brows do) and lie above the eye row - SIDEBURN_M (the beard lies below) join the label when they are
+# CONNECTED to it — grown ring by ring from the label, at most TEMPLE_RINGS (~6 cm): a brow tail or an ear is never
+# reached across the skin between.
+TEMPLE_RINGS = 15
+SIDEBURN_M = 0.03           # ... down to this far below the eye row (a sideburn ends about mid-ear)
 
 #: The cut's gates: (kind, limit, label) like ``garment_fit.GATES``.
 CUT_GATES: Dict[str, Tuple[str, float, str]] = {
@@ -147,7 +162,10 @@ CUT_GATES: Dict[str, Tuple[str, float, str]] = {
     "hairline_cm": ("max", 1.5, "hairline 3D vs 2D"),
     "label_holes": ("max", 0, "holes left in the hair sheet"),
     "hair_area_cm2": ("min", 1.0, "hair area"),
+    "rim_p95_mm": ("max", 3.0, "cut edge above the scalp (open hairline)"),
 }
+# rim_p95_mm: ring 0 of the edge near the scalp (``SNAP_MAX_M``), its distance to B's outer wall, p95. The open
+# edge of CUT_VERSION 5 stood at INNER_OFFSET_M (6 mm); the rolled one at RIM_M (1 mm), the shell's at SHELL_INNER_M.
 
 _VIEW_SIGN = {"front": 1, "back": -1}
 _DIRECTIONS = ((2, 1), (2, -1), (0, 1), (0, -1), (1, 1))
@@ -665,13 +683,22 @@ def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: n
     hair = erode(dilate(grown, adj, 3), adj, 3) & outer & ~deep
     hair = dilate(erode(hair, adj, 1), adj, 1)
     hair = majority(hair, adj, LABEL_SMOOTH_PASSES) & outer & ~deep
+    temple_ok = outer & head & protect & ~deep & (facing <= PROTECT_FACING) & (Q[:, 1] > eye_y - SIDEBURN_M / k)
+    temple_tint, _ = tinted_hair(tint, scalp & (geo | voted), protect & ~voted, temple_ok)
+    temple = np.zeros(len(Q), bool)
+    for _ in range(TEMPLE_RINGS):
+        step = dilate(hair | temple, adj, 1) & temple_tint & ~hair & ~temple
+        if not step.any():
+            break
+        temple |= step
+    hair |= temple
     hair, enclosed, enclosure = fill_enclosed(hair, outer & head & ~protect, outer & (protect | ~head), adj,
                                               ENCLOSE_LEAK_SHARE)
     hair, filled = fill_label_holes(F, Q * k, hair, adj, HOLE_FILL_MAX_M2)
     hair &= largest_components(faces_all(F, hair), len(Q), 0.5)
     return {"hair": hair, "report": {
         "geo_seeds": int(geo.sum()), "geo_only": int((geo & ~voted & ~loose).sum()), "protect": int(protect.sum()),
-        "tint": tint_report, "tint_only": int((tinted & ~geo & ~voted & ~loose).sum()),
+        "tint": tint_report, "tint_only": int((tinted & ~geo & ~voted & ~loose).sum()), "temple": int(temple.sum()),
         "seeds": int(seed.sum()), "grown": int(grown.sum()), "enclosed_filled": enclosed, "enclosure": enclosure, "holes_filled": filled,
         "hairline_y_m": None if hairline_y is None else round(float(hairline_y) * k, 4)}}
 
@@ -692,11 +719,11 @@ class CutResult:
 
 def fit_params(shape: str) -> Tuple[float, float]:
     """``(clearance_m, spread_m)`` of the placed fit of a cut / shell (``garment_fit.fit_hair``): the cut's inner
-    sheet sits at ``CLEAR_CUT_M`` and keeps the spike's push spread; the shell's inner sheet at ``SHELL_INNER_M``
-    without spread (a shell pushed to its thickness would fold both sheets onto one)."""
+    edge sits at ``RIM_M`` (its inner sheet higher) and keeps the spike's push spread; the shell's inner sheet at
+    ``SHELL_INNER_M`` without spread (a shell pushed to its thickness would fold both sheets onto one)."""
     if shape == "shell":
         return SHELL_INNER_M, 0.0
-    return CLEAR_CUT_M, gf.SPREAD_M
+    return RIM_M, gf.SPREAD_M
 
 
 def _scale(body_u, body_r) -> Tuple[float, np.ndarray]:
@@ -1177,7 +1204,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     surface = gf.BodySurface(Pb, Fb[gf.outer_faces(Pb, Fb, sdf)])   # never onto an inner wall
     snap, normal, d_m = _snap_offsets(Pw_q, surface, k)
     if shape == "cut":
-        # The inner sheet sits AT the placed fit's clearance (INNER_OFFSET_M = CLEAR_CUT_M), thin hair's outer sheet
+        # The inner sheet sits above the placed fit's clearance (INNER_OFFSET_M > RIM_M), thin hair's outer sheet
         # just above it: the fit then has nothing to push. With the inner sheet lowered under thin hair (down to
         # 0.5 mm, the old clip) the fit pushed it to the clearance and its spread carried that push onto the
         # neighbours already there — Kira's front 6.0 -> 10.8 mm p50 (edge 0.8 -> 7.4 mm) off the forehead,
@@ -1190,6 +1217,22 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
         outer = Pw_q.copy()
         thin = near & (sd_outer < INNER_OFFSET_M + INNER_GAP_M)
         outer[thin] = snap[thin] + normal[thin] * ((INNER_OFFSET_M + INNER_GAP_M) / k)
+        # the rolled edge: near the scalp the inner sheet comes down to RIM_M at ring 0 (re-seated after the edge
+        # smoothing, like the shell's rim) and rises ring by ring; the outer sheet keeps its height above it
+        ring_no = np.full(len(wu), RIM_RINGS, np.int64)
+        ring_no[ring0] = 0
+        reached = ring0.copy()
+        for r in range(1, RIM_RINGS):
+            step = dilate(reached, adj_w, 1) & ~reached
+            ring_no[step] = r
+            reached |= step
+        roll = near & (ring_no < RIM_RINGS)
+        lift = RIM_M + (INNER_OFFSET_M - RIM_M) * ring_no / RIM_RINGS
+        height = outer - inner
+        inner[roll] = snap[roll] + normal[roll] * (lift[roll] / k)[:, None]
+        outer[roll] = inner[roll] + height[roll]
+        seat, seat_n = surface.closest(inner[ring0 & near])
+        inner[ring0 & near] = seat + seat_n * (RIM_M / k)
         # ring 0: the sheets meet (on the inner sheet near the scalp, on the outer one at a free strand's end)
         meet = np.where(near[:, None], inner, smooth_edge(outer, B_edges, EDGE_SMOOTH_PASSES))
         inner[ring0] = meet[ring0]
@@ -1258,8 +1301,14 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
                         "largest_share": round(float(shares.max()) if len(shares) else 0.0, 4),
                         "vertices": int(len(Pc)), "faces": int(len(Fc))}
 
+    rim_at = ring0 & (d_m < SNAP_MAX_M)
+    rim_pts = np.concatenate([outer[rim_at], inner[rim_at]])
+    rim_mm = (np.linalg.norm(rim_pts - surface.closest(rim_pts)[0], axis=1) * k * 1000 if rim_at.any()
+              else np.zeros(0))
+    report["rim"] = {"n": int(rim_at.sum()), "p50_mm": round(float(np.median(rim_mm)), 2) if len(rim_mm) else None}
     metrics = {"registration_p95_cm": _finite(reg_p95, 3), "hairline_cm": _finite(hairline_cm, 2),
-               "label_holes": len(holes), "hair_area_cm2": round(hair_area_cm2, 1)}
+               "label_holes": len(holes), "hair_area_cm2": round(hair_area_cm2, 1),
+               "rim_p95_mm": round(float(np.percentile(rim_mm, 95)), 2) if len(rim_mm) else 0.0}
     ok, reasons = gf.gate(metrics, CUT_GATES)
     glb = static_glb(P_out, F_all, U_out, image=image, mime=mime, material=material, name="hair_subtract")
     clear, spread = fit_params(shape)

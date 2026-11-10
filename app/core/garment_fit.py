@@ -54,6 +54,12 @@ from app.core.glb_mesh import BodyMesh, GarmentMesh
 CLEAR_M = 0.0119
 VOX_M = 0.0034
 SPREAD_M = 0.0085
+# Hair (``fit_hair``) asks for less than CLEAR_M: the hair rides the rigid Head, and the mesher's hair lies INSIDE the
+# bald head after the framing (Kai 2026-11-10, ~/claude-out/kai-hair-gap: 99 % of the vertices, the hair's own outer
+# wall p50 11.8 mm inside), so the push makes ALL of it and the clearance becomes the gap: scalp -> hair p50 15-17 mm
+# at 11.9 mm, 10-11 mm at 6 mm (front 15.7 -> 9.7). 6 mm = the subtract cut's inner sheet
+# (``garment_cut.INNER_OFFSET_M``).
+HAIR_CLEAR_M = 0.006
 SPREAD_DEPTH_M = 0.119
 PROBE_M = 0.068
 KABSCH_RES_M = 0.006
@@ -103,8 +109,10 @@ RIGGED_SMOOTH_UNTIL = 7
 #: smooths the alignment's displacement over the mesh; v5 outfit-body fits could be torn open at the front.
 #: 7 (2026-11-10): clothing — the body solid is sealed (``_seal_cavities``: a hollow outfit body let the piece sink
 #: into its cavity, the skin showed through) and a fit placed from the base fit is not gated on the image placement.
+#: hair 3 (2026-11-10): the hair's clearance is ``HAIR_CLEAR_M`` (6 mm, was CLEAR_M 11.9) in the push AND the rigged
+#: pass (the edit chain's hair floated 15-17 mm off the scalp).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 3, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
@@ -1907,7 +1915,7 @@ def hair_gates(length_class: Optional[str] = None, *, shell: bool = False) -> Di
 
 def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes,
              bald_front_mask=None, ghost_front_mask=None, *, placed: bool = False,
-             clearance_m: float = CLEAR_M, spread_m: float = SPREAD_M,
+             clearance_m: float = HAIR_CLEAR_M, spread_m: float = SPREAD_M,
              gates: Optional[Dict[str, Tuple[str, float, str]]] = None) -> FitResult:
     """Fit a prepared (decimated) hair mesh onto the rigged base body.
 
@@ -1917,7 +1925,8 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
 
     ``placed`` (the subtract method, ``garment_cut``): the prepared mesh already lies in the unrigged base's
     frame — no ``place_by_framing`` / ``align_depth``, the masks are not needed. ``clearance_m`` / ``spread_m``
-    are the push-out's clearance and spread (metres; defaults ``CLEAR_M`` / ``SPREAD_M``), ``gates`` the limits
+    are the push-out's AND the rigged clearance pass's clearance and spread (metres; defaults ``HAIR_CLEAR_M`` /
+    ``SPREAD_M``), ``gates`` the limits
     the metrics are gated on (default ``GATES``; ``hair_gates`` per length class).
     """
     if not placed:
@@ -1946,10 +1955,11 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     if placed:
         sdf = ExactNearSdf(sdf, body_u.positions, body_u.faces, PLACED_EXACT_M / k)
     Qp, disp = push_out(Q, Fk, sdf, clear=clearance_m / k, spread=spread_m / k, spread_depth=SPREAD_DEPTH_M / k)
-    # placed: the rigged clearance pass keeps the cut's own clearance — the default CLEAR_M (11.9 mm) lifted a 1 mm
-    # shell to 12 mm off the scalp (Kai, p50 11.9 mm) and curled its rim where both sheets meet
+    # the rigged clearance pass keeps the fit's own clearance — the default CLEAR_M (11.9 mm) lifted a 1 mm shell to
+    # 12 mm off the scalp (Kai, p50 11.9 mm) and curled its rim where both sheets meet; the edit chain's hair at 6 mm
+    # went back to 15 mm through it (Kai 2026-11-10)
     X, transfer_report = (transfer(Qp, body_u, body_r, faces=Fk, clear_m=clearance_m, exact_near_m=PLACED_EXACT_M)
-                          if placed else transfer(Qp, body_u, body_r, faces=Fk))
+                          if placed else transfer(Qp, body_u, body_r, faces=Fk, clear_m=clearance_m))
     names, J, W = hair_weights(X, body_r)
     m = metrics(X, Fk, Q * k, Qp * k, body_r)
     ok, reasons = gate(m, gates)

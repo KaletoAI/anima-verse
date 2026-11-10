@@ -45,7 +45,8 @@ EXPECTED, BY HAND
     1138.8 cm^2 minus the 57..60-degree band cells at the 25 vertices: the band is 2 pi R^2 (cos 57 - cos 60) =
     101.7 cm^2 = 0.847 per longitude, a removed vertex takes the cell to its left whole and the last one half ->
     25.5 cells = 21.6 cm^2 -> 1117.2 cm^2 (+-2 %: chordal grid); the result is ONE closed component (welded: no
-    open edge); gates pass; fit params (0.006 m, SPREAD_M).
+    open edge); gates pass; the edge rolled onto the head: ring 0 re-seated at RIM_M = 1.0 mm by the closest point
+    (rim_p95_mm 1.0 +-0.05, CUT_VERSION 6); fit params (RIM_M 0.001 m, SPREAD_M).
 [e] cut_hair (shell, 5 mm): outer sheet median distance to the head sphere 5.0 mm (+-0.3), max <= 5.3 mm; inner
     sheet median 1.0 mm (+-0.3); a 512 x 512 PNG base colour; closed; gates pass; fit params (0.001 m, 0).
 [f] fill_label_holes: the cap minus a 2 x 4 patch of rows 5..6 -> one island filled, label == cap again; a
@@ -101,7 +102,9 @@ EXPECTED, BY HAND
     zone) -> label 2376, geo_seeds 0; hairline: the theta-57 ring y 0.9 + 0.103 cos 57 = 0.9561 vs 0.953 ->
     0.0031 x 1.7 = 0.53 cm (+-0.1). With the colour label off (TINT_MARGIN_DE 1e9) only the front votes: < 2376.
     The sheets (5.1 mm hair < INNER_OFFSET_M 6 + INNER_GAP_M 1): inner sheet at 6.0 mm, outer lifted to 7.0 mm
-    (medians over the vertices off the edge, +-0.2 mm: chordal grid), every snapped vertex lifted.
+    (medians over the vertices off the edge, +-0.2 mm: chordal grid), every snapped vertex lifted. The temple
+    flood (CUT_VERSION 6) takes none of the 25 hair-coloured face-zone vertices: they face forward (front-facing
+    theta-60 ring, B's normal z > PROTECT_FACING) -> temple 0.
 """
 import io
 import math
@@ -297,7 +300,8 @@ def test_cut():
     near("hair area (cm2)", res.metrics["hair_area_cm2"], 1117.2, 1117.2 * 0.02)
     check("closed: no open edge, one component", (res.report["closed"]["open_edges"],
                                                   res.report["closed"]["components"]), (0, 1))
-    check("fit params", (res.clearance_m, res.spread_m), (0.006, gf.SPREAD_M))
+    near("rim p95 (mm): ring 0 at RIM_M", res.metrics["rim_p95_mm"], 1.0, 0.05)
+    check("fit params", (res.clearance_m, res.spread_m), (0.001, gf.SPREAD_M))
     P, F, _U, image, mime, _mat = static_arrays(res.glb)
     outer = P[: len(P) // 2]
     theta = np.degrees(np.arccos(np.clip((outer[:, 1] - C[1]) / np.linalg.norm(outer - C, axis=1), -1, 1)))
@@ -564,6 +568,7 @@ def test_flat_hair():
     check("ok", (res.ok, res.reasons), (True, []))
     check("no geometry seed (5.1 mm < 12 mm)", lab_rep["geo_seeds"], 0)
     check("colour label used", lab_rep["tint"]["used"], True)
+    check("temple flood: none of the forward-facing face-zone vertices", lab_rep["temple"], 0)
     check("label = 2401 cap vertices - 25 in the face zone", lab_rep["vertices"], 2376)
     near("hairline (cm)", res.metrics["hairline_cm"], 0.53, 0.1)
     check("holes", res.metrics["label_holes"], 0)
