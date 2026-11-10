@@ -37,6 +37,7 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { FreshnessBadge } from './FreshnessBadge'
+import { meshNotReadyText } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { RefImage } from './RefImage'
@@ -466,13 +467,20 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
             <div>
               <div className="ga-fieldset-title" style={{ margin: '0 0 2px' }}>{t('Outfits on this body')}</div>
               {body.outfits.length ? body.outfits.map((o) => (
-                <div key={o.signature} className="ga-model3d-status-row ga-obody-line"
-                  title={[o.signature, o.stale_reason === 'outfit_body' ? t('Built on an older outfit body')
-                    : o.stale_reason === 'body_mode' ? t('Built for the other outfit body mode') : ''].filter(Boolean).join('\n')}>
-                  <span className={`ga-model3d-status-dot ga-model3d-status-${o.stale_reason ? 'yellow' : 'green'}`} />
-                  <span className="ga-model3d-status-text">
-                    {o.name || o.signature}{o.worn ? ` · ${t('worn')}` : ''}{o.stale_reason ? ` · ${t('outdated')}` : ''}
-                  </span>
+                <div key={o.signature}>
+                  <div className="ga-model3d-status-row ga-obody-line"
+                    title={[o.signature, o.stale_reason === 'outfit_body' ? t('Built on an older outfit body')
+                      : o.stale_reason === 'body_mode' ? t('Built for the other outfit body mode') : ''].filter(Boolean).join('\n')}>
+                    <span className={`ga-model3d-status-dot ga-model3d-status-${o.stale_reason ? 'yellow' : 'green'}`} />
+                    <span className="ga-model3d-status-text">
+                      {o.name || o.signature}{o.worn ? ` · ${t('worn')}` : ''}{o.stale_reason ? ` · ${t('outdated')}` : ''}
+                    </span>
+                  </div>
+                  {(o.missing_mesh_items || []).map((m) => (
+                    <div key={m.item_id} className="ga-hint" style={WARNING_STYLE}>
+                      {meshNotReadyText(t, m.name, m.reason)}
+                    </div>
+                  ))}
                 </div>
               )) : <div className="ga-hint">{t('No outfit model stands on it')}</div>}
             </div>

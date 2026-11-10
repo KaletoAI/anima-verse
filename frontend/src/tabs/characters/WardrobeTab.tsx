@@ -391,7 +391,7 @@ export function WardrobeTab({ character }: { character: string }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 50, minWidth: 0 }}>
                   <OwnMeshToggle itemId={it.item_id} checked={!!garmentStatus} disabled={busy}
                     onChanged={() => { void load() }} />
-                  {garmentStatus ? <PieceStatusChip status={garmentStatus} /> : null}
+                  {garmentStatus ? <PieceStatusChip status={garmentStatus} name={it.name} /> : null}
                   {garmentStatus ? (
                     <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
                       onClick={() => setOpenGarment(it.item_id)}>

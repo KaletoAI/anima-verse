@@ -596,14 +596,21 @@ def render_view(character_name: str, body_id: str, view: str) -> Dict[str, Any]:
 
 def _outfits_on_body(character_name: str, body_id: str, models: Dict[str, Dict[str, Any]],
                      saved: List[Dict[str, Any]], worn: str) -> List[Dict[str, Any]]:
+    """The outfit models on the body: ``{signature, name, worn, stale_reason,
+    missing_mesh_items, meta}`` — ``missing_mesh_items`` the own-mesh pieces
+    it is missing because they have no accepted fit yet (ruling 2026-11-10,
+    ``base_body.mesh_items_missing``): ``[{item_id, name, reason}]``."""
     from app.core import base_body
+    from app.models.inventory import get_item
     out = []
     for sig, meta in models.items():
         if meta.get("body_id") != body_id:
             continue
         stale = base_body.outfit_body_stale(character_name, meta)
+        missing = [{"item_id": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
+                    "reason": reason} for item_id, reason in base_body.mesh_items_missing(character_name, meta)]
         out.append({"signature": sig, "name": _outfit_name(meta, saved), "worn": sig == worn,
-                    "stale_reason": stale or None, "meta": meta})
+                    "stale_reason": stale or None, "missing_mesh_items": missing, "meta": meta})
     return sorted(out, key=lambda e: (not e["worn"], e["name"], e["signature"]))
 
 

@@ -26,6 +26,13 @@ export const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', ove
 export const WARN_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
 export const ROW: CSSProperties = { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }
 
+/** The warning of an own-mesh piece the outfit model is missing in outfit body mode mesh: no accepted fit
+ *  yet, so it is never meshed into the outfit body (server `base_body.MESH_ITEM_NOT_READY`). */
+export function meshNotReadyText(t: (key: string) => string, item: string, reason: string | null | undefined): string {
+  return t('{item}: own mesh not ready — not shown until its mesh is accepted ({reason})')
+    .replace('{item}', item).replace('{reason}', t(reason || ''))
+}
+
 /** The server's chip limits per step (`limits` of the info routes). */
 export type GarmentLimits = Partial<Record<string, Record<string, GateLimit>>>
 

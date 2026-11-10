@@ -4306,6 +4306,8 @@
     "without {items}": "ohne {items}",
     "Mesh steps": "Mesh-Schritte",
     "no accepted fit on the current base model": "keine akzeptierte Anpassung auf dem aktuellen Grundmodell",
+    "{item}: own mesh not ready — not shown until its mesh is accepted ({reason})": "{item}: eigenes Mesh nicht fertig — nicht sichtbar, bis sein Mesh akzeptiert ist ({reason})",
+    "An own-mesh piece is painted on here — the mesh mode leaves it out": "Hier ist ein Teil mit eigenem Mesh aufgemalt — der Mesh-Modus lässt es weg",
     "Base body model missing — generate it in the 3D tab": "Grundkörper-Modell fehlt — im 3D-Tab erzeugen",
     "Rebuilding from the base body…": "Wird aus dem Grundkörper neu gebaut…",
     "No 3D model for this outfit yet — it is built from the base body (Rebuild from base body).": "Noch kein 3D-Modell für dieses Outfit — es wird aus dem Grundkörper gebaut (Aus Grundkörper neu bauen).",

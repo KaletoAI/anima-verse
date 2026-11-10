@@ -25,9 +25,10 @@ assembly of its predecessor.
 
 Which garment: the hair of the profile's ``equipped_mesh_pieces`` (outfit
 independent) plus the own-mesh outfit pieces of THE SIGNATURE — the
-``mesh_items.effective`` list its bare sidecar recorded (plan
-2026-11-09-base-body-phase5-mesh-items, Task 4: the pieces the build left
-out of the texture), never the current profile's pieces, so a stand-in or a
+pieces its bare sidecar recorded as left out of the texture
+(``effective_mesh_items``: ``mesh_items.effective``, in outfit body mode mesh
+``mesh_items.unpainted``; plan 2026-11-09-base-body-phase5-mesh-items, Task
+4), never the current profile's pieces, so a stand-in or a
 model of another outfit carries exactly the garments its texture lacks.
 Per garment the fit ``garment_store.accepted_fit`` names on the CURRENT base
 model (current fsig, else the newest accepted fit) — and only when the bare
@@ -187,12 +188,12 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
 
 def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
     """The own-mesh outfit pieces a bare outfit model was built WITHOUT in its
-    texture (sidecar ``mesh_items.effective``), sorted; [] when it records
-    none."""
-    mesh = (bare_meta or {}).get("mesh_items")
-    if not isinstance(mesh, dict):
-        return []
-    return sorted({str(i) for i in (mesh.get("effective") or []) if isinstance(i, str) and i})
+    texture (``base_body.mesh_items_unpainted``: sidecar
+    ``mesh_items.effective``; in outfit body mode mesh ``unpainted``, every
+    flagged piece — one without an accepted fit yet is simply not grafted
+    until it has one, ruling 2026-11-10), sorted; [] when it records none."""
+    from app.core.base_body import mesh_items_unpainted
+    return mesh_items_unpainted(bare_meta)
 
 
 def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,

@@ -1935,14 +1935,17 @@ def get_character_garment(character_name: str, item_id: str,
     pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
     mesh_pieces = profile.get("equipped_mesh_pieces") if isinstance(profile.get("equipped_mesh_pieces"), dict) else {}
     worn = item_id in pieces.values() or item_id in mesh_pieces.values()
-    # Only clothing is painted on while it has no fit (hair is simply absent).
+    # Only clothing is painted on while it has no fit (hair is simply absent);
+    # in outfit body mode mesh it is missing instead (ruling 2026-11-10).
     painted_when_unfitted = bool(pipeline and worn and kind == garment_set.CLOTHING)
+    mesh_mode = bool(pipeline and base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE)
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "own_mesh": kind == garment_set.CLOTHING, "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=painted_when_unfitted, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,
-                                                  base_model_sha=base[1] if base else "").get(item_id)),
+                                                  base_model_sha=base[1] if base else "").get(item_id),
+                   mesh_mode=mesh_mode),
                "garment": info, "limits": _garment_limits(kind)}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)

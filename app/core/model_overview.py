@@ -22,7 +22,8 @@ a 3D model or an image, decided here on the server.
      view guard, the back refit, the body retexture proof, the restored face
      texels, the extension rig (inherited from the base), the collision
      capsules (the base's set, ``collision.py``), the own-mesh
-     pieces (own garment mesh / left painted on), the garments assembled
+     pieces (own garment mesh / left painted on / in mesh mode missing
+     until their fit is accepted), the garments assembled
      onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it. On an
      OUTFIT BODY (``outfit_body_mode: "mesh"``) the painted-body, back-refit,
@@ -43,7 +44,7 @@ a 3D model or an image, decided here on the server.
    dressed front a draft was made from (and a dressed back/side of an
    outfit body, ``outfit_body_view_freshness``, plus its dress text), the
    base views a base model was built from, an own-mesh piece painted on that has its garment mesh now
-   (``mesh_item_ready``), the garment fsig and the hair stale reasons, the pose render
+   (``mesh_item_ready``) or that the outfit body mode handles otherwise now (``mesh_items_off_rule``), the garment fsig and the hair stale reasons, the pose render
    behind an old-path model, the profile picture behind the face view.
 
 The ``annotate_*`` functions add both to the payloads of the info routes
@@ -711,23 +712,33 @@ def _face_texels_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 f"{int(restored or 0):,} of {int(numbers['mask'] or 0):,} texels", numbers)
 
 
-def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str]) -> Optional[Dict[str, Any]]:
+def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
+                     missing: Iterable[str] = ()) -> Optional[Dict[str, Any]]:
     """The own-mesh pieces of an outfit model (sidecar ``mesh_items``): which
     are their own garment mesh, which stayed painted on (their reasons are in
-    the garment warnings). None for an outfit without any."""
+    the garment warnings) and — outfit body mode mesh, ruling 2026-11-10 —
+    which are missing from it because they have no accepted fit yet
+    (``missing``: ``base_body.mesh_items_missing``, judged now; "missing
+    own-mesh pieces: …"). None for an outfit without any."""
+    from app.core.base_body import mesh_items_unpainted
     mesh = _dict(meta.get("mesh_items"))
     intended = [i for i in mesh.get("intended") or [] if isinstance(i, str)]
     if not intended:
         return None
-    effective = [i for i in intended if i in set(mesh.get("effective") or [])]
-    painted = [i for i in intended if i not in effective]
+    unpainted = set(mesh_items_unpainted(meta))
+    absent = set(missing) & unpainted
+    effective = [i for i in intended if i in unpainted and i not in absent]
+    painted = [i for i in intended if i not in unpainted]
+    lacking = [i for i in intended if i in absent]
     parts = []
     if effective:
         parts.append("own mesh: " + ", ".join(names.get(i, i) for i in effective))
     if painted:
         parts.append("painted on: " + ", ".join(names.get(i, i) for i in painted))
-    return step("mesh_items", "Own-mesh pieces", WARNING if painted else DONE, " · ".join(parts),
-                {"intended": len(intended), "effective": len(effective)})
+    if lacking:
+        parts.append("missing own-mesh pieces: " + ", ".join(names.get(i, i) for i in lacking))
+    return step("mesh_items", "Own-mesh pieces", WARNING if painted or lacking else DONE, " · ".join(parts),
+                {"intended": len(intended), "effective": len(effective), "missing": len(lacking) or None})
 
 
 def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[Dict[str, Any]]:
@@ -761,7 +772,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        refit_limit: float = 4.0, covered_missing_text: str = "",
                        item_names: Optional[Dict[str, str]] = None,
                        texture_shared: Optional[int] = None,
-                       body_meta: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                       body_meta: Optional[Dict[str, Any]] = None,
+                       missing_items: Iterable[str] = ()) -> List[Dict[str, Any]]:
     """The steps of an outfit model on the base-body pipeline (pure).
     ``meta``: its sidecar; ``base``: the current ``(bsig, base model
     sha256)``; ``base_meta``: the sidecar of the base model it names (None
@@ -774,7 +786,9 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     ``item_names``: item id -> name for the own-mesh pieces row;
     ``texture_shared``: how many stored outfit models use its painted body;
     ``body_meta``: the sidecar of the outfit body it names (mesh mode; None
-    when gone or in retexture mode)."""
+    when gone or in retexture mode); ``missing_items``: the own-mesh pieces
+    it left out that have no accepted fit now (mesh mode,
+    ``base_body.mesh_items_missing``)."""
     on_body = meta.get("outfit_body_mode") == "mesh"
     proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
@@ -819,7 +833,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
         source = ""
     rows.append(_extension_step(state, source=source))
     rows.append(_collision_step(meta))
-    mesh_row = _mesh_items_step(meta, item_names or {})
+    mesh_row = _mesh_items_step(meta, item_names or {}, missing_items)
     if mesh_row is not None:
         rows.append(mesh_row)
     rows += _garment_steps(garments, [w for w in (meta.get("garment_warnings") or []) if isinstance(w, str)])
@@ -831,10 +845,13 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
 # --- Freshness rules (pure) ------------------------------------------------------
 
 def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
-                      mesh_ready: bool = False) -> Dict[str, str]:
+                      mesh_ready: bool = False, off_rule: str = "") -> Dict[str, str]:
     """A dressed view on the pipeline: made from the current base view?
     ``mesh_ready``: an own-mesh piece it left painted on has its garment
-    mesh now (``base_body.mesh_items_ready``)."""
+    mesh now (``base_body.mesh_items_ready``); ``off_rule``: the reason
+    when its own-mesh pieces follow the other outfit body mode's rule
+    (``base_body.mesh_items_off_rule``: ``MESH_ITEM_PAINTED_IN`` in mesh
+    mode, ``BODY_MODE_CHANGED`` in retexture mode), "" when they do not."""
     if not meta.get("base_signature"):
         return freshness(MISSING, NO_PROVENANCE)
     if meta["base_signature"] != bsig:
@@ -845,6 +862,8 @@ def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
         return freshness(STALE, OLDER_BASE_VIEW)
     if mesh_ready:
         return freshness(STALE, MESH_ITEM_READY)
+    if off_rule:
+        return freshness(STALE, off_rule)
     return freshness(CURRENT)
 
 
@@ -1126,7 +1145,9 @@ def outfit_model_overview(character_name: str,
                                texture_shared=(len(base_body.texture_users(character_name).get(
                                    str(meta.get("texture_signature")), [])) if meta.get("texture_signature")
                                    else None),
-                               body_meta=body_meta)
+                               body_meta=body_meta,
+                               missing_items=[i for i, _reason in base_body.mesh_items_missing(
+                                   character_name, meta, base_sha=base[1] if base else None)])
     return steps, dressed_newer(str(meta.get("created_at") or ""), records)
 
 
@@ -1174,9 +1195,13 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
                 return
             path = find_ref_image(character_name, base_body._kind(view), signature) if signature else None
             record = _sidecar(path)
+            off_rule = ""
+            if base_body.mesh_items_off_rule(character_name, record, bsig=bsig):
+                off_rule = (base_body.MESH_ITEM_PAINTED_IN if base_body.outfit_body_mode(character_name)
+                            == base_body.MESH_MODE else base_body.BODY_MODE_CHANGED)
             tile["freshness"] = dressed_freshness(
                 record, bsig=bsig, base_view_sha=shas.get(view, ""),
-                mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)))
+                mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)), off_rule=off_rule)
 
         mark(info.get("tpose"), "front")
         if isinstance(info.get("pose"), dict):

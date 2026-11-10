@@ -944,6 +944,17 @@ MESH_ITEM_PAINTED = "{item} stays painted on: {reason}"
 #: that fsig (``garments.cached_failure``), only Regenerate does.
 MESH_ITEM_FAILED = "{item} stays painted on: {reason} — Regenerate in the Wardrobe"
 NO_MESH_FIT = "no accepted fit on the current base model"
+#: Outfit body mode ``mesh`` (ruling 2026-11-10): a flagged piece without an
+#: accepted fit is never painted (meshed) into the outfit body — it is
+#: missing from the outfit model until its mesh is accepted. The same English
+#: text is a React key (Outfit body tab, Wardrobe), built there from the parts.
+MESH_ITEM_NOT_READY = "{item}: own mesh not ready — not shown until its mesh is accepted ({reason})"
+#: ... the reason of a piece whose garment chain failed for its fsig (only
+#: Regenerate in the Wardrobe retries it, ``garments.cached_failure``).
+MESH_ITEM_CHAIN_FAILED = "{step} — {error} — Regenerate in the Wardrobe"
+#: A dressed view / outfit model of the mesh mode built while the old rule
+#: painted an own-mesh piece without a fit into it (the outfit body).
+MESH_ITEM_PAINTED_IN = "An own-mesh piece is painted on here — the mesh mode leaves it out"
 
 
 def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
@@ -958,8 +969,9 @@ def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str
     layer: the pieces, else (nothing structured worn) a dressed free-text
     wardrobe's text; the items follow with their own verb ("holding …").
 
-    ``mesh_items``: own-mesh pieces that are their own garment mesh on this
-    outfit (``resolve_mesh_items``' effective set) — left out of the pieces
+    ``mesh_items``: own-mesh pieces left out of the texture on this outfit
+    (``mesh_items_unpainted`` of ``resolve_mesh_items``' record: the
+    effective set, in mesh mode every flagged piece) — left out of the pieces
     BEFORE the renderer resolves ``covers`` / ``partially_covers``, so what
     lies under them is painted (plan 2026-11-09-base-body-phase5 Task 4).
     Pieces that are ALL mesh items leave nothing to paint: "" (never the
@@ -1158,6 +1170,24 @@ def variant_current(character_name: str, meta: Dict[str, Any], *,
 
 
 # --- Own-mesh outfit pieces (plan 2026-11-09-base-body-phase5-mesh-items, Task 4) ---
+#
+# The record (sidecar ``mesh_items`` of every dressed view and outfit model,
+# ``resolve_mesh_items``): ``intended`` = the flagged worn pieces,
+# ``effective`` = those with an accepted fit when it was made, ``warnings``.
+# Which pieces the dress text LEFT OUT (``mesh_items_unpainted``) depends on
+# the outfit body mode:
+#
+# * ``retexture`` (ruling P1: never a bare body where it belongs, never
+#   painted AND a mesh): the effective set — a piece without a fit is painted
+#   on until its mesh is accepted (painting is one cheap texture step). Such
+#   a record has no ``unpainted`` key.
+# * ``mesh`` (ruling 2026-11-10): EVERY intended piece (``unpainted`` =
+#   ``intended``) — painting a piece there would mesh it into an outfit body
+#   (mesh + rig hub jobs) that is thrown away once the piece's own mesh is
+#   accepted. A piece without a fit is MISSING from the outfit model until
+#   then (``missing``: item -> reason, ``MESH_ITEM_NOT_READY``); the tsig and
+#   the body id do not change when it gets one, so its acceptance only
+#   assembles it onto the existing body (``after_mesh_item_ready``).
 
 def mesh_items_intended(record: Dict[str, Any]) -> List[str]:
     """The own-mesh pieces a dressed view / outfit model was made for
@@ -1168,11 +1198,28 @@ def mesh_items_intended(record: Dict[str, Any]) -> List[str]:
     return [str(i) for i in mesh.get("intended") or [] if isinstance(i, str) and i]
 
 
-def _mesh_items_pending(record: Dict[str, Any]) -> List[str]:
-    """Intended but not effective: the pieces left painted on."""
+def mesh_items_unpainted(record: Optional[Dict[str, Any]]) -> List[str]:
+    """The own-mesh pieces a dressed view / outfit model LEFT OUT of its dress
+    text (block above): the recorded ``unpainted`` (mesh mode), else
+    ``effective`` (retexture mode); sorted, [] when it records none."""
     mesh = record.get("mesh_items") if isinstance(record, dict) else None
-    effective = set((mesh or {}).get("effective") or []) if isinstance(mesh, dict) else set()
-    return sorted(set(mesh_items_intended(record)) - effective)
+    if not isinstance(mesh, dict):
+        return []
+    key = "unpainted" if isinstance(mesh.get("unpainted"), list) else "effective"
+    return sorted({str(i) for i in mesh.get(key) or [] if isinstance(i, str) and i})
+
+
+def _mesh_items_pending(record: Dict[str, Any]) -> List[str]:
+    """Intended but not left out: the pieces painted on."""
+    return sorted(set(mesh_items_intended(record)) - set(mesh_items_unpainted(record)))
+
+
+def _record_base_sha(character_name: str, record: Dict[str, Any], bsig: Optional[str],
+                     base_sha: Optional[str]) -> str:
+    if base_sha is not None:
+        return base_sha
+    bsig = bsig or str(record.get("base_signature") or "")
+    return base_model_sha256(character_name, bsig) if bsig else ""
 
 
 def mesh_items_ready(character_name: str, record: Dict[str, Any], *, bsig: Optional[str] = None,
@@ -1186,14 +1233,63 @@ def mesh_items_ready(character_name: str, record: Dict[str, Any], *, bsig: Optio
     pending = _mesh_items_pending(record)
     if not pending:
         return []
-    if base_sha is None:
-        bsig = bsig or str(record.get("base_signature") or "")
-        base_sha = base_model_sha256(character_name, bsig) if bsig else ""
+    base_sha = _record_base_sha(character_name, record, bsig, base_sha)
     if not base_sha:
         return []
     from app.core import garment_store
     return [item_id for item_id in pending
             if garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha) is not None]
+
+
+def mesh_items_missing(character_name: str, record: Dict[str, Any], *, bsig: Optional[str] = None,
+                       base_sha: Optional[str] = None) -> List[Tuple[str, str]]:
+    """Mesh mode (ruling 2026-11-10): the pieces a dressed view / outfit
+    model left out that have NO accepted fit on the current base model now
+    (``base_sha`` / ``bsig`` as in ``mesh_items_ready``) — missing from the
+    outfit model until their fit is accepted. ``[(item_id, reason)]``, the
+    reason the build recorded (``mesh_items.missing``), else ``NO_MESH_FIT``
+    / ``BASE_MODEL_MISSING``. [] for a record without ``unpainted`` (made in
+    retexture mode: its pieces without a fit are painted on)."""
+    mesh = record.get("mesh_items") if isinstance(record, dict) else None
+    if not isinstance(mesh, dict) or not isinstance(mesh.get("unpainted"), list):
+        return []
+    unpainted = mesh_items_unpainted(record)
+    if not unpainted:
+        return []
+    base_sha = _record_base_sha(character_name, record, bsig, base_sha)
+    recorded = mesh.get("missing") if isinstance(mesh.get("missing"), dict) else {}
+    from app.core import garment_store
+    out: List[Tuple[str, str]] = []
+    for item_id in unpainted:
+        if base_sha and garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha) is not None:
+            continue
+        out.append((item_id, str(recorded.get(item_id) or "") or (NO_MESH_FIT if base_sha else BASE_MODEL_MISSING)))
+    return out
+
+
+def mesh_item_warnings(missing: Iterable[Tuple[str, str]]) -> List[str]:
+    """``MESH_ITEM_NOT_READY`` per ``(item_id, reason)`` of ``mesh_items_missing``."""
+    from app.models.inventory import get_item
+    return [MESH_ITEM_NOT_READY.format(item=str((get_item(item_id) or {}).get("name") or item_id), reason=reason)
+            for item_id, reason in missing]
+
+
+def mesh_items_off_rule(character_name: str, record: Dict[str, Any], *, bsig: Optional[str] = None,
+                        base_sha: Optional[str] = None, profile: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The own-mesh pieces a dressed view / outfit model handled under the
+    OTHER outfit body mode's rule (block above) — such a record is stale. In
+    mesh mode: the pieces it painted on (``_mesh_items_pending``; made in
+    retexture mode, or in mesh mode before the ruling of 2026-11-10 — they
+    are in its outfit body's mesh). In retexture mode: the pieces a mesh-mode
+    record left out that still have no fit (``mesh_items_missing``; they
+    belong painted on). [] when none (cheap: no profile is read for a record
+    without own-mesh pieces)."""
+    if not mesh_items_intended(record):
+        return []
+    if outfit_body_mode(character_name, profile=profile) == MESH_MODE:
+        return _mesh_items_pending(record)
+    return [item_id for item_id, _reason in mesh_items_missing(character_name, record, bsig=bsig,
+                                                               base_sha=base_sha)]
 
 
 def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
@@ -1207,12 +1303,24 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
     finished chain returns at once). ``intended`` = the flagged worn pieces
     (``garment_set.worn_garments``, kind clothing), ``effective`` = those
     with an accepted fit on the current base model
-    (``garment_store.accepted_fit``), ``warnings`` = one ``MESH_ITEM_PAINTED``
-    entry per piece left out of ``effective`` with the chain's error — such
-    a piece stays painted on (ruling P1: never a bare body where it belongs,
-    never painted AND a mesh). A chain that failed for its current fsig is
-    not run again here (``garments.run_queued`` skips it, fix round 1): the
-    warning says to Regenerate in the Wardrobe."""
+    (``garment_store.accepted_fit``).
+
+    Retexture mode: a piece left out of ``effective`` stays painted on, one
+    ``MESH_ITEM_PAINTED`` warning each with the chain's error (ruling P1:
+    never a bare body where it belongs, never painted AND a mesh).
+
+    Mesh mode (``outfit_body_mode``, ruling 2026-11-10): no flagged piece is
+    painted — ``unpainted`` = ``intended``, so the dress text, the tsig and
+    the outfit body hold the painted pieces only and stay the same when a
+    piece's mesh is accepted later (then it is only assembled onto that
+    body, ``after_mesh_item_ready``: no second body, no hub job). A piece
+    without a fit is missing from the outfit model meanwhile: ``missing``
+    (item -> reason) and one ``MESH_ITEM_NOT_READY`` warning each.
+
+    A chain that failed for its current fsig is not run again here
+    (``garments.run_queued`` skips it, fix round 1): the warning says to
+    Regenerate in the Wardrobe (``MESH_ITEM_FAILED`` /
+    ``MESH_ITEM_CHAIN_FAILED``)."""
     from app.core import garment_set, garment_store, garments
     from app.models.inventory import get_item
     profile = _profile_of(character_name, profile)
@@ -1221,10 +1329,12 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
                 if garment_set.garment_kind_of(get_item(item_id)) == garment_set.CLOTHING]
     if not intended:
         return {}
+    mesh_mode = outfit_body_mode(character_name, profile=profile) == MESH_MODE
     results = garments.run_queued(character_name, intended)
     base_sha = base_model_sha256(character_name, base_signature(character_name, profile=profile))
     effective: List[str] = []
     warnings: List[str] = []
+    missing: Dict[str, str] = {}
     for item_id in intended:
         fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha) if base_sha else None
         if fit is not None:
@@ -1233,22 +1343,39 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
         result = results.get(item_id) or {}
         reason = str(result.get("error") or "") or (NO_MESH_FIT if base_sha else BASE_MODEL_MISSING)
         name = str((get_item(item_id) or {}).get("name") or item_id)
-        if result.get("step") and result.get("error"):
+        failed = bool(result.get("step") and result.get("error"))
+        if mesh_mode:
             # The chain failed for this fsig: cached, only Regenerate retries.
+            missing[item_id] = (MESH_ITEM_CHAIN_FAILED.format(step=result["step"], error=reason) if failed
+                                else reason)
+            warnings.append(MESH_ITEM_NOT_READY.format(item=name, reason=missing[item_id]))
+        elif failed:
             warnings.append(MESH_ITEM_FAILED.format(item=name, reason=f"{result['step']} — {reason}"))
         else:
             warnings.append(MESH_ITEM_PAINTED.format(item=name, reason=reason))
-    logger.info("Own-mesh pieces of %s: intended %s, effective %s", character_name, intended, effective)
-    return {"intended": intended, "effective": effective, "warnings": warnings}
+    logger.info("Own-mesh pieces of %s (%s mode): intended %s, effective %s", character_name,
+                MESH_MODE if mesh_mode else RETEXTURE_MODE, intended, effective)
+    out: Dict[str, Any] = {"intended": intended, "effective": effective, "warnings": warnings}
+    if mesh_mode:
+        out.update(unpainted=list(intended), missing=missing)
+    return out
 
 
 def after_mesh_item_ready(character_name: str, item_id: str) -> bool:
-    """A garment run accepted a fit of the own-mesh piece ``item_id``: when
-    the CURRENT outfit's dressed front (or its model) left that piece painted
-    on, the outfit's mesh inputs are rendered again (``dressed_image`` now
-    calls them stale, ``MESH_ITEM_READY``) and the model is rebuilt after
-    them (``model_refs`` → ``model3d.maybe_auto_generate_for_outfit``).
-    True when that was asked for. Never raises."""
+    """A garment run accepted a fit of the own-mesh piece ``item_id``.
+
+    Mesh mode (ruling 2026-11-10): when the CURRENT outfit model stands on
+    an outfit body and left that piece out (``mesh_items_unpainted``), the
+    body stays — the piece is only assembled onto it
+    (``garment_assembly.schedule``: its fit on the body, CPU, then the
+    graft). No dressed view, no body rebuild, no hub job.
+
+    Otherwise, when the CURRENT outfit's dressed front (or its model) left
+    that piece painted on, the outfit's mesh inputs are rendered again
+    (``dressed_image`` now calls them stale, ``MESH_ITEM_READY``) and the
+    model is rebuilt after them (``model_refs`` →
+    ``model3d.maybe_auto_generate_for_outfit``).
+    True when either was asked for. Never raises."""
     try:
         from app.core import model3d
         from app.core.model_refs import current_outfit_state, find_ref_image, trigger_now
@@ -1258,10 +1385,20 @@ def after_mesh_item_ready(character_name: str, item_id: str) -> bool:
         signature = current_outfit_state(character_name)[2]
         bsig = base_signature(character_name, profile=profile)
         base_sha = base_model_sha256(character_name, bsig)
-        records = [_ref_sidecar(find_ref_image(character_name, "tpose", signature))]
         path = model3d.find_model3d(character_name, signature, include_stale=True)
+        model_meta = model3d._read_sidecar(path) if path is not None else {}
+        if (outfit_body_mode(character_name, profile=profile) == MESH_MODE
+                and model_meta.get("outfit_body_mode") == MESH_MODE
+                and item_id in mesh_items_unpainted(model_meta)
+                and not _mesh_items_pending(model_meta)):
+            from app.core import garment_assembly
+            logger.info("Own-mesh piece %s of %s has a fit now: assembled onto outfit body %s of outfit %s "
+                        "(no body rebuild)", item_id, character_name, model_meta.get("body_id"), signature)
+            garment_assembly.schedule(character_name, signature)
+            return True
+        records = [_ref_sidecar(find_ref_image(character_name, "tpose", signature))]
         if path is not None:
-            records.append(model3d._read_sidecar(path))
+            records.append(model_meta)
         if not any(item_id in mesh_items_ready(character_name, r, base_sha=base_sha) for r in records):
             return False
         logger.info("Own-mesh piece %s of %s has a fit now: outfit %s is rendered again without it",
@@ -1415,7 +1552,10 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str) -> 
     re-rendered one, does not line up with it). Only ``dressed_views()`` are
     dressed; a side view is None while the side views are off. A view that
     left an own-mesh piece painted on which has an accepted fit now
-    (``mesh_items_ready``) does not count either."""
+    (``mesh_items_ready``) does not count either, nor one whose own-mesh
+    pieces follow the other outfit body mode's rule (``mesh_items_off_rule``:
+    in mesh mode a piece painted on, in retexture mode a mesh-mode view that
+    left out a piece still without a fit)."""
     from app.core.model_refs import find_ref_image
     if view not in dressed_views():
         return None
@@ -1428,6 +1568,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str) -> 
         return None
     if mesh_items_ready(character_name, meta, bsig=bsig):
         return None  # an own-mesh piece painted on here has its garment mesh now
+    if mesh_items_off_rule(character_name, meta, bsig=bsig):
+        return None  # made under the other mode's own-mesh rule
     return path
 
 
@@ -1784,7 +1926,8 @@ def texture_inputs(character_name: str, *, pieces: Optional[Dict[str, str]], ite
                    profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What a painted body is made of (the ``tsig`` inputs): the base
     signature, the base variant, the effective dress text of every dressed
-    view (``dress_text(mesh_items=effective)``, ``dressed_views()``), the
+    view (``dress_text(mesh_items=<unpainted>)``, ``mesh_items_unpainted``;
+    ``dressed_views()``), the
     side-view switch and ``TEXTURE_BODY_VERSION``. NOT the outfit
     signature, NOT the own-mesh token: a piece that is its own garment mesh
     is not painted, so it changes nothing here."""
@@ -2203,15 +2346,18 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     Own-mesh outfit pieces (plan 2026-11-09-base-body-phase5 Task 4): when
     the front is rendered, ``resolve_mesh_items`` first runs the garment
     chain of every flagged worn piece (FIFO per character, cached by fsig)
-    and the EFFECTIVE set (an accepted fit on the current base model) is
-    left out of the pieces before the outfit text resolves ``covers``
-    (``dress_text(mesh_items=…)``) — a piece hidden under a mesh dress is
-    painted. Pieces that are all mesh items copy the base views (``dressed:
-    false``). Every view's sidecar records ``mesh_items: {intended,
-    effective, warnings}`` (the views after the front take the front's
-    record); the mesh-input sidecars also carry ``mesh_token``
-    (``model_refs.mesh_items_token``). A failed chain leaves its piece in
-    the text with a warning (ruling P1).
+    and the UNPAINTED set (``mesh_items_unpainted``: in retexture mode the
+    effective set — an accepted fit on the current base model —, in mesh
+    mode every flagged piece, ruling 2026-11-10) is left out of the pieces
+    before the outfit text resolves ``covers`` (``dress_text(mesh_items=…)``)
+    — a piece hidden under a mesh dress is painted. Pieces that are all
+    mesh items copy the base views (``dressed: false``). Every view's
+    sidecar records ``mesh_items: {intended, effective, warnings}`` (mesh
+    mode adds ``unpainted`` and ``missing``; the views after the front take
+    the front's record); the mesh-input sidecars also carry ``mesh_token``
+    (``model_refs.mesh_items_token``). In retexture mode a failed chain
+    leaves its piece in the text with a warning (ruling P1); in mesh mode
+    the piece is missing from the outfit model until its fit is accepted.
 
     Texture reuse (plan 2026-11-10-texture-body-reuse, Task 1): the views
     belong to the texture ``tsig`` (``texture_inputs`` — the effective dress
@@ -2263,7 +2409,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
             mesh = recorded if isinstance(recorded, dict) else {}
         else:
             mesh = resolve_mesh_items(character_name, pieces, profile=mesh_profile)
-        meshed = list(mesh.get("effective") or [])
+        meshed = mesh_items_unpainted({"mesh_items": mesh})
         dressed = bool(dress_text(character_name, "front", pieces=pieces, items=items, profile=mesh_profile,
                                   mesh_items=meshed))
         mesh_extra = {"mesh_items": mesh} if mesh else {}
@@ -3053,6 +3199,16 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
 # effective dress text is empty (``dressed: false``) is the base body itself
 # in both modes.
 #
+# Ruling 2026-11-10: in this mode the dress text leaves out EVERY flagged
+# own-mesh piece (``resolve_mesh_items``: ``unpainted`` = ``intended``), not
+# only those with an accepted fit — a piece without one is never meshed into
+# a body (that body would be thrown away with its hub jobs once the piece's
+# mesh is accepted). It is missing from the outfit model until then
+# (``MESH_ITEM_NOT_READY``); its acceptance only assembles it onto the same
+# body (``after_mesh_item_ready``). A model built before the ruling with
+# such a piece painted in is stale (``outfit_body_stale``: "outfit_body") and
+# rebuilt on the body of its painted pieces alone.
+#
 # Storage: the body is a model signature of its own in the character's model
 # store, laid out like the base body (``base<8hex>``) so every signature-keyed
 # step of the old path (staging, publication, re-rig, face retexture, LOD
@@ -3128,7 +3284,7 @@ def _outfit_texture(character_name: str, front: Path, *, bsig: str,
     variant = texture_variant(character_name, manifest.get("pieces") or {}, dressed=dressed, mesh=mesh,
                               profile=profile)
     inputs = texture_inputs(character_name, pieces=manifest.get("pieces") or {}, items=manifest.get("items") or [],
-                            variant=variant, mesh_effective=mesh.get("effective") or [], bsig=bsig,
+                            variant=variant, mesh_effective=mesh_items_unpainted({"mesh_items": mesh}), bsig=bsig,
                             profile=mesh_profile)
     return {"manifest": manifest, "dressed": dressed, "variant": variant, "inputs": inputs,
             "tsig": texture_signature(inputs), "mesh_profile": mesh_profile}
@@ -3176,8 +3332,11 @@ def outfit_body_stale(character_name: str, meta: Dict[str, Any], *,
     """Why a dressed outfit model on the pipeline is not current for the
     character's body mode: ``"body_mode"`` (built in the other mode),
     ``"outfit_body"`` (mesh mode: its outfit body was rebuilt or is gone —
-    ``body_sha256``), else ``""``. An undressed copy is the base body in both
-    modes; a model from before the pipeline is judged elsewhere."""
+    ``body_sha256`` —, or it was built before the ruling of 2026-11-10 with
+    an own-mesh piece without a fit painted into its body: the body of its
+    painted pieces alone is another one), else ``""``. An undressed copy is
+    the base body in both modes; a model from before the pipeline is judged
+    elsewhere."""
     if meta.get("dressed") is False or not meta.get("base_signature"):
         return ""
     built = meta.get("outfit_body_mode") or RETEXTURE_MODE
@@ -3187,6 +3346,8 @@ def outfit_body_stale(character_name: str, meta: Dict[str, Any], *,
         body_id = meta.get("body_id")
         if (not is_outfit_body_signature(body_id)
                 or file_sha256(outfit_body_path(character_name, str(body_id))) != meta.get("body_sha256")):
+            return "outfit_body"
+        if _mesh_items_pending(meta):
             return "outfit_body"
     return ""
 
@@ -3376,7 +3537,11 @@ def _build_on_outfit_body(character_name: str, signature: str, *, bsig: str, bas
                  "texture_signature": tsig, "outfit_body_mode": MESH_MODE, "body_id": body_id,
                  "body_sha256": hashlib.sha256(body["rigged"]).hexdigest()})
     meta.update(manifest)
-    warnings = [w for w in (_dict_of(manifest.get("mesh_items")).get("warnings") or []) if isinstance(w, str) and w]
+    mesh = _dict_of(manifest.get("mesh_items"))
+    # A mesh-mode record's "not ready" warnings are judged live (outfit_info,
+    # mesh_items_missing): an accepted fit later must not leave them behind.
+    warnings = ([] if isinstance(mesh.get("unpainted"), list)
+                else [w for w in (mesh.get("warnings") or []) if isinstance(w, str) and w])
     from app.core.garment_assembly import body_fit_warning
     not_fitted = body_fit_warning(character_name, meta, profile=profile)
     if not_fitted:
@@ -3414,6 +3579,17 @@ def dressed_warnings(character_name: str, signature: str, bsig: str) -> List[str
     return warnings
 
 
+def _mesh_warnings(character_name: str, meta: Dict[str, Any], base_sha: str) -> List[str]:
+    """The own-mesh warnings of a stored outfit model: a mesh-mode record's
+    pieces still without a fit, judged NOW (``mesh_items_missing`` —
+    ``MESH_ITEM_NOT_READY``), else the recorded ones (retexture mode: painted
+    on, ``MESH_ITEM_PAINTED``)."""
+    mesh = _dict_of(meta.get("mesh_items"))
+    if isinstance(mesh.get("unpainted"), list):
+        return mesh_item_warnings(mesh_items_missing(character_name, meta, base_sha=base_sha))
+    return [w for w in (mesh.get("warnings") or []) if isinstance(w, str)]
+
+
 def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
                 signature: Optional[str] = None) -> Dict[str, Any]:
     """``{signature, status, error, proof, url}`` of an outfit model on the
@@ -3428,7 +3604,9 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     painted on has its garment mesh now), ``ready``,
     ``missing``. ``warnings``: the stored model's view-guard warnings
     (dressed views left out because they turned around) and own-mesh pieces
-    it left painted on (``MESH_ITEM_PAINTED``), then the dressed
+    it left painted on (``MESH_ITEM_PAINTED``) — in mesh mode the ones it is
+    missing because they have no accepted fit yet (``MESH_ITEM_NOT_READY``,
+    judged now: ``_mesh_warnings``) —, then the dressed
     images' own (``dressed_warnings``). ``proof``: the
     worker's proof of the stored model (None for an undressed base copy)."""
     from app.core import model3d
@@ -3467,8 +3645,7 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
                               else "outfit_body" if error == OUTFIT_BODY_CHANGED
                               else "mesh_item_ready" if error == MESH_ITEM_READY else "older_base")
                              if status == "stale" else None),
-            "warnings": (list(meta.get("view_warnings") or []) + [
-                w for w in (_dict_of(meta.get("mesh_items")).get("warnings") or []) if isinstance(w, str)]
-                if path else []) + dressed_warnings(character_name, signature, base_sig),
+            "warnings": (list(meta.get("view_warnings") or []) + _mesh_warnings(character_name, meta, current[1])
+                         if path else []) + dressed_warnings(character_name, signature, base_sig),
             "proof": meta.get("retexture_proof") if path else None,
             "url": model3d.signature_model_url(character_name, signature) if status == "ready" else None}

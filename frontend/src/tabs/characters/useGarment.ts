@@ -308,7 +308,10 @@ export interface PieceStatus {
   step: string | null
   /** Worn without an accepted fit: the outfit build paints it onto the body. */
   painted: boolean
-  /** Why it is painted on (server text, the outfit warning's words). */
+  /** Outfit body mode mesh only: worn without an accepted fit — never painted (meshed) into the outfit body,
+   *  so it is missing from the outfit model until its mesh is accepted (ruling 2026-11-10). */
+  missing?: boolean
+  /** Why it is painted on / missing (server text, the outfit warning's words). */
   reason: string | null
   /** Names of the worn own-mesh pieces under this one that have a fit: it is fitted over them
    *  (absent when nothing is worn under it). */

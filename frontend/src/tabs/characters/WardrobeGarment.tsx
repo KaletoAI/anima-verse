@@ -32,7 +32,7 @@ import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
 import type { ImageStepSpec } from './GarmentSteps'
-import { ROW, WARN_STYLE } from './garmentStyle'
+import { ROW, WARN_STYLE, meshNotReadyText } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
@@ -110,8 +110,8 @@ const CHIP: CSSProperties = {
   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
 }
 
-/** The row chip: running, painted on (and why), or how far the chain got. */
-export function PieceStatusChip({ status }: { status: PieceStatus }) {
+/** The row chip: running, painted on / missing (and why), or how far the chain got. */
+export function PieceStatusChip({ status, name }: { status: PieceStatus; name: string }) {
   const { t } = useI18n()
   const progress = t(STATE_LABELS[status.state] || status.state)
   let text = progress
@@ -124,6 +124,10 @@ export function PieceStatusChip({ status }: { status: PieceStatus }) {
     color = 'var(--accent, #6aa9ff)'
   } else if (status.painted) {
     text = `${t('Painted on')}: ${t(status.reason || '')}`
+    color = 'var(--warning, #d29922)'
+  } else if (status.missing) {
+    // Mesh mode: not painted into the outfit body, so not shown until the mesh is accepted.
+    text = meshNotReadyText(t, name, status.reason)
     color = 'var(--warning, #d29922)'
   } else if (status.state === 'fitted') {
     color = 'var(--success, #3fb950)'
@@ -261,6 +265,11 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
               {t('Until it has an accepted fit, the outfit model paints this piece onto the body.')}
             </div>
           ) : null}
+          {info.status.missing && !running ? (
+            <div className="ga-hint" style={WARN_STYLE}>
+              {meshNotReadyText(t, info.name || name, info.status.reason)}
+            </div>
+          ) : null}
           <div className="ga-hint">
             {t('Pushed out of the body\'s collision capsules when moving (viewer: “Garment collision”); worn over another own-mesh piece, it is fitted over it.')}
           </div>
@@ -279,7 +288,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
             {running || feedback.pending !== null
               ? <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} bare
                 onCancel={() => { void cancel() }} />
-              : info?.status ? <PieceStatusChip status={info.status} /> : null}
+              : info?.status ? <PieceStatusChip status={info.status} name={info.name || name} /> : null}
           </div>
           {info?.pipeline ? (
             <RunButton
