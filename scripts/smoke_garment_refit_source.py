@@ -52,6 +52,37 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     refitted False, source.fsig F3; no file of F3 carries copied_from.
 [6] The piece's own inputs changed (hair colour; base unchanged): no
     source names the current inputs -> no refit: 4 renders, 1 mesh call.
+[7] Arms (garment_source.arm_numbers / arm_gate on synthetic geometry).
+    Body: per side an arm cylinder r 0.030 along +-x at y 1.4, z 0, rings
+    of 24 points every 5 mm from |x| 0.100 to 0.750; weights by |x|:
+    Shoulder below 0.18, Arm to 0.43, ForeArm to 0.67, Hand beyond, the
+    rings AT 0.18 / 0.43 / 0.67 half and half -> shoulder (0.18, 1.4, 0),
+    elbow (0.43, 1.4, 0), wrist (0.67, 1.4, 0) (ring means), both limb
+    radii 0.030 (every dominant ring point lies on r). A torso block at
+    |x| < 0.09 weighted Spine. Joint order Hips, Spine, LeftShoulder, LeftArm,
+    LeftForeArm, LeftHand, Right…: a tie goes to the lower index, so the
+    0.18 ring is the Shoulder's.
+    Sleeve = rings of 36 points, r 0.045 (excess 0.015 < 0.04), every 5 mm
+    from |x| 0.120 to x_end. On the arm (nearest body ring = same x, the same
+    angles on every ring): the rings 0.185 .. x_end.
+    LONG  x_end 0.66: 96 rings, 3456 values, the p99 index 0.99 x 3455 =
+          3420.45 lies in the last ring (3420 .. 3455) -> reach_fore =
+          (0.66 - 0.43) / 0.24 = 0.9583; off_fore 0.0.
+    SHORT x_end 0.55: 74 rings, p99 index 2636.37 in the last ring (2628 ..
+          2663) -> reach_fore 0.5; drop 0.4583 > 0.04: refused "short".
+    HANG  LONG with the rings beyond x 0.43 moved 0.05 down: a point of such a
+          ring at angle phi (y = -0.05 + 0.045 cos phi, z = 0.045 sin phi) is
+          d^2 = 0.004525 - 0.0045 cos phi from the forearm axis; d > 0.07
+          (r + 4 cm) for cos phi < -0.0833, i.e. phi 100 .. 260 deg = 17 of 36
+          points; the forearm set = the rings 0.43 .. 0.66 = 47 rings, 46 of them
+          moved -> off_fore = 46 x 17 / (47 x 36) = 0.4622 (> 0 + 0.10):
+          refused "off the forearm"; reach unchanged 0.9583.
+    LONG against itself: ok.
+[8] Wiring: a refit whose source has sleeves (source_arms stubbed to the LONG
+    numbers) and whose fit is SHORT (arm_numbers stubbed): B4 (dy 60; from the
+    [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside the caps) -> the arm
+    gate refuses the refit, the same run renders the chain: ok, 4 renders,
+    1 mesh call, the fit refitted False, no file carries copied_from.
 """
 import json
 import os
@@ -85,6 +116,63 @@ def moved(arr, dy):
     out = np.full_like(arr, 128)
     out[dy:] = arr[:-dy]
     return out
+
+
+ARM_JOINTS = ["Hips", "Spine"] + [f"{s}{b}" for s in ("Left", "Right") for b in ("Shoulder", "Arm", "ForeArm", "Hand")]
+
+
+def arm_body():
+    """[7]'s body: two arm cylinders + a torso block (docstring)."""
+    from app.core.glb_mesh import BodyMesh
+    P, J, W = [], [], []
+    angles = np.radians(np.arange(24) * 15.0)
+
+    def add(point, joints, weights):
+        P.append(point)
+        J.append(list(joints) + [0] * (4 - len(joints)))
+        W.append(list(weights) + [0.0] * (4 - len(weights)))
+
+    for side, sign in (("Left", 1.0), ("Right", -1.0)):
+        idx = {b: ARM_JOINTS.index(side + b) for b in ("Shoulder", "Arm", "ForeArm", "Hand")}
+        for k in range(131):
+            x = round(0.100 + 0.005 * k, 3)
+            if x < 0.18:
+                jw = ([idx["Shoulder"]], [1.0])
+            elif x == 0.18:
+                jw = ([idx["Shoulder"], idx["Arm"]], [0.5, 0.5])
+            elif x < 0.43:
+                jw = ([idx["Arm"]], [1.0])
+            elif x == 0.43:
+                jw = ([idx["Arm"], idx["ForeArm"]], [0.5, 0.5])
+            elif x < 0.67:
+                jw = ([idx["ForeArm"]], [1.0])
+            elif x == 0.67:
+                jw = ([idx["ForeArm"], idx["Hand"]], [0.5, 0.5])
+            else:
+                jw = ([idx["Hand"]], [1.0])
+            for a in angles:
+                add([sign * x, 1.4 + 0.03 * np.cos(a), 0.03 * np.sin(a)], *jw)
+    for x in np.linspace(-0.08, 0.08, 9):
+        for y in np.linspace(1.0, 1.5, 11):
+            for z in (-0.08, 0.08):
+                add([x, y, z], [ARM_JOINTS.index("Spine")], [1.0])
+    return BodyMesh(positions=np.asarray(P, np.float64), faces=np.zeros((0, 3), np.int64),
+                    uvs=np.zeros((len(P), 2)), joints=np.asarray(J, np.int64), weights=np.asarray(W, np.float64),
+                    joint_names=["mixamorig:" + n for n in ARM_JOINTS])
+
+
+def sleeves(x_end, hang=0.0):
+    """[7]'s sleeves: rings of 36 points, r 0.045, from |x| 0.120 to x_end; ``hang`` moves the rings beyond
+    |x| 0.43 down."""
+    out = []
+    angles = np.radians(np.arange(36) * 10.0)
+    for sign in (1.0, -1.0):
+        for k in range(int(round((x_end - 0.12) / 0.005)) + 1):
+            x = round(0.12 + 0.005 * k, 3)
+            dy = -hang if x > 0.43 else 0.0
+            for a in angles:
+                out.append([sign * x, 1.4 + dy + 0.045 * np.cos(a), 0.045 * np.sin(a)])
+    return np.asarray(out, np.float64)
 
 
 def main() -> int:
@@ -175,7 +263,7 @@ def main() -> int:
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
         images = get_character_images_dir("Demo")
         images.mkdir(parents=True, exist_ok=True)
-        for i in (1, 2, 3):
+        for i in (1, 2, 3, 4):
             (images / f"Demo_{i}.png").write_bytes(sc.solid_png((50, 60, 69 + i), 7 + i))
         refs = get_character_dir("Demo") / "model_refs"
         mdir = get_character_dir("Demo") / "model3d"
@@ -317,6 +405,50 @@ def main() -> int:
         res = garments.run_garment("Demo", hid)
         check("ok", res.get("ok"), True)
         check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+
+        # --- [7] ---------------------------------------------------------------------
+        print("[7] arms on synthetic geometry")
+        body = arm_body()
+        long_ = garment_source.arm_numbers(sleeves(0.66), body)
+        short = garment_source.arm_numbers(sleeves(0.55), body)
+        hang = garment_source.arm_numbers(sleeves(0.66, hang=0.05), body)
+        for side in ("left", "right"):
+            check(f"{side} LONG", (round(long_[side]["reach_fore"], 4), long_[side]["off_fore"]), (0.9583, 0.0))
+            check(f"{side} SHORT reach", round(short[side]["reach_fore"], 4), 0.5)
+            check(f"{side} HANG", (round(hang[side]["reach_fore"], 4), hang[side]["off_fore"]), (0.9583, 0.4622))
+        check("LONG vs LONG ok", garment_source.arm_gate(long_, long_)["ok"], True)
+        gate = garment_source.arm_gate(short, long_)
+        check("SHORT refused for reach", (gate["ok"], ["short of the source" in r for r in gate["reasons"]]),
+              (False, [True, True]))
+        gate = garment_source.arm_gate(hang, long_)
+        check("HANG refused off the forearm", (gate["ok"], ["off the forearm" in r for r in gate["reasons"]]),
+              (False, [True, True]))
+        check("a sleeve the source has, gone", garment_source.arm_gate({"left": None, "right": None}, long_)["ok"],
+              False)
+        check("sleeveless source: nothing checked", garment_source.arm_gate(short, {"left": None, "right": None})["ok"],
+              True)
+
+        # --- [8] ---------------------------------------------------------------------
+        print("[8] a refit with a short sleeve is refused -> the chain renders")
+        real_source_arms, real_arm_numbers = garment_source.source_arms, garment_source.arm_numbers
+        garment_source.source_arms = lambda *a, **k: long_
+        garment_source.arm_numbers = lambda *a, **k: short
+        try:
+            b4 = use_profile_image(4)
+            write_base(b4, 60)
+            f4 = gs.garment_fsig("Demo", hid)
+            before = counts()
+            res = garments.run_garment("Demo", hid)
+        finally:
+            garment_source.source_arms, garment_source.arm_numbers = real_source_arms, real_arm_numbers
+        check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["haired", "ghost", "cutout", "mesh", "fit"]))
+        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+        rec8 = fit_record(f4)
+        check("fit F4 own", (rec8.get("accepted"), rec8.get("refitted"), (rec8.get("source") or {}).get("fsig")),
+              (True, False, f4))
+        marked = [p.name for p in gs.stored_groups("Demo").get((hid, f4), [])
+                  if p.suffix == ".png" and gs.read_record(p.with_suffix(".json")).get("copied_from")]
+        check("no copied file in F4", marked, [])
 
     if FAILS:
         print(f"FAILED ({len(FAILS)}): " + ", ".join(FAILS))

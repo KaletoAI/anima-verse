@@ -629,6 +629,14 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     if not result.ok:
         raise _Refused("fit", "fit refused — " + "; ".join(result.reasons),
                        {**gates, "metrics": result.metrics})
+    # A refit's sleeves against its source's (``garment_source`` ARMS).
+    arms = garment_source.check_arms(character_name, item_id, fsig, result.garment.positions, snapshot["rigged"],
+                                     frame)
+    if arms is not None and not arms["ok"]:
+        raise _Refused("fit", "refit refused — " + "; ".join(arms["reasons"]),
+                       {"ok": False, "reasons": arms["reasons"], "arms": arms})
+    if arms is not None:
+        frame = {**frame, "arms": arms}
 
     record: Dict[str, Any] = {
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
@@ -1071,6 +1079,13 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         if not result.ok:
             raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(result.reasons),
                            {**gates, "metrics": result.metrics})
+        arms = garment_source.check_arms(character_name, item_id, fsig, result.garment.positions, body["rigged"],
+                                         frame)
+        if arms is not None and not arms["ok"]:
+            raise _Refused("fit", "refit on the outfit body refused — " + "; ".join(arms["reasons"]),
+                           {"ok": False, "reasons": arms["reasons"], "arms": arms})
+        if arms is not None:
+            record["frame"] = {**frame, "arms": arms}
         record.update({
             "metrics": result.metrics, "gates": gates, "report": result.report,
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
