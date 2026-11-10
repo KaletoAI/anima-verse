@@ -177,7 +177,7 @@ def main() -> int:
                 gate_x.wait(30)
             return {"ok": True}
 
-        outfit_bodies.check_run = lambda character_name, kind, body_id, item_id="": None
+        outfit_bodies.check_run = lambda character_name, kind, body_id, item_id="", view="": None
         outfit_bodies._run = body_recorder
 
         print("[7] X runs, Y and Z wait")

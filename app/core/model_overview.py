@@ -40,8 +40,9 @@ a 3D model or an image, decided here on the server.
    since; ``reason`` names what, several joined by `` · ``) / ``missing``
    (no provenance recorded to compare against). The stale notions are the
    ones the pipeline already keeps: base signature and base view hashes, the
-   dressed front a draft was made from, the base views a base model was
-   built from, an own-mesh piece painted on that has its garment mesh now
+   dressed front a draft was made from (and a dressed back/side of an
+   outfit body, ``outfit_body_view_freshness``, plus its dress text), the
+   base views a base model was built from, an own-mesh piece painted on that has its garment mesh now
    (``mesh_item_ready``), the garment fsig and the hair stale reasons, the pose render
    behind an old-path model, the profile picture behind the face view.
 
@@ -73,6 +74,8 @@ OLDER_BASE_BODY = "Made from an older base body"
 OLDER_BASE_VIEW = "Made from an older base view"
 OLDER_FRONT_VIEW = "Made from an older front view"
 OLDER_DRESSED_FRONT = "Made from an older dressed front"
+# A view of an outfit body whose recorded dress text is not what its outfits compute now.
+DRESS_TEXT_CHANGED = "Dress text changed"
 BASE_VIEWS_CHANGED = "Base views re-rendered since this model"
 DRESSED_VIEWS_CHANGED = "Dressed views re-rendered since this model"
 POSE_RENDER_CHANGED = "Pose render changed since this model"
@@ -853,6 +856,29 @@ def draft_freshness(meta: Dict[str, Any], *, bsig: str, front_sha: str) -> Dict[
     if not meta.get("front_sha256"):
         return freshness(STALE, _join(reasons)) if reasons else freshness(MISSING, NO_PROVENANCE)
     if meta["front_sha256"] != front_sha:
+        reasons.append(OLDER_DRESSED_FRONT)
+    return freshness(STALE, _join(reasons)) if reasons else freshness(CURRENT)
+
+
+def outfit_body_view_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
+                               mesh_ready: bool = False, follows_front: Optional[bool] = None,
+                               text_now: Optional[str] = None) -> Dict[str, str]:
+    """A dressed view of an outfit body (the Outfit body tab, mesh mode):
+    the reasons of ``dressed_freshness`` (base body, base view, own-mesh
+    piece), plus ``DRESS_TEXT_CHANGED`` when the view's recorded
+    ``dress_text`` is not ``text_now`` (what the body's outfits compute for
+    that view now; None = unknown, not judged) and, for a back/side view,
+    ``OLDER_DRESSED_FRONT`` when it was not drafted from the body's current
+    dressed front (``follows_front`` False; None = the front itself or no
+    draft provenance, not judged). No provenance at all -> missing."""
+    base = dressed_freshness(meta, bsig=bsig, base_view_sha=base_view_sha, mesh_ready=mesh_ready)
+    if base["state"] == MISSING:
+        return base
+    reasons = [base["reason"]] if base["state"] == STALE else []
+    recorded = meta.get("dress_text")
+    if text_now is not None and isinstance(recorded, str) and recorded != text_now:
+        reasons.append(DRESS_TEXT_CHANGED)
+    if follows_front is False:
         reasons.append(OLDER_DRESSED_FRONT)
     return freshness(STALE, _join(reasons)) if reasons else freshness(CURRENT)
 

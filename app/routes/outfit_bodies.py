@@ -11,12 +11,17 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
 * ``POST …/{body_id}/rerig`` — the rig chain on the retained unrigged mesh.
 * ``POST …/{body_id}/refit`` ``{item_id?}`` — every fit on the body (or one)
   anew (CPU).
-  The three runs answer 202 ``{kind, body_id, started, queued, position,
-  behind}`` and queue behind a running 3D run of the character (never 409
-  for a run in progress); 409 when the run has nothing to work on.
-* ``POST …/{body_id}/cancel`` — take the body's waiting runs out of the
-  queue (``outfit_bodies.cancel``); 409 when its run has already started,
-  404 when none waits.
+* ``POST …/{body_id}/views/{view}/regenerate`` — render ONE dressed view of
+  the body anew (``outfit_bodies.render_view``, image jobs only — the mesh
+  is not touched; it shows "Dressed views changed" until its own
+  Regenerate).
+  The four runs answer 202 ``{kind, body_id, item_id, view, started, queued,
+  position, behind}`` and queue behind a running 3D run of the character
+  (never 409 for a run in progress); 409 when the run has nothing to work on
+  (for a view: ``outfit_bodies.view_blocked``), 400 for an unknown view.
+* ``POST …/{body_id}/cancel`` ``{view?}`` — take the body's waiting runs (or
+  only that view's) out of the queue (``outfit_bodies.cancel``); 409 when
+  its run has already started, 404 when none waits.
 * ``POST …/{body_id}/delete`` — the body and its chain through the artefact
   graph (``artefact_graph.delete_body``); 409 while a run of the tab is on it.
 """
@@ -58,11 +63,11 @@ def get_outfit_body_view(character_name: str, key: str, view: str, request: Requ
     return etag_file_response(path, request, media_type or "application/octet-stream")
 
 
-def _start(character_name: str, kind: str, body_id: str, item_id: str = "") -> Dict[str, Any]:
+def _start(character_name: str, kind: str, body_id: str, item_id: str = "", view: str = "") -> Dict[str, Any]:
     from app.core import outfit_bodies
     _require_character(character_name)
     try:
-        return outfit_bodies.start(character_name, kind, body_id, item_id)
+        return outfit_bodies.start(character_name, kind, body_id, item_id, view)
     except LookupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -92,13 +97,24 @@ def refit_outfit_body(character_name: str, body_id: str, body: Optional[RefitReq
     return _start(character_name, "refit", body_id, (body.item_id if body else "") or "")
 
 
+@router.post("/{character_name}/outfit-bodies/{body_id}/views/{view}/regenerate", status_code=202)
+def regenerate_outfit_body_view(character_name: str, body_id: str, view: str,
+                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    return _start(character_name, "view", body_id, view=view)
+
+
+class CancelRequest(BaseModel):
+    #: only the waiting run of this dressed view; empty = every waiting run of the body
+    view: str = ""
+
+
 @router.post("/{character_name}/outfit-bodies/{body_id}/cancel")
-def cancel_outfit_body_run(character_name: str, body_id: str,
+def cancel_outfit_body_run(character_name: str, body_id: str, body: Optional[CancelRequest] = None,
                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import outfit_bodies
     _require_character(character_name)
     try:
-        return outfit_bodies.cancel(character_name, body_id)
+        return outfit_bodies.cancel(character_name, body_id, (body.view if body else "") or "")
     except outfit_bodies.RunStarted as e:
         raise HTTPException(status_code=409, detail=str(e))
     except LookupError as e:

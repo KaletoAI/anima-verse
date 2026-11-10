@@ -34,7 +34,7 @@ import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
-import { RefImage } from './RefImage'
+import { ViewRenderTile } from './ViewRenderTile'
 import { CollisionScales } from './CollisionScales'
 import { ModelFaceActions } from './ModelFaceActions'
 import { useModel3DStatus } from './useModel3DStatus'
@@ -44,22 +44,7 @@ import type { BaseBodyInfo, BaseView } from './useBaseBody'
 
 const TILE_HEIGHT = 128
 
-const EMPTY_TILE: CSSProperties = {
-  width: '100%',
-  height: TILE_HEIGHT,
-  borderRadius: 6,
-  border: '1px solid var(--border, #30363d)',
-  background: 'rgba(255, 255, 255, 0.04)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  textAlign: 'center',
-  padding: 6,
-  boxSizing: 'border-box',
-}
-
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
-const WARNING_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
 
 function ViewTile({ info, view, label, busy, onRender }: {
   info: BaseBodyInfo
@@ -74,37 +59,10 @@ function ViewTile({ info, view, label, busy, onRender }: {
   // A side/back view edits the front: it cannot render before the front exists.
   const needsFront = view !== 'front' && !info.images?.front
   return (
-    <div style={{ minWidth: 0 }}>
-      <div className="ga-face-actions-row" style={{ justifyContent: 'space-between', marginBottom: 2 }}>
-        <span className="ga-hint">{label}</span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || !!st?.running || needsFront}
-          title={needsFront ? t('Render the front view first') : undefined}
-          onClick={() => onRender(view, !!url)}
-          aria-label={`${url ? t('Regenerate') : t('Generate')} · ${label}`}
-        >
-          {url ? t('Regenerate') : t('Generate')}
-        </button>
-      </div>
-      {url ? (
-        <RefImage key={url} src={url} height={TILE_HEIGHT} label={label} meta={info.image_meta?.[view]} compact />
-      ) : (
-        <div className="ga-hint" style={EMPTY_TILE}>
-          {st?.running ? t('Generating…') : t('No render yet')}
-        </div>
-      )}
-      {url && st?.running ? <div className="ga-hint">{t('Generating…')}</div> : null}
-      {st?.failed && !st.running ? (
-        <div className="ga-hint" style={ERROR_STYLE} title={st.error || ''}>
-          {t('Failed')}{st.error ? `: ${st.error}` : ''}
-        </div>
-      ) : null}
-      {url && st?.warning && !st.running ? (
-        <div className="ga-hint" style={WARNING_STYLE} title={st.warning}>{st.warning}</div>
-      ) : null}
-    </div>
+    <ViewRenderTile label={label} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
+      running={!!st?.running} failed={!!st?.failed} error={st?.error} warning={st?.warning}
+      disabled={busy || needsFront} disabledTitle={needsFront ? t('Render the front view first') : undefined}
+      onRender={() => onRender(view, !!url)} />
   )
 }
 

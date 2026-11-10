@@ -6,20 +6,28 @@
  *
  * Mesh mode: every combination of painted pieces has its own meshed and
  * rigged outfit body. Layout like the Base body tab, three columns on one
- * screen: the bodies (one line each) and the selected body's views stacked
- * small on the left (a click enlarges one); its 3D preview with the step
- * checklist and the collision capsule toggle in the middle; on the right its
+ * screen: the bodies (one line each) and the selected body's dressed views
+ * stacked small on the left (a click enlarges one), each with its server
+ * freshness badge and its own Regenerate (ONE view rendered anew, image jobs
+ * only — the back follows the front through its draft, so a new front leaves
+ * the back "outdated: Made from an older dressed front" until its own
+ * Regenerate; no cascade); its 3D preview with the step checklist and the
+ * collision capsule toggle in the middle, the model's own Regenerate (mesh
+ * again from the views shown) beside its title — it shows "outdated: Dressed
+ * views changed" after a view was rendered anew; on the right its other
  * actions, the outfits standing on it, its dress text and the garments
  * fitted onto it (one line each, details on hover, Re-fit per garment).
  * Retexture mode: one line saying so and the painted bodies read-only.
  *
  * Backend (app/routes/outfit_bodies.py, app/core/outfit_bodies.py):
  * GET /characters/{n}/outfit-bodies (polled while a run waits or works),
- * POST …/{body}/regenerate | rerig | refit {item_id?} — 202 with the queue
- * place, a run queues behind the character's running 3D run, never 409 for
- * that; POST …/{body}/cancel — takes the body's waiting run out of the queue
- * (409 once it has started); POST …/{body}/delete — the body and its chain
- * through the artefact graph (409 while a run is on it).
+ * POST …/{body}/regenerate | rerig | refit {item_id?} and
+ * POST …/{body}/views/{view}/regenerate — 202 with the queue place, a run
+ * queues behind the character's running 3D run, never 409 for that (409 when
+ * it has nothing to work on: a view's `blocked`); POST …/{body}/cancel
+ * {view?} — takes the body's (that view's) waiting run out of the queue (409
+ * once it has started, 404 when none waits); POST …/{body}/delete — the body
+ * and its chain through the artefact graph (409 while a run is on it).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -32,10 +40,13 @@ import { FreshnessBadge } from './FreshnessBadge'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { RefImage } from './RefImage'
+import { ViewRenderTile } from './ViewRenderTile'
 import { BODY_VIEWS, useOutfitBodies } from './useOutfitBodies'
-import type { BodyFit, BodyView, OutfitBody, PaintedBody, RunKind } from './useOutfitBodies'
+import type { BodyFit, BodyView, BodyViewInfo, OutfitBody, PaintedBody, RunKind } from './useOutfitBodies'
 
 const TILE_HEIGHT = 112
+/** The body's dressed views, stacked like the Base body tab's. */
+const VIEW_TILE_HEIGHT = 128
 
 const EMPTY_TILE: CSSProperties = {
   width: '100%',
@@ -77,7 +88,7 @@ function useStatusText() {
   return (body: OutfitBody): string => {
     if (body.status === 'running') {
       return body.run_kind === 'rerig' ? t('Re-rigging…') : body.run_kind === 'refit' ? t('Re-fitting…')
-        : body.run_kind === 'build' ? t('Building…') : t('Meshing…')
+        : body.run_kind === 'build' ? t('Building…') : body.run_kind === 'view' ? t('Rendering…') : t('Meshing…')
     }
     if (body.status === 'queued') return `${t('Queued')} (#${body.queue_position ?? '?'})`
     if (body.status === 'failed') return t('Failed')
@@ -108,6 +119,37 @@ function ViewTiles({ views, meta, keyLabel }: {
           label={`${t(VIEW_LABELS[view])} · ${keyLabel}`} meta={meta?.[view]} compact />
       ))}
     </div>
+  )
+}
+
+/** One dressed view of the selected body: freshness, its own Regenerate, queue place + Cancel. */
+function BodyViewTile({ view, entry, posting, cancelling, onRender, onCancel }: {
+  view: BodyView
+  entry: BodyViewInfo
+  posting: boolean
+  cancelling: boolean
+  onRender: () => void
+  onCancel: () => void
+}) {
+  const { t } = useI18n()
+  const queued = entry.status === 'queued'
+  return (
+    <ViewRenderTile label={t(VIEW_LABELS[view])} url={entry.url} meta={entry.meta}
+      height={VIEW_TILE_HEIGHT} running={entry.status === 'running'}
+      failed={entry.status === 'failed'} error={entry.error} warning={entry.warning}
+      disabled={posting || queued || !!entry.blocked} disabledTitle={entry.blocked ? t(entry.blocked) : undefined}
+      actionTitle={t('Renders only this dressed view anew (image jobs) — the model is meshed again only by its own Regenerate.')}
+      onRender={onRender}
+      status={queued ? (
+        <div className="ga-face-actions-row">
+          <span className="ga-hint">{t('Queued')} (#{entry.queue_position ?? '?'})</span>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={posting} aria-busy={cancelling || undefined}
+            title={t('Removes this waiting run from the queue — nothing of it has started')}
+            onClick={onCancel}>
+            {cancelling ? t('Cancelling…') : t('Cancel')}
+          </button>
+        </div>
+      ) : null} />
   )
 }
 
@@ -194,6 +236,44 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
         startPoll()
       } finally {
         setPosting('')
+      }
+    },
+    [enc, posting, startPoll, t, toast],
+  )
+
+  // ONE dressed view of the body rendered anew (image jobs only).
+  const renderView = useCallback(
+    async (body: OutfitBody, view: BodyView) => {
+      if (posting) return
+      setPosting(`${body.body_id}:view:${view}`)
+      try {
+        const d = await apiPost<{ started: boolean; position: number }>(
+          `/characters/${enc}/outfit-bodies/${body.body_id}/views/${view}/regenerate`, {})
+        if (!d.started) toast(`${t('Queued')} (#${d.position})`, 'info')
+        startPoll(300)
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        startPoll()
+      } finally {
+        setPosting('')
+      }
+    },
+    [enc, posting, startPoll, t, toast],
+  )
+
+  // The Cancel of one view's waiting run.
+  const cancelView = useCallback(
+    async (body: OutfitBody, view: BodyView) => {
+      if (posting) return
+      setPosting(`${body.body_id}:cancel:${view}`)
+      try {
+        await apiPost(`/characters/${enc}/outfit-bodies/${body.body_id}/cancel`, { view })
+        toast(t('Waiting run cancelled'), 'success')
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setPosting('')
+        startPoll(0)
       }
     },
     [enc, posting, startPoll, t, toast],
@@ -300,7 +380,17 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
             </button>
           ))}
         </div>
-        <ViewTiles views={body.views} meta={body.image_meta} keyLabel={body.body_id} />
+        {body.view_info ? (
+          <div className="ga-view-stack">
+            {BODY_VIEWS.filter((view) => !!body.view_info?.[view]).map((view) => (
+              <BodyViewTile key={view} view={view} entry={body.view_info?.[view] as BodyViewInfo}
+                posting={!!posting}
+                cancelling={posting === `${body.body_id}:cancel:${view}`}
+                onRender={() => { void renderView(body, view) }}
+                onCancel={() => { void cancelView(body, view) }} />
+            ))}
+          </div>
+        ) : <ViewTiles views={body.views} meta={body.image_meta} keyLabel={body.body_id} />}
         {(body.view_warnings || []).map((w) => (
           <div key={w} className="ga-hint" style={WARNING_STYLE} title={w}>{w}</div>
         ))}
@@ -321,6 +411,11 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
               {cancelling ? t('Cancelling…') : t('Cancel')}
             </button>
           ) : null}
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.can_regenerate}
+            title={body.can_regenerate
+              ? t('Meshes and rigs this body anew from its dressed views (mesh, face, rig, normalize, extension rig, capsules — hub jobs).')
+              : t('No outfit stands on this body\'s dressed views any more — nothing to mesh from.')}
+            onClick={() => run(body, 'regenerate')}>{t('Regenerate')}</button>
           {body.freshness ? <FreshnessBadge freshness={body.freshness} compact /> : null}
           {info.generation_running && body.status === 'running' ? (
             <span className="ga-hint" title={t('Another 3D run of this character holds the generation slot; this run starts when it ends.')}>
@@ -342,11 +437,6 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
           )}
           <div className="ga-basebody-side">
             <div className="ga-face-actions-row">
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.can_regenerate}
-                title={body.can_regenerate
-                  ? t('Meshes and rigs this body anew from its dressed views (mesh, face, rig, normalize, extension rig, capsules — hub jobs).')
-                  : t('No outfit stands on this body\'s dressed views any more — nothing to mesh from.')}
-                onClick={() => run(body, 'regenerate')}>{t('Regenerate')}</button>
               <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.can_rerig}
                 title={body.can_rerig ? t('Rigs the retained unrigged mesh anew (rig chain, hub job).')
                   : t('No retained unrigged mesh — regenerate the body.')}
@@ -362,7 +452,9 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
               <div className="ga-hint" style={body.last_run.ok ? undefined : ERROR_STYLE}
                 title={[body.last_run.error, ...(body.last_run.detail?.failed || []).map((f) => `${f.name}: ${f.error}`)]
                   .filter(Boolean).join('\n')}>
-                {t('Last run')}: {t(body.last_run.kind === 'rerig' ? 'Re-rig' : body.last_run.kind === 'refit' ? 'Re-fit' : 'Regenerate')}
+                {t('Last run')}: {body.last_run.kind === 'view' && body.last_run.view
+                  ? `${t(VIEW_LABELS[body.last_run.view])} · ${t('Regenerate')}`
+                  : t(body.last_run.kind === 'rerig' ? 'Re-rig' : body.last_run.kind === 'refit' ? 'Re-fit' : 'Regenerate')}
                 {' · '}{body.last_run.ok ? t('done') : t('failed')}
                 {body.last_run.error ? ` · ${body.last_run.error}` : ''}
               </div>

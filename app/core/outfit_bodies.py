@@ -14,10 +14,29 @@ model that wears those painted pieces is a copy of it.
 the outfits on it (names), its dress text, freshness, step list, fits and
 run state; in retexture mode the painted bodies (``texture_users``) read-only.
 
+Its views (``view_info``) are the CURRENT dressed views of the body's texture
+(the texture store ``model_refs/texture/tpose[_<view>]_<tsig>``, which every
+render of a dressed view publishes into; the body's own mesher inputs
+``tpose[_<view>]_<body id>`` only when the store has none) — what the next
+regeneration meshes from — each with a server freshness
+(``model_overview.outfit_body_view_freshness``: base body / base view, dress
+text, and for a back/side whether it was drafted from the current dressed
+front), its run state and why it cannot be rendered (``view_blocked``).
+The body's model is judged against those views as before
+(``DRESSED_VIEWS_CHANGED``), so a re-rendered view leaves the model
+"outdated: Dressed views changed" until its own Regenerate run.
+
 The runs (``start``): ``regenerate`` (mesh again from its views — the old
 path's chain through the routed occasions, hub jobs), ``rerig`` (the rig
 chain on the retained unrigged mesh, hub job), ``refit`` (every fit on the
-body anew from the base fits, CPU). They join ONE FIFO per character and
+body anew from the base fits, CPU), ``view`` (ONE dressed view rendered
+anew — ``render_view``: image jobs only, never the mesh; the front is one
+edit of the base front, a back/side a draft from the dressed front plus the
+gated fit). A view run does not cascade: the back follows the front through
+its draft, so after a new front the back shows "outdated: Made from an older
+dressed front" and is rendered again only by its own click (the pipeline
+accepts a back of an older front — ``base_body.dressed_image`` judges the
+base view only). They join ONE FIFO per character and
 never refuse (the explicit-run rule of the garment queue, 4c81488b): a run
 waits behind the running one, and each run holds model3d's per-character
 generation guard (``model3d.generation_slot``) — a body is never rebuilt
@@ -38,7 +57,7 @@ from app.core.log import get_logger
 
 logger = get_logger("outfit_bodies")
 
-RUN_KINDS = ("regenerate", "rerig", "refit")
+RUN_KINDS = ("regenerate", "rerig", "refit", "view")
 NO_SOURCE = ("No outfit stands on this body's dressed views any more — "
              "render the outfit's pose images first")
 NO_UNRIGGED = "The outfit body has no retained unrigged mesh — regenerate it"
@@ -60,11 +79,13 @@ class _Job:
     body_id: str
     #: a refit of ONE garment on the body ("" = every garment on it)
     item_id: str = ""
+    #: the dressed view of a ``view`` run
+    view: str = ""
     done: threading.Event = field(default_factory=threading.Event)
     result: Dict[str, Any] = field(default_factory=dict)
 
-    def key(self) -> Tuple[str, str, str]:
-        return self.kind, self.body_id, self.item_id
+    def key(self) -> Tuple[str, str, str, str]:
+        return self.kind, self.body_id, self.item_id, self.view
 
 
 _lock = threading.Lock()
@@ -409,6 +430,168 @@ def match_stale_postures(character_name: str) -> List[str]:
     return done
 
 
+# --- the dressed views of a body -----------------------------------------------------
+
+def view_blocked(character_name: str, body_id: str, view: str, *, profile: Optional[Dict[str, Any]] = None,
+                 source: Optional[str] = None) -> str:
+    """Why the dressed ``view`` of the body cannot be rendered anew now
+    (server English the tab translates), "" when it can: a view that is not
+    dressed (the side views while they are off), not mesh mode, no outfit
+    standing on the body's views (``NO_SOURCE``), the base view missing, a
+    back/side without a current dressed front to draft from. ``source``:
+    ``source_outfit`` when the caller has it."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    profile = profile if profile is not None else _profile(character_name)
+    if view not in base_body.dressed_views():
+        return base_body.SIDE_VIEW_NOT_DRESSED
+    if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+        return NOT_MESH_MODE
+    source = source if source is not None else source_outfit(character_name, body_id, profile=profile)
+    if not source:
+        return NO_SOURCE
+    bsig = base_body.base_signature(character_name, profile=profile)
+    if find_ref_image(character_name, base_body._kind(view), bsig) is None:
+        return base_body.BASE_IMAGES_MISSING
+    if view != "front" and base_body.dressed_image(character_name, "front", source, bsig) is None:
+        return base_body.DRESSED_FRONT_FIRST
+    return ""
+
+
+def _texts_now(character_name: str, candidates: List[str], *, bsig: str,
+               profile: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """``{view: dress text}`` the first candidate outfit with a stored front
+    computes NOW (``base_body._outfit_texture`` of that front's manifest) —
+    what a view of the body would be sent today; None when none can."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    seen = set()
+    for sig in candidates:
+        if not sig or sig in seen:
+            continue
+        seen.add(sig)
+        front = find_ref_image(character_name, "tpose", sig)
+        if front is None:
+            continue
+        try:
+            texts = base_body._outfit_texture(character_name, front, bsig=bsig, profile=profile)["inputs"]["dress_text"]
+        except Exception:  # noqa: BLE001 — a display hint, never a failure
+            logger.debug("Dress text of %s / %s not computable", character_name, sig, exc_info=True)
+            continue
+        return {str(k): str(v) for k, v in (texts or {}).items()}
+    return None
+
+
+def _view_runs(character_name: str, body_id: str) -> Dict[str, Tuple[str, Optional[int]]]:
+    """``{view: (running|queued, queue position)}`` of the body's view runs."""
+    out: Dict[str, Tuple[str, Optional[int]]] = {}
+    with _lock:
+        current = _current.get(character_name)
+        if current is not None and current.body_id == body_id and current.kind == "view":
+            out[current.view] = ("running", None)
+        for n, job in enumerate(_queues.get(character_name) or (), start=1):
+            if job.body_id == body_id and job.kind == "view":
+                out.setdefault(job.view, ("queued", n))
+    return out
+
+
+def view_infos(character_name: str, body_id: str, *, record: Dict[str, Any], tsig: str, source: str, bsig: str,
+               profile: Dict[str, Any], candidates: List[str],
+               last: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """``{view: {url, meta, source, status, queue_position, error, warning,
+    blocked}}`` — every dressed view of the body (and any other view that
+    has an image), in ``BASE_VIEWS`` order. ``url``/``meta``: the texture
+    store's view of ``tsig`` (``source: "texture"``), else the body's mesher
+    input (``"body"``), else None; ``meta`` = ``image_tile_meta`` +
+    ``freshness`` (``outfit_body_view_freshness``). ``status``: running /
+    queued (a ``view`` run of the tab) / failed (the body's last run was this
+    view's and failed, ``error``) / "". ``warning``: the kept fit's gate
+    warning. ``blocked``: ``view_blocked``."""
+    from app.core import base_body
+    from app.core.model_overview import outfit_body_view_freshness
+    from app.core.model_refs import find_ref_image, image_tile_meta
+    dressed = base_body.dressed_views()
+    has_store = base_body.is_texture_signature(tsig)
+    store = {v: base_body._texture_view(character_name, v, tsig) for v in base_body.BASE_VIEWS} if has_store else {}
+    front_sha = base_body.file_sha256(store.get("front"))
+    texts = _texts_now(character_name, candidates, bsig=bsig, profile=profile)
+    runs = _view_runs(character_name, body_id)
+    last = last or {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for v in base_body.BASE_VIEWS:
+        path, key, origin = store.get(v), tsig, "texture"
+        if path is None:
+            path, key, origin = view_path(character_name, body_id, v), body_id, "body"
+        if path is None and v not in dressed:
+            continue
+        url, tile = None, None
+        meta = base_body._ref_sidecar(path)
+        if path is not None:
+            try:
+                url = f"/characters/{_enc(character_name)}/outfit-bodies/{key}/views/{v}?v={path.stat().st_mtime_ns}"
+            except OSError:
+                url = None
+        if url is not None:
+            follows: Optional[bool] = None
+            if v != "front" and origin == "texture" and meta.get(f"{v}_draft_sha256"):
+                follows = base_body.follows_front(v, meta, base_body._texture_draft(character_name, v, tsig),
+                                                  front_sha)
+            tile = {**image_tile_meta(path, meta), "freshness": outfit_body_view_freshness(
+                meta, bsig=bsig,
+                base_view_sha=base_body.file_sha256(find_ref_image(character_name, base_body._kind(v), bsig)),
+                mesh_ready=bool(base_body.mesh_items_ready(character_name, meta, bsig=bsig)),
+                follows_front=follows, text_now=(texts or {}).get(v) if texts is not None else None)}
+        run, position = runs.get(v, ("", None))
+        failed = (not run and last.get("kind") == "view" and last.get("view") == v and not last.get("ok"))
+        gate = meta.get("fit_gate") if isinstance(meta.get("fit_gate"), dict) else {}
+        out[v] = {"url": url, "meta": tile, "source": origin if url else None,
+                  "status": run or ("failed" if failed else ""), "queue_position": position,
+                  "error": str(last.get("error") or "") if failed else "",
+                  "warning": str(gate.get("warning") or "") if url else "",
+                  "blocked": view_blocked(character_name, body_id, v, profile=profile, source=source)}
+    return out
+
+
+def render_view(character_name: str, body_id: str, view: str) -> Dict[str, Any]:
+    """Render ONE dressed view of the body anew (image jobs only, never the
+    mesh): the outfit standing on the body's views (``source_outfit``) and
+    the texture store become one set first (``base_body._sync_texture_views``
+    — a back is drafted from the texture's current front), then
+    ``generate_dressed_images(view=…, force=True)`` with the pieces of that
+    outfit's dressed front; the render is published into the texture store
+    (what the tab shows). Caller holds the character's generation slot.
+    ``{ok, error}``."""
+    from app.core import base_body
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model_refs import find_ref_image
+    profile = _profile(character_name)
+    source = source_outfit(character_name, body_id, profile=profile)
+    blocked = view_blocked(character_name, body_id, view, profile=profile, source=source)
+    if blocked:
+        return {"ok": False, "error": blocked}
+    bsig = base_body.base_signature(character_name, profile=profile)
+    front = base_body.dressed_image(character_name, "front", source, bsig)
+    if front is None:
+        return {"ok": False, "error": NO_SOURCE}
+    texture = base_body._outfit_texture(character_name, front, bsig=bsig, profile=profile)
+    registrations = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in base_body.BASE_VIEWS}
+    manifest = texture["manifest"]
+    with keyed_lock("outfit_body", f"{character_name}:{body_id}"):
+        base_body._sync_texture_views(character_name, signature=source, tsig=texture["tsig"], bsig=bsig,
+                                      base_views=registrations, texts=texture["inputs"]["dress_text"],
+                                      manifest=manifest, profile=texture["mesh_profile"])
+    logger.info("Outfit body %s of %s: rendering the dressed %s anew (outfit %s)", body_id, character_name, view,
+                source)
+    results = base_body.generate_dressed_images(character_name, pieces=manifest.get("pieces") or {},
+                                                items=manifest.get("items") or [], signature=source,
+                                                force=True, view=view)
+    if results.get(base_body._kind(view)):
+        return {"ok": True, "error": ""}
+    with base_body._status_lock:
+        failure = dict(base_body._outfit_failed.get((character_name, source)) or {})
+    return {"ok": False, "error": str(failure.get("error") or f"Dressed {view} render failed")}
+
+
 # --- info ---------------------------------------------------------------------------
 
 def _outfits_on_body(character_name: str, body_id: str, models: Dict[str, Dict[str, Any]],
@@ -494,6 +677,9 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         status, error = "ready", ""
     overview = outfit_body_overview(character_name, body_id) if path.is_file() else None
     unrigged = path.parent / "unrigged" / path.name
+    candidates = [source, str(record.get("built_for") or "")] + [e["signature"] for e in on_body]
+    view_info = view_infos(character_name, body_id, record=record, tsig=tsig, source=source, bsig=bsig,
+                           profile=profile, candidates=candidates, last=last)
     return {
         "body_id": body_id, "texture_signature": tsig or None, "status": status, "error": error,
         "run_kind": kind, "queue_position": position, "last_run": last or None,
@@ -501,7 +687,7 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         "url": model3d.signature_model_url(character_name, body_id) if path.is_file() else None,
         "views": views, "image_meta": view_meta, "used_views": list(record.get("used_views") or []),
         "view_warnings": [w for w in record.get("view_warnings") or [] if isinstance(w, str)],
-        "dress_text": dress, "freshness": fresh,
+        "dress_text": dress, "freshness": fresh, "view_info": view_info,
         "outfits": [{k: v for k, v in e.items() if k != "meta"} for e in on_body],
         "steps": (overview or {}).get("steps") or [],
         "collision": meta.get("collision") if path.is_file() else None,
@@ -512,12 +698,16 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
 
 
 def queue_state(character_name: str) -> Dict[str, Any]:
+    def entry(job: _Job) -> Dict[str, Any]:
+        # ``view`` only on a view run.
+        return {"kind": job.kind, "body_id": job.body_id, "item_id": job.item_id or None,
+                **({"view": job.view} if job.view else {})}
+
     with _lock:
         current = _current.get(character_name)
-        waiting = [{"kind": j.kind, "body_id": j.body_id, "item_id": j.item_id or None}
-                   for j in _queues.get(character_name) or ()]
-    return {"running": {"kind": current.kind, "body_id": current.body_id, "item_id": current.item_id or None}
-            if current else None,
+        waiting = [entry(j) for j in _queues.get(character_name) or ()]
+        running = entry(current) if current else None
+    return {"running": running,
             "waiting": waiting}
 
 
@@ -578,21 +768,29 @@ def info(character_name: str) -> Dict[str, Any]:
 
 # --- runs ---------------------------------------------------------------------------
 
-def check_run(character_name: str, kind: str, body_id: str, item_id: str = "") -> None:
+def check_run(character_name: str, kind: str, body_id: str, item_id: str = "", view: str = "") -> None:
     """``ValueError`` (400) / ``LookupError`` (409) before a run is queued:
-    an unknown kind or id, off the pipeline, not mesh mode (regenerate),
-    nothing to mesh from, no unrigged mesh (re-rig), no body (re-rig /
-    refit)."""
+    an unknown kind, id or view, off the pipeline, not mesh mode
+    (regenerate), nothing to mesh from, no unrigged mesh (re-rig), no body
+    (re-rig / refit), a view that cannot be rendered (``view_blocked``)."""
     from app.core import base_body
     if kind not in RUN_KINDS:
         raise ValueError(f"run must be one of {', '.join(RUN_KINDS)}")
     if not base_body.is_outfit_body_signature(body_id):
         raise ValueError("not an outfit body id")
+    if (kind == "view") != bool(view):
+        raise ValueError("a view run names one view, the other runs none")
+    if view and view not in base_body.BASE_VIEWS:
+        raise ValueError(f"view must be one of {', '.join(base_body.BASE_VIEWS)}")
     profile = _profile(character_name)
     if not base_body.is_base_pipeline(character_name, profile=profile):
         raise LookupError(NOT_PIPELINE)
     path = base_body.outfit_body_path(character_name, body_id)
-    if kind == "regenerate":
+    if kind == "view":
+        blocked = view_blocked(character_name, body_id, view, profile=profile)
+        if blocked:
+            raise LookupError(blocked)
+    elif kind == "regenerate":
         if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
             raise LookupError(NOT_MESH_MODE)
         if not source_outfit(character_name, body_id, profile=profile):
@@ -621,14 +819,14 @@ def _position_locked(character_name: str, job: _Job) -> Dict[str, Any]:
             "behind": {"kind": ahead.kind, "body_id": ahead.body_id} if ahead is not None else None}
 
 
-def start(character_name: str, kind: str, body_id: str, item_id: str = "") -> Dict[str, Any]:
+def start(character_name: str, kind: str, body_id: str, item_id: str = "", view: str = "") -> Dict[str, Any]:
     """Queue a run on the body (``check_run`` first) in the character's FIFO
     — never refused for a running run. An identical waiting run is not added
     twice. ``{kind, body_id, started, queued, position, behind}``:
     ``started`` True when the worker took it at once (it may still wait for
     another 3D run of the character to end — ``generation_running``)."""
-    check_run(character_name, kind, body_id, item_id)
-    wanted = _Job(kind, body_id, item_id)
+    check_run(character_name, kind, body_id, item_id, view)
+    wanted = _Job(kind, body_id, item_id, view)
     with _lock:
         queue = _queues.setdefault(character_name, deque())
         job = next((j for j in queue if j.key() == wanted.key()), None)
@@ -641,7 +839,7 @@ def start(character_name: str, kind: str, body_id: str, item_id: str = "") -> Di
             threading.Thread(target=_worker, args=(character_name,), daemon=True,
                              name=f"outfit-body-{character_name}").start()
         out = _position_locked(character_name, job)
-    return {"kind": kind, "body_id": body_id, "item_id": item_id or None, **out}
+    return {"kind": kind, "body_id": body_id, "item_id": item_id or None, "view": view or None, **out}
 
 
 class RunStarted(Exception):
@@ -653,19 +851,23 @@ NOT_QUEUED = "No run on this outfit body waits in the queue"
 CANCELLED = "Cancelled while queued"
 
 
-def cancel(character_name: str, body_id: str) -> Dict[str, Any]:
-    """Take the body's WAITING runs out of the character's FIFO (atomic under
-    ``_lock``; the runs behind them move up). The run in flight is never
-    touched: ``RunStarted`` when the body only has that one, ``LookupError``
+def cancel(character_name: str, body_id: str, view: str = "") -> Dict[str, Any]:
+    """Take the body's WAITING runs (``view``: only the waiting run of that
+    dressed view) out of the character's FIFO (atomic under ``_lock``; the
+    runs behind them move up). The run in flight is never touched:
+    ``RunStarted`` when the body (view) only has that one, ``LookupError``
     when no run is on it. A cancelled job's waiter gets ``{ok: False,
     cancelled: True, error}``; the body's last result is not rewritten.
     ``{body_id, cancelled (count), queue}`` (``queue_state``'s shape)."""
+    def matches(job: _Job) -> bool:
+        return job.body_id == body_id and (not view or (job.kind == "view" and job.view == view))
+
     with _lock:
         queue = _queues.get(character_name)
-        dropped = [j for j in queue or () if j.body_id == body_id]
+        dropped = [j for j in queue or () if matches(j)]
         current = _current.get(character_name)
         if not dropped:
-            if current is not None and current.body_id == body_id:
+            if current is not None and matches(current):
                 raise RunStarted(ALREADY_RUNNING)
             raise LookupError(NOT_QUEUED)
         for job in dropped:
@@ -699,8 +901,8 @@ def _worker(character_name: str) -> None:
             job.result = result
             with _lock:
                 _results[(character_name, job.body_id)] = {
-                    "kind": job.kind, "ok": bool(result.get("ok")), "error": str(result.get("error") or ""),
-                    "finished_at": utc_now_iso(),
+                    "kind": job.kind, "view": job.view or None, "ok": bool(result.get("ok")),
+                    "error": str(result.get("error") or ""), "finished_at": utc_now_iso(),
                     "detail": {k: result[k] for k in ("fitted", "failed", "skipped") if k in result}}
                 if _current.get(character_name) is job:
                     _current.pop(character_name, None)
@@ -724,10 +926,11 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
     again (the state may have changed while it waited)."""
     from app.core import base_body, model3d
     try:
-        check_run(character_name, job.kind, job.body_id, job.item_id)
+        check_run(character_name, job.kind, job.body_id, job.item_id, job.view)
     except (ValueError, LookupError) as e:
         return {"ok": False, "error": str(e)}
-    labels = {"regenerate": "Outfit body", "rerig": "Re-rig outfit body", "refit": "Re-fit on outfit body"}
+    labels = {"regenerate": "Outfit body", "rerig": "Re-rig outfit body", "refit": "Re-fit on outfit body",
+              "view": f"Outfit body {job.view} view"}
     queue, task_id = _tracked(character_name, f"{labels[job.kind]}: {character_name} ({job.body_id})")
     result: Dict[str, Any] = {"ok": False, "error": ""}
     try:
@@ -740,6 +943,8 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
                 result = {"ok": False, "error": f"the outfit's views stand for {built.get('body_id')} now"}
             else:
                 result = {"ok": bool(built.get("ok")), "error": str(built.get("error") or "")}
+        elif job.kind == "view":
+            result = render_view(character_name, job.body_id, job.view)
         elif job.kind == "rerig":
             rigged = model3d.rerig_model(character_name, job.body_id, track_id=task_id)
             result = {"ok": bool(rigged.get("ok")), "error": str(rigged.get("error") or "")}
