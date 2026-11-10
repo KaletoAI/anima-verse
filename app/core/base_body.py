@@ -1492,16 +1492,21 @@ def render_draft(character_name: str, view: str, *, stem: Path, front: Path, ref
 
 def render_fit(character_name: str, view: str, *, stem: Path, base_reference: Path,
                draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
-               common: Dict[str, Any], postprocess: bool = True) -> Optional[Path]:
-    """One FIT render of a two-step view into ``stem``: ``FIT_PROMPT`` on
-    the base reference (image 1) with the draft reference (image 2), use
-    case ``FIT_USE_CASE``, occasion ``DRESS_OCCASIONS[view][1]``, at the
-    canvas size. ``postprocess=False`` keeps the backend's full frame (the
+               common: Dict[str, Any], postprocess: bool = True, prompt: str = FIT_PROMPT,
+               prompt_keywords: Optional[str] = None) -> Optional[Path]:
+    """One FIT render of a two-step view into ``stem``: ``prompt`` (the
+    outfit's ``FIT_PROMPT``; an own-mesh piece's worn back names the piece,
+    ``garment_clothing.fit_prompt``) on the base reference (image 1) with
+    the draft reference (image 2), use case ``FIT_USE_CASE``, occasion
+    ``DRESS_OCCASIONS[view][1]``, at the canvas size. ``prompt_keywords``:
+    the tag form a keywords-family backend gets instead (None = ``prompt``
+    everywhere). ``postprocess=False`` keeps the backend's full frame (the
     garment chain crops it back onto the base view). None when the render
     returned nothing; render errors propagate."""
     from app.core import expression_regen
     return expression_regen.render_character_image(
-        character_name, output_stem=stem, bare_prompt=FIT_PROMPT,
+        character_name, output_stem=stem, bare_prompt=prompt,
+        **({"bare_prompt_keywords": prompt_keywords} if prompt_keywords else {}),
         occasion=DRESS_OCCASIONS[view][1], reference_image=base_reference,
         extra_reference_images=[draft_reference], sidecar_extra=extra,
         **{**common, "image_use_case": FIT_USE_CASE,

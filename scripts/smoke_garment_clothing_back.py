@@ -70,13 +70,27 @@ image centred in the canvas (dx 88) -> cropped back at offset (88, 0) it is
 the planned image again.
 
 [1] prompts: draft = base_body.draft_prompt(back, outfit_text = "wearing only
-    a black tailored blazer with silver buttons, the same garment as on the
-    person in the reference image, with the same length, cut and colour") —
+    a black tailored blazer with silver buttons and no other clothing, the
+    same garment as on the person in the reference image, with the same
+    length, cut and colour") —
     not the outfit's DRAFT_OUTFIT_TEXT; its negative ends with the worn
     negative "loose clothing, baggy, skirt, dress, shoes, socks, hair" —
     "jacket" is dropped: its pattern (base_body.DRESS_GARMENT_NEGATIVE,
-    r"jackets?|coats?|blazers?") names the fragment's "blazer". Fit prompt = "edit the first image with the clothes from the
-    second image". edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn
+    r"jackets?|coats?|blazers?") names the fragment's "blazer". Fit prompt
+    (garment_clothing.FIT with the noun = the name lower-cased, "black
+    blazer") = "edit the first image with the black blazer from the second
+    image: the person wears only the black blazer, add no other clothing,
+    the rest of the body stays exactly as in the first image"; its keywords
+    form (FIT_KEYWORDS) = "black blazer from the second image, only the black
+    blazer, no other clothing, body unchanged from the first image" — not
+    the outfit's FIT_PROMPT "edit the first image with the clothes from the
+    second image" (live 2026-11-10, Black Stilettos: the fit put a body suit
+    or a top and briefs on the bare draft in 5 of 5 fits). A shoe ("Black
+    Stilettos", slots [feet], fragment "shiny black leather stiletto heels,
+    high pointed toe") -> noun "black stilettos" in the same two sentences;
+    its draft text "wearing only shiny black leather stiletto heels, high
+    pointed toe and no other clothing, the same garment …". fit_prompt(ghost)
+    -> ValueError. edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn
     views (front, back), back "draft"; ghost keeps the default order.
 [2] gate numbers (worn_gate + back_follows_front) as derived above.
 [3] chain run from scratch, fits [BACK_FRONT, BACK_OK]: render order worn f1,
@@ -84,7 +98,9 @@ the planned image again.
     BEFORE the fits, the front before both. Draft call: occasion
     "outfit_back_draft", use case "base_back", reference = the worn front's
     file name, character_loras True. Fit calls: occasion "outfit_back", use
-    case "outfit_fit", postprocess False, 1200 x 1200, image 1 = the base
+    case "outfit_fit", bare_prompt = the blazer's fit prompt of [1] and
+    bare_prompt_keywords = its keywords form, postprocess False, 1200 x
+    1200, image 1 = the base
     back, image 2 = the draft. Back attempt 1 refused with the opening
     reason, attempt 2 accepted; the accepted back records front_sha256 = the
     worn front's sha, draft = the draft's file name.
@@ -93,6 +109,15 @@ the planned image again.
 [5] a new accepted front drops the worn back (+ its ghost); a back whose
     front_sha256 is not the current front is not served from the cache.
 [6] fsig: version 2 differs from the same inputs under version 1.
+[7] the family pick (service.prompt_for_backend, payload prompt_by_family):
+    a backend with image_family "keywords" renders the keywords form, one
+    with "natural" the prompt; image_family "" + model "z-image-turbo"
+    resolves to keywords (get_target_model -> z_image -> keywords); a
+    by_family without the backend's family keeps the prompt.
+    ImageService._parse_input keeps prompt_by_family (its whitelist drops
+    unknown keys). The real render_character_image hands the image service
+    payload["prompt_by_family"] = {"keywords": <kw>} with a
+    bare_prompt_keywords, and no prompt_by_family without one.
 """
 import io
 import json
@@ -113,8 +138,17 @@ SKIN = (200, 160, 140)
 GREEN = (40, 90, 50)
 W, H = 1024, 1200
 FRAGMENT = "a black tailored blazer with silver buttons"
-DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons, the same garment as on the person in "
-              "the reference image, with the same length, cut and colour")
+DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons and no other clothing, the same garment "
+              "as on the person in the reference image, with the same length, cut and colour")
+FIT_BLAZER = ("edit the first image with the black blazer from the second image: the person wears only the black "
+              "blazer, add no other clothing, the rest of the body stays exactly as in the first image")
+KW_BLAZER = "black blazer from the second image, only the black blazer, no other clothing, body unchanged from the first image"
+FIT_SHOE = ("edit the first image with the black stilettos from the second image: the person wears only the black "
+            "stilettos, add no other clothing, the rest of the body stays exactly as in the first image")
+KW_SHOE = ("black stilettos from the second image, only the black stilettos, no other clothing, body unchanged "
+           "from the first image")
+SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe and no other clothing, the "
+                   "same garment as on the person in the reference image, with the same length, cut and colour")
 WORN_NEG = "loose clothing, baggy, skirt, dress, shoes, socks, hair"
 FIT_PROMPT = "edit the first image with the clothes from the second image"
 OPENING = "back shows the front opening: neckline 0.1001 Hb deep, front 0.1001 Hb"
@@ -251,7 +285,18 @@ def main() -> int:
         check("draft text in it, not the outfit's", (DRAFT_TEXT in draft[0],
                                                      base_body.DRAFT_OUTFIT_TEXT in draft[0]), (True, False))
         check("draft negative", draft[1], f"{outfit_negative}, {WORN_NEG}")
-        check("fit prompt", base_body.FIT_PROMPT, FIT_PROMPT)
+        check("outfit fit prompt unchanged", base_body.FIT_PROMPT, FIT_PROMPT)
+        check("blazer fit prompt", garment_clothing.fit_prompt("worn", item_id=jid), (FIT_BLAZER, KW_BLAZER))
+        sid = inventory.add_item(name="Black Stilettos", category="outfit_piece",
+                                 prompt_fragment="shiny black leather stiletto heels, high pointed toe",
+                                 outfit_piece={"slots": ["feet"], "outfit_types": ["formal"], "own_mesh": True})["id"]
+        check("shoe fit prompt", garment_clothing.fit_prompt("worn", item_id=sid), (FIT_SHOE, KW_SHOE))
+        shoe_draft = garment_clothing.draft_prompt("Demo", "worn", item_id=sid)[0]
+        check("shoe draft text", (SHOE_DRAFT_TEXT in shoe_draft,
+                                  shoe_draft == base_body.draft_prompt("Demo", "back", outfit_text=SHOE_DRAFT_TEXT)[0]),
+              (True, True))
+        raises("ghost has no fit", lambda: garment_clothing.fit_prompt("ghost", item_id=jid),
+               ValueError, "no drafted back")
         raises("worn back is no edit", lambda: garment_clothing.edit_prompt("Demo", "worn", "back", item_id=jid),
                ValueError, "drafted from the worn front")
         raises("ghost has no draft", lambda: garment_clothing.draft_prompt("Demo", "ghost", item_id=jid),
@@ -325,6 +370,7 @@ def main() -> int:
             path.with_suffix(".json").write_text(json.dumps(kw["sidecar_extra"]))
             return path
 
+        real_render = expression_regen.render_character_image
         expression_regen.render_character_image = recorder
 
         def cut_out(character_name, item_id, fsig_, view, *, force=False):
@@ -351,10 +397,11 @@ def main() -> int:
               ("outfit_back_draft", "base_back", True, draft[0], front_final.name, True))
         fit = dict(calls)["worn b1"]
         draft_file = garment_images.draft_path("Demo", jid, fsig, "worn")
-        check("fit call", (fit["occasion"], fit["image_use_case"], fit["bare_prompt"], fit["postprocess"],
+        check("fit call", (fit["occasion"], fit["image_use_case"], fit["bare_prompt"],
+                           fit.get("bare_prompt_keywords"), fit["postprocess"],
                            fit["override_width"], fit["override_height"],
                            Path(fit["reference_image"]).name, [Path(p).name for p in fit["extra_reference_images"]]),
-              ("outfit_back", "outfit_fit", FIT_PROMPT, False, 1200, 1200, f"tpose_back_{bsig}.png",
+              ("outfit_back", "outfit_fit", FIT_BLAZER, KW_BLAZER, False, 1200, 1200, f"tpose_back_{bsig}.png",
                [draft_file.name]))
         back_final = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="back")
         record = gs.read_record(back_final.with_suffix(".json"))
@@ -415,6 +462,40 @@ def main() -> int:
             check("version 1 had another fsig", gs.garment_fsig("Demo", jid) != fsig, True)
         finally:
             gs.GARMENT_VERSION["clothing"] = 2
+
+        print("[7] the keywords form reaches a keywords backend")
+        from types import SimpleNamespace
+        pick = imgservice.prompt_for_backend
+        by = {"keywords": KW_SHOE}
+        check("keywords backend", pick(FIT_SHOE, by, SimpleNamespace(image_family="keywords", model="")), KW_SHOE)
+        check("natural backend", pick(FIT_SHOE, by, SimpleNamespace(image_family="natural", model="")), FIT_SHOE)
+        check("family from the model name",
+              pick(FIT_SHOE, by, SimpleNamespace(image_family="", model="z-image-turbo")), KW_SHOE)
+        check("no form for the family", pick(FIT_SHOE, {"natural": "other"},
+                                             SimpleNamespace(image_family="keywords", model="")), FIT_SHOE)
+        check("no by_family", pick(FIT_SHOE, None, SimpleNamespace(image_family="keywords", model="")), FIT_SHOE)
+        parsed = imgservice.ImageService._parse_input(
+            imgservice.ImageService.__new__(imgservice.ImageService),
+            json.dumps({"prompt": FIT_SHOE, "agent_name": "Demo", "prompt_by_family": by}))
+        check("parse_input keeps it", (parsed["prompt"], parsed.get("prompt_by_family")), (FIT_SHOE, by))
+        sent = []
+
+        class Gen:
+            enabled = True
+
+            def generate_from_input(self, payload):
+                sent.append(json.loads(payload))
+                return "no image"
+
+        imgservice.get_image_service = lambda: Gen()
+        for kw_form in (KW_SHOE, None):
+            real_render("Demo", output_stem=root / "render" / "fit", equipped_pieces={}, equipped_items=[],
+                        pose_prompt="", expression_prompt="", bare_prompt=FIT_SHOE,
+                        **({"bare_prompt_keywords": kw_form} if kw_form else {}),
+                        image_use_case="outfit_fit", occasion="outfit_back", apply_state_modifiers=False,
+                        postprocess=False)
+        check("payload prompt + by family", [(p.get("prompt"), p.get("prompt_by_family")) for p in sent],
+              [(FIT_SHOE, {"keywords": KW_SHOE}), (FIT_SHOE, None)])
 
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))

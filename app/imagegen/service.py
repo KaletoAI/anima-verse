@@ -325,6 +325,19 @@ def slot_extra_references(slots: Dict[str, str], extra: List[str], backend: Any,
     return slots
 
 
+def prompt_for_backend(prompt: str, by_family: Any, backend: Any) -> str:
+    """The prompt ``backend`` renders: the caller's own prompt for the
+    backend's image family (``by_family`` = ``{"natural"|"keywords": str}``,
+    payload ``prompt_by_family``) when it names one, else ``prompt``."""
+    if isinstance(by_family, dict) and by_family:
+        from app.imagegen.negation_fold import resolve_family
+        own = by_family.get(resolve_family(getattr(backend, "image_family", "") or "",
+                                           getattr(backend, "model", "") or ""))
+        if isinstance(own, str) and own.strip():
+            return own.strip()
+    return prompt
+
+
 @dataclass
 class GenerationResult:
     """One finished string-path generation (``ImageService.generate_on_backend``).
@@ -2247,6 +2260,9 @@ class ImageService:
             # The dialog's pose-check override (True/False); absent = the
             # occasion's routing switch decides (app/imagegen/pose_check.py).
             "pose_check": ctx.get("pose_check"),
+            # A caller's own prompt per image family ({"keywords": ...}),
+            # picked per backend in generate_on_backend.
+            "prompt_by_family": ctx.get("prompt_by_family"),
         }
 
         if "prompt" not in ctx and self._json_keys(data.get("prompt")):
@@ -2374,8 +2390,13 @@ class ImageService:
         this backend. Errors are RAISED, never returned as text:
         BackendBusyError, BackendFailedError (cooled down — the routing re-runs
         on it), 4xx/GatewayRejectedError, MediaGenerationDisabled,
-        GpuTaskCancelled, TooManyJobsError, ImageSaveError."""
-        prompt_text = input_data.get("prompt", "")
+        GpuTaskCancelled, TooManyJobsError, ImageSaveError.
+
+        ``prompt_by_family`` (``{"keywords": ...}``): a caller's own prompt
+        for one image family — it replaces ``prompt`` on a backend of that
+        family (a bare edit instruction in tag form)."""
+        prompt_text = prompt_for_backend(input_data.get("prompt", ""), input_data.get("prompt_by_family"),
+                                         backend)
         character_name = (input_data.get("agent_name") or "").strip()
         set_profile = bool(input_data.get("set_profile"))
         skip_gallery = bool(input_data.get("skip_gallery"))

@@ -40,7 +40,7 @@ steps (``base_body.render_draft`` / ``render_fit``, the occasions
 ``outfit_back_draft`` / ``outfit_back``): a draft rendered fresh from the
 step's accepted FRONT (``kind.draft_prompt``), stored as
 ``images/{item}_{fsig}_{step}draft_back.png``, then up to ``ATTEMPTS`` fits
-of the cut-out draft onto the cut-out base back (``base_body.FIT_PROMPT``),
+of the cut-out draft onto the cut-out base back (``kind.fit_prompt``),
 both on neutral grey in a square canvas, published unprocessed and cropped
 back onto the base back's frame. Each fit is gated like an edit (the kind's
 gate against the base back: a poor registration = changed outline/colour
@@ -477,6 +477,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     from app.core.base_body import file_sha256
     from app.core.garment_store import garment_path, read_record, write_record
     from app.core.model_refs import VIEW_REFERENCE_BACKGROUND, _tpose_size, neutral_view_reference
+    fit_text, fit_keywords = kind.fit_prompt(step, item_id=item_id)
     front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
     front_gate = accepted_record(front)
     if front_gate is None:
@@ -512,6 +513,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             path = base_body.render_fit(
                 character_name, "back", stem=target.with_suffix(""), base_reference=base_reference,
                 draft_reference=draft_reference, canvas=canvas, common=common, postprocess=False,
+                prompt=fit_text, prompt_keywords=fit_keywords,
                 extra={"garment": {**meta, "attempt": attempt, "stage": "fit"}, **follow,
                        "edit_canvas": {"side": list(canvas), "offset": list(offset), "crop": list(base_size)}})
             if path is None:

@@ -822,6 +822,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            reference_image: Optional[Path] = None,
                            occasion: str = "", record_provenance: bool = False,
                            bare_prompt: Optional[str] = None,
+                           bare_prompt_keywords: Optional[str] = None,
                            mesh_input_profile: Optional[Dict[str, Any]] = None,
                            backend: str = "", dialog_loras: Optional[list] = None,
                            negative_prompt: str = "",
@@ -852,6 +853,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``{character}`` slot (``config.fill_character_slot``; the base-body
     views) — the final prompt then reads style, block, rest of the style,
     prompt as one comma list. None = no block, the historic join.
+    ``bare_prompt_keywords`` is the tag form of ``bare_prompt`` a
+    keywords-family backend renders instead (payload ``prompt_by_family``,
+    picked per backend in ``service.generate_on_backend``).
     ``postprocess=False`` publishes the backend's file as delivered: no
     background removal, no side trim — a garment edit keeps the full frame
     of its source (``garment_images``), the gates compare it pixel for pixel.
@@ -1059,6 +1063,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
         "profile_only": True,
         "appearances": [{"name": character_name, "appearance": appearance or ""}],
     }
+    if bare_prompt is not None and bare_prompt_keywords:
+        payload["prompt_by_family"] = {"keywords": bare_prompt_keywords}
     if reference_image is not None:
         payload["reference_image_override"] = str(reference_image)
     if extra_reference_images:
