@@ -32,7 +32,7 @@ import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
 import type { ImageStepSpec } from './GarmentSteps'
-import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, meshNotReadyText } from './garmentStyle'
+import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
@@ -223,6 +223,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   const footwear = footwearOf(info)
   const runState = footwear ?? garment
   const stepLabels = footwear ? FOOTWEAR_STEP_LABELS : STEP_LABELS
+  // What a default run of the shoe would run and what it costs (server step list).
+  const footwearPlan = footwear ? footwearRunPlan(footwear, t) : ''
   const running = garmentRunning(info)
   const busy = feedback.pending !== null || running
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
@@ -244,8 +246,9 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
                 {footwear.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}
               </span>
               <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
-                title={t('The shown shoe stays in use until the new one is made.')}
+                title={[footwearPlan, t('The shown shoe stays in use until the new one is made.')].filter(Boolean).join('\n')}
                 label={t('Regenerate')} />
+              {footwearPlan ? <span className="ga-hint" style={{ flexBasis: '100%' }}>{footwearPlan}</span> : null}
             </div>
           ) : null}
           <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun} />
@@ -343,7 +346,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
               slot="all"
               primary
               disabled={busy || !garment}
-              title={t('Runs every step that is missing or out of date')}
+              title={[t('Runs every step that is missing or out of date'), footwearPlan].filter(Boolean).join('\n')}
               onClick={() => onRun({}, 'all')}
               label={t('Run all')}
             />

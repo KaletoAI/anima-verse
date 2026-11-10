@@ -4515,6 +4515,11 @@
     "The shown shoe stays in use until the new one is made.": "Der gezeigte Schuh bleibt in Gebrauch, bis der neue erzeugt ist.",
     "Topline": "Schaftkante",
     "Type gates": "Typprüfungen",
-    "Vamp cover (open shoe)": "Vorderblatt-Abdeckung (offener Schuh)"
+    "Vamp cover (open shoe)": "Vorderblatt-Abdeckung (offener Schuh)",
+    "Runs: {steps}": "Läuft: {steps}",
+    "hub image job": "Hub-Bildjob",
+    "hub mesh job": "Hub-Mesh-Job",
+    "upscale job when small": "Upscale-Job, wenn klein",
+    "local": "lokal"
   }
 }

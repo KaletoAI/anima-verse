@@ -4,7 +4,9 @@
  * modules so fast refresh keeps working.
  */
 import type { CSSProperties } from 'react'
-import type { GarmentImageInfo, GarmentRunState, GateLimit, GateRecord, RecordLimits, RunFeedback } from './useGarment'
+import type {
+  FootwearInfo, GarmentImageInfo, GarmentRunState, GateLimit, GateRecord, RecordLimits, RunFeedback,
+} from './useGarment'
 
 export const TILE_HEIGHT = 200
 
@@ -62,6 +64,33 @@ export const FOOTWEAR_STEP_LABELS: Record<string, string> = {
   mesh: 'Mesh',
   insole: 'Insole',
   fit: 'Fit',
+}
+
+/** What a footwear step costs when it runs (the shoe source is shared by every wearer). */
+const FOOTWEAR_STEP_COST: Record<string, string> = {
+  source: 'upscale job when small',
+  empty: 'hub image job',
+  cutout: 'local',
+  mesh: 'hub mesh job',
+  insole: 'local',
+  fit: 'local',
+}
+
+/** "Runs: Empty shoe (hub image job), Mesh (hub mesh job), Insole (local)" — the steps a default run
+ *  (POST …/run {}) of a footwear piece runs, read off the server's step list in its order: every step
+ *  that is not accepted or whose freshness is stale (the fit while it is still `pending` runs nothing);
+ *  '' when nothing would run. */
+export function footwearRunPlan(info: FootwearInfo, t: (s: string) => string): string {
+  const parts: string[] = []
+  for (const [step, data] of Object.entries(info.steps || {})) {
+    if (!data) continue
+    if (step === 'fit' && (data as { pending?: boolean }).pending) continue
+    const stale = (data as { freshness?: { state?: string } | null }).freshness?.state === 'stale'
+    if (data.status === 'accepted' && !stale) continue
+    const cost = FOOTWEAR_STEP_COST[step]
+    parts.push(`${t(FOOTWEAR_STEP_LABELS[step] || step)}${cost ? ` (${t(cost)})` : ''}`)
+  }
+  return parts.length ? t('Runs: {steps}').replace('{steps}', parts.join(', ')) : ''
 }
 
 export const MESH_CHIPS: ChipSpec[] = [
