@@ -1867,6 +1867,12 @@ class HairPlacementRequest(BaseModel):
     tilt_deg: Any = None
 
 
+class FootwearWidthCapRequest(BaseModel):
+    # A number or null (back to the default); plain Any so garment_footwear.set_width_cap validates (400 with
+    # its message, not a schema 422).
+    cap: Any = None
+
+
 class GarmentRunRequest(BaseModel):
     # Plain strings, validated by garments.start_garment: an unknown step or
     # view is a 400 with its message, not a schema 422.
@@ -1894,13 +1900,16 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     (``garment_gates.limits``), the mesh component share and the fit gates
     (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``). Footwear: the
     empty-shoe, mesh and insole gates of the shoe source (``footwear_gates``,
-    ``footwear_insole``); its fit gates come with the fit."""
+    ``footwear_insole``) and the fit gates (``footwear_fit.FIT_GATES``)."""
     from app.core import garment_fit, garment_gates, garment_mesh
     if kind == "footwear":
-        from app.core import footwear_gates, footwear_insole
+        from app.core import footwear_fit, footwear_gates, footwear_insole
+        fit_gates = {key: (kind_, limit, footwear_fit.GATE_LABELS[key])
+                     for key, (kind_, limit) in footwear_fit.FIT_GATES.items()}
         return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),
                 "mesh": _footwear_gate_limits(footwear_gates.MESH_GATES),
-                "insole": _footwear_gate_limits(footwear_insole.INSOLE_GATES), "fit": {}}
+                "insole": _footwear_gate_limits(footwear_insole.INSOLE_GATES),
+                "fit": _footwear_gate_limits(fit_gates)}
     return {**garment_gates.limits(kind),
             "mesh": {"largest_component_share": {"op": "ge", "value": garment_mesh.MIN_COMPONENT_SHARE}},
             "fit": _gate_limits(garment_fit.CLOTHING_GATES if kind == "clothing" else garment_fit.GATES)}
@@ -2317,6 +2326,27 @@ def get_character_footwear_insole(character_name: str, item_id: str, request: Re
     if path is None or not path.is_file():
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "application/json")
+
+
+@router.post("/{character_name}/garments/{item_id}/footwear/width-cap")
+def set_character_footwear_width_cap(character_name: str, item_id: str, body: FootwearWidthCapRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set the per-fit width cap of a footwear piece (``garment_footwear.set_width_cap``): a number in
+    1.00..1.10, or null for the default 1.10. 400 for anything else or an item that is no footwear piece of
+    this character. Only the fit fingerprint changes: the next run re-fits from the cached shoe source on the
+    CPU (no run starts here). ``{item_id, width_cap, fsig}``."""
+    from app.core import garment_footwear, garment_store as gs
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    try:
+        saved = garment_footwear.set_width_cap(character_name, item_id, body.cap)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    profile = get_character_profile(character_name) or {}
+    return {"item_id": item_id, "width_cap": garment_footwear.width_cap(profile, item_id),
+            "fsig": gs.garment_fsig(character_name, item_id, profile=profile)}
 
 
 @router.get("/{character_name}/garments/{item_id}/hairdeck/{image}")

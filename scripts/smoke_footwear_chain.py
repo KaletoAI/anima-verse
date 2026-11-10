@@ -45,8 +45,9 @@ the real ones; measured once by a prototype, the values only confirm it):
 So ONE run of an item from nothing costs (upscale, edit, mesh) = (1, 1, 1).
 
 [C1] run_garment(Kira, heels) -> {ok True, fsig = garment_fsig(Kira, heels),
-     ran ["source", "empty", "cutout", "mesh", "insole"]} (the fit is not
-     wired yet: no "fit" in ran, ``fit`` "pending"); counters (1, 1, 1); no
+     ran ["source", "empty", "cutout", "mesh", "insole"]} (Kira has no base
+     model: no "fit" in ran, ``fit`` "no_base" — the fit step itself is
+     smoke_footwear_fit_step.py); counters (1, 1, 1); no
      running step left; status not failed; a second run_garment(Kira, heels)
      -> ran [], counters still (1, 1, 1).
 [C2] Mira holds heels too: run_garment(Mira, heels) -> ok, ran [], counters
@@ -67,7 +68,7 @@ So ONE run of an item from nothing costs (upscale, edit, mesh) = (1, 1, 1).
 [C5] garment_info(Kira, heels): kind "footwear", method "shoe", ssig = the C4
      ssig, steps.empty {status "accepted", freshness {state "current",
      reason ""}}, steps.mesh.status "accepted", steps.insole.status
-     "accepted", steps.fit {status "missing", pending True}, insole.nominal
+     "accepted", steps.fit.status "missing" (no base model), insole.nominal
      present, mesh_url and item_image_url set, stale_reasons [].
      The item image file is replaced (one pixel changed) -> the current ssig
      changes, nothing exists under it yet -> the info still shows the C4
@@ -337,7 +338,7 @@ def main() -> int:
             res = garments.run_garment("Kira", heels)
             fsig = gs.garment_fsig("Kira", heels)
             check("C1 result", (res.get("ok"), res.get("fsig"), res.get("ran"), res.get("fit")),
-                  (True, fsig, ITEM_STEPS, "pending"))
+                  (True, fsig, ITEM_STEPS, "no_base"))
             if not res.get("ok"):
                 print("     ", res)
             check("C1 counters", svc.counts(), (1, 1, 1))
@@ -398,8 +399,7 @@ def main() -> int:
                   ("accepted", {"state": "current", "reason": ""}))
             check("C5 mesh/insole", (steps.get("mesh", {}).get("status"), steps.get("insole", {}).get("status")),
                   ("accepted", "accepted"))
-            check("C5 fit pending", (steps.get("fit", {}).get("status"), steps.get("fit", {}).get("pending")),
-                  ("missing", True))
+            check("C5 fit missing (no base model)", steps.get("fit", {}).get("status"), "missing")
             check("C5 step order", list(steps), ITEM_STEPS + ["fit"])
             check("C5 insole nominal", isinstance((info.get("insole") or {}).get("nominal"), dict), True)
             check("C5 overlay", sorted((info.get("insole") or {}).get("overlay") or {}), ["insole", "topline"])

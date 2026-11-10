@@ -337,7 +337,8 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     older fit algorithm: ``garment_fit.FIT_VERSION``), ``outdated``
     (accepted, but the prepared mesh / HairDeck hair it was fitted from was
     replaced or removed) or ``missing``. Footwear (method ``shoe``):
-    ``garment_footwear.fit_state`` on the base."""
+    ``garment_footwear.fit_state`` on the base (``outdated`` there: the shoe
+    source mesh or its insole was replaced)."""
     from app.core.garment_store import HAIRDECK, SHOE, garment_path, read_record
     if method == SHOE:
         from app.core import garment_footwear
@@ -1182,9 +1183,23 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
     off that body with the reason (coordinator ruling 2026-11-10, like mesh
     mode and footwear: a v5 blazer could be torn open). Nothing is fitted on a body whose stored bytes
     are no longer ``body_sha`` (the outfit model is stale; its rebuild copies
-    the new body)."""
+    the new body).
+
+    Footwear dispatches to ``garment_footwear.body_fit``: the shoe source is
+    fitted on the outfit body directly, ``base_fit`` is not read."""
     from app.core import garment_fit, garment_store as gs
     from app.core.keyed_lock import keyed_lock
+    try:
+        footwear = gs._garment_kind(item_id) == _footwear()
+    except ValueError:
+        footwear = False
+    if footwear:
+        from app.core import garment_footwear
+        if profile is None:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        return garment_footwear.body_fit(character_name, item_id, body_id=body_id, body_sha=body_sha,
+                                         profile=profile, build=build)
     path, base_record = base_fit
     parsed = gs.parse_name(Path(path))
     if not parsed or parsed[0] != item_id or not gs.is_body_id(body_id) or not body_sha:
@@ -2323,7 +2338,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     (``body_fit_info``; ``body_id`` repeats its id), None on the base body —
     ``steps.fit`` stays the chain's fit on the base model.
     Footwear has its own panel (``garment_footwear.info``: the per-item
-    source steps, the insole, the fit).
+    source steps, the insole, the fit of the current fsig on the base model
+    and the width cap).
     ValueError for an invalid item."""
     from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version

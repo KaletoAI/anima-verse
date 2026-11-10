@@ -11,16 +11,29 @@ no base in it: a base change makes a fit stale, never the source.
 The chain runs inside the garment run (``garments._run_locked`` dispatches a
 footwear piece to ``run_chain``, the character's garment queue and cancel
 are the same as for every garment): the item steps through
-``footwear_source.run_source`` under the item lock, then ``fit`` — not wired
-yet (plan Task 9/10, ``FIT_PENDING``): the chain ends after the insole.
+``footwear_source.run_source`` under the item lock, then ``fit`` on the
+wearer's base model (CPU only, never a hub job).
 ``info`` is the Wardrobe panel; the footwear routes of
 ``app/routes/characters.py`` serve the files it names (``image_path``,
 ``mesh_path``, ``insole_path``).
+
+The fit (plan Task 10, spec § 5.5–§ 5.7): ``fit`` runs ``footwear_fit.fit_pair`` of the item's CURRENT source
+(``prepared.glb`` + ``insole.json`` under the current ssig) on one body — the base model (``body`` "") or an
+outfit body (``body`` = its id, ``garment_store.body_root``) — and publishes ``{item}_{fsig}.glb`` = that rigged
+body with two grafted shoe nodes ``garment_footwear_<item>_left`` / ``_right`` (``graft`` refuses a repeated
+name, so one node per side; extras ``{kind, item_id, fsig, side}``), its record and the ``low/`` tier. A fit is
+keyed (item, fsig, body id) like a garment fit: two wearers make two fits of ONE source. Footwear never derives
+a body fit from the base fit (``body_fit`` fits the source on the outfit body directly; there is no
+``base_fit_sha256``). A refused fit publishes nothing: the failure is recorded per fsig (the base: the run's
+``garments._note_outcome``; an outfit body: ``garment_store.record_body_failure``) and a fit of another body or
+an older ``garment_fit.FIT_VERSION`` is never served in its place (R11 ruling; the fsig holds the fit version).
 """
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
+
+import numpy as np
 
 from app.core.log import get_logger
 
@@ -43,6 +56,43 @@ def width_cap(profile: Dict[str, Any], item_id: str) -> float:
     return round(min(footwear_fit.WIDTH_CAP, max(footwear_fit.WIDTH_CAP_MIN, float(value))), 4)
 
 
+def set_width_cap(character_name: str, item_id: str, cap: Optional[float]) -> bool:
+    """Store the per-fit width cap override of ``item_id`` (profile key ``WIDTH_CAP_KEY``, ``{item_id: cap}``);
+    None removes it (back to ``footwear_fit.WIDTH_CAP``). ValueError for a value that is no number or lies
+    outside ``footwear_fit.WIDTH_CAP_MIN`` .. ``footwear_fit.WIDTH_CAP``, and for an item that is no footwear
+    piece of the character — nothing is stored then. One read-modify-write under the profile lock; returns
+    ``save_character_profile``'s bool (True without a change). Only the fit fingerprint changes: the next run
+    re-fits from the cached source on the CPU."""
+    from app.core import footwear_fit
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    _check(character_name, item_id)
+    value: Optional[float] = None
+    if cap is not None:
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap != cap:
+            raise ValueError("The width cap must be a number or null")
+        value = round(float(cap), 4)
+        if not footwear_fit.WIDTH_CAP_MIN <= value <= footwear_fit.WIDTH_CAP:
+            raise ValueError(f"The width cap must lie between {footwear_fit.WIDTH_CAP_MIN:.2f} and "
+                             f"{footwear_fit.WIDTH_CAP:.2f}")
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        caps = dict(profile.get(WIDTH_CAP_KEY)) if isinstance(profile.get(WIDTH_CAP_KEY), dict) else {}
+        if value is None:
+            if item_id not in caps:
+                return True
+            caps.pop(item_id)
+        else:
+            if caps.get(item_id) == value:
+                return True
+            caps[item_id] = value
+        if caps:
+            profile[WIDTH_CAP_KEY] = caps
+        else:
+            profile.pop(WIDTH_CAP_KEY, None)
+        return bool(save_character_profile(character_name, profile))
+
+
 def fsig_inputs(character_name: str, item: Dict[str, Any], *, profile: Dict[str, Any]) -> Dict[str, Any]:
     """The footwear fingerprint inputs: the item's current source ``ssig``,
     the insole analysis version, the width cap and the fit version — no base
@@ -55,8 +105,8 @@ def fsig_inputs(character_name: str, item: Dict[str, Any], *, profile: Dict[str,
 
 # --- the run ------------------------------------------------------------------------------------------------------------
 
-#: What a footwear run says about its fit step until the fit lands (plan Task 9/10): the chain ends after the insole.
-FIT_PENDING = "The fit onto the wearer is not available yet — the chain ends after the insole"
+#: ``fit`` of a run result whose wearer has no base model yet: the item steps ran, nothing to fit onto.
+NO_BASE = "no_base"
 #: ``error_type`` of a failed item step that is load or the media switch, not a defect of the item: the run
 #: fails without a persisted failure record (``retry_later``), so automatic triggers try again.
 RETRY_LATER_ERRORS: Tuple[str, ...] = ("BackendBusyError", "MediaGenerationDisabled")
@@ -76,12 +126,18 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
     ``wanted`` None: every item step that is not done (an insole of an older analysis version counts as not
     done). A step name (or several): from the earliest of them on, cached steps reused; with ``force`` that
     item step starts a new source first (``footwear_source.regenerate``: next seed, new ssig, the accepted
-    outputs before it copied), so it and every later item step run again. The fit is not wired yet
-    (``FIT_PENDING``): the result carries ``fit: "pending"``.
+    outputs before it copied), so it and every later item step run again.
+
+    Then the fit on the wearer's base model (CPU, ``fit``): it runs when the fit of the current fsig is not
+    ``accepted`` on the current base model bytes (``fit_state``), when an item step ran, or when ``fit`` is
+    wanted with ``force`` (Re-fit). A wearer without a base model yet ends after the item steps with
+    ``fit: NO_BASE``. ``fit`` in the result = the fit state after the run.
 
     -> ``{ok: True, fsig, ran, fit}`` or ``{ok: False, fsig, step, error, gates, error_type, ran}`` plus
-    ``retry_later: True`` for load / the media switch (``RETRY_LATER_ERRORS``: no failure record)."""
-    from app.core import footwear_insole, footwear_source, garment_store as gs
+    ``retry_later: True`` for load / the media switch (``RETRY_LATER_ERRORS``: no failure record). A refused
+    fit is ``{ok: False, step "fit", error, gates}`` (``garments._note_outcome`` records it per fsig)."""
+    from app.core import base_body, footwear_insole, footwear_source, garment_store as gs
+    from app.core.garments import _Refused
     from app.models.character import get_character_profile
     item_id = str(item.get("id") or "")
     profile = get_character_profile(character_name) or {}
@@ -125,8 +181,21 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
                                 res.get("gates"), ran, str(res.get("error_type") or ""))
         if running:
             gs.end(character_name, item_id, running.pop())
-        # ``fit``: lands with plan Task 9/10 (FIT_PENDING) — nothing to run, nothing produced.
-        return {"ok": True, "fsig": fsig, "ran": ran, "fit": "pending"}
+        base = base_body.current_base(character_name, profile=profile)
+        if not base or not base[1]:
+            logger.info("Footwear run %s/%s: no base model yet — nothing to fit onto", character_name, item_id)
+            return {"ok": True, "fsig": fsig, "ran": ran, "fit": NO_BASE}
+        refit = bool(force and wanted and "fit" in wanted)
+        if refit or ran or fit_state(character_name, item_id, fsig, base[1]) != "accepted":
+            on_step("fit")
+            fit(character_name, item_id, fsig, profile=profile)
+            ran.append("fit")
+            gs.end(character_name, item_id, running.pop())
+        return {"ok": True, "fsig": fsig, "ran": ran, "fit": fit_state(character_name, item_id, fsig, base[1])}
+    except _Refused as e:
+        if running:
+            running.pop()
+        return _failure(character_name, item_id, fsig, e.step, e.error, e.gates, ran, "GateRefused")
     except Exception as e:  # noqa: BLE001 — reported as the step's failure, like garments._run_locked
         logger.warning("Footwear run %s/%s failed at %s: %s", character_name, item_id, step, e)
         if running:
@@ -159,31 +228,244 @@ def step_done(item_id: str, step: str) -> bool:
     return True
 
 
+#: Why a fit cannot run yet: the item's source is not through the insole (``step_done``).
+SOURCE_NOT_READY = "The shoe source is not ready — run the shoe chain up to the insole first"
+#: The fingerprint changed between the caller computing it and the fit (the source or the width cap).
+FSIG_CHANGED = "The shoe source or the width cap changed during the run — run the chain again"
+#: Fit step freshness reasons (fixed English phrases; the React badge translates them).
+FIT_BODY_CHANGED = "Body changed — refit pending"
+FIT_SOURCE_CHANGED = "Shoe source changed — refit pending"
+
+
+def node_name(item_id: str, side: str) -> str:
+    """The grafted shoe node of one side: ``garment_footwear_<item>_<side>``."""
+    return f"garment_{KIND}_{item_id}_{side}"
+
+
+def source_ready(item_id: str) -> bool:
+    """Whether the item's CURRENT source has an accepted mesh and an accepted insole of the current analysis
+    version (what ``fit`` reads)."""
+    return step_done(item_id, "mesh") and step_done(item_id, "insole")
+
+
+def _source_parents(item_id: str, ssig: str) -> Dict[str, Any]:
+    """``parents.source`` of a fit record: ``{ssig, empty_sha256, mesh_sha256, insole_version}``."""
+    from app.core import footwear_source
+    from app.core.base_body import file_sha256
+    folder = footwear_source.source_dir(item_id, ssig)
+    return {"ssig": ssig, "empty_sha256": file_sha256(folder / "empty.png"),
+            "mesh_sha256": file_sha256(folder / "prepared.glb"),
+            "insole_version": footwear_source.step_record(item_id, ssig, "insole").get("version")}
+
+
+def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile: Dict[str, Any],
+        schedule: bool = False) -> Path:
+    """Fit the item's current shoe source onto ``body`` ("" = the base model, else an outfit body id) and
+    publish it under ``garment_store.garment_path(…, "fit", body=body)`` (module docstring): the rigged body +
+    the two shoe nodes, the record (spec § 5.7 without ``cut``, plus ``accepted``, ``fit_version``,
+    ``body_id``, ``body_sha256``, ``base_model_sha256`` on the base only, ``base_signature``,
+    ``parents.source`` and ``foot_pose`` with its ``source``), and the ``low/`` tier decimated from the fit GLB.
+    ``schedule`` asks for the outfit assembly afterwards (P2: never — the served model stays unchanged).
+
+    ``garments._Refused("fit", …)`` when a gate refuses (``BOOT_REFUSED`` first for a boot) or the fsig is no
+    longer ``fsig``; ``base_body.MissingInput`` when the source is not ready or the outfit body is missing;
+    ``base_body.OutfitError`` without a base model. CPU only: never a hub job."""
+    import hashlib
+    from app.blender import refine
+    from app.core import base_body, footwear_fit, footwear_source, garment_fit, glb_mesh
+    from app.core import garment_store as gs
+    from app.core.garments import _Refused, _snapshot_body, _write_atomic
+    from app.core.timeutils import utc_now_iso
+    _item_, kind = _item_kind(character_name, item_id)
+    if _fsig(character_name, item_id, profile) != fsig:
+        raise _Refused("fit", FSIG_CHANGED, None)
+    if not source_ready(item_id):
+        raise base_body.MissingInput(SOURCE_NOT_READY)
+    ssig = footwear_source.current_ssig(item_id)
+    folder = footwear_source.source_dir(item_id, ssig)
+    prepared = (folder / "prepared.glb").read_bytes()
+    insole = gs.read_record(folder / "insole.json")
+    if body:
+        if not gs.is_body_id(body):
+            raise ValueError(f"not an outfit body id: {str(body)[:40]!r}")
+        snapshot = _snapshot_body(character_name, body)
+        rigged, body_sha = snapshot["rigged"], snapshot["sha"]
+        bsig = str((snapshot["meta"].get("outfit_body") or {}).get("base_signature") or "")
+        body_id = body
+    else:
+        base = base_body.current_base(character_name, profile=profile)
+        if not base:
+            raise ValueError(f"{character_name} is not on the base-body pipeline")
+        bsig = base[0]
+        rigged = base_body._snapshot_base_model(character_name, bsig)["rigged"]
+        body_sha = hashlib.sha256(rigged).hexdigest()
+        body_id = bsig
+
+    positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared)
+    n = len(positions)
+    shoe = glb_mesh.GarmentMesh(positions=positions, normals=None, uvs=uvs, indices=faces,
+                                joints=np.zeros((n, 4), np.int64), weights=np.zeros((n, 4)), joint_names=[],
+                                image=image, mime=mime, material=material)
+    cap = width_cap(profile, item_id)
+    result = footwear_fit.fit_pair(insole, shoe, glb_mesh.body_arrays(rigged), glb_mesh.joint_bind_matrices(rigged),
+                                   width_cap=cap)
+    if not result.ok:
+        gates = {"ok": False, "reasons": list(result.reasons), **(result.record.get("gates") or {})}
+        raise _Refused("fit", "fit refused — " + "; ".join(result.reasons), gates)
+
+    blob = rigged
+    for side in footwear_fit.SIDES:
+        blob = glb_mesh.graft(blob, result.shoes[side], name=node_name(item_id, side),
+                              extras={"kind": kind, "item_id": item_id, "fsig": fsig, "side": side})
+    now = utc_now_iso()
+    parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
+                               "source": _source_parents(item_id, ssig)}
+    record: Dict[str, Any] = {
+        "method": "shoe", "kind": kind, "item_id": item_id, "fsig": fsig, "ssig": ssig, **result.record,
+        "parents": parents, "accepted": True, "fit_version": garment_fit.FIT_VERSION[kind],
+        "body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
+        "foot_pose": {**result.foot_pose, "source": {"item_id": item_id, "fsig": fsig,
+                                                     "glb_sha256": hashlib.sha256(blob).hexdigest()}},
+        "fitted_at": now, "created_at": now}
+    if not body:
+        parents["base_model_sha256"] = body_sha
+        record["base_model_sha256"] = body_sha
+    path = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
+    low = gs.garment_path(character_name, item_id, fsig, "low", body=body)
+    # A distance tier of the previous fit must never pair with the new one.
+    low.unlink(missing_ok=True)
+    _write_atomic(path, blob)
+    gs.write_record(path.with_suffix(".json"), record)
+    logger.info("Footwear fit %s/%s (%s): accepted on %s, width x%.3f, lift %.1f mm", character_name, item_id, fsig,
+                body or bsig, result.record["scale"]["width_factor"], 1000.0 * result.record["root_lift_m"])
+    tris = len(glb_mesh.static_arrays(blob)[1])
+    target = max(1, int(round(refine.lod_ratio("character") * tris)))
+    try:
+        dec = refine.decimate_to(path, target, low)
+    except Exception as e:  # noqa: BLE001 — the distance tier falls back to the full fit
+        dec = {"ok": False, "error": str(e) or type(e).__name__}
+    if dec.get("ok"):
+        record["low"] = {"ok": True, "tris": dec.get("tris"), "ratio": dec.get("ratio")}
+    else:
+        logger.warning("Footwear fit %s/%s: distance tier failed: %s", character_name, item_id, dec.get("error"))
+        record["low"] = {"ok": False, "error": dec.get("error") or "decimation failed"}
+    gs.write_record(path.with_suffix(".json"), record)
+    if body:
+        gs.clear_failure_on_body(character_name, item_id, fsig, body)
+    if schedule:
+        from app.core import garment_assembly
+        garment_assembly.schedule(character_name)
+    return path
+
+
+def _item_kind(character_name: str, item_id: str) -> Tuple[Dict[str, Any], str]:
+    """``garments._item`` of a footwear piece; ValueError for anything else."""
+    from app.core import garments
+    item, kind = garments._item(character_name, item_id)
+    if kind != KIND:
+        raise ValueError(f"{item_id} is no footwear piece")
+    return item, kind
+
+
 def fit_state(character_name: str, item_id: str, fsig: str, body_sha: str, *, body: str = "") -> str:
-    """The state of the wearer's fit of ``fsig`` on ``body`` ("" = the base): ``missing`` (no accepted fit),
-    ``stale`` (made on other body bytes, or by an older ``garment_fit.FIT_VERSION``), ``outdated`` (the
-    source mesh it was fitted from was replaced or removed) or ``accepted``. Until the fit step lands
-    (plan Task 10) no run writes such a record: every footwear fit is ``missing``."""
+    """The state of the wearer's fit of ``fsig`` on ``body`` ("" = the base model, ``body_sha`` its model
+    sha256; an outfit body id with its rigged sha256): ``missing`` (no accepted fit), ``stale`` (made on other
+    body bytes, or by an older ``garment_fit.FIT_VERSION``), ``outdated`` (the source mesh it was fitted from
+    was replaced or removed, or its insole is gone, no longer accepted or of another analysis version) or
+    ``accepted``."""
     from app.core import footwear_source, garment_store as gs
     from app.core.base_body import file_sha256
     from app.core.garment_fit import FIT_VERSION
-    fit = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
-    record = gs.read_record(fit.with_suffix(".json"))
-    if not fit.is_file() or record.get("accepted") is not True:
+    try:
+        path = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
+    except ValueError:
         return "missing"
-    used = record.get("body_sha256") if body else record.get("base_model_sha256")
-    if not body_sha or used != body_sha:
+    record = gs.read_record(path.with_suffix(".json"))
+    if not path.is_file() or record.get("accepted") is not True:
+        return "missing"
+    if body:
+        if not body_sha or record.get("body_id") != body or record.get("body_sha256") != body_sha:
+            return "stale"
+    elif not body_sha or record.get("base_model_sha256") != body_sha:
         return "stale"
     if record.get("fit_version") != FIT_VERSION.get(KIND):
         return "stale"
     source = (record.get("parents") or {}).get("source") or {}
+    ssig = str(source.get("ssig") or "")
     try:
-        prepared = footwear_source.source_dir(item_id, str(source.get("ssig") or "")) / "prepared.glb"
+        folder = footwear_source.source_dir(item_id, ssig)
     except ValueError:
         return "outdated"
+    prepared = folder / "prepared.glb"
     if not prepared.is_file() or source.get("mesh_sha256") != file_sha256(prepared):
         return "outdated"
+    insole = footwear_source.step_record(item_id, ssig, "insole")
+    if (not (folder / "insole.json").is_file() or insole.get("accepted") is not True
+            or insole.get("version") != source.get("insole_version")):
+        return "outdated"
     return "accepted"
+
+
+def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, profile: Dict[str, Any],
+             build: bool = False) -> Dict[str, Any]:
+    """``garments.body_fit`` of a footwear piece: what an outfit model on the outfit body ``body_id`` (made of the
+    body bytes ``body_sha``) carries of it — ``{fit, low, record, fsig, pending, error}``, same shape.
+
+    Fits the item's source on the outfit body directly (``fit`` with ``body``), never from the base fit (there
+    is no ``base_fit_sha256``). ``build`` (the assembly build, never serving) fits a missing / stale / outdated
+    one first, serialised per body; a refusal or failure is recorded per body (``record_body_failure``, the
+    fit version as the third key) and nothing of another body or an older fit version is served then (R11
+    ruling). Without a ready source nothing is fitted and nothing recorded (``SOURCE_NOT_READY``); nothing is
+    fitted on a body whose stored bytes are no longer ``body_sha``."""
+    from app.core import garment_fit, garment_store as gs, garments
+    from app.core.keyed_lock import keyed_lock
+    empty = {"fit": None, "low": None, "record": {}, "fsig": "", "pending": False}
+    if not gs.is_body_id(body_id) or not body_sha:
+        return {**empty, "error": "no outfit body to fit on"}
+    try:
+        fsig = _fsig(character_name, item_id, profile)
+    except ValueError as e:
+        return {**empty, "error": str(e)}
+    fit_path = gs.garment_path(character_name, item_id, fsig, "fit", body=body_id)
+    version = garment_fit.FIT_VERSION[KIND]
+
+    def current() -> Tuple[str, Optional[Dict[str, Any]]]:
+        state = fit_state(character_name, item_id, fsig, body_sha, body=body_id)
+        failure = (gs.body_failure(character_name, item_id, fsig, body_id, body_sha=body_sha, base_fit_sha="",
+                                   fit_version=version) if state != "accepted" else None)
+        return state, failure
+
+    state, failure = current()
+    ready = source_ready(item_id)
+    on_body = state != "accepted" and ready and garments.body_sha256(character_name, body_id) == body_sha
+    if on_body and failure is None and build:
+        with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
+            state, failure = current()
+            if state != "accepted" and failure is None:
+                try:
+                    fit(character_name, item_id, fsig, body=body_id, profile=profile, schedule=False)
+                except Exception as e:  # noqa: BLE001 — recorded per body, the assembly goes on
+                    error = e.error if isinstance(e, garments._Refused) else (str(e) or type(e).__name__)
+                    logger.warning("Footwear fit %s/%s (%s) on outfit body %s failed: %s", character_name, item_id,
+                                   fsig, body_id, error)
+                    gs.record_body_failure(character_name, item_id, fsig, body_id, error=error, body_sha=body_sha,
+                                           base_fit_sha="", fit_version=version)
+                state, failure = current()
+    record = gs.read_record(fit_path.with_suffix(".json"))
+    usable = (fit_path.is_file() and record.get("accepted") is True and record.get("body_id") == body_id
+              and record.get("body_sha256") == body_sha and record.get("fit_version") == version)
+    low = gs.garment_path(character_name, item_id, fsig, "low", body=body_id)
+    pending = on_body and failure is None and not build
+    if state == "accepted":
+        error = ""
+    elif failure is not None:
+        error = str(failure.get("error") or "")
+    elif not ready:
+        error = SOURCE_NOT_READY
+    else:
+        error = "not fitted on this outfit body yet" if pending or on_body else "the outfit body was rebuilt"
+    return {"fit": fit_path if usable else None, "low": low if usable and low.is_file() else None,
+            "record": record if usable else {}, "fsig": fsig, "pending": pending, "error": error}
 
 
 # --- info ---------------------------------------------------------------------------------------------------------------
@@ -289,6 +571,35 @@ def _numbers(values: Any) -> Dict[str, float]:
     return {k: v for k, v in values.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
+def _fit_info(character_name: str, item_id: str, fsig: Optional[str], base_sha: str) -> Dict[str, Any]:
+    """``steps.fit`` of ``info`` (see there)."""
+    from app.core import garment_store as gs
+    from app.core.model_overview import CURRENT, MISSING, STALE, freshness
+    status = fit_state(character_name, item_id, fsig, base_sha) if fsig and base_sha else "missing"
+    record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit").with_suffix(".json")) if fsig else {}
+    error = None
+    if status != "accepted" and fsig:
+        failure = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base_sha)
+        if failure is not None and failure.get("step") == "fit":
+            status, error = "refused", failure.get("error")
+    if status == "missing" or not record.get("accepted"):
+        record = {}
+    scale = record.get("scale") or {}
+    sides = record.get("sides") or {}
+    needed = scale.get("width_needed") or {}
+    metrics = _numbers({
+        "width_factor": scale.get("width_factor"), "width_cap": scale.get("width_cap"),
+        "root_lift_m": record.get("root_lift_m"), "k_m_per_unit": scale.get("k_m_per_unit"),
+        **{f"{key}_{side}": value for side in ("left", "right") for key, value in (
+            ("width_needed", needed.get(side) if isinstance(needed, dict) else None),
+            ("extension_deg", ((sides.get(side) or {}).get("extension") or {}).get("deg")),
+            ("toe_room_mm", (sides.get(side) or {}).get("toe_room_mm")))}})
+    fresh = {"accepted": freshness(CURRENT), "stale": freshness(STALE, FIT_BODY_CHANGED),
+             "outdated": freshness(STALE, FIT_SOURCE_CHANGED)}.get(status, freshness(MISSING))
+    return {"status": status, "gates": record.get("gates") or {}, "metrics": metrics, "url": None,
+            "freshness": fresh, "created_at": record.get("fitted_at"), "error": error}
+
+
 def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[str, Any]:
     """The Wardrobe panel of a footwear piece (``garments.garment_info`` of kind ``footwear``):
 
@@ -304,8 +615,11 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     ``upscale``); ``freshness`` = ``{state, reason}`` computed here: ``stale`` with ``ITEM_IMAGE_CHANGED``
     when the shown source was made from another item image than the current one (``OLDER_SOURCE`` for the
     same image under an older source version), the insole also ``OLDER_ANALYSIS`` when its analysis version
-    is not ``footwear_insole.INSOLE_VERSION``. ``fit`` = ``{status, pending True, detail FIT_PENDING, …}``:
-    the chain ends after the insole until the fit lands.
+    is not ``footwear_insole.INSOLE_VERSION``. ``fit`` = the fit of the CURRENT fsig on the base model:
+    ``{status accepted|stale|outdated|refused|missing, gates, metrics, url None, freshness, created_at, error}``
+    (``fit_state``; ``refused`` = the persisted failure of the fsig holds on this base model; freshness
+    ``FIT_BODY_CHANGED`` for stale, ``FIT_SOURCE_CHANGED`` for outdated), ``metrics`` the record's width factor /
+    cap, root lift, extension and toe room per side. ``width_cap`` = the cap the next fit uses (``width_cap``).
     ``insole`` = ``insole.json``'s ``{version, nominal, gates, overlay, frame}`` (None without one);
     ``stale_reasons`` codes ``item_image_changed`` / ``source_version_changed`` / ``analysis_updated``."""
     from app.core import base_body, footwear_insole, footwear_source, garment_store as gs, garments
@@ -408,9 +722,7 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
                 entry["url"] = _url(character_name, item_id, "insole", _stamp(out))
         steps[step] = entry
     base = base_body.current_base(character_name, profile=profile) or ("", "")
-    fit_status = fit_state(character_name, item_id, fsig, base[1]) if fsig else "missing"
-    steps["fit"] = {"status": fit_status, "gates": {}, "metrics": {}, "url": None, "pending": True,
-                    "detail": FIT_PENDING, "freshness": freshness(MISSING, FIT_PENDING)}
+    steps["fit"] = _fit_info(character_name, item_id, fsig, base[1])
 
     insole = gs.read_record(folder / "insole.json")
     insole_view = ({k: insole.get(k) for k in ("version", "nominal", "gates", "overlay", "frame")}
@@ -434,5 +746,5 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"], "failed": failed,
         "item_image_url": (_url(character_name, item_id, "image/source", image_stamp)
                            if image_stamp is not None else None),
-        "mesh_url": steps["mesh"]["url"], "insole": insole_view,
+        "mesh_url": steps["mesh"]["url"], "insole": insole_view, "width_cap": width_cap(profile, item_id),
         "preview_url": None, "served_fsig": None, "refit": None, "body": None, "body_id": None}
