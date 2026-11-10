@@ -62,7 +62,11 @@ HEAD_SHARE = 0.15               # the head segment: the top 15 % of the figure's
 EYE_BAND = (0.45, 0.70)         # the eye line within the head segment
 EYE_MIN_VERTICES = 30
 EYE_HALF_WIDTH_MM = (8.0, 32.0)
-EYE_SEPARATION_MM = (35.0, 90.0)
+# Separation of the two lash-paint CENTRES, not of the pupils: smoky paint and lash flaps widen toward the outer
+# corner, so the paint median sits outward of the eye. Measured on the unrigged base meshes 2026-11-10: Kai 82 mm,
+# Kira 88 mm, Lirien 100 mm — 90 refused Lirien and left her lash flaps black through the face retexture
+# (smoke_face_cleanup_eye_separation.py).
+EYE_SEPARATION_MM = (35.0, 110.0)
 EYE_SYMMETRY_MM = 10.0          # |(xL - mid) + (xR - mid)|
 EYE_LEVEL_MM = 8.0              # |yL - yR|
 EYE_Y_TRIM_MM = 12.0            # paint farther than this from the eye line (brows, nostrils) is not the eye
