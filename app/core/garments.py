@@ -1886,6 +1886,103 @@ def wait_idle(timeout: float = 60.0) -> bool:
     return False
 
 
+# --- Collecting a finished mesh job ------------------------------------------------
+
+class StepBusy(RuntimeError):
+    """``collect_mesh_job``: the lock its mesh step runs under is held — a run is going (a route answers 409)."""
+
+
+#: ``collect_mesh_job``'s refusal while a garment run of the character holds its run lock.
+RUN_GOING = "A garment run of this character is going — fetch the job once it has ended"
+
+
+def _clear_failure_from(character_name: str, item_id: str, fsig: str, step: str, order: Tuple[str, ...]) -> None:
+    """Drop the persisted failure of ``(item_id, fsig)`` when it names ``step`` or a later step (a new
+    accepted mesh makes those run again anyway); a failure before it stays."""
+    from app.core import garment_store as gs
+    try:
+        failed = str(gs.read_record(gs.garment_path(character_name, item_id, fsig, "failed")).get("step") or "")
+    except ValueError:
+        return
+    if failed and failed in order and order.index(failed) >= order.index(step):
+        gs.clear_failure(character_name, item_id, fsig)
+
+
+def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear: bool) -> Dict[str, Any]:
+    """Collect a FINISHED gateway mesh job by its id as the item's mesh step — for a mesh whose run outlived
+    our own poll (timeout, server restart) but finished on the gateway. Reuses the character models' fetch
+    (``ImageService.fetch_mesh_job``: each mesh gateway asked once, checksums verified, rig ``none``).
+
+    The mesh step of the item's CURRENT method, under the lock that step runs under, taken WITHOUT waiting
+    (``StepBusy`` while it is held — a collected job never races a running step):
+
+    - edit chain (clothing, hair "views → mesh"): ``garment_mesh.collect_job`` under the character's run lock
+      (``garment_store.char_lock``), step ``mesh``;
+    - hair ``subtract``: ``garment_subtract.collect_source_job`` under the same lock, step ``mesh_source``;
+    - footwear: ``footwear_source.collect_mesh_job`` under the ITEM lock, step ``mesh`` of the shoe source.
+
+    Each runs the SAME prepare + gates as a fresh attempt and writes the same record plus ``collected_job``.
+    Accepted: the step's failure (persisted, in memory) ends when it named this step or a later one. Refused
+    (gate) or failed (decimation, an unreadable delivery): recorded as the step's failure like a run's. A job
+    that is not done, unknown, someone else's or failed changes nothing. Nothing starts a run: the next run
+    reuses the accepted mesh and runs only what follows (CPU).
+
+    Returns the store's answer plus ``step`` (and ``fsig``): ``status`` ``accepted`` / ``refused`` /
+    ``step_failed`` / ``queued`` / ``running`` / ``unknown`` / ``forbidden`` / ``failed`` / ``rig_mismatch``
+    / ``error``. ValueError for an item that is no garment of the character, a footwear piece on the
+    garment route (or the reverse, ``footwear``), or hair made by HairDeck (no mesh job);
+    ``base_body.MissingInput`` / FileNotFoundError when the step's input is missing. Blocking."""
+    from app.core import base_body, garment_mesh, garment_store as gs
+    from app.models.character import get_character_profile
+    _item_, kind = _item(character_name, item_id)
+    if (kind == _footwear()) != bool(footwear):
+        raise ValueError(f"{item_id} is {'no' if footwear else 'a'} footwear piece"
+                         + ("" if footwear else " — its mesh is the shoe source's"))
+    profile = get_character_profile(character_name) or {}
+    method = gs.kind_method(kind, character_name, profile)
+    order = gs.steps_for(kind, method)
+    if method == gs.HAIRDECK:
+        raise ValueError("Hair made by HairDeck has no mesh job to fetch")
+    step = "mesh_source" if method == gs.SUBTRACT else "mesh"
+    if kind == _footwear():
+        from app.core import footwear_source
+        try:
+            res = footwear_source.collect_mesh_job(item_id, job_id)
+        except footwear_source.SourceBusy as e:
+            raise StepBusy(str(e)) from e
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    else:
+        lock = gs.char_lock(character_name)
+        if not lock.acquire(blocking=False):
+            raise StepBusy(RUN_GOING)
+        try:
+            fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+            if method == gs.SUBTRACT:
+                from app.core import garment_subtract
+                res = garment_subtract.collect_source_job(
+                    character_name, item_id, gs.image_fsig(character_name, item_id, profile=profile),
+                    gs.subtract_ssig(character_name, item_id, profile=profile), job_id)
+            else:
+                res = garment_mesh.collect_job(character_name, item_id, fsig, job_id)
+        finally:
+            lock.release()
+    status = res.get("status")
+    out = {**res, "step": step, "fsig": fsig}
+    if status == "accepted":
+        gs.end(character_name, item_id, step)
+        _clear_failure_from(character_name, item_id, fsig, step, order)
+    elif status in ("refused", garment_mesh.STEP_FAILED):
+        error = str(res.get("error") or status)
+        gates = res.get("gates") if kind == _footwear() else {"attempts": (res.get("record") or {}).get("attempts")
+                                                                           or []}
+        gs.end(character_name, item_id, step, error=error, gates=gates)
+        base = base_body.current_base(character_name, profile=profile)
+        gs.record_failure(character_name, item_id, fsig, step=step, error=error,
+                          base_model_sha=base[1] if base else "")
+    logger.info("Garment %s/%s: mesh job %s collected for %s: %s", character_name, item_id, job_id, step, status)
+    return out
+
+
 # --- Triggers -------------------------------------------------------------------
 
 def _worn_garments(character_name: str, profile: Dict[str, Any]) -> List[str]:

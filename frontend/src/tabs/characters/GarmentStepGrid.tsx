@@ -21,6 +21,7 @@ import { RunBadge, RunButton } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import { MESH_CHIPS, chipResults, num, queueText, shownRecord, upscaleText } from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
+import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
@@ -145,7 +146,8 @@ const STEP_HELP: Record<string, string> = {
   fit: 'Fit: the mesh fitted onto the rigged base model. Re-fit runs locally — no hub job.',
 }
 
-export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback }: {
+export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
+  meshFetchUrl = null, onMeshFetched }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -154,6 +156,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   busy: boolean
   onRun: (body: GarmentRunBody, slot?: string) => void
   feedback?: RunFeedback
+  /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
+  meshFetchUrl?: string | null
+  /** The mesh record changed through a fetched job: reload the panel. */
+  onMeshFetched?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -282,6 +288,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           label={mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
           onClick={() => onRun({ step: 'mesh', force: true })}
         />
+        <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
 
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />

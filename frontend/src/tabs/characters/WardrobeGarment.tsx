@@ -281,6 +281,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
     if (ready) void start({ step: 'fit' })
     else startPoll(0)
   }
+  // "Fetch finished job…" on the mesh row: the shoe source's own route for footwear.
+  const meshFetchUrl = info?.pipeline && itemId
+    ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/${footwear ? 'footwear/mesh' : 'mesh'}/fetch` : null
+  const onMeshFetched = () => startPoll(0)
   const previewPose = PREVIEW_POSES.find((p) => p.key === pose) || PREVIEW_POSES[0]
   const fit = garment?.steps.fit
   const fitRecord = fit && fit.status !== 'missing' ? fit.metrics : null
@@ -306,7 +310,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
             </div>
           ) : null}
           <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun}
-            onWidthCap={(cap) => { void onWidthCap(cap) }} />
+            onWidthCap={(cap) => { void onWidthCap(cap) }} meshFetchUrl={meshFetchUrl}
+            onMeshFetched={onMeshFetched} />
         </div>
         <div className="ga-garment-dialog-col">
           {footwear.preview_url ? (
@@ -368,6 +373,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
             busy={busy}
             onRun={onRun}
             feedback={feedback}
+            meshFetchUrl={meshFetchUrl}
+            onMeshFetched={onMeshFetched}
           />
         </div>
         <div className="ga-garment-dialog-col">

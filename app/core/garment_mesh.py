@@ -230,7 +230,6 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
              attempt: int) -> Dict[str, Any]:
     """One fresh generation + decimation + gate; the attempt's record.
     Raises when the generation or the decimation fails."""
-    from app.blender import refine
     from app.imagegen.service import get_image_service
     res = get_image_service().generate_mesh(
         source_image_path=str(cut["front"]), output_path=str(raw),
@@ -244,6 +243,15 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
         raise RuntimeError(f"garment mesh generation delivered no GLB ({delivered.name or 'nothing'})")
     if delivered != raw:
         os.replace(delivered, raw)
+    return _prepare(kind, raw, candidate, attempt, res)
+
+
+def _prepare(kind: str, raw: Path, candidate: Path, attempt: int, res: Dict[str, Any]) -> Dict[str, Any]:
+    """Decimation + gate of a delivered raw mesh — the half of an attempt
+    after the generation, shared by a fresh attempt and a collected job
+    (``collect_job``). ``res`` is the generation's result (``backend``,
+    ``routing``, ``fallback_from``). Raises when the decimation fails."""
+    from app.blender import refine
     # Welded on import: split at its UV seams the mesh would tear
     # apart under the collapse (2026-11-09: share 0.982 -> 0.724).
     dec = refine.decimate_to(raw, target_tris(kind), candidate, merge_vertices=True)
@@ -258,6 +266,79 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
              "tris_raw": dec.get("tris_before"), "tris_prepared": dec.get("tris"),
              "ratio": dec.get("ratio"), "largest_component_share": share}
     return entry
+
+
+#: What a collected job's answer is when the step itself fails (decimation) — the job was fine.
+STEP_FAILED = "step_failed"
+
+
+def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, Any]:
+    """Collect a FINISHED gateway mesh job by its id as this fsig's mesh —
+    the way back to a mesh step whose run outlived our own poll (timeout,
+    server restart) but finished on the gateway.
+
+    ``get_image_service().fetch_mesh_job`` (rig ``none``: a garment mesh is
+    unrigged) downloads the result into a staging folder; then the SAME
+    ``_prepare`` (decimation + component gate) as a fresh attempt runs, and
+    the same step record is written (one attempt), plus ``collected_job`` =
+    the job's full id. Accepted: ``raw`` + ``prepared`` + record, so the next
+    run reuses the pair (R13) and runs only the fit. Refused: the record says
+    so and an older prepared mesh of this fsig goes, like a refused step.
+
+    Returns ``{status: "accepted" | "refused", job_id, record, error?}``;
+    ``{status: STEP_FAILED, job_id, error}`` when the decimation fails (raw
+    written, no record — like a failed first attempt); else the fetch's own
+    answer with nothing written: ``queued`` / ``running`` (+ ``progress``)
+    or ``unknown`` / ``forbidden`` / ``failed`` / ``rig_mismatch`` /
+    ``error`` (+ ``error``). Blocking (download + Blender); the caller holds
+    ``garment_store.char_lock`` (``garments.collect_mesh_job``)."""
+    import shutil
+    import tempfile
+    from app.core import garment_store as gs
+    from app.imagegen.service import get_image_service
+
+    kind = _kind(item_id)
+    prepared = gs.garment_path(name, item_id, fsig, "prepared")
+    record_path = prepared.with_suffix(".json")
+    raw = gs.garment_path(name, item_id, fsig, "raw")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=raw.parent))
+    candidate = prepared.with_name(f".{prepared.stem}.candidate.glb")
+    try:
+        res = get_image_service().fetch_mesh_job(job_id, str(staging / raw.name), rig="none")
+        if res.get("status") != "stored":
+            return res
+        full = str(res.get("job_id") or job_id)
+        delivered = Path(str(res.get("path") or ""))
+        if delivered.suffix.lower() != ".glb" or not delivered.is_file():
+            return {"status": "error", "job_id": full,
+                    "error": f"job {full} delivered no GLB ({delivered.name or 'nothing'})"}
+        os.replace(delivered, raw)
+        prepared.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            entry = _prepare(kind, raw, candidate, 1, {"backend": res.get("backend", ""), "routing": {}})
+        except Exception as e:  # noqa: BLE001 — the step failed, the job was fine
+            error = str(e) or type(e).__name__
+            logger.info("garment mesh %s/%s: collected job %s failed: %s", name, item_id, full, error)
+            return {"status": STEP_FAILED, "job_id": full, "error": error}
+        entry["collected_job"] = full
+        record = _record(kind, item_id, fsig, entry, [entry], accepted=bool(entry["ok"]))
+        record["collected_job"] = full
+        logger.info("garment mesh %s/%s: collected job %s: %s tris -> %s, largest component %.4f%s", name,
+                    item_id, full, entry["tris_raw"], entry["tris_prepared"], entry["largest_component_share"],
+                    "" if entry["ok"] else " (refused)")
+        if entry["ok"]:
+            os.replace(candidate, prepared)
+            gs.write_record(record_path, record)
+            return {"status": "accepted", "job_id": full, "record": record}
+        # Refused like a step: an older accepted mesh of this fsig must not stay behind this record.
+        prepared.unlink(missing_ok=True)
+        gs.write_record(record_path, record)
+        return {"status": "refused", "job_id": full, "record": record,
+                "error": f"garment mesh refused ({', '.join(entry['reasons'])})"}
+    finally:
+        candidate.unlink(missing_ok=True)
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 #: The subtract hair method's source mesh (plan 2026-11-10-hair-subtract-method): what the generator is

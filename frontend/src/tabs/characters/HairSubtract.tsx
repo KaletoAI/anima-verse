@@ -23,6 +23,7 @@ import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clock
 import { FitBlock, GateChips, RunBadge, RunButton, StepState } from './GarmentSteps'
 import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, chipResults, num, recordLimits, shownRecord } from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
+import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
@@ -134,7 +135,8 @@ function StepLine({ title, status, statusStyle, details, mark, slot, feedback, d
 }
 
 /** The middle column: the haired input views, source mesh, cut and fit. */
-export function SubtractSteps({ garment, limits, hairedChips, fitChips, busy, onRun, feedback }: {
+export function SubtractSteps({ garment, limits, hairedChips, fitChips, busy, onRun, feedback, meshFetchUrl = null,
+  onMeshFetched }: {
   garment: GarmentInfo | null
   limits: GarmentLimits
   /** The haired views' gate chips (FieldHair's HAIRED_CHIPS). */
@@ -143,6 +145,10 @@ export function SubtractSteps({ garment, limits, hairedChips, fitChips, busy, on
   busy: boolean
   onRun: (body: GarmentRunBody) => void
   feedback?: RunFeedback
+  /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
+  meshFetchUrl?: string | null
+  /** The mesh record changed through a fetched job: reload the panel. */
+  onMeshFetched?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -230,6 +236,8 @@ export function SubtractSteps({ garment, limits, hairedChips, fitChips, busy, on
         <div className="ga-hint" style={{ ...ERROR_STYLE, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
           title={source.error}>{source.error}</div>
       ) : null}
+      <MeshJobFetch url={garment && hairedReady ? meshFetchUrl : null} disabled={busy}
+        onDone={() => onMeshFetched?.()} />
       {garment ? <StepState garment={garment} step="mesh_source" /> : null}
 
       <StepLine

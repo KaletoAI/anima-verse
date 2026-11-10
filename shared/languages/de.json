@@ -4571,6 +4571,9 @@
     "Locked: a run on this body is queued": "Gesperrt: ein Lauf auf diesem Körper wartet in der Warteschlange",
     "The outfit body has no retained unrigged mesh — regenerate it": "Der Outfit-Körper hat kein aufbewahrtes ungeriggtes Mesh — ihn neu generieren",
     "Dressed view of this texture made for another outfit — the worn outfit has none yet, not used": "Bekleidete Ansicht dieser Textur, für ein anderes Outfit erstellt — das getragene Outfit hat noch keine, nicht verwendet",
-    "Older mesher input of this body — not the worn outfit's dressed view, not used": "Ältere Mesher-Eingabe dieses Körpers — nicht die bekleidete Ansicht des getragenen Outfits, nicht verwendet"
+    "Older mesher input of this body — not the worn outfit's dressed view, not used": "Ältere Mesher-Eingabe dieses Körpers — nicht die bekleidete Ansicht des getragenen Outfits, nicht verwendet",
+    "Fetch finished job…": "Fertigen Job abholen…",
+    "Fetching…": "Wird abgeholt…",
+    "Stored as this step’s mesh and gated like a new one; the steps after it run on the next run. A job that is still running changes nothing — try again once it is done.": "Wird als Mesh dieses Schritts gespeichert und wie ein neues geprüft; die Schritte danach laufen beim nächsten Durchlauf. Ein Job, der noch läuft, ändert nichts — erneut versuchen, sobald er fertig ist."
   }
 }

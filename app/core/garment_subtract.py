@@ -70,27 +70,11 @@ def source_glb(character_name: str, item_id: str, ssig: str) -> Optional[Path]:
     return glb
 
 
-def run_source(character_name: str, item_id: str, ifsig: str, ssig: str, *, force: bool = False) -> Path:
-    """The source mesh of ``ssig`` — cached unless ``force``; else the haired views' cut-outs and ONE
-    ``hair_source_mesh`` job (``garment_mesh.generate_hair_source``). ``MissingInput`` without both accepted
-    haired views; ``garment_mesh.MeshAttemptFailed`` (step ``mesh_source``) when the job fails — the record then
-    says why (``accepted: false``)."""
-    from app.core import base_body, garment_mesh, garment_store as gs
-    from app.core import garment_images as gi
-    from app.core.timeutils import utc_now_iso
-    if not force:
-        cached = source_glb(character_name, item_id, ssig)
-        if cached is not None:
-            return cached
-    haired = {v: _haired(character_name, item_id, ifsig, v) for v in gs.GARMENT_VIEWS}
-    shas = gs.haired_shas(character_name, item_id, ifsig)
-    if not all(shas.values()):
-        raise base_body.MissingInput("The haired views are missing — run the haired step first")
-    folder = gs.source_dir(character_name, item_id, ssig)
-    folder.mkdir(parents=True, exist_ok=True)
-    record_path = folder / gs.SOURCE_RECORD
-    cutouts: Dict[str, Path] = {}
+def _cutouts(haired: Dict[str, Path], folder: Path) -> Dict[str, Path]:
+    """The haired views cut out locally (BiRefNet-DIS, full frame) into ``folder`` — the source mesh's input."""
     from PIL import Image
+    from app.core import garment_images as gi
+    cutouts: Dict[str, Path] = {}
     for view, path in haired.items():
         data = path.read_bytes()
         with Image.open(io.BytesIO(data)) as im:
@@ -103,6 +87,35 @@ def run_source(character_name: str, item_id: str, ifsig: str, ssig: str, *, forc
         out.save(tmp, format="PNG")
         tmp.replace(target)
         cutouts[view] = target
+    return cutouts
+
+
+def _haired_inputs(character_name: str, item_id: str, ifsig: str) -> Tuple[Dict[str, Path], Dict[str, str]]:
+    """``(haired view paths, their sha256)``; ``MissingInput`` without both accepted haired views."""
+    from app.core import base_body, garment_store as gs
+    haired = {v: _haired(character_name, item_id, ifsig, v) for v in gs.GARMENT_VIEWS}
+    shas = gs.haired_shas(character_name, item_id, ifsig)
+    if not all(shas.values()):
+        raise base_body.MissingInput("The haired views are missing — run the haired step first")
+    return haired, shas
+
+
+def run_source(character_name: str, item_id: str, ifsig: str, ssig: str, *, force: bool = False) -> Path:
+    """The source mesh of ``ssig`` — cached unless ``force``; else the haired views' cut-outs and ONE
+    ``hair_source_mesh`` job (``garment_mesh.generate_hair_source``). ``MissingInput`` without both accepted
+    haired views; ``garment_mesh.MeshAttemptFailed`` (step ``mesh_source``) when the job fails — the record then
+    says why (``accepted: false``)."""
+    from app.core import garment_mesh, garment_store as gs
+    from app.core.timeutils import utc_now_iso
+    if not force:
+        cached = source_glb(character_name, item_id, ssig)
+        if cached is not None:
+            return cached
+    haired, shas = _haired_inputs(character_name, item_id, ifsig)
+    folder = gs.source_dir(character_name, item_id, ssig)
+    folder.mkdir(parents=True, exist_ok=True)
+    record_path = folder / gs.SOURCE_RECORD
+    cutouts = _cutouts(haired, folder)
     glb = folder / SOURCE_GLB
     candidate = folder / f".{SOURCE_GLB}.candidate.glb"
     base = {"ssig": ssig, "image_fsig": ifsig, "haired": shas, "face_num": garment_mesh.SOURCE_FACE_NUM,
@@ -118,6 +131,62 @@ def run_source(character_name: str, item_id: str, ifsig: str, ssig: str, *, forc
     logger.info("Hair source mesh %s/%s (%s): %s tris from %s", character_name, item_id, ssig, meta.get("tris"),
                 meta.get("backend"))
     return glb
+
+
+def collect_source_job(character_name: str, item_id: str, ifsig: str, ssig: str, job_id: str) -> Dict[str, Any]:
+    """Collect a FINISHED gateway ``hair_source_mesh`` job by its id as the source mesh of ``ssig`` — the
+    way back to a ``mesh_source`` step whose run outlived our own poll (timeout, server restart).
+
+    ``get_image_service().fetch_mesh_job`` (rig ``none``) downloads the result into a staging folder; only a
+    stored result writes anything: the haired views' cut-outs (as ``run_source`` makes them — the cut reads
+    them), the same readable-GLB check as a fresh job (``garment_mesh.generate_hair_source``: its triangle
+    count) and the same record, plus ``collected_job`` = the job's full id. The cut and the fit then run on
+    the next run (CPU).
+
+    Returns ``{status: "accepted", job_id, record}``, ``{status: garment_mesh.STEP_FAILED, job_id, error}``
+    when the delivered GLB is unreadable (record ``accepted: false``, like a failed job), else the fetch's own
+    answer with nothing written (``queued`` / ``running`` + ``progress``, or ``unknown`` / ``forbidden`` /
+    ``failed`` / ``rig_mismatch`` / ``error`` + ``error``). ``MissingInput`` without both accepted haired
+    views. The caller holds ``garment_store.char_lock`` (``garments.collect_mesh_job``)."""
+    import shutil
+    import tempfile
+    from app.core import garment_mesh, glb_mesh, garment_store as gs
+    from app.core.timeutils import utc_now_iso
+    from app.imagegen.service import get_image_service
+    haired, shas = _haired_inputs(character_name, item_id, ifsig)
+    folder = gs.source_dir(character_name, item_id, ssig)
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=folder.parent))
+    try:
+        res = get_image_service().fetch_mesh_job(job_id, str(staging / SOURCE_GLB), rig="none")
+        if res.get("status") != "stored":
+            return res
+        full = str(res.get("job_id") or job_id)
+        delivered = Path(str(res.get("path") or ""))
+        if delivered.suffix.lower() != ".glb" or not delivered.is_file():
+            return {"status": "error", "job_id": full,
+                    "error": f"job {full} delivered no GLB ({delivered.name or 'nothing'})"}
+        folder.mkdir(parents=True, exist_ok=True)
+        cutouts = _cutouts(haired, folder)
+        base = {"ssig": ssig, "image_fsig": ifsig, "haired": shas, "face_num": garment_mesh.SOURCE_FACE_NUM,
+                "cutouts": {v: _sha(p) for v, p in cutouts.items()}, "collected_job": full}
+        record_path = folder / gs.SOURCE_RECORD
+        try:
+            tris = int(len(glb_mesh.static_arrays(delivered.read_bytes())[1]))
+        except Exception as e:  # noqa: BLE001 — an unreadable delivery fails the step like a fresh job
+            error = f"hair source mesh unreadable: {e}"
+            gs.write_record(record_path, {**base, "accepted": False, "error": error, "created_at": utc_now_iso()})
+            return {"status": garment_mesh.STEP_FAILED, "job_id": full, "error": error}
+        glb = folder / SOURCE_GLB
+        delivered.replace(glb)
+        record = {**base, "backend": res.get("backend", ""), "routing": {}, "tris": tris, "accepted": True,
+                  "sha256": _sha(glb), "error": None, "created_at": utc_now_iso()}
+        gs.write_record(record_path, record)
+        logger.info("Hair source mesh %s/%s (%s): collected job %s, %s tris from %s", character_name, item_id,
+                    ssig, full, tris, record["backend"])
+        return {"status": "accepted", "job_id": full, "record": record}
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 # --- cut ----------------------------------------------------------------------------

@@ -448,9 +448,6 @@ def _step_cutout(iid: str, ssig: str, seed: int, d: Path) -> None:
 def _mesh_attempt(iid: str, cutout: Path, raw: Path, candidate: Path, alpha, attempt: int) -> Dict[str, Any]:
     """One fresh mesher call + decimation + gates; the attempt's record. Raises when
     the generation or the decimation fails."""
-    from app.blender import refine
-    from app.core import glb_mesh
-    from app.core.footwear_gates import MESH_GATES, check_gates, component_shares, side_silhouette, silhouette_iou
     from app.imagegen.service import get_image_service
     res = get_image_service().generate_mesh(
         source_image_path=str(cutout), output_path=str(raw), occasion=MESH_OCCASION,
@@ -462,6 +459,15 @@ def _mesh_attempt(iid: str, cutout: Path, raw: Path, candidate: Path, alpha, att
         raise RuntimeError(f"shoe mesh generation delivered no GLB ({delivered.name or 'nothing'})")
     if delivered != raw:
         os.replace(delivered, raw)
+    return _prepare_mesh(raw, candidate, alpha, attempt, res)
+
+
+def _prepare_mesh(raw: Path, candidate: Path, alpha, attempt: int, res: Dict[str, Any]) -> Dict[str, Any]:
+    """Decimation + gates of a delivered raw shoe mesh — the half of an attempt after the generation, shared
+    by a fresh attempt and a collected job (``collect_mesh_job``). Raises when the decimation fails."""
+    from app.blender import refine
+    from app.core import glb_mesh
+    from app.core.footwear_gates import MESH_GATES, check_gates, component_shares, side_silhouette, silhouette_iou
     dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
     if not dec.get("ok"):
         raise RuntimeError(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}")
@@ -477,24 +483,34 @@ def _mesh_attempt(iid: str, cutout: Path, raw: Path, candidate: Path, alpha, att
             "tris_raw": dec.get("tris_before"), "tris_prepared": dec.get("tris"), "ratio": dec.get("ratio")}
 
 
-def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
+def _cutout_alpha(cutout: Path):
+    """The cut-out's alpha as a uint8 array (the mesh_iou gate's reference)."""
     import numpy as np
     from PIL import Image
+    with Image.open(cutout) as im:
+        return np.asarray(im.convert("RGBA").getchannel("A"), dtype=np.uint8)
+
+
+def _mesh_record(last: Dict[str, Any], attempts: List[Dict[str, Any]], accepted: bool, **extra: Any) -> Dict[str, Any]:
+    """The ``mesh`` step record; the numbers are those of ``last`` (a gated attempt, or {})."""
+    return _entry(accepted=accepted, gates=last.get("gates") or {}, backend=last.get("backend", ""),
+                  routing=last.get("routing"), attempts=attempts, target_tris=TARGET_TRIS, face_num=FACE_NUM,
+                  tris_raw=last.get("tris_raw"), tris_prepared=last.get("tris_prepared"),
+                  **({"fallback_from": last["fallback_from"]} if last.get("fallback_from") else {}), **extra)
+
+
+def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
     cutout = d / "cutout.png"
     if not cutout.is_file():
         raise FileNotFoundError("the shoe cut-out is missing — run the cutout step first")
-    with Image.open(cutout) as im:
-        alpha = np.asarray(im.convert("RGBA").getchannel("A"), dtype=np.uint8)
+    alpha = _cutout_alpha(cutout)
     raw, prepared = d / "raw.glb", d / "prepared.glb"
     # Decimated here first and renamed onto ``prepared`` only once accepted.
     candidate = d / ".prepared.candidate.glb"
     attempts: List[Dict[str, Any]] = []
 
     def _record(last: Dict[str, Any], accepted: bool, **extra: Any) -> Dict[str, Any]:
-        return _entry(accepted=accepted, gates=last.get("gates") or {}, backend=last.get("backend", ""),
-                      routing=last.get("routing"), attempts=attempts, target_tris=TARGET_TRIS, face_num=FACE_NUM,
-                      tris_raw=last.get("tris_raw"), tris_prepared=last.get("tris_prepared"),
-                      **({"fallback_from": last["fallback_from"]} if last.get("fallback_from") else {}), **extra)
+        return _mesh_record(last, attempts, accepted, **extra)
     try:
         for attempt in range(1, MESH_ATTEMPTS + 1):
             try:
@@ -618,3 +634,83 @@ def regenerate(item_id: str, step: str) -> str:
         write_record(item_dir(iid) / _CURRENT, {"ssig": new, "seed": seed})
         logger.info("Shoe source %s: regenerate from %s, %s -> %s", iid, step, old, new)
         return new
+
+
+#: ``collect_mesh_job``'s answer when the step itself fails (decimation) — the job was fine.
+STEP_FAILED = "step_failed"
+
+
+class SourceBusy(RuntimeError):
+    """A step of the item's shoe source is running (its item lock is held): a collected job would race it."""
+
+
+def collect_mesh_job(item_id: str, job_id: str) -> Dict[str, Any]:
+    """Collect a FINISHED gateway ``mesh_footwear`` job by its id as the ``mesh`` step of the item's CURRENT
+    source — the way back to a mesh step whose run outlived our own poll (timeout, server restart).
+
+    Under the item lock, taken WITHOUT waiting: ``SourceBusy`` while any step of the source runs. Needs the
+    accepted cut-out (``FileNotFoundError`` otherwise — the mesh_iou gate reads it).
+    ``get_image_service().fetch_mesh_job`` (rig ``none``) downloads into a staging folder; only a stored
+    result changes the source: the mesh step and every later one are dropped (like a step run), then the SAME
+    decimation + gates as a fresh attempt (``_prepare_mesh``) and the same record (one attempt) plus
+    ``collected_job`` = the job's full id. The insole (CPU) then runs on the next run.
+
+    Returns ``{status: "accepted" | "refused", ssig, job_id, record, error?, gates?}``, ``{status:
+    STEP_FAILED, ssig, job_id, error, failure}`` when the decimation fails (record ``accepted: false``), else
+    the fetch's own answer with nothing written (``queued`` / ``running`` + ``progress``, or ``unknown`` /
+    ``forbidden`` / ``failed`` / ``rig_mismatch`` / ``error`` + ``error``). Blocking (download + Blender)."""
+    import tempfile
+    from app.imagegen.service import get_image_service
+    iid = item_dir(item_id).name
+    lock = _lock(iid)
+    if not lock.acquire(blocking=False):
+        raise SourceBusy("A step of this shoe source is running — fetch the job once it has ended")
+    try:
+        ssig = current(iid)["ssig"]
+        d = source_dir(iid, ssig)
+        cutout = d / "cutout.png"
+        if not step_done(iid, ssig, "cutout"):
+            raise FileNotFoundError("the shoe cut-out is missing — run the cutout step first")
+        alpha = _cutout_alpha(cutout)
+        staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=d))
+        candidate = d / ".prepared.candidate.glb"
+        try:
+            res = get_image_service().fetch_mesh_job(job_id, str(staging / "raw.glb"), rig="none")
+            if res.get("status") != "stored":
+                return res
+            full = str(res.get("job_id") or job_id)
+            delivered = Path(str(res.get("path") or ""))
+            if delivered.suffix.lower() != ".glb" or not delivered.is_file():
+                return {"status": "error", "ssig": ssig, "job_id": full,
+                        "error": f"job {full} delivered no GLB ({delivered.name or 'nothing'})"}
+            _drop_from(d, "mesh")
+            raw = d / "raw.glb"
+            os.replace(delivered, raw)
+            try:
+                entry = _prepare_mesh(raw, candidate, alpha, 1, {"backend": res.get("backend", ""), "routing": {}})
+            except Exception as e:  # noqa: BLE001 — the step failed, the job was fine
+                failure, error = failure_of(e)
+                attempts = [{"attempt": 1, "ok": False, "failure": failure, "error": error}]
+                _set_step(d, "mesh", _mesh_record({}, attempts, False, failure=failure, error=error,
+                                                  collected_job=full))
+                logger.warning("Shoe source %s/%s: collected job %s failed: %s", iid, ssig, full, error)
+                return {"status": STEP_FAILED, "ssig": ssig, "job_id": full, "error": error, "failure": failure,
+                        "gates": {"attempts": attempts}}
+            entry["collected_job"] = full
+            logger.info("Shoe source %s/%s: collected job %s %s (component %.4f, iou %.4f)", iid, ssig, full,
+                        "accepted" if entry["ok"] else "refused", entry["gates"]["component_share"],
+                        entry["gates"]["mesh_iou"])
+            if entry["ok"]:
+                os.replace(candidate, d / "prepared.glb")
+                record = _mesh_record(entry, [entry], True, collected_job=full)
+                _set_step(d, "mesh", record)
+                return {"status": "accepted", "ssig": ssig, "job_id": full, "record": record}
+            record = _mesh_record(entry, [entry], False, failure=GATE, collected_job=full)
+            _set_step(d, "mesh", record)
+            return {"status": "refused", "ssig": ssig, "job_id": full, "record": record, "gates": entry["gates"],
+                    "error": f"shoe mesh refused ({', '.join(entry['gates']['reasons'])})"}
+        finally:
+            candidate.unlink(missing_ok=True)
+            shutil.rmtree(staging, ignore_errors=True)
+    finally:
+        lock.release()

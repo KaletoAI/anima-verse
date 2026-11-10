@@ -42,6 +42,7 @@ import { GateChips, RunBadge, RunButton } from './GarmentSteps'
 import { AttemptThumbs, GateIcon, StepLabel } from './GarmentStepGrid'
 import { ERROR_STYLE, FOOTWEAR_STEP_LABELS, WARN_STYLE, num, upscaleText } from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
+import { MeshJobFetch } from './MeshJobFetch'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import { FOOTWEAR_STEPS, runMark, runSlot } from './useGarment'
@@ -118,7 +119,8 @@ const INSOLE_CHIPS: ChipSpec[] = [
   { key: 'opening_share', label: 'Opening (solid mesh)', scale: 100, unit: '%', digits: 1 },
 ]
 
-export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap }: {
+export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap, meshFetchUrl = null,
+  onMeshFetched }: {
   info: FootwearInfo
   limits: GarmentLimits
   busy: boolean
@@ -126,6 +128,10 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap 
   onRun: (body: GarmentRunBody, slot?: string) => void
   /** Save the width cap (null = back to the default) and re-fit; the caller posts. */
   onWidthCap: (cap: number | null) => void
+  /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
+  meshFetchUrl?: string | null
+  /** The mesh record changed through a fetched job: reload the panel. */
+  onMeshFetched?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -304,6 +310,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap 
           label={mesh?.url ? t('Regenerate') : t('Generate')}
           onClick={() => onRun({ step: 'mesh', force: true })}
         />
+        <MeshJobFetch url={meshBlocked ? null : meshFetchUrl} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
       {info.mesh_url ? (
         <>

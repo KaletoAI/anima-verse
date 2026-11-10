@@ -1881,6 +1881,11 @@ class GarmentRunRequest(BaseModel):
     force: bool = False
 
 
+class GarmentMeshFetchRequest(BaseModel):
+    # The gateway job id as pasted ("Job 466a4e41b73d" works too); model3d.normalize_job_id checks it.
+    job_id: str = ""
+
+
 def _gate_limits(gates: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Chip limits of a mesh gate table ``{key: (min|max, limit, label)}``."""
     return {key: {"op": "le" if kind == "max" else "ge", "value": limit}
@@ -2221,6 +2226,45 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _fetch_garment_mesh_job(character_name: str, item_id: str, raw_job: str, *, footwear: bool) -> Dict[str, Any]:
+    """The two mesh-job fetch routes (``garments.collect_mesh_job``). 200 for ``accepted`` / ``refused`` (the
+    step's gate refused the delivered mesh, recorded like a run's refusal) and ``queued`` / ``running``
+    (nothing changed); 400 for an id that is no job id or an item that does not fit the route; 404 unknown
+    job, 403 another gateway user's job, 409 a running step / a failed job / a missing input, 422 a rigged
+    delivery, 502 a download or step failure."""
+    from app.core import base_body, garments
+    from app.core.model3d import normalize_job_id
+    _require_character(character_name)
+    job_id = normalize_job_id(raw_job)
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Not a job id")
+    try:
+        res = garments.collect_mesh_job(character_name, item_id, job_id, footwear=footwear)
+    except garments.StepBusy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except (base_body.MissingInput, FileNotFoundError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    status = res.get("status")
+    if status in ("accepted", "refused", "queued", "running"):
+        res.pop("path", None)
+        return res
+    code = {"unknown": 404, "forbidden": 403, "failed": 409, "rig_mismatch": 422}.get(status, 502)
+    raise HTTPException(status_code=code, detail=res.get("error") or f"job {job_id}: {status}")
+
+
+@router.post("/{character_name}/garments/{item_id}/mesh/fetch")
+def fetch_character_garment_mesh_job(character_name: str, item_id: str, body: GarmentMeshFetchRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Collect a FINISHED gateway mesh job by its id as the garment's mesh step (clothing and hair "views →
+    mesh": ``mesh``; hair "subtract": ``mesh_source``) — for a mesh whose run outlived our own poll. The
+    delivered mesh goes through the step's own prepare + gate and record (``collected_job``); nothing else
+    runs (the next run reuses it and runs the fit). A running garment run of the character → 409.
+    ``{status, step, fsig, job_id, record?, error?, progress?}`` (``_fetch_garment_mesh_job``)."""
+    return _fetch_garment_mesh_job(character_name, item_id, body.job_id, footwear=False)
+
+
 @router.post("/{character_name}/garments/{item_id}/cancel")
 def cancel_character_garment(character_name: str, item_id: str,
                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -2326,6 +2370,16 @@ def get_character_footwear_insole(character_name: str, item_id: str, request: Re
     if path is None or not path.is_file():
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "application/json")
+
+
+@router.post("/{character_name}/garments/{item_id}/footwear/mesh/fetch")
+def fetch_character_footwear_mesh_job(character_name: str, item_id: str, body: GarmentMeshFetchRequest,
+                                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Collect a FINISHED gateway ``mesh_footwear`` job by its id as the ``mesh`` step of the footwear piece's
+    shoe source (``footwear_source.collect_mesh_job``: the step's own decimation + gates and record, plus
+    ``collected_job``; the insole and the fit run on the next run). A running step of the shoe source → 409.
+    Answers like the garment route (``_fetch_garment_mesh_job``)."""
+    return _fetch_garment_mesh_job(character_name, item_id, body.job_id, footwear=True)
 
 
 @router.post("/{character_name}/garments/{item_id}/footwear/width-cap")

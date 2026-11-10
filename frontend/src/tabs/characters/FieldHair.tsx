@@ -535,6 +535,9 @@ export function FieldHair({ character, onEditAppearance }: {
   const isSubtract = info.method === 'subtract'
   const noHair = !!garment && !garment.served_fsig && !garment.running_step && fit?.status !== 'accepted'
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
+  // "Fetch finished job…" on the mesh step (views → mesh: mesh, subtract: mesh_source).
+  const meshFetchUrl = itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh/fetch` : null
+  const onMeshFetched = () => startPoll(0)
 
   const editChainSection = (
     <GarmentSteps
@@ -548,6 +551,8 @@ export function FieldHair({ character, onEditAppearance }: {
       lowFailedText="Distance tier failed — the full hair is used"
       compact
       feedback={feedback}
+      meshFetchUrl={meshFetchUrl}
+      onMeshFetched={onMeshFetched}
     />
   )
 
@@ -615,7 +620,7 @@ export function FieldHair({ character, onEditAppearance }: {
 
   const subtractSection = (
     <SubtractSteps garment={garment} limits={limits} hairedChips={HAIRED_CHIPS} fitChips={FIT_CHIPS}
-      busy={busy} onRun={onRun} feedback={feedback} />
+      busy={busy} onRun={onRun} feedback={feedback} meshFetchUrl={meshFetchUrl} onMeshFetched={onMeshFetched} />
   )
 
   // Shape and shell thickness re-cut + re-fit the hair: beside the preview.

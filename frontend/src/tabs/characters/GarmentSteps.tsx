@@ -24,6 +24,7 @@ import {
   EMPTY_TILE, ERROR_STYLE, MESH_CHIPS, ROW, TILE_HEIGHT, WARN_STYLE, chipResults, flatFit, num, queueText, shownRecord, upscaleText,
 } from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
+import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
@@ -434,7 +435,7 @@ export interface ImageStepSpec {
 /** The edit chain: the image steps (each needs the previous one accepted
  *  per view), the mesh (needs both cut-outs) and the fit (needs the mesh). */
 export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, lowFailedText,
-  compact = false, feedback }: {
+  compact = false, feedback, meshFetchUrl = null, onMeshFetched }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -447,6 +448,10 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
   compact?: boolean
   /** The panel's own run clicks (useGarmentRun). */
   feedback?: RunFeedback
+  /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
+  meshFetchUrl?: string | null
+  /** The mesh record changed through a fetched job: reload the panel. */
+  onMeshFetched?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -524,6 +529,7 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
           onClick={() => { onRun({ step: 'mesh', force: true }) }}
           label={mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
         />
+        <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
       <GateChips specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} />
       {mesh?.status === 'refused' && mesh.gates.length ? (
