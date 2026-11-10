@@ -25,14 +25,16 @@ rigged, ``k_h`` the same for H's own units):
    ``OUTER_TOL_M`` from five directions), distances to B's outer wall exact (``garment_fit.ExactNearSdf``):
    on the head (nearest B vertex Head-weighted) more than ``GEO_MIN_M`` outside B is hair — except in the face
    zone (below the 2D hairline, facing forward or near the eyes / ears), where only the masks decide; the
-   masks' votes and the old growth (``LOOSE_EPS_M``, ``GROW_RINGS``, never into the face zone) add the rest;
+   masks' votes, H's own texture colour (``tinted_hair``: hair that lies flatter than ``GEO_MIN_M`` and that the
+   masks miss) and the old growth (``LOOSE_EPS_M``, ``GROW_RINGS``, never into the face zone) add the rest;
    the crown, which can lie INSIDE B, is filled when hair encloses it (``fill_enclosed``); holes up to
    ``HOLE_FILL_MAX_M2``; the largest component only (it must reach the head). Long hair on the shoulders and
    back lies ON the body: there only the masks' votes and the growth from them count. Then registration pass 2
    on the non-hair HEAD only (the hair sits on it; one similarity does not fit head and shoulders of two
    mesher outputs at once), starting from pass 1, and the label again (off the head with pass 1's distances).
 5. ``cut`` (longer hair): H's hair faces with H's texture as the outer sheet, an inner sheet SNAPPED onto B
-   (``INNER_OFFSET_M`` outside, never across the outer sheet; a free strand farther than ``SNAP_MAX_M`` keeps a
+   (``INNER_OFFSET_M`` outside = the placed fit's clearance, so the fit pushes nothing; hair thinner than that has
+   its outer sheet lifted to ``INNER_GAP_M`` above the inner one; a free strand farther than ``SNAP_MAX_M`` keeps a
    sheet ``FREE_INNER_M`` inward), the two sheets joined at the cut edge -> one closed part. ``shell`` (short
    hair): the hair patch snapped onto the scalp, outer sheet at the shell thickness, inner at ``SHELL_INNER_M``,
    colour baked from the haired views into a ``TEXTURE_SIDE``² texture (seamless azimuthal UVs from the head
@@ -69,7 +71,8 @@ from app.core.log import get_logger
 logger = get_logger("garment_cut")
 
 #: Bump whenever the cut's output changes (part of the subtract fsig, ``garment_store``).
-CUT_VERSION = 4   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label
+CUT_VERSION = 5   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label;
+                  # 5: colour label from H's texture, the cut's inner sheet at the fit's clearance
 
 SHAPES: Tuple[str, ...] = ("cut", "shell")
 #: Default / allowed shell thickness (profile ``hair_shell_mm``).
@@ -128,6 +131,15 @@ REREG_DILATE = 2            # registration pass 2 leaves out the pass-1 label di
 CAP_LOOP_MAX_M = 0.25       # a boundary loop of the hair sheet shorter than this is capped (the face opening and
                             # the hair's outer edge are 90-190 cm; Kira e2e's gaps between strands 1.6-21 cm)
 CAP_ROUNDS = 3              # rounds of capping the hair sheet's small holes (loops touching at a vertex: 2)
+# Colour label (``tinted_hair``): H's OWN texture per vertex. Flat hair lies inside GEO_MIN_M and the masks miss
+# lit blonde (Kira 2026-11-10, ~/claude-out/kira-hair-cut: a 72 cm² patch from the crown to the left temple lay
+# 5.9 mm p50 / 9.9 p95 outside B, its front-view colour (196,162,124) nearer to the skin (210,163,138) than to the
+# side strands' hair colour (153,120,80) the mask measured). On H's texture the same patch is hair: CIELAB
+# distance to the hair reference p50 8.7, to the face's skin 15.0 (Kira: hair L*a*b* 62.9/8.5/31.4, skin
+# 53.1/20.7/21.9 — 17 apart; Kai 21 apart).
+TINT_MARGIN_DE = 3.0        # a vertex is hair-coloured when nearer to the hair than to the skin by this much
+TINT_MIN_SEPARATION_DE = 10.0  # ... and only when hair and skin reference lie this far apart (one-colour textures)
+TINT_MIN_N = 20             # vertices each reference needs
 
 #: The cut's gates: (kind, limit, label) like ``garment_fit.GATES``.
 CUT_GATES: Dict[str, Tuple[str, float, str]] = {
@@ -585,9 +597,35 @@ def small_loops(F: np.ndarray, P_m: np.ndarray, max_m: float) -> List[Tuple[np.n
     return out
 
 
+def tinted_hair(tint: Optional[np.ndarray], hair_ref: np.ndarray, skin_ref: np.ndarray, allowed: np.ndarray
+                ) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """The ``allowed`` vertices whose colour on H's own texture (``tint``: CIELAB per vertex) is hair:
+    nearer to the hair reference (median over ``hair_ref``) than to the skin reference (median over ``skin_ref``)
+    by more than ``TINT_MARGIN_DE`` -> ``(mask, report)``. Off (empty) without a texture, with fewer than
+    ``TINT_MIN_N`` vertices in a reference, or when the two references lie closer than ``TINT_MIN_SEPARATION_DE``
+    (a one-colour texture says nothing)."""
+    none = np.zeros(len(allowed), bool)
+    if tint is None or int(hair_ref.sum()) < TINT_MIN_N or int(skin_ref.sum()) < TINT_MIN_N:
+        return none, {"used": False}
+    hl = np.median(tint[hair_ref], 0)
+    sl = np.median(tint[skin_ref], 0)
+    separation = float(np.linalg.norm(hl - sl))
+    report: Dict[str, Any] = {"used": separation >= TINT_MIN_SEPARATION_DE,
+                              "hair_lab": [round(float(c), 1) for c in hl],
+                              "skin_lab": [round(float(c), 1) for c in sl], "separation_de": round(separation, 1)}
+    if not report["used"]:
+        return none, report
+    d_hair = np.linalg.norm(tint - hl, axis=1)
+    d_skin = np.linalg.norm(tint - sl, axis=1)
+    out = np.asarray(allowed, bool) & (d_skin - d_hair > TINT_MARGIN_DE)
+    report["seeds"] = int(out.sum())
+    return out, report
+
+
 def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: np.ndarray, voted: np.ndarray,
                loose: np.ndarray, hairline_y: Optional[float], eye_y: float,
-               facing: np.ndarray, centre_z: float, k: float, F: np.ndarray) -> Dict[str, Any]:
+               facing: np.ndarray, centre_z: float, k: float, F: np.ndarray,
+               tint: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """The hair label of H (registered into B's frame as ``Q``; ``sd`` its signed distance to B's outer wall in
     METRES, + outside) -> ``{"hair": vertex mask, "report": {...}}``. GEOMETRY first, colour at the face:
 
@@ -600,6 +638,10 @@ def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: n
     - Geometry seeds: the outer wall on the head (nearest B vertex Head-weighted) outside ``protect`` more than
       ``GEO_MIN_M`` outside B. The skin outside the face zone stays within it (derivation at ``GEO_MIN_M``);
       the hair the blonde back mask missed lies 2-5 cm out (Kira e2e back of the head, p50 3.5-4.5 cm).
+    - Colour seeds (``tinted_hair``, ``tint`` = H's texture in CIELAB per vertex): the outer wall on the head
+      outside ``protect`` (not ``DEEP_M`` inside) whose colour is the hair's — the hair reference is the geometry
+      seeds and the mask votes there, the skin reference the face zone the masks do not vote. Hair that lies
+      flatter than ``GEO_MIN_M`` and that the masks miss (lit blonde nearer to the skin in the views) is hair here.
     - With the mask votes (the loose ones only that far outside B, ``LOOSE_EPS_M``): seeds (eroded + dilated
       once), growth over the outer wall more than ``LOOSE_EPS_M`` outside B (never into ``protect``), closing,
       opening, majority (the old label steps).
@@ -615,7 +657,9 @@ def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: n
     low = below & (Q[:, 1] < eye_y + PROTECT_BROW_M / k) & (Q[:, 2] > centre_z - PROTECT_BEHIND_M / k)
     protect = outer & head & (low | (below & (facing > PROTECT_FACING)))
     geo = outer & head & ~protect & (sd > GEO_MIN_M)
-    guess = voted | (loose & (sd > LOOSE_EPS_M)) | geo
+    scalp = outer & head & ~protect
+    tinted, tint_report = tinted_hair(tint, scalp & (geo | voted), protect & ~voted, scalp & ~deep)
+    guess = voted | (loose & (sd > LOOSE_EPS_M)) | geo | tinted
     seed = dilate(erode(guess & outer & ~deep, adj, 1), adj, 1)
     grown = seed | (dilate(seed, adj, GROW_RINGS) & outer & (sd > LOOSE_EPS_M) & ~protect)
     hair = erode(dilate(grown, adj, 3), adj, 3) & outer & ~deep
@@ -627,6 +671,7 @@ def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: n
     hair &= largest_components(faces_all(F, hair), len(Q), 0.5)
     return {"hair": hair, "report": {
         "geo_seeds": int(geo.sum()), "geo_only": int((geo & ~voted & ~loose).sum()), "protect": int(protect.sum()),
+        "tint": tint_report, "tint_only": int((tinted & ~geo & ~voted & ~loose).sum()),
         "seeds": int(seed.sum()), "grown": int(grown.sum()), "enclosed_filled": enclosed, "enclosure": enclosure, "holes_filled": filled,
         "hairline_y_m": None if hairline_y is None else round(float(hairline_y) * k, 4)}}
 
@@ -971,6 +1016,14 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     from scipy.spatial import cKDTree
     tree_vb = cKDTree(Pb)
     vn_b = gf.vertex_normals(Pb, Fb)
+    # H's own colour per welded vertex (CIELAB): the colour label's input and the colour mend's reference
+    tex_h = _rgb_of(img_h)
+    lab_v = None
+    if tex_h is not None and len(Uh) == len(Ph0):
+        rgb_v = np.zeros((len(Ph), 3))
+        np.add.at(rgb_v, inv_h, sample_texture(tex_h, Uh))
+        rgb_v /= np.maximum(np.bincount(inv_h, minlength=len(Ph)), 1)[:, None]
+        lab_v = lab(rgb_v)
 
     def label_pass(Qp, sd_body=None):
         T = gf.similarity(Ph, Qp)
@@ -984,7 +1037,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
         facing = vn_b[tree_vb.query(Qp)[1], 2]
         labelled = label_hair(Qp, sd_p, adj, outer=outer_h, head=head_h, voted=voted, loose=loose_v,
                               hairline_y=line_p["y"], eye_y=line_p["y_eye"],
-                              facing=facing, centre_z=zc_q, k=k, F=Fh)
+                              facing=facing, centre_z=zc_q, k=k, F=Fh, tint=lab_v)
         return labelled, sd_p, head_h
 
     lab1, sd1, head1 = label_pass(Q)
@@ -1011,15 +1064,10 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     ytop = float(Q[:, 1].max())
     # colour reference: H's texture per welded vertex; the skin colour from H's own non-hair head, the hair
     # colour from the label CORE_RINGS inside its border
-    tex_h = _rgb_of(img_h)
     hair_lab = skin_lab = None
     cap_uv = None               # the UV of the hair texel nearest the hair colour (the caps of the sheet's holes)
-    if tex_h is not None and len(Uh) == len(Ph0) and hair_v.any():
-        rgb_v = np.zeros((len(Ph), 3))
-        np.add.at(rgb_v, inv_h, sample_texture(tex_h, Uh))
-        rgb_v /= np.maximum(np.bincount(inv_h, minlength=len(Ph)), 1)[:, None]
-        lab_v = lab(rgb_v)
-        face = (~hair_v) & (~voted) & outer_h & (Q[:, 1] > ytop - REGISTER_TOP_M / k) & (sd_h > -DEEP_M)
+    if lab_v is not None and hair_v.any():
+        face =(~hair_v) & (~voted) & outer_h & (Q[:, 1] > ytop - REGISTER_TOP_M / k) & (sd_h > -DEEP_M)
         skin_lab = np.median(lab_v[face], 0) if face.sum() >= 20 else None
         core = erode(hair_v, adj, CORE_RINGS)
         hair_lab = np.median(lab_v[core if core.any() else hair_v], 0)
@@ -1129,13 +1177,19 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     surface = gf.BodySurface(Pb, Fb[gf.outer_faces(Pb, Fb, sdf)])   # never onto an inner wall
     snap, normal, d_m = _snap_offsets(Pw_q, surface, k)
     if shape == "cut":
+        # The inner sheet sits AT the placed fit's clearance (INNER_OFFSET_M = CLEAR_CUT_M), thin hair's outer sheet
+        # just above it: the fit then has nothing to push. With the inner sheet lowered under thin hair (down to
+        # 0.5 mm, the old clip) the fit pushed it to the clearance and its spread carried that push onto the
+        # neighbours already there — Kira's front 6.0 -> 10.8 mm p50 (edge 0.8 -> 7.4 mm) off the forehead,
+        # where the hair lies flattest (~/claude-out/kira-hair-cut, lift.py)
         sd_outer = sdf.sample(Pw_q) * k
-        offset = np.clip(sd_outer - INNER_GAP_M, 0.0005, INNER_OFFSET_M)
         near = d_m < SNAP_MAX_M
         toward = gf._unit(snap - Pw_q)
-        inner = np.where(near[:, None], snap + normal * (offset / k)[:, None], Pw_q + toward * (FREE_INNER_M / k))
+        inner = np.where(near[:, None], snap + normal * (INNER_OFFSET_M / k), Pw_q + toward * (FREE_INNER_M / k))
         inner = smooth_edge(inner, B_edges, EDGE_SMOOTH_PASSES)
         outer = Pw_q.copy()
+        thin = near & (sd_outer < INNER_OFFSET_M + INNER_GAP_M)
+        outer[thin] = snap[thin] + normal[thin] * ((INNER_OFFSET_M + INNER_GAP_M) / k)
         # ring 0: the sheets meet (on the inner sheet near the scalp, on the outer one at a free strand's end)
         meet = np.where(near[:, None], inner, smooth_edge(outer, B_edges, EDGE_SMOOTH_PASSES))
         inner[ring0] = meet[ring0]
@@ -1146,7 +1200,8 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
         uv_out = Uh[used]
         image, mime, material = img_h, mime_h, mat_h
         report["cut"] = {"snapped_share": round(float(near.mean()), 3),
-                         "inner_offset_p50_mm": round(float(np.median(offset[near])) * 1000, 2) if near.any() else None}
+                         "inner_offset_mm": round(INNER_OFFSET_M * 1000, 2),
+                         "thin_lifted_share": round(float(thin.mean()), 3)}
         if tex_h is not None and hair_lab is not None:
             cover = _raster(uv_out[F_out], tex_h.shape[:2])
             mended, report["colour"] = recolour_texture(tex_h, cover, hair_lab, skin_lab)

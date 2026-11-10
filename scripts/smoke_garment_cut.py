@@ -85,6 +85,23 @@ EXPECTED, BY HAND
     R pi / 60 = 0.997 cm, a longitude step R sin(theta) pi / 60: loop (4,6)-(4,7)-(5,8)-(6,8)-(6,7)-(5,6) ->
     0.207 (row 4) + sqrt(0.997^2 + 0.233^2) 1.024 + 0.997 + 0.308 (row 6) + sqrt(0.997^2 + 0.283^2) 1.036 +
     0.997 = 4.57 cm (+-0.05) < CAP_LOOP_MAX_M 25 cm.
+[n] tinted_hair (CUT_VERSION 5): hair reference 25 vertices at L*a*b* (60, 10, 30), skin 25 at (50, 20, 20) ->
+    separation sqrt(3 x 10^2) = 17.32 >= TINT_MIN_SEPARATION_DE 10. On the line hair + t (skin - hair): distance
+    to the hair 17.32 t, to the skin 17.32 (1 - t), margin 17.32 (1 - 2 t) > TINT_MARGIN_DE 3 <=> t < 0.4134:
+    (58, 11, 29) -> 2.45 vs 15.03 (hair); t 0.4 (56, 14, 26) -> margin 3.46 (hair); t 0.42 (55.8, 14.2, 25.8) ->
+    2.77 (not); t 0.5 (55, 15, 25) -> 0 (not); a hair-coloured vertex not allowed -> not. Skin reference at
+    (55, 15, 25): separation 8.66 < 10 -> off, nothing; a reference of 19 vertices (< TINT_MIN_N 20) -> off.
+[o] flat hair the masks miss (Kira 2026-11-10: lit blonde lying 0.6 cm on the scalp): the [d] head with a cap of
+    radius 0.103 (0.003 x 1.7 = 5.1 mm outside B < GEO_MIN_M 12 mm, < LOOSE_EPS_M: neither geometry nor growth),
+    H's texture HAIR on the cap vertices and SKIN elsewhere (a 2 x 1 texture, u 0.25 / 0.75), the back view
+    blind (hair painted in skin colour). Images: cap disc r 0.103 with y >= 0.952 -> haired bbox rows [97, 1100)
+    = H's y [0, 1.003] (s 0.001, centre row 598.5, mid y 0.5015); the 2D hairline is row 147 -> y 0.5015 +
+    (598.5 - 147) x 0.001 = 0.953; the theta-60 ring (y 0.9515, row 148.5) lies under it -> the same 25 face-zone
+    vertices as [k]. The colour seeds are then exactly [k]'s geometry seeds (every cap vertex outside the face
+    zone) -> label 2376, geo_seeds 0; hairline: the theta-57 ring y 0.9 + 0.103 cos 57 = 0.9561 vs 0.953 ->
+    0.0031 x 1.7 = 0.53 cm (+-0.1). With the colour label off (TINT_MARGIN_DE 1e9) only the front votes: < 2376.
+    The sheets (5.1 mm hair < INNER_OFFSET_M 6 + INNER_GAP_M 1): inner sheet at 6.0 mm, outer lifted to 7.0 mm
+    (medians over the vertices off the edge, +-0.2 mm: chordal grid), every snapped vertex lifted.
 """
 import io
 import math
@@ -152,9 +169,9 @@ def bodies():
     return P, F, head
 
 
-def haired_truth():
+def haired_truth(cap_r=0.112):
     import smoke_garment_fit as fx
-    hP, hF, rows, nlon = head_grid(lambda i: 0.112 if i <= 20 else 0.100)
+    hP, hF, rows, nlon = head_grid(lambda i: cap_r if i <= 20 else 0.100)
     nP, nF = fx.uv_sphere(0.02, (0.0, 0.88, 0.095), nlat=12, nlon=24)
     eP, eF = fx.uv_sphere(0.02, EAR, nlat=12, nlon=24)
     tP, tF = fx.cylinder(0.12, 0.0, 0.8)
@@ -181,13 +198,13 @@ def glbs():
     return unrigged, rigged, P, F
 
 
-def images():
+def images(cap_r=0.112, cap_low=0.956):
     yy, xx = np.mgrid[0:H, 0:W]
     x = (xx + 0.5 - 512) / 1000.0
     y = 1.0 - (yy + 0.5 - 100) / 1000.0
     head = x ** 2 + (y - 0.9) ** 2 <= 0.1 ** 2
     torso = (np.abs(x) <= 0.12) & (y >= 0) & (y <= 0.8)
-    cap = (x ** 2 + (y - 0.9) ** 2 <= 0.112 ** 2) & (y >= 0.956)
+    cap = (x ** 2 + (y - 0.9) ** 2 <= cap_r ** 2) & (y >= cap_low)
     bald = np.zeros((H, W, 3), np.float32)
     bald[:] = GREY
     bald[head | torso] = SKIN
@@ -491,6 +508,83 @@ def test_small_loops():
     near("perimeter (cm)", round(per * 100, 3), 4.57, 0.05)
 
 
+def test_tinted():
+    print("[n] tinted_hair")
+    from app.core import garment_cut as gc
+    hair, skin = np.array([60.0, 10.0, 30.0]), np.array([50.0, 20.0, 20.0])
+    probe = np.array([[58, 11, 29], hair + 0.4 * (skin - hair), hair + 0.42 * (skin - hair),
+                      hair + 0.5 * (skin - hair), [58, 11, 29]], float)
+    tint = np.concatenate([np.tile(hair, (25, 1)), np.tile(skin, (25, 1)), probe])
+    n = len(tint)
+    hair_ref = np.zeros(n, bool)
+    hair_ref[:25] = True
+    skin_ref = np.zeros(n, bool)
+    skin_ref[25:50] = True
+    allowed = np.zeros(n, bool)
+    allowed[50:54] = True                       # the last probe (hair-coloured) is not allowed
+    out, rep = gc.tinted_hair(tint, hair_ref, skin_ref, allowed)
+    check("probes: hair, t 0.4 hair, t 0.42 not, t 0.5 not, not allowed", out[50:].tolist(),
+          [True, True, False, False, False])
+    near("separation (dE)", rep["separation_de"], 17.32, 0.05)
+    tint2 = tint.copy()
+    tint2[25:50] = hair + 0.5 * (skin - hair)
+    out2, rep2 = gc.tinted_hair(tint2, hair_ref, skin_ref, allowed)
+    check("references 8.66 apart -> off", (rep2["used"], int(out2.sum())), (False, 0))
+    few = skin_ref.copy()
+    few[25:31] = False                          # 19 skin vertices
+    out3, rep3 = gc.tinted_hair(tint, hair_ref, few, allowed)
+    check("19 reference vertices -> off", (rep3["used"], int(out3.sum())), (False, 0))
+    check("no texture -> off", gc.tinted_hair(None, hair_ref, skin_ref, allowed)[1], {"used": False})
+
+
+def test_flat_hair():
+    print("[o] flat hair the masks miss: colour label + inner sheet at the clearance")
+    import io as _io
+    from PIL import Image
+    from app.core import garment_cut as gc
+    from app.core.glb_mesh import static_arrays
+    import smoke_garment_fit as fx
+    unrigged, rigged, Pb, Fb = glbs()
+    Pt, Ft, cap = haired_truth(0.103)
+    Hfile = 2.0 * Pt + np.array([0.3, -0.2, 0.1])
+    tex = Image.new("RGB", (2, 1))
+    tex.putpixel((0, 0), HAIR)
+    tex.putpixel((1, 0), SKIN)
+    buf = _io.BytesIO()
+    tex.save(buf, format="PNG")
+    U = np.stack([np.where(cap, 0.25, 0.75), np.full(len(Pt), 0.5)], 1)
+    haired_glb = fx.make_glb(Hfile, Ft, U, image=buf.getvalue())
+    bald, bald_mask, haired, haired_mask = images(0.103, 0.952)
+    blind = haired.copy()
+    blind[np.all(haired == np.array(HAIR, np.float32), axis=2)] = SKIN
+    vs = {"front": gc.View(haired, haired_mask, bald, bald_mask), "back": gc.View(blind, haired_mask, bald, bald_mask)}
+    res = gc.cut_hair(haired_glb, unrigged, rigged, vs, shape="cut")
+    lab_rep = res.report["label"]
+    print(f"       metrics {res.metrics}; label {lab_rep}; cut {res.report['cut']}")
+    check("ok", (res.ok, res.reasons), (True, []))
+    check("no geometry seed (5.1 mm < 12 mm)", lab_rep["geo_seeds"], 0)
+    check("colour label used", lab_rep["tint"]["used"], True)
+    check("label = 2401 cap vertices - 25 in the face zone", lab_rep["vertices"], 2376)
+    near("hairline (cm)", res.metrics["hairline_cm"], 0.53, 0.1)
+    check("holes", res.metrics["label_holes"], 0)
+    P = static_arrays(res.glb)[0]
+    half = len(P) // 2
+    d_out = (np.linalg.norm(P[:half] - C, axis=1) - 0.1) * K * 1000
+    d_in = (np.linalg.norm(P[half:] - C, axis=1) - 0.1) * K * 1000
+    off_edge = np.abs(d_out - d_in) > 0.6            # ring 0 (sheets meet) and ring 1 (halfway) excluded
+    near("inner sheet median (mm)", round(float(np.median(d_in[off_edge])), 3), 6.0, 0.2)
+    near("outer sheet median, lifted (mm)", round(float(np.median(d_out[off_edge])), 3), 7.0, 0.2)
+    check("every snapped vertex lifted", res.report["cut"]["thin_lifted_share"], res.report["cut"]["snapped_share"])
+    old = gc.TINT_MARGIN_DE
+    gc.TINT_MARGIN_DE = 1e9
+    try:
+        off = gc.cut_hair(haired_glb, unrigged, rigged, vs, shape="cut")
+    finally:
+        gc.TINT_MARGIN_DE = old
+    print(f"       colour label off: label {off.report['label']['vertices']}")
+    check("without the colour label the front votes only", off.report["label"]["vertices"] < 2376, True)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="garment-cut-") as tmp:
         os.environ["STORAGE_DIR"] = str(Path(tmp) / "world")
@@ -508,6 +602,8 @@ def main() -> int:
         test_geometry_label()
         test_fill_enclosed()
         test_small_loops()
+        test_tinted()
+        test_flat_hair()
         test_args()
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0
