@@ -17,8 +17,9 @@ The shoe: the Task 5 wedge pump (length 0.26, width 0.08, insole h(x) = 0.09 on 
 footwear_insole.analyse_arrays (frame = the wedge's own coordinates).
 
 Expected, by hand:
-[F0] constants: FOOTWEAR_FIT_VERSION 2, BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
-     SLIM_MAX_SHARE 0.18, FIT_GATES / ACTIVE_IN_P2 verbatim.
+[F0] constants: FOOTWEAR_FIT_VERSION 3, BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
+     SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
+     (fit version 3, Task 15).
 [F9] joint_bind_matrices(glb) = inverse(inverseBindMatrix) per normalised joint name: the fixture's IBMs are
      the negated joint translations -> "leftfoot" = translation (0, 0.08, -0.10), "righttoebase" =
      (0.13, 0.01, 0.10), identity rotation. A GLB without a skin -> ValueError.
@@ -122,14 +123,13 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 2 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 3 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
                            "slim_needed": ("max", 0.18), "stand_floor_mm": ("range", (-3.0, 3.0)),
                            "boot": ("max", 0.0)}
-          and ff.ACTIVE_IN_P2 == {"ball_placement_mm", "lift_asymmetry_mm", "stand_floor_mm", "boot"},
-          "[F0] FIT_GATES / ACTIVE_IN_P2")
+          and not hasattr(ff, "ACTIVE_IN_P2"), "[F0] FIT_GATES, no ACTIVE_IN_P2")
 
     # [F9] bind matrices + feet
     glb = fx.foot_body_glb()
@@ -198,8 +198,13 @@ def main() -> int:
     wide = fx.foot_body_glb(0.10)
     fw = ff.fit_pair(insole, shoe, glb_mesh.body_arrays(wide), glb_mesh.joint_bind_matrices(wide))
     gw = fw.record["gates"]["slim_needed"]
-    check(near(gw["value"], 0.2210, 1e-3) and not gw["ok"] and not gw["gating"] and fw.ok,
-          f"[F5] 0.10 m foot: slim {gw['value']} > 0.18 reported, not gating (ok {fw.ok})")
+    check(near(gw["value"], 0.2210, 1e-3) and not gw["ok"] and gw["gating"] and not fw.ok
+          and fw.reasons[:1] == ["slim_needed 0.2209 > 0.18 (share of the ball width the forefoot slimming must take off, "
+                                 "worse side)"] and "cut" not in fw.record,
+          f"[F5] 0.10 m foot: slim {gw['value']} > 0.18 refuses (ok {fw.ok}, {fw.reasons[:1]}); a refused fit carries no cut")
+    check(all(v["gating"] is True for v in g.values()) and set(fit.record["cut"]["sides"]) == {"left", "right"}
+          and fit.record["cut"]["version"] == 1,
+          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 1)")
     f105 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.05)
     f150 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.5)
     check(f105.record["scale"]["width_factor"] == 1.05 and f150.record["scale"]["width_factor"] == 1.10,

@@ -1,6 +1,6 @@
 """The CPU fit of a rigid shoe onto a wearer's body (plan
 ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md`` Task 9, spec
-``docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`` § 5.5 steps 1–7, § 5.7, § 6.1).
+``docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`` § 5.5 steps 1–8, § 5.7, § 6.1).
 
 A pure numpy port of the spike's ``bl_assemble2.py`` v3 (``~/claude-out/shoe-spike/src``), without
 Blender. Every length is in the body's bind space (metres, Y up); the shoe comes in its mesher
@@ -50,8 +50,12 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
 7. **Rigid bind**: weights Foot (1 - w) / ToeBase w, ``w`` = smoothstep over ±``BLEND_M`` around the ball
    along the shoe axis; the bind position is the inverse skinning of the posed placement (so in the bind
    pose the shoe is turned back by the extension, spec § 6.3). No leg bone gets weight.
+8. **The cut** (fit version 3): a fit that passed its gates carries ``record["cut"]`` =
+   ``footwear_cut.cut_description`` — the geometric description (no vertex indices) of what the shoe hides of
+   the body, per side in the shoe's frame on the Foot / ToeBase bones. The fit step (``garment_footwear.fit``)
+   applies it to the fit GLB's body and runs ``footwear_cut.cut_gates``; the assembly applies it per tier.
 
-Gates (``FIT_GATES``; P2 gates only ``ACTIVE_IN_P2``, the rest is recorded): ``ball_placement_mm`` (the
+Gates (``FIT_GATES``, every one refuses a fit since version 3): ``ball_placement_mm`` (the
 posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the
 midline step — the residual of the fixed point plus whatever the chord's elevation misses; the spike read
 the ball rigid on Foot, 4–5 mm off on the real material), ``lift_asymmetry_mm``,
@@ -75,7 +79,7 @@ from app.core.footwear_gates import check_gates
 
 #: Bumped when the fit changes what it produces (part of the footwear fsig and
 #: ``garment_fit.FIT_VERSION["footwear"]``).
-FOOTWEAR_FIT_VERSION = 2
+FOOTWEAR_FIT_VERSION = 3
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -95,8 +99,6 @@ FIT_GATES: Dict[str, Tuple[str, Any]] = {
     "stand_floor_mm": ("range", (-3.0, 3.0)),
     "boot": ("max", 0.0),
 }
-#: The gates that refuse a fit in P2; the others are recorded (Task 15 activates them).
-ACTIVE_IN_P2 = {"ball_placement_mm", "lift_asymmetry_mm", "stand_floor_mm", "boot"}
 GATE_LABELS = {
     "ball_placement_mm": "the posed ball contact vs the shoe's ball point, worse side",
     "lift_asymmetry_mm": "difference of the two sides' lifts",
@@ -174,8 +176,9 @@ class FootMeasure:
 
 @dataclass
 class FootwearFit:
-    """``fit_pair``'s result: ``ok`` = every active gate passed; ``record`` = spec § 5.7 without ``cut``,
-    ``accepted`` and the parents; ``shoes[side]`` in bind space; ``foot_pose`` = spec § 6.1 without ``source``."""
+    """``fit_pair``'s result: ``ok`` = every gate passed; ``record`` = spec § 5.7 without ``accepted`` and the
+    parents (``cut`` only when ``ok``); ``shoes[side]`` in bind space; ``foot_pose`` = spec § 6.1 without
+    ``source``."""
     ok: bool
     reasons: List[str]
     record: Dict[str, Any]
@@ -421,8 +424,8 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
              joints: Dict[str, np.ndarray], *, width_cap: float = WIDTH_CAP) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
-    and no shoes; a fit that ran returns everything, ``ok`` = the active gates. ValueError for a body
-    without the foot joints."""
+    and no shoes; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` passed (the cut
+    gates are the fit step's, ``garment_footwear.fit``). ValueError for a body without the foot joints."""
     width_cap = min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
@@ -631,9 +634,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         "stand_floor_mm": min(lowest) * 1000.0,
         "boot": max(toplines) if toplines else None,
     }
-    active = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in FIT_GATES.items()
-              if name in ACTIVE_IN_P2}
-    ok, reasons = check_gates(metrics, active, optional=("boot",))
+    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in FIT_GATES.items()}
+    ok, reasons = check_gates(metrics, table, optional=("boot",))
     if metrics["boot"] is not None and metrics["boot"] > FIT_GATES["boot"][1]:
         reasons.insert(0, BOOT_REFUSED)
     gates: Dict[str, Any] = {}
@@ -641,7 +643,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         value = metrics[name]
         passed = check_gates({name: value}, {name: (kind, limit, GATE_LABELS[name])}, optional=("boot",))[0]
         gates[name] = {"value": value, "limit": list(limit) if isinstance(limit, tuple) else limit,
-                       "ok": passed, "gating": name in ACTIVE_IN_P2}
+                       "ok": passed, "gating": True}
 
     seat = float(ins.z(ins.x0 + HEEL_SEAT_M / k))
     ball_h = float(ins.z(BALL_SHARE * ins.length))
@@ -686,4 +688,10 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         record["refusal"] = BOOT_REFUSED
     foot_pose = {"version": FOOT_POSE_VERSION, "bones": bones, "root_lift_m": root_lift,
                  "contacts": contacts_pose}
-    return FootwearFit(ok=ok, reasons=reasons, record=_r(record), shoes=shoes, foot_pose=_r(foot_pose))
+    result = FootwearFit(ok=ok, reasons=reasons, record=_r(record), shoes=shoes, foot_pose=_r(foot_pose))
+    if ok:
+        # 8. the cut: derived from the record and the bound shoes of this fit (footwear_cut imports this module,
+        # hence the local import); a refused fit carries none — nothing applies it
+        from app.core.footwear_cut import cut_description
+        result.record["cut"] = cut_description(result, insole)
+    return result

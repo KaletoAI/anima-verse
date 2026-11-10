@@ -205,44 +205,6 @@ def box(levels, x0=-0.06, x1=0.19, hw=0.0425):
                 targets=[], joint_names=list(JOINT_NAMES))
 
 
-def clog():
-    """``(positions, faces)`` of the closed flat clog (docstring [X7]), in the mesher's coordinates."""
-    L, HW, TOP, X0, STEP, W_LO, W_HI, ROOF = 0.26, 0.04, 0.01, 0.01, 0.1825, 0.035, 0.04, 0.04
-    COUNTER, COUNTER_TO = 0.05, 0.04          # the heel counter stands taller than the toe box: the heel rule
-    P, F = [], []
-
-    def tri(a, b, c, facing):
-        a, b, c = (np.asarray(v, np.float64) for v in (a, b, c))
-        if np.dot(np.cross(b - a, c - a), facing) < 0:
-            b, c = c, b
-        base = len(P)
-        P.extend([a, b, c])
-        F.append((base, base + 1, base + 2))
-
-    def quad(p00, p10, p11, p01, facing):
-        tri(p00, p10, p11, facing)
-        tri(p00, p11, p01, facing)
-
-    def wall(x):
-        if x < COUNTER_TO - 1e-9:
-            return COUNTER
-        return W_LO if x < STEP - 1e-9 else W_HI
-
-    xs = [round(0.0025 * i, 10) for i in range(105)]
-    for x0, x1 in zip(xs[:-1], xs[1:]):
-        if x0 >= X0 - 1e-9:
-            quad((x0, TOP, -HW), (x1, TOP, -HW), (x1, TOP, HW), (x0, TOP, HW), (0, 1, 0))
-        quad((x0, 0, -HW), (x1, 0, -HW), (x1, 0, HW), (x0, 0, HW), (0, -1, 0))
-        for z, facing in ((HW, (0, 0, 1)), (-HW, (0, 0, -1))):
-            quad((x0, 0, z), (x1, 0, z), (x1, wall(x1), z), (x0, wall(x0), z), facing)
-        if x0 >= STEP - 1e-9:
-            quad((x0, ROOF, -HW), (x1, ROOF, -HW), (x1, ROOF, HW), (x0, ROOF, HW), (0, 1, 0))
-    quad((0, 0, -HW), (0, COUNTER, -HW), (0, COUNTER, HW), (0, 0, HW), (-1, 0, 0))        # heel counter
-    quad((X0, 0, -HW), (X0, TOP, -HW), (X0, TOP, HW), (X0, 0, HW), (-1, 0, 0))          # sole's rear end
-    quad((L, 0, -HW), (L, ROOF, -HW), (L, ROOF, HW), (L, 0, HW), (1, 0, 0))              # toe box front
-    return np.asarray(P, np.float64), np.asarray(F, np.int64)
-
-
 def two_prim_glb(prim: Prim) -> bytes:
     """A GLB: mesh 0 with the cylinder (prim 0) and a 4-triangle patch (prim 1), node skinned to skin 0."""
     blob = bytearray()
@@ -421,7 +383,7 @@ def main() -> int:
           and set(glb_mesh.joint_bind_matrices(new_glb)) == {"leftfoot", "lefttoebase"})
 
     print("[X6] cut_description on the fixture fit")
-    from _footwear_fixtures import wedge, shoe_garment, foot_body_glb
+    from _footwear_fixtures import clog, wedge, shoe_garment, foot_body_glb
     from app.core import footwear_fit as ff, footwear_insole as fi
     Pw, Fw = wedge()
     ins = fi.analyse_arrays(Pw, Fw)

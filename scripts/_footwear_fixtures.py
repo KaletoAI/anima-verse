@@ -15,6 +15,9 @@ mesher's own coordinates (Y up, x heel -> toe, z lateral), length 0.26, width 0.
 - ``solid=True``: the closed solid wedge — the sole alone (side faces from the ground to h(x), no walls above
   it, no roof), i.e. a mesher result whose top surface would be read as the insole.
 
+``clog`` is the closed flat clog of the cut smokes (its docstring): the one fixture shoe a rigid box foot
+passes the cut gates in.
+
 Every quad is two triangles over the 0.01 x-grid; each face is wound so its normal points outward
 (up for the sole top and the roof, down for the bottom, +-z for the walls).
 """
@@ -95,6 +98,51 @@ def shoe_garment(positions, faces):
     return glb_mesh.GarmentMesh(positions=P, normals=N, uvs=np.zeros((len(P), 2)), indices=F,
                                 joints=np.zeros((len(P), 4), np.int64), weights=np.zeros((len(P), 4)),
                                 joint_names=[])
+
+
+# --- the closed flat clog (Task 14 / 15) ---------------------------------------------------------------------------
+
+def clog():
+    """``(positions, faces)`` of the closed flat clog (smoke_footwear_cut.py [X7], smoke_footwear_fit_step.py), in
+    the mesher's coordinates: a sole solid x in [0.01, 0.26] with its top (the insole) at 0.01, a floor plate
+    from x = 0, side walls z = +-0.04 from the ground to 0.05 over x < 0.04 (the heel counter stands taller than
+    the toe box: the analysis' heel rule), 0.035 behind the throat, 0.04 from x = 0.1825 on, a roof at 0.04 over
+    [0.1825, 0.26], a heel-counter face at x = 0, the sole's rear end at 0.01, the toe-box front at 0.26 (walls
+    tessellated every 0.0025). Closed everywhere, so the cut gates' flood fill stays outside."""
+    L, HW, TOP, X0, STEP, W_LO, W_HI, ROOF = 0.26, 0.04, 0.01, 0.01, 0.1825, 0.035, 0.04, 0.04
+    COUNTER, COUNTER_TO = 0.05, 0.04          # the heel counter stands taller than the toe box: the heel rule
+    P, F = [], []
+
+    def tri(a, b, c, facing):
+        a, b, c = (np.asarray(v, np.float64) for v in (a, b, c))
+        if np.dot(np.cross(b - a, c - a), facing) < 0:
+            b, c = c, b
+        base = len(P)
+        P.extend([a, b, c])
+        F.append((base, base + 1, base + 2))
+
+    def quad(p00, p10, p11, p01, facing):
+        tri(p00, p10, p11, facing)
+        tri(p00, p11, p01, facing)
+
+    def wall(x):
+        if x < COUNTER_TO - 1e-9:
+            return COUNTER
+        return W_LO if x < STEP - 1e-9 else W_HI
+
+    xs = [round(0.0025 * i, 10) for i in range(105)]
+    for x0, x1 in zip(xs[:-1], xs[1:]):
+        if x0 >= X0 - 1e-9:
+            quad((x0, TOP, -HW), (x1, TOP, -HW), (x1, TOP, HW), (x0, TOP, HW), (0, 1, 0))
+        quad((x0, 0, -HW), (x1, 0, -HW), (x1, 0, HW), (x0, 0, HW), (0, -1, 0))
+        for z, facing in ((HW, (0, 0, 1)), (-HW, (0, 0, -1))):
+            quad((x0, 0, z), (x1, 0, z), (x1, wall(x1), z), (x0, wall(x0), z), facing)
+        if x0 >= STEP - 1e-9:
+            quad((x0, ROOF, -HW), (x1, ROOF, -HW), (x1, ROOF, HW), (x0, ROOF, HW), (0, 1, 0))
+    quad((0, 0, -HW), (0, COUNTER, -HW), (0, COUNTER, HW), (0, 0, HW), (-1, 0, 0))        # heel counter
+    quad((X0, 0, -HW), (X0, TOP, -HW), (X0, TOP, HW), (X0, 0, HW), (-1, 0, 0))          # sole's rear end
+    quad((L, 0, -HW), (L, ROOF, -HW), (L, ROOF, HW), (L, 0, HW), (1, 0, 0))              # toe box front
+    return np.asarray(P, np.float64), np.asarray(F, np.int64)
 
 
 # --- the synthetic feet (Task 9) ------------------------------------------------------------------------------------
