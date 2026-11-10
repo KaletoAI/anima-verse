@@ -25,7 +25,10 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
   from the cut-out alone, decimated to ``TARGET_TRIS``; gates
   ``footwear_gates.MESH_GATES`` (``component_share``, ``mesh_iou``), two
   attempts like ``garment_mesh.generate``.
-- ``insole`` -> ``insole.json`` (Task 5).
+- ``insole`` -> ``insole.json``: ``footwear_insole.analyse`` of ``prepared.glb`` (CPU, no hub job),
+  written whether or not it passes; gates ``footwear_insole.INSOLE_GATES`` (``insole_cover``,
+  ``vamp_cover``) — a refusal names ``INSOLE_REFUSED`` / ``OPEN_REFUSED``. ``boot`` needs a body and
+  is judged at the fit.
 
 ``record.json`` = ``{steps: {step: {accepted, gates, backend, routing,
 created_at, ...}}}``. A step whose record is accepted and whose output exists
@@ -488,9 +491,28 @@ def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
         candidate.unlink(missing_ok=True)
 
 
-#: The steps this module runs, in order (Task 5 adds ``insole``).
+def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
+    from app.core import footwear_insole
+    from app.core.garment_store import write_record
+    prepared = d / "prepared.glb"
+    if not prepared.is_file():
+        raise FileNotFoundError("the prepared shoe mesh is missing — run the mesh step first")
+    res = footwear_insole.analyse(prepared.read_bytes())
+    gates = res["gates"]
+    # Written refused too: the Wardrobe row shows what the analysis found.
+    write_record(d / "insole.json", res)
+    _set_step(d, "insole", _entry(accepted=bool(gates["ok"]), gates=gates, version=footwear_insole.INSOLE_VERSION,
+                                  nominal=res["nominal"]))
+    logger.info("Shoe source %s/%s: insole %s (cover %.3f, vamp %.3f)", iid, ssig,
+                "accepted" if gates["ok"] else "refused", gates["insole_cover"], gates["vamp_cover"])
+    if not gates["ok"]:
+        raise StepRefused(f"{gates.get('refusal') or 'insole refused'} ({'; '.join(gates['reasons'])})", gates)
+
+
+#: The steps this module runs, in order.
 _RUNNERS: Dict[str, Callable[[str, str, int, Path], None]] = {
     "source": _step_source, "empty": _step_empty, "cutout": _step_cutout, "mesh": _step_mesh,
+    "insole": _step_insole,
 }
 
 

@@ -1,20 +1,103 @@
-"""Insole and heel analysis of a shoe mesh (plan
-``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``, spec
+"""Insole and heel analysis of a shoe mesh, pure numpy (plan
+``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md`` Task 5, spec
 ``docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`` § 5.4).
 
-Task 3 adds the shoe frame (``shoe_frame``), which the side-silhouette gate
-projects on; the pure numpy insole analysis lands in Task 5, which also flips
-the provisional heel end after tracking.
+A port of the spike's ``bl_shoe_rays.py`` + ``insole.py`` (``~/claude-out/shoe-spike/src``) without
+Blender:
+
+- **Frame** (``shoe_frame``): up = the mesher's +Y, x = the principal axis of the footprint, the
+  provisional heel = the end whose rear ``HEEL_END_SHARE`` stands taller. After tracking, the frame is
+  flipped when the insole at 0.10 L is lower than at 0.90 L — toe and heel come from the insole height.
+- **Vertical rays** (``vertical_hits``) on ``STATIONS`` stations x the lateral columns: every triangle's
+  xz bounding box is binned into the station grid and each (triangle, ray) pair is tested with the 2D
+  barycentric point-in-triangle test (vertical rays need no Möller–Trumbore); the height is the
+  barycentric interpolation, ``normal_up`` the face normal's up component. Hits closer than 1e-5 L in
+  one column are one hit (the spike's BVH restarted its ray 1e-5 L above the last hit).
+- **Tracking** (the spike's ``insole.py`` verbatim): a candidate is an up-facing hit (``normal_up >
+  0.3``) with at least ``AIR_SHARE`` L of air above it or nothing above; seeded at 0.55 of the stations
+  (the lowest candidate), followed both ways with the slope-extrapolated prediction within ``TOL_SHARE``
+  L; a second pass gives each lost cell the candidate nearest its station's median within 2 TOL.
+  Profile = the median over the middle 50 % of a station's insole columns.
+- **Topline** per station (tessellation-independent): every triangle edge is cut by the station plane;
+  per lateral side the highest cut point with |z| >= ``TOPLINE_SIDE_SHARE`` x that side's max |z| at
+  the station; the topline is the lower of the two sides. ("The station's max |z|" is read per side,
+  so an asymmetric cross-section does not drop the narrower side.)
+- **Nominal numbers**: per-item numbers need a size, so they are given at ``NOMINAL_LENGTH_M``
+  (k = NOMINAL_LENGTH_M / length_raw); the fit recomputes them at the real scale. Heel seat = the
+  profile ``HEEL_SEAT_M`` (nominal) from the heel end; ball = the profile at ``BALL_SHARE`` L; pitch =
+  atan2(profile(``PITCH_HEEL_SHARE`` L) - profile(``BALL_SHARE`` L), (BALL - PITCH_HEEL) L); shank
+  slope = the median station slope between the heel seat and the ball (negative: falling to the toe).
+- **Type gates** (``INSOLE_GATES``): ``insole_cover`` = insole cells / footprint cells (refusal
+  ``INSOLE_REFUSED``); ``vamp_cover`` = the share of footprint cells at x >= ``BALL_SHARE`` L whose
+  column has a hit above the insole (refusal ``OPEN_REFUSED``). ``boot`` (``BOOT_MARGIN_M`` above the
+  ankle, ``BOOT_REFUSED``) needs a body and is judged at the fit.
+- ``cavity_end_x``: the first roofed station in front of the ball whose insole-to-roof gap is below
+  ``CAVITY_MIN_M`` (nominal), else the last insole station — where the insole arc for the scale ends.
+- ``contacts`` (frame coordinates, on the sole): ``heel_tip`` = the centroid of the ground cells within
+  ``CONTACT_BAND_SHARE`` L of the rearmost ground cell (the top-lift of a heel), ``ball`` = the ground
+  cells within that band around ``BALL_SHARE`` L, ``toe_tip`` = the front-most footprint station.
+
+Every length in ``insole.json`` is raw (mesh units) except ``nominal``; ``overlay`` is in the prepared
+mesh's own coordinates.
+
+Calibration: the spike's Black Stilettos (Blender rays) — insole cover 0.92, heel seat 9.3 cm (at the
+fitted foot's heel point), heel rise 8.0 cm, insole ball 1.3 cm, foot-chord pitch 35.3 / 32.5 deg. This
+port on the spike's raw mesh (93k tris, 0.4 s): profile within 0.6 mm of the Blender profile, insole
+cover 0.918, nominal heel seat 9.62 cm, ball 1.37 cm, heel rise 8.25 cm, pitch 33.84 deg (the spike's
+own profile gives 33.81 / 9.63 by these definitions), shank -35.7 deg, vamp cover 0.613, cavity end
+0.222 m (spike 0.217 with the foot's 1.63 cm toes), shaft (max lower topline) 14.0 cm.
 """
+import math
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from app.core.footwear_gates import check_gates
 
 #: Bumped when the analysis changes what it measures (part of the footwear fsig).
 INSOLE_VERSION = 1
 
+#: Shoe length the per-item (nominal) numbers are given at.
+NOMINAL_LENGTH_M = 0.26
+#: Stations along the length (the lateral column count follows the aspect).
+STATIONS = 240
+#: Air above an up-facing hit that makes it an insole candidate, as a share of the length.
+AIR_SHARE = 0.025
+#: Tracking tolerance against the slope-extrapolated height, as a share of the length.
+TOL_SHARE = 0.035
+#: Up component of a hit's face normal above which it faces up.
+UP_MIN = 0.3
+#: Station (share of the count) where the tracking is seeded: the open forepart.
+SEED_SHARE = 0.55
+#: Recorded hits per ray.
+MAX_HITS = 12
 #: Share of the length at each end whose height decides the provisional heel.
 HEEL_END_SHARE = 0.15
+#: Topline: cut points per side with |z| >= this share of the side's max |z| at the station.
+TOPLINE_SIDE_SHARE = 0.75
+#: Heel seat: the insole this far (nominal metres) from the heel end.
+HEEL_SEAT_M = 0.04
+#: The ball station, as a share of the length.
+BALL_SHARE = 0.62
+#: The heel point of the pitch chord, as a share of the length.
+PITCH_HEEL_SHARE = 0.10
+#: Insole-to-roof gap (nominal metres) below which the toe box is too low for the toes.
+CAVITY_MIN_M = 0.015
+#: A lowest hit within this share of the length above the ground stands on the ground.
+GROUND_SHARE = 0.01
+#: Contact bands (heel tip, ball) as a share of the length.
+CONTACT_BAND_SHARE = 0.05
+
+INSOLE_GATES: Dict[str, Tuple[str, Any, str]] = {
+    "insole_cover": ("min", 0.80, "share of the footprint with a tracked insole"),
+    "vamp_cover": ("min", 0.6, "share of the forefoot footprint under a vamp"),
+}
+#: The boot gate (judged at the fit): a topline above the ankle joint + this margin.
+BOOT_MARGIN_M = 0.03
+BOOT_REFUSED = "Boots are not supported yet"
+OPEN_REFUSED = "Open shoes and sandals are not supported yet"
+INSOLE_REFUSED = "No insole found: the shoe mesh is closed or solid"
 
 
 @dataclass
@@ -36,6 +119,17 @@ class ShoeFrame:
         """``(N, 3)`` frame coordinates ``(x, height, z)`` of ``positions``."""
         basis = np.stack([self.x_axis, self.up, self.z_axis])
         return (np.asarray(positions, np.float64).reshape(-1, 3) - self.origin) @ basis.T
+
+    def to_mesh(self, points: np.ndarray) -> np.ndarray:
+        """``(N, 3)`` mesh coordinates of frame points ``(x, height, z)``."""
+        basis = np.stack([self.x_axis, self.up, self.z_axis])
+        return np.asarray(points, np.float64).reshape(-1, 3) @ basis + self.origin
+
+    def flipped(self) -> "ShoeFrame":
+        """The same frame seen from the other end: the heel becomes the toe
+        (x and z negated, the origin moved ``length`` along x)."""
+        return ShoeFrame(origin=self.origin + self.length * self.x_axis, x_axis=-self.x_axis, up=self.up,
+                         z_axis=-self.z_axis, length=self.length)
 
 
 def shoe_frame(positions: np.ndarray, faces: np.ndarray) -> ShoeFrame:
@@ -85,3 +179,427 @@ def shoe_frame(positions: np.ndarray, faces: np.ndarray) -> ShoeFrame:
     z_mid = 0.5 * (float(zs.min()) + float(zs.max()))
     origin = t0 * x_axis + float(h.min()) * up + z_mid * z_axis
     return ShoeFrame(origin=origin, x_axis=x_axis, up=up, z_axis=z_axis, length=float(length))
+
+
+# --- rays -------------------------------------------------------------------------------------------------------------
+
+#: (triangle, ray) pairs tested per vectorised batch (bounds the memory of large triangles).
+_PAIR_BATCH = 2_000_000
+
+
+def vertical_hits(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, gz: np.ndarray,
+                  max_hits: int = MAX_HITS) -> np.ndarray:
+    """Every hit of the vertical rays at ``(gx[i], gz[j])`` (frame coordinates ``(x, height, z)``) ->
+    ``(nx, nz, max_hits, 2)`` = ``(height, normal_up)`` sorted by height, NaN where there is none.
+
+    Each triangle's xz bounding box is binned into the station grid; every (triangle, ray) pair in it
+    gets the 2D barycentric point-in-triangle test (inclusive edges), the height by barycentric
+    interpolation, ``normal_up`` = the unit face normal's up component. Triangles without xz area
+    (vertical faces) have no hit. Hits within 1e-5 x the grid span of the previous one in the same
+    column (a ray through a shared edge) count once."""
+    P = np.asarray(p_frame, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    gx = np.asarray(gx, np.float64)
+    gz = np.asarray(gz, np.float64)
+    nx, nz = len(gx), len(gz)
+    out = np.full((nx, nz, max_hits, 2), np.nan)
+    if not len(F) or not nx or not nz:
+        return out
+    span = max(float(gx[-1] - gx[0]), float(gz[-1] - gz[0]), float(np.ptp(P[:, [0, 2]])), 1e-12)
+    a, b, c = P[F[:, 0]], P[F[:, 1]], P[F[:, 2]]
+    det = (b[:, 0] - a[:, 0]) * (c[:, 2] - a[:, 2]) - (c[:, 0] - a[:, 0]) * (b[:, 2] - a[:, 2])
+    keep = np.abs(det) > 1e-14 * span * span
+    a, b, c, det = a[keep], b[keep], c[keep], det[keep]
+    n = np.cross(b - a, c - a)
+    norm = np.linalg.norm(n, axis=1)
+    nu = n[:, 1] / np.where(norm > 0, norm, 1.0)
+    tri = np.stack([a, b, c], axis=1)
+    tol = 1e-9 * span
+    i0 = np.searchsorted(gx, tri[:, :, 0].min(1) - tol, "left")
+    i1 = np.searchsorted(gx, tri[:, :, 0].max(1) + tol, "right")
+    j0 = np.searchsorted(gz, tri[:, :, 2].min(1) - tol, "left")
+    j1 = np.searchsorted(gz, tri[:, :, 2].max(1) + tol, "right")
+    ni, nj = np.maximum(i1 - i0, 0), np.maximum(j1 - j0, 0)
+    count = ni * nj
+    cells: List[np.ndarray] = []
+    heights: List[np.ndarray] = []
+    normals: List[np.ndarray] = []
+    ends = np.cumsum(count)
+    start = 0
+    while start < len(count):
+        base = ends[start - 1] if start else 0
+        stop = int(np.searchsorted(ends, base + _PAIR_BATCH, "right"))
+        stop = max(stop, start + 1)
+        sel = np.arange(start, stop)
+        cnt = count[sel]
+        total = int(cnt.sum())
+        start = stop
+        if not total:
+            continue
+        t = np.repeat(sel, cnt)
+        local = np.arange(total) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        ii = i0[t] + local // nj[t]
+        jj = j0[t] + local % nj[t]
+        px, pz = gx[ii], gz[jj]
+        ax, az = a[t, 0], a[t, 2]
+        w1 = ((px - ax) * (c[t, 2] - az) - (c[t, 0] - ax) * (pz - az)) / det[t]
+        w2 = ((b[t, 0] - ax) * (pz - az) - (px - ax) * (b[t, 2] - az)) / det[t]
+        w0 = 1.0 - w1 - w2
+        inside = (w0 >= -1e-9) & (w1 >= -1e-9) & (w2 >= -1e-9)
+        if not inside.any():
+            continue
+        t, ii, jj = t[inside], ii[inside], jj[inside]
+        w0, w1, w2 = w0[inside], w1[inside], w2[inside]
+        heights.append(w0 * a[t, 1] + w1 * b[t, 1] + w2 * c[t, 1])
+        normals.append(nu[t])
+        cells.append(ii * nz + jj)
+    if not cells:
+        return out
+    cell = np.concatenate(cells)
+    height = np.concatenate(heights)
+    normal = np.concatenate(normals)
+    order = np.lexsort((height, cell))
+    cell, height, normal = cell[order], height[order], normal[order]
+    dup = np.zeros(len(cell), bool)
+    dup[1:] = (cell[1:] == cell[:-1]) & (height[1:] - height[:-1] <= 1e-5 * span)
+    cell, height, normal = cell[~dup], height[~dup], normal[~dup]
+    _, first, inverse = np.unique(cell, return_index=True, return_inverse=True)
+    rank = np.arange(len(cell)) - first[inverse]
+    ok = rank < max_hits
+    out[cell[ok] // nz, cell[ok] % nz, rank[ok], 0] = height[ok]
+    out[cell[ok] // nz, cell[ok] % nz, rank[ok], 1] = normal[ok]
+    return out
+
+
+# --- topline ----------------------------------------------------------------------------------------------------------
+
+def _edges(F: np.ndarray) -> np.ndarray:
+    e = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    return np.unique(np.sort(e, axis=1), axis=0)
+
+
+def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray) -> Tuple[np.ndarray, np.ndarray,
+                                                                                       np.ndarray]:
+    """``(topline, z_pos, z_neg)`` per station: every triangle edge cut by the plane x = gx[i]
+    (an edge lying in the plane gives both its ends); per side (z > 0 / z < 0) the highest cut point
+    with |z| >= ``TOPLINE_SIDE_SHARE`` x that side's max |z|; ``topline`` = the lower of the two
+    sides' heights, ``z_pos`` / ``z_neg`` = the lateral position of each side's point. NaN where a
+    side has no cut point."""
+    P = np.asarray(p_frame, np.float64).reshape(-1, 3)
+    E = _edges(np.asarray(faces, np.int64).reshape(-1, 3))
+    nx = len(gx)
+    top = np.full(nx, np.nan)
+    zp = np.full(nx, np.nan)
+    zn = np.full(nx, np.nan)
+    if not len(E):
+        return top, zp, zn
+    pa, pb = P[E[:, 0]], P[E[:, 1]]
+    xlo, xhi = np.minimum(pa[:, 0], pb[:, 0]), np.maximum(pa[:, 0], pb[:, 0])
+    dxe = pb[:, 0] - pa[:, 0]
+    eps = 1e-9 * max(float(np.ptp(P[:, 0])), 1e-12)
+    flat = np.abs(dxe) <= eps
+    for i, s in enumerate(np.asarray(gx, np.float64)):
+        m = (xlo <= s + eps) & (xhi >= s - eps)
+        if not m.any():
+            continue
+        cut = m & ~flat
+        tt = (s - pa[cut, 0]) / dxe[cut]
+        pts = [pa[cut] + tt[:, None] * (pb[cut] - pa[cut])]
+        inplane = m & flat
+        if inplane.any():
+            pts += [pa[inplane], pb[inplane]]
+        q = np.concatenate(pts)
+        heights = []
+        for sign, zarr in ((1.0, zp), (-1.0, zn)):
+            side = q[sign * q[:, 2] > 0]
+            if not len(side):
+                heights.append(np.nan)
+                continue
+            lat = sign * side[:, 2]
+            side = side[lat >= TOPLINE_SIDE_SHARE * lat.max()]
+            k = int(np.argmax(side[:, 1]))
+            heights.append(float(side[k, 1]))
+            zarr[i] = float(side[k, 2])
+        top[i] = min(heights) if not any(math.isnan(v) for v in heights) else np.nan
+    return top, zp, zn
+
+
+# --- tracking ---------------------------------------------------------------------------------------------------------
+
+def _track(H: np.ndarray, length: float) -> Tuple[np.ndarray, np.ndarray]:
+    """The spike's ``insole.py``: ``(ins, roof)`` (nx, nz) — the tracked insole height per cell and the
+    next hit above it (NaN where none)."""
+    nx, nz, K = H.shape[:3]
+    air, tol = AIR_SHARE * length, TOL_SHARE * length
+    hz, hn = H[..., 0], H[..., 1]
+    above = np.full_like(hz, np.nan)
+    above[..., :-1] = hz[..., 1:]
+    cand_mask = (hn > UP_MIN) & (np.isnan(above) | (above - hz > air))
+    cand = np.where(cand_mask, hz, np.nan)
+    ins = np.full((nx, nz), np.nan)
+    pick = np.full((nx, nz), -1, np.int64)
+
+    def candidates(i: int, j: int) -> Tuple[np.ndarray, np.ndarray]:
+        k = np.nonzero(~np.isnan(cand[i, j]))[0]
+        return cand[i, j, k], k
+
+    seed = int(SEED_SHARE * nx)
+    for j in range(nz):
+        c, ks = candidates(seed, j)
+        if not len(c):
+            continue
+        k0 = int(np.argmin(c))
+        z0 = float(c[k0])
+        ins[seed, j], pick[seed, j] = z0, ks[k0]
+        for step in (-1, 1):
+            prev = [z0]
+            i = seed + step
+            while 0 <= i < nx:
+                c, ks = candidates(i, j)
+                pred = prev[-1] + (prev[-1] - prev[-3]) / 2 if len(prev) >= 3 else prev[-1]
+                if not len(c):
+                    break
+                k = int(np.argmin(np.abs(c - pred)))
+                if abs(c[k] - pred) > tol:
+                    break
+                ins[i, j], pick[i, j] = c[k], ks[k]
+                prev.append(float(c[k]))
+                i += step
+    # Second pass: cells the per-column track lost (the insole curls up toward the walls) take the
+    # candidate nearest the station's tracked median, within 2 TOL.
+    for i in range(nx):
+        tracked = ins[i][~np.isnan(ins[i])]
+        if len(tracked) < 3:
+            continue
+        zc = float(np.median(tracked))
+        for j in range(nz):
+            if not np.isnan(ins[i, j]):
+                continue
+            c, ks = candidates(i, j)
+            if not len(c):
+                continue
+            k = int(np.argmin(np.abs(c - zc)))
+            if abs(c[k] - zc) < 2 * tol:
+                ins[i, j], pick[i, j] = c[k], ks[k]
+    roof = np.full((nx, nz), np.nan)
+    ii, jj = np.nonzero(pick >= 0)
+    nxt = pick[ii, jj] + 1
+    has = nxt < K
+    roof[ii[has], jj[has]] = hz[ii[has], jj[has], nxt[has]]
+    return ins, roof
+
+
+def _middle(js: np.ndarray) -> np.ndarray:
+    """The middle 50 % of a station's insole column indices."""
+    lo, hi = js.min(), js.max()
+    return js[(js >= lo + 0.25 * (hi - lo)) & (js <= hi - 0.25 * (hi - lo))]
+
+
+def _interp(x: float, xs: np.ndarray, ys: np.ndarray) -> Optional[float]:
+    ok = ~np.isnan(ys)
+    if not ok.any():
+        return None
+    return float(np.interp(x, xs[ok], ys[ok]))
+
+
+def _r(v: Any, nd: int = 7) -> Any:
+    """JSON-safe: floats rounded, NaN/inf -> None, arrays -> lists."""
+    if isinstance(v, np.ndarray):
+        return [_r(x, nd) for x in v.tolist()]
+    if isinstance(v, (list, tuple)):
+        return [_r(x, nd) for x in v]
+    if isinstance(v, (float, np.floating)):
+        f = float(v)
+        return round(f, nd) if math.isfinite(f) else None
+    if isinstance(v, np.integer):
+        return int(v)
+    return v
+
+
+# --- analysis ---------------------------------------------------------------------------------------------------------
+
+def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
+    """Every measurement in ``frame`` (raw units); ``flip`` = the insole says the heel is the other end."""
+    L = frame.length
+    pf = frame.to_frame(P)
+    used = pf[np.unique(F)]
+    gx = np.linspace(0.0, L, STATIONS)
+    zlo, zhi = float(used[:, 2].min()), float(used[:, 2].max())
+    nzc = max(8, int(STATIONS * (zhi - zlo) / L)) if L > 0 else 8
+    gz = np.linspace(zlo, zhi, nzc)
+    H = vertical_hits(pf, F, gx, gz)
+    ins, roof = _track(H, L)
+    air = AIR_SHARE * L
+
+    footprint = ~np.isnan(H[:, :, 0, 0])
+    n_fp = int(footprint.sum())
+    found = ~np.isnan(ins)
+    insole_cover = float(found.sum() / n_fp) if n_fp else 0.0
+
+    prof = np.full(STATIONS, np.nan)
+    cav = np.full(STATIONS, np.nan)
+    mid_z = np.full(STATIONS, np.nan)
+    for i in range(STATIONS):
+        js = np.nonzero(found[i])[0]
+        if len(js) < 4:
+            continue
+        c = _middle(js)
+        prof[i] = float(np.median(ins[i, c]))
+        mid_z[i] = float(np.median(gz[c]))
+        r = roof[i, c] - ins[i, c]
+        if np.mean(~np.isnan(r)) > 0.5:
+            cav[i] = float(np.nanmedian(r))
+
+    k = NOMINAL_LENGTH_M / L if L > 0 else float("nan")
+    p_heel = _interp(PITCH_HEEL_SHARE * L, gx, prof)
+    p_toe = _interp((1.0 - PITCH_HEEL_SHARE) * L, gx, prof)
+    flip = p_heel is not None and p_toe is not None and p_heel < p_toe
+
+    # vamp cover: forefoot footprint cells with a hit above the insole (a cell without its own
+    # insole is judged against the station profile, interpolated where the station has none)
+    ref = np.where(found, ins, np.nan)
+    fill = np.isnan(ref)
+    if fill.any() and (~np.isnan(prof)).any():
+        ok = ~np.isnan(prof)
+        ref = np.where(fill, np.interp(gx, gx[ok], prof[ok])[:, None], ref)
+    fore = footprint & (gx >= BALL_SHARE * L)[:, None]
+    with np.errstate(invalid="ignore"):
+        covered = np.any(H[..., 0] > (ref + 0.25 * air)[..., None], axis=2)
+    n_fore = int(fore.sum())
+    vamp_cover = float((covered & fore).sum() / n_fore) if n_fore else 0.0
+
+    top, zp, zn = topline_stations(pf, F, gx)
+
+    # footprint outline: per station the lateral extent of the cells with a hit
+    left, right = [], []
+    for i in range(STATIONS):
+        js = np.nonzero(footprint[i])[0]
+        if len(js):
+            left.append([gx[i], gz[js.min()]])
+            right.append([gx[i], gz[js.max()]])
+    outline = left + right[::-1]
+
+    # cavity end: the first roofed station in front of the ball lower than the toes
+    valid = np.nonzero(~np.isnan(prof))[0]
+    cavity_end = float(gx[valid[-1]]) if len(valid) else None
+    if len(valid) and k == k:
+        for i in range(STATIONS):
+            if gx[i] >= BALL_SHARE * L and not np.isnan(cav[i]) and cav[i] * k < CAVITY_MIN_M:
+                cavity_end = float(gx[i])
+                break
+
+    # sole contacts
+    low = H[:, :, 0, 0]
+    contacts: Dict[str, Optional[List[float]]] = {"heel_tip": None, "ball": None, "toe_tip": None}
+    if n_fp:
+        ground = footprint & (low <= np.nanmin(low) + GROUND_SHARE * L)
+        band = CONTACT_BAND_SHARE * L
+        X = np.broadcast_to(gx[:, None], low.shape)
+        Z = np.broadcast_to(gz[None, :], low.shape)
+        rear = ground & (X < 0.5 * L)
+        if rear.any():
+            sel = rear & (X <= X[rear].min() + band)
+            contacts["heel_tip"] = [float(X[sel].mean()), float(low[sel].mean()), float(Z[sel].mean())]
+        ball = ground & (np.abs(X - BALL_SHARE * L) <= band)
+        if ball.any():
+            contacts["ball"] = [float(X[ball].mean()), float(low[ball].mean()), float(Z[ball].mean())]
+        else:
+            i = int(np.argmin(np.abs(gx - BALL_SHARE * L)))
+            js = np.nonzero(footprint[i])[0]
+            if len(js):
+                j = int(js[np.argmin(np.abs(gz[js] - gz[js].mean()))])
+                contacts["ball"] = [float(gx[i]), float(low[i, j]), float(gz[j])]
+        i_toe = int(np.nonzero(footprint.any(axis=1))[0].max())
+        js = np.nonzero(footprint[i_toe])[0]
+        contacts["toe_tip"] = [float(gx[i_toe]), float(low[i_toe, js].min()), float(gz[js].mean())]
+
+    # nominal numbers
+    seat = _interp(HEEL_SEAT_M / k, gx, prof) if k == k else None
+    ball_h = _interp(BALL_SHARE * L, gx, prof)
+    pitch = shank = None
+    if p_heel is not None and ball_h is not None:
+        pitch = math.degrees(math.atan2(p_heel - ball_h, (BALL_SHARE - PITCH_HEEL_SHARE) * L))
+    if seat is not None:
+        span = (gx >= HEEL_SEAT_M / k) & (gx <= BALL_SHARE * L)
+        idx = np.nonzero(span & ~np.isnan(prof))[0]
+        if len(idx) >= 2:
+            slopes = np.degrees(np.arctan2(np.diff(prof[idx]), np.diff(gx[idx])))
+            shank = float(np.median(slopes))
+    nominal = {
+        "k": k,
+        "heel_seat_h_m": None if seat is None else seat * k,
+        "insole_ball_h_m": None if ball_h is None else ball_h * k,
+        "heel_rise_m": None if seat is None or ball_h is None else (seat - ball_h) * k,
+        "pitch_deg": pitch,
+        "shank_slope_deg": shank,
+    }
+
+    ok, reasons = check_gates({"insole_cover": insole_cover, "vamp_cover": vamp_cover}, INSOLE_GATES)
+    refusal = None
+    if not ok:
+        refusal = INSOLE_REFUSED if any(r.startswith("insole_cover") for r in reasons) else OPEN_REFUSED
+
+    finite_top = top[~np.isnan(top)]
+    # overlay polylines in the mesh's own coordinates
+    pi = np.nonzero(~np.isnan(prof))[0]
+    insole_line = frame.to_mesh(np.stack([gx[pi], prof[pi], mid_z[pi]], axis=1)) if len(pi) else np.zeros((0, 3))
+    ti = np.nonzero(~np.isnan(top))[0]
+    ring = np.concatenate([np.stack([gx[ti], top[ti], zp[ti]], axis=1),
+                           np.stack([gx[ti], top[ti], zn[ti]], axis=1)[::-1]]) if len(ti) else np.zeros((0, 3))
+    topline_line = frame.to_mesh(ring) if len(ring) else ring
+
+    return {
+        "flip": flip,
+        "length_raw": L,
+        "stations": gx,
+        "lateral": gz,
+        "profile": prof,
+        "topline": top,
+        "cavity": cav,
+        "footprint_outline": outline,
+        "insole_cover": insole_cover,
+        "vamp_cover": vamp_cover,
+        "cavity_end_x": cavity_end,
+        "shaft_h_raw": float(finite_top.max()) if len(finite_top) else None,
+        "contacts": contacts,
+        "nominal": nominal,
+        "gates": {"ok": ok, "reasons": reasons, "insole_cover": insole_cover, "vamp_cover": vamp_cover,
+                  "refusal": refusal},
+        "overlay": {"insole": insole_line, "topline": topline_line},
+    }
+
+
+def analyse_arrays(positions: np.ndarray, faces: np.ndarray) -> Dict[str, Any]:
+    """The ``insole.json`` content of a shoe mesh (module docstring): measured in the provisional
+    frame, measured again in the flipped frame when the insole says the heel is the other end."""
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    frame = shoe_frame(P, F)
+    res = _measure(P, F, frame)
+    flipped = bool(res.pop("flip"))
+    if flipped:
+        frame = frame.flipped()
+        res = _measure(P, F, frame)
+        res.pop("flip")
+    out: Dict[str, Any] = {
+        "version": INSOLE_VERSION,
+        "frame": {"origin": frame.origin, "x_axis": frame.x_axis, "up": frame.up, "z_axis": frame.z_axis,
+                  "length": frame.length, "flipped": flipped},
+        **res,
+    }
+    return _r_tree(out)
+
+
+def _r_tree(v: Any) -> Any:
+    if isinstance(v, dict):
+        return {k: _r_tree(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)) and v and all(isinstance(x, (dict, list, tuple, np.ndarray)) for x in v):
+        return [_r_tree(x) for x in v]
+    return _r(v)
+
+
+def analyse(prepared_glb: bytes) -> Dict[str, Any]:
+    """``analyse_arrays`` of a prepared shoe GLB (all primitives, node transforms ignored)."""
+    from app.core import glb_mesh
+    positions, faces = glb_mesh.static_arrays(prepared_glb)[:2]
+    return analyse_arrays(positions, faces)

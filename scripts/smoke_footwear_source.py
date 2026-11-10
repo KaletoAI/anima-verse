@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke: the per-item shoe source store and its steps source -> empty -> cutout -> mesh
-(app/core/footwear_source.py; plan docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md, Task 4;
+"""Smoke: the per-item shoe source store and its steps source -> empty -> cutout -> mesh -> insole
+(app/core/footwear_source.py; plan docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md, Tasks 4 + 5;
 spec docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md § 5.2, § 5.3, § 5.6).
 
 Usage:  ./.venv/bin/python scripts/smoke_footwear_source.py
@@ -55,10 +55,23 @@ Expected, by hand:
      are cropped to their bbox and resampled -> 1.0 (+-0.02) >= 0.80. -> accepted, prepared.glb exists.
      Item X: box B moved OUTSIDE A (x offset 0.5 m) on both attempts -> component_share = 0.89290 <
      0.98 -> 2 mesher calls, refused, no prepared.glb.
+     The same run goes on to the insole of the two boxes (footwear_insole, L = 0.25, AIR = 0.00625,
+     TOL = 0.00875; 240 stations x int(240 * 0.09 / 0.25) = 86 columns): A's top (0.13) faces up with
+     nothing above, B's top (0.03) faces up with 0.10 of air -> both candidates. Seed station 132
+     (x = 0.1381, inside B's x [0.075, 0.175]): B's columns (|z| <= 0.025: j = 19..66, 48 columns) start
+     at 0.03, the rest at 0.13; past B's ends B's columns lose the track (0.10 > TOL) and the second pass
+     gives them the station median 0.13 -> insole_cover 1.0. Forefoot x >= 0.62 L = 0.155 (stations
+     149..239, 91): covered only where the insole is B's top under A's top, stations 149..167 (x <=
+     0.175) x 48 columns -> vamp_cover = 19 * 48 / (91 * 86) = 912 / 7826 = 0.1165 < 0.6 -> run_source
+     {ok False, step "insole", ran ["mesh"]}, the error starts with OPEN_REFUSED, insole.json written with
+     gates.refusal OPEN_REFUSED, record insole accepted False.
+[S5b] the wedge pump of scripts/_footwear_fixtures.py written as W's prepared.glb, run_source(W,
+     steps=["insole"], force=True) -> ok, ran ["insole"], 0 service calls, record insole accepted with
+     version 1 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
 [S6] second run_source(W) -> ran == [], 0 calls of any kind. regenerate(W, "mesh") -> seed 1, new ssig =
      ssig_for(W, 1) != old; upscaled/empty/cutout copied (bytes equal) with copied_from = old ssig, no
-     mesh record in the new folder; the next run_source -> ran == ["mesh"], exactly 1 mesher call,
-     0 upscale, 0 edit.
+     mesh record in the new folder; the next run_source -> mesh runs (exactly 1 mesher call, 0 upscale,
+     0 edit) and the two boxes' insole is refused again -> {ok False, ssig new, ran ["mesh"]}.
 [S7] ssig_for(A, 0) == md5(json.dumps({"image": sha256(A file), "version": 1, "seed": 0},
      sort_keys=True))[:12]; current(A) == {"ssig": that, "seed": 0} before any regenerate.
 [S8] anti-goal: every item image file's sha256 and mtime_ns are unchanged after S1-S6.
@@ -75,6 +88,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 FAILED = []
 
@@ -387,8 +401,11 @@ def main():
                 near("W cutout alpha aspect", (x1 - x0) / (y1 - y0), 1.92, 0.02)
 
             print("[S5] mesh")
+            from app.core import footwear_insole as fi
             res = fs.run_source("shoe_w")
-            check("W mesh ok", (res.get("ok"), res.get("ran")), (True, ["mesh"]))
+            check("W mesh ran, insole refused", (res.get("ok"), res.get("step"), res.get("ran")),
+                  (False, "insole", ["mesh"]))
+            check("W insole error", str(res.get("error", "")).startswith(fi.OPEN_REFUSED), True)
             check("W mesher calls", len(svc.meshes), 1)
             m = svc.meshes[-1]
             check("W mesh args", (m.get("occasion"), m.get("face_num"), m.get("material"), m.get("alpha"),
@@ -406,6 +423,31 @@ def main():
             near("W mesh_iou", g.get("mesh_iou"), 1.0, 0.02)
             check("W prepared.glb", (dw / "prepared.glb").is_file(), True)
             check("W no candidate left", [p.name for p in dw.iterdir() if "candidate" in p.name], [])
+            ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
+            check("W insole.json written", (ins.get("version"), (ins.get("gates") or {}).get("refusal")),
+                  (1, fi.OPEN_REFUSED))
+            near("W boxes insole_cover", ins.get("insole_cover"), 1.0, 1e-6)
+            near("W boxes vamp_cover", ins.get("vamp_cover"), 912 / 7826, 1e-6)
+            rec = fs.step_record("shoe_w", ssig_w, "insole")
+            check("W insole record refused", (rec.get("accepted"), (rec.get("gates") or {}).get("refusal")),
+                  (False, fi.OPEN_REFUSED))
+            check("W step_done insole", fs.step_done("shoe_w", ssig_w, "insole"), False)
+
+            print("[S5b] insole of the wedge pump")
+            from _footwear_fixtures import wedge
+            from app.core import glb_mesh
+            wp, wf = wedge()
+            (dw / "prepared.glb").write_bytes(glb_mesh.static_glb(wp, wf, np.zeros((len(wp), 2))))
+            c0 = svc.counts()
+            res = fs.run_source("shoe_w", steps=["insole"], force=True)
+            check("W insole ok", (res.get("ok"), res.get("ran")), (True, ["insole"]))
+            check("W insole no service call", svc.counts(), c0)
+            rec = fs.step_record("shoe_w", ssig_w, "insole")
+            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 1))
+            near("W insole pitch", (rec.get("nominal") or {}).get("pitch_deg"), 30.61, 0.1)
+            ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
+            near("W insole.json heel seat", (ins.get("nominal") or {}).get("heel_seat_h_m"), 0.09, 1e-5)
+            check("W step_done insole", fs.step_done("shoe_w", ssig_w, "insole"), True)
 
             svc.mesh_answer = lambda: two_boxes(False)
             n0 = len(svc.meshes)
@@ -434,7 +476,8 @@ def main():
                   ({}, False))
             c0 = svc.counts()
             res = fs.run_source("shoe_w")
-            check("W after regenerate", (res.get("ok"), res.get("ssig"), res.get("ran")), (True, new, ["mesh"]))
+            check("W after regenerate", (res.get("ok"), res.get("ssig"), res.get("step"), res.get("ran")),
+                  (False, new, "insole", ["mesh"]))
             up, ed, me = svc.counts()
             check("W after regenerate calls", (up - c0[0], ed - c0[1], me - c0[2]), (0, 0, 1))
 
