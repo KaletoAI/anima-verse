@@ -27,6 +27,12 @@ Expected, by hand:
     fit = 2 → 1 + 2 = 3). blocked: regenerate WORN_VIEWS_MISSING (no outfit stands on P's views), rerig
     NO_UNRIGGED, refit NO_MODEL (no glb), delete NOTHING_STORED (no file of P at all), views "" (it can run).
     view_info: front + back listed (dressed views), url None, blocked WORN_VIEWS_MISSING (not NO_SOURCE).
+[1b] A pending entry never shows another image as its current dressed view: the texture store holds a front
+    and back of T (made for some other outfit, current base, sidecar dressed) -> P's front/back tiles serve them
+    (url names T, source "texture") but WITHOUT a freshness badge (meta.freshness None) and with pending_note
+    PENDING_TEXTURE_VIEW; blocked stays WORN_VIEWS_MISSING. Store removed, an older mesher input
+    tpose_back_<P> planted instead -> the back tile serves it (source "body"), freshness None, pending_note
+    PENDING_BODY_VIEW; the front has no image (url None, no note). Both removed again (so [3] renders, [6] holds).
 [2] Routes: user -> 403, anonymous -> 401; generate-views on another body id -> 404 NOT_WORN_BODY. Another 3D run
     holds the generation guard: POST generate-views -> 202 started True (the worker took it and waits);
     a second POST -> 202 queued position 1 (the running one is not in the waiting list). GET: P status "running",
@@ -230,6 +236,32 @@ def main() -> int:
                                             "delete": outfit_bodies.NOTHING_STORED, "views": ""})
         check("[1] view tiles", {v: (e["url"], e["blocked"]) for v, e in b["view_info"].items()},
               {"front": (None, outfit_bodies.WORN_VIEWS_MISSING), "back": (None, outfit_bodies.WORN_VIEWS_MISSING)})
+
+        # --- [1b] --------------------------------------------------------------------------------------------
+        print("[1b] images in a pending entry are not its current dressed views")
+        store = base_body.texture_refs_dir(char)
+        planted = []
+        for v, colour in (("front", (90, 0, 0)), ("back", (0, 90, 0))):
+            img = png(store / f"{base_body._kind(v)}_{T}.png", colour)
+            write_json(img.with_suffix(".json"), {"base_signature": bsig, "dressed": True, "texture_signature": T,
+                                                  "base_image_sha256": sha(base_views[v]), "dress_text": "x"})
+            planted += [img, img.with_suffix(".json")]
+        vi = body(P)["view_info"]
+        check("[1b] store views served", [(vi[v]["source"], f"/outfit-bodies/{T}/views/{v}?" in (vi[v]["url"] or ""))
+                                          for v in ("front", "back")], [("texture", True)] * 2)
+        check("[1b] no badge, honest note", [((vi[v]["meta"] or {}).get("freshness"), vi[v].get("pending_note"),
+                                              vi[v]["blocked"]) for v in ("front", "back")],
+              [(None, outfit_bodies.PENDING_TEXTURE_VIEW, outfit_bodies.WORN_VIEWS_MISSING)] * 2)
+        for f in planted:
+            f.unlink()
+        img = png(R / f"tpose_back_{P}.png", (3, 3, 3))
+        write_json(img.with_suffix(".json"), {"outfit_body": {"body_id": P, "texture_signature": T}})
+        vi = body(P)["view_info"]
+        check("[1b] older mesher input", (vi["back"]["source"], (vi["back"]["meta"] or {}).get("freshness"),
+                                          vi["back"].get("pending_note")), ("body", None, outfit_bodies.PENDING_BODY_VIEW))
+        check("[1b] front without image", (vi["front"]["url"], vi["front"].get("pending_note")), (None, None))
+        img.unlink()
+        img.with_suffix(".json").unlink()
 
         # --- [2] ---------------------------------------------------------------------------------------------
         print("[2] routes, queue, lock reasons, cancel")

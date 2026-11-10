@@ -34,6 +34,8 @@ export interface BodyViewInfo {
   warning: string
   /** Why it cannot be rendered now (server English), "" when it can. */
   blocked: string
+  /** A pending worn entry's image that is not this body's current dressed view (shown dimmed, no badge). */
+  pending_note?: string
 }
 
 export interface BodyOutfit {

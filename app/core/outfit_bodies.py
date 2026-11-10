@@ -82,6 +82,10 @@ NOT_WORN_BODY = "Not the worn outfit's body — Generate views renders the worn 
 NO_MODEL = "No model stored — regenerate the body first"
 NO_GARMENTS = "No own-mesh garment or hair on this body"
 NOTHING_STORED = "Nothing of this body is stored yet"
+# What a pending worn entry's view tile shows instead of a freshness badge (``body_info``).
+PENDING_TEXTURE_VIEW = ("Dressed view of this texture made for another outfit — the worn outfit has none yet, "
+                        "not used")
+PENDING_BODY_VIEW = "Older mesher input of this body — not the worn outfit's dressed view, not used"
 LOCKED_BUILD = "Locked: a 3D model job is running for this body"
 LOCKED_RUNNING = "Locked: a run on this body is running"
 LOCKED_QUEUED = "Locked: a run on this body is queued"
@@ -785,7 +789,9 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
     outfit stands (or will stand) on this body — it then carries
     ``worn_outfit`` ``{signature, name, predicted, views_missing,
     image_jobs}`` and its view tiles say to Generate views while no outfit
-    stands on them yet. ``orphaned``: never built, no outfit standing on its
+    stands on them yet; an image such a tile still finds loses its freshness
+    badge and gets ``pending_note`` (``PENDING_TEXTURE_VIEW`` /
+    ``PENDING_BODY_VIEW``) — it is not this body's current dressed view. ``orphaned``: never built, no outfit standing on its
     views, no outfit model on it, not the worn one (ruling 2026-11-10: listed
     collapsed, never hidden — the artefact GC keeps such a body while a live
     outfit names its texture). ``blocked``: ``_blocked``."""
@@ -843,10 +849,16 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
     view_info = view_infos(character_name, body_id, record=record, tsig=tsig, source=source, bsig=bsig,
                            profile=profile, candidates=candidates, last=last)
     if worn_entry is not None and not source:
-        # No outfit stands on the views yet: the worn outfit's own Generate views makes them.
+        # No outfit stands on the views yet: the worn outfit's own Generate views makes them. An image
+        # the tile still finds (the texture store's view made for another outfit, or an older mesher
+        # input of the body) is NOT this body's current dressed view: no freshness badge, an honest note.
         for entry in view_info.values():
             if entry.get("blocked") == NO_SOURCE:
                 entry["blocked"] = WORN_VIEWS_MISSING
+            if entry.get("url"):
+                entry["meta"] = {**(entry.get("meta") or {}), "freshness": None}
+                entry["pending_note"] = PENDING_TEXTURE_VIEW if entry.get("source") == "texture" \
+                    else PENDING_BODY_VIEW
     fits = fits_on_body(character_name, body_id, profile=profile, on_body=on_body)
     stored = path.is_file() or unrigged.is_file() or any(views.values())
     worn_outfit = None

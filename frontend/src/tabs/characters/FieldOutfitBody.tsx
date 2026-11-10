@@ -180,6 +180,7 @@ function BodyViewTile({ view, entry, posting, cancelling, onRender, onCancel }: 
       height={VIEW_TILE_HEIGHT} running={entry.status === 'running'}
       failed={entry.status === 'failed'} error={entry.error} warning={entry.warning}
       disabled={posting || queued || !!entry.blocked} disabledReason={entry.blocked ? t(entry.blocked) : undefined}
+      note={entry.pending_note ? t(entry.pending_note) : undefined}
       actionTitle={t('Renders only this dressed view anew (image jobs) — the model is meshed again only by its own Regenerate.')}
       onRender={onRender}
       status={queued ? (

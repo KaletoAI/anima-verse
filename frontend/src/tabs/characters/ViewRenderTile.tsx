@@ -4,7 +4,8 @@
  * above the tile (RefImage — the freshness badge comes with its `meta`, the
  * server decides it), below it the run state ("Generating…", a caller's
  * status line such as the queue place with Cancel), the failure and the
- * kept warning of the view.
+ * kept warning of the view. A `note` dims the image and says what it really
+ * is (an image that is not the current view it stands for).
  *
  * The caller decides everything (what the button starts, why it is
  * disabled); the tile only renders. A disabled button shows its reason
@@ -36,7 +37,7 @@ function emptyTile(height: number): CSSProperties {
 }
 
 export function ViewRenderTile({ label, url, meta, height, running, status, failed, error, warning, disabled,
-  disabledTitle, disabledReason, actionTitle, onRender }: {
+  disabledTitle, disabledReason, note, actionTitle, onRender }: {
   label: string
   url: string | null
   meta?: ImageTileMeta | null
@@ -55,6 +56,8 @@ export function ViewRenderTile({ label, url, meta, height, running, status, fail
   disabledTitle?: string
   /** Why the button is disabled, shown as a visible line under the tile (and as its tooltip). */
   disabledReason?: string
+  /** The image is not the current view it stands for: shown dimmed with this line under it. */
+  note?: string
   /** The button's tooltip otherwise. */
   actionTitle?: string
   onRender: () => void
@@ -77,13 +80,16 @@ export function ViewRenderTile({ label, url, meta, height, running, status, fail
         </button>
       </div>
       {url ? (
-        <RefImage key={url} src={url} height={height} label={label} meta={meta} compact />
+        <div style={note ? { opacity: 0.45 } : undefined}>
+          <RefImage key={url} src={url} height={height} label={label} meta={meta} compact />
+        </div>
       ) : (
         <div className="ga-hint" style={emptyTile(height)}>
           {running ? t('Generating…') : t('No render yet')}
         </div>
       )}
       {url && running ? <div className="ga-hint">{t('Generating…')}</div> : null}
+      {url && note ? <div className="ga-hint" style={WARNING_STYLE} title={note}>{note}</div> : null}
       {status}
       {disabled && !running && disabledReason ? (
         <div className="ga-hint" style={LOCK_STYLE} title={disabledReason}>{disabledReason}</div>
