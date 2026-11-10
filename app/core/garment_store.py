@@ -624,8 +624,13 @@ def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, e
     path = garment_path(character_name, item_id, fsig, "failed")
     if not path.parent.parent.parent.is_dir():
         return  # never mint the folders of a vanished character
-    write_record(path, {"item_id": item_id, "fsig": fsig, "step": step, "error": error,
-                        "base_model_sha256": base_model_sha, "failed_at": _iso(utc_now())})
+    record = {"item_id": item_id, "fsig": fsig, "step": step, "error": error,
+              "base_model_sha256": base_model_sha, "failed_at": _iso(utc_now())}
+    if step == "fit":
+        # Refused by a fit that already widens a too-small piece (``garment_refit`` retries one without).
+        from app.core.garment_fit import SCALE_RETRY_VERSION
+        record["scale_retry"] = SCALE_RETRY_VERSION
+    write_record(path, record)
 
 
 def record_body_failure(character_name: str, item_id: str, fsig: str, body: str, *, error: str,
@@ -634,6 +639,7 @@ def record_body_failure(character_name: str, item_id: str, fsig: str, body: str,
     body ``body``: automatic fits on that body skip it while the body, the
     base fit it was derived from and the fit algorithm are the same
     (``body_failure``)."""
+    from app.core.garment_fit import SCALE_RETRY_VERSION
     from app.core.timeutils import utc_now
     from app.models.character import get_character_dir
     if not get_character_dir(character_name).is_dir():
@@ -641,7 +647,7 @@ def record_body_failure(character_name: str, item_id: str, fsig: str, body: str,
     write_record(garment_path(character_name, item_id, fsig, "failed", body=body),
                  {"item_id": item_id, "fsig": fsig, "step": "fit", "error": error, "body_id": body,
                   "body_sha256": body_sha, "base_fit_sha256": base_fit_sha, "fit_version": fit_version,
-                  "failed_at": _iso(utc_now())})
+                  "scale_retry": SCALE_RETRY_VERSION, "failed_at": _iso(utc_now())})
 
 
 def body_failure(character_name: str, item_id: str, fsig: str, body: str, *, body_sha: str,

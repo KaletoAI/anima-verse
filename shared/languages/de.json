@@ -4415,6 +4415,8 @@
     "Waiting runs": "Wartende Läufe",
     "waits for the running 3D run": "wartet auf den laufenden 3D-Lauf",
     "worn": "getragen",
-    "No view images": "Keine Ansichtsbilder"
+    "No view images": "Keine Ansichtsbilder",
+    "Widened {pct} % to fit": "Um {pct} % geweitet, damit es passt",
+    "Widened up to {pct} %, still too small": "Bis {pct} % geweitet, immer noch zu klein"
   }
 }

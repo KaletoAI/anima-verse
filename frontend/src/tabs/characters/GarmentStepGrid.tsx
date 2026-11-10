@@ -239,8 +239,17 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     : garment?.failed?.step === 'fit' && garment.failed.gates?.metrics
       ? (garment.failed.gates.metrics as Record<string, unknown>)
       : null
+  // garment_fit.scale_retry: the factor a too-small piece was widened by (1.0 = not widened), the largest tried.
+  const widened = num(fitRecord?.scale_retry)
+  const triedUpTo = num(fitRecord?.scale_retry_max)
+  const widenText = widened != null && widened > 1
+    ? t('Widened {pct} % to fit').replace('{pct}', String(Math.round((widened - 1) * 100)))
+    : triedUpTo != null && triedUpTo > 1
+      ? t('Widened up to {pct} %, still too small').replace('{pct}', String(Math.round((triedUpTo - 1) * 100)))
+      : ''
   const fitText = [
     t(FIT_STATUS[fit?.status || 'missing']),
+    widenText,
     fit?.tris ? `${t('Triangles')} ${fit.tris.toLocaleString()}` : '',
     fit?.created_at ? formatDateTime(fit.created_at, clockSettings()) : '',
   ].filter(Boolean).join(' · ')

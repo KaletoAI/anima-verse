@@ -50,6 +50,19 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
         "fit", the log line ends "refused — ...".
     _run_hairdeck is never called (0) — the sweep never asks HairDeck for
     one more seed.
+[5] Too-small refusals from before the scale retry (fsig 777777777777):
+    failure records cR / cW (deep_push_share only, no ``scale_retry`` stamp,
+    on SHA) are retried; cS (stamped 1), cT (component gate too), cU (on
+    OTHER) and hV (hair) are not -> refused_fits = [cR, cW]. The fit refuses
+    cR again and accepts cW: refit_character -> [cW], fits [cR, cW], cR's new
+    failure carries scale_retry = SCALE_RETRY_VERSION, cW's failure is gone,
+    2 log lines "too-small refusal retried widened"; then refused_fits = []
+    and a second refit fits nothing (once).
+[5b] Outfit body ob0000000a (body sha unchanged, served fsig 777..): body
+    failures cR (eligible), cS (stamped), cT (other gate) ->
+    refused_body_fits = [(cR, clothing, 777.., ob0000000a)]; fit_on_body
+    refuses -> the body failure is stamped, the log names the outfit body,
+    refused_body_fits = [] afterwards. 0 hub calls throughout.
 """
 import hashlib
 import json
@@ -271,6 +284,88 @@ def main() -> int:
                              for line in lines.lines), True)
         check("(c) old record kept", json.loads(rec("hH", h_fsig)).get("fit_version"), 1)
         check("no HairDeck / hub call", HUB, [])
+
+        # --- [5] too-small refusals before the scale retry ------------------------------
+        print("[5] a too-small clothing refusal from before the scale retry is fitted once more")
+        small = "fit refused — deep_push_share 0.1329 > 0.12 (share of vertices pushed out more than 3 cm)"
+        other = ("fit refused — largest_component_share 0.9 < 0.98 (area share of the largest component); "
+                 "deep_push_share 0.13 > 0.12 (share of vertices pushed out more than 3 cm)")
+        KIND = {"cR": "clothing", "cS": "clothing", "cT": "clothing", "cU": "clothing", "cW": "clothing",
+                "hV": "hair"}
+        FSIG.update({item_id: "7" * 12 for item_id in KIND})
+        garments._item_order = lambda name, item_id, profile=None: ({}, KIND[item_id], ())
+
+        def failed(item_id, error, sha=SHA, stamp=None, body=""):
+            record = {"item_id": item_id, "fsig": "7" * 12, "step": "fit", "error": error}
+            if body:
+                record.update(body_id=body, body_sha256="BODY", base_fit_sha256="x", fit_version=4)
+            else:
+                record["base_model_sha256"] = sha
+            if stamp is not None:
+                record["scale_retry"] = stamp
+            gs.write_record(gs.garment_path("Demo", item_id, "7" * 12, "failed", body=body), record)
+
+        failed("cR", small)                 # eligible
+        failed("cW", small)                 # eligible
+        failed("cS", small, stamp=1)        # refused WITH the scale retry already
+        failed("cT", other)                 # another gate failed too
+        failed("cU", small, sha=OTHER)      # on another base model
+        failed("hV", small)                 # hair
+        check("retry_refusal small / stamped / other",
+              [garment_refit.retry_refusal(r) for r in ({"step": "fit", "error": small},
+                                                        {"step": "fit", "error": small, "scale_retry": 1},
+                                                        {"step": "fit", "error": other},
+                                                        {"step": "mesh", "error": small})],
+              [True, False, False, False])
+        check("refused_fits", garment_refit.refused_fits("Demo"),
+              [("cR", "clothing", "7" * 12, "edit_chain"), ("cW", "clothing", "7" * 12, "edit_chain")])
+
+        def fit_small(name, item_id, kind, fsig, bsig, profile):
+            if item_id == "cR":
+                FITS.append(item_id)
+                raise garments._Refused("fit", "fit refused — deep_push_share 0.125 > 0.12 (widened to 1.08)",
+                                        {"ok": False, "metrics": {"scale_retry": 1.0, "scale_retry_max": 1.08}})
+            return fit_stub(name, item_id, kind, fsig, bsig, profile)
+        garments._fit = fit_small
+        FITS.clear(), lines.lines.clear()
+        check("refit", garment_refit.refit_character("Demo"), ["cW"])
+        check("fit calls", FITS, ["cR", "cW"])
+        check("cR failure stamped", (gs.chain_failure("Demo", "cR", "7" * 12, base_model_sha=SHA) or {}).get(
+            "scale_retry"), garment_fit.SCALE_RETRY_VERSION)
+        check("cW failure cleared", gs.chain_failure("Demo", "cW", "7" * 12, base_model_sha=SHA), None)
+        check("log", sum(1 for line in lines.lines if "too-small refusal retried widened" in line), 2)
+        check("once: nothing left", garment_refit.refused_fits("Demo"), [])
+        FITS.clear()
+        check("second refit", garment_refit.refit_character("Demo"), [])
+        check("no second fit", FITS, [])
+
+        print("[5b] ... and on an outfit body")
+        BODY = "ob0000000a"
+        failed("cR", small, body=BODY)
+        failed("cS", small, stamp=1, body=BODY)
+        failed("cT", other, body=BODY)
+        garments.body_sha256 = lambda name, body_id: "BODY"
+        cw_fit = gs.garment_path("Demo", "cW", "7" * 12, "fit")
+        cr_fit = gs.garment_path("Demo", "cR", "7" * 12, "fit")
+        cr_fit.write_bytes(b"BASE:cR")
+        gs.accepted_fit = lambda name, item_id, base_model_sha="", profile=None: (
+            (cr_fit if item_id == "cR" else cw_fit), {"kind": KIND[item_id]})
+        check("refused_body_fits", garment_refit.refused_body_fits("Demo"), [("cR", "clothing", "7" * 12, BODY)])
+        ON_BODY = []
+
+        def on_body(name, item_id, body_id, base_fit, profile=None, schedule=True):
+            ON_BODY.append((item_id, body_id))
+            raise garments._Refused("fit", "fit on the outfit body refused — deep_push_share 0.13 > 0.12 (x)", None)
+        garments.fit_on_body = on_body
+        lines.lines.clear()
+        check("refit", garment_refit.refit_character("Demo"), [])
+        check("fit_on_body calls", ON_BODY, [("cR", BODY)])
+        check("body failure stamped", gs.read_record(gs.garment_path("Demo", "cR", "7" * 12, "failed", body=BODY))
+              .get("scale_retry"), garment_fit.SCALE_RETRY_VERSION)
+        check("body log", any("on outfit body" in line and "too-small refusal retried widened: refused" in line
+                              for line in lines.lines), True)
+        check("once on the body", garment_refit.refused_body_fits("Demo"), [])
+        check("no hub call", HUB, [])
 
     print("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
     return 1 if FAILS else 0

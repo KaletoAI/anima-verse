@@ -210,6 +210,33 @@ CLOTHING_GATES = {
     "rigged_inside_share": ("max", 0.01, "share of vertices inside the rigged body after the transfer"),
 }
 
+# Scale retry (2026-11-10): a clothing fit refused ONLY because the piece is too small for the body — every failing
+# gate one of ``SCALE_RETRY_KEYS`` — is fitted again with the placed piece widened by the steps of
+# ``SCALE_RETRY_STEPS``; the smallest step whose fit passes every gate is taken, the first that fails for any other
+# reason does not end the walk (a larger one may still pass). A refusal for another gate is never retried; a fit that
+# passes unwidened is the unchanged fit (the factor 1.0, the same arrays as before).
+#
+# Axes and centre, measured 2026-11-10 on Kira's Black Blazer (fit-reuse spike: prepared mesh, ghost front warped to
+# the outfit body 2b6731cd04b4, refused there for deep_push_share 0.133 > 0.12) through the unrigged push-out —
+# deep push share / max push / hem height / top height (unrigged frame x k, m):
+#   unwidened                     0.133 / 60 mm / 0.0456 / 0.627
+#   x, z  1.02 / 1.04 / 1.08      0.118 / 0.104 / 0.085   hem 0.0456 at every step, top 0.628 .. 0.632
+#   isotropic about the centroid  0.104 / 0.084 / 0.054   hem 0.040 / 0.033 / 0.021, top 0.638 / 0.632 / 0.644
+# The isotropic scale makes the piece LONGER (the hem 2.4 cm lower at 1.08) — a blazer must not grow a hem. Widening
+# x and z only keeps the hem and the collar where they were (the top moves by the push-out alone, < 6 mm). Every deep
+# vertex of that case lay within the torso (|x| < 0.25 m); beyond the torso's half width (``CLOTHING_BODY_HALF_X`` of
+# the body height, the band ``align_band_depth`` centres on) x is SHIFTED by the shoulder's widening instead of
+# scaled, so a sleeve keeps its length and moves out with the shoulder seam (same deep shares, 0.118 / 0.104 / 0.085:
+# no deep vertex lies there). The centre is the body's vertical axis through the torso band: x = the body's median x,
+# z = the middle of the body band's depth (where ``align_band_depth`` put the garment band's middle).
+#: Widening factors tried after a too-small refusal, smallest first.
+SCALE_RETRY_STEPS: Tuple[float, ...] = (1.02, 1.04, 1.06, 1.08)
+#: The clothing gates whose refusal means "too small for the body".
+SCALE_RETRY_KEYS: Tuple[str, ...] = ("deep_push_share", "max_push_m")
+#: Stamped on a refused fit's failure record (``garment_store.record_failure``): the refusal was made WITH the scale
+#: retry. A too-small refusal recorded without it is retried once by the refit sweep (``garment_refit``).
+SCALE_RETRY_VERSION = 1
+
 _ARM_TOKENS = ("arm", "hand", "shoulder")
 _LOWER_ARM_TOKENS = ("forearm", "hand")
 _LEG_TOKENS = ("leg", "foot", "toe")
@@ -1454,13 +1481,9 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
 
 
-def align_band_depth(Q, body_P, *, height_u: float, band=CLOTHING_DEPTH_BAND,
-                     half_x: float = CLOTHING_BODY_HALF_X) -> Tuple[np.ndarray, float]:
-    """Shift the garment in z so its band ``band`` (fractions of ``height_u`` below its top) is centred on the body
-    band at the same heights within ``half_x * height_u`` of the body's centre line (the median x) -> ``(Q, dz)``
-    (spike ``fit_dress.py``: the torso band of a dress)."""
-    Q = np.array(Q, np.float64)
-    body_P = np.asarray(body_P, np.float64)
+def _depth_bands(Q, body_P, *, height_u: float, band, half_x: float
+                 ) -> Tuple[np.ndarray, np.ndarray, float]:
+    """``(garment band, body band, body centre x)`` of ``align_band_depth``."""
     top = Q[:, 1].max()
     bq = Q[(Q[:, 1] < top - band[0] * height_u) & (Q[:, 1] > top - band[1] * height_u)]
     if len(bq) == 0:
@@ -1470,9 +1493,100 @@ def align_band_depth(Q, body_P, *, height_u: float, band=CLOTHING_DEPTH_BAND,
     bb = body_P[(body_P[:, 1] > yl) & (body_P[:, 1] < yh) & (np.abs(body_P[:, 0] - xc) < half_x * height_u)]
     if len(bb) == 0:
         raise ValueError("No body vertices at the garment's depth band")
+    return bq, bb, xc
+
+
+def align_band_depth(Q, body_P, *, height_u: float, band=CLOTHING_DEPTH_BAND,
+                     half_x: float = CLOTHING_BODY_HALF_X) -> Tuple[np.ndarray, float]:
+    """Shift the garment in z so its band ``band`` (fractions of ``height_u`` below its top) is centred on the body
+    band at the same heights within ``half_x * height_u`` of the body's centre line (the median x) -> ``(Q, dz)``
+    (spike ``fit_dress.py``: the torso band of a dress)."""
+    Q = np.array(Q, np.float64)
+    bq, bb, _xc = _depth_bands(Q, np.asarray(body_P, np.float64), height_u=height_u, band=band, half_x=half_x)
     dz = float((bb[:, 2].min() + bb[:, 2].max()) / 2 - (bq[:, 2].min() + bq[:, 2].max()) / 2)
     Q[:, 2] += dz
     return Q, dz
+
+
+def torso_axis(Q, body_P, *, height_u: float, band=CLOTHING_DEPTH_BAND,
+               half_x: float = CLOTHING_BODY_HALF_X) -> Tuple[float, float]:
+    """``(x, z)`` of the body's vertical axis through the torso band of ``align_band_depth``: the body's median x
+    and the middle of the body band's depth — the centre the scale retry widens about (``widen``)."""
+    _bq, bb, xc = _depth_bands(np.asarray(Q, np.float64), np.asarray(body_P, np.float64), height_u=height_u,
+                               band=band, half_x=half_x)
+    return xc, float((bb[:, 2].min() + bb[:, 2].max()) / 2)
+
+
+def widen(Q, scale: float, *, centre_x: float, centre_z: float, half_width: float) -> np.ndarray:
+    """The placed garment ``Q`` widened by ``scale`` about the vertical axis ``(centre_x, centre_z)``: z scaled
+    about ``centre_z``; x scaled about ``centre_x`` within ``half_width`` of it and beyond that shifted by the
+    widening at ``half_width`` (``x' = x + (scale - 1) * clip(x - centre_x, -half_width, half_width)``), so a
+    sleeve keeps its length. y (the length) is never changed. ``scale`` 1.0 returns ``Q`` as a copy."""
+    Q = np.array(Q, np.float64)
+    if scale == 1.0:
+        return Q
+    dx = Q[:, 0] - centre_x
+    Q[:, 0] = Q[:, 0] + (scale - 1.0) * np.clip(dx, -half_width, half_width)
+    Q[:, 2] = centre_z + (Q[:, 2] - centre_z) * scale
+    return Q
+
+
+def push_numbers(Q0_pre, Q_post) -> Dict[str, float]:
+    """``max_push_m`` and ``deep_push_share`` of a push-out (positions in metres, as ``clothing_metrics``)."""
+    push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
+    return {"max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
+            "deep_push_share": round(float((push > DEEP_PUSH_M).mean()) if len(push) else 0.0, 4)}
+
+
+def gate_keys(reasons: List[str]) -> List[str]:
+    """The metric keys of ``gate`` reasons (each reason starts with its key)."""
+    return [str(r).split(" ", 1)[0].rstrip(":") for r in reasons]
+
+
+def too_small(reasons: List[str]) -> bool:
+    """A refusal whose every reason is a ``SCALE_RETRY_KEYS`` gate: the piece is too small for the body."""
+    keys = gate_keys(reasons)
+    return bool(keys) and all(key in SCALE_RETRY_KEYS for key in keys)
+
+
+def scale_retry(Q, push, finish, *, centre_x: float, centre_z: float, half_width: float,
+                steps: Tuple[float, ...] = SCALE_RETRY_STEPS) -> Tuple["FitResult", Dict[str, Any]]:
+    """Fit the placed garment ``Q``; when refused as ``too_small``, again widened (``widen``) by each of ``steps``
+    until one passes -> ``(result, info)``.
+
+    ``push(Qs)`` -> ``(Qp, disp, numbers)`` (the push-out of the placed positions and its ``push_numbers``),
+    ``finish(Qs, Qp, disp)`` -> the ``FitResult`` of that push-out. A step whose push numbers already fail the
+    ``SCALE_RETRY_KEYS`` gates is not finished (no transfer). ``info``: ``factor`` = the scale of the returned
+    result (1.0 unwidened — a pass at 1.0, another refusal, or no step passed: then the unwidened refusal is
+    returned), ``max_tried`` = the largest scale tried (1.0 without a retry), ``attempts`` = per tried scale
+    (1.0 first) ``{scale, ok, reasons, deep_push_share, max_push_m}`` — empty without a retry."""
+    Qp, disp, _numbers = push(Q)
+    first = finish(Q, Qp, disp)
+    info: Dict[str, Any] = {"factor": 1.0, "max_tried": 1.0, "attempts": [], "centre": [centre_x, centre_z],
+                            "half_width_u": half_width}
+    if first.ok or not too_small(first.reasons):
+        return first, info
+
+    def attempt(scale, ok, reasons, m):
+        info["attempts"].append({"scale": scale, "ok": bool(ok), "reasons": list(reasons),
+                                 **{key: m.get(key) for key in SCALE_RETRY_KEYS}})
+
+    attempt(1.0, False, first.reasons, first.metrics)
+    push_gates = {key: CLOTHING_GATES[key] for key in SCALE_RETRY_KEYS}
+    for scale in steps:
+        info["max_tried"] = scale
+        Qs = widen(Q, scale, centre_x=centre_x, centre_z=centre_z, half_width=half_width)
+        Qp, disp, numbers = push(Qs)
+        ok, reasons = gate(numbers, push_gates)
+        if not ok:
+            attempt(scale, False, reasons, numbers)
+            continue
+        result = finish(Qs, Qp, disp)
+        attempt(scale, result.ok, result.reasons, result.metrics)
+        if result.ok:
+            info["factor"] = scale
+            return result, info
+    return first, info
 
 
 def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes, *,
@@ -1489,6 +1603,11 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     ``CLOTHING_WAIST_DROP`` of the body height (sleeves ride the arms above it), ``clothing_weights`` (skirt when
     ``is_skirt``), the gate ``CLOTHING_GATES``. The output joints are the bones the weights use (contract bones and,
     over their tissue, extension bones), in skin order.
+
+    A fit refused only because the piece is too small (``too_small``) is fitted again widened about the torso axis
+    (``scale_retry``, ``widen``, steps ``SCALE_RETRY_STEPS``); the push numbers of a widened fit are measured from
+    the widened placement. ``metrics["scale_retry"]`` = the applied factor (1.0 unwidened), ``scale_retry_max`` =
+    the largest tried (1.0 without a retry), ``report["scale_retry"]`` the attempts with their gate numbers.
     """
     body_mask, garment_mask = _mask(masks["body"]), _mask(masks["garment"])
     if body_mask.shape != garment_mask.shape:
@@ -1508,39 +1627,53 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     Q = place_by_framing(Pk, body_u.positions, body_mask, garment_mask)
     Q, dz = align_band_depth(Q, body_u.positions, height_u=height_u)
     margin = SDF_MARGIN_M / k
-    sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
-    Qp, disp = push_out(Q, Fk, sdf, clear=CLEAR_M / k)
-    split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
-    X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y)
-    skirt = is_skirt(X, body_r, slots)
-    J, W = clothing_weights(X, body_r, skirt=skirt)
-    used = np.unique(J[W > 0])
-    remap = np.zeros(max(len(body_r.joint_names), int(J.max()) + 1 if J.size else 0), np.int64)
-    remap[used] = np.arange(len(used))
-    J = np.where(W > 0, remap[J], 0)
-    names = [body_r.joint_names[i] for i in used]
-    m = clothing_metrics(X, Fk, Q * k, Qp * k, transfer_report)
-    ok, reasons = gate(m, CLOTHING_GATES)
 
-    garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
-    crotch = crotch_height(body_r)
-    hips = names.index(body_r.joint_names[joint_index(body_r, "hips")]) if skirt else -1
-    report = {
-        "k": float(k),
-        "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
-                     "out": int(len(garment.positions))},
-        "dropped_components_faces": int(len(Fw0) - len(Fk)),
-        "depth_shift_u": dz,
-        "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
-                 "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
-        "waist_y_u": split_y,
-        "transfer": transfer_report,
-        "crotch_y_m": crotch,
-        "hem_y_m": float(X[:, 1].min()),
-        "skirt": bool(skirt),
-        "skirt_zone_share": float((X[:, 1] < crotch + SKIRT_ZONE_M).mean()) if skirt else 0.0,
-        "hem_hips_weight": (float(((J == hips) * W).sum(1)[X[:, 1] <= X[:, 1].min() + 0.01].mean())
-                            if skirt else None),
-        "joints": names,
-    }
-    return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
+    def push(Qs):
+        sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k,
+                       bounds=(Qs.min(0) - margin, Qs.max(0) + margin))
+        Qp, disp = push_out(Qs, Fk, sdf, clear=CLEAR_M / k)
+        return Qp, disp, push_numbers(Qs * k, Qp * k)
+
+    def finish(Qs, Qp, disp) -> FitResult:
+        split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
+        X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y)
+        skirt = is_skirt(X, body_r, slots)
+        J, W = clothing_weights(X, body_r, skirt=skirt)
+        used = np.unique(J[W > 0])
+        remap = np.zeros(max(len(body_r.joint_names), int(J.max()) + 1 if J.size else 0), np.int64)
+        remap[used] = np.arange(len(used))
+        J = np.where(W > 0, remap[J], 0)
+        names = [body_r.joint_names[i] for i in used]
+        m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report)
+        ok, reasons = gate(m, CLOTHING_GATES)
+
+        garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
+        crotch = crotch_height(body_r)
+        hips = names.index(body_r.joint_names[joint_index(body_r, "hips")]) if skirt else -1
+        report = {
+            "k": float(k),
+            "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
+                         "out": int(len(garment.positions))},
+            "dropped_components_faces": int(len(Fw0) - len(Fk)),
+            "depth_shift_u": dz,
+            "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
+                     "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
+            "waist_y_u": split_y,
+            "transfer": transfer_report,
+            "crotch_y_m": crotch,
+            "hem_y_m": float(X[:, 1].min()),
+            "skirt": bool(skirt),
+            "skirt_zone_share": float((X[:, 1] < crotch + SKIRT_ZONE_M).mean()) if skirt else 0.0,
+            "hem_hips_weight": (float(((J == hips) * W).sum(1)[X[:, 1] <= X[:, 1].min() + 0.01].mean())
+                                if skirt else None),
+            "joints": names,
+        }
+        return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
+
+    centre_x, centre_z = torso_axis(Q, body_u.positions, height_u=height_u)
+    result, info = scale_retry(Q, push, finish, centre_x=centre_x, centre_z=centre_z,
+                               half_width=CLOTHING_BODY_HALF_X * height_u)
+    result.metrics["scale_retry"] = info["factor"]
+    result.metrics["scale_retry_max"] = info["max_tried"]
+    result.report["scale_retry"] = info
+    return result

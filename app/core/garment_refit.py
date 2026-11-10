@@ -29,6 +29,15 @@ body whose posture record is stale gets its base body's posture
 the turned body's garments are refitted onto it and the worn outfit's model
 on it is rebuilt as the CPU copy.
 
+Refused clothing fits (scale retry, 2026-11-10): a clothing fit refused as
+too small (``garment_fit.too_small`` — only deep push / max push gates)
+whose failure record predates the scale retry (no ``scale_retry`` stamp,
+``garment_fit.SCALE_RETRY_VERSION``) is fitted ONCE more by the widening
+fit — on the base model (``refused_fits``, edit chain, the current fsig on
+the current base model) and on every outfit body (``refused_body_fits``,
+the body stored unchanged, the fsig of the served base fit). A new refusal
+is recorded stamped, so it is not retried again.
+
 CPU only: no image, mesh or hub call. ``garments._publish_fit`` schedules the
 re-assembly of the current outfit model. A character whose garment chain runs
 (its run lock held, or its FIFO active) is retried later, never refitted
@@ -93,6 +102,104 @@ def outdated_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = No
     return out
 
 
+def retry_refusal(record: Dict[str, Any]) -> bool:
+    """A failure record of a fit refused as too small (``garment_fit.too_small``
+    on the reasons after the error's "— ") that was recorded before the scale
+    retry (``scale_retry`` missing or older than
+    ``garment_fit.SCALE_RETRY_VERSION``): the refit sweep fits it once more."""
+    from app.core import garment_fit
+    if record.get("step") != "fit":
+        return False
+    try:
+        if int(record.get("scale_retry") or 0) >= garment_fit.SCALE_RETRY_VERSION:
+            return False
+    except (TypeError, ValueError):
+        pass
+    _head, sep, reasons = str(record.get("error") or "").partition(" — ")
+    return bool(sep) and garment_fit.too_small(reasons.split("; "))
+
+
+def _clothing_kind(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[str]:
+    """The item's garment kind when it is clothing, else None (unknown items too)."""
+    from app.core import garment_set, garments
+    try:
+        kind = garments._item_order(character_name, item_id, profile)[1]
+    except ValueError:
+        return None
+    return kind if kind == garment_set.CLOTHING else None
+
+
+def refused_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                 ) -> List[Tuple[str, str, str, str]]:
+    """``[(item_id, kind, fsig, method)]`` of the character's clothing whose
+    fit of the CURRENT fsig was refused on the CURRENT base model as too
+    small before the scale retry (``retry_refusal``); edit chain only (the
+    method clothing is made with)."""
+    from app.core import base_body, garment_store as gs
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None or not base[1]:
+        return []
+    out: List[Tuple[str, str, str, str]] = []
+    for (item_id, fsig), files in sorted(gs.stored_groups(character_name).items()):
+        failed = gs.garment_path(character_name, item_id, fsig, "failed")
+        if failed not in files:
+            continue
+        record = gs.read_record(failed)
+        if record.get("base_model_sha256") != base[1] or not retry_refusal(record):
+            continue
+        kind = _clothing_kind(character_name, item_id, profile)
+        if kind is None:
+            continue
+        try:
+            current = gs.garment_fsig(character_name, item_id, profile=profile)
+            method = gs.garment_method(character_name, item_id, profile=profile)
+        except ValueError:
+            continue
+        if current != fsig or method != gs.EDIT_CHAIN:
+            continue
+        out.append((item_id, kind, fsig, method))
+    return out
+
+
+def refused_body_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                      ) -> List[Tuple[str, str, str, str]]:
+    """``[(item_id, kind, fsig, body_id)]`` of the character's clothing fits
+    on outfit bodies refused as too small before the scale retry
+    (``retry_refusal``): the body stored unchanged since (``body_sha256``),
+    the fsig that of the fit the base model serves now; by (item, fsig), then
+    body."""
+    from app.core import base_body, garments, garment_store as gs
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None or not base[1]:
+        return []
+    out: List[Tuple[str, str, str, str]] = []
+    served: Dict[str, Optional[str]] = {}
+    for (item_id, fsig), files in sorted(gs.stored_groups(character_name).items()):
+        for failed in files:
+            body_id = gs.body_of(failed)
+            if not body_id or failed != gs.garment_path(character_name, item_id, fsig, "failed", body=body_id):
+                continue
+            record = gs.read_record(failed)
+            if not retry_refusal(record) or not record.get("body_sha256") \
+                    or record.get("body_sha256") != garments.body_sha256(character_name, body_id):
+                continue
+            if item_id not in served:
+                hit = gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
+                parsed = gs.parse_name(hit[0]) if hit else None
+                served[item_id] = parsed[1] if parsed else None
+            kind = _clothing_kind(character_name, item_id, profile)
+            if served[item_id] != fsig or kind is None:
+                continue
+            out.append((item_id, kind, fsig, body_id))
+    return out
+
+
 def outdated_body_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = None
                        ) -> List[Tuple[str, str, str, str]]:
     """``[(item_id, kind, fsig, body_id)]`` of the character's fits on outfit
@@ -132,12 +239,14 @@ def outdated_body_fits(character_name: str, *, profile: Optional[Dict[str, Any]]
 
 
 def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -> List[str]:
-    """Refit ``outdated_body_fits`` (caller holds the run lock). Returns
-    ``"<item>@<body id>"`` per refitted fit."""
+    """Refit ``outdated_body_fits``, then ``refused_body_fits`` (caller holds
+    the run lock). Returns ``"<item>@<body id>"`` per refitted fit."""
     from app.core import garment_fit, garments, garment_store as gs
     from app.core.keyed_lock import keyed_lock
     done: List[str] = []
-    for item_id, kind, fsig, body_id in outdated_body_fits(character_name, profile=profile):
+    outdated = outdated_body_fits(character_name, profile=profile)
+    refused = [fit for fit in refused_body_fits(character_name, profile=profile) if fit not in outdated]
+    for item_id, kind, fsig, body_id in outdated + refused:
         base_fit = gs.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile)
         if base_fit is None:
             continue
@@ -156,8 +265,42 @@ def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -
         else:
             done.append(f"{item_id}@{body_id}")
             outcome = "ok"
-        logger.info("Garment refit %s/%s (%s, %s) on outfit body %s: fit_version %s -> %s: %s", character_name,
-                    item_id, kind, fsig, body_id, old.get("fit_version"), garment_fit.FIT_VERSION[kind], outcome)
+        why = ("too-small refusal retried widened" if (item_id, kind, fsig, body_id) in refused
+               else f"fit_version {old.get('fit_version')} -> {garment_fit.FIT_VERSION[kind]}")
+        logger.info("Garment refit %s/%s (%s, %s) on outfit body %s: %s: %s", character_name,
+                    item_id, kind, fsig, body_id, why, outcome)
+    return done
+
+
+def _retry_refused(character_name: str, profile: Dict[str, Any], bsig: str,
+                   skip: List[str]) -> List[str]:
+    """Fit ``refused_fits`` once more (caller holds the run lock), items in
+    ``skip`` (refitted just now) left out; the outcome is recorded like a
+    run's fit (``garments._note_outcome``: a new refusal stamped). Returns
+    the item ids fitted."""
+    from app.core import base_body, garments, garment_store as gs
+    done: List[str] = []
+    for item_id, kind, fsig, _method in refused_fits(character_name, profile=profile):
+        if item_id in skip:
+            continue
+        gs.start(character_name, item_id, "fit")
+        try:
+            garments._fit(character_name, item_id, kind, fsig, bsig, profile)
+        except base_body.MissingInput as e:
+            gs.end(character_name, item_id, "fit")
+            logger.info("Garment refit %s/%s (%s): skipped — %s", character_name, item_id, fsig, e)
+            continue
+        except garments._Refused as e:
+            result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
+        except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
+            result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
+        else:
+            gs.end(character_name, item_id, "fit")
+            result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
+            done.append(item_id)
+        garments._note_outcome(character_name, item_id, result)
+        logger.info("Garment refit %s/%s (%s, %s): too-small refusal retried widened: %s", character_name, item_id,
+                    kind, fsig, "ok" if result.get("ok") else f"refused — {result.get('error')}")
     return done
 
 
@@ -197,8 +340,9 @@ def _refit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsi
 
 
 def refit_character(character_name: str) -> Optional[List[str]]:
-    """Refit the character's outdated fits (``outdated_fits``, then
-    ``outdated_body_fits``) under its garment run lock. None when a chain
+    """Refit the character's outdated fits (``outdated_fits``, the too-small
+    refusals ``refused_fits``, then ``outdated_body_fits`` /
+    ``refused_body_fits``) under its garment run lock. None when a chain
     runs (lock held / FIFO active) — nothing was touched; else the item ids
     refitted (``"<item>@<body id>"`` for a fit on an outfit body)."""
     from app.core import base_body, garment_fit, garments, garment_store as gs
@@ -240,6 +384,7 @@ def refit_character(character_name: str) -> Optional[List[str]]:
                         kind, fsig, old.get("fit_version"), garment_fit.FIT_VERSION[kind],
                         "ok" if result.get("ok") else f"refused — {result.get('error')}")
         if base is not None and base[1]:
+            done += _retry_refused(character_name, profile, base[0], done)
             done += _refit_bodies(character_name, profile, base[1])
     finally:
         lock.release()
