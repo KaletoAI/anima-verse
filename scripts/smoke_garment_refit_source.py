@@ -110,6 +110,23 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     Clamp, target S (straight +x from (0.18, 1.4, 0), segments 0.20 / 0.20 /
     0.05, radii 0.03): V6 Hand 1, X0 (0.74, 1.43, 0): chain distance 0.56 >
     0.45 -> the tip (0.63, 1.4, 0) + 1.0 x 0.03 v = (0.63, 1.43, 0).
+[10] map_torso / torso_gate (garment_fit, garment_source) by hand. Source
+    trunk: axis x = z = 0, hip y 0.9, neck y 1.4 (span 0.5), surface radius
+    0.10 everywhere; target: axis x 0.02, z 0, hip 1.0, neck 1.6 (span 0.6),
+    radius 0.12. theta = atan2(x, z) (0 = front).
+    T1 (0, 1.15, 0.13): v 0.5, theta 0, clearance 0.03 -> y 1.0 + 0.5 x 0.6 =
+       1.30, radius 0.15 -> (0.02, 1.30, 0.15).
+    T2 (0.11, 0.85, 0): below the hip by 0.05 m (kept in metres) -> y 0.95;
+       theta 90 deg, clearance 0.01 -> (0.02 + 0.13, 0.95, 0) = (0.15, 0.95, 0).
+    T3 (0, 1.45, -0.105): above the neck by 0.05 -> y 1.65; theta 180 deg,
+       clearance 0.005 -> (0.02, 1.65, -0.125).
+    Gate: 10 bands x 12 sectors, 10 vertices per cell; sector k's centre
+    (k + 0.5) x 30 - 180 deg: front = k 4..7 (|centre| <= 60), back = k 0, 1,
+    10, 11, side = 2, 3, 8, 9. Source covers every cell fully except band 0
+    (0.3: below TORSO_SOURCE_COVERED, not part of the area). Fit = source with
+    the front cells of bands 1..9 at 0.85 -> front 0.85 vs 1.0, drop 0.15 >
+    0.10: refused "torso front"; at 0.95 -> ok. Band 0 at 0 in the fit changes
+    nothing (not in the area).
 """
 import json
 import os
@@ -509,6 +526,29 @@ def main() -> int:
         Xc, _ = garment_fit.align_limbs(np.zeros((1, 3)), np.array([[0.74, 1.43, 0.0]]), np.array([[0, 0, 1.0]]),
                                         names0, source, straight)
         check("V6 clamped at the tip", [round(float(c), 5) for c in Xc[0]], [0.63, 1.43, 0.0])
+
+        # --- [10] --------------------------------------------------------------------
+        print("[10] map_torso / torso_gate by hand")
+        nv = int(round((garment_fit.TORSO_V[1] - garment_fit.TORSO_V[0]) / garment_fit.TORSO_V[2]))
+        src_t = {"points": [[0.0, 0.9, 0.0], [0.0, 1.4, 0.0]], "hip_y": 0.9, "neck_y": 1.4, "kind": "torso",
+                 "radius": [[0.10] * garment_fit.TORSO_THETA] * nv}
+        tgt_t = {"points": [[0.02, 1.0, 0.0], [0.02, 1.6, 0.0]], "hip_y": 1.0, "neck_y": 1.6, "kind": "torso",
+                 "radius": [[0.12] * garment_fit.TORSO_THETA] * nv}
+        T = garment_fit.map_torso(np.array([[0.0, 1.15, 0.13], [0.11, 0.85, 0.0], [0.0, 1.45, -0.105]]), src_t, tgt_t)
+        for i, want_t in enumerate([[0.02, 1.30, 0.15], [0.15, 0.95, 0.0], [0.02, 1.65, -0.125]]):
+            check(f"T{i + 1}", [round(float(c), 5) for c in T[i]], want_t)
+        nb, ns = garment_source.TORSO_BANDS, garment_source.TORSO_SECTORS
+        count = [[10] * ns for _ in range(nb)]
+        covered = [[0.3] * ns] + [[1.0] * ns for _ in range(nb - 1)]
+        source_cover = {"covered": covered, "count": count}
+
+        def fit_cover(front):
+            rows = [[0.0] * ns] + [[front if 4 <= k <= 7 else 1.0 for k in range(ns)] for _ in range(nb - 1)]
+            return {"covered": rows, "count": count}
+        gate = garment_source.torso_gate(fit_cover(0.85), source_cover)
+        check("front 0.85 refused", (gate["ok"], gate["shares"]["front"], ["torso front" in r for r in gate["reasons"]]),
+              (False, {"fit": 0.85, "source": 1.0}, [True]))
+        check("front 0.95 ok", garment_source.torso_gate(fit_cover(0.95), source_cover)["ok"], True)
 
     if FAILS:
         print(f"FAILED ({len(FAILS)}): " + ", ".join(FAILS))

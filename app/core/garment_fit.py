@@ -94,7 +94,9 @@ RIGGED_SMOOTH_UNTIL = 7
 #: (``EXTENSION_FULL_M``), so it moves with the chest instead of letting the chest jiggle through it.
 #: 5 (2026-11-10): clothing — a fit on an outfit body (and a refit from another base) aligns its sleeves / trouser
 #: legs onto the body's own limbs (``align_limbs``); a native base fit is unchanged.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 5}
+#: 6 (2026-11-10): clothing — a fit on an outfit body places its trunk from the base fit too (``map_torso``) and
+#: smooths the alignment's displacement over the mesh; v5 outfit-body fits could be torn open at the front.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 6}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
@@ -1047,8 +1049,13 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     relaxed = relax_stretched(X, Q * float(k), faces, adjacency)
     limb_report = None
     if limbs is not None:
-        X, limb_report = align_limbs(X, limbs["x0"], limbs["w0"], limbs["names0"], limbs["frames"],
-                                     limb_frames(body_rigged), kinds=limbs.get("kinds", ("arm", "leg")))
+        target = limb_frames(body_rigged)
+        if "torso" in limbs["frames"]:
+            torso = torso_frame(body_rigged)
+            if torso is not None:
+                target["torso"] = torso
+        X, limb_report = align_limbs(X, limbs["x0"], limbs["w0"], limbs["names0"], limbs["frames"], target,
+                                     kinds=limbs.get("kinds", ("arm", "leg")), adjacency=adjacency)
 
     lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
@@ -1096,6 +1103,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
 # source garment's own skin weights (the transition into the shoulder / hip runs over the same blend as the skin,
 # no crease); the rest of the vertex stays where the torso placement put it.
 LIMB_JOINT_SHARED = 0.25
+#: Passes of the displacement smoothing after the alignment (``align_limbs``).
+LIMB_SMOOTH_PASSES = 150
 LIMB_CHAINS: Dict[str, Dict[str, Any]] = {
     f"{side}_{limb}": spec
     for side in ("left", "right")
@@ -1178,10 +1187,14 @@ def _segment_frame(a, b, reference) -> Tuple[np.ndarray, np.ndarray, np.ndarray,
 
 
 def align_limbs(X, X0, W0, names0, source: Dict[str, Dict[str, Any]], target: Dict[str, Dict[str, Any]], *,
-                kinds=("arm", "leg")) -> Tuple[np.ndarray, Dict[str, Any]]:
+                kinds=("arm", "leg"), adjacency=None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Re-express the limb part of ``X`` (the torso-placed garment in the target's rigged space) from the source
     fit ``X0`` (same vertices, the source's rigged space; ``W0`` its skin weights over ``names0``) — block above.
-    Chains missing on either side, or of a kind not in ``kinds``, are left alone. ``(X, report)``."""
+    Chains missing on either side, or of a kind not in ``kinds``, are left alone; a ``torso`` chain (``torso_frame``)
+    goes through ``map_torso``. With ``adjacency`` (the garment's, ``_adjacency``) the displacement from ``X0`` is
+    smoothed over the mesh (``LIMB_SMOOTH_PASSES``): where the skin blends two maps that disagree by centimetres
+    (upper arm / shoulder / trunk) their positions would stretch the triangles across the body; the smoothed
+    displacement keeps the garment's own local shape. ``(X, report)``."""
     from app.core.rig_contract import norm_bone_name
     X = np.asarray(X, np.float64)
     X0 = np.asarray(X0, np.float64)
@@ -1193,6 +1206,19 @@ def align_limbs(X, X0, W0, names0, source: Dict[str, Dict[str, Any]], target: Di
     for name, src in source.items():
         tgt = target.get(name)
         if not tgt or src.get("kind") not in kinds:
+            continue
+        if src["kind"] == "torso":
+            w = np.zeros(len(X))
+            for bone, c in col.items():
+                if torso_bone(bone):
+                    w += W0[:, c]
+            rows = np.nonzero(w > 1e-4)[0]
+            if len(rows):
+                Y[rows] += w[rows, None] * map_torso(X0[rows], src, tgt)
+                S[rows] += w[rows]
+            report["chains"][name] = {"vertices": int(len(rows)),
+                                      "source_span_m": round(src["neck_y"] - src["hip_y"], 4),
+                                      "target_span_m": round(tgt["neck_y"] - tgt["hip_y"], 4)}
             continue
         ps, pt = np.asarray(src["points"], np.float64), np.asarray(tgt["points"], np.float64)
         nseg = min(len(ps), len(pt)) - 1
@@ -1241,12 +1267,144 @@ def align_limbs(X, X0, W0, names0, source: Dict[str, Dict[str, Any]], target: Di
     Y = np.where(S[:, None] > 0, Y / total[:, None], X)
     S = np.clip(S, 0.0, 1.0)
     Xa = (1.0 - S)[:, None] * X + S[:, None] * Y
+    if adjacency is not None and LIMB_SMOOTH_PASSES > 0 and (S > 0).any():
+        Xa = X0 + _smooth(Xa - X0, adjacency, LIMB_SMOOTH_PASSES)
     shift = np.linalg.norm(Xa - X, axis=1)
     moved = S > 0
     report.update({"vertices": int(moved.sum()),
                    "shift_p50_m": round(float(np.median(shift[moved])), 4) if moved.any() else 0.0,
                    "shift_max_m": round(float(shift.max()), 4) if len(shift) else 0.0})
     return Xa, report
+
+
+# --- torso alignment (fits on outfit bodies, garment_source) -------------------------------------------------------
+# An outfit body is meshed from its own dressed views (another framing, heels, another chest), so the image framing
+# that places a piece on its base does not place it on the outfit body (Kira's blazer: collar 0.4 - 6.5 cm and hem up
+# to 6 cm off). ``map_torso`` re-expresses every vertex the SOURCE fit skinned to a trunk bone (``torso_bone``: any
+# bone that is no limb bone — extension bones such as the chest included, whatever the rig names them; without
+# them the radius table misses the chest and the front panel lands inside it) from the source body's trunk into
+# the target's: height proportional between the hip joint (the mean of both
+# Hips / UpLeg joints) and the neck joint (Spine2 / Neck), in metres below and above them; around the trunk axis
+# (the chain of joint points, interpolated by height) its clearance over the body SURFACE in its direction is kept
+# in metres — the surface radius ``R(v, theta)`` per normalised height v (``TORSO_V`` bins) and angle (``TORSO_THETA``
+# bins) is the outermost trunk vertex there, gaps filled along the height and smoothed 3 x 3 — so a deeper chest
+# carries the front panel out with it. Blended with the limbs by the source skin weights (``align_limbs``).
+_LIMB_BONE_PARTS = ("arm", "hand", "leg", "foot", "toe")
+_HEAD_BONE_PARTS = ("head", "eye", "jaw")
+
+
+def torso_bone(name: str) -> bool:
+    """A normalised bone name (``rig_contract.norm_bone_name``) the trunk carries: no arm / hand / leg / foot / toe
+    bone. The head counts (a collar's weights), but not for the trunk's surface (``trunk_bone``)."""
+    return not any(part in name for part in _LIMB_BONE_PARTS)
+
+
+def trunk_bone(name: str) -> bool:
+    """A bone whose dominant vertices are the trunk's SURFACE (radius table, coverage): ``torso_bone`` without the
+    head (whose hair would read as a trunk)."""
+    return torso_bone(name) and not any(part in name for part in _HEAD_BONE_PARTS)
+TORSO_V = (-0.6, 1.4, 0.02)
+TORSO_THETA = 36
+
+
+def torso_frame(body: BodyMesh) -> Optional[Dict[str, Any]]:
+    """The trunk of a rigged body (block above): ``{points [[x, y, z], ...] (hip, joints up to the neck),
+    hip_y, neck_y, radius [[...] per v bin] (TORSO_THETA per bin), kind "torso"}``; None without the joints."""
+    from app.core.rig_contract import norm_bone_name
+    W = dense_weights(body)
+    P = np.asarray(body.positions, np.float64)
+    names = [norm_bone_name(n) for n in body.joint_names]
+
+    def joint(a: str, b: str) -> Optional[np.ndarray]:
+        if a not in names or b not in names:
+            return None
+        shared = (W[:, names.index(a)] > LIMB_JOINT_SHARED) & (W[:, names.index(b)] > LIMB_JOINT_SHARED)
+        return P[shared].mean(0) if shared.sum() >= 3 else None
+
+    legs = [joint("hips", "leftupleg"), joint("hips", "rightupleg")]
+    chain = [joint("hips", "spine"), joint("spine", "spine1"), joint("spine1", "spine2"), joint("spine2", "neck")]
+    if any(p is None for p in legs) or chain[-1] is None:
+        return None
+    hip = (legs[0] + legs[1]) / 2
+    points = [hip] + [p for p in chain if p is not None]
+    neck = chain[-1]
+    trunk = np.isin(W.argmax(1), [i for i, n in enumerate(names) if trunk_bone(n)])
+    T = P[trunk]
+    frame = {"points": [[float(c) for c in p] for p in points], "hip_y": float(hip[1]), "neck_y": float(neck[1]),
+             "kind": "torso"}
+    v, theta, rho = _torso_coords(T, frame)
+    lo, hi, step = TORSO_V
+    nv = int(round((hi - lo) / step))
+    iv = np.clip(((v - lo) / step).astype(int), 0, nv - 1)
+    it = _theta_bin(theta)
+    R = np.full((nv, TORSO_THETA), np.nan)
+    np.fmax.at(R, (iv, it), rho)
+    rows = np.arange(nv)
+    for k in range(TORSO_THETA):  # gaps along the height: nearest defined bins
+        ok = ~np.isnan(R[:, k])
+        if ok.any():
+            R[:, k] = np.interp(rows, rows[ok], R[ok, k])
+    for k in np.nonzero(np.isnan(R).all(0))[0]:  # an angle without any vertex: its neighbours
+        R[:, k] = np.nanmean(R[:, [(k - 1) % TORSO_THETA, (k + 1) % TORSO_THETA]], axis=1)
+    R = np.nan_to_num(R, nan=float(np.nanmedian(R)))
+    padded = np.concatenate([R[:, -1:], R, R[:, :1]], axis=1)
+    padded = np.concatenate([padded[:1], padded, padded[-1:]], axis=0)
+    R = sum(padded[1 + dv:1 + dv + nv, 1 + dt:1 + dt + TORSO_THETA] for dv in (-1, 0, 1) for dt in (-1, 0, 1)) / 9.0
+    frame["radius"] = R.round(5).tolist()
+    return frame
+
+
+def _theta_bin(theta: np.ndarray) -> np.ndarray:
+    return ((np.asarray(theta) + np.pi) / (2 * np.pi) * TORSO_THETA).astype(int) % TORSO_THETA
+
+
+def _torso_v(y: np.ndarray, frame: Dict[str, Any]) -> np.ndarray:
+    return (np.asarray(y, np.float64) - frame["hip_y"]) / max(frame["neck_y"] - frame["hip_y"], 1e-6)
+
+
+def _torso_axis(y: np.ndarray, frame: Dict[str, Any]) -> np.ndarray:
+    pts = np.asarray(frame["points"], np.float64)
+    order = np.argsort(pts[:, 1])
+    return np.stack([np.interp(y, pts[order, 1], pts[order, 0]), np.interp(y, pts[order, 1], pts[order, 2])], 1)
+
+
+def _torso_coords(X: np.ndarray, frame: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(v, theta, rho)``: normalised height, angle around the trunk axis (0 = +z, front), radial distance."""
+    X = np.asarray(X, np.float64)
+    rel = X[:, [0, 2]] - _torso_axis(X[:, 1], frame)
+    return _torso_v(X[:, 1], frame), np.arctan2(rel[:, 0], rel[:, 1]), np.linalg.norm(rel, axis=1)
+
+
+def _torso_radius(frame: Dict[str, Any], v: np.ndarray, theta: np.ndarray) -> np.ndarray:
+    """``R(v, theta)`` bilinear over the bins (clamped in v, circular in theta)."""
+    R = np.asarray(frame["radius"], np.float64)
+    lo, _hi, step = TORSO_V
+    fv = np.clip((np.asarray(v) - lo) / step - 0.5, 0, len(R) - 1)
+    ft = (np.asarray(theta) + np.pi) / (2 * np.pi) * TORSO_THETA - 0.5
+    v0 = np.minimum(np.floor(fv).astype(int), len(R) - 2)
+    t0 = np.floor(ft).astype(int)
+    av, at = fv - v0, ft - t0
+    t0, t1 = t0 % TORSO_THETA, (t0 + 1) % TORSO_THETA
+    return ((1 - av) * ((1 - at) * R[v0, t0] + at * R[v0, t1])
+            + av * ((1 - at) * R[v0 + 1, t0] + at * R[v0 + 1, t1]))
+
+
+def map_torso(X0, source: Dict[str, Any], target: Dict[str, Any]) -> np.ndarray:
+    """``X0`` (source rigged space) re-expressed on the target trunk (block above)."""
+    X0 = np.asarray(X0, np.float64)
+    v, theta, rho = _torso_coords(X0, source)
+    clearance = rho - _torso_radius(source, v, theta)
+    y = X0[:, 1]
+    span_s = source["neck_y"] - source["hip_y"]
+    span_t = target["neck_y"] - target["hip_y"]
+    y_t = np.where(y < source["hip_y"], target["hip_y"] + (y - source["hip_y"]),
+                   np.where(y > source["neck_y"], target["neck_y"] + (y - source["neck_y"]),
+                            target["hip_y"] + v * span_t))
+    if span_s <= 0:
+        return X0.copy()
+    radius = np.maximum(_torso_radius(target, _torso_v(y_t, target), theta) + clearance, 0.0)
+    axis = _torso_axis(y_t, target)
+    return np.stack([axis[:, 0] + np.sin(theta) * radius, y_t, axis[:, 1] + np.cos(theta) * radius], 1)
 
 
 def chin_height(body_rigged: BodyMesh) -> float:

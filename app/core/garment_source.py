@@ -94,14 +94,33 @@ WITH the alignment (same refits): forearm 0.016 / 0.000 and 0.025 / 0.000, upper
 length), penetration after the push-out 0.0 on both, hem / collar as before (5.27 / 5.63 cm, 5.54 / 6.45 cm):
 both accepted. The blazer's hem carries thigh weights but covers no thigh, so no leg chain is aligned for it.
 
-On an outfit body (``garments.fit_on_body``) the body mask is that body's dressed front as before; the ghost is
-registered from the group's base copy onto the base front of the base the body was dressed from. An outfit body is
-meshed from its own dressed views, so its arms are not the base's (Kira's five outfit bodies: elbows 3 - 4 cm
-further in and up to 13 cm further back, forearms 1 - 3 cm shorter): the sleeves of the base fit's ghost hung
-beside the T-pose arms (off the upper arm 0.59 - 1.0, reach 0.06 - 0.14 m). Every outfit-body fit is therefore
-aligned from the group's BASE FIT (``limb_source_from_fit`` of it — the same prepared mesh) and gated against that
-fit's limb numbers: off the upper arm / forearm then 0.018 - 0.061 / 0.000 - 0.032, reach 0.467 - 0.473 m,
-penetration 0.0 on all five.
+TORSO (outfit bodies). An outfit body (``garments.fit_on_body``) is meshed from its OWN dressed views: another
+image framing (T-pose, 1024 or 1536 px high, cropped wider), heels (Kira: crotch 0.82 - 0.89 m against 0.84 on the
+base), its own chest and its own arms (elbows 3 - 4 cm further in and up to 13 cm further back, forearms 1 - 3 cm
+shorter). The ghost's frame is the base front's; laid onto the outfit body's front by the image framing alone the
+blazer sat 6 cm low on 3b3a0adaf672 (collar -0.35 cm / hem 0.44 cm against the base fit's 6.19 / 6.66) and its
+front was torn open on three of the five bodies (chest / belly front exposed 0.92 - 0.94 / 0.80 - 0.93 against
+0.18 / 0.00, the V-neck), the sleeves hung beside the T-pose arms (off the upper arm 0.59 - 1.0) — and every gate
+passed (deep push 0 - 0.12, penetration 0). Every outfit-body fit is therefore placed from the group's BASE FIT
+(``limb_source_from_fit(..., torso=True)`` of it — the same prepared mesh): its limbs by ``align_limbs`` (LIMBS),
+its trunk by ``garment_fit.map_torso`` (height proportional between hip and neck joint, the clearance over the
+body surface kept per direction, every non-limb bone counting — the chest is an extension bone), the displacement
+smoothed over the mesh. Gated twice against the base fit: the limbs (``limb_gate``) and the trunk coverage
+(``torso_gate``): per front / side / back the covered share (a garment vertex within ``TORSO_COVER_M``) of the
+trunk cells the base fit covers may fall at most ``TORSO_COVER_DELTA`` below the base fit's. Refused = the piece is
+left off that body with its reason (``garment_assembly`` "left off"), never served torn.
+
+Measured 2026-11-10, Kira's blazer on her five outfit bodies (front / side / back covered share; base fit 0.99):
+    image framing only     22354 0.67 front, 2b67 0.78 front, 3b3a 0.70 / 0.72 / 0.74, 62aad 0.59 front: all four
+                           refused (072149: torso 0.99, refused by its limbs) — the torn fronts
+    from the base fit      0.94 - 0.98 / 0.96 - 0.99 / 0.92 - 1.00: all five accepted; collar 4.6 - 7.7 cm, hem
+                           5.6 - 9.2 cm above shoulder top / below crotch (base fit 6.19 / 6.66), chest front exposed
+                           0.07 - 0.28 (base fit 0.18, the V-neck), belly <= 0.004, off the upper arm <= 0.094
+                           (source 0.012 - 0.015), reach 0.467 - 0.477 m, penetration 0.
+``TORSO_COVER_DELTA`` 0.10 lies between the largest accepted drop (0.074, back of 22354) and the smallest
+refused one (0.216). The displacement smoothing (``garment_fit.LIMB_SMOOTH_PASSES`` 150) took the upper-arm
+skin showing through the sleeves of 3b3a / 62aad from 0.12 / 0.17 to 0.02 / 0.00 (body vertices outside the
+sleeve).
 
 Subtract hair: the cut labels the hair by the haired view against ITS base view (``garment_subtract._views``
 reads the group's base copy) and places the haired mesh through ``place_mask`` — the current base front
@@ -112,7 +131,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -133,6 +152,16 @@ LIMB_OFF_M = 0.04
 LIMB_OFF_DELTA = 0.10
 #: Fewer of the piece's vertices on a limb segment than this: the piece does not cover it (nothing to check).
 LIMB_MIN_VERTICES = 50
+#: Torso coverage (module docstring TORSO): a trunk vertex is covered with a garment vertex within this.
+TORSO_COVER_M = 0.04
+#: The trunk heights measured (0 = hip joint, 1 = neck joint) in this many bands x this many angles.
+TORSO_V_RANGE = (-0.1, 1.0)
+TORSO_BANDS = 10
+TORSO_SECTORS = 12
+#: A cell the source covers at least this much belongs to the area the fit must keep covered.
+TORSO_SOURCE_COVERED = 0.5
+#: The covered share of that area may fall at most this below the source's (front / side / back each).
+TORSO_COVER_DELTA = 0.10
 #: The image "step" name of the base view copies (``base_copy``).
 BASE_STEP = "base"
 #: Marker key of a copied record (``materialize``).
@@ -592,11 +621,13 @@ def limb_numbers(positions, body) -> Optional[Dict[str, Any]]:
     return out
 
 
-def limb_source_from_fit(blob: bytes, *, skirt: bool = False) -> Optional[Dict[str, Any]]:
+def limb_source_from_fit(blob: bytes, *, skirt: bool = False, torso: bool = False) -> Optional[Dict[str, Any]]:
     """``garment_fit.fit_clothing``'s ``limb_source`` from a fit GLB (the garment grafted on its body): its
-    vertices, its skin weights on the limb bones, and the limb frames of the chains the piece COVERS (``limb_numbers``
-    not None — a blazer's hem carries thigh weights but is no trouser leg); legs never for a skirt. None without a
-    covered limb."""
+    vertices, its skin weights on the limb (and with ``torso`` the trunk) bones, and the frames of the limb chains
+    the piece COVERS (``limb_numbers`` not None — a blazer's hem carries thigh weights but is no trouser leg; legs
+    never for a skirt) plus, with ``torso`` (a fit on an outfit body), the trunk (``garment_fit.torso_frame``).
+    ``numbers`` = the covered limbs' numbers, ``torso_cover`` (with ``torso``) the trunk coverage (``torso_cover``),
+    both the gate's source. None without anything to align."""
     from app.core import garment_fit, glb_mesh
     from app.core.rig_contract import norm_bone_name
     garment = glb_mesh.garment_arrays(blob)
@@ -605,7 +636,16 @@ def limb_source_from_fit(blob: bytes, *, skirt: bool = False) -> Optional[Dict[s
     frames = {name: frame for name, frame in garment_fit.limb_frames(body).items()
               if covered.get(name) and not (skirt and frame["kind"] == "leg")}
     keep = {side + bone for side in ("left", "right") for kind in ("arm", "leg") for bone in _limb_bones(kind)}
-    names = [n for n in garment.joint_names if norm_bone_name(n) in keep]
+    kinds = ["arm"] if skirt else ["arm", "leg"]
+    cover = None
+    if torso:
+        trunk = garment_fit.torso_frame(body)
+        if trunk is not None:
+            frames["torso"] = trunk
+            kinds.append("torso")
+            cover = torso_cover(garment.positions, body)
+    names = [n for n in garment.joint_names
+             if norm_bone_name(n) in keep or ("torso" in frames and garment_fit.torso_bone(norm_bone_name(n)))]
     if not frames or not names:
         return None
     col = {n: i for i, n in enumerate(names)}
@@ -617,7 +657,7 @@ def limb_source_from_fit(blob: bytes, *, skirt: bool = False) -> Optional[Dict[s
                 rows = J[:, c] == j
                 W0[rows, col[name]] += Wt[rows, c]
     return {"x0": np.asarray(garment.positions, np.float32), "w0": W0, "names0": names, "frames": frames,
-            "kinds": ["arm"] if skirt else ["arm", "leg"], "numbers": covered}
+            "kinds": kinds, "numbers": covered, "torso_cover": cover}
 
 
 def write_limb_source(character_name: str, item_id: str, source: str, target: str) -> bool:
@@ -717,3 +757,68 @@ def check_limbs(character_name: str, item_id: str, fsig: str, positions, rigged_
         return None
     from app.core import glb_mesh
     return limb_gate(limb_numbers(positions, glb_mesh.body_arrays(rigged_glb)), source)
+
+
+# --- Torso coverage (outfit bodies) -----------------------------------------------------------------------
+
+def torso_cover(positions, body) -> Optional[Dict[str, Any]]:
+    """Which part of the trunk of the rigged ``body`` the garment ``positions`` cover (module docstring TORSO):
+    the trunk vertices (dominated by a ``garment_fit.trunk_bone``) from just below the hip joint to the neck joint
+    in ``TORSO_BANDS`` heights x ``TORSO_SECTORS`` angles around the trunk axis; a vertex is covered with a garment
+    vertex within ``TORSO_COVER_M``. ``{covered [[share per sector] per band], count [[...]]}``; None without a
+    trunk."""
+    from scipy.spatial import cKDTree
+    from app.core import garment_fit
+    from app.core.rig_contract import norm_bone_name
+    frame = garment_fit.torso_frame(body)
+    if frame is None:
+        return None
+    names = [norm_bone_name(n) for n in body.joint_names]
+    cols = [i for i, n in enumerate(names) if garment_fit.trunk_bone(n)]
+    P = np.asarray(body.positions, np.float64)
+    T = P[np.isin(garment_fit.dense_weights(body).argmax(1), cols)]
+    v, theta, _rho = garment_fit._torso_coords(T, frame)
+    lo, hi = TORSO_V_RANGE
+    inside = (v >= lo) & (v < hi)
+    T, v, theta = T[inside], v[inside], theta[inside]
+    band = np.clip(((v - lo) / (hi - lo) * TORSO_BANDS).astype(int), 0, TORSO_BANDS - 1)
+    sector = ((theta + np.pi) / (2 * np.pi) * TORSO_SECTORS).astype(int) % TORSO_SECTORS
+    X = np.asarray(positions, np.float64)
+    hit = (cKDTree(X).query(T)[0] <= TORSO_COVER_M) if len(X) else np.zeros(len(T), bool)
+    covered = np.zeros((TORSO_BANDS, TORSO_SECTORS))
+    count = np.zeros((TORSO_BANDS, TORSO_SECTORS))
+    np.add.at(covered, (band, sector), hit)
+    np.add.at(count, (band, sector), 1)
+    return {"covered": (covered / np.maximum(count, 1)).round(4).tolist(), "count": count.astype(int).tolist()}
+
+
+def _sector_group(k: int) -> str:
+    centre = abs((k + 0.5) / TORSO_SECTORS * 360.0 - 180.0)  # 0 = front (+z)
+    return "front" if centre <= 60 else ("back" if centre >= 120 else "side")
+
+
+def torso_gate(fit: Optional[Dict[str, Any]], source: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``{ok, reasons, shares, limits}``: per front / side / back the covered share of the trunk cells the SOURCE
+    covers (share >= ``TORSO_SOURCE_COVERED``), each side counted with its own vertices; refused when the fit's
+    share is more than ``TORSO_COVER_DELTA`` below the source's."""
+    reasons: List[str] = []
+    shares: Dict[str, Any] = {}
+    if source and fit:
+        cs, ns = np.asarray(source["covered"]), np.asarray(source["count"])
+        cf, nf = np.asarray(fit["covered"]), np.asarray(fit["count"])
+        region = cs >= TORSO_SOURCE_COVERED
+        for group in ("front", "side", "back"):
+            cols = np.array([_sector_group(k) == group for k in range(TORSO_SECTORS)])
+            cells = region & cols[None, :]
+            if ns[cells].sum() == 0 or nf[cells].sum() == 0:
+                continue
+            want = float((cs * ns)[cells].sum() / ns[cells].sum())
+            got = float((cf * nf)[cells].sum() / nf[cells].sum())
+            shares[group] = {"fit": round(got, 4), "source": round(want, 4)}
+            if want - got > TORSO_COVER_DELTA:
+                reasons.append(f"torso {group}: {got:.2f} of the area the source covers is covered within "
+                               f"{TORSO_COVER_M * 100:.0f} cm (source {want:.2f}, limit -{TORSO_COVER_DELTA})")
+    elif source and not fit:
+        reasons.append("torso: not measurable on this body")
+    return {"ok": not reasons, "reasons": reasons, "shares": shares,
+            "limits": {"cover_m": TORSO_COVER_M, "cover_delta": TORSO_COVER_DELTA}}

@@ -985,7 +985,7 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
     when the gate refuses, ``MissingInput`` when a source is gone (the
     prepared mesh / ghost front / HairDeck seed, the body or its front
     view). Never runs a generator."""
-    from app.core import base_body, garment_fit, garment_set
+    from app.core import base_body, garment_fit, garment_set, glb_mesh
     from app.core import garment_store as gs
     from app.core.model_refs import find_ref_image
     from app.core.timeutils import utc_now_iso
@@ -1072,11 +1072,12 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         if kind == garment_set.CLOTHING:
             from app.models.inventory import get_item
             slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
-            # The outfit body has its own arms / legs: align the sleeves / trouser legs from the base fit of the
-            # same prepared mesh (``garment_source`` — outfit bodies).
+            # The outfit body has its own framing, trunk and limbs: place the piece from the base fit of the same
+            # prepared mesh (torso + sleeves / trouser legs, ``garment_source`` — outfit bodies).
             try:
                 limb_source = garment_source.limb_source_from_fit(
-                    Path(path).read_bytes(), skirt=bool((base_record.get("report") or {}).get("skirt")))
+                    Path(path).read_bytes(), skirt=bool((base_record.get("report") or {}).get("skirt")),
+                    torso=True)
             except (OSError, ValueError, KeyError) as e:
                 logger.warning("Garment fit %s/%s on %s: base fit unreadable for the limbs: %s", character_name,
                                item_id, body_id, e)
@@ -1100,6 +1101,15 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
                            {"ok": False, "reasons": limbs["reasons"], "limbs": limbs})
         if limbs is not None:
             record["frame"] = {**frame, "limbs": limbs}
+        if (limb_source or {}).get("torso_cover"):
+            # The trunk the base fit covers stays covered (``garment_source`` TORSO) — never a torn piece.
+            torso = garment_source.torso_gate(
+                garment_source.torso_cover(result.garment.positions, glb_mesh.body_arrays(body["rigged"])),
+                limb_source["torso_cover"])
+            if not torso["ok"]:
+                raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(torso["reasons"]),
+                               {"ok": False, "reasons": torso["reasons"], "torso": torso})
+            record["frame"] = {**record["frame"], "torso": torso}
         record.update({
             "metrics": result.metrics, "gates": gates, "report": result.report,
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
