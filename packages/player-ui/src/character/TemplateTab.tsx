@@ -43,6 +43,18 @@ export interface TmplSectionRaw extends TmplSection {
   /** The section takes whatever height its column has left over — for slots
    *  whose content scales (a picture), not for stacked fields. */
   grow?: boolean
+  /** The section sits to the RIGHT of the section before it in its column
+   *  (same row band) instead of below it — two short sections share the
+   *  width rather than stacking past the screen. */
+  beside?: boolean
+}
+
+/** A special slot: a fixed node, or one rendered from the section that names
+ *  it (the section's own attributes parameterise the slot). */
+export type SpecialSlot = React.ReactNode | ((section: TmplSectionRaw) => React.ReactNode)
+
+function renderSlot(slot: SpecialSlot | undefined, section: TmplSectionRaw): React.ReactNode {
+  return typeof slot === 'function' ? slot(section) : slot
 }
 
 function asBoolStore(f: TmplFieldDef) {
@@ -202,8 +214,10 @@ export function TemplateTab({
   tab: TmplTabDef
   sections: TmplSectionRaw[]
   dynamicData: DynamicData
-  /** A render node per `section.special` (e.g. "placement" → the placement UI). */
-  specialSlots?: Record<string, React.ReactNode>
+  /** A render node per `section.special` (e.g. "placement" → the placement
+   *  UI), or a function of the section for a slot several sections share
+   *  with different parameters (e.g. its `slot_keys`). */
+  specialSlots?: Record<string, SpecialSlot>
   /** Policy exclusion of single fields (e.g. the social numbers in /play). */
   excludeKeys?: string[]
   /** Render prompt fields that have an image in two columns (prompt left,
@@ -464,15 +478,24 @@ export function TemplateTab({
             s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0,
           )
           .sort((a, b) => (a.row ?? 0) - (b.row ?? 0))
+        // A `beside` section joins the band of the one before it.
+        const bands: TmplSectionRaw[][] = []
+        for (const s of colSections) {
+          if (s.beside && bands.length) bands[bands.length - 1].push(s)
+          else bands.push([s])
+        }
+        const renderSection = (s: TmplSectionRaw) => (
+          <div key={s.id}
+            className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
+            <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
+            {s.special ? renderSlot(specialSlots?.[String(s.special)], s)
+              : <div className="tpl-section-fields">{editableFields(s).map(renderField)}</div>}
+          </div>
+        )
         return (
           <div key={col} className="tpl-tab-col">
-            {colSections.map((s) => (
-              <div key={s.id}
-                className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
-                <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-                {s.special ? specialSlots?.[String(s.special)]
-                  : <div className="tpl-section-fields">{editableFields(s).map(renderField)}</div>}
-              </div>
+            {bands.map((band) => band.length === 1 ? renderSection(band[0]) : (
+              <div key={band[0].id} className="tpl-tab-band">{band.map(renderSection)}</div>
             ))}
           </div>
         )

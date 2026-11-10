@@ -2025,65 +2025,62 @@ BASE_BODY_MATCH_FIELDS = ("base_front_workflow", "base_view_workflow", "outfit_f
                           "outfit_side_draft_workflow", "outfit_side_workflow")
 
 
+#: Every backend-glob key of the override record (``profile.outfit_imagegen``),
+#: in the order the GET route answers them.
+IMAGEGEN_MATCH_FIELDS = ("workflow", "profile_workflow", "tpose_workflow", "tpose_view_workflow",
+                         *BASE_BODY_MATCH_FIELDS, "mesh_workflow", "hair_mesh_workflow")
+#: The two LoRA lists of the record.
+IMAGEGEN_LORA_FIELDS = ("loras", "tpose_loras")
+
+
 def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Saves workflow/model/LoRA override for the outfit image service.
-    All fields empty deletes the override completely."""
+    """Saves the per-character image-generation override record (backend
+    globs + LoRA lists, ``profile.outfit_imagegen``).
+
+    A PARTIAL update: a key the body names replaces the stored value, a key it
+    leaves out keeps it — the editor shows these keys on several tabs (Image,
+    Pose, Base body, Hair, 3D) and sends only what was edited. The record
+    turns into ``{}`` when every glob is empty and both LoRA lists are.
+
+    What each key steers: ``workflow`` is position 0 of every render occasion
+    of the character (photo, Instagram, variants, regenerate),
+    ``profile_workflow`` of the portrait, ``tpose_workflow`` /
+    ``tpose_view_workflow`` of the T-pose renders, the
+    ``BASE_BODY_MATCH_FIELDS`` of the base-body steps, ``mesh_workflow`` of
+    the character mesh chain its rig selects, ``hair_mesh_workflow`` of the
+    hair_mesh chain (app/imagegen/occasions.py). ``loras`` go onto the
+    character's renders, ``tpose_loras`` REPLACE them on the mesh-input
+    renders (different backend, different LoRA ecosystem — no merge)."""
     from app.models.character import get_character_profile, save_character_profile
-    workflow = (body.get("workflow") or "").strip()
-    profile_workflow = (body.get("profile_workflow") or "").strip()
-    # Separate backend glob for the T-pose reference renders (the image->3D
-    # input), e.g. a pose-controlled alias. Empty = the normal match above.
-    tpose_workflow = (body.get("tpose_workflow") or "").strip()
-    tpose_view_workflow = (body.get("tpose_view_workflow") or "").strip()
-    # Backend glob in front of the character mesh chain (mesh_humanoid or
-    # mesh_creature, whichever the rig selects). Empty = the world chain.
-    mesh_workflow = (body.get("mesh_workflow") or "").strip()
-    # Backend glob in front of the hair_mesh chain (img2hair, HairDeck).
-    # Empty = the world chain.
-    hair_mesh_workflow = (body.get("hair_mesh_workflow") or "").strip()
-    # One glob per base-body step; empty = the step's fallback field.
-    base_body_matches = {field: (body.get(field) or "").strip() for field in BASE_BODY_MATCH_FIELDS}
-    clean_loras = _clean_lora_list(body.get("loras"))
-    # Own LoRA list for the T-pose reference renders: it REPLACES the list
-    # above for those renders (different backend, different LoRA ecosystem —
-    # no merge). Empty = the normal LoRAs apply.
-    clean_tpose_loras = _clean_lora_list(body.get("tpose_loras"))
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
     # Read AND write under the per-character profile lock (DATA-3): the save
-    # rewrites the whole profile_json blob. No image is generated here — this
-    # only stores the workflow/model/LoRA override the service reads later —
-    # so the span is a leaf and holds no lock across a backend call.
+    # rewrites the whole profile_json blob, and the merge reads the stored
+    # record. No image is generated here, so the span holds no lock across a
+    # backend call.
     from app.core.keyed_lock import keyed_lock
     with keyed_lock("character_profile", character_name):
         prof = get_character_profile(character_name) or {}
+        current = prof.get("outfit_imagegen")
+        if not isinstance(current, dict):
+            current = {}
+
+        def _pick(key: str) -> Any:
+            return body[key] if key in body else current.get(key)
+
+        globs = {key: str(_pick(key) or "").strip() for key in IMAGEGEN_MATCH_FIELDS}
+        lora_lists = {key: _clean_lora_list(_pick(key)) for key in IMAGEGEN_LORA_FIELDS}
         # Always write (even empty) -- otherwise a clear does not persist:
-        # outfit_imagegen lives in config_json and is only transferred on save when
-        # the key is PRESENT in the profile. A del leaves the old config value in
-        # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
-        # (it comes from the workflow).
-        if (workflow or profile_workflow or tpose_workflow or tpose_view_workflow
-                or mesh_workflow or hair_mesh_workflow or any(base_body_matches.values())
-                or clean_loras or clean_tpose_loras):
-            prof["outfit_imagegen"] = {"workflow": workflow,
-                                       "profile_workflow": profile_workflow,
-                                       "tpose_workflow": tpose_workflow,
-                                       "tpose_view_workflow": tpose_view_workflow,
-                                       **base_body_matches,
-                                       "mesh_workflow": mesh_workflow,
-                                       "hair_mesh_workflow": hair_mesh_workflow,
-                                       "loras": clean_loras,
-                                       "tpose_loras": clean_tpose_loras}
+        # outfit_imagegen lives in config_json and is only transferred on save
+        # when the key is PRESENT in the profile. ``model`` is dropped (the
+        # model comes from the backend).
+        if any(globs.values()) or any(lora_lists.values()):
+            prof["outfit_imagegen"] = {**globs, **lora_lists}
         else:
             prof["outfit_imagegen"] = {}
         if not save_character_profile(character_name, prof):
             raise HTTPException(status_code=500, detail="Failed to save image-generation overrides")
-    return {"status": "ok", "workflow": workflow,
-            "profile_workflow": profile_workflow,
-            "tpose_workflow": tpose_workflow,
-            "tpose_view_workflow": tpose_view_workflow,
-            **base_body_matches,
-            "mesh_workflow": mesh_workflow, "hair_mesh_workflow": hair_mesh_workflow,
-            "loras": clean_loras,
-            "tpose_loras": clean_tpose_loras}
+    return {"status": "ok", **globs, **lora_lists}
 
 
 def build_status_effects(character_name: str) -> Dict[str, Any]:

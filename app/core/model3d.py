@@ -824,7 +824,7 @@ def list_mesh_backends(occasion: str = "", character: str = "") -> Dict[str, Any
 
     All img2mesh backends produce unrigged sources. With no occasion supplied,
     no default is preselected. ``character`` puts that character's own mesh
-    match (Characters → Image) in front of the chain, so the dialog preselects
+    match (Characters → 3D) in front of the chain, so the dialog preselects
     what an Auto run for this character would use.
     """
     from app.imagegen.service import get_image_service

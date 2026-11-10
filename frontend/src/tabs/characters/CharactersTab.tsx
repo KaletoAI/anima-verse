@@ -14,7 +14,7 @@ import {
   type RoomRef,
 } from '../../lib/refs'
 import { SoulEditor } from '@anima/player-ui'
-import { ImageOverrides } from './ImageOverrides'
+import { ImagegenOverrideFields } from './ImagegenOverrideFields'
 import { GalleryTab } from './GalleryTab'
 import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from '@anima/player-ui'
@@ -91,8 +91,8 @@ export interface ScheduleSlot {
 // Special tabs with a dedicated UI (not plain template field sections). The
 // field tabs (General/Appearance/Config/…) come generically from `template.tabs`
 // (column layout) and are hooked in before these — see fieldTabs.
-// "Image" is placed directly behind the "Appearance" field tab in the subTabs
-// build (see subTabs). "Current state"/"Preferences" are no longer tabs of their
+// The "Image" field tab (template `image_settings`) is placed directly behind
+// the "Appearance" field tab in the subTabs build. "Current state"/"Preferences" are no longer tabs of their
 // own: the placement lives in General col3, the dressing preference in "Properties".
 const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'soul', label: 'Soul' },
@@ -140,6 +140,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 const SPECIAL_SLOTS = new Set([
   'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body', 'hair',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
+  'imagegen_override',
 ])
 
 function sectionIsRenderable(s: TmplSectionRaw): boolean {
@@ -170,10 +171,9 @@ export function CharactersTab() {
    *  but never blurred — it never reached the buffer — goes back to the
    *  server's value as well. */
   const [discardSignal, setDiscardSignal] = useState(0)
-  /** Bumped by a SUCCESSFUL Save. Panels whose choices are computed by the
-   *  server from STORED values — the LoRA suggestions behind the image
-   *  overrides are resolved from the saved backend match — reload on it,
-   *  because until the Save those choices answered the previous match. */
+  /** Bumped by a SUCCESSFUL Save. Panels that show STORED server values —
+   *  the image-override record behind the backend globs — read them again
+   *  on it, because the buffer they showed over them is gone. */
   const [savedSignal, setSavedSignal] = useState(0)
   /** The character the selection wants to move to while the draft is full.
    *  Answered with real UI, never with window.confirm. */
@@ -566,8 +566,8 @@ export function CharactersTab() {
       const fieldTasks: Promise<unknown>[] = []
       if (body.profile) fieldTasks.push(apiPost(`/characters/${enc}/profile`, { fields: body.profile }))
       if (body.config) fieldTasks.push(apiPost(`/characters/${enc}/config`, { fields: body.config }))
-      // The image override is ONE record — its route takes the whole thing,
-      // so the patch IS the body. The body slots are one request each.
+      // The image override takes the edited keys (a partial record — keys
+      // left out keep their stored value). The body slots are one request each.
       if (body.imagegen) fieldTasks.push(apiPut(`/characters/${enc}/outfit-imagegen`, body.imagegen))
       for (const [slotId, values] of Object.entries(body.body || {})) {
         fieldTasks.push(
@@ -656,9 +656,10 @@ export function CharactersTab() {
     [buf],
   )
 
-  /** Remember the image-override record instead of PUTting it. Its route
-   *  stores the record AS A WHOLE, so `ImageOverrides` hands over all seven of
-   *  its keys on every edit and this only merges them under the one target. */
+  /** Remember edited keys of the image-override record instead of PUTting
+   *  them. The sections showing them sit on several tabs (Image, Pose, Base
+   *  body, Hair, 3D) and each queues only its own key; the route takes a
+   *  partial record, so the Save sends just what was edited. */
   const queueImagegen = useCallback((patch: Record<string, unknown>) => {
     setBuf((b) => queueFields(b, IMAGEGEN_TARGET, patch))
   }, [])
@@ -669,9 +670,25 @@ export function CharactersTab() {
     setBuf((b) => queueFields(b, bodyTarget(slotId), patch))
   }, [])
 
-  /** The image-override draft as its panel reads it — laid OVER what the GET
-   *  returned, so re-opening the sub-tab shows the unsaved edits. */
+  /** The image-override draft as its sections read it — laid OVER what the
+   *  GET returned, so re-opening a tab shows the unsaved edits. */
   const imagegenDraft = useMemo(() => targetPatch(buf, IMAGEGEN_TARGET), [buf])
+
+  /** The keys of the image-override record a template section names
+   *  (`slot_keys`) — rendered on the tab of the step they steer; nothing when
+   *  the section names none. */
+  const imagegenSlot = (s: { [k: string]: unknown }) => {
+    const keys = Array.isArray(s.slot_keys) ? s.slot_keys.map(String) : []
+    return keys.length ? (
+      <ImagegenOverrideFields
+        character={selected}
+        keys={keys}
+        draft={imagegenDraft}
+        queue={queueImagegen}
+        savedSignal={savedSignal}
+      />
+    ) : null
+  }
 
   /** The same for one body slot. A function rather than a map, because only
    *  the slot editor knows which slots the species package declares. */
@@ -764,18 +781,22 @@ export function CharactersTab() {
     // `garderobe`; it sits exactly where the Wardrobe tab would, so both
     // sheets keep one tab order.
     const wardrobeField = fieldTabs.find((ft) => ft.tab.id === 'garderobe')
+    // The Image field tab (template `image_settings`: render/portrait globs,
+    // character LoRAs) sits directly behind Appearance, wherever the
+    // template lists it.
+    const imageField = fieldTabs.find((ft) => ft.tab.id === 'image_settings')
     const afterAussehen: Array<{ id: string; label: string; translated?: boolean }> = [
-      { id: 'image', label: 'Image' },
+      ...(imageField ? [{ id: imageField.id, label: imageField.label, translated: true }] : []),
       ...(wardrobeField
         ? [{ id: wardrobeField.id, label: wardrobeField.label, translated: true }]
         : [{ id: 'wardrobe', label: 'Wardrobe' }]),
       { id: 'secrets', label: 'Secrets' },
-    ].filter((s) => s.id === wardrobeField?.id || gateOk(s.id))
-    const placed = new Set(['image', 'wardrobe', 'secrets'])
+    ].filter((s) => s.id === wardrobeField?.id || s.id === imageField?.id || gateOk(s.id))
+    const placed = new Set(['wardrobe', 'secrets'])
     const out: Array<{ id: string; label: string; translated?: boolean }> = []
     let inserted = false
     for (const ft of fieldTabs) {
-      if (ft === wardrobeField) continue
+      if (ft === wardrobeField || ft === imageField) continue
       out.push({ id: ft.id, label: ft.label })
       if (ft.tab.id === 'aussehen') {
         out.push(...afterAussehen)
@@ -1125,10 +1146,13 @@ export function CharactersTab() {
                       base_body: <FieldBaseBody key={selected} character={selected} />,
                       // Hair as its own mesh (garment chain); the description
                       // is derived from Appearance, so the tab links there.
-                      hair: (
+                      // The hair section's `slot_keys` (its HairDeck backend
+                      // glob) sit under the hair method they belong to.
+                      hair: (s) => (
                         <FieldHair key={selected} character={selected}
                           onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
-                            ? () => setSubTab('tab:aussehen') : undefined} />
+                            ? () => setSubTab('tab:aussehen') : undefined}
+                          methodSettings={imagegenSlot(s)} />
                       ),
                       // Pose renders left, the outfit model built from them right.
                       model_refs: (
@@ -1145,6 +1169,10 @@ export function CharactersTab() {
                       model3d_animations: <div className="ga-model3d-side"><Model3DAnimations character={selected} /></div>,
                       model3d_extensions: <div className="ga-model3d-side"><Model3DExtensions character={selected} /></div>,
                       model3d_generation: <div className="ga-model3d-side"><Model3DGeneration character={selected} /></div>,
+                      // Backend globs / LoRA lists of the image-override
+                      // record; each section names its keys (`slot_keys`), so
+                      // a key sits on the tab of the step it steers.
+                      imagegen_override: imagegenSlot,
                     }}
                   />
                 ) : null
@@ -1170,14 +1198,6 @@ export function CharactersTab() {
               <KnownLocationsEditor character={selected} />
             ) : subTab === 'relationships' ? (
               <RelationshipAddresses character={selected} />
-            ) : subTab === 'image' ? (
-              <ImageOverrides
-                character={selected}
-                queueImagegen={queueImagegen}
-                draft={imagegenDraft}
-                discardSignal={discardSignal}
-                savedSignal={savedSignal}
-              />
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
             ) : subTab === 'expressions' ? (

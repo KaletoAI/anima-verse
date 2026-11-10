@@ -6,6 +6,10 @@ Usage: ./.venv/bin/python scripts/smoke_portrait_routing.py
 Derived from the UI contract: profile_workflow takes character position 0 for
 profile only; empty uses the server's portrait chain, never workflow. Clearing
 all overrides removes position 0. Photo/expression and T-pose keep their selections.
+The save is a PARTIAL update (the editor shows the keys on several tabs and
+sends only what was edited): a body naming only profile_workflow keeps
+workflow; an empty body changes nothing; every key named empty clears the
+record to {}.
 Round-trip through real profile persistence and a real BackendPool; no HTTP,
 server or generation. Every path is isolated in temporary storage.
 """
@@ -69,14 +73,34 @@ def main():
         assert resolve_image_route("tpose", character="demo", pool=pool).backend.name == "Normal"
         character_ops.apply_outfit_imagegen("demo", {"profile_workflow": "Portrait"})
         assert resolve_image_route("profile", character="demo", pool=pool).backend.name == "Portrait"
+        # Partial: workflow ("Normal", set above) survives a profile-only body.
+        assert get_character_profile("demo")["outfit_imagegen"]["workflow"] == "Normal"
+        assert resolve_image_route("photo", character="demo", pool=pool).backend.name == "Normal"
+        # The editor's LoRA list resolves with the UNSAVED glob laid over the
+        # stored one: stored workflow "Normal", draft "Portrait" -> Portrait;
+        # a draft "" -> no position 0, the expression chain is empty -> the
+        # cheapest backend (Normal, cost 0); tpose falls back to the draft
+        # workflow when its own key is empty.
+        from app.imagegen.routing import explain_occasion
+        assert explain_occasion("expression", character="demo", pool=pool,
+                                spec_overrides={"workflow": "Portrait"})["resolved"] == "Portrait"
+        assert explain_occasion("expression", character="demo", pool=pool,
+                                spec_overrides={"workflow": ""})["position"] is None
+        assert explain_occasion("tpose", character="demo", pool=pool,
+                                spec_overrides={"workflow": "TPose"})["resolved"] == "TPose"
+        assert explain_occasion("expression", character="demo", pool=pool)["resolved"] == "Normal"
         character_ops.apply_outfit_imagegen("demo", {})
+        assert get_character_profile("demo")["outfit_imagegen"]["profile_workflow"] == "Portrait"
+        cleared = {key: "" for key in character_ops.IMAGEGEN_MATCH_FIELDS}
+        cleared.update({key: [] for key in character_ops.IMAGEGEN_LORA_FIELDS})
+        character_ops.apply_outfit_imagegen("demo", cleared)
         assert get_character_profile("demo")["outfit_imagegen"] == {}
         assert resolve_image_route("profile", character="demo", pool=pool).position == 1
         settings["image_generation"]["routing"] = {}
         config.save(settings)
         route = resolve_image_route("profile", character="demo", pool=pool)
         assert (route.backend.name, route.position) == ("Normal", None), route
-        print("PASS: portrait override persistence, server-chain inheritance, independent render/T-pose and clearing")
+        print("PASS: portrait override persistence, server-chain inheritance, independent render/T-pose, partial save, draft-spec resolution and clearing")
 
 
 if __name__ == "__main__":

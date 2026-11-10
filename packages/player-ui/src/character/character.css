@@ -155,6 +155,15 @@
   flex: 1 1 140px;
   min-width: 0;
 }
+/* Sections marked `beside` in the template share one band with the section
+   before them, side by side. */
+.tpl-tab-band {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+  align-items: flex-start;
+}
+.tpl-tab-band > .tpl-tab-section { flex: 1 1 320px; min-width: 0; }
 /* `width: "narrow"` in the template: the field is as wide as its input (a
    number ~7em, a select its options), its hint wraps within 20em. */
 .tpl-section-fields > .tpl-field--narrow {

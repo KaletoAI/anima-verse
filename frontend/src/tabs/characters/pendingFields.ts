@@ -57,8 +57,8 @@ export const PROFILE_TARGET = 'profile'
 /** The per-character config store (`POST /characters/{n}/config {fields}`). */
 export const CONFIG_TARGET = 'config'
 /** The image-generation override record (`PUT /characters/{n}/outfit-imagegen`).
- *  That route takes the WHOLE record, so its patch is the whole body — the
- *  editor queues every key of it at once. */
+ *  That route takes a PARTIAL record (keys left out keep their stored value),
+ *  so its patch is the body — the edited keys only. */
 export const IMAGEGEN_TARGET = 'imagegen'
 
 /** One body slot's values (`POST /characters/{n}/body-slots/{slot} {values}`).
@@ -85,18 +85,12 @@ export function emptyFields(): PendingFields {
  *
  * Fields, not targets: "Save (5)" for five edited fields says how much unsaved
  * work there is, while a count of targets would say "1" for a whole sheet
- * rewritten. The one exception is the imagegen target: its route takes the
- * WHOLE record, so every edit queues all four keys at once — counting them
- * individually would jump the button to "Save (4)" on the first keystroke.
- * It counts as ONE change (the props buffer's "dims counts as 1" precedent).
+ * rewritten. The imagegen target counts like the others — its sections queue
+ * one key per edit.
  */
 export function pendingFieldCount(buf: PendingFields): number {
   let n = 0
-  for (const [target, patch] of buf.entries()) {
-    if (target === IMAGEGEN_TARGET) {
-      n += Object.keys(patch).length > 0 ? 1 : 0
-      continue
-    }
+  for (const patch of buf.values()) {
     n += Object.keys(patch).length
   }
   return n

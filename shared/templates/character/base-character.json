@@ -59,9 +59,7 @@
       "label_de": "Bild",
       "columns": [
         20,
-        21,
-        22,
-        23
+        21
       ]
     },
     {
@@ -174,6 +172,18 @@
       "visible_when": { "feature": "humanoid" }
     },
     {
+      "id": "base_body_backends",
+      "label": "Render backends",
+      "label_de": "Render-Backends",
+      "column": 28,
+      "row": 2,
+      "beside": true,
+      "special": "imagegen_override",
+      "slot_keys": ["base_front_workflow", "base_view_workflow"],
+      "fields": [],
+      "visible_when": { "feature": "humanoid" }
+    },
+    {
       "id": "outfit_body",
       "label": "Outfit body",
       "label_de": "Outfit-Körper",
@@ -212,6 +222,7 @@
       "column": 27,
       "row": 0,
       "special": "hair",
+      "slot_keys": ["hair_mesh_workflow"],
       "fields": [],
       "visible_when": { "feature": "humanoid" }
     },
@@ -223,6 +234,29 @@
       "row": 0,
       "special": "model_refs",
       "fields": []
+    },
+    {
+      "id": "pose_backends",
+      "label": "Pose render backends",
+      "label_de": "Pose-Render-Backends",
+      "column": 26,
+      "row": 1,
+      "special": "imagegen_override",
+      "slot_keys": ["tpose_workflow", "tpose_view_workflow", "tpose_loras"],
+      "fields": []
+    },
+    {
+      "id": "outfit_view_backends",
+      "label": "Outfit view backends (base-body pipeline)",
+      "label_de": "Outfit-Ansichten-Backends (Grundkörper-Pipeline)",
+      "column": 26,
+      "row": 2,
+      "beside": true,
+      "special": "imagegen_override",
+      "slot_keys": ["outfit_front_workflow", "outfit_back_draft_workflow", "outfit_back_workflow",
+                    "outfit_side_draft_workflow", "outfit_side_workflow"],
+      "fields": [],
+      "visible_when": { "feature": "humanoid" }
     },
     {
       "id": "model3d_animations",
@@ -249,6 +283,16 @@
       "column": 25,
       "row": 3,
       "special": "model3d_generation",
+      "fields": []
+    },
+    {
+      "id": "mesh_backend",
+      "label": "Mesh backend",
+      "label_de": "Mesh-Backend",
+      "column": 25,
+      "row": 4,
+      "special": "imagegen_override",
+      "slot_keys": ["mesh_workflow"],
       "fields": []
     },
     {
@@ -619,13 +663,23 @@
       ]
     },
     {
-      "id": "outfit_imagegen",
-      "visible_when": { "feature": "outfit_system_enabled" },
-      "label": "Outfit Image Generator (Override)",
-      "label_de": "Outfit-Bild Generator (Override)",
+      "id": "image_backends",
+      "label": "Render backends",
+      "label_de": "Render-Backends",
       "column": 20,
       "row": 0,
-      "special": "outfit_imagegen",
+      "special": "imagegen_override",
+      "slot_keys": ["workflow", "profile_workflow"],
+      "fields": []
+    },
+    {
+      "id": "image_loras",
+      "label": "LoRAs",
+      "label_de": "LoRAs",
+      "column": 21,
+      "row": 0,
+      "special": "imagegen_override",
+      "slot_keys": ["loras"],
       "fields": []
     },
     {

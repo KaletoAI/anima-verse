@@ -1,0 +1,41 @@
+/* Per-character image-generation overrides (ImagegenOverrideFields, template
+   special slot `imagegen_override`): backend globs in a grid of short cells,
+   one status line under each input (details on hover), LoRA lists compact. */
+/* One grid for globs and LoRA lists: a glob is one short cell, a LoRA list
+   two — so a section of two globs and a list stays one row wide. */
+.ga-igo {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+  gap: 8px 14px;
+  align-items: start;
+  min-width: 0;
+}
+.ga-igo-cell { min-width: 0; }
+.ga-igo-cell .ga-field { margin-bottom: 0; }
+.ga-igo-control { display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; }
+.ga-igo-control .ga-input { width: 100%; min-width: 0; box-sizing: border-box; }
+.ga-igo-status {
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ga-igo-status--ok { color: #3fb950; }
+.ga-igo-status--bad { color: var(--danger, #f85149); }
+.ga-igo-status--muted { color: var(--text-muted, #8b949e); }
+.ga-igo-loras { grid-column: span 2; max-width: 440px; min-width: 0; }
+.ga-igo-loras .ga-field { margin-bottom: 0; }
+.ga-igo-lora-body { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; }
+.ga-igo-lora-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ga-igo-lora-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+input.ga-input.ga-igo-lora-strength { flex: 0 0 72px; width: 72px; }
+.ga-igo-lora-pick { flex: 1 1 auto; min-width: 0; }

@@ -38,7 +38,7 @@ Per occasion:
                       (app/imagegen/pose_check.py, config
                       ``image_generation.pose_check``).
   hint                optional English advice shown with the occasion on the
-                      routing page and the character's Image overrides.
+                      routing page and the character's backend globs.
 """
 from typing import Any, Dict, List, Tuple
 
@@ -64,7 +64,7 @@ def _mesh(label: str, covers: str, rig: str,
             **scope}
 
 
-# A character's mesh match (Characters → Image) covers whichever of the two
+# A character's mesh match (Characters → 3D) covers whichever of the two
 # character mesh occasions its rig selects; objects and buildings stay world-only.
 _CHAR_MESH = {"character_scoped": True, "char_spec_field": "mesh_workflow",
               "char_spec_fallback": ""}

@@ -199,7 +199,9 @@ def main():
         translations = json.loads((root / "shared/languages/de.json").read_text())["translations"]
         check("new UI strings have German translations", all(translations.get(key) for key in (
             "Main view", "Front view", "Back view", "Right view",
-            "T-pose views backend match (glob)", "Empty: T-pose views chain")))
+            "T-pose views",
+            "The extra reference views (back, side, face) and the Hair tab's haired and "
+            "hair-only edits. The base-body and outfit view steps fall back to it.")))
         print("all checks passed")
 
 

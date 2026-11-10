@@ -164,7 +164,11 @@ def _rules(occasion: str) -> List[str]:
     return list(chain) if isinstance(chain, list) else []
 
 
-def _character_spec(occ_def: Dict[str, Any], character: str) -> str:
+def _character_spec(occ_def: Dict[str, Any], character: str,
+                    spec_overrides: Optional[Dict[str, str]] = None) -> str:
+    """The character's own glob for an occasion (position 0). ``spec_overrides``
+    = unsaved values of single ``outfit_imagegen`` keys laid over the stored
+    record (the character editor's LoRA list follows its draft)."""
     if not character or not occ_def.get("character_scoped"):
         return ""
     try:
@@ -174,6 +178,8 @@ def _character_spec(occ_def: Dict[str, Any], character: str) -> str:
         return ""
     if not isinstance(ovr, dict):
         return ""
+    if spec_overrides:
+        ovr = {**ovr, **spec_overrides}
     from app.imagegen.occasions import spec_fields
     for field in spec_fields(occ_def):
         spec = normalize_spec(ovr.get(field))
@@ -191,12 +197,13 @@ def _pool(pool: Any = None) -> Any:
     return get_image_service().pool
 
 
-def chain_for(occasion: str, character: str = "") -> List[Tuple[str, str, int]]:
+def chain_for(occasion: str, character: str = "", *,
+              spec_overrides: Optional[Dict[str, str]] = None) -> List[Tuple[str, str, int]]:
     """``[(spec, source, position)]`` — source "character" (position 0) or
     "rule" (1..n). Empty and duplicate entries are dropped."""
     occ = get_occasion(occasion)
     out: List[Tuple[str, str, int]] = []
-    cs = _character_spec(occ, character)
+    cs = _character_spec(occ, character, spec_overrides)
     if cs:
         out.append((cs, "character", 0))
     seen = set()
@@ -475,9 +482,10 @@ def _pos_label(position: Optional[int]) -> str:
 
 def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
                  p: Any,
-                 has_ref: bool = False) -> Dict[str, Any]:
+                 has_ref: bool = False,
+                 spec_overrides: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     oid = row["id"]
-    entries = chain_for(oid, character)
+    entries = chain_for(oid, character, spec_overrides=spec_overrides)
     chain, resolved, position = [], None, None
     for spec, source, pos in entries:
         status, live, names = _evaluate(oid, spec, backends, set(), has_ref)
@@ -517,7 +525,8 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
 
 
 def explain_occasion(occasion: str, character: str = "", pool: Any = None, *,
-                     has_ref: bool = False) -> Dict[str, Any]:
+                     has_ref: bool = False,
+                     spec_overrides: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """``explain_image_routing`` for ONE occasion (dialog preselection, the
     LoRA list of a character render, the mesh dialogs' default). Never
     probes, never advances the round-robin.
@@ -525,11 +534,15 @@ def explain_occasion(occasion: str, character: str = "", pool: Any = None, *,
     ``has_ref``: the render will slot a reference image — inside a glob the
     img2img backends are preferred, exactly as ``resolve_image_route`` does
     for that render (the character LoRA list passes the variant render's
-    ``render_has_reference_image``, so both land on the same backend)."""
+    ``render_has_reference_image``, so both land on the same backend).
+
+    ``spec_overrides``: unsaved ``outfit_imagegen`` values laid over the
+    character's stored ones (see ``_character_spec``)."""
     get_occasion(occasion)
     p = _pool(pool)
     row = next(r for r in catalog_payload() if r["id"] == occasion)
-    return _explain_one(row, character, list(p.backends), p, has_ref=has_ref)
+    return _explain_one(row, character, list(p.backends), p, has_ref=has_ref,
+                        spec_overrides=spec_overrides)
 
 
 def explain_image_routing(character: str = "", pool: Any = None) -> Dict[str, Any]:

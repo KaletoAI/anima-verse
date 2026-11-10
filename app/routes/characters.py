@@ -494,7 +494,9 @@ def _save_home_location_route_sync(character_name: str,
 @router.get("/outfit-lora-options")
 def get_outfit_lora_options(character_name: str = "",
                             target: str = "render",
-                            backend: str = "") -> Dict[str, Any]:
+                            backend: str = "",
+                            workflow: Optional[str] = None,
+                            tpose_workflow: Optional[str] = None) -> Dict[str, Any]:
     """Returns the LoRA list for the outfit-piece editor.
 
     Args:
@@ -508,6 +510,10 @@ def get_outfit_lora_options(character_name: str = "",
             as an fnmatch glob (case-insensitive like the routing; an exact
             name works); no such backend → empty list. Used by panel fields
             whose LoRAs belong to a backend chosen in the same form.
+        workflow / tpose_workflow: given (even empty) = the character's
+            UNSAVED glob of that key, used in place of the stored one for
+            this resolution — the editor's LoRA list follows the backend
+            typed into its draft, not the one saved before it.
 
     Response:
         loras: [{name, missing}] from the LoRA library, scoped to the backend
@@ -545,9 +551,13 @@ def get_outfit_lora_options(character_name: str = "",
         # preference inside a glob applies as in the render
         # (render_has_reference_image — one rule for both).
         _occ = "tpose" if target == "tpose" else "expression"
+        _drafts = {key: value for key, value in (("workflow", workflow),
+                                                  ("tpose_workflow", tpose_workflow))
+                   if value is not None}
         _name = str(explain_occasion(
             _occ, character=character_name or "",
-            has_ref=render_has_reference_image(character_name)).get("resolved") or "")
+            has_ref=render_has_reference_image(character_name),
+            spec_overrides=_drafts).get("resolved") or "")
         eff = next((b for b in imagegen.backends if b.name == _name), None)
         lib_options = get_lora_options(
             eff.name if eff else "",
@@ -934,40 +944,27 @@ def delete_expression_route(character_name: str, filename: str, _: Dict[str, Any
 
 @router.get("/{character_name}/outfit-imagegen")
 def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
-    """Returns the per-character overrides for the outfit/variant image
-    service (match globs + model + LoRAs). Empty values = defaults."""
+    """Returns the per-character image-generation override record (backend
+    globs + LoRA lists; empty values = the routing chains) plus what the
+    editor shows beside them: the mesh occasion this character's rig selects
+    with its world chain and backends, the hair_mesh chain and backends, and
+    per image glob the occasion chains that run when it stays empty."""
     from app.models.character import get_character_profile
     prof = get_character_profile(character_name) or {}
     override = prof.get("outfit_imagegen") or {}
     if not isinstance(override, dict):
         override = {}
     return {
-        "workflow": override.get("workflow", "") or "",
-        "profile_workflow": override.get("profile_workflow", "") or "",
-        # Backend glob for the T-pose reference renders only; empty = the
-        # normal render match.
-        "tpose_workflow": override.get("tpose_workflow", "") or "",
-        "tpose_view_workflow": override.get("tpose_view_workflow", "") or "",
-        # Base-body pipeline steps (occasions base_front … outfit_back);
-        # empty = the occasion's fallback field, then its chain.
-        **{field: override.get(field, "") or "" for field in character_ops.BASE_BODY_MATCH_FIELDS},
-        # Backend glob in front of the character mesh chain; empty = world chain.
-        "mesh_workflow": override.get("mesh_workflow", "") or "",
+        **{field: override.get(field, "") or "" for field in character_ops.IMAGEGEN_MATCH_FIELDS},
+        **{field: override.get(field, []) or [] for field in character_ops.IMAGEGEN_LORA_FIELDS},
         **_mesh_match_context(character_name),
-        # Backend glob in front of the hair_mesh chain (HairDeck); empty = world chain.
-        "hair_mesh_workflow": override.get("hair_mesh_workflow", "") or "",
         **_hair_match_context(),
         "match_chains": _image_match_chains(),
-        "model": override.get("model", "") or "",
-        "loras": override.get("loras", []) or [],
-        # LoRAs used INSTEAD of "loras" for the T-pose reference renders;
-        # empty = the normal LoRAs apply.
-        "tpose_loras": override.get("tpose_loras", []) or [],
     }
 
 
 def _mesh_match_context(character_name: str) -> Dict[str, Any]:
-    """What the Image tab needs beside the mesh match: the mesh occasion this
+    """What the 3D tab needs beside the mesh match: the mesh occasion this
     character's rig selects, its world chain (shown as the fallback) and every
     enabled img2mesh backend name (match preview; offline ones included, the
     glob still names them)."""

@@ -189,7 +189,7 @@ const IR_TEXT = {
               + 'backend right now; a failure re-runs the whole occasion on the next entry. An empty '
               + 'chain uses the cheapest available backend of the right kind, except rig occasions: configure their mesh2rig chains explicitly. A chain whose entries '
               + 'are all unusable fails instead of falling back to the cheapest.',
-    position0: 'Position 0: the character\'s own backend match (Characters → Image) comes before this chain.',
+    position0: 'Position 0: the character\'s own backend glob (Game-Admin → Characters, on the tab of the step: Image, Pose, Base body, Hair or 3D) comes before this chain.',
     emptyChain: 'empty — cheapest available backend of this kind',
     addPlaceholder: 'Backend name or glob, e.g. Flux*', add: 'Add',
     moveUp: 'Move up (earlier)', moveDown: 'Move down (later)', remove: 'Remove',
