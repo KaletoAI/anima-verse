@@ -650,15 +650,19 @@ def collect_mesh_job(item_id: str, job_id: str) -> Dict[str, Any]:
 
     Under the item lock, taken WITHOUT waiting: ``SourceBusy`` while any step of the source runs. Needs the
     accepted cut-out (``FileNotFoundError`` otherwise — the mesh_iou gate reads it).
-    ``get_image_service().fetch_mesh_job`` (rig ``none``) downloads into a staging folder; only a stored
-    result changes the source: the mesh step and every later one are dropped (like a step run), then the SAME
-    decimation + gates as a fresh attempt (``_prepare_mesh``) and the same record (one attempt) plus
-    ``collected_job`` = the job's full id. The insole (CPU) then runs on the next run.
+    ``get_image_service().fetch_mesh_job`` (rig ``none``) downloads into a staging folder, where the SAME
+    decimation + gates as a fresh attempt run (``_prepare_mesh``). Accepted: the mesh step and every later one
+    are dropped (like a step run), then ``raw.glb`` + ``prepared.glb`` and the same record (one attempt) plus
+    ``collected_job`` = the job's full id; the insole (CPU) runs on the next run.
 
-    Returns ``{status: "accepted" | "refused", ssig, job_id, record, error?, gates?}``, ``{status:
-    STEP_FAILED, ssig, job_id, error, failure}`` when the decimation fails (record ``accepted: false``), else
-    the fetch's own answer with nothing written (``queued`` / ``running`` + ``progress``, or ``unknown`` /
-    ``forbidden`` / ``failed`` / ``rig_mismatch`` / ``error`` + ``error``). Blocking (download + Blender)."""
+    A refused or failed fetch NEVER touches an accepted mesh or the insole after it (a wrong pasted id must not
+    destroy a good shoe): nothing is written, the answer carries ``kept: True``. Only without an accepted mesh
+    is it recorded like the step's own refusal / failure.
+
+    Returns ``{status: "accepted" | "refused", ssig, job_id, record?, reasons?, gates?, error?, kept?}``,
+    ``{status: STEP_FAILED, ssig, job_id, error, failure, kept}`` when the decimation fails, else the fetch's
+    own answer with nothing written (``queued`` / ``running`` + ``progress``, or ``unknown`` / ``forbidden`` /
+    ``failed`` / ``rig_mismatch`` / ``error`` + ``error``). Blocking (download + Blender)."""
     import tempfile
     from app.imagegen.service import get_image_service
     iid = item_dir(item_id).name
@@ -673,7 +677,7 @@ def collect_mesh_job(item_id: str, job_id: str) -> Dict[str, Any]:
             raise FileNotFoundError("the shoe cut-out is missing — run the cutout step first")
         alpha = _cutout_alpha(cutout)
         staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=d))
-        candidate = d / ".prepared.candidate.glb"
+        candidate = staging / "candidate.glb"
         try:
             res = get_image_service().fetch_mesh_job(job_id, str(staging / "raw.glb"), rig="none")
             if res.get("status") != "stored":
@@ -683,34 +687,42 @@ def collect_mesh_job(item_id: str, job_id: str) -> Dict[str, Any]:
             if delivered.suffix.lower() != ".glb" or not delivered.is_file():
                 return {"status": "error", "ssig": ssig, "job_id": full,
                         "error": f"job {full} delivered no GLB ({delivered.name or 'nothing'})"}
-            _drop_from(d, "mesh")
-            raw = d / "raw.glb"
-            os.replace(delivered, raw)
+            kept = step_done(iid, ssig, "mesh")
             try:
-                entry = _prepare_mesh(raw, candidate, alpha, 1, {"backend": res.get("backend", ""), "routing": {}})
+                entry = _prepare_mesh(delivered, candidate, alpha, 1,
+                                      {"backend": res.get("backend", ""), "routing": {}})
             except Exception as e:  # noqa: BLE001 — the step failed, the job was fine
                 failure, error = failure_of(e)
                 attempts = [{"attempt": 1, "ok": False, "failure": failure, "error": error}]
-                _set_step(d, "mesh", _mesh_record({}, attempts, False, failure=failure, error=error,
-                                                  collected_job=full))
                 logger.warning("Shoe source %s/%s: collected job %s failed: %s", iid, ssig, full, error)
+                if not kept:
+                    _drop_from(d, "mesh")
+                    _set_step(d, "mesh", _mesh_record({}, attempts, False, failure=failure, error=error,
+                                                      collected_job=full))
                 return {"status": STEP_FAILED, "ssig": ssig, "job_id": full, "error": error, "failure": failure,
-                        "gates": {"attempts": attempts}}
+                        "gates": {"attempts": attempts}, "kept": kept}
             entry["collected_job"] = full
             logger.info("Shoe source %s/%s: collected job %s %s (component %.4f, iou %.4f)", iid, ssig, full,
-                        "accepted" if entry["ok"] else "refused", entry["gates"]["component_share"],
-                        entry["gates"]["mesh_iou"])
+                        "accepted" if entry["ok"] else ("refused, accepted mesh kept" if kept else "refused"),
+                        entry["gates"]["component_share"], entry["gates"]["mesh_iou"])
             if entry["ok"]:
+                _drop_from(d, "mesh")
+                os.replace(delivered, d / "raw.glb")
                 os.replace(candidate, d / "prepared.glb")
                 record = _mesh_record(entry, [entry], True, collected_job=full)
                 _set_step(d, "mesh", record)
                 return {"status": "accepted", "ssig": ssig, "job_id": full, "record": record}
+            refused = {"status": "refused", "ssig": ssig, "job_id": full, "gates": entry["gates"],
+                       "reasons": list(entry["gates"]["reasons"]), "kept": kept,
+                       "error": f"shoe mesh refused ({', '.join(entry['gates']['reasons'])})"}
+            if kept:
+                return refused  # the accepted mesh and its insole stay exactly as they are
+            _drop_from(d, "mesh")
+            os.replace(delivered, d / "raw.glb")
             record = _mesh_record(entry, [entry], False, failure=GATE, collected_job=full)
             _set_step(d, "mesh", record)
-            return {"status": "refused", "ssig": ssig, "job_id": full, "record": record, "gates": entry["gates"],
-                    "error": f"shoe mesh refused ({', '.join(entry['gates']['reasons'])})"}
+            return {**refused, "record": record}
         finally:
-            candidate.unlink(missing_ok=True)
             shutil.rmtree(staging, ignore_errors=True)
     finally:
         lock.release()

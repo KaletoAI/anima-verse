@@ -2228,7 +2228,8 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
 
 def _fetch_garment_mesh_job(character_name: str, item_id: str, raw_job: str, *, footwear: bool) -> Dict[str, Any]:
     """The two mesh-job fetch routes (``garments.collect_mesh_job``). 200 for ``accepted`` / ``refused`` (the
-    step's gate refused the delivered mesh, recorded like a run's refusal) and ``queued`` / ``running``
+    step's gate refused the delivered mesh: ``reasons``; an accepted mesh is kept untouched, ``kept: True`` —
+    only without one is the refusal recorded like a run's) and ``queued`` / ``running``
     (nothing changed); 400 for an id that is no job id or an item that does not fit the route; 404 unknown
     job, 403 another gateway user's job, 409 a running step / a failed job / a missing input, 422 a rigged
     delivery, 502 a download or step failure."""

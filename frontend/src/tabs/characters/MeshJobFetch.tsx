@@ -18,6 +18,10 @@ interface FetchAnswer {
   job_id?: string
   progress?: number | null
   error?: string
+  /** The gate's reasons of a refused delivery. */
+  reasons?: string[]
+  /** Refused next to an accepted mesh: nothing was written. */
+  kept?: boolean
 }
 
 export function MeshJobFetch({ url, disabled, onDone }: {
@@ -46,8 +50,14 @@ export function MeshJobFetch({ url, disabled, onDone }: {
         setJobId('')
         onDone()
       } else if (d.status === 'refused') {
-        setResult({ text: `${t('Refused')} · ${t('job')} ${d.job_id || id}${d.error ? `: ${d.error}` : ''}`, tone: 'error' })
-        onDone()
+        // The gate's own reasons; next to an accepted mesh nothing was written (server: `kept`).
+        const why = d.reasons?.length ? d.reasons.join('; ') : d.error || ''
+        setResult({
+          text: `${t('Refused')} · ${t('job')} ${d.job_id || id}${why ? `: ${why}` : ''}`
+            + (d.kept ? ` — ${t('the accepted mesh is kept')}` : ''),
+          tone: 'error',
+        })
+        if (!d.kept) onDone()
       } else {
         const pct = typeof d.progress === 'number' ? ` — ${Math.round(d.progress * 100)} %` : ''
         setResult({

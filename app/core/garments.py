@@ -1923,7 +1923,9 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
 
     Each runs the SAME prepare + gates as a fresh attempt and writes the same record plus ``collected_job``.
     Accepted: the step's failure (persisted, in memory) ends when it named this step or a later one. Refused
-    (gate) or failed (decimation, an unreadable delivery): recorded as the step's failure like a run's. A job
+    (gate) or failed (decimation, an unreadable delivery): an ACCEPTED mesh of the step is never touched —
+    nothing is written, nothing recorded (``kept: True``, the reasons in the answer); without one it is
+    recorded as the step's failure like a run's. A job
     that is not done, unknown, someone else's or failed changes nothing. Nothing starts a run: the next run
     reuses the accepted mesh and runs only what follows (CPU).
 
@@ -1971,7 +1973,9 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     if status == "accepted":
         gs.end(character_name, item_id, step)
         _clear_failure_from(character_name, item_id, fsig, step, order)
-    elif status in ("refused", garment_mesh.STEP_FAILED):
+    elif status in ("refused", garment_mesh.STEP_FAILED) and not res.get("kept"):
+        # Recorded like the step's own refusal only when no accepted mesh was there: a refused fetch next to an
+        # accepted mesh changed nothing (the stores wrote nothing), so the step has not failed.
         error = str(res.get("error") or status)
         gates = res.get("gates") if kind == _footwear() else {"attempts": (res.get("record") or {}).get("attempts")
                                                                            or []}

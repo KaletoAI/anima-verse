@@ -278,19 +278,23 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
     server restart) but finished on the gateway.
 
     ``get_image_service().fetch_mesh_job`` (rig ``none``: a garment mesh is
-    unrigged) downloads the result into a staging folder; then the SAME
-    ``_prepare`` (decimation + component gate) as a fresh attempt runs, and
-    the same step record is written (one attempt), plus ``collected_job`` =
-    the job's full id. Accepted: ``raw`` + ``prepared`` + record, so the next
-    run reuses the pair (R13) and runs only the fit. Refused: the record says
-    so and an older prepared mesh of this fsig goes, like a refused step.
+    unrigged) downloads the result into a staging folder; the SAME
+    ``_prepare`` (decimation + component gate) as a fresh attempt runs on
+    the staged file. Accepted: ``raw`` + ``prepared`` + the step record (one
+    attempt) plus ``collected_job`` = the job's full id, so the next run
+    reuses the pair (R13) and runs only the fit.
 
-    Returns ``{status: "accepted" | "refused", job_id, record, error?}``;
-    ``{status: STEP_FAILED, job_id, error}`` when the decimation fails (raw
-    written, no record — like a failed first attempt); else the fetch's own
-    answer with nothing written: ``queued`` / ``running`` (+ ``progress``)
-    or ``unknown`` / ``forbidden`` / ``failed`` / ``rig_mismatch`` /
-    ``error`` (+ ``error``). Blocking (download + Blender); the caller holds
+    A refused or failed fetch NEVER touches an accepted mesh of this fsig (a
+    wrong pasted id must not destroy a good mesh): nothing is written and
+    the answer carries ``kept: True``. Only without an accepted mesh is a
+    refusal written like a refused step (raw + the refused record).
+
+    Returns ``{status: "accepted" | "refused", job_id, record?, reasons?,
+    error?, kept?}``; ``{status: STEP_FAILED, job_id, error, kept}`` when the
+    decimation fails (nothing written); else the fetch's own answer with
+    nothing written: ``queued`` / ``running`` (+ ``progress``) or
+    ``unknown`` / ``forbidden`` / ``failed`` / ``rig_mismatch`` / ``error``
+    (+ ``error``). Blocking (download + Blender); the caller holds
     ``garment_store.char_lock`` (``garments.collect_mesh_job``)."""
     import shutil
     import tempfile
@@ -303,7 +307,7 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
     raw = gs.garment_path(name, item_id, fsig, "raw")
     raw.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=raw.parent))
-    candidate = prepared.with_name(f".{prepared.stem}.candidate.glb")
+    candidate = staging / "candidate.glb"
     try:
         res = get_image_service().fetch_mesh_job(job_id, str(staging / raw.name), rig="none")
         if res.get("status") != "stored":
@@ -313,31 +317,35 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
         if delivered.suffix.lower() != ".glb" or not delivered.is_file():
             return {"status": "error", "job_id": full,
                     "error": f"job {full} delivered no GLB ({delivered.name or 'nothing'})"}
-        os.replace(delivered, raw)
-        prepared.parent.mkdir(parents=True, exist_ok=True)
+        kept = prepared.is_file() and gs.read_record(record_path).get("accepted") is True
         try:
-            entry = _prepare(kind, raw, candidate, 1, {"backend": res.get("backend", ""), "routing": {}})
+            entry = _prepare(kind, delivered, candidate, 1, {"backend": res.get("backend", ""), "routing": {}})
         except Exception as e:  # noqa: BLE001 — the step failed, the job was fine
             error = str(e) or type(e).__name__
             logger.info("garment mesh %s/%s: collected job %s failed: %s", name, item_id, full, error)
-            return {"status": STEP_FAILED, "job_id": full, "error": error}
+            return {"status": STEP_FAILED, "job_id": full, "error": error, "kept": kept}
         entry["collected_job"] = full
         record = _record(kind, item_id, fsig, entry, [entry], accepted=bool(entry["ok"]))
         record["collected_job"] = full
         logger.info("garment mesh %s/%s: collected job %s: %s tris -> %s, largest component %.4f%s", name,
                     item_id, full, entry["tris_raw"], entry["tris_prepared"], entry["largest_component_share"],
-                    "" if entry["ok"] else " (refused)")
+                    "" if entry["ok"] else (" (refused, accepted mesh kept)" if kept else " (refused)"))
         if entry["ok"]:
+            prepared.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(delivered, raw)
             os.replace(candidate, prepared)
             gs.write_record(record_path, record)
             return {"status": "accepted", "job_id": full, "record": record}
-        # Refused like a step: an older accepted mesh of this fsig must not stay behind this record.
+        refused = {"status": "refused", "job_id": full, "reasons": list(entry["reasons"]), "kept": kept,
+                   "largest_component_share": entry["largest_component_share"],
+                   "error": f"garment mesh refused ({', '.join(entry['reasons'])})"}
+        if kept:
+            return refused  # the accepted mesh stays exactly as it is
+        os.replace(delivered, raw)
         prepared.unlink(missing_ok=True)
         gs.write_record(record_path, record)
-        return {"status": "refused", "job_id": full, "record": record,
-                "error": f"garment mesh refused ({', '.join(entry['reasons'])})"}
+        return {**refused, "record": record}
     finally:
-        candidate.unlink(missing_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
 
 

@@ -143,8 +143,9 @@ def collect_source_job(character_name: str, item_id: str, ifsig: str, ssig: str,
     count) and the same record, plus ``collected_job`` = the job's full id. The cut and the fit then run on
     the next run (CPU).
 
-    Returns ``{status: "accepted", job_id, record}``, ``{status: garment_mesh.STEP_FAILED, job_id, error}``
-    when the delivered GLB is unreadable (record ``accepted: false``, like a failed job), else the fetch's own
+    Returns ``{status: "accepted", job_id, record}``, ``{status: garment_mesh.STEP_FAILED, job_id, error, kept}``
+    when the delivered GLB is unreadable — recorded ``accepted: false`` like a failed job only when no accepted
+    source mesh exists; an accepted one is never touched (``kept: True``, nothing written) — else the fetch's own
     answer with nothing written (``queued`` / ``running`` + ``progress``, or ``unknown`` / ``forbidden`` /
     ``failed`` / ``rig_mismatch`` / ``error`` + ``error``). ``MissingInput`` without both accepted haired
     views. The caller holds ``garment_store.char_lock`` (``garments.collect_mesh_job``)."""
@@ -166,17 +167,23 @@ def collect_source_job(character_name: str, item_id: str, ifsig: str, ssig: str,
         if delivered.suffix.lower() != ".glb" or not delivered.is_file():
             return {"status": "error", "job_id": full,
                     "error": f"job {full} delivered no GLB ({delivered.name or 'nothing'})"}
+        try:
+            tris = int(len(glb_mesh.static_arrays(delivered.read_bytes())[1]))
+            error = ""
+        except Exception as e:  # noqa: BLE001 — an unreadable delivery fails the step like a fresh job
+            tris, error = 0, f"hair source mesh unreadable: {e}"
+        kept = source_glb(character_name, item_id, ssig) is not None
+        if error and kept:
+            # A failed fetch never touches an accepted source mesh (a wrong pasted id must not destroy it).
+            return {"status": garment_mesh.STEP_FAILED, "job_id": full, "error": error, "kept": True}
         folder.mkdir(parents=True, exist_ok=True)
         cutouts = _cutouts(haired, folder)
         base = {"ssig": ssig, "image_fsig": ifsig, "haired": shas, "face_num": garment_mesh.SOURCE_FACE_NUM,
                 "cutouts": {v: _sha(p) for v, p in cutouts.items()}, "collected_job": full}
         record_path = folder / gs.SOURCE_RECORD
-        try:
-            tris = int(len(glb_mesh.static_arrays(delivered.read_bytes())[1]))
-        except Exception as e:  # noqa: BLE001 — an unreadable delivery fails the step like a fresh job
-            error = f"hair source mesh unreadable: {e}"
+        if error:
             gs.write_record(record_path, {**base, "accepted": False, "error": error, "created_at": utc_now_iso()})
-            return {"status": garment_mesh.STEP_FAILED, "job_id": full, "error": error}
+            return {"status": garment_mesh.STEP_FAILED, "job_id": full, "error": error, "kept": False}
         glb = folder / SOURCE_GLB
         delivered.replace(glb)
         record = {**base, "backend": res.get("backend", ""), "routing": {}, "tris": tris, "accepted": True,

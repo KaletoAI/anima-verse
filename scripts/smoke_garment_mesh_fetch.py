@@ -36,15 +36,20 @@ Fixtures (hand-derived):
 [2] "run1" -> 200 {status running, progress 0.4}; NOTHING written: the file list under garments/ (names,
     sizes, mtimes) is identical before and after.
 [3] "zzzz9999" -> 404 (unknown); nothing written. "../x" -> 400 (no job id), fetch_job not asked.
-[4] "bad1" -> 200 {status refused}; the record says accepted False, share 0.97, collected_job "bad1";
-    the older accepted prepared GLB is gone (a refused step never leaves one behind its record); the
-    persisted failure names step "mesh".
+[4] "bad1" NEXT TO the accepted mesh of [1] -> 200 {status refused, kept True, reasons naming "largest
+    component"}; NOTHING written: raw, prepared and the record byte-identical, no failure record, no
+    in-memory failure (a wrong pasted id must never destroy a good mesh).
+[4b] The accepted pair removed (no accepted mesh) -> "bad1" is recorded like a refused step: record
+    accepted False, share 0.97, collected_job "bad1", no prepared GLB, the persisted failure names "mesh".
 [5] gs.char_lock(Demo) held (a mesh step running) -> 409, fetch_job not asked, nothing written.
 [6] Footwear item "shoe_w" (store level, item lock): cut-out recorded as accepted under the current ssig.
     The item lock held by another thread -> SourceBusy, nothing asked. "run1" -> running, no raw/prepared.
     "shoe1" -> accepted: prepared.glb + raw.glb, record mesh {accepted True, collected_job "shoe1",
     gates.component_share 1.0, gates.mesh_iou 1.0 +- 0.02, tris_raw 24}; an earlier insole.json is dropped
     (the step and every later one, like a step run). Without a cut-out -> FileNotFoundError.
+    Then an insole is recorded and "shoebad" (box B moved 0.5 m OUTSIDE A: component_share
+    0.1334 / 0.1494 = 0.8929 < 0.98) -> refused, kept True; prepared.glb, raw.glb, record.json and
+    insole.json byte-identical.
 [7] Subtract source (store level): haired views accepted under an image fsig I, ssig S. "src1" -> accepted:
     source/H_S/haired.glb = GOOD, both cut-outs written, record accepted True, collected_job "src1",
     tris 4; garment_subtract.source_glb(...) is that file. "run1" -> running, the source folder is not
@@ -113,10 +118,11 @@ def box(lo, hi):
     return P, F
 
 
-def shoe_glb() -> bytes:
+def shoe_glb(inside=True) -> bytes:
     from app.core import glb_mesh
     pa, fa = box((0.0, 0.0, -0.045), (0.25, 0.13, 0.045))
-    pb, fb = box((0.075, 0.01, -0.025), (0.175, 0.03, 0.025))
+    off = 0.0 if inside else 0.5
+    pb, fb = box((0.075 + off, 0.01, -0.025), (0.175 + off, 0.03, 0.025))
     P = pa + pb
     F = fa + [(a + 8, b + 8, c + 8) for a, b, c in fb]
     return glb_mesh.static_glb(P, F, [(0.0, 0.0)] * len(P), image=png16(), mime="image/png")
@@ -185,7 +191,8 @@ def main() -> int:
         GOOD, BAD, SHOE = quads_glb([0.99, 0.01]), quads_glb([0.97, 0.03]), shoe_glb()
         backend = FakeMeshBackend({"good1": ("done", GOOD, "good1-full"), "bad1": ("done", BAD, "bad1"),
                                    "run1": ("running",), "shoe1": ("done", SHOE, "shoe1"),
-                                   "src1": ("done", GOOD, "src1")})
+                                   "src1": ("done", GOOD, "src1"),
+                                   "shoebad": ("done", shoe_glb(inside=False), "shoebad")})
 
         class Svc:
             """Stand-in for the image service: the real fetch over the one fake mesh backend."""
@@ -270,9 +277,22 @@ def main() -> int:
         check("400 not a job id", code, 400)
         check("fetch_job not asked", len(backend.asked), asked)
 
-        print("[4] refused gate")
+        print("[4] refused next to an accepted mesh -> nothing written")
+        failed_path = gs.garment_path("Demo", hid, F, "failed")
+        kept = {p: p.read_bytes() for p in (raw, prepared, prepared.with_suffix(".json"))}
         code, res = fetch("bad1")
-        check("200 refused", (code, res.get("status")), (200, "refused"))
+        check("200 refused, kept", (code, res.get("status"), res.get("kept")), (200, "refused", True))
+        check("reasons name the gate", any("largest component" in r for r in res.get("reasons") or []), True)
+        check("raw / prepared / record byte-identical", {p.name: p.read_bytes() == b for p, b in kept.items()},
+              {p.name: True for p in kept})
+        check("no failure record", failed_path.exists(), False)
+        check("no in-memory failure", gs.status("Demo", hid).get("failed"), None)
+
+        print("[4b] refused without an accepted mesh -> recorded like a refused step")
+        prepared.unlink()
+        prepared.with_suffix(".json").unlink()
+        code, res = fetch("bad1")
+        check("200 refused, not kept", (code, res.get("status"), res.get("kept")), (200, "refused", False))
         rec = gs.read_record(prepared.with_suffix(".json"))
         check("record refused / collected_job", (rec.get("accepted"), rec.get("collected_job")), (False, "bad1"))
         near("refused share", rec.get("largest_component_share"), 0.97, 1e-6)
@@ -344,6 +364,15 @@ def main() -> int:
         check("decimation (target, welded)", decimations[-1], (30000, True))
         check("insole dropped", ((d / "insole.json").exists(), "insole" in (fs._read(d)["steps"])), (False, False))
         check("no staging / candidate", sorted(p.name for p in d.iterdir() if p.name.startswith(".")), [])
+        (d / "insole.json").write_text('{"insole_cover": 1.0}')
+        fs._set_step(d, "insole", fs._entry(accepted=True, gates={}))
+        kept = {name: (d / name).read_bytes() for name in ("prepared.glb", "raw.glb", "record.json", "insole.json")}
+        res = fs.collect_mesh_job(iid, "shoebad")
+        check("shoebad refused, kept", (res.get("status"), res.get("kept")), ("refused", True))
+        check("shoebad reasons name component_share",
+              any("component_share" in r for r in res.get("reasons") or []), True)
+        check("shoe files + insole byte-identical", {n: (d / n).read_bytes() == b for n, b in kept.items()},
+              {n: True for n in kept})
 
         print("[7] subtract source (store level)")
         I, S = "0000000000a1", "0000000000b2"
