@@ -15,7 +15,9 @@ import type { CollisionPayload } from '@anima/scene-render'
 
 export const BODY_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BodyView = typeof BODY_VIEWS[number]
-export type RunKind = 'regenerate' | 'rerig' | 'refit' | 'view'
+export type RunKind = 'regenerate' | 'rerig' | 'refit' | 'view' | 'views'
+/** The body actions a reason can block (`outfit_bodies._blocked`). */
+export type BodyAction = 'regenerate' | 'rerig' | 'refit' | 'delete' | 'views'
 
 /** One dressed view of an outfit body (`outfit_bodies.view_infos`). */
 export interface BodyViewInfo {
@@ -83,6 +85,14 @@ export interface OutfitBody {
   can_regenerate: boolean
   regenerate_from: string | null
   can_rerig: boolean
+  /** The worn outfit stands (or will stand, once its dressed views exist) on this body
+   *  (`outfit_bodies.worn_body`); `views_missing` non-empty = Generate views renders them. */
+  worn_outfit?: { signature: string; name: string; predicted: boolean; views_missing: BodyView[];
+    image_jobs: number } | null
+  /** Never built, no outfit stands on its views, none on it, not the worn one — listed collapsed. */
+  orphaned?: boolean
+  /** Why each action cannot start now (server English, translated), "" when it can. */
+  blocked?: Partial<Record<BodyAction, string>>
 }
 
 export interface PaintedBody {

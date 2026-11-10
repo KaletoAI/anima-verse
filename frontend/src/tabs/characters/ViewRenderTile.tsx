@@ -7,7 +7,8 @@
  * kept warning of the view.
  *
  * The caller decides everything (what the button starts, why it is
- * disabled); the tile only renders.
+ * disabled); the tile only renders. A disabled button shows its reason
+ * (`disabledReason`) as a line under the tile, not only as its tooltip.
  */
 import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -16,6 +17,7 @@ import type { ImageTileMeta } from './RefImage'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 const WARNING_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
+const LOCK_STYLE: CSSProperties = { fontStyle: 'italic', overflowWrap: 'anywhere' }
 
 function emptyTile(height: number): CSSProperties {
   return {
@@ -34,7 +36,7 @@ function emptyTile(height: number): CSSProperties {
 }
 
 export function ViewRenderTile({ label, url, meta, height, running, status, failed, error, warning, disabled,
-  disabledTitle, actionTitle, onRender }: {
+  disabledTitle, disabledReason, actionTitle, onRender }: {
   label: string
   url: string | null
   meta?: ImageTileMeta | null
@@ -51,6 +53,8 @@ export function ViewRenderTile({ label, url, meta, height, running, status, fail
   disabled: boolean
   /** Why the button is disabled (its tooltip then). */
   disabledTitle?: string
+  /** Why the button is disabled, shown as a visible line under the tile (and as its tooltip). */
+  disabledReason?: string
   /** The button's tooltip otherwise. */
   actionTitle?: string
   onRender: () => void
@@ -65,7 +69,7 @@ export function ViewRenderTile({ label, url, meta, height, running, status, fail
           type="button"
           className="ga-btn ga-btn-sm"
           disabled={disabled || running}
-          title={(disabled && disabledTitle) || actionTitle || undefined}
+          title={(disabled && (disabledReason || disabledTitle)) || actionTitle || undefined}
           onClick={onRender}
           aria-label={`${action} · ${label}`}
         >
@@ -81,6 +85,9 @@ export function ViewRenderTile({ label, url, meta, height, running, status, fail
       )}
       {url && running ? <div className="ga-hint">{t('Generating…')}</div> : null}
       {status}
+      {disabled && !running && disabledReason ? (
+        <div className="ga-hint" style={LOCK_STYLE} title={disabledReason}>{disabledReason}</div>
+      ) : null}
       {failed && !running ? (
         <div className="ga-hint" style={ERROR_STYLE} title={error || ''}>
           {t('Failed')}{error ? `: ${error}` : ''}

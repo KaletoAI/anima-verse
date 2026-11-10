@@ -15,7 +15,11 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
   the body anew (``outfit_bodies.render_view``, image jobs only — the mesh
   is not touched; it shows "Dressed views changed" until its own
   Regenerate).
-  The four runs answer 202 ``{kind, body_id, item_id, view, started, queued,
+* ``POST …/{body_id}/generate-views`` — the WORN outfit's missing dressed
+  views (``outfit_bodies.render_worn_views``, image jobs only, never chained
+  to the mesh) when the worn outfit stands, or will stand, on ``body_id``
+  (``outfit_bodies.worn_body``); 404 for any other body.
+  The five runs answer 202 ``{kind, body_id, item_id, view, started, queued,
   position, behind}`` and queue behind a running 3D run of the character
   (never 409 for a run in progress); 409 when the run has nothing to work on
   (for a view: ``outfit_bodies.view_blocked``), 400 for an unknown view.
@@ -68,6 +72,8 @@ def _start(character_name: str, kind: str, body_id: str, item_id: str = "", view
     _require_character(character_name)
     try:
         return outfit_bodies.start(character_name, kind, body_id, item_id, view)
+    except outfit_bodies.UnknownBody as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except LookupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -101,6 +107,12 @@ def refit_outfit_body(character_name: str, body_id: str, body: Optional[RefitReq
 def regenerate_outfit_body_view(character_name: str, body_id: str, view: str,
                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     return _start(character_name, "view", body_id, view=view)
+
+
+@router.post("/{character_name}/outfit-bodies/{body_id}/generate-views", status_code=202)
+def generate_worn_outfit_views(character_name: str, body_id: str,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    return _start(character_name, "views", body_id)
 
 
 class CancelRequest(BaseModel):

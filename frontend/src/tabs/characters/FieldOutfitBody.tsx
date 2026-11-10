@@ -17,6 +17,13 @@
  * views changed" after a view was rendered anew; on the right its other
  * actions, the outfits standing on it, its dress text and the garments
  * fitted onto it (one line each, details on hover, Re-fit per garment).
+ * Every disabled action shows its reason as a line under it (the server's
+ * `blocked`, e.g. "Locked: a 3D model job is running for this body"), not
+ * only as a tooltip. The worn outfit's body is always listed: before its
+ * dressed views exist it is a pending entry ("Worn outfit — dressed views
+ * missing") with Generate views (image jobs only, never chained to the
+ * mesh); bodies that were never built and that no outfit stands on any more
+ * are listed last, collapsed, as "Orphaned — no outfit stands on it".
  * Retexture mode: one line saying so and the painted bodies read-only.
  *
  * Backend (app/routes/outfit_bodies.py, app/core/outfit_bodies.py):
@@ -27,7 +34,9 @@
  * it has nothing to work on: a view's `blocked`); POST …/{body}/cancel
  * {view?} — takes the body's (that view's) waiting run out of the queue (409
  * once it has started, 404 when none waits); POST …/{body}/delete — the body
- * and its chain through the artefact graph (409 while a run is on it).
+ * and its chain through the artefact graph (409 while a run is on it);
+ * POST …/{body}/generate-views — the worn outfit's missing dressed views
+ * (202 queued like the other runs, 404 for a body it does not stand on).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -43,7 +52,7 @@ import { ModelSteps } from './ModelSteps'
 import { RefImage } from './RefImage'
 import { ViewRenderTile } from './ViewRenderTile'
 import { BODY_VIEWS, useOutfitBodies } from './useOutfitBodies'
-import type { BodyFit, BodyView, BodyViewInfo, OutfitBody, PaintedBody, RunKind } from './useOutfitBodies'
+import type { BodyAction, BodyFit, BodyView, BodyViewInfo, OutfitBody, PaintedBody, RunKind } from './useOutfitBodies'
 
 const TILE_HEIGHT = 112
 /** The body's dressed views, stacked like the Base body tab's. */
@@ -63,6 +72,12 @@ const EMPTY_TILE: CSSProperties = {
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 const WARNING_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
+/** The visible reason under a disabled action. */
+const REASON_STYLE: CSSProperties = { fontStyle: 'italic', overflowWrap: 'anywhere' }
+
+const ACTION_LABELS: Record<BodyAction, string> = {
+  regenerate: 'Regenerate', rerig: 'Re-rig', refit: 'Re-fit all', delete: 'Delete', views: 'Generate views',
+}
 
 const VIEW_LABELS: Record<BodyView, string> = {
   front: 'Front view', back: 'Back view', left: 'Left view', right: 'Right view',
@@ -89,19 +104,45 @@ function useStatusText() {
   return (body: OutfitBody): string => {
     if (body.status === 'running') {
       return body.run_kind === 'rerig' ? t('Re-rigging…') : body.run_kind === 'refit' ? t('Re-fitting…')
-        : body.run_kind === 'build' ? t('Building…') : body.run_kind === 'view' ? t('Rendering…') : t('Meshing…')
+        : body.run_kind === 'build' ? t('Building…') : body.run_kind === 'view' ? t('Rendering…')
+          : body.run_kind === 'views' ? t('Rendering views…') : t('Meshing…')
     }
     if (body.status === 'queued') return `${t('Queued')} (#${body.queue_position ?? '?'})`
     if (body.status === 'failed') return t('Failed')
+    if (body.orphaned) return t('Orphaned — no outfit stands on it')
+    if (body.status === 'missing' && body.worn_outfit?.views_missing.length) {
+      return t('Worn outfit — dressed views missing')
+    }
     if (body.status === 'missing') return t('Not built')
     if (body.status === 'unrigged') return t('Static mesh without a rig')
     return t('Ready')
   }
 }
 
-/** Short label of a body: the outfits standing on it, else its id. */
+/** Short label of a body: the outfits standing on it, else the worn outfit's name, else its id. */
 function bodyLabel(body: OutfitBody): string {
-  return body.outfits.map((o) => o.name || o.signature).join(' · ') || body.body_id
+  return body.outfits.map((o) => o.name || o.signature).join(' · ') || body.worn_outfit?.name || body.body_id
+}
+
+function isWorn(body: OutfitBody): boolean {
+  return !!body.worn_outfit || body.outfits.some((o) => o.worn)
+}
+
+/** The visible reasons under a row of disabled actions: one line when they share it (a lock), else one per action. */
+function ActionReasons({ reasons }: { reasons: [BodyAction, string][] }) {
+  const { t } = useI18n()
+  const shown = reasons.filter(([, reason]) => !!reason)
+  if (!shown.length) return null
+  if (shown.length > 1 && shown.every(([, reason]) => reason === shown[0][1])) {
+    return <div className="ga-hint" style={REASON_STYLE}>{t(shown[0][1])}</div>
+  }
+  return (
+    <>
+      {shown.map(([action, reason]) => (
+        <div key={action} className="ga-hint" style={REASON_STYLE}>{t(ACTION_LABELS[action])}: {t(reason)}</div>
+      ))}
+    </>
+  )
 }
 
 function ViewTiles({ views, meta, keyLabel }: {
@@ -138,7 +179,7 @@ function BodyViewTile({ view, entry, posting, cancelling, onRender, onCancel }: 
     <ViewRenderTile label={t(VIEW_LABELS[view])} url={entry.url} meta={entry.meta}
       height={VIEW_TILE_HEIGHT} running={entry.status === 'running'}
       failed={entry.status === 'failed'} error={entry.error} warning={entry.warning}
-      disabled={posting || queued || !!entry.blocked} disabledTitle={entry.blocked ? t(entry.blocked) : undefined}
+      disabled={posting || queued || !!entry.blocked} disabledReason={entry.blocked ? t(entry.blocked) : undefined}
       actionTitle={t('Renders only this dressed view anew (image jobs) — the model is meshed again only by its own Regenerate.')}
       onRender={onRender}
       status={queued ? (
@@ -218,6 +259,7 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
   const { info, startPoll } = useOutfitBodies(character, refreshKey)
   const statusText = useStatusText()
   const [selected, setSelected] = useState('')
+  const [orphansOpen, setOrphansOpen] = useState(false)
   // The clicked action until its request answered ("<body>:<kind>[:item]").
   const [posting, setPosting] = useState('')
   const [pendingDelete, setPendingDelete] = useState<OutfitBody | null>(null)
@@ -229,7 +271,8 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
       setPosting(key)
       try {
         const d = await apiPost<{ started: boolean; position: number }>(
-          `/characters/${enc}/outfit-bodies/${body.body_id}/${kind}`, itemId ? { item_id: itemId } : {})
+          `/characters/${enc}/outfit-bodies/${body.body_id}/${kind === 'views' ? 'generate-views' : kind}`,
+          itemId ? { item_id: itemId } : {})
         if (!d.started) toast(`${t('Queued')} (#${d.position})`, 'info')
         startPoll(300)
       } catch (e) {
@@ -360,6 +403,14 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
   const cancelling = posting === `${body.body_id}:cancel:`
   const shownCancelled = cancelled?.bodyId === body.body_id && cancelled.since === info
   const busy = body.status === 'running' || body.status === 'queued' || posting.startsWith(`${body.body_id}:`)
+  // Why each action cannot start (the server's reasons, the lock of a running/queued run included).
+  const blocked = body.blocked || {}
+  const reason = (action: BodyAction): string => blocked[action] || ''
+  const regular = info.bodies.filter((b) => !b.orphaned)
+  const orphans = info.bodies.filter((b) => b.orphaned)
+  const showOrphans = orphansOpen || !regular.length || !!body.orphaned
+  const worn = body.worn_outfit
+  const viewsPending = !!worn?.views_missing.length
   const waiting = info.queue.waiting.length
   const fitsCount = body.fits.length
   const deleteMessage = t('Deletes the outfit body with its {f} fit(s) and the {o} outfit model(s) built on it — nothing of it stays. Its dressed views stay; the next build of such an outfit meshes and rigs the body again (hub jobs).')
@@ -369,18 +420,40 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
     <div className="ga-split ga-split-views">
       <div className="ga-split-col">
         <div className="ga-obody-list" role="listbox" aria-label={t('Outfit bodies')}>
-          {info.bodies.map((b) => (
+          {[...regular, ...(showOrphans ? orphans : [])].map((b) => (
             <button key={b.body_id} type="button" role="option" aria-selected={b === body}
               className={`ga-obody-row${b === body ? ' ga-obody-row--sel' : ''}`}
               title={[b.body_id, statusText(b), b.freshness?.reason, b.dress_text].filter(Boolean).join('\n')}
               onClick={() => setSelected(b.body_id)}>
               <span className={`ga-model3d-status-dot ga-model3d-status-${dotOf(b)}`} />
               <span className="ga-model3d-status-text">
-                {bodyLabel(b)}{b.outfits.some((o) => o.worn) ? ` · ${t('worn')}` : ''}
+                {bodyLabel(b)}{isWorn(b) ? ` · ${t('worn')}` : ''}
+                {b.orphaned ? ` · ${t('orphaned')}` : b.status === 'missing' && b.worn_outfit?.views_missing.length
+                  ? ` · ${t('dressed views missing')}` : ''}
               </span>
             </button>
           ))}
         </div>
+        {orphans.length && regular.length ? (
+          <button type="button" className="ga-btn ga-btn-sm" aria-expanded={showOrphans}
+            title={t('Bodies never built that no outfit stands on any more — kept while an outfit names their texture; Delete removes one.')}
+            onClick={() => setOrphansOpen((v) => !v)}>
+            {showOrphans ? t('Hide orphaned bodies') : t('Show orphaned bodies')} ({orphans.length})
+          </button>
+        ) : null}
+        {worn && viewsPending ? (
+          <div>
+            <div className="ga-face-actions-row">
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason('views')}
+                title={reason('views') ? t(reason('views')) : t('Renders the worn outfit\'s missing dressed views ({views}) — about {n} image job(s): one edit for the front, a draft and a fit for each other view; a view the texture store holds is copied without a job. Own-mesh pieces run their garment chain first. The body is meshed only by its own Regenerate.')
+                  .replace('{views}', worn.views_missing.map((v) => t(VIEW_LABELS[v])).join(', '))
+                  .replace('{n}', String(worn.image_jobs))}
+                onClick={() => run(body, 'views')}>{t('Generate views')}</button>
+              <span className="ga-hint">{t('Worn outfit — dressed views missing')}</span>
+            </div>
+            <ActionReasons reasons={[['views', reason('views')]]} />
+          </div>
+        ) : null}
         {body.view_info ? (
           <div className="ga-view-stack">
             {BODY_VIEWS.filter((view) => !!body.view_info?.[view]).map((view) => (
@@ -412,10 +485,9 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
               {cancelling ? t('Cancelling…') : t('Cancel')}
             </button>
           ) : null}
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.can_regenerate}
-            title={body.can_regenerate
-              ? t('Meshes and rigs this body anew from its dressed views (mesh, face, rig, normalize, extension rig, capsules — hub jobs).')
-              : t('No outfit stands on this body\'s dressed views any more — nothing to mesh from.')}
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason('regenerate')}
+            title={reason('regenerate') ? t(reason('regenerate'))
+              : t('Meshes and rigs this body anew from its dressed views (mesh, face, rig, normalize, extension rig, capsules — hub jobs).')}
             onClick={() => run(body, 'regenerate')}>{t('Regenerate')}</button>
           {body.freshness ? <FreshnessBadge freshness={body.freshness} compact /> : null}
           {info.generation_running && body.status === 'running' ? (
@@ -424,6 +496,12 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
             </span>
           ) : null}
         </div>
+        <ActionReasons reasons={[['regenerate', reason('regenerate')]]} />
+        {body.orphaned ? (
+          <div className="ga-hint" style={WARNING_STYLE}>
+            {t('Orphaned — no outfit stands on it')}. {t('It was never built and no outfit stands on its dressed views any more; Delete removes it.')}
+          </div>
+        ) : null}
         {body.status === 'failed' && body.error ? <div className="ga-hint" style={ERROR_STYLE}>{body.error}</div> : null}
         <div className="ga-basebody-model">
           {body.url ? (
@@ -438,24 +516,28 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
           )}
           <div className="ga-basebody-side">
             <div className="ga-face-actions-row">
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.can_rerig}
-                title={body.can_rerig ? t('Rigs the retained unrigged mesh anew (rig chain, hub job).')
-                  : t('No retained unrigged mesh — regenerate the body.')}
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason('rerig')}
+                title={reason('rerig') ? t(reason('rerig')) : t('Rigs the retained unrigged mesh anew (rig chain, hub job).')}
                 onClick={() => run(body, 'rerig')}>{t('Re-rig')}</button>
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !body.url || !fitsCount}
-                title={t('Fits every garment on this body anew from its base fit (CPU, no hub job).')}
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason('refit')}
+                title={reason('refit') ? t(reason('refit'))
+                  : t('Fits every garment on this body anew from its base fit (CPU, no hub job).')}
                 onClick={() => run(body, 'refit')}>{t('Re-fit all')}</button>
-              <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={busy}
-                title={t('Delete the body with its fits and the outfit models built on it')}
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={busy || !!reason('delete')}
+                title={reason('delete') ? t(reason('delete'))
+                  : t('Delete the body with its fits and the outfit models built on it')}
                 onClick={() => setPendingDelete(body)}>{t('Delete')}</button>
             </div>
+            <ActionReasons reasons={[['rerig', reason('rerig')], ['refit', reason('refit')],
+              ['delete', reason('delete')]]} />
             {body.last_run ? (
               <div className="ga-hint" style={body.last_run.ok ? undefined : ERROR_STYLE}
                 title={[body.last_run.error, ...(body.last_run.detail?.failed || []).map((f) => `${f.name}: ${f.error}`)]
                   .filter(Boolean).join('\n')}>
                 {t('Last run')}: {body.last_run.kind === 'view' && body.last_run.view
                   ? `${t(VIEW_LABELS[body.last_run.view])} · ${t('Regenerate')}`
-                  : t(body.last_run.kind === 'rerig' ? 'Re-rig' : body.last_run.kind === 'refit' ? 'Re-fit' : 'Regenerate')}
+                  : t(body.last_run.kind === 'rerig' ? 'Re-rig' : body.last_run.kind === 'refit' ? 'Re-fit'
+                    : body.last_run.kind === 'views' ? 'Generate views' : 'Regenerate')}
                 {' · '}{body.last_run.ok ? t('done') : t('failed')}
                 {body.last_run.error ? ` · ${body.last_run.error}` : ''}
               </div>
@@ -482,7 +564,14 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
                     </div>
                   ))}
                 </div>
-              )) : <div className="ga-hint">{t('No outfit model stands on it')}</div>}
+              )) : worn ? (
+                <div className="ga-model3d-status-row ga-obody-line" title={worn.signature}>
+                  <span className="ga-model3d-status-dot ga-model3d-status-grey" />
+                  <span className="ga-model3d-status-text">
+                    {worn.name || worn.signature} · {t('worn')} · {t('no outfit model yet')}
+                  </span>
+                </div>
+              ) : <div className="ga-hint">{t('No outfit model stands on it')}</div>}
             </div>
 
             {body.dress_text ? (

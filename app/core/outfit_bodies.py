@@ -32,7 +32,10 @@ chain on the retained unrigged mesh, hub job), ``refit`` (every fit on the
 body anew from the base fits, CPU), ``view`` (ONE dressed view rendered
 anew — ``render_view``: image jobs only, never the mesh; the front is one
 edit of the base front, a back/side a draft from the dressed front plus the
-gated fit). A view run does not cascade: the back follows the front through
+gated fit), ``views`` (the WORN outfit's missing dressed views —
+``render_worn_views``: image jobs only, never chained to the mesh; the
+body the worn outfit will stand on is listed before they exist,
+``worn_body``). A view run does not cascade: the back follows the front through
 its draft, so after a new front the back shows "outdated: Made from an older
 dressed front" and is rendered again only by its own click (the pipeline
 accepts a back of an older front — ``base_body.dressed_image`` judges the
@@ -57,7 +60,7 @@ from app.core.log import get_logger
 
 logger = get_logger("outfit_bodies")
 
-RUN_KINDS = ("regenerate", "rerig", "refit", "view")
+RUN_KINDS = ("regenerate", "rerig", "refit", "view", "views")
 NO_SOURCE = ("No outfit stands on this body's dressed views any more — "
              "render the outfit's pose images first")
 NO_UNRIGGED = "The outfit body has no retained unrigged mesh — regenerate it"
@@ -71,6 +74,21 @@ NOT_BUILT = "Not built"
 # A body from before the posture match, or matched to another base model (outfit_body_posture.py):
 # the next "Re-fit all", outfit build on it or server start matches it (CPU).
 POSTURE_NOT_MATCHED = "Posture not matched to the base body yet"
+# The worn outfit's body before its dressed views exist (``worn_body``) and the
+# reasons the tab shows under a disabled action (``body_info``'s ``blocked``).
+WORN_VIEWS_MISSING = "The worn outfit's dressed views are missing — Generate views renders them"
+WORN_VIEWS_PRESENT = "The worn outfit's dressed views exist already"
+NOT_WORN_BODY = "Not the worn outfit's body — Generate views renders the worn outfit's views only"
+NO_MODEL = "No model stored — regenerate the body first"
+NO_GARMENTS = "No own-mesh garment or hair on this body"
+NOTHING_STORED = "Nothing of this body is stored yet"
+LOCKED_BUILD = "Locked: a 3D model job is running for this body"
+LOCKED_RUNNING = "Locked: a run on this body is running"
+LOCKED_QUEUED = "Locked: a run on this body is queued"
+
+
+class UnknownBody(LookupError):
+    """``check_run``: the run names a body it cannot work on at all (404)."""
 
 
 @dataclass
@@ -190,9 +208,11 @@ def _saved_outfits(character_name: str) -> List[Dict[str, Any]]:
         return []
 
 
-def body_ids(character_name: str, outfit_models: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
+def body_ids(character_name: str, outfit_models: Optional[Dict[str, Dict[str, Any]]] = None,
+             extra: Optional[str] = None) -> List[str]:
     """Every outfit body the character has files of (model, refs) or an
-    outfit model names, sorted."""
+    outfit model names, plus ``extra`` (the worn outfit's body, ``worn_body``),
+    sorted."""
     from app.core import base_body
     from app.models.character import get_character_dir
     root = get_character_dir(character_name)
@@ -207,6 +227,8 @@ def body_ids(character_name: str, outfit_models: Optional[Dict[str, Dict[str, An
     for meta in (outfit_models if outfit_models is not None else _outfit_models(character_name)).values():
         if base_body.is_outfit_body_signature(meta.get("body_id")):
             ids.add(str(meta["body_id"]))
+    if base_body.is_outfit_body_signature(extra):
+        ids.add(str(extra))
     with _lock:
         for job in list(_queues.get(character_name) or ()) + (
                 [_current[character_name]] if character_name in _current else []):
@@ -483,12 +505,17 @@ def _texts_now(character_name: str, candidates: List[str], *, bsig: str,
 
 
 def _view_runs(character_name: str, body_id: str) -> Dict[str, Tuple[str, Optional[int]]]:
-    """``{view: (running|queued, queue position)}`` of the body's view runs."""
+    """``{view: (running|queued, queue position)}`` of the body's view runs;
+    a running ``views`` run counts as running for every dressed view (its
+    waiting run is the body's, cancelled with the body's Cancel)."""
+    from app.core import base_body
     out: Dict[str, Tuple[str, Optional[int]]] = {}
     with _lock:
         current = _current.get(character_name)
         if current is not None and current.body_id == body_id and current.kind == "view":
             out[current.view] = ("running", None)
+        if current is not None and current.body_id == body_id and current.kind == "views":
+            out.update({v: ("running", None) for v in base_body.dressed_views()})
         for n, job in enumerate(_queues.get(character_name) or (), start=1):
             if job.body_id == body_id and job.kind == "view":
                 out.setdefault(job.view, ("queued", n))
@@ -592,6 +619,100 @@ def render_view(character_name: str, body_id: str, view: str) -> Dict[str, Any]:
     return {"ok": False, "error": str(failure.get("error") or f"Dressed {view} render failed")}
 
 
+# --- the worn outfit's body ------------------------------------------------------------
+
+def worn_body(character_name: str, *, profile: Dict[str, Any], bsig: str) -> Optional[Dict[str, Any]]:
+    """Mesh mode: the body the WORN outfit stands on — or will stand on once
+    its dressed views exist. ``{signature, pieces, items, body_id, tsig,
+    predicted, views_missing, image_jobs}``; None off mesh mode, with nothing
+    worn, for an undressed combination (it stands on the base body) or when
+    it cannot be computed.
+
+    With a dressed front of the current base the body is
+    ``base_body.outfit_body_of_outfit``'s (``predicted`` False). Without
+    one it is predicted from the worn pieces by the rule
+    ``generate_dressed_images`` signs the views with in mesh mode
+    (``resolve_mesh_items``: every flagged own-mesh piece is left out —
+    ``unpainted`` = ``intended`` —, ``texture_variant`` / ``texture_inputs``
+    of the pieces), read-only: no garment chain runs. ``views_missing``: the
+    dressed views (``dressed_views()``) without a current image
+    (``dressed_image``); ``image_jobs``: what rendering them costs at least —
+    one edit for the front, a draft plus a fit for each other view (a view
+    the texture store holds is copied, no job)."""
+    from copy import deepcopy
+    from app.core import base_body, garment_set
+    from app.core.model_refs import current_outfit_state
+    from app.models.inventory import get_item
+    if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+        return None
+    try:
+        pieces, items, worn = current_outfit_state(character_name)
+        if not worn:
+            return None
+        front = base_body.dressed_image(character_name, "front", worn, bsig)
+        if front is not None:
+            body_id = base_body.outfit_body_of_outfit(character_name, worn, profile=profile)
+            if not body_id:
+                return None  # an undressed front: the outfit stands on the base body
+            dressed = True
+            tsig = str(base_body._outfit_texture(character_name, front, bsig=bsig, profile=profile)["tsig"])
+        else:
+            mesh_profile = deepcopy(profile)
+            mesh_profile["equipped_pieces"] = dict(pieces or {})
+            mesh_profile["equipped_items"] = list(items or [])
+            intended = [i for i in garment_set.worn_garments(character_name, profile=mesh_profile,
+                                                             pieces=dict(pieces or {}))
+                        if garment_set.garment_kind_of(get_item(i)) in garment_set.OWN_MESH_PIECE_KINDS]
+            dressed = bool(base_body.dress_text(character_name, "front", pieces=pieces, items=items,
+                                                profile=mesh_profile, mesh_items=intended))
+            variant = base_body.texture_variant(character_name, pieces, dressed=dressed,
+                                                mesh={"intended": intended}, profile=profile)
+            tsig = base_body.texture_signature(base_body.texture_inputs(
+                character_name, pieces=pieces, items=items, variant=variant, mesh_effective=intended, bsig=bsig,
+                profile=mesh_profile))
+            body_id = base_body.outfit_body_id(tsig)
+        if not dressed:
+            return None
+        missing = [v for v in base_body.dressed_views()
+                   if base_body.dressed_image(character_name, v, worn, bsig) is None]
+    except Exception:  # noqa: BLE001 — a display entry, never a failure
+        logger.debug("Worn outfit body of %s not computable", character_name, exc_info=True)
+        return None
+    return {"signature": worn, "pieces": dict(pieces or {}), "items": list(items or []), "body_id": body_id,
+            "tsig": tsig, "predicted": front is None, "views_missing": missing,
+            "image_jobs": (1 if "front" in missing else 0) + 2 * len([v for v in missing if v != "front"])}
+
+
+def render_worn_views(character_name: str, body_id: str) -> Dict[str, Any]:
+    """The ``views`` run: render the worn outfit's missing dressed views
+    (``generate_dressed_images`` without ``force`` — image jobs only, a view
+    the texture store holds is copied) when the worn outfit stands on
+    ``body_id`` (``worn_body``). Never chained to the mesh: the body's own
+    Regenerate meshes it. Caller holds the character's generation slot.
+    ``{ok, error}``."""
+    from app.core import base_body
+    profile = _profile(character_name)
+    bsig = base_body.base_signature(character_name, profile=profile)
+    worn = worn_body(character_name, profile=profile, bsig=bsig)
+    if worn is None or worn["body_id"] != body_id:
+        return {"ok": False, "error": NOT_WORN_BODY}
+    logger.info("Outfit body %s of %s: rendering the worn outfit's dressed views %s (outfit %s)", body_id,
+                character_name, worn["views_missing"], worn["signature"])
+    base_body.generate_dressed_images(character_name, pieces=worn["pieces"], items=worn["items"],
+                                      signature=worn["signature"], force=False)
+    missing = [v for v in base_body.dressed_views()
+               if base_body.dressed_image(character_name, v, worn["signature"], bsig) is None]
+    now = base_body.outfit_body_of_outfit(character_name, worn["signature"], profile=profile)
+    if now and now != body_id:
+        logger.warning("Outfit body of %s: the worn outfit's views stand for %s, %s was predicted",
+                       character_name, now, body_id)
+    if not missing:
+        return {"ok": True, "error": ""}
+    with base_body._status_lock:
+        failure = dict(base_body._outfit_failed.get((character_name, worn["signature"])) or {})
+    return {"ok": False, "error": str(failure.get("error") or "Dressed views missing: " + ", ".join(missing))}
+
+
 # --- info ---------------------------------------------------------------------------
 
 def _outfits_on_body(character_name: str, body_id: str, models: Dict[str, Dict[str, Any]],
@@ -634,14 +755,48 @@ def stale_posture(character_name: str, meta: Dict[str, Any]) -> str:
         return ""
 
 
+def _blocked(*, run: str, kind: Optional[str], source: str, worn_entry: bool,
+             built: bool, unrigged: bool, fits: int, stored: bool, views_missing: List[str]) -> Dict[str, str]:
+    """Why each action of the body cannot start now (server English the tab
+    translates), "" when it can: ``regenerate`` / ``rerig`` / ``refit`` /
+    ``delete`` / ``views`` (the worn outfit's Generate views). A run the
+    tab's own queue holds on the body comes first (``Locked: …``); the tab
+    adds what only it knows (a request in flight)."""
+    if run == "running":
+        lock = LOCKED_BUILD if kind == "build" else LOCKED_RUNNING
+    elif run == "queued":
+        lock = LOCKED_QUEUED
+    else:
+        lock = ""
+    out = {
+        "regenerate": "" if source else (WORN_VIEWS_MISSING if worn_entry else NO_SOURCE),
+        "rerig": "" if unrigged else NO_UNRIGGED,
+        "refit": "" if built and fits else (NO_GARMENTS if built else NO_MODEL),
+        "delete": "" if stored else NOTHING_STORED,
+        "views": ("" if views_missing else WORN_VIEWS_PRESENT) if worn_entry else NOT_WORN_BODY,
+    }
+    return {k: lock or v for k, v in out.items()}
+
+
 def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsig: str,
-              models: Dict[str, Dict[str, Any]], saved: List[Dict[str, Any]], worn: str) -> Dict[str, Any]:
+              models: Dict[str, Dict[str, Any]], saved: List[Dict[str, Any]], worn: str,
+              worn_entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """One body of the tab. ``worn_entry``: ``worn_body`` when the worn
+    outfit stands (or will stand) on this body — it then carries
+    ``worn_outfit`` ``{signature, name, predicted, views_missing,
+    image_jobs}`` and its view tiles say to Generate views while no outfit
+    stands on them yet. ``orphaned``: never built, no outfit standing on its
+    views, no outfit model on it, not the worn one (ruling 2026-11-10: listed
+    collapsed, never hidden — the artefact GC keeps such a body while a live
+    outfit names its texture). ``blocked``: ``_blocked``."""
     from app.core import base_body, model3d
     from app.core.model_overview import freshness, outfit_body_overview
+    if worn_entry is not None and worn_entry.get("body_id") != body_id:
+        worn_entry = None
     path = base_body.outfit_body_path(character_name, body_id)
     meta = _json(path.with_suffix(".json")) if path.is_file() else {}
     record = _body_record(character_name, body_id)
-    tsig = str(record.get("texture_signature") or "")
+    tsig = str(record.get("texture_signature") or "") or (str(worn_entry["tsig"]) if worn_entry else "")
     on_body = _outfits_on_body(character_name, body_id, models, saved, worn)
     views, view_meta = _view_urls(character_name, body_id)
     source = source_outfit(character_name, body_id, profile=profile, outfit_models=models)
@@ -687,6 +842,20 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
     candidates = [source, str(record.get("built_for") or "")] + [e["signature"] for e in on_body]
     view_info = view_infos(character_name, body_id, record=record, tsig=tsig, source=source, bsig=bsig,
                            profile=profile, candidates=candidates, last=last)
+    if worn_entry is not None and not source:
+        # No outfit stands on the views yet: the worn outfit's own Generate views makes them.
+        for entry in view_info.values():
+            if entry.get("blocked") == NO_SOURCE:
+                entry["blocked"] = WORN_VIEWS_MISSING
+    fits = fits_on_body(character_name, body_id, profile=profile, on_body=on_body)
+    stored = path.is_file() or unrigged.is_file() or any(views.values())
+    worn_outfit = None
+    if worn_entry is not None:
+        worn_outfit = {"signature": worn_entry["signature"],
+                       "name": _outfit_name({"pieces": worn_entry["pieces"]}, saved),
+                       "predicted": bool(worn_entry["predicted"]),
+                       "views_missing": list(worn_entry["views_missing"]),
+                       "image_jobs": int(worn_entry["image_jobs"])}
     return {
         "body_id": body_id, "texture_signature": tsig or None, "status": status, "error": error,
         "run_kind": kind, "queue_position": position, "last_run": last or None,
@@ -698,9 +867,14 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         "outfits": [{k: v for k, v in e.items() if k != "meta"} for e in on_body],
         "steps": (overview or {}).get("steps") or [],
         "collision": meta.get("collision") if path.is_file() else None,
-        "fits": fits_on_body(character_name, body_id, profile=profile, on_body=on_body),
+        "fits": fits,
         "can_regenerate": bool(source), "regenerate_from": source or None,
         "can_rerig": unrigged.is_file(),
+        "worn_outfit": worn_outfit,
+        "orphaned": not path.is_file() and not source and not on_body and worn_entry is None and not run,
+        "blocked": _blocked(run=run, kind=kind, source=source, worn_entry=worn_entry is not None,
+                            built=path.is_file(), unrigged=unrigged.is_file(), fits=len(fits), stored=stored,
+                            views_missing=list((worn_entry or {}).get("views_missing") or [])),
     }
 
 
@@ -743,17 +917,20 @@ def info(character_name: str) -> Dict[str, Any]:
         worn = ""
     models = _outfit_models(character_name)
     saved = _saved_outfits(character_name)
-    for body_id in body_ids(character_name, models):
+    worn_entry = worn_body(character_name, profile=profile, bsig=bsig)
+    for body_id in body_ids(character_name, models, extra=(worn_entry or {}).get("body_id")):
         try:
             out["bodies"].append(body_info(character_name, body_id, profile=profile, bsig=bsig, models=models,
-                                           saved=saved, worn=worn))
+                                           saved=saved, worn=worn, worn_entry=worn_entry))
         except Exception as e:  # noqa: BLE001 — one unreadable body does not hide the others
             logger.exception("Outfit body %s of %s unreadable", body_id, character_name)
             out["bodies"].append({"body_id": body_id, "status": "failed", "error": str(e), "views": {},
-                                  "outfits": [], "steps": [], "fits": [], "freshness": None})
-    # The worn outfit's body first, then the newest (stable sorts, the last key first).
+                                  "outfits": [], "steps": [], "fits": [], "freshness": None, "worn_outfit": None,
+                                  "orphaned": False, "blocked": {}})
+    # The worn outfit's body first, the orphaned ones last, else the newest (stable sorts, the last key first).
     out["bodies"].sort(key=lambda b: str(b.get("created_at") or ""), reverse=True)
-    out["bodies"].sort(key=lambda b: not any(o.get("worn") for o in b.get("outfits") or []))
+    out["bodies"].sort(key=lambda b: (bool(b.get("orphaned")), not (
+        b.get("worn_outfit") or any(o.get("worn") for o in b.get("outfits") or []))))
     if mode != base_body.MESH_MODE:
         for tsig, sigs in sorted(base_body.texture_users(character_name).items()):
             views, view_meta = _view_urls(character_name, tsig)
@@ -778,8 +955,11 @@ def info(character_name: str) -> Dict[str, Any]:
 def check_run(character_name: str, kind: str, body_id: str, item_id: str = "", view: str = "") -> None:
     """``ValueError`` (400) / ``LookupError`` (409) before a run is queued:
     an unknown kind, id or view, off the pipeline, not mesh mode
-    (regenerate), nothing to mesh from, no unrigged mesh (re-rig), no body
-    (re-rig / refit), a view that cannot be rendered (``view_blocked``)."""
+    (regenerate, views), nothing to mesh from, no unrigged mesh (re-rig), no
+    body (re-rig / refit), a view that cannot be rendered (``view_blocked``),
+    the worn outfit's views present or its base views missing (views).
+    ``UnknownBody`` (404, a ``LookupError``): a ``views`` run on a body the
+    worn outfit does not stand on."""
     from app.core import base_body
     if kind not in RUN_KINDS:
         raise ValueError(f"run must be one of {', '.join(RUN_KINDS)}")
@@ -802,6 +982,18 @@ def check_run(character_name: str, kind: str, body_id: str, item_id: str = "", v
             raise LookupError(NOT_MESH_MODE)
         if not source_outfit(character_name, body_id, profile=profile):
             raise LookupError(NO_SOURCE)
+    elif kind == "views":
+        if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+            raise LookupError(NOT_MESH_MODE)
+        bsig = base_body.base_signature(character_name, profile=profile)
+        worn = worn_body(character_name, profile=profile, bsig=bsig)
+        if worn is None or worn["body_id"] != body_id:
+            raise UnknownBody(NOT_WORN_BODY)
+        if not worn["views_missing"]:
+            raise LookupError(WORN_VIEWS_PRESENT)
+        from app.core.model_refs import find_ref_image
+        if any(find_ref_image(character_name, base_body._kind(v), bsig) is None for v in base_body.dressed_views()):
+            raise LookupError(base_body.BASE_IMAGES_MISSING)
     elif kind == "rerig":
         if not (path.parent / "unrigged" / path.name).is_file():
             raise LookupError(NO_UNRIGGED)
@@ -937,7 +1129,7 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
     except (ValueError, LookupError) as e:
         return {"ok": False, "error": str(e)}
     labels = {"regenerate": "Outfit body", "rerig": "Re-rig outfit body", "refit": "Re-fit on outfit body",
-              "view": f"Outfit body {job.view} view"}
+              "view": f"Outfit body {job.view} view", "views": "Outfit body dressed views"}
     queue, task_id = _tracked(character_name, f"{labels[job.kind]}: {character_name} ({job.body_id})")
     result: Dict[str, Any] = {"ok": False, "error": ""}
     try:
@@ -952,6 +1144,8 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
                 result = {"ok": bool(built.get("ok")), "error": str(built.get("error") or "")}
         elif job.kind == "view":
             result = render_view(character_name, job.body_id, job.view)
+        elif job.kind == "views":
+            result = render_worn_views(character_name, job.body_id)
         elif job.kind == "rerig":
             rigged = model3d.rerig_model(character_name, job.body_id, track_id=task_id)
             result = {"ok": bool(rigged.get("ok")), "error": str(rigged.get("error") or "")}
