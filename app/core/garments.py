@@ -79,7 +79,8 @@ run of the item becomes the explicit one in its place — and
 ``enqueue_garment`` (the triggers: ``after_base_model``, the outfit build's
 ``run_queued``) appends a default run behind the others. Several garments of
 one character run one after the other, each request once; a failed run never
-holds the queue (the next one starts). ``queue_state`` is the UI view.
+holds the queue (the next one starts). ``queue_state`` is the UI view;
+``cancel_garment`` takes an item's waiting runs out (never the one in flight).
 
 An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
 asks ``base_body.after_mesh_item_ready``: an outfit model that left it
@@ -1539,6 +1540,47 @@ def enqueue_garment(character_name: str, item_id: str) -> "_Job":
                 _abort_spawn_locked(character_name, item_id)
                 raise
     return job
+
+
+class RunStarted(Exception):
+    """``cancel_garment``: the item's run has started — it cannot be cancelled."""
+
+
+#: ``cancel_garment``'s refusal (409) and the result a cancelled job's waiters get.
+ALREADY_RUNNING = "The run has already started — a running run cannot be cancelled"
+NOT_QUEUED = "No run of this item waits in the queue"
+CANCELLED = "Cancelled while queued"
+
+
+def cancel_garment(character_name: str, item_id: str) -> Dict[str, Any]:
+    """Take the item's WAITING runs out of the character's FIFO (atomic under
+    ``_lock``; the runs behind them move up). A run in flight is never
+    touched: ``RunStarted`` when the item only has that one, ``LookupError``
+    when the item has no run at all. The item's ``queued`` mark ends unless
+    its run is in flight; a waiter of a cancelled job (``run_queued``) gets
+    ``{ok: False, cancelled: True, error}``. Returns ``{item_id, cancelled
+    (count), queue_running, queue}``."""
+    from app.core import garment_store as gs
+    with _lock:
+        queue = _queues.get(character_name)
+        dropped = [j for j in queue or () if j.item_id == item_id]
+        current = _current.get(character_name)
+        in_flight = current is not None and current.item_id == item_id
+        if not dropped:
+            if in_flight:
+                raise RunStarted(ALREADY_RUNNING)
+            raise LookupError(NOT_QUEUED)
+        for job in dropped:
+            queue.remove(job)
+        if not in_flight:
+            gs.end(character_name, item_id, QUEUED)
+        for job in dropped:
+            job.result = {"ok": False, "cancelled": True, "error": CANCELLED, "ran": []}
+            job.done.set()
+        waiting = [j.item_id for j in queue]
+    logger.info("Garment %s/%s: %d waiting run(s) cancelled", character_name, item_id, len(dropped))
+    return {"item_id": item_id, "cancelled": len(dropped),
+            "queue_running": current.item_id if current is not None else None, "queue": waiting}
 
 
 def queue_state(character_name: str, item_id: Optional[str] = None) -> Dict[str, Any]:

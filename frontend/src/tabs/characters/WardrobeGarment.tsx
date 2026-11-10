@@ -191,7 +191,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   const enc = encodeURIComponent(character)
   const url = character && itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}` : null
   const { info, startPoll } = useGarment<GarmentItemInfo & { steps?: ModelStep[] }>(url)
-  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll)
+  const { feedback, start, cancel } = useGarmentRun(character, itemId, info, startPoll)
 
   useEffect(() => { if (info?.status) onStatus(itemId, info.status) }, [info, itemId, onStatus])
   useEffect(() => {
@@ -276,7 +276,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
           <span className="ga-garment-dialog-title" title={name}>{name}</span>
           <div style={{ flex: '1 1 auto', minWidth: 0, fontWeight: 400 }}>
             {running || feedback.pending !== null
-              ? <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} bare />
+              ? <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} bare
+                onCancel={() => { void cancel() }} />
               : info?.status ? <PieceStatusChip status={info.status} /> : null}
           </div>
           {info?.pipeline ? (

@@ -98,13 +98,16 @@ export function RunButton({ feedback, slot, label, disabled, title, ariaLabel, s
 
 /** The panel's status line while the item runs or waits — sticky, so it
  *  stays in view while the steps scroll: Starting… / Queued (behind the
- *  character's other runs) / Running: <step>, with the start time. */
-export function RunStatusLine({ garment, feedback, stepLabels, bare = false }: {
+ *  character's other runs) / Running: <step>, with the start time. While
+ *  the item's run WAITS (`queue_position`), a Cancel button takes it out of
+ *  the queue (`onCancel`, useGarmentRun's cancel); a run in flight has none. */
+export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onCancel }: {
   garment: GarmentInfo | null
   feedback?: RunFeedback
   stepLabels: Record<string, string>
   /** Inline in a header: no sticky box of its own. */
   bare?: boolean
+  onCancel?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -115,8 +118,12 @@ export function RunStatusLine({ garment, feedback, stepLabels, bare = false }: {
     ? `${t(stepLabels[target.step] || target.step)}${target.view
       ? ` · ${target.view === 'front' ? t('Front view') : t('Back view')}` : ''}`
     : ''
+  const cancel = feedback?.cancel
+  const waits = running === 'queued' && typeof garment?.queue_position === 'number'
   let text: string
-  if (!running) {
+  if (cancel?.done) {
+    text = t('Cancelled')
+  } else if (!running) {
     text = t('Starting…')
   } else if (running === 'queued') {
     text = queueText(garment, feedback, stepLabels, t)
@@ -127,12 +134,23 @@ export function RunStatusLine({ garment, feedback, stepLabels, bare = false }: {
     <div className={bare ? 'ga-hint ga-run-status-bare' : 'ga-hint ga-run-status'} role="status">
       {running ? <RunBadge mark={running === 'queued' ? 'queued' : 'generating'} /> : null}
       <span style={{ flex: '1 1 0', minWidth: 0 }}>
-        {[
+        {cancel?.done ? text : [
           text,
           requested ? `${t('Requested')}: ${requested}` : '',
           running && garment?.started_at ? `${t('started')} ${formatDateTime(garment.started_at, clockSettings())}` : '',
         ].filter(Boolean).join(' · ')}
       </span>
+      {onCancel && waits && !cancel?.done ? (
+        <button type="button" className="ga-btn ga-btn-sm" disabled={cancel?.pending}
+          aria-busy={cancel?.pending || undefined}
+          title={t('Removes this waiting run from the queue — nothing of it has started')}
+          onClick={onCancel}>
+          {cancel?.pending ? t('Cancelling…') : t('Cancel')}
+        </button>
+      ) : null}
+      {cancel?.error ? (
+        <span style={{ ...ERROR_STYLE, flexBasis: '100%' }} title={cancel.error}>{t('Error')}: {cancel.error}</span>
+      ) : null}
     </div>
   )
 }

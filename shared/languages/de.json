@@ -4364,6 +4364,8 @@
     "Requested": "Angefordert",
     "started": "gestartet",
     "position {n}": "Position {n}",
+    "Removes this waiting run from the queue — nothing of it has started": "Nimmt diesen wartenden Lauf aus der Warteschlange — davon hat noch nichts begonnen",
+    "Waiting run cancelled": "Wartender Lauf abgebrochen",
     "Worn views: the base body wearing this piece, front and back (image edits of the base views). Regenerate: one hub image job for that view (a second attempt when the gate refuses it), then every later step runs again.": "Getragene Ansichten: der Grundkörper mit diesem Teil, vorne und hinten (Bildbearbeitungen der Grundansichten). Neu generieren: ein Hub-Bildjob für diese Ansicht (ein zweiter Versuch, wenn die Prüfung ihn ablehnt), danach laufen alle späteren Schritte erneut.",
     "Piece-only views: the piece alone, the body removed, aligned to the worn view. Regenerate: one hub image job for that view (a second attempt when the gate refuses it), then every later step runs again.": "Nur-Teil-Ansichten: das Teil allein, ohne Körper, an der getragenen Ansicht ausgerichtet. Neu generieren: ein Hub-Bildjob für diese Ansicht (ein zweiter Versuch, wenn die Prüfung ihn ablehnt), danach laufen alle späteren Schritte erneut.",
     "Cut-outs: the piece-only views squared and upscaled as the mesh input. Regenerate: local crop plus a routed upscale job, then the mesh and the fit run again.": "Ausschnitte: die Nur-Teil-Ansichten quadratisch zugeschnitten und hochskaliert als Mesh-Eingabe. Neu generieren: lokaler Zuschnitt plus ein gerouteter Upscale-Job, danach laufen Mesh und Anpassung erneut.",

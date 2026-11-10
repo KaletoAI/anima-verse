@@ -17,10 +17,11 @@
  * GET /characters/{n}/outfit-bodies (polled while a run waits or works),
  * POST …/{body}/regenerate | rerig | refit {item_id?} — 202 with the queue
  * place, a run queues behind the character's running 3D run, never 409 for
- * that; POST …/{body}/delete — the body and its chain through the artefact
- * graph (409 while a run is on it).
+ * that; POST …/{body}/cancel — takes the body's waiting run out of the queue
+ * (409 once it has started); POST …/{body}/delete — the body and its chain
+ * through the artefact graph (409 while a run is on it).
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -198,6 +199,29 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
     [enc, posting, startPoll, t, toast],
   )
 
+  // The Cancel of a body's waiting run: its body id and the info on screen
+  // when it answered — "Cancelled" shows until a newer info arrives.
+  const [cancelled, setCancelled] = useState<{ bodyId: string; since: unknown } | null>(null)
+  const infoRef = useRef(info)
+  useEffect(() => { infoRef.current = info }, [info])
+  const cancel = useCallback(
+    async (body: OutfitBody) => {
+      if (posting) return
+      setPosting(`${body.body_id}:cancel:`)
+      try {
+        await apiPost(`/characters/${enc}/outfit-bodies/${body.body_id}/cancel`, {})
+        setCancelled({ bodyId: body.body_id, since: infoRef.current })
+        toast(t('Waiting run cancelled'), 'success')
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setPosting('')
+        startPoll(0)
+      }
+    },
+    [enc, posting, startPoll, t, toast],
+  )
+
   const remove = useCallback(async () => {
     const body = pendingDelete
     setPendingDelete(null)
@@ -252,6 +276,8 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
   }
 
   const body = info.bodies.find((b) => b.body_id === selected) ?? info.bodies[0]
+  const cancelling = posting === `${body.body_id}:cancel:`
+  const shownCancelled = cancelled?.bodyId === body.body_id && cancelled.since === info
   const busy = body.status === 'running' || body.status === 'queued' || posting.startsWith(`${body.body_id}:`)
   const waiting = info.queue.waiting.length
   const fitsCount = body.fits.length
@@ -284,9 +310,17 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
         <div className="ga-face-actions-row">
           <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Outfit body')} {body.body_id}</span>
           <span className="ga-hint">
-            {statusText(body)}
+            {shownCancelled ? t('Cancelled') : statusText(body)}
             {body.created_at && body.status !== 'running' ? ` · ${formatDateTime(body.created_at, clockSettings())}` : ''}
           </span>
+          {body.status === 'queued' && !shownCancelled ? (
+            <button type="button" className="ga-btn ga-btn-sm" disabled={!!posting}
+              aria-busy={cancelling || undefined}
+              title={t('Removes this waiting run from the queue — nothing of it has started')}
+              onClick={() => { void cancel(body) }}>
+              {cancelling ? t('Cancelling…') : t('Cancel')}
+            </button>
+          ) : null}
           {body.freshness ? <FreshnessBadge freshness={body.freshness} compact /> : null}
           {info.generation_running && body.status === 'running' ? (
             <span className="ga-hint" title={t('Another 3D run of this character holds the generation slot; this run starts when it ends.')}>

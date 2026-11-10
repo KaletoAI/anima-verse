@@ -22,7 +22,8 @@ never refuse (the explicit-run rule of the garment queue, 4c81488b): a run
 waits behind the running one, and each run holds model3d's per-character
 generation guard (``model3d.generation_slot``) — a body is never rebuilt
 while another 3D run of the character goes. Delete is not a run: it is the
-artefact graph's explicit walk (``artefact_graph.delete_body``).
+artefact graph's explicit walk (``artefact_graph.delete_body``). ``cancel``
+takes a body's waiting runs out of the FIFO (never the one in flight).
 """
 from __future__ import annotations
 
@@ -559,6 +560,38 @@ def start(character_name: str, kind: str, body_id: str, item_id: str = "") -> Di
                              name=f"outfit-body-{character_name}").start()
         out = _position_locked(character_name, job)
     return {"kind": kind, "body_id": body_id, "item_id": item_id or None, **out}
+
+
+class RunStarted(Exception):
+    """``cancel``: the body's run has started — it cannot be cancelled."""
+
+
+ALREADY_RUNNING = "The run on this outfit body has already started — a running run cannot be cancelled"
+NOT_QUEUED = "No run on this outfit body waits in the queue"
+CANCELLED = "Cancelled while queued"
+
+
+def cancel(character_name: str, body_id: str) -> Dict[str, Any]:
+    """Take the body's WAITING runs out of the character's FIFO (atomic under
+    ``_lock``; the runs behind them move up). The run in flight is never
+    touched: ``RunStarted`` when the body only has that one, ``LookupError``
+    when no run is on it. A cancelled job's waiter gets ``{ok: False,
+    cancelled: True, error}``; the body's last result is not rewritten.
+    ``{body_id, cancelled (count), queue}`` (``queue_state``'s shape)."""
+    with _lock:
+        queue = _queues.get(character_name)
+        dropped = [j for j in queue or () if j.body_id == body_id]
+        current = _current.get(character_name)
+        if not dropped:
+            if current is not None and current.body_id == body_id:
+                raise RunStarted(ALREADY_RUNNING)
+            raise LookupError(NOT_QUEUED)
+        for job in dropped:
+            queue.remove(job)
+            job.result = {"ok": False, "cancelled": True, "error": CANCELLED}
+            job.done.set()
+    logger.info("Outfit body %s of %s: %d waiting run(s) cancelled", body_id, character_name, len(dropped))
+    return {"body_id": body_id, "cancelled": len(dropped), "queue": queue_state(character_name)}
 
 
 def _worker(character_name: str) -> None:

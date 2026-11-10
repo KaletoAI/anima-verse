@@ -2144,6 +2144,24 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{character_name}/garments/{item_id}/cancel")
+def cancel_character_garment(character_name: str, item_id: str,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Cancel the item's WAITING run(s) in the character's garment queue
+    (hair and own-mesh pieces share it; ``garments.cancel_garment``): the
+    runs behind move up, the item's queued mark ends. 409 when the item's
+    run has already started (a running run is never cancelled), 404 when no
+    run of the item waits. ``{item_id, cancelled, queue_running, queue}``."""
+    from app.core import garments
+    _require_character(character_name)
+    try:
+        return garments.cancel_garment(character_name, item_id)
+    except garments.RunStarted as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/{character_name}/garments/{item_id}/images/{step}/{view}")
 def get_character_garment_image(character_name: str, item_id: str, step: str, view: str, request: Request,
                                 attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):

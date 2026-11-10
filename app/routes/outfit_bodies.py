@@ -14,6 +14,9 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
   The three runs answer 202 ``{kind, body_id, started, queued, position,
   behind}`` and queue behind a running 3D run of the character (never 409
   for a run in progress); 409 when the run has nothing to work on.
+* ``POST …/{body_id}/cancel`` — take the body's waiting runs out of the
+  queue (``outfit_bodies.cancel``); 409 when its run has already started,
+  404 when none waits.
 * ``POST …/{body_id}/delete`` — the body and its chain through the artefact
   graph (``artefact_graph.delete_body``); 409 while a run of the tab is on it.
 """
@@ -87,6 +90,19 @@ class RefitRequest(BaseModel):
 def refit_outfit_body(character_name: str, body_id: str, body: Optional[RefitRequest] = None,
                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     return _start(character_name, "refit", body_id, (body.item_id if body else "") or "")
+
+
+@router.post("/{character_name}/outfit-bodies/{body_id}/cancel")
+def cancel_outfit_body_run(character_name: str, body_id: str,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import outfit_bodies
+    _require_character(character_name)
+    try:
+        return outfit_bodies.cancel(character_name, body_id)
+    except outfit_bodies.RunStarted as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/{character_name}/outfit-bodies/{body_id}/delete")

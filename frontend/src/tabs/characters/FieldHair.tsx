@@ -405,7 +405,7 @@ export function FieldHair({ character, onEditAppearance, methodSettings }: {
   )
 
   const itemId = info?.item_id || ''
-  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll)
+  const { feedback, start, cancel } = useGarmentRun(character, itemId, info, startPoll)
 
   const create = useCallback(
     () => call(`/characters/${enc}/hair`, {}, (d) => {
@@ -649,7 +649,8 @@ export function FieldHair({ character, onEditAppearance, methodSettings }: {
             <span>{t('Wear hair')}</span>
           </label>
 
-          <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} />
+          <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS}
+            onCancel={() => { void cancel() }} />
 
           {garment && garment.stale_reasons.length ? (
             <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>

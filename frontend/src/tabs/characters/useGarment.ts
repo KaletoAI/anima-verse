@@ -380,6 +380,10 @@ export interface RunFeedback {
   /** Item id → display name of the character's belongings (loaded with
    *  `others`), for the ids the queue answers carry. */
   names: Record<string, string>
+  /** The Cancel of the item's waiting run: `pending` while the POST is in
+   *  flight, `done` from its success until the poll shows the item no longer
+   *  queued, `error` = the server's refusal (409 already running / 404). */
+  cancel: { pending: boolean; done: boolean; error: string | null }
 }
 
 /** The queue place of a start answer; `behind` may name items (strings or
@@ -442,6 +446,11 @@ export function useGarmentRun(character: string, itemId: string,
   const [refused, setRefused] = useState<RunFeedback['refused']>(null)
   const [others, setOthers] = useState<OtherRun[] | null>(null)
   const [names, setNames] = useState<Record<string, string>>({})
+  // `since` = the info on screen when the cancel answered: "Cancelled" shows
+  // until a NEWER info arrives (the server's state then speaks).
+  const [cancelState, setCancelState] = useState<{ pending: boolean; since: unknown; error: string | null } | null>(null)
+  const infoRef = useRef(info)
+  useEffect(() => { infoRef.current = info }, [info])
   const enc = encodeURIComponent(character)
 
   const loadOthers = useCallback(async () => {
@@ -466,6 +475,7 @@ export function useGarmentRun(character: string, itemId: string,
     if (pending !== null || !itemId) return
     setPending(slot)
     setRefused(null)
+    setCancelState(null)
     try {
       const answer = await apiPost<RunAnswer>(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, body)
       setTarget({ body, since: info, queue: queuePlace(answer) })
@@ -479,8 +489,30 @@ export function useGarmentRun(character: string, itemId: string,
     }
   }, [enc, info, itemId, loadOthers, pending, startPoll])
 
+  /** Take the item's waiting run out of the character's garment queue
+   *  (POST …/garments/{item}/cancel); a run that already started is refused
+   *  (409) and its message shown beside the button. */
+  const cancel = useCallback(async () => {
+    if (!itemId || cancelState?.pending) return
+    setCancelState({ pending: true, since: undefined, error: null })
+    try {
+      await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/cancel`, {})
+      setTarget(null)
+      setCancelState({ pending: false, since: infoRef.current, error: null })
+    } catch (e) {
+      setCancelState({ pending: false, since: undefined, error: e instanceof Error ? e.message : String(e) })
+    } finally {
+      startPoll(0)
+    }
+  }, [cancelState?.pending, enc, itemId, startPoll])
+
   const running = info?.garment?.running_step || null
   const queued = running === 'queued'
+  // The cancel's "Cancelled" ends with the first newer info; its error with
+  // the next run click.
+  useEffect(() => {
+    if (cancelState && !cancelState.pending && !cancelState.error && info !== cancelState.since) setCancelState(null)
+  }, [cancelState, info])
   useEffect(() => {
     if (target && info !== target.since && !running) setTarget(null)
   }, [info, running, target])
@@ -489,11 +521,13 @@ export function useGarmentRun(character: string, itemId: string,
   }, [queued, loadOthers])
   // Another item / character: nothing of the old one stays on screen.
   useEffect(() => {
-    setTarget(null); setRefused(null); setOthers(null)
+    setTarget(null); setRefused(null); setOthers(null); setCancelState(null)
   }, [character, itemId])
 
   const feedback: RunFeedback = {
     pending, target: target?.body ?? null, queue: target?.queue ?? null, refused, others, names,
+    cancel: { pending: !!cancelState?.pending, done: !!cancelState && !cancelState.pending && !cancelState.error,
+      error: cancelState?.error ?? null },
   }
-  return { feedback, start }
+  return { feedback, start, cancel }
 }
