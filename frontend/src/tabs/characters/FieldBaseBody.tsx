@@ -182,21 +182,22 @@ export function FieldBaseBody({ character }: { character: string }) {
     <div className="ga-split ga-split-views">
       <div className="ga-split-col">
         {pipelineSwitch}
-        <div className="ga-view-stack">
-          {BASE_VIEWS.map((view) => (
-            <ViewTile key={view} info={info} view={view} label={viewLabel(view)}
-              busy={posting} onRender={(v, force) => post('images', { view: v, force })} />
-          ))}
-        </div>
         <button
           type="button"
           className="ga-btn ga-btn-sm"
+          style={{ alignSelf: 'flex-start' }}
           disabled={imagesBusy}
           // Missing views only — or every view anew once all four exist.
           onClick={() => post('images', { force: allPresent })}
         >
           {viewsRunning(info) ? t('Generating…') : allPresent ? t('Regenerate all') : t('Render all')}
         </button>
+        <div className="ga-view-stack">
+          {BASE_VIEWS.map((view) => (
+            <ViewTile key={view} info={info} view={view} label={viewLabel(view)}
+              busy={posting} onRender={(v, force) => post('images', { view: v, force })} />
+          ))}
+        </div>
       </div>
 
       <div className="ga-split-col">
