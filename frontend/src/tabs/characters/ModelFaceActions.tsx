@@ -296,7 +296,12 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
     setBusy(true)
     const query = new URLSearchParams({ signature: faceSignature, lang })
     try {
-      const result = await apiPost<{ ok: boolean; error?: string }>(`/characters/${enc}/model3d/face-retexture/revert?${query}`, {})
+      const request = apiPost<{ ok: boolean; error?: string }>(`/characters/${enc}/model3d/face-retexture/revert?${query}`, {})
+      // A re-rig revert holds the request for the whole rig job: poll
+      // meanwhile, so the tab shows the run and reloads the model when it
+      // ends even if this response never arrives.
+      if (face?.face_retexture_revert === 'rerig') onStarted()
+      const result = await request
       if (!result.ok) throw new Error(result.error || t('Face retexture revert failed'))
       setRevertFaceOpen(false)
       toast(t('Face retexture reverted'))

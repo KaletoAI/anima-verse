@@ -1231,14 +1231,30 @@ def face_info(character_name: str, face_path: Path) -> Dict[str, Any]:
     snapshot = snapshot_info(face_path.parent, face_path.stem)
     out["face_retexture_snapshot"] = snapshot
     out["face_retexture_revert"] = (
-        "snapshot" if snapshot["ok"] else "rerig" if (
-            not (face_path.parent / "rollback" / face_path.stem).exists()
+        "snapshot" if _snapshot_before_face(snapshot, face_path.stem) else "rerig" if (
+            (snapshot["ok"] or not (face_path.parent / "rollback" / face_path.stem).exists())
             and (out["face_retexture"] or {}).get("status") == "applied"
             and (face_path.parent / "unrigged" / f"{face_path.stem}.glb").is_file()) else None)
     if (face_path.parent / "facefix" / f"{face_path.stem}.png").is_file():
         out["face_retexture_compare_url"] = (f"/characters/{quote(character_name)}/model3d/face-retexture/compare"
                                              f"?signature={face_path.stem}")
     return out
+
+
+def _snapshot_before_face(snapshot: Dict[str, Any], signature: str) -> bool:
+    """Whether a verified rollback snapshot (``face_retexture.snapshot_info``)
+    holds a model WITHOUT a face correction — the only state "Revert face
+    retexture" may restore. The snapshot is taken before the first explicit
+    face retexture; on a model whose face was already corrected during its
+    generation ("Improve face before rigging", a re-applied face cleanup) it
+    captures that corrected model, ``facefix/<sig>.glb`` included, and
+    restoring it changes nothing (Lirien 2026-11-10: the revert published the
+    same bytes, so neither the model URL nor the preview moved). Such a
+    revert re-rigs the retained unrigged source instead."""
+    if not snapshot.get("ok"):
+        return False
+    corrected = (Path("facefix") / f"{signature}.glb").as_posix()
+    return not any(Path(entry.get("path", "")).as_posix() == corrected for entry in snapshot.get("files") or [])
 
 
 def _purge_combination(out_dir: Path, signature: str, *,
@@ -3294,6 +3310,9 @@ def _rerig_model(character_name: str, signature: Optional[str] = None, *,
         # Reapply on resume: the previous runtime's staging deletions vanished.
         for suffix in (".glb", ".json", ".png"):
             (directory / "facefix" / f"{op.inputs['signature']}{suffix}").unlink(missing_ok=True)
+        # A rollback snapshot left beside a face-corrected model holds that
+        # corrected state: the publication drops it with the correction.
+        (directory / ".face-revert").touch()
     source = _restore_frozen_source(op, directory, op.inputs["signature"])
     return _rig_from_source(character_name, op.inputs["signature"], source,
                             rig_backend_glob=op.inputs.get("backend_glob") or "", op=op)
@@ -4158,12 +4177,18 @@ def _revert_face_retexture(character_name: str, signature: Optional[str] = None,
     real_root = publication['directory'] if publication else root
     snapshot = real_root / 'rollback' / signature
     info = snapshot_info(real_root, signature)
-    if not info['ok']:
+    if not _snapshot_before_face(info, signature):
+        # No snapshot, or one that already carries a face correction
+        # (``_snapshot_before_face``): re-rig the original source. A damaged
+        # snapshot still refuses.
         path = find_model3d(character_name, signature)
-        if (not snapshot.exists() and path
+        if ((info['ok'] or not snapshot.exists()) and path
                 and _read_sidecar(path).get("face_retexture", {}).get("status") == "applied"
                 and (root / "unrigged" / f"{signature}.glb").is_file()):
             return _rerig_model(character_name, signature, _revert_face=True, _op_ctx=_op_ctx)
+        if info['ok']:
+            return {'ok': False, 'error': 'The rollback snapshot already carries a face correction and no '
+                                          'uncorrected source is retained; revert refused.'}
         return info
     for path in _signature_files(root, signature).values():
         path.unlink()
