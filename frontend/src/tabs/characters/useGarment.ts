@@ -21,7 +21,7 @@ export type GarmentView = typeof GARMENT_VIEWS[number]
 /** The image steps of both kinds: hair haired → ghost → cutout, clothing
  *  worn → ghost → cutout (`garment_store.GARMENT_STEPS`). */
 export type GarmentImageStep = 'haired' | 'worn' | 'ghost' | 'cutout'
-export type GarmentStep = GarmentImageStep | 'mesh' | 'hairdeck' | 'fit'
+export type GarmentStep = GarmentImageStep | 'mesh' | 'hairdeck' | 'mesh_source' | 'cut' | 'fit'
 
 /** One gate record (`garment_gates.haired_gate` / `ghost_gate`, a mesh
  *  attempt, the fit gates) — numbers plus `ok` and `reasons`. */
@@ -62,7 +62,8 @@ export interface GarmentFitInfo {
   metrics: Record<string, number>
   /** HairDeck fits: the colour the fit used. */
   colour?: { target: string | null; source: string } | null
-  gates: { ok?: boolean; reasons?: string[] }
+  /** Subtract fits also carry the limits they were gated on (`garment_subtract.run_fit`). */
+  gates: { ok?: boolean; reasons?: string[]; limits?: RecordLimits }
   tris: number | null
   low: { ok: boolean; tris?: number; ratio?: number; error?: string } | null
   base_signature: string | null
@@ -70,7 +71,52 @@ export interface GarmentFitInfo {
 }
 
 /** How the hair mesh is made (`garment_hair.HAIR_METHODS`). */
-export type HairMethod = 'edit_chain' | 'hairdeck'
+export type HairMethod = 'edit_chain' | 'hairdeck' | 'subtract'
+
+/** Gate limits as a record stores them: `{key: ["max" | "min", limit]}`
+ *  (`garment_cut.CUT_GATES`, `garment_fit.hair_gates`). */
+export type RecordLimits = Record<string, [string, number]>
+
+/** The subtract method's source mesh of the haired character
+ *  (`garment_subtract.step_info`, step `mesh_source`). */
+export interface SubtractSourceInfo {
+  status: 'accepted' | 'refused' | 'missing'
+  ssig: string
+  backend: string | null
+  tris: number | null
+  error: string | null
+  /** The routed result's `route_meta()` (routing, fallback_from, …). */
+  routing: Record<string, unknown> | null
+  created_at: string | null
+}
+
+/** The subtract method's cut (`garment_subtract.step_info`, step `cut`):
+ *  `stale` = an accepted cut made from another source mesh. */
+export interface SubtractCutInfo {
+  status: 'accepted' | 'stale' | 'refused' | 'missing'
+  shape: 'cut' | 'shell' | null
+  shell_mm: number | null
+  /** registration_p95_cm, hairline_cm, label_holes, hair_area_cm2. */
+  metrics: Record<string, number>
+  gates: { ok?: boolean; reasons?: string[]; limits?: RecordLimits }
+  /** The cut's report sections (registration, hairline, label, edge, closed, shell, cut, seconds). */
+  report: Record<string, unknown>
+  created_at: string | null
+}
+
+/** The subtract settings of the Hair tab (`_hair_subtract_settings`). */
+export interface HairSubtractSettings {
+  /** The shape in effect and where it comes from. */
+  shape: 'cut' | 'shell'
+  shape_source: 'character' | 'length'
+  /** The stored override, "" = automatic (from the hair length). */
+  shape_override: '' | 'cut' | 'shell'
+  length_class: string | null
+  shell_mm: number
+  shell_mm_default: number
+  shell_mm_min: number
+  shell_mm_max: number
+}
 
 /** One HairDeck tile (`garments.hairdeck_panel` images): null = no file. */
 export type HairDeckImage = (ImageTileMeta & { url: string }) | null
@@ -179,6 +225,8 @@ export interface GarmentInfo {
     ghost?: Partial<Record<GarmentView, GarmentImageInfo>>
     cutout?: Partial<Record<GarmentView, GarmentImageInfo>>
     mesh?: GarmentMeshInfo
+    mesh_source?: SubtractSourceInfo
+    cut?: SubtractCutInfo
     fit?: GarmentFitInfo
   }
   stale_reasons: Array<'description_changed' | 'base_changed' | 'base_model_changed' | 'hairdeck_changed'
@@ -227,8 +275,10 @@ export interface HairInfo {
   world_method: HairMethod
   /** The HairDeck section (null without a hair item). */
   hairdeck: HairDeckPanel | null
-  /** The other method's last result (null without one). */
+  /** The newest last result among the other methods (null without one). */
   other: OtherMethodInfo | null
+  /** The subtract method's shape and shell thickness (null off humanoids / an older server). */
+  subtract?: HairSubtractSettings | null
 }
 
 const POLL_MS = 3000

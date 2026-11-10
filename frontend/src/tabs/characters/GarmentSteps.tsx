@@ -216,8 +216,10 @@ export function RecordNumbers({ label, record }: { label: string; record: unknow
 }
 
 /** The gate records of a failure, labelled: per attempt, per view (the
- *  front/back bottoms check) or the fit's single record. */
-function failureRecords(gates: Record<string, unknown> | null, t: (s: string) => string): Array<[string, unknown]> {
+ *  front/back bottoms check) or the single record of the failed step (the
+ *  fit, the subtract method's cut) under `stepLabel`. */
+function failureRecords(gates: Record<string, unknown> | null, t: (s: string) => string,
+  stepLabel: string): Array<[string, unknown]> {
   if (!gates) return []
   if (Array.isArray(gates.attempts)) {
     return (gates.attempts as GateRecord[]).map((r, i) => [`${t('Attempt')} ${num(r?.attempt) ?? i + 1}`, flatFit(r)])
@@ -226,7 +228,7 @@ function failureRecords(gates: Record<string, unknown> | null, t: (s: string) =>
     return [[t('Front view'), gates.front], [t('Back view'), gates.back]]
   }
   if (gates.metrics && typeof gates.metrics === 'object') {
-    return [[t('Fit'), { ...(gates.metrics as object), reasons: gates.reasons }]]
+    return [[stepLabel, { ...(gates.metrics as object), reasons: gates.reasons }]]
   }
   return [[t('Gate'), gates]]
 }
@@ -371,7 +373,7 @@ export function GarmentFailure({ garment, stepLabels }: {
 }) {
   const { t } = useI18n()
   if (!garment?.failed || garment.running_step) return null
-  const failures = failureRecords(garment.failed.gates, t)
+  const failures = failureRecords(garment.failed.gates, t, t(stepLabels[garment.failed.step] || garment.failed.step))
   return (
     <div>
       <div className="ga-hint" style={ERROR_STYLE}>

@@ -4,7 +4,7 @@
  * modules so fast refresh keeps working.
  */
 import type { CSSProperties } from 'react'
-import type { GarmentImageInfo, GarmentInfo, GateLimit, GateRecord, RunFeedback } from './useGarment'
+import type { GarmentImageInfo, GarmentInfo, GateLimit, GateRecord, RecordLimits, RunFeedback } from './useGarment'
 
 export const TILE_HEIGHT = 200
 
@@ -161,4 +161,15 @@ export function queueText(garment: GarmentInfo | null | undefined, fb: RunFeedba
   const position = garment?.queue_position ?? fb?.queue?.position ?? null
   if (position) text += ` · ${t('position {n}').replace('{n}', String(position))}`
   return text
+}
+
+/** A record's limits `{key: ["max" | "min", v]}` as chip limits; undefined without any. */
+export function recordLimits(raw: RecordLimits | null | undefined): Record<string, GateLimit> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Record<string, GateLimit> = {}
+  for (const [key, pair] of Object.entries(raw)) {
+    if (!Array.isArray(pair) || typeof pair[1] !== 'number') continue
+    out[key] = { op: pair[0] === 'min' ? 'ge' : 'le', value: pair[1] }
+  }
+  return Object.keys(out).length ? out : undefined
 }
