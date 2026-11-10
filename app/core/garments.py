@@ -612,6 +612,12 @@ def _write_atomic(path: Path, data: bytes) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _hair_fit_gates(character_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """The fit gates of the edit-chain hair: those of its length class (``garment_fit.hair_gates``)."""
+    from app.core import garment_fit, garment_hair
+    return garment_fit.hair_gates(garment_hair.hair_length_class(character_name, profile=profile))
+
+
 def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
          profile: Dict[str, Any]) -> Path:
     """Fit the prepared mesh onto the current base model and store it (see
@@ -659,9 +665,11 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
                                           limb_source=limb_source)
         limits = garment_fit.CLOTHING_GATES
     else:
+        # The gates of the hair's length class: short hair lies on the scalp and is pushed almost everywhere
+        # by design (``hair_gates`` drops ``moved_share`` for it, like the subtract method's fit).
+        limits = _hair_fit_gates(character_name, profile)
         result = garment_fit.fit_hair(prepared_bytes, snapshot["unrigged"], snapshot["rigged"], bald_mask,
-                                      ghost_mask)
-        limits = garment_fit.GATES
+                                      ghost_mask, gates=limits)
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
     if not result.ok:
@@ -1122,8 +1130,9 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
                                               limb_source=limb_source)
             limits = garment_fit.CLOTHING_GATES
         else:
-            result = garment_fit.fit_hair(prepared_bytes, body["unrigged"], body["rigged"], body_mask, ghost_mask)
-            limits = garment_fit.GATES
+            limits = _hair_fit_gates(character_name, profile)
+            result = garment_fit.fit_hair(prepared_bytes, body["unrigged"], body["rigged"], body_mask, ghost_mask,
+                                          gates=limits)
         gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
                  "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
         if not result.ok:

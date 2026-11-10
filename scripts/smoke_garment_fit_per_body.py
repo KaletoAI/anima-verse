@@ -279,7 +279,12 @@ def main() -> int:
             return real_fit_on_body(character_name, item_id, **kw)
         garments.fit_on_body = tracking_fit_on_body
         garment_fit.fit_clothing = fit_clothing
-        garment_fit.fit_hair = lambda prepared, unrigged, rigged, bald, ghost: fake_fit("hair", rigged, unrigged)
+        HAIR_GATES = []
+
+        def fit_hair(prepared, unrigged, rigged, bald, ghost, *, gates=None):
+            HAIR_GATES.append(sorted(gates or {}))
+            return fake_fit("hair", rigged, unrigged)
+        garment_fit.fit_hair = fit_hair
 
         # --- fixture -----------------------------------------------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -486,6 +491,11 @@ def main() -> int:
         check("retexture outfit wants the BASE hair fit", wanted("OR")[hid]["fit"], base_fit["hair"])
 
         # --- [5] layering per body ---------------------------------------------------------------
+        # The hair's length class decides its gates (medium: every GATES key, moved_share included).
+        check("hair on a body: the medium length class's gates", HAIR_GATES[-1] if HAIR_GATES else None,
+              sorted(garment_fit.hair_gates("medium")))
+        check("medium keeps moved_share", "moved_share" in (HAIR_GATES[-1] if HAIR_GATES else []), True)
+
         print("[5] layering per body")
         layer_a = gs.garment_path("Demo", "coat", fc, "layer", lsig=lsig_a, body=A)
         check("A layer files", (layer_a.is_file(), layer_a.with_suffix(".json").is_file(),
