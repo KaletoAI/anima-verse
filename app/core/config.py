@@ -1660,6 +1660,18 @@ def _migrate_garment_routing(config: dict) -> bool:
     return _seed_routing_copies(config, _GARMENT_ROUTING_SEEDS)
 
 
+#: (target, source) — the hair views mesh had no chain of its own before; it
+#: ran on mesh_garment, so it starts as a copy of that chain.
+_HAIR_MESH_ROUTING_SEEDS = (("hair_views_mesh", "mesh_garment"),)
+
+
+def _migrate_hair_mesh_routing(config: dict) -> bool:
+    """Copy the garment mesh chain to ``hair_views_mesh`` once; an existing
+    target owns its value and a missing source seeds nothing. Runs after
+    ``_migrate_garment_routing`` (which may seed mesh_garment itself)."""
+    return _seed_routing_copies(config, _HAIR_MESH_ROUTING_SEEDS)
+
+
 #: (target, source) — the base-body pipeline steps start on the chains they
 #: rendered on before they had their own occasion (the front on tpose, every
 #: edit on tpose_view), so nothing changes until the admin edits them.
@@ -1770,6 +1782,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_tpose_view_routing(config):
         changed = True
     if _migrate_garment_routing(config):
+        changed = True
+    if _migrate_hair_mesh_routing(config):
         changed = True
     if _migrate_base_body_routing(config):
         changed = True

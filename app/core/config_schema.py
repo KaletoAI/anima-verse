@@ -129,13 +129,13 @@ SECTIONS = {
                 "type": "select",
                 "label": "Hair method",
                 "choices": ["edit_chain", "hairdeck", "subtract"],
-                "choice_labels": {"edit_chain": "Edit chain (image edits + mesh)",
+                "choice_labels": {"edit_chain": "Hair views → mesh (image edits + one mesh)",
                                   "hairdeck": "HairDeck (one image → hair cards)",
                                   "subtract": "Subtract (haired mesh − bald base)"},
                 "default": "edit_chain",
-                "description": "How a base-body character's hair mesh is made. Edit chain: the base views are "
+                "description": "How a base-body character's hair mesh is made. Hair views → mesh: the base views are "
                                "edited into hair-only images, which become a mesh (several image edits and one "
-                               "mesh job). HairDeck: one job turns the profile picture into hair cards (needs an "
+                               "mesh job, occasion hair_views_mesh). HairDeck: one job turns the profile picture into hair cards (needs an "
                                "img2hair backend, occasion hair_mesh). Subtract: the haired views become one mesh "
                                "of the haired character (occasion hair_source_mesh) and the hair is cut off it "
                                "against the bald base on the CPU — short hair as a thin scalp shell. All are "

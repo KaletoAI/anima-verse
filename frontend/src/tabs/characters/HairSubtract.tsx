@@ -3,7 +3,7 @@
  * docs/superpowers/plans/2026-11-10-hair-subtract-method.md, Task 2; spec
  * docs/superpowers/specs/2026-11-10-hair-subtract-method-design.md).
  *
- * The edit chain's haired front + back views (the input, small tiles — a click
+ * The haired front + back views of Hair views → mesh (`edit_chain`; the input, small tiles — a click
  * enlarges) become ONE mesh of the haired character (`mesh_source`, the routed
  * occasion `hair_source_mesh`, one hub job), the hair is cut off it against
  * the bald base on the CPU (`cut`) and fitted like every garment (`fit`).
@@ -204,7 +204,7 @@ export function SubtractSteps({ garment, limits, hairedChips, fitChips, busy, on
           )
         })}
         <div className="ga-hint" style={{ flex: '1 1 160px', minWidth: 0 }}>
-          {t('The edit chain\'s haired views — both methods share them.')}
+          {t('The haired views of Hair views → mesh — both methods share them.')}
         </div>
       </div>
       {garment ? <StepState garment={garment} step="haired" /> : null}

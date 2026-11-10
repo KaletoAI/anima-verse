@@ -2028,7 +2028,8 @@ BASE_BODY_MATCH_FIELDS = ("base_front_workflow", "base_view_workflow", "outfit_f
 #: Every backend-glob key of the override record (``profile.outfit_imagegen``),
 #: in the order the GET route answers them.
 IMAGEGEN_MATCH_FIELDS = ("workflow", "profile_workflow", "tpose_workflow", "tpose_view_workflow",
-                         *BASE_BODY_MATCH_FIELDS, "mesh_workflow", "hair_mesh_workflow")
+                         *BASE_BODY_MATCH_FIELDS, "mesh_workflow", "hair_mesh_workflow",
+                         "hair_views_mesh_workflow", "hair_source_mesh_workflow")
 #: The two LoRA lists of the record.
 IMAGEGEN_LORA_FIELDS = ("loras", "tpose_loras")
 
@@ -2048,7 +2049,9 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     ``tpose_view_workflow`` of the T-pose renders, the
     ``BASE_BODY_MATCH_FIELDS`` of the base-body steps, ``mesh_workflow`` of
     the character mesh chain its rig selects, ``hair_mesh_workflow`` of the
-    hair_mesh chain (app/imagegen/occasions.py). ``loras`` go onto the
+    hair_mesh chain, ``hair_views_mesh_workflow`` / ``hair_source_mesh_workflow``
+    of the hair_views_mesh / hair_source_mesh chains
+    (app/imagegen/occasions.py). ``loras`` go onto the
     character's renders, ``tpose_loras`` REPLACE them on the mesh-input
     renders (different backend, different LoRA ecosystem — no merge)."""
     from app.models.character import get_character_profile, save_character_profile

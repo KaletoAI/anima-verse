@@ -2,8 +2,9 @@
 ``docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md``, R5, R8, R10,
 R13, Task 5).
 
-From the two cut-outs of the garment (front + back) the routed
-``mesh_garment`` occasion builds a raw mesh (``garments/raw/{item}_{fsig}.glb``,
+From the two cut-outs of the garment (front + back) the routed mesh
+occasion (``mesh_occasion``: hair ``hair_views_mesh``, every other kind
+``mesh_garment``) builds a raw mesh (``garments/raw/{item}_{fsig}.glb``,
 asked for ``face_num=100000`` like the spike), Blender's ``lod.py`` reduces it
 to about ``target_tris(kind)`` triangles (hair ``TARGET_TRIS`` 25000, clothing
 60000 — the spike dress worked on its undecimated 71k-vertex mesh, a body-sized
@@ -110,6 +111,13 @@ def target_tris(kind: str) -> int:
     return int(TARGET_TRIS_BY_KIND.get(kind, TARGET_TRIS))
 
 
+def mesh_occasion(kind: str) -> str:
+    """The routing occasion of a kind's mesh step: hair from its views has its
+    own chain (``hair_views_mesh``), every other kind runs on ``mesh_garment``."""
+    from app.core import garment_set
+    return "hair_views_mesh" if kind == garment_set.HAIR else "mesh_garment"
+
+
 def _gate(share: float) -> List[str]:
     if share < MIN_COMPONENT_SHARE:
         return [f"largest component share {share:.4f} < {MIN_COMPONENT_SHARE}"]
@@ -120,8 +128,8 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     """The prepared (decimated) garment mesh of ``item_id`` under ``fsig``.
 
     Reuses an accepted prepared mesh unless ``force``. Otherwise up to
-    ``MAX_ATTEMPTS`` times: ``generate_mesh`` on the ``mesh_garment``
-    occasion from the front cut-out with the back cut-out as extra view, then
+    ``MAX_ATTEMPTS`` times: ``generate_mesh`` on the kind's occasion
+    (``mesh_occasion``) from the front cut-out with the back cut-out as extra view, then
     ``refine.decimate_to(raw, target_tris(kind), …)`` and the component gate.
 
     ``view_body`` is left at ``"humanoid"`` (the ``generate_mesh`` default):
@@ -221,7 +229,7 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
     res = get_image_service().generate_mesh(
         source_image_path=str(cut["front"]), output_path=str(raw),
         character_name=name, mesh_name=f"{name}-{kind}",
-        view_images={"back": str(cut["back"])}, occasion="mesh_garment",
+        view_images={"back": str(cut["back"])}, occasion=mesh_occasion(kind),
         face_num=FACE_NUM, material="dielectric", alpha="opaque")
     if not res.get("ok"):
         raise RuntimeError(f"garment mesh generation failed: {res.get('error') or 'unknown error'}")

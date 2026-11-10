@@ -54,7 +54,7 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
 
 [1] Full run run_garment(Demo, H): 4 renders (haired f/b, ghost f/b, each
     accepted at attempt 1), cut-outs f/b, ONE generate_mesh (occasion
-    mesh_garment), decimate_to raw -> prepared (target 25000) and fit -> low
+    hair_views_mesh), decimate_to raw -> prepared (target 25000) and fit -> low
     (target round(lod_ratio("character") x tris of the fit GLB)); the fit
     garments/H_F1.glb has a node "garment_hair_H" with extras.garment
     {kind hair, item_id H, fsig F1}; record accepted True, base_signature
@@ -368,7 +368,7 @@ def main() -> int:
             def generate_mesh(self, **kw):
                 MESHES.append(kw)
                 if mode["mesh_raise_at"] and len(MESHES) == mode["mesh_raise_at"]:
-                    raise RuntimeError("no backend available for mesh_garment: FakeMesh (cooling down)")
+                    raise RuntimeError("no backend available for hair_views_mesh: FakeMesh (cooling down)")
                 Path(kw["output_path"]).write_bytes(hair_glb(bad=mode["mesh_bad"]))
                 return {"ok": True, "path": kw["output_path"], "backend": "FakeMesh",
                         "routing": {"occasion": kw.get("occasion")}}
@@ -470,7 +470,7 @@ def main() -> int:
                 p = gs.garment_path("Demo", hid, f1, "image", step=step, view=v)
                 check(f"{step} {v} accepted", (p.is_file(), gs.read_record(p.with_suffix(".json")).get("accepted")),
                       (True, True))
-        check("one mesh call", [m.get("occasion") for m in MESHES], ["mesh_garment"])
+        check("one mesh call", [m.get("occasion") for m in MESHES], ["hair_views_mesh"])
         raw = gs.garment_path("Demo", hid, f1, "raw")
         prepared = gs.garment_path("Demo", hid, f1, "prepared")
         fit = gs.garment_path("Demo", hid, f1, "fit")

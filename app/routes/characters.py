@@ -948,7 +948,7 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
     globs + LoRA lists; empty values = the routing chains) plus what the
     editor shows beside them: the mesh occasion this character's rig selects
     with its world chain and backends, the hair_mesh chain and backends, and
-    per image glob the occasion chains that run when it stays empty."""
+    per glob the occasion chains that run when it stays empty."""
     from app.models.character import get_character_profile
     prof = get_character_profile(character_name) or {}
     override = prof.get("outfit_imagegen") or {}
@@ -1002,18 +1002,20 @@ def _hair_match_context() -> Dict[str, Any]:
 
 
 def _image_match_chains() -> Dict[str, List[Dict[str, Any]]]:
-    """What runs behind each per-character IMAGE match when it stays empty:
-    ``{match field: [{occasion, label, chain}]}`` — every image occasion that
-    takes the field as position 0, with its world chain (positions 1..n, the
+    """What runs behind each per-character match when it stays empty:
+    ``{match field: [{occasion, label, chain}]}`` — every occasion that takes
+    the field as position 0, with its world chain (positions 1..n, the
     character's own glob left out). An empty ``chain`` means the cheapest
-    backend of the right kind. Mesh matches are covered by
-    ``_mesh_match_context``."""
+    backend of the right kind. The character mesh and HairDeck matches show
+    ``_mesh_match_context`` / ``_hair_match_context`` instead (the mesh one
+    depends on the character's rig); the hair views and subtract source mesh
+    matches read their rows here."""
     from app.imagegen.occasions import OCCASIONS
     from app.imagegen.routing import chain_for
     out: Dict[str, List[Dict[str, Any]]] = {}
     for oid, occ in OCCASIONS.items():
         field = occ.get("char_spec_field") or ""
-        if not field or occ.get("media") != "image":
+        if not field:
             continue
         try:
             chain = [spec for spec, _source, _pos in chain_for(oid)]

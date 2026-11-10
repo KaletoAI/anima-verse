@@ -12,7 +12,7 @@ import './imagegenOverride.css'
  * section per pipeline stage (`slot_keys` names the keys of the stage):
  * Pictures (renders, portrait, character LoRAs) → T-pose (main reference,
  * its views + hair edits, T-pose LoRAs) → Base body → Outfit views → 3D
- * (character mesh, HairDeck hair mesh). The grouping is a template edit
+ * (character mesh, the three hair meshes). The grouping is a template edit
  * (base-character.json, tab `image_settings`), not code.
  *
  * A glob is position 0 in front of its occasion chain of the image routing
@@ -145,6 +145,14 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   hair_mesh_workflow: {
     kind: 'hair', label: 'Hair mesh (HairDeck)', placeholder: 'HairDeck*',
     tip: 'Tried first for the hair cards made from one image of the character (Hair tab, method HairDeck). Empty = the hair-cards chain.',
+  },
+  hair_views_mesh_workflow: {
+    kind: 'mesh', label: 'Hair mesh (hair views)', placeholder: 'Trellis*',
+    tip: 'Tried first for the hair mesh built from the hair-only views (Hair tab, method Hair views → mesh). Empty = the hair-views mesh chain.',
+  },
+  hair_source_mesh_workflow: {
+    kind: 'mesh', label: 'Hair mesh (subtract source)', placeholder: 'Trellis*',
+    tip: 'Tried first for the mesh of the haired character the hair is cut off (Hair tab, method Subtract). Empty = the haired-source mesh chain.',
   },
   loras: {
     kind: 'loras', label: 'Character LoRAs', target: 'render', empty: 'None',
@@ -320,7 +328,7 @@ function GlobRow({ fieldKey, def, value, globValue, stored, backends, onChange }
       status = t('uses {field}: {glob}')
         .replace('{field}', refName(via)).replace('{glob}', globValue(via).trim())
         + (hits.length ? ' → ' + hits.join(', ') : ' (' + t('no match') + ')')
-    } else if (def.kind === 'mesh') {
+    } else if (fieldKey === 'mesh_workflow') {
       status = t('chain') + ': ' + chainText(stored.mesh_world_chain || [])
     } else if (def.kind === 'hair') {
       status = t('chain') + ': ' + chainText(stored.hair_world_chain || [])

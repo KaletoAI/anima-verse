@@ -9,7 +9,7 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 37 occasions (§ 1 table, minus `mesh_low` which the review
+A1. Exactly these 38 occasions (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
     plan-tier-animationen.md P1, plus `garment_view` and `mesh_garment` from
     the base-body phase-4 plan, R4, plus the five base-body steps of the
@@ -19,19 +19,22 @@ A1. Exactly these 37 occasions (§ 1 table, minus `mesh_low` which the review
     plan 2026-11-09 after mesh_garment, plus the dressed side steps
     outfit_side_draft outfit_side (finding 6, 2026-11-09) after outfit_back, plus
     `hair_source_mesh` (mesh/img2mesh/none, world-only: the haired character
-    for the subtract hair method, plan 2026-11-10) after hair_mesh):
+    for the subtract hair method, plan 2026-11-10) after hair_mesh, plus
+    `hair_views_mesh` (mesh/img2mesh/none, user decision 2026-11-10: the hair
+    views method's mesh, split off mesh_garment) right after mesh_garment):
       photo instagram profile expression tpose tpose_view garment_view
       base_front base_view outfit_front outfit_back_draft outfit_back
       outfit_side_draft outfit_side scene_view
       location timevariant event prop surface_texture item regenerate frame video
       mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture
-      mesh_object mesh_building mesh_garment hair_mesh hair_source_mesh pose_animation
+      mesh_object mesh_building mesh_garment hair_views_mesh hair_mesh hair_source_mesh
+      pose_animation
       pose_transition
 A2. `mesh_low` is unknown: get_occasion("mesh_low") raises
     UnknownOccasionError, which is a ValueError.
 P2 adds upscale (image/upscale), P1 adds face_retexture (mesh/face_retexture).
 A3. media: video -> "video"; the five mesh_*, both rigs, face_retexture and
-    hair_mesh, hair_source_mesh -> "mesh"; pose_animation -> "animation"; 24 occasions "image".
+    hair_views_mesh, hair_mesh, hair_source_mesh -> "mesh"; pose_animation -> "animation"; 24 occasions "image".
 A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
     requires mesh2rig/mixamo; rig_creature mesh2rig/generic.
     pose_animation requires mesh2anim; image/video occasions use category render.
@@ -44,7 +47,10 @@ A5. character_scoped exactly: photo, instagram, profile, expression, tpose, tpos
     a figure — review note), plus the two CHARACTER mesh occasions
     mesh_humanoid + mesh_creature (user request 2026-10-21: a per-character
     mesh match; both read outfit_imagegen.mesh_workflow), plus hair_mesh
-    (reads outfit_imagegen.hair_mesh_workflow, HairDeck plan). Objects, buildings
+    (reads outfit_imagegen.hair_mesh_workflow, HairDeck plan), plus
+    hair_views_mesh and hair_source_mesh (user decision 2026-11-10: read
+    hair_views_mesh_workflow / hair_source_mesh_workflow, no fallback field —
+    every model override sits on the Image tab). Objects, buildings
     and both rigs stay world-only (rig: user decision, no per-character rig).
 A7. needs_ref_slot only on timevariant (§ 1 "only backends with >= 1 ref slot"),
     garment_view (an edit of the stored base view, R4), outfit_back and
@@ -180,9 +186,10 @@ def part_a():
                     "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
                     "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "upscale", "face_retexture", "mesh_object",
-                    "mesh_building", "mesh_garment", "hair_mesh", "hair_source_mesh", "pose_animation",
+                    "mesh_building", "mesh_garment", "hair_views_mesh", "hair_mesh", "hair_source_mesh",
+                    "pose_animation",
                     "pose_transition"]
-    check("A1 the 37 occasions in catalog order", occ.occasion_ids(), expected_ids)
+    check("A1 the 38 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -193,7 +200,7 @@ def part_a():
     media = {i: occ.get_occasion(i)["media"] for i in expected_ids}
     check("A3 video media", media["video"], "video")
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
-          ["face_retexture", "hair_mesh", "hair_source_mesh", "mesh_building", "mesh_creature", "mesh_garment", "mesh_humanoid",
+          ["face_retexture", "hair_mesh", "hair_source_mesh", "hair_views_mesh", "mesh_building", "mesh_creature", "mesh_garment", "mesh_humanoid",
            "mesh_object", "rig_creature", "rig_humanoid"])
     check("A3 image media count", sum(1 for m in media.values() if m == "image"), 24)
 
@@ -214,12 +221,15 @@ def part_a():
           ["photo", "instagram", "profile", "expression", "tpose", "tpose_view",
            "garment_view", "base_front", "base_view", "outfit_front", "outfit_back_draft",
            "outfit_back", "outfit_side_draft", "outfit_side", "regenerate", "mesh_humanoid",
-           "mesh_creature", "hair_mesh"])
+           "mesh_creature", "hair_views_mesh", "hair_mesh",
+           "hair_source_mesh"])
     check("A5 mesh spec field",
           {i: occ.get_occasion(i)["char_spec_field"]
-           for i in ("mesh_humanoid", "mesh_creature", "hair_mesh")},
+           for i in ("mesh_humanoid", "mesh_creature", "hair_mesh", "hair_views_mesh",
+                     "hair_source_mesh")},
           {"mesh_humanoid": "mesh_workflow", "mesh_creature": "mesh_workflow",
-           "hair_mesh": "hair_mesh_workflow"})
+           "hair_mesh": "hair_mesh_workflow", "hair_views_mesh": "hair_views_mesh_workflow",
+           "hair_source_mesh": "hair_source_mesh_workflow"})
 
     check("A7 needs_ref_slot",
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],

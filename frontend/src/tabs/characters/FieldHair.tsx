@@ -25,7 +25,7 @@
  * method's last result.
  *
  * Two hair methods (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md,
- * Task 5): the edit chain above, or HairDeck (the profile picture -> hair
+ * Task 5): Hair views → mesh (the edit chain above), or HairDeck (the profile picture -> hair
  * cards in one Hub call -> fit). The method selector at the top stores the
  * character's choice (POST /characters/{n}/hair/method, "" = world default);
  * the selected method's section is shown, the other method's last result is
@@ -76,7 +76,7 @@ const STEP_LABELS: Record<string, string> = {
 }
 
 const METHOD_LABELS: Record<HairMethod, string> = {
-  edit_chain: 'Edit chain',
+  edit_chain: 'Hair views → mesh',
   hairdeck: 'HairDeck',
   subtract: 'Subtract',
 }
@@ -85,7 +85,7 @@ const METHOD_LABELS: Record<HairMethod, string> = {
 const METHODS: HairMethod[] = ['edit_chain', 'hairdeck', 'subtract']
 
 const METHOD_HINTS: Record<HairMethod, string> = {
-  edit_chain: 'The edit chain renders the hair views and builds a mesh from them.',
+  edit_chain: 'Hair views → mesh renders the hair views and builds one mesh from them.',
   hairdeck: 'HairDeck makes hair cards from the profile picture in one step.',
   subtract: 'Subtract meshes the haired character once and cuts the hair off it against the bald base body.',
 }

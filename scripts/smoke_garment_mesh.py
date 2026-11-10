@@ -24,7 +24,8 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     BAD:  quad A area 0.97, quad B area 0.03 -> share 0.97 < 0.98 -> fail.
 
 [1] generate(Demo, H, F) with the service writing GOOD:
-    - ONE generate_mesh call with occasion "mesh_garment", face_num 100000,
+    - ONE generate_mesh call with occasion "hair_views_mesh" (kind hair; a
+      clothing piece runs on "mesh_garment"), face_num 100000,
       view_images {"back": <cutout back>} (keys {"back"}),
       source_image_path = <cutout front>, output_path = garments/raw/H_F.glb,
       mesh_name "Demo-hair", character_name "Demo", material "dielectric",
@@ -35,7 +36,7 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     - returns garments/prepared/H_F.glb (exists, bytes = GOOD);
     - record prepared/H_F.json: accepted True, tris_raw 4, tris_prepared 4,
       target_tris 25000, largest_component_share 0.99 (+-1e-6), backend
-      "FakeMesh", routing {"occasion": "mesh_garment"} copied from the result,
+      "FakeMesh", routing {"occasion": "hair_views_mesh"} copied from the result,
       1 attempt.
 [2] Cache: a second generate makes NO service call and returns the same path;
     force=True makes exactly one more call.
@@ -236,14 +237,14 @@ class Recorder:
     def generate_mesh(self, **kw):
         self.calls.append(kw)
         if self.raise_at and len(self.calls) == self.raise_at:
-            raise RuntimeError("no backend available for mesh_garment: FakeMesh (cooling down)")
+            raise RuntimeError("no backend available for hair_views_mesh: FakeMesh (cooling down)")
         if self.answer is not None:
             return dict(self.answer)
         blob = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
         out = Path(kw["output_path"])
         out.write_bytes(blob)
         return {"ok": True, "path": str(out), "format": "glb", "backend": "FakeMesh",
-                "routing": {"occasion": "mesh_garment"}}
+                "routing": {"occasion": "hair_views_mesh"}}
 
 
 def main() -> int:
@@ -337,7 +338,7 @@ def main() -> int:
         prepared = gm.generate("Demo", hid, F)
         check("one service call", len(rec.calls), 1)
         kw = rec.calls[0] if rec.calls else {}
-        check("occasion", kw.get("occasion"), "mesh_garment")
+        check("occasion", kw.get("occasion"), "hair_views_mesh")
         check("face_num", kw.get("face_num"), 100000)
         check("view_images keys", set((kw.get("view_images") or {}).keys()), {"back"})
         check("back view path", (kw.get("view_images") or {}).get("back"), str(cut["back"]))
@@ -362,7 +363,7 @@ def main() -> int:
         check("target_tris", record.get("target_tris"), 25000)
         near("largest share", record.get("largest_component_share"), 0.99, 1e-6)
         check("backend", record.get("backend"), "FakeMesh")
-        check("routing", record.get("routing"), {"occasion": "mesh_garment"})
+        check("routing", record.get("routing"), {"occasion": "hair_views_mesh"})
         check("attempts", len(record.get("attempts") or []), 1)
         check("TARGET_TRIS", gm.TARGET_TRIS, 25000)
 
