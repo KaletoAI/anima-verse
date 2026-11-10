@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""Bald outfit bodies under an own hair mesh (user decision 2026-11-10; app/core/base_body.py block "Bald outfit
-bodies": ``outfit_body_bald``, ``hair_rule_off``, ``dress_prompt(bald=…)``, ``texture_inputs(bald=…)``;
-app/core/outfit_bodies.py ``source_outfit`` / ``successor`` / ``regenerate_blocked``; artefact GC).
+"""Bald dressed views under an own hair mesh (controller ruling 2026-11-10; app/core/base_body.py block "Bald
+dressed views under an own hair mesh": ``outfit_body_bald``, ``dress_prompt(bald=…)``). A prompt detail only — the
+texture key, the body id and every stale judgement stay what they were.
 
 Usage:
     ./.venv/bin/python scripts/smoke_outfit_body_bald.py
 
 Throwaway storage + instance directory with a copy of the repo's ``human`` package; the outfit_bodies router on a
 bare FastAPI app with a TestClient (session lookup stubbed, header ``x-role: admin``). No hub, no GPU:
-``expression_regen.render_character_image`` is a recorder that writes a PNG + sidecar (one call = one image job),
-``base_body.prepare_outfit_body`` a recorder (one call = one mesh run), ``outfit_bodies.rebuild_worn_on`` a recorder.
+``expression_regen.render_character_image`` is a recorder that writes a PNG + sidecar (one call = one image job).
 
 Fixture (character Demo: humanoid, pipeline on, outfit_body_mode mesh, side views off = the default; appearance
 with hair, so ``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, painted.
 Base views front/back of bsig, base model. Outfit O1 {top, skirt} WORN with a dressed front + back made BEFORE the
-rule (no ``bald`` in their sidecars), texture T0 = its tsig without the rule, its OLD body B0 = outfit_body_id(T0)
-(record without ``bald``; refs + rigged GLB) and the outfit model of O1 on B0.
+rule, texture T0 = its tsig, its body B0 = outfit_body_id(T0) (refs + rigged GLB) and the outfit model of O1 on B0.
 
 Expected, by hand:
 [1] Rule: outfit_body_bald(Demo) True (mesh mode + worn own hair item); hair taken off (equipped_mesh_pieces {})
@@ -25,35 +23,18 @@ Expected, by hand:
        same framing and background. Only change their clothing: <text>. Completely bald, smooth clean-shaven head
        with no hair at all, the bare scalp and the bare back of the head fully visible, natural eyebrows."
     (the base front's BALD_HEAD words, capitalised, one sentence), negative = the bald=False negative + ", " +
-    HAIR_NEGATIVE. bald=False = the same text WITHOUT that last sentence (unchanged composition). The back
-    draft's prompt carries "completely bald" in both rules (base view prompt, unchanged).
-[3] Key: texture_inputs(bald=True) = the bald=False dict + {"bald": true}; T0 = "tex" + sha256(canonical JSON of
-    the dict WITHOUT the key)[:12] (= every texture before the rule — unchanged), Tb = the same over the dict
-    WITH it; Tb != T0, so outfit_body_id(Tb) = Bb != B0.
-[4] Old body under the rule: O1's old front no longer counts (dressed_image None; with hair_rule=False it is the
-    file); hair_rule_off(old front) "baked_hair". outfit_body_of_outfit(O1) = "" (no front under the rule), with
-    bald=True = Bb (the old front's pieces), with bald=False = B0.
-    outfit_body_stale(O1 model) "baked_hair"; outfit_info stale_reason "baked_hair", error BAKED_HAIR.
-    Tab, body B0: freshness stale, reason contains BAKED_HAIR; hair_stale "baked_hair"; successor Bb;
-    regenerate_from O1; can_regenerate False with regenerate_blocked RENDER_VIEWS_FIRST (O1 has no view under the
-    rule yet); front view blocked "", freshness contains VIEW_NOT_BALD (B0's own mesher input, the Tb store is
-    empty); back blocked DRESSED_FRONT_FIRST. POST regenerate -> 409 RENDER_VIEWS_FIRST. Nothing rendered.
-[5] View runs: POST views/front/regenerate -> ONE image job (tpose_<O1>, occasion outfit_front) whose bare prompt
-    is [2]'s bald prompt and whose sidecar names bald True and texture_signature Tb; the tab's front now serves
-    the Tb store, freshness current. Back: blocked "" now; its view run writes draft + fit (two more image jobs,
-    occasions outfit_back_draft / outfit_back), the draft prompt with "completely bald", sidecars bald True.
-    Zero mesh runs so far.
-[6] Regenerate on B0: regenerate_blocked "" -> POST regenerate -> prepare_outfit_body(Demo, O1, rebuild=True)
-    once (the recorder answers body Bb) -> last_run ok, result successor Bb, rebuild_worn_on(Demo, Bb) once.
-[7] GC: before the outfit model moves, B0 is reachable (O1's model names it and T0). After it moved (model
-    of O1 on Bb, record bald, refs of Bb, O1's model names Bb/Tb/bald) B0 is NOT reachable, Bb is ("texture of a
-    live outfit (mesh mode)"); outfit_body_stale(new O1 model) "".
-[8] Hair per bald body: garment_assembly.body_fit_warning(new O1 model meta) asks garments.body_fit for the worn
-    hair H on body Bb with build=True (accepted base fit stubbed) — the hair is fitted per outfit body.
-[9] No own hair -> unchanged: hair taken off -> outfit_body_bald False; texture of O1 = T0 again;
-    outfit_body_of_outfit(O1) uses the views made under the rule? They are bald now -> hair_rule_off "bald_body",
-    dressed_image None. The OLD front sidecar (no bald) -> hair_rule_off "". Retexture mode: a bald view ->
-    "body_mode", an old one -> "". A dressed=False copy is never judged ("").
+    HAIR_NEGATIVE. bald=False = the same text WITHOUT that last sentence. The back draft's prompt carries
+    "completely bald" (base view prompt, unchanged).
+[3] Key unchanged: T0 = "tex" + sha256(canonical JSON of texture_inputs)[:12] with the own hair worn, and the
+    SAME with it taken off (the rule is not an input); texture_inputs has no "bald" key.
+[4] Nothing stale: O1's old front counts (dressed_image = the file), outfit_body_of_outfit(O1) = B0,
+    outfit_body_stale(O1 model) "", outfit_info not stale; the tab's B0: freshness not stale, can_regenerate True.
+    (After a re-render of its views B0 says only DRESSED_VIEWS_CHANGED, as after any re-render.)
+[5] A new front render: POST views/front/regenerate on B0 -> ONE image job (tpose_<O1>, occasion outfit_front)
+    whose bare prompt is [2]'s bald prompt and whose negative ends with HAIR_NEGATIVE; its sidecar names
+    texture_signature T0 and no "bald"; outfit_body_of_outfit(O1) still B0; the tab's B0 still not stale.
+[6] No own hair -> unchanged: hair taken off -> the next front render's prompt is [2]'s plain prompt, its
+    negative the plain negative; texture T0, body B0.
 """
 import hashlib
 import json
@@ -221,23 +202,23 @@ def main() -> int:
         check("[2] back draft bald in both rules", "completely bald" in base_body.draft_prompt(char, "back")[0], True)
 
         # --- [3] ---------------------------------------------------------------------------------------------
-        print("[3] the key")
+        print("[3] the key is unchanged")
         variant = base_body.texture_variant(char, pieces, dressed=True, mesh={}, profile=profile())
         plain_in = base_body.texture_inputs(char, pieces=pieces, items=[], variant=variant, bsig=bsig,
                                             profile=profile())
-        bald_in = base_body.texture_inputs(char, pieces=pieces, items=[], variant=variant, bsig=bsig,
-                                           profile=profile(), bald=True)
-        check("[3] bald inputs = plain + bald", bald_in, {**plain_in, "bald": True})
-        check("[3] plain inputs carry no key", "bald" in plain_in, False)
+        check("[3] no bald key in the inputs", "bald" in plain_in, False)
 
         def by_hand(inputs):
             raw = json.dumps(inputs, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
             return "tex" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-        T0, Tb = base_body.texture_signature(plain_in), base_body.texture_signature(bald_in)
-        check("[3] T0 by hand", T0, by_hand({k: v for k, v in plain_in.items()}))
-        check("[3] Tb by hand", Tb, by_hand({**plain_in, "bald": True}))
-        B0, Bb = base_body.outfit_body_id(T0), base_body.outfit_body_id(Tb)
-        check("[3] new body id", (Tb != T0, Bb != B0), (True, True))
+        T0 = base_body.texture_signature(plain_in)
+        check("[3] T0 by hand", T0, by_hand(plain_in))
+        set_profile(equipped_mesh_pieces={})
+        off_in = base_body.texture_inputs(char, pieces=pieces, items=[], variant=variant, bsig=bsig,
+                                          profile=profile())
+        check("[3] same key without own hair", base_body.texture_signature(off_in), T0)
+        set_profile(equipped_mesh_pieces={"hair": hair_id})
+        B0 = base_body.outfit_body_id(T0)
 
         # --- fixture: O1 with views, body B0 and model from before the rule ------------------------------------
         variant_o, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
@@ -274,7 +255,7 @@ def main() -> int:
         (M / f"{O1}.glb").write_bytes(b"OUTFIT-ON-B0")
         outfit_bodies.stale_posture = lambda c, meta: ""
 
-        renders, meshes, rebuilt = [], [], []
+        renders = []
 
         def fake_render(character_name, *, output_stem, sidecar_extra=None, equipped_pieces=None,
                         equipped_items=None, **kw):
@@ -288,150 +269,55 @@ def main() -> int:
             return out
         expression_regen.render_character_image = fake_render
 
-        def fake_prepare(c, signature=None, *, force=False, rebuild=False):
-            meshes.append((c, signature, rebuild))
-            return {"ok": True, "cached": False, "body_id": Bb}
-        base_body.prepare_outfit_body = fake_prepare
-        outfit_bodies.rebuild_worn_on = lambda c, body_id: rebuilt.append((c, body_id)) or True
-
         def tab_body(body_id):
             data = client.get(f"/characters/{char}/outfit-bodies", headers=ADMIN).json()
             return next((b for b in data["bodies"] if b["body_id"] == body_id), None)
 
-        def fresh(b, v):
-            f = ((b["view_info"][v] or {}).get("meta") or {}).get("freshness") or {}
-            return f.get("state"), f.get("reason") or ""
+        def not_stale(label, rerendered=False):
+            """Not stale for the rule; after a re-render the body says only what any re-render makes it say
+            (``outfit_bodies.DRESSED_VIEWS_CHANGED``: its mesher inputs differ from the outfit's views now)."""
+            b = tab_body(B0)
+            f = b["freshness"] or {}
+            want = ("stale", outfit_bodies.DRESSED_VIEWS_CHANGED) if rerendered else (None, None)
+            got = (f.get("state"), f.get("reason")) if f.get("state") == "stale" else (None, None)
+            check(f"{label}: tab B0 freshness", (got, b["can_regenerate"]), (want, True))
+            check(f"{label}: outfit model not stale", base_body.outfit_body_stale(char, o1_model), "")
+            check(f"{label}: outfit_info not stale", base_body.outfit_info(char, signature=O1)["status"] != "stale",
+                  True)
+            check(f"{label}: O1 stands on B0", base_body.outfit_body_of_outfit(char, O1), B0)
 
         # --- [4] ---------------------------------------------------------------------------------------------
-        print("[4] the old body under the rule")
-        check("[4] old front does not count", base_body.dressed_image(char, "front", O1, bsig), None)
-        check("[4] ... without the hair rule it does", base_body.dressed_image(char, "front", O1, bsig,
-                                                                              hair_rule=False), o1_front)
-        check("[4] hair_rule_off(old front)", base_body.hair_rule_off(char, json.loads(
-            o1_front.with_suffix(".json").read_text())), "baked_hair")
-        check("[4] O1 stands on no body now (no front under the rule)", base_body.outfit_body_of_outfit(char, O1), "")
-        check("[4] ... under the rule with its old front's pieces on Bb",
-              base_body.outfit_body_of_outfit(char, O1, bald=True), Bb)
-        check("[4] ... under the old rule on B0", base_body.outfit_body_of_outfit(char, O1, bald=False), B0)
-        check("[4] outfit model stale", base_body.outfit_body_stale(char, o1_model), "baked_hair")
-        info = base_body.outfit_info(char, signature=O1)
-        check("[4] outfit_info", (info["status"], info["stale_reason"], info["error"]),
-              ("stale", "baked_hair", base_body.BAKED_HAIR))
-        b = tab_body(B0)
-        check("[4] B0 stale with BAKED_HAIR", (b["freshness"]["state"], base_body.BAKED_HAIR in b["freshness"]["reason"]),
-              ("stale", True))
-        check("[4] hair_stale / successor / source", (b["hair_stale"], b["successor"], b["regenerate_from"]),
-              ("baked_hair", Bb, O1))
-        check("[4] regenerate blocked", (b["can_regenerate"], b["regenerate_blocked"]),
-              (False, outfit_bodies.RENDER_VIEWS_FIRST))
-        check("[4] front blocked / back blocked", (b["view_info"]["front"]["blocked"], b["view_info"]["back"]["blocked"]),
-              ("", base_body.DRESSED_FRONT_FIRST))
-        check("[4] front freshness names the rule", base_body.VIEW_NOT_BALD in fresh(b, "front")[1], True)
-        r = client.post(f"/characters/{char}/outfit-bodies/{B0}/regenerate", headers=ADMIN)
-        check("[4] regenerate -> 409", (r.status_code, r.json().get("detail")), (409, outfit_bodies.RENDER_VIEWS_FIRST))
-        check("[4] nothing rendered or meshed", (renders, meshes), ([], []))
+        print("[4] nothing becomes stale")
+        check("[4] old front counts", base_body.dressed_image(char, "front", O1, bsig), o1_front)
+        not_stale("[4]")
+
+        def front_run():
+            n = len(renders)
+            r = client.post(f"/characters/{char}/outfit-bodies/{B0}/views/front/regenerate", headers=ADMIN)
+            check("front run accepted", r.status_code, 202)
+            check("front run ended", wait_for(lambda: not outfit_bodies._active), True)
+            return renders[n:]
 
         # --- [5] ---------------------------------------------------------------------------------------------
-        print("[5] the view runs render bald")
-        r = client.post(f"/characters/{char}/outfit-bodies/{B0}/views/front/regenerate", headers=ADMIN)
-        check("[5] front run accepted", r.status_code, 202)
-        check("[5] front run ended", wait_for(lambda: not outfit_bodies._active), True)
-        check("[5] one image job", [(x["stem"], x["occasion"]) for x in renders], [(f"tpose_{O1}", "outfit_front")])
-        check("[5] its prompt is the bald prompt", renders[0]["prompt"], bald_prompt)
-        check("[5] its negative carries the hair negative", (renders[0]["negative"] or "").endswith(
-            base_body.HAIR_NEGATIVE), True)
-        front_meta = json.loads(o1_front.with_suffix(".json").read_text())
-        check("[5] sidecar bald + Tb", (front_meta.get("bald"), front_meta.get("texture_signature")), (True, Tb))
-        b = tab_body(B0)
-        check("[5] tab front serves the Tb store", f"/outfit-bodies/{Tb}/views/front?" in (b["view_info"]["front"]["url"]
-                                                                                          or ""), True)
-        check("[5] tab front current", fresh(b, "front"), ("current", ""))
-        check("[5] back renderable now", b["view_info"]["back"]["blocked"], "")
-        r = client.post(f"/characters/{char}/outfit-bodies/{B0}/views/back/regenerate", headers=ADMIN)
-        check("[5] back run accepted", r.status_code, 202)
-        check("[5] back run ended", wait_for(lambda: not outfit_bodies._active, timeout=120), True)
-        b = tab_body(B0)
-        check("[5] back run ok", (b["last_run"] or {}).get("ok"), True)
-        check("[5] draft + fit jobs", [(x["stem"].split("_")[0], x["occasion"]) for x in renders[1:]][:2],
-              [("tpose", "outfit_back_draft"), ("tpose", "outfit_back")])
-        check("[5] draft prompt bald", "completely bald" in (renders[1]["prompt"] or ""), True)
-        back_meta = json.loads(o1_back.with_suffix(".json").read_text())
-        check("[5] back sidecar bald + Tb", (back_meta.get("bald"), back_meta.get("texture_signature")), (True, Tb))
-        check("[5] no mesh run yet", meshes, [])
+        print("[5] a new front render carries the bald rule")
+        jobs = front_run()
+        check("[5] one image job", [(x["stem"], x["occasion"]) for x in jobs], [(f"tpose_{O1}", "outfit_front")])
+        check("[5] its prompt is the bald prompt", jobs[0]["prompt"], bald_prompt)
+        check("[5] its negative ends with the hair negative",
+              (jobs[0]["negative"] or "").endswith(base_body.HAIR_NEGATIVE), True)
+        meta = json.loads(o1_front.with_suffix(".json").read_text())
+        check("[5] sidecar: T0, no bald key", (meta.get("texture_signature"), "bald" in meta), (T0, False))
+        not_stale("[5]", rerendered=True)
 
         # --- [6] ---------------------------------------------------------------------------------------------
-        print("[6] Regenerate builds the successor")
-        b = tab_body(B0)
-        check("[6] regenerate possible", (b["can_regenerate"], b["regenerate_blocked"]), (True, None))
-        r = client.post(f"/characters/{char}/outfit-bodies/{B0}/regenerate", headers=ADMIN)
-        check("[6] regenerate accepted", r.status_code, 202)
-        check("[6] run ended", wait_for(lambda: not outfit_bodies._active), True)
-        check("[6] one mesh run", meshes, [(char, O1, True)])
-        b = tab_body(B0)
-        check("[6] last run ok", ((b["last_run"] or {}).get("kind"), (b["last_run"] or {}).get("ok")),
-              ("regenerate", True))
-        check("[6] worn outfit moved to Bb", rebuilt, [(char, Bb)])
-
-        # --- [7] ---------------------------------------------------------------------------------------------
-        print("[7] artefact GC")
-
-        def verdict(key):
-            nodes = [n for n in artefact_graph.analyse(char).nodes if n.kind == "body" and n.key == key]
-            return (nodes[0].reachable, nodes[0].reason) if nodes else None
-        check("[7] B0 kept while O1's model names it", (verdict(B0) or (None,))[0], True)
-        recb = {**rec0, "body_id": Bb, "texture_signature": Tb, "bald": True,
-                "views": {"front": sha(o1_front), "back": sha(o1_back)}}
-        for kind in ("tpose", "tpose_back"):
-            png(R / f"{kind}_{Bb}.png", (3, 3, 3))
-            write_json(R / f"{kind}_{Bb}.json", {"outfit_body": recb, "base_signature": bsig, "bald": True})
-        (M / f"{Bb}.glb").write_bytes(b"BODY-BALD")
-        write_json(M / f"{Bb}.json", {"outfit_body": recb, "rig": "mixamo", "created_at": "2026-11-10T13:00:00+00:00"})
-        new_model = {**o1_model, "texture_signature": Tb, "body_id": Bb, "body_sha256": sha(M / f"{Bb}.glb"),
-                     "bald": True}
-        write_json(M / f"{O1}.json", new_model)
-        (M / f"{O1}.glb").write_bytes(b"OUTFIT-ON-BB")
-        check("[7] new model current", base_body.outfit_body_stale(char, new_model), "")
-        check("[7] B0 unreachable", (verdict(B0) or (None,))[0], False)
-        check("[7] Bb reachable", verdict(Bb), (True, "texture of a live outfit (mesh mode)"))
-        b = tab_body(Bb)
-        check("[7] Bb not hair-stale", (b["hair_stale"], base_body.BAKED_HAIR in (b["freshness"] or {}).get("reason", "")),
-              (None, False))
-
-        # --- [8] ---------------------------------------------------------------------------------------------
-        print("[8] the hair is fitted per bald body")
-        hair_fit = cdir / "garments" / f"{hair_id}_aaaaaaaaaaaa.glb"
-        hair_fit.parent.mkdir(parents=True, exist_ok=True)
-        hair_fit.write_bytes(b"HAIR-FIT")
-        asked = []
-        garment_store.accepted_fit = lambda c, item_id, **kw: ((hair_fit, {"kind": "hair", "accepted": True})
-                                                                if item_id == hair_id else None)
-
-        def fake_body_fit(c, item_id, *, body_id, body_sha, base_fit, profile=None, build=False):
-            asked.append((item_id, body_id, build))
-            return {"fit": None, "low": None, "record": {}, "fsig": "aaaaaaaaaaaa", "pending": False,
-                    "error": "stub"}
-        garments.body_fit = fake_body_fit
-        garment_assembly.body_fit_warning(char, new_model)
-        check("[8] hair fitted on Bb", asked, [(hair_id, Bb, True)])
-
-        # --- [9] ---------------------------------------------------------------------------------------------
-        print("[9] no own hair -> unchanged")
+        print("[6] no own hair -> unchanged")
         set_profile(equipped_mesh_pieces={})
-        check("[9] rule off", base_body.outfit_body_bald(char), False)
-        check("[9] O1's texture is T0 again",
-              base_body._outfit_texture(char, o1_front, bsig=bsig, profile=profile())["tsig"], T0)
-        check("[9] a bald view made under the rule", base_body.hair_rule_off(char, front_meta), "bald_body")
-        check("[9] ... does not count", base_body.dressed_image(char, "front", O1, bsig), None)
-        old_meta = {**front_meta}
-        old_meta.pop("bald")
-        check("[9] an old (not bald) view", base_body.hair_rule_off(char, old_meta), "")
-        check("[9] old outfit model current again", base_body.hair_rule_off(char, o1_model), "")
-        check("[9] undressed copy never judged", base_body.hair_rule_off(char, {**front_meta, "dressed": False}), "")
-        set_profile(outfit_body_mode="retexture")
-        check("[9] retexture: bald view", base_body.hair_rule_off(char, front_meta), "body_mode")
-        check("[9] retexture: old view", base_body.hair_rule_off(char, old_meta), "")
-        set_profile(equipped_mesh_pieces={"hair": hair_id})
-        check("[9] retexture never bald even with own hair", base_body.outfit_body_bald(char), False)
+        jobs = front_run()
+        check("[6] plain prompt", jobs[0]["prompt"] if jobs else None, plain_prompt)
+        check("[6] plain negative", jobs[0]["negative"] if jobs else None, plain_neg)
+        meta = json.loads(o1_front.with_suffix(".json").read_text())
+        check("[6] sidecar T0", meta.get("texture_signature"), T0)
+        not_stale("[6]", rerendered=True)
 
     print(f"\n{len(FAILS)} failure(s)" if FAILS else "\nOK")
     return 1 if FAILS else 0

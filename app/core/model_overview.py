@@ -94,10 +94,7 @@ MODEL_STALE_REASONS = {"older_base": "Built on an older base body",
                        "mesh_item_ready": MESH_ITEM_READY,
                        # base_body.BODY_MODE_CHANGED / OUTFIT_BODY_CHANGED
                        "body_mode": "Built for the other outfit body mode",
-                       "outfit_body": "Built on an older outfit body",
-                       # base_body.BAKED_HAIR / BALD_WITHOUT_HAIR (hair_rule_off)
-                       "baked_hair": "Built with baked-in hair",
-                       "bald_body": "Made bald, but no own hair mesh is worn"}
+                       "outfit_body": "Built on an older outfit body"}
 # garments.garment_info ``stale_reasons`` -> phrase (the Hair tab's labels).
 HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "base_changed": "Base body changed",
@@ -884,7 +881,7 @@ def draft_freshness(meta: Dict[str, Any], *, bsig: str, front_sha: str) -> Dict[
 
 def outfit_body_view_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
                                mesh_ready: bool = False, follows_front: Optional[bool] = None,
-                               text_now: Optional[str] = None, off_rule: str = "") -> Dict[str, str]:
+                               text_now: Optional[str] = None) -> Dict[str, str]:
     """A dressed view of an outfit body (the Outfit body tab, mesh mode):
     the reasons of ``dressed_freshness`` (base body, base view, own-mesh
     piece), plus ``DRESS_TEXT_CHANGED`` when the view's recorded
@@ -892,11 +889,8 @@ def outfit_body_view_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha
     that view now; None = unknown, not judged) and, for a back/side view,
     ``OLDER_DRESSED_FRONT`` when it was not drafted from the body's current
     dressed front (``follows_front`` False; None = the front itself or no
-    draft provenance, not judged). ``off_rule``: the view was rendered under
-    the other hair rule (``base_body.hair_rule_text(view=True)``). No
-    provenance at all -> missing."""
-    base = dressed_freshness(meta, bsig=bsig, base_view_sha=base_view_sha, mesh_ready=mesh_ready,
-                             off_rule=off_rule)
+    draft provenance, not judged). No provenance at all -> missing."""
+    base = dressed_freshness(meta, bsig=bsig, base_view_sha=base_view_sha, mesh_ready=mesh_ready)
     if base["state"] == MISSING:
         return base
     reasons = [base["reason"]] if base["state"] == STALE else []
@@ -1205,9 +1199,6 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
             if base_body.mesh_items_off_rule(character_name, record, bsig=bsig):
                 off_rule = (base_body.MESH_ITEM_PAINTED_IN if base_body.outfit_body_mode(character_name)
                             == base_body.MESH_MODE else base_body.BODY_MODE_CHANGED)
-            hair = base_body.hair_rule_text(base_body.hair_rule_off(character_name, record), view=True)
-            if hair and hair != off_rule:
-                off_rule = _join([off_rule, hair]) if off_rule else hair
             tile["freshness"] = dressed_freshness(
                 record, bsig=bsig, base_view_sha=shas.get(view, ""),
                 mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)), off_rule=off_rule)

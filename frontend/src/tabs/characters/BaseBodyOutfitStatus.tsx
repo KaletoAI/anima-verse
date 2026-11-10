@@ -80,11 +80,7 @@ export function BaseBodyOutfitStatus({ character, onStarted }: {
           ? t('Built for another body detail under the clothing — rebuild it')
           : outfit.stale_reason === 'mesh_item_ready'
             ? t('An own-mesh piece painted on here has its garment mesh now — rebuild it')
-            : outfit.stale_reason === 'baked_hair'
-              ? t('Built with baked-in hair')
-              : outfit.stale_reason === 'bald_body'
-                ? t('Made bald, but no own hair mesh is worn')
-                : t('Built on an older base body — rebuild it'))
+            : t('Built on an older base body — rebuild it'))
     : outfit.status === 'missing' ? t('Not built yet')
     : t('Ready')
 
