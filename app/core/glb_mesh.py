@@ -350,6 +350,68 @@ def pack_glb(gltf: dict, binary: bytes) -> bytes:
     return b"glTF" + struct.pack("<II", 2, 12 + len(body)) + body
 
 
+def static_glb(positions, faces, uvs, *, image: bytes = b"", mime: str = "", material: Optional[Dict[str, Any]] = None,
+               name: str = "Mesh") -> bytes:
+    """A static one-primitive GLB (what ``static_arrays`` reads back): POSITION, TEXCOORD_0, uint32 indices and,
+    with ``image``, a base-colour texture. Of ``material`` only the PBR factors, ``doubleSided`` and ``name`` are
+    kept (its texture references belong to another file); the image is the base colour."""
+    P = np.ascontiguousarray(np.asarray(positions, np.float64), dtype="<f4").reshape(-1, 3)
+    U = np.ascontiguousarray(np.asarray(uvs, np.float64), dtype="<f4").reshape(-1, 2)
+    F = np.ascontiguousarray(np.asarray(faces, np.int64).reshape(-1), dtype="<u4")
+    if len(U) != len(P):
+        raise ValueError("UV count differs from the vertex count")
+    if len(F) and int(F.max()) >= len(P):
+        raise ValueError("A face index is out of range")
+    binary = bytearray()
+    views: List[dict] = []
+    accessors: List[dict] = []
+
+    def add(raw: bytes, target: Optional[int]) -> int:
+        binary.extend(b"\0" * (-len(binary) % 4))
+        view = {"buffer": 0, "byteOffset": len(binary), "byteLength": len(raw)}
+        if target:
+            view["target"] = target
+        views.append(view)
+        binary.extend(raw)
+        return len(views) - 1
+
+    def accessor(arr: np.ndarray, ctype: int, typ: str, target: int, minmax: bool = False) -> int:
+        entry = {"bufferView": add(arr.tobytes(), target), "componentType": ctype,
+                 "count": int(len(arr)), "type": typ}
+        if minmax and len(arr):
+            entry["min"], entry["max"] = arr.min(0).tolist(), arr.max(0).tolist()
+        accessors.append(entry)
+        return len(accessors) - 1
+
+    attributes = {"POSITION": accessor(P, 5126, "VEC3", 34962, True),
+                  "TEXCOORD_0": accessor(U, 5126, "VEC2", 34962)}
+    primitive = {"attributes": attributes, "indices": accessor(F, 5125, "SCALAR", 34963), "mode": 4}
+    gltf: Dict[str, Any] = {"asset": {"version": "2.0", "generator": "anima glb_mesh.static_glb"}, "scene": 0,
+                            "scenes": [{"nodes": [0]}], "nodes": [{"name": name, "mesh": 0}],
+                            "meshes": [{"name": name, "primitives": [primitive]}],
+                            "bufferViews": views, "accessors": accessors, "buffers": []}
+    source = material or {}
+    pbr = {k: copy.deepcopy(v) for k, v in (source.get("pbrMetallicRoughness") or {}).items()
+           if k in ("baseColorFactor", "metallicFactor", "roughnessFactor")}
+    mat: Dict[str, Any] = {"name": str(source.get("name") or name), "doubleSided": bool(source.get("doubleSided", True))}
+    if image:
+        if mime not in ("image/png", "image/jpeg", "image/webp"):
+            raise ValueError(f"Unsupported image type {mime!r}")
+        gltf["images"] = [{"bufferView": add(bytes(image), None), "mimeType": mime}]
+        if mime == "image/webp":
+            gltf["textures"] = [{"extensions": {"EXT_texture_webp": {"source": 0}}}]
+            gltf["extensionsUsed"] = ["EXT_texture_webp"]
+        else:
+            gltf["textures"] = [{"source": 0}]
+        pbr["baseColorTexture"] = {"index": 0}
+    mat["pbrMetallicRoughness"] = pbr
+    gltf["materials"] = [mat]
+    primitive["material"] = 0
+    binary.extend(b"\0" * (-len(binary) % 4))
+    gltf["buffers"] = [{"byteLength": len(binary)}]
+    return pack_glb(gltf, bytes(binary))
+
+
 def _body_node_index(parsed: dict) -> int:
     """Index of the body mesh node skinned to skin 0 (read on ``parsed`` itself: primitives match by identity)."""
     from app.core.face_retexture import _body_primitives

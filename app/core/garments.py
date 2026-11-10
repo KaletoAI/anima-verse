@@ -279,9 +279,11 @@ def _front_hints(character_name: str, item_id: str, fsig: str, kind: str, step: 
 
 
 def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str) -> None:
-    """``_Refused`` when the fsig of the run is no longer the current one."""
-    from app.core.garment_store import garment_fsig
-    if garment_fsig(character_name, item_id) != fsig:
+    """``_Refused`` when the fsig of the run's images is no longer the
+    current one (``garment_store.image_fsig``: the edit-chain fsig of the
+    subtract method's haired views, ``garment_fsig`` otherwise)."""
+    from app.core.garment_store import image_fsig
+    if image_fsig(character_name, item_id) != fsig:
         raise _Refused(step, INPUTS_CHANGED_ERROR, None)
 
 
@@ -325,7 +327,13 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
 
 def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, base_model_sha: str,
           method: str = "edit_chain", hsig: str = "") -> bool:
-    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS
+    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS, SUBTRACT, image_fsig
+    if method == SUBTRACT and step != "fit":
+        if step in IMAGE_STEPS:  # the haired views: the edit chain's own, under its fsig
+            fsig = image_fsig(character_name, item_id)
+        else:
+            from app.core import garment_subtract
+            return garment_subtract.step_done(character_name, item_id, step, fsig)
     if step in IMAGE_STEPS:
         if not all(_accepted(_image(character_name, item_id, fsig, step, v)) for v in GARMENT_VIEWS):
             return False
@@ -963,7 +971,12 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         "body_id": body_id, "body_sha256": body["sha"], "base_signature": bsig,
         "texture_signature": body["meta"]["outfit_body"].get("texture_signature"),
         "base_fit_sha256": base_fit_sha}
-    if gs.fit_method(base_record) == gs.HAIRDECK:
+    if gs.fit_method(base_record) == gs.SUBTRACT:
+        from app.core import garment_subtract
+        result, fields = garment_subtract.fit_on_body(character_name, item_id, body_id=body_id, body=body,
+                                                      base_record=base_record, profile=profile)
+        record.update({**fields, "created_at": utc_now_iso()})
+    elif gs.fit_method(base_record) == gs.HAIRDECK:
         from app.core import garment_hair
         inputs = base_record.get("inputs") or {}
         hsig = str(inputs.get("hsig") or "")
@@ -1255,6 +1268,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         bsig, base_sha = base
         _refresh_description(character_name, item, kind, profile)
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        # The image steps' fsig: the subtract method's haired views are the edit chain's own.
+        ifsig = gs.image_fsig(character_name, item_id, profile=profile)
         if method == gs.HAIRDECK:
             hsig = gs.garment_hsig(character_name, item_id, profile=profile)
         if wanted is None:
@@ -1271,30 +1286,45 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             forced = force and step == first
             gs.start(character_name, item_id, step)
             produced = False
-            if step in gs.IMAGE_STEPS:
+            if method == gs.SUBTRACT and step not in gs.IMAGE_STEPS:
+                # New haired views name a new subtract fsig (their sha256 is in it).
+                fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+            if method == gs.SUBTRACT and step in ("mesh_source", "cut"):
+                from app.core import garment_subtract
+                ssig = gs.subtract_ssig(character_name, item_id, profile=profile)
+                # The source mesh is keyed by the haired views alone: only a click re-runs it.
+                if forced or not garment_subtract.step_done(character_name, item_id, step, fsig,
+                                                            profile=profile) or (step == "cut" and dirty):
+                    if step == "mesh_source":
+                        garment_subtract.run_source(character_name, item_id, ifsig, ssig, force=forced)
+                    else:
+                        garment_subtract.run_cut(character_name, item_id, fsig, ifsig, ssig, bsig, profile,
+                                                 force=True)
+                    produced = True
+            elif step in gs.IMAGE_STEPS:
                 views = (gs.GARMENT_VIEWS if step == "cutout"
                          else _kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
                 for v in views:
                     f = forced and (view is None or v == view)
                     # Checked per view: a new front of a drafted step (clothing
                     # ``worn``) drops the back it was drafted from.
-                    if not f and _accepted(_image(character_name, item_id, fsig, step, v)):
+                    if not f and _accepted(_image(character_name, item_id, ifsig, step, v)):
                         continue
                     if step == "cutout":
-                        garment_images.cut_out(character_name, item_id, fsig, v, force=f)
+                        garment_images.cut_out(character_name, item_id, ifsig, v, force=f)
                     else:
                         # The pair step's back is accepted before its front starts.
-                        pair = (_pair_check(character_name, item_id, kind, fsig)
+                        pair = (_pair_check(character_name, item_id, kind, ifsig)
                                 if step == pair_step and v == "front" else None)
-                        garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f,
+                        garment_images.run_edit_step(character_name, item_id, ifsig, step, v, force=f,
                                                      pair_check=pair,
-                                                     prompt_hints=_front_hints(character_name, item_id, fsig,
+                                                     prompt_hints=_front_hints(character_name, item_id, ifsig,
                                                                                kind, step, v))
                     produced = True
                     # Right away: a refusal of the next view must not leave a
                     # mesh behind that was built from the replaced image.
-                    _drop_mesh(character_name, item_id, fsig)
-                    _inputs_unchanged(character_name, item_id, fsig, step)
+                    _drop_mesh(character_name, item_id, ifsig)
+                    _inputs_unchanged(character_name, item_id, ifsig, step)
                 if step == pair_step and not _pair(character_name, item_id, kind, fsig)[0]:
                     # The back is the reference (the hair's length, the
                     # hem); the front renders again against it (two
@@ -1328,6 +1358,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     if method == gs.HAIRDECK:
                         _hairdeck_fit_step(character_name, item_id, kind, fsig, bsig, hsig, profile, ran,
                                            prefer_seed=regenerated_seed)
+                    elif method == gs.SUBTRACT:
+                        from app.core import garment_subtract
+                        garment_subtract.run_fit(character_name, item_id, kind, fsig, bsig, profile)
                     else:
                         _fit(character_name, item_id, kind, fsig, bsig, profile)
                     produced = True
@@ -1347,8 +1380,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
     except garment_mesh.MeshAttemptFailed as e:
         # An attempt failed outright (no backend, worker crash, decimation):
         # the failure carries every attempt, an earlier refusal's numbers too.
-        logger.warning("Garment run %s/%s failed at mesh: %s", character_name, item_id, e)
-        return _refusal(character_name, item_id, fsig, "mesh", str(e), {"attempts": e.records}, ran)
+        logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, e.step, e)
+        return _refusal(character_name, item_id, fsig, e.step, str(e), {"attempts": e.records}, ran)
     except _Refused as e:
         return _refusal(character_name, item_id, fsig, e.step, e.error, e.gates, ran)
     except Exception as e:  # noqa: BLE001 — reported as the step's failure
@@ -1828,7 +1861,7 @@ def image_path(character_name: str, item_id: str, step: str, view: str, attempt:
     outside ``garments/`` (``garment_store.garment_path``)."""
     from app.core import garment_store as gs
     _item(character_name, item_id)
-    return _image(character_name, item_id, gs.garment_fsig(character_name, item_id), step, view, attempt)
+    return _image(character_name, item_id, gs.image_fsig(character_name, item_id), step, view, attempt)
 
 
 def preview_path(character_name: str, item_id: str, method: str = "") -> Optional[Path]:
@@ -1840,8 +1873,9 @@ def preview_path(character_name: str, item_id: str, method: str = "") -> Optiona
     newest accepted fit (on the current base model first, else on any) —
     the tab's "Other method" preview. ValueError for an unknown method."""
     from app.core import base_body, garment_store as gs
+    from app.core.garment_hair import HAIR_METHODS
     from app.models.character import get_character_profile
-    if method and method not in (gs.EDIT_CHAIN, gs.HAIRDECK):
+    if method and method not in HAIR_METHODS:
         raise ValueError(f"unknown method {method[:40]!r}")
     profile = get_character_profile(character_name) or {}
     try:
@@ -1884,11 +1918,11 @@ def _other_fit(character_name: str, item_id: str, method: str,
 
 def other_method_info(character_name: str, item_id: str, *,
                       profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """The Hair tab's collapsed "Other method": the last result of the hair
+    """The Hair tab's collapsed "Other method": the last result of a hair
     method NOT selected — ``{method, preview_url, created_at, metrics,
-    colour, on_current_base}`` of its newest accepted fit — or None when that
-    method has none (or the item is no hair)."""
-    from app.core import garment_hair, garment_store as gs
+    colour, on_current_base}`` of the newest accepted fit among the other
+    methods — or None when they have none (or the item is no hair)."""
+    from app.core import garment_hair
     from app.core.http_files import content_version
     from app.models.character import get_character_profile
     if profile is None:
@@ -1897,11 +1931,11 @@ def other_method_info(character_name: str, item_id: str, *,
     if kind != garment_hair.HAIR_KIND:
         return None
     current = garment_hair.hair_method(character_name, profile=profile)
-    other = gs.HAIRDECK if current == gs.EDIT_CHAIN else gs.EDIT_CHAIN
-    hit = _other_fit(character_name, item_id, other, profile)
-    if hit is None:
+    hits = [(m, _other_fit(character_name, item_id, m, profile)) for m in garment_hair.HAIR_METHODS if m != current]
+    hits = [(m, h) for m, h in hits if h is not None]
+    if not hits:
         return None
-    path, record, on_base = hit
+    other, (path, record, on_base) = max(hits, key=lambda mh: _stamp(mh[1][0]) or 0)
     try:
         url: Optional[str] = _url(character_name, item_id, "model", content_version(path), f"&method={other}")
     except OSError:
@@ -2090,9 +2124,13 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     base = base_body.current_base(character_name, profile=profile) or ("", "")
     steps: Dict[str, Any] = {}
     if fsig:
+        ifsig = gs.image_fsig(character_name, item_id, profile=profile)
         for step in gs.steps_for(kind, method):
             if step in gs.IMAGE_STEPS:
-                steps[step] = {v: _image_info(character_name, item_id, fsig, step, v) for v in gs.GARMENT_VIEWS}
+                steps[step] = {v: _image_info(character_name, item_id, ifsig, step, v) for v in gs.GARMENT_VIEWS}
+            elif step in ("mesh_source", "cut"):
+                from app.core import garment_subtract
+                steps[step] = garment_subtract.step_info(character_name, item_id, step, fsig, profile=profile)
             elif step == "mesh":
                 steps[step] = _mesh_info(character_name, item_id, fsig)
             elif step == "hairdeck":

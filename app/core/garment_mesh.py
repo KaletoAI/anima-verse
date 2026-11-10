@@ -244,3 +244,42 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
              "tris_raw": dec.get("tris_before"), "tris_prepared": dec.get("tris"),
              "ratio": dec.get("ratio"), "largest_component_share": share}
     return entry
+
+
+#: The subtract hair method's source mesh (plan 2026-11-10-hair-subtract-method): what the generator is
+#: asked for (hair spike A, UniForge3D-Multiview at 100 000 faces).
+SOURCE_FACE_NUM = 100000
+
+
+def generate_hair_source(name: str, cutouts: Dict[str, Path], output: Path) -> Dict[str, Any]:
+    """ONE routed ``hair_source_mesh`` generation from the haired front cut-out (+ the back as extra view)
+    into ``output`` (a GLB of the HAIRED character, undecimated — the cut reads its full resolution).
+
+    Returns ``{backend, routing, fallback_from?, tris}``. ``MeshAttemptFailed`` (records = this one attempt)
+    when the generation fails outright or delivers no readable GLB; chained to the cause (``NoRouteError``,
+    ``BackendBusyError``, ``MediaGenerationDisabled``, …). No retry: the job is one hub job per character."""
+    from app.core import glb_mesh
+    from app.imagegen.service import get_image_service
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        res = get_image_service().generate_mesh(
+            source_image_path=str(cutouts["front"]), output_path=str(output),
+            character_name=name, mesh_name=f"{name}-hair-source",
+            view_images={"back": str(cutouts["back"])}, occasion="hair_source_mesh",
+            face_num=SOURCE_FACE_NUM, material="dielectric", alpha="opaque")
+        if not res.get("ok"):
+            raise RuntimeError(f"hair source mesh generation failed: {res.get('error') or 'unknown error'}")
+        delivered = Path(str(res.get("path") or ""))
+        if delivered.suffix.lower() != ".glb" or not delivered.is_file():
+            raise RuntimeError(f"hair source mesh generation delivered no GLB ({delivered.name or 'nothing'})")
+        if delivered != output:
+            os.replace(delivered, output)
+        tris = int(len(glb_mesh.static_arrays(output.read_bytes())[1]))
+    except Exception as e:
+        error = str(e) or type(e).__name__
+        exc = MeshAttemptFailed(error, [{"attempt": 1, "ok": False, "error": error, "reasons": [error]}])
+        exc.step = "mesh_source"
+        raise exc from e
+    return {"backend": res.get("backend", ""), "routing": res.get("routing") or {}, "tris": tris,
+            **({"fallback_from": res["fallback_from"]} if res.get("fallback_from") else {})}

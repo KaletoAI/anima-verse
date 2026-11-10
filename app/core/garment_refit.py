@@ -12,7 +12,8 @@ outdated ``fit_version``, the fit step only:
 - edit chain: ``garments._fit`` from the cached prepared mesh + images;
 - HairDeck: the stored seeds (``garments._fit_seed``), the served seed first
   — HairDeck itself never runs again here (a run's fit step would ask for one
-  more seed when none passes; the sweep refuses instead).
+  more seed when none passes; the sweep refuses instead);
+- subtract: ``garment_subtract.run_fit`` from the cached cut.
 
 Per body (plan 2026-11-10-outfit-body-mesh-mode, Task 2): then every fit on
 an OUTFIT BODY (``garments/bodies/<body id>/``) with an outdated
@@ -215,6 +216,9 @@ def refit_character(character_name: str) -> Optional[List[str]]:
             try:
                 if method == gs.HAIRDECK:
                     _refit_hairdeck(character_name, item_id, kind, fsig, base[0], profile)
+                elif method == gs.SUBTRACT:
+                    from app.core import garment_subtract
+                    garment_subtract.run_fit(character_name, item_id, kind, fsig, base[0], profile)
                 else:
                     garments._fit(character_name, item_id, kind, fsig, base[0], profile)
             except base_body.MissingInput as e:

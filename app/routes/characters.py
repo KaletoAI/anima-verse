@@ -1850,6 +1850,14 @@ class HairColourRequest(BaseModel):
     hex: str = ""
 
 
+class HairSubtractRequest(BaseModel):
+    # Plain values, validated by garment_hair.set_hair_subtract (400 with its
+    # message, not a schema 422): shape "" | "cut" | "shell", thickness in mm
+    # or null / "" for the default.
+    shape: Any = ""
+    shell_mm: Any = None
+
+
 class HairPlacementRequest(BaseModel):
     # Numbers or null (automatic); plain Any so garment_hair.set_hair_placement
     # validates (400 with its message, not a schema 422).
@@ -2002,16 +2010,54 @@ def get_character_hair(character_name: str,
                                if humanoid else None))},
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.world_hair_method(),
-                "hairdeck": hairdeck, "other": other}
+                "hairdeck": hairdeck, "other": other,
+                "subtract": _hair_subtract_settings(character_name, profile) if humanoid else None}
     from app.core.model_overview import annotate_hair
     return annotate_hair(payload)
+
+
+def _hair_subtract_settings(character_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """The subtract method's settings for the Hair tab: ``shape`` (``cut`` /
+    ``shell``) and where it comes from (``"character"`` override or the
+    hair's ``"length"`` class), the stored override (``""`` = automatic),
+    the shell thickness in mm with its default and limits."""
+    from app.core import garment_cut, garment_hair
+    shape, source = garment_hair.subtract_shape_source(character_name, profile=profile)
+    return {"shape": shape, "shape_source": source,
+            "shape_override": str(profile.get(garment_hair.SUBTRACT_SHAPE_KEY) or ""),
+            "length_class": garment_hair.hair_length_class(character_name, profile=profile),
+            "shell_mm": garment_hair.shell_mm(profile),
+            "shell_mm_default": round(garment_cut.DEFAULT_SHELL_M * 1000, 2),
+            "shell_mm_min": round(garment_cut.SHELL_MIN_M * 1000, 2),
+            "shell_mm_max": round(garment_cut.SHELL_MAX_M * 1000, 2)}
+
+
+@router.post("/{character_name}/hair/subtract")
+def set_character_hair_subtract(character_name: str, body: HairSubtractRequest,
+                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set the subtract method's shape (``""`` = from the hair length: very
+    short / short hair is a scalp ``shell``, else a ``cut``) and the shell
+    thickness in mm (null / ``""`` = the default). 400 for anything else.
+    Only the subtract fingerprint changes: the next run re-cuts on the CPU
+    from the cached source mesh (no run starts here)."""
+    from app.core import garment_hair
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    try:
+        saved = garment_hair.set_hair_subtract(character_name, body.shape, body.shell_mm)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    return _hair_subtract_settings(character_name, get_character_profile(character_name) or {})
 
 
 @router.post("/{character_name}/hair/method")
 def set_character_hair_method(character_name: str, body: HairMethodRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Choose how the character's hair mesh is made: ``""`` (the world
-    default ``base_body.hair_method``), ``"edit_chain"`` or ``"hairdeck"``.
+    default ``base_body.hair_method``), ``"edit_chain"``, ``"hairdeck"`` or
+    ``"subtract"``.
     400 for anything else. No GPU work starts: the served hair follows the
     method's newest accepted fit, so the served model is re-assembled."""
     from app.core import garment_assembly, garment_hair

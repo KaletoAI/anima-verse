@@ -34,6 +34,8 @@ NODES (the report key in brackets; a file belongs to exactly one node):
 * body fit ``bodyfit:<body>:<item>_<fsig>`` — the same parts on an outfit
   body: ``garments/bodies/<body>/…``; parents the body and ``garment:<item>_<fsig>``.
 * HairDeck job ``hairdeck:<item>_<hsig>`` — the folder ``garments/raw/<item>_<hsig>/``.
+* hair source ``hairsource:<item>_<ssig>`` — the subtract method's mesh of the haired character, the folder
+  ``garments/source/<item>_<ssig>/``.
 * temp ``temp:<path>`` — a dot-named entry anywhere below the three roots:
   a ``.process-*`` stage, a ``.fitgate_*`` / ``.fitref_*`` / ``.viewref_*``
   work folder, a ``.tmp`` write. A process that dies leaves them behind.
@@ -65,6 +67,10 @@ REACHABILITY (one function each, ``_judge``):
   method). Body fit: its body AND its garment group are reachable.
 * HairDeck job: its item is kept and the hsig is the item's current one or
   is named by a kept fit (``inputs.hsig``: a refit needs the seed files).
+* garment group of the subtract method's haired views (the edit-chain fsig):
+  also kept when a kept fit or cut names it (``inputs.image_fsig`` /
+  ``image_fsig``). Hair source: its item is kept and the ssig is the item's
+  current one or is named by a kept fit or cut (``ssig``).
 * temp: younger than ``TEMP_GRACE_S`` or a live stage of this process
   (``model3d.active_stages``).
 
@@ -140,7 +146,7 @@ _HAIRDECK_DIR_RE = re.compile(r"(?P<item>[A-Za-z0-9][A-Za-z0-9_-]*)_(?P<hsig>[0-
 @dataclass
 class Node:
     key: str
-    kind: str        # outfit | base | body | texture | garment | body_fit | hairdeck | temp | face_view
+    kind: str        # outfit | base | body | texture | garment | body_fit | hairdeck | hair_source | temp | face_view
     category: str    # report bucket (CATEGORIES), "" for face_view
     files: List[Path] = field(default_factory=list)
     dirs: List[Path] = field(default_factory=list)   # owned folders, removed whole when empty after
@@ -298,6 +304,16 @@ def scan(character_name: str) -> Tuple[List[Node], List[Path]]:
                      if not any(part.startswith(".") for part in p.relative_to(folder).parts)]
             nodes.append(Node(f"hairdeck:{folder.name}", "hairdeck", "hairdeck", files, dirs=[folder],
                               parents={"item_id": match.group("item"), "hsig": match.group("hsig")}))
+    source = garment_store._root(character_name) / garment_store.SOURCE_DIR
+    if source.is_dir():
+        for folder in sorted(source.iterdir()):
+            match = _HAIRDECK_DIR_RE.fullmatch(folder.name)
+            if not match or not folder.is_dir() or folder.is_symlink():
+                continue
+            files = [p for p in _tree_files(folder)
+                     if not any(part.startswith(".") for part in p.relative_to(folder).parts)]
+            nodes.append(Node(f"hairsource:{folder.name}", "hair_source", "garments", files, dirs=[folder],
+                              parents={"item_id": match.group("item"), "ssig": match.group("hsig")}))
     face = [p for p in sorted((root / "model_refs").glob("face_view.*")) if p.is_file()]
     if face:
         nodes.append(Node("face_view", "face_view", "", face))
@@ -461,6 +477,17 @@ def _hair_hsig(character_name: str, item_id: str) -> str:
         return ""
 
 
+def _hair_ssig(character_name: str, item_id: str) -> str:
+    """The item's current hair source fingerprint (``garment_store.subtract_ssig``), "" when it cannot be
+    computed (its source meshes are kept then)."""
+    try:
+        from app.core import garment_store
+        return garment_store.subtract_ssig(character_name, item_id)
+    except Exception:  # noqa: BLE001 — unknown ssig: never delete on a guess
+        logger.exception("Artefact GC %s: hair source fingerprint of %s unavailable", character_name, item_id)
+        return ""
+
+
 def _check_deadline(deadline: Optional[float], character_name: str) -> None:
     if deadline is not None and time.monotonic() > deadline:
         raise GcOverBudget(f"artefact GC of {character_name} over its time budget")
@@ -564,6 +591,27 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         else:
             node.reachable, node.reason = False, "no held garment uses this fingerprint"
         garment_ok[node.key] = node.reachable
+    # The subtract method keeps the haired views of the fits and cuts it keeps (their edit-chain group).
+    kept_ssigs: Dict[str, Set[str]] = {}
+    named: Set[str] = set()
+    for node in nodes:
+        if node.kind != "garment" or not node.reachable:
+            continue
+        for p in node.files:
+            if p.suffix != ".json" or p.parent.name not in ("garments", "prepared"):
+                continue
+            record = _json(p)
+            inputs = record.get("inputs") if isinstance(record.get("inputs"), dict) else {}
+            ifsig = inputs.get("image_fsig") or record.get("image_fsig")
+            if ifsig:
+                named.add(f"garment:{node.parents['item_id']}_{ifsig}")
+            ssig = inputs.get("ssig") or record.get("ssig")
+            if ssig:
+                kept_ssigs.setdefault(node.parents["item_id"], set()).add(str(ssig))
+    for node in nodes:
+        if node.kind == "garment" and not node.reachable and node.key in named:
+            node.reachable, node.reason = True, "haired views of a kept subtract fit"
+            garment_ok[node.key] = True
     for node in nodes:
         if node.kind != "body_fit":
             continue
@@ -600,6 +648,23 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
             node.reachable, node.reason = True, "job of a kept fit"
         else:
             node.reachable, node.reason = False, "older HairDeck job"
+    current_ssig: Dict[str, str] = {}
+    for node in nodes:
+        if node.kind != "hair_source":
+            continue
+        item, ssig = node.parents["item_id"], node.parents["ssig"]
+        if item in roots.hair_items and item not in current_ssig:
+            current_ssig[item] = _hair_ssig(character_name, item)
+        if roots.garment_keep is None:
+            node.reachable, node.reason = True, "garment roots unknown"
+        elif item not in roots.garment_items:
+            node.reachable, node.reason = False, "item not held"
+        elif current_ssig.get(item, "") in ("", ssig):
+            node.reachable, node.reason = True, "current hair source mesh"
+        elif ssig in kept_ssigs.get(item, set()):
+            node.reachable, node.reason = True, "source of a kept fit"
+        else:
+            node.reachable, node.reason = False, "older hair source mesh"
     # 6. Temp work folders.
     from app.core.timeutils import utc_now
     try:
@@ -731,7 +796,7 @@ def _delete_node(character_name: str, node: Node, root: Path) -> Tuple[int, int,
         finally:
             for lock in held:
                 lock.release()
-    if node.kind in ("garment", "body_fit", "hairdeck"):
+    if node.kind in ("garment", "body_fit", "hairdeck", "hair_source"):
         from app.core import garment_store
         garments_root = garment_store._root(character_name)
         held = []

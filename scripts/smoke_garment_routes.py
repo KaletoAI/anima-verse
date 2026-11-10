@@ -36,8 +36,11 @@ Fixture (expected values derived by hand):
     None, equipped False, garment None, collision None (no base model ->
     no capsule set, commit 8a617513), method
     "edit_chain", method_source "world", world_method "edit_chain",
-    hairdeck None, other None} (the method keys: plan
-    2026-11-09-hairdeck-hair Task 5, schema default edit_chain; the limits
+    hairdeck None, other None, subtract {shape "cut" from the length class
+    "medium", no override, shell 5.0 mm (default 5.0, 2.0 .. 15.0)}} (the
+    method keys: plan 2026-11-09-hairdeck-hair Task 5, schema default
+    edit_chain; the subtract settings: plan 2026-11-10-hair-subtract-method
+    Task 1; the limits
     also carry "hairdeck_fit"); Pet: humanoid False, description "", garment
     None; Nobody: 404.
 [3] POST /hair: Pet 400, Offline 400 ("base-body pipeline"), Bald 400
@@ -206,7 +209,10 @@ def main() -> int:
                   (200, {"pipeline": True, "humanoid": True, "description": "medium blonde hair",
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
                          "collision": None, "method": "edit_chain", "method_source": "world",
-                         "world_method": "edit_chain", "hairdeck": None, "other": None}))
+                         "world_method": "edit_chain", "hairdeck": None, "other": None,
+                         "subtract": {"shape": "cut", "shape_source": "length", "shape_override": "",
+                                      "length_class": "medium", "shell_mm": 5.0, "shell_mm_default": 5.0,
+                                      "shell_mm_min": 2.0, "shell_mm_max": 15.0}}))
             # The chip limits come from the gate constants (R7): haired XOR < 0.015,
             # ghost |top_dy| <= 0.0052 H, mesh component share >= 0.98, fit bib <= 50 cm².
             check("hair limits", (sorted(limits), limits.get("haired", {}).get("body_xor"),

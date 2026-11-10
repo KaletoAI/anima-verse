@@ -1633,7 +1633,8 @@ def _migrate_tpose_view_routing(config: dict) -> bool:
 #: (target, source) — the garment chains start as copies of the chains whose
 #: backends already serve the same kind of work (base-body phase 4, R4).
 _GARMENT_ROUTING_SEEDS = (("garment_view", "tpose_view"),
-                          ("mesh_garment", "mesh_humanoid"))
+                          ("mesh_garment", "mesh_humanoid"),
+                          ("hair_source_mesh", "mesh_humanoid"))
 
 
 def _seed_routing_copies(config: dict, seeds) -> bool:
@@ -1654,8 +1655,8 @@ def _seed_routing_copies(config: dict, seeds) -> bool:
 
 def _migrate_garment_routing(config: dict) -> bool:
     """Copy the T-pose view chain to ``garment_view`` and the humanoid mesh chain
-    to ``mesh_garment`` once each; an existing target owns its value and a
-    missing source seeds nothing."""
+    to ``mesh_garment`` and ``hair_source_mesh`` once each; an existing target
+    owns its value and a missing source seeds nothing."""
     return _seed_routing_copies(config, _GARMENT_ROUTING_SEEDS)
 
 

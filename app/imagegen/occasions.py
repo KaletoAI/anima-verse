@@ -208,6 +208,10 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                            "char_spec_fallback": ""}),
                   "category": "img2hair", "requires_chain": False,
                   "hint": "Hair cards from one image of the character (e.g. HairDeck)."},
+    # The subtract hair method (plan 2026-11-10-hair-subtract-method): one mesh of
+    # the HAIRED character from its haired front + back cut-outs; the hair is cut
+    # off it on the CPU (garment_cut).
+    "hair_source_mesh": _mesh("3D mesh — haired source", "Hair tab: subtract method", "none"),
     "pose_animation": {"label": "3D animation — pose clip", "media": "animation",
                        "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
                        "style_use_cases": [], "covers": "Poses tab: generate animation",

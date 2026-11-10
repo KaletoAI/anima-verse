@@ -358,6 +358,11 @@ def _surface_samples(P: np.ndarray, F: np.ndarray) -> Tuple[np.ndarray, np.ndarr
 def point_triangle_distance(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.ndarray) -> np.ndarray:
     """Euclidean distance of points ``X`` to triangles ``(A, B, C)`` (broadcasting, last axis xyz; Ericson's
     closest-point regions, degenerate triangles fall back to their edges)."""
+    return np.linalg.norm(X - point_triangle_closest(X, A, B, C), axis=-1)
+
+
+def point_triangle_closest(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """The closest point of triangles ``(A, B, C)`` to points ``X`` (see ``point_triangle_distance``)."""
     ab, ac, ap = B - A, C - A, X - A
     d1, d2 = (ab * ap).sum(-1), (ac * ap).sum(-1)
     bp = X - B
@@ -394,7 +399,7 @@ def point_triangle_distance(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.n
         dist = np.stack([np.linalg.norm(X - e, axis=-1) for e in edge], -1)
         pick = np.take_along_axis(np.stack(edge, -2), dist.argmin(-1)[..., None, None], -2)[..., 0, :]
         closest = np.where(degenerate[..., None], pick, closest)
-    return np.linalg.norm(X - closest, axis=-1)
+    return closest
 
 
 def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = None,
@@ -1377,17 +1382,35 @@ def _prepare(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     return (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded)
 
 
+def hair_gates(length_class: Optional[str] = None, *, shell: bool = False) -> Dict[str, Tuple[str, float, str]]:
+    """The fit gates of hair of ``length_class`` (``garment_hair.LENGTH_CLASSES``): ``GATES`` without
+    ``moved_share`` for short hair (``garment_hair.SHORT_LENGTH_CLASSES``) and for a scalp ``shell`` — a
+    scalp-hugging layer is pushed almost everywhere by design (hair spike A); ``GATES`` otherwise."""
+    from app.core.garment_hair import SHORT_LENGTH_CLASSES
+    if shell or (length_class or "") in SHORT_LENGTH_CLASSES:
+        return {key: value for key, value in GATES.items() if key != "moved_share"}
+    return dict(GATES)
+
+
 def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes,
-             bald_front_mask, ghost_front_mask) -> FitResult:
+             bald_front_mask=None, ghost_front_mask=None, *, placed: bool = False,
+             clearance_m: float = CLEAR_M, spread_m: float = SPREAD_M,
+             gates: Optional[Dict[str, Tuple[str, float, str]]] = None) -> FitResult:
     """Fit a prepared (decimated) hair mesh onto the rigged base body.
 
     ``bald_front_mask`` is the full-frame body mask of the bald front view the unrigged base was generated from,
     ``ghost_front_mask`` the full-frame hair mask of the hair-only front view (same framing, R6). The R9 constants
     are converted to unrigged units by ``k`` from a first global similarity pass over the head (Head weight > 0.5).
+
+    ``placed`` (the subtract method, ``garment_cut``): the prepared mesh already lies in the unrigged base's
+    frame — no ``place_by_framing`` / ``align_depth``, the masks are not needed. ``clearance_m`` / ``spread_m``
+    are the push-out's clearance and spread (metres; defaults ``CLEAR_M`` / ``SPREAD_M``), ``gates`` the limits
+    the metrics are gated on (default ``GATES``; ``hair_gates`` per length class).
     """
-    bald, ghost = _mask(bald_front_mask), _mask(ghost_front_mask)
-    if bald.shape != ghost.shape:
-        raise ValueError(f"The masks must share one image size (same framing): {bald.shape} vs {ghost.shape}")
+    if not placed:
+        bald, ghost = _mask(bald_front_mask), _mask(ghost_front_mask)
+        if bald.shape != ghost.shape:
+            raise ValueError(f"The masks must share one image size (same framing): {bald.shape} vs {ghost.shape}")
     (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded) = \
         _prepare(prepared_glb, unrigged_base_glb, rigged_base_glb)
 
@@ -1399,20 +1422,24 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     if not (k > 0 and math.isfinite(k)):
         raise ValueError("Could not measure the unrigged -> rigged scale")
 
-    Q = place_by_framing(Pk, body_u.positions, bald, ghost)
-    head_P = body_u.positions[head]
-    Q = align_depth(Q, head_P, probe_u=PROBE_M / k, band_u=PROBE_BAND_M / k)
+    if placed:
+        Q = np.asarray(Pk, np.float64)
+    else:
+        Q = place_by_framing(Pk, body_u.positions, bald, ghost)
+        head_P = body_u.positions[head]
+        Q = align_depth(Q, head_P, probe_u=PROBE_M / k, band_u=PROBE_BAND_M / k)
     margin = SDF_MARGIN_M / k
     sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
-    Qp, disp = push_out(Q, Fk, sdf, clear=CLEAR_M / k, spread=SPREAD_M / k, spread_depth=SPREAD_DEPTH_M / k)
+    Qp, disp = push_out(Q, Fk, sdf, clear=clearance_m / k, spread=spread_m / k, spread_depth=SPREAD_DEPTH_M / k)
     X, transfer_report = transfer(Qp, body_u, body_r, faces=Fk)
     names, J, W = hair_weights(X, body_r)
     m = metrics(X, Fk, Q * k, Qp * k, body_r)
-    ok, reasons = gate(m)
+    ok, reasons = gate(m, gates)
 
     garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
     report = {
         "k": float(k),
+        "placed": bool(placed), "clearance_m": float(clearance_m), "spread_m": float(spread_m),
         "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
                      "out": int(len(garment.positions))},
         "dropped_components_faces": int(len(Fw0) - len(Fk)),

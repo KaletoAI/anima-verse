@@ -106,8 +106,10 @@ def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
 # --- The hair method (plan 2026-11-09-hairdeck-hair, Task 4) -------------------
 
 #: How the hair mesh is made: the edit chain (haired -> ghost -> cutout ->
-#: mesh -> fit) or HairDeck (one profile picture -> hair cards -> fit).
-HAIR_METHODS: Tuple[str, ...] = ("edit_chain", "hairdeck")
+#: mesh -> fit), HairDeck (one profile picture -> hair cards -> fit) or
+#: subtract (haired -> one mesh of the haired character -> the hair cut off
+#: it -> fit; plan 2026-11-10-hair-subtract-method).
+HAIR_METHODS: Tuple[str, ...] = ("edit_chain", "hairdeck", "subtract")
 DEFAULT_HAIR_METHOD = "edit_chain"
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
@@ -133,8 +135,83 @@ def hair_method_source(character_name: str, *, profile: Optional[Dict[str, Any]]
 
 
 def hair_method(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """``"edit_chain"`` or ``"hairdeck"`` — see ``hair_method_source``."""
+    """``"edit_chain"``, ``"hairdeck"`` or ``"subtract"`` — see ``hair_method_source``."""
     return hair_method_source(character_name, profile=profile)[0]
+
+
+# --- The subtract method's shape and shell (plan 2026-11-10-hair-subtract-method) ---
+
+#: Profile key of the shape override: "" = automatic (``subtract_shape``), "cut" or "shell".
+SUBTRACT_SHAPE_KEY = "hair_subtract_shape"
+#: Profile key of the shell thickness in millimetres ("" = ``garment_cut.DEFAULT_SHELL_M``).
+SHELL_MM_KEY = "hair_shell_mm"
+
+
+def subtract_shape_source(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+    """``(shape, source)``: the profile's ``hair_subtract_shape`` when it is ``cut`` / ``shell`` (source
+    ``"character"``), else from the hair's length class (source ``"length"``): very short / short hair is a
+    scalp ``shell``, everything else (and an unknown length) a ``cut``."""
+    from app.core.garment_cut import SHAPES
+    profile = _profile_of(character_name, profile)
+    own = str(profile.get(SUBTRACT_SHAPE_KEY) or "")
+    if own in SHAPES:
+        return own, "character"
+    length = hair_length_class(character_name, profile=profile)
+    return ("shell" if length in SHORT_LENGTH_CLASSES else "cut"), "length"
+
+
+def subtract_shape(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """``"cut"`` or ``"shell"`` — see ``subtract_shape_source``."""
+    return subtract_shape_source(character_name, profile=profile)[0]
+
+
+def _shell_mm_value(raw: Any) -> Optional[float]:
+    """A shell thickness in mm as float, None for empty. ValueError for a non-number or one outside
+    ``garment_cut.SHELL_MIN_M`` .. ``SHELL_MAX_M``."""
+    from app.core.garment_cut import SHELL_MAX_M, SHELL_MIN_M
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool):
+        raise ValueError("shell thickness must be a number of millimetres or empty")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("shell thickness must be a number of millimetres or empty") from None
+    if not math.isfinite(value) or not SHELL_MIN_M * 1000 <= value <= SHELL_MAX_M * 1000:
+        raise ValueError(f"shell thickness must be within {SHELL_MIN_M * 1000:g}..{SHELL_MAX_M * 1000:g} mm")
+    return round(value, 2)
+
+
+def shell_mm(profile: Optional[Dict[str, Any]]) -> float:
+    """The shell thickness in millimetres: the profile's ``hair_shell_mm``, else (empty or invalid)
+    ``garment_cut.DEFAULT_SHELL_M``."""
+    from app.core.garment_cut import DEFAULT_SHELL_M
+    try:
+        value = _shell_mm_value((profile or {}).get(SHELL_MM_KEY))
+    except ValueError:
+        value = None
+    return value if value is not None else round(DEFAULT_SHELL_M * 1000, 2)
+
+
+def set_hair_subtract(character_name: str, shape: Any, thickness_mm: Any) -> bool:
+    """Store the subtract method's shape override (``""`` automatic, ``"cut"``, ``"shell"``) and shell
+    thickness (mm, None / ``""`` = default) in ONE read-modify-write under the profile lock. ValueError for
+    anything else — nothing is stored then. Only the subtract fingerprint changes: the next run re-cuts on the
+    CPU from the cached source mesh."""
+    from app.core.garment_cut import SHAPES
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    shape = str(shape or "")
+    if shape not in ("", *SHAPES):
+        raise ValueError(f"hair shape must be one of: \"\", {', '.join(SHAPES)}")
+    mm = _shell_mm_value(thickness_mm)
+    wanted = {SUBTRACT_SHAPE_KEY: shape, SHELL_MM_KEY: "" if mm is None else mm}
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if all(profile.get(key, "") == value for key, value in wanted.items()):
+            return True
+        profile.update(wanted)
+        return bool(save_character_profile(character_name, profile))
 
 
 def hair_colour_override(profile: Optional[Dict[str, Any]]) -> str:

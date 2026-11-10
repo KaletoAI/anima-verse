@@ -76,6 +76,21 @@ The fit is the same ``{item}_{fsig}.glb`` + record (its record says
 ``method: "hairdeck"``; a record without ``method`` is an edit-chain fit);
 ``prepared/`` is not used by HairDeck.
 
+Hair by SUBTRACT (plan ``docs/superpowers/plans/2026-11-10-hair-subtract-method.md``) — steps
+``("haired", "mesh_source", "cut", "fit")``: the haired views are the edit chain's own (stored under the
+edit-chain fsig, ``image_fsig``), one mesh of the HAIRED character is generated from them
+(occasion ``hair_source_mesh``) and the hair is cut off it on the CPU (``garment_cut``)::
+
+    source/{item}_{ssig}/haired.glb                   the haired character's mesh
+    source/{item}_{ssig}/haired_{view}_cut.png        its inputs (the haired views' cut-outs)
+    source/{item}_{ssig}/record.json                  {accepted, ssig, image_fsig, haired, backend, ...}
+    prepared/{item}_{fsig}.glb + .json                the cut (B's unrigged frame) + its gates
+
+``ssig`` = md5[:12] over the haired views' sha256 and ``SOURCE_VERSION``: the mesh job is redone only for
+new haired views. The subtract fsig is the edit-chain payload plus ``method``, the haired views' sha256,
+the base MODEL's sha256 (a new base model re-cuts on the CPU, never a mesh job), the shape (``cut`` /
+``shell``), the shell thickness and ``garment_cut.CUT_VERSION``.
+
 Run status is in memory (like ``base_body``): a restart reruns only the step
 that was in flight, every finished step is cached on disk under ``fsig``.
 """
@@ -105,6 +120,14 @@ HAIRDECK_VERSION = 1
 HAIRDECK_RECORD = "record.json"
 EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
+SUBTRACT = "subtract"
+#: The steps of hair made by subtraction (``steps_for``; ``haired`` is the edit chain's image step).
+SUBTRACT_STEPS: Tuple[str, ...] = ("haired", "mesh_source", "cut", "fit")
+#: Bumped when the hair source mesh job's inputs change meaning (part of ``ssig``).
+SOURCE_VERSION = 1
+#: Folder of the hair source meshes (one sub-folder per ``(item, ssig)``) and the record in it.
+SOURCE_DIR = "source"
+SOURCE_RECORD = "record.json"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
 #: Every step of any kind that stores images (the rest store meshes); the
 #: order of one kind is ``image_steps``.
@@ -248,6 +271,23 @@ def hairdeck_dir(character_name: str, item_id: str, hsig: str) -> Path:
     return path
 
 
+def source_dir(character_name: str, item_id: str, ssig: str) -> Path:
+    """``garments/source/{item}_{ssig}/`` — the hair source mesh of the
+    subtract method (``haired.glb``, the cut-outs it was made from and
+    ``record.json``). ValueError like ``garment_path``. Creates nothing."""
+    from app.models.inventory import safe_item_id
+    iid = safe_item_id(item_id)
+    if not iid or iid != item_id:
+        raise ValueError(f"invalid garment item id {str(item_id)[:80]!r}")
+    if not isinstance(ssig, str) or not _FSIG_RE.fullmatch(ssig):
+        raise ValueError(f"invalid source fingerprint {str(ssig)[:40]!r}")
+    root = _root(character_name)
+    path = root / SOURCE_DIR / f"{iid}_{ssig}"
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"garment path escapes {root}")
+    return path
+
+
 def parse_name(path: Path) -> Optional[Tuple[str, str]]:
     """``(item_id, fsig)`` of a stored garment file, None for any other name
     (a layered fit belongs to the group of the body fit it was made from)."""
@@ -332,6 +372,8 @@ def steps_for(kind: str, method: str) -> Tuple[str, ...]:
         raise ValueError(f"unknown garment kind {kind!r}")
     if method == HAIRDECK and kind == "hair":
         return HAIRDECK_STEPS
+    if method == SUBTRACT and kind == "hair":
+        return SUBTRACT_STEPS
     if method != EDIT_CHAIN:
         raise ValueError(f"unknown {kind} method {method!r}")
     return GARMENT_STEPS[kind]
@@ -399,29 +441,83 @@ def garment_hsig(character_name: str, item_id: str, *,
     return digest.hexdigest()[:12]
 
 
+def _edit_payload(character_name: str, item_id: str, kind: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """The edit-chain fingerprint payload (R10)."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    bsig = base_body.base_signature(character_name, profile=profile)
+    images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
+              for view in GARMENT_VIEWS}
+    return {"kind": kind, **_kind_inputs(kind, character_name, profile, item_id),
+            "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": images}
+
+
+def _md5(payload: Dict[str, Any]) -> str:
+    digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"))
+    return digest.hexdigest()[:12]
+
+
+def image_fsig(character_name: str, item_id: str, *,
+               profile: Optional[Dict[str, Any]] = None) -> str:
+    """The fsig the item's IMAGE steps are stored under: the edit-chain fsig
+    for the subtract method (its haired views are the edit chain's own),
+    ``garment_fsig`` otherwise. ValueError like ``garment_fsig``."""
+    kind = _garment_kind(item_id)
+    profile = _profile_of(character_name, profile)
+    if kind_method(kind, character_name, profile) == SUBTRACT:
+        return _md5(_edit_payload(character_name, item_id, kind, profile))
+    return garment_fsig(character_name, item_id, profile=profile)
+
+
+def haired_shas(character_name: str, item_id: str, ifsig: str) -> Dict[str, str]:
+    """view -> sha256 of the ACCEPTED haired view under ``ifsig`` ("" when
+    there is none)."""
+    from app.core import base_body
+    out: Dict[str, str] = {}
+    for view in GARMENT_VIEWS:
+        path = garment_path(character_name, item_id, ifsig, "image", step="haired", view=view)
+        accepted = path.is_file() and read_record(path.with_suffix(".json")).get("accepted") is True
+        out[view] = base_body.file_sha256(path) if accepted else ""
+    return out
+
+
+def subtract_ssig(character_name: str, item_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None) -> str:
+    """md5[:12] over the accepted haired views' sha256 (always those of the
+    edit-chain fsig — whatever method is selected now) and ``SOURCE_VERSION``
+    — names the hair source mesh folder (``source_dir``)."""
+    kind = _garment_kind(item_id)
+    profile = _profile_of(character_name, profile)
+    ifsig = _md5(_edit_payload(character_name, item_id, kind, profile))
+    return _md5({"haired": haired_shas(character_name, item_id, ifsig), "version": SOURCE_VERSION})
+
+
 def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
-    ``garment_hair.hair_placement``, None = automatic). ValueError when
-    ``item_id`` is no garment of a known kind."""
-    from app.core import base_body
-    from app.core.model_refs import find_ref_image
+    ``garment_hair.hair_placement``, None = automatic); hair made by
+    subtraction adds ``{method, haired, base_model, shape, shell_mm,
+    cut_version}`` (module docstring). ValueError when ``item_id`` is no
+    garment of a known kind."""
     kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
-    bsig = base_body.base_signature(character_name, profile=profile)
-    images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
-              for view in GARMENT_VIEWS}
-    payload = {"kind": kind, **_kind_inputs(kind, character_name, profile, item_id),
-               "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": images}
-    if kind_method(kind, character_name, profile) == HAIRDECK:
+    payload = _edit_payload(character_name, item_id, kind, profile)
+    method = kind_method(kind, character_name, profile)
+    if method == HAIRDECK:
         from app.core import garment_hair
         payload.update(method=HAIRDECK, hsig=garment_hsig(character_name, item_id, profile=profile),
                        colour=garment_hair.hair_colour_override(profile),
                        placement=garment_hair.hair_placement(profile))
-    digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8"))
-    return digest.hexdigest()[:12]
+    elif method == SUBTRACT:
+        from app.core import base_body, garment_cut, garment_hair
+        base = base_body.current_base(character_name, profile=profile)
+        payload.update(method=SUBTRACT, haired=haired_shas(character_name, item_id, _md5(payload)),
+                       base_model=base[1] if base else "",
+                       shape=garment_hair.subtract_shape(character_name, profile=profile),
+                       shell_mm=garment_hair.shell_mm(profile), cut_version=garment_cut.CUT_VERSION)
+    return _md5(payload)
 
 
 def fit_method(record: Dict[str, Any]) -> str:
