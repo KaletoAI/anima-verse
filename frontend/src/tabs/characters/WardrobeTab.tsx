@@ -270,8 +270,17 @@ export function WardrobeTab({ character }: { character: string }) {
       list = list.filter((it) => !(it.outfit_types || []).length
         || it.outfit_types.includes(typeFilter))
     }
-    return list
-  }, [data.items, slotFilter, typeFilter])
+    // Worn pieces first, in body-slot order (head to feet); the rest keeps
+    // the server's order (Array.prototype.sort is stable).
+    const rank = (it: Item) => {
+      const idx = it.slots.map((s) => data.slot_order.indexOf(s)).filter((i) => i >= 0)
+      return idx.length ? Math.min(...idx) : data.slot_order.length
+    }
+    return [...list].sort((a, b) => {
+      if (a.equipped !== b.equipped) return a.equipped ? -1 : 1
+      return a.equipped ? rank(a) - rank(b) : 0
+    })
+  }, [data.items, data.slot_order, slotFilter, typeFilter])
 
   const slotOptions = useMemo(() => {
     const s = new Set<string>()
