@@ -280,7 +280,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
-  areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
+  areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
@@ -399,6 +399,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  under the loaded model so it rides the orientation fix along. Model
      *  mode only; refreshed live. */
     areaOutlines?: AreaOutline[]
+    /** Generic overlay polylines in the loaded model's own (glTF y-up) MODEL
+     *  space — hung under the loaded object like `areaOutlines`, so they ride
+     *  the orientation fix along; drawn on top (no depth test). The caller's
+     *  server measured them (e.g. a shoe's insole and topline); this viewer
+     *  only draws. Model mode only; refreshed live. */
+    polylines?: Array<{ points: [number, number, number][]; color: string }>
     /** THE ASSEMBLY PREVIEW: what the picture areas show, keyed by area id —
      *  the SAME `applySlotMaterials` both renderers use, so the poster hangs
      *  in this preview the way it hangs in the scene. Cleared (or changed) the
@@ -562,6 +568,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const areaOutlinesRef = useRef(areaOutlines)
   areaOutlinesRef.current = areaOutlines
   const areaFnRef = useRef<(() => void) | null>(null)
+  const polylinesRef = useRef(polylines)
+  polylinesRef.current = polylines
+  const polylineFnRef = useRef<(() => void) | null>(null)
   const slotsRef = useRef(slots)
   slotsRef.current = slots
   const slotFnRef = useRef<(() => void) | null>(null)
@@ -615,6 +624,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // Live outline / preview refresh — a detected area or a picked picture must
   // show up without re-downloading the model.
   useEffect(() => { areaFnRef.current?.() }, [areaOutlines])
+  useEffect(() => { polylineFnRef.current?.() }, [polylines])
   useEffect(() => { slotFnRef.current?.() }, [slots])
   // Disarming the tool drops whatever was half-drawn: a ring that survived
   // into the next arming would send points from the previous camera.
@@ -1429,6 +1439,28 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           disposers.push(() => {
             if (areaFnRef.current === rebuildAreas) areaFnRef.current = null
             clearGroup(areaGroup)
+          })
+
+          // ── Overlay polylines (model space, like the area outlines) ──
+          const polylineGroup = new THREE.Group()
+          object.add(polylineGroup)
+          const rebuildPolylines = () => {
+            clearGroup(polylineGroup)
+            for (const pl of polylinesRef.current || []) {
+              const pts = (pl.points || []).map((p) => new THREE.Vector3(p[0], p[1], p[2]))
+              if (pts.length < 2) continue
+              const line = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(pts),
+                new THREE.LineBasicMaterial({ color: new THREE.Color(pl.color), depthTest: false }))
+              line.renderOrder = 5
+              polylineGroup.add(line)
+            }
+          }
+          polylineFnRef.current = rebuildPolylines
+          rebuildPolylines()
+          disposers.push(() => {
+            if (polylineFnRef.current === rebuildPolylines) polylineFnRef.current = null
+            clearGroup(polylineGroup)
           })
 
           // ── The door leaf test swing (spec § 6) ──

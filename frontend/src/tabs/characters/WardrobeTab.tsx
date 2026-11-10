@@ -390,6 +390,7 @@ export function WardrobeTab({ character }: { character: string }) {
               {garments ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 50, minWidth: 0 }}>
                   <OwnMeshToggle itemId={it.item_id} checked={!!garmentStatus} disabled={busy}
+                    feet={it.slots.length > 0 && it.slots.every((s) => s === 'feet')}
                     onChanged={() => { void load() }} />
                   {garmentStatus ? <PieceStatusChip status={garmentStatus} name={it.name} /> : null}
                   {garmentStatus ? (

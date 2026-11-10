@@ -23,7 +23,9 @@ import { MESH_CHIPS, chipResults, num, queueText, shownRecord, upscaleText } fro
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
-import type { GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, RunFeedback } from './useGarment'
+import type {
+  GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit, GateRecord, RunFeedback,
+} from './useGarment'
 
 /** Thumbnail height of an image cell (px). */
 const THUMB_H = 112
@@ -44,7 +46,7 @@ const STATUS_ICON: CSSProperties = {
 /** One status icon for a gate record: ✓ every gated number passes, ✕ one
  *  fails (or the record names reasons), • numbers only; the tooltip lists
  *  every chip with its limit and the reasons. */
-function GateIcon({ specs, record, limits, view, extra }: {
+export function GateIcon({ specs, record, limits, view, extra }: {
   specs: ChipSpec[]
   record: Record<string, unknown> | null | undefined
   limits: Record<string, GateLimit> | undefined
@@ -76,7 +78,7 @@ function GateIcon({ specs, record, limits, view, extra }: {
 
 /** The refused/replaced attempts of an image as tiny thumbnails (click =
  *  lightbox, reason and numbers on hover). */
-function AttemptThumbs({ attempts, label, chips, limits, view }: {
+export function AttemptThumbs({ attempts, label, chips, limits, view }: {
   attempts: Array<{ attempt: number; gate: GateRecord | null; url: string }>
   label: string
   chips?: ChipSpec[]
@@ -112,8 +114,8 @@ function AttemptThumbs({ attempts, label, chips, limits, view }: {
 
 /** The step name cell: name, tooltip (what it makes, what Regenerate costs),
  *  the step's own state (running / failed). */
-function StepLabel({ garment, step, label, help }: {
-  garment: GarmentInfo | null
+export function StepLabel({ garment, step, label, help }: {
+  garment: GarmentRunState | null
   step: string
   label: string
   help: string

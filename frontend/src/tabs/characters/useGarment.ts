@@ -261,6 +261,103 @@ export interface GarmentInfo {
   preview_freshness?: Freshness | null
 }
 
+/** The run state every garment panel carries (clothing, hair and footwear alike): what the run
+ *  marks, the status line and the failure block read. */
+export type GarmentRunState = Pick<GarmentInfo, 'running_step' | 'started_at' | 'queue_position' | 'queue_running'
+  | 'failed'>
+
+/** The steps of a footwear piece in chain order (`garment_store.FOOTWEAR_STEPS`): the item steps
+ *  (one shoe source per item, shared by every wearer) and the per-body fit. */
+export const FOOTWEAR_STEPS = ['source', 'empty', 'cutout', 'mesh', 'insole', 'fit'] as const
+export type FootwearStep = typeof FOOTWEAR_STEPS[number]
+
+/** One step of the shoe source (`garment_footwear.info` steps). */
+export interface FootwearStepInfo {
+  status: 'accepted' | 'refused' | 'missing'
+  /** The step's gate record (`ok`, `reasons` and the gated numbers). */
+  gates: GateRecord
+  /** The step's numbers (gate numbers, sizes, triangle counts). */
+  metrics: Record<string, number>
+  /** The step's file, versioned; null = none. */
+  url: string | null
+  /** Server-computed: Item image changed / Older source version / Older analysis version. */
+  freshness: Freshness | null
+  backend: string
+  created_at: string | null
+  error: string | null
+}
+
+/** One empty-shoe edit attempt (`empty.try{n}`). */
+export interface FootwearEmptyAttempt {
+  attempt: number
+  ok: boolean | null
+  gates: GateRecord
+  seed: number | null
+  backend: string
+  error: string | null
+  url: string | null
+}
+
+/** One shoe mesh attempt. */
+export interface FootwearMeshAttempt {
+  attempt: number
+  ok?: boolean
+  gates?: GateRecord
+  error?: string
+}
+
+/** The insole analysis (`insole.json`, `footwear_insole.analyse`): per-item numbers at the
+ *  nominal length, the type gates and the overlay polylines in the prepared mesh's own coordinates. */
+export interface FootwearInsole {
+  version: number | null
+  nominal: {
+    k?: number
+    heel_seat_h_m?: number | null
+    insole_ball_h_m?: number | null
+    heel_rise_m?: number | null
+    pitch_deg?: number | null
+    shank_slope_deg?: number | null
+  } | null
+  gates: GateRecord & { refusal?: string | null } | null
+  overlay: { insole?: [number, number, number][]; topline?: [number, number, number][] } | null
+  frame: Record<string, unknown> | null
+}
+
+/** GET /characters/{n}/garments/{item} → `garment` of a footwear piece (`garment_footwear.info`). */
+export interface FootwearInfo extends GarmentRunState {
+  item_id: string
+  kind: 'footwear'
+  method: 'shoe'
+  method_source: string
+  description: string
+  fsig: string | null
+  /** The shown shoe source and the current one (they differ while the shown one is stale). */
+  ssig: string
+  current_ssig: string
+  steps: {
+    source?: FootwearStepInfo & { upscale?: Record<string, unknown> | null }
+    empty?: FootwearStepInfo & { skipped?: boolean | null; attempts?: FootwearEmptyAttempt[] }
+    cutout?: FootwearStepInfo
+    mesh?: FootwearStepInfo & { attempts?: FootwearMeshAttempt[] }
+    insole?: FootwearStepInfo & { version?: number | null }
+    fit?: { status: string; pending?: boolean; detail?: string; freshness?: Freshness | null }
+  }
+  /** item_image_changed · source_version_changed · analysis_updated */
+  stale_reasons: string[]
+  /** The inventory item image (read-only here), versioned. */
+  item_image_url: string | null
+  mesh_url: string | null
+  insole: FootwearInsole | null
+  preview_url: string | null
+}
+
+/** The panel's `garment` as footwear info — the server sends `garment_footwear.info` for kind
+ *  `footwear` (`garments.garment_info`); null for every other kind. */
+export function footwearOf(info: { kind?: string; garment?: unknown } | null | undefined): FootwearInfo | null {
+  if (info?.kind !== 'footwear' || !info.garment) return null
+  return info.garment as FootwearInfo
+}
+
 /** A chip limit (`garment_gates.limits` + mesh + fit in the route). */
 export interface GateLimit {
   op: 'lt' | 'le' | 'ge' | 'abs_le' | 'range'
@@ -477,7 +574,7 @@ export type RunMark = 'queued' | 'generating' | 'redo' | null
  *  started: the targeted step waits (`queued`) or runs (`generating`); a later
  *  step of a forced run is redone after it (`redo`, until it runs) — the
  *  same view only, when the click named one. `order` = the method's steps. */
-export function runMark(fb: RunFeedback | undefined, garment: GarmentInfo | null | undefined,
+export function runMark(fb: RunFeedback | undefined, garment: GarmentRunState | null | undefined,
   order: readonly string[], step: string, view?: string): RunMark {
   const target = fb?.target
   const running = garment?.running_step

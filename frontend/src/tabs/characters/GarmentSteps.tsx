@@ -27,7 +27,7 @@ import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
-  GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentView, GateLimit, GateRecord, RunFeedback, RunMark,
+  GarmentImageInfo, GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit, GateRecord, RunFeedback, RunMark,
 } from './useGarment'
 
 const MARK_LABELS: Record<Exclude<RunMark, null>, string> = {
@@ -102,7 +102,7 @@ export function RunButton({ feedback, slot, label, disabled, title, ariaLabel, s
  *  the item's run WAITS (`queue_position`), a Cancel button takes it out of
  *  the queue (`onCancel`, useGarmentRun's cancel); a run in flight has none. */
 export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onCancel }: {
-  garment: GarmentInfo | null
+  garment: GarmentRunState | null
   feedback?: RunFeedback
   stepLabels: Record<string, string>
   /** Inline in a header: no sticky box of its own. */
@@ -368,7 +368,7 @@ export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailed
 
 /** The failed step with its error and the numbers of the refused attempts. */
 export function GarmentFailure({ garment, stepLabels }: {
-  garment: GarmentInfo | null
+  garment: GarmentRunState | null
   stepLabels: Record<string, string>
 }) {
   const { t } = useI18n()

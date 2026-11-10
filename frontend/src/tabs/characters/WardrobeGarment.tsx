@@ -32,16 +32,20 @@ import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
 import type { ImageStepSpec } from './GarmentSteps'
-import { ROW, WARN_STYLE, meshNotReadyText } from './garmentStyle'
+import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, meshNotReadyText } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
+import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
-import { garmentRunning, useGarment, useGarmentRun } from './useGarment'
+import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type { GarmentItemInfo, PieceStatus } from './useGarment'
 
 /** The item flag's explanation (also the hint of the item editor). */
 const OWN_MESH_HINT = 'Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.'
+
+/** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a rigid shoe. */
+const OWN_MESH_SHOE_HINT = "Made once per item from the item image; fitted onto each wearer's foot on the CPU. Boots and sandals are not supported yet; socks stay painted."
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -50,6 +54,10 @@ const STEP_LABELS: Record<string, string> = {
   cutout: 'Cut-outs',
   mesh: 'Mesh',
   fit: 'Fit',
+  // Footwear (the row chip of a shoe while it runs).
+  source: 'Item image',
+  empty: 'Empty shoe',
+  insole: 'Insole',
 }
 
 const STALE_LABELS: Record<string, string> = {
@@ -57,6 +65,10 @@ const STALE_LABELS: Record<string, string> = {
   base_changed: 'Base body changed',
   base_model_changed: 'Base model changed',
   fit_algorithm_updated: 'Fit algorithm updated',
+  // Footwear (garment_footwear.info).
+  item_image_changed: 'Item image changed',
+  source_version_changed: 'Older source version',
+  analysis_updated: 'Older analysis version',
 }
 
 const STATE_LABELS: Record<PieceStatus['state'], string> = {
@@ -142,10 +154,12 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
 
 /** The item flag. The PUT replaces the whole outfit_piece, so the stored
  *  one is read first and only `own_mesh` changes. */
-export function OwnMeshToggle({ itemId, checked, disabled, onChanged }: {
+export function OwnMeshToggle({ itemId, checked, disabled, feet = false, onChanged }: {
   itemId: string
   checked: boolean
   disabled?: boolean
+  /** A piece worn in slot feet alone: a rigid shoe (own label and hint). */
+  feet?: boolean
   onChanged: () => void
 }) {
   const { t } = useI18n()
@@ -167,10 +181,10 @@ export function OwnMeshToggle({ itemId, checked, disabled, onChanged }: {
   }
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: '0.75em' }}
-      title={t(OWN_MESH_HINT)}>
+      title={t(feet ? OWN_MESH_SHOE_HINT : OWN_MESH_HINT)}>
       <input type="checkbox" checked={checked} disabled={disabled || busy}
         onChange={(e) => { void flip(e.target.checked) }} />
-      <span>{t('Own mesh (every wearer)')}</span>
+      <span>{feet ? t('Own mesh — shoe (rigid)') : t('Own mesh (every wearer)')}</span>
     </label>
   )
 }
@@ -205,6 +219,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   }, [onClose])
 
   const garment = info?.garment ?? null
+  // Kind footwear: the shoe source steps of the item (garment_footwear.info), not the clothing chain.
+  const footwear = footwearOf(info)
+  const runState = footwear ?? garment
+  const stepLabels = footwear ? FOOTWEAR_STEP_LABELS : STEP_LABELS
   const running = garmentRunning(info)
   const busy = feedback.pending !== null || running
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
@@ -216,6 +234,35 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
     body = <div className="ga-hint">{t('Loading…')}</div>
   } else if (!info.pipeline) {
     body = <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Base body tab')}</div>
+  } else if (footwear) {
+    body = (
+      <div className="ga-garment-dialog-body">
+        <div className="ga-garment-dialog-col">
+          {footwear.stale_reasons.length ? (
+            <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
+              <span style={WARN_STYLE} title={t('The shown shoe stays in use until the new one is made.')}>
+                {footwear.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}
+              </span>
+              <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
+                title={t('The shown shoe stays in use until the new one is made.')}
+                label={t('Regenerate')} />
+            </div>
+          ) : null}
+          <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun} />
+        </div>
+        <div className="ga-garment-dialog-col">
+          <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>{t('No fitted mesh yet')}</div>
+          {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
+          <GarmentFailure garment={footwear} stepLabels={FOOTWEAR_STEP_LABELS} />
+          {info.status.missing && !running ? (
+            <div className="ga-hint" style={WARN_STYLE}>
+              {meshNotReadyText(t, info.name || name, info.status.reason)}
+            </div>
+          ) : null}
+          <div className="ga-hint">{t(OWN_MESH_SHOE_HINT)}</div>
+        </div>
+      </div>
+    )
   } else {
     body = (
       <div className="ga-garment-dialog-body">
@@ -286,7 +333,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
           <span className="ga-garment-dialog-title" title={name}>{name}</span>
           <div style={{ flex: '1 1 auto', minWidth: 0, fontWeight: 400 }}>
             {running || feedback.pending !== null
-              ? <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} bare
+              ? <RunStatusLine garment={runState} feedback={feedback} stepLabels={stepLabels} bare
                 onCancel={() => { void cancel() }} />
               : info?.status ? <PieceStatusChip status={info.status} name={info.name || name} /> : null}
           </div>

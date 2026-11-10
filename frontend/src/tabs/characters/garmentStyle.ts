@@ -4,7 +4,7 @@
  * modules so fast refresh keeps working.
  */
 import type { CSSProperties } from 'react'
-import type { GarmentImageInfo, GarmentInfo, GateLimit, GateRecord, RecordLimits, RunFeedback } from './useGarment'
+import type { GarmentImageInfo, GarmentRunState, GateLimit, GateRecord, RecordLimits, RunFeedback } from './useGarment'
 
 export const TILE_HEIGHT = 200
 
@@ -51,6 +51,17 @@ export interface ChipSpec {
   /** A boolean of the record that says whether this number is gated
    *  (false = reported only, e.g. `head_gated` of a piece worn on the head). */
   gatedKey?: string
+}
+
+/** The step names of a footwear piece (FootwearSteps, the dialog's run status line). */
+export const FOOTWEAR_STEP_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  source: 'Item image',
+  empty: 'Empty shoe',
+  cutout: 'Cut-out',
+  mesh: 'Mesh',
+  insole: 'Insole',
+  fit: 'Fit',
 }
 
 export const MESH_CHIPS: ChipSpec[] = [
@@ -156,7 +167,7 @@ export function upscaleText(upscale: Record<string, unknown> | null | undefined,
  *  character's garment queue: the item in flight and the place from the
  *  polled info (`queue_running` / `queue_position`), else from the start
  *  answer, else the overview's running pieces; item ids shown by name. */
-export function queueText(garment: GarmentInfo | null | undefined, fb: RunFeedback | undefined,
+export function queueText(garment: GarmentRunState | null | undefined, fb: RunFeedback | undefined,
   stepLabels: Record<string, string>, t: (s: string) => string): string {
   const name = (id: string) => fb?.names[id] || id
   const ahead = garment?.queue_running
