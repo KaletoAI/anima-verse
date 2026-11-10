@@ -300,6 +300,14 @@ export function SubtractSettings({ settings, busy, running, sourceReady, onApply
   const same = shape === settings.shape_override && value === storedValue
   const manual = settings.shape_override !== '' || storedValue !== null
   // The length class is the server's word (garment_hair.LENGTH_CLASSES), shown as is.
+  // Why Apply cannot run, shown as a line under the row (like the Outfit body tab's lock reasons), not only
+  // as a tooltip: a value out of range used to do nothing visible.
+  const waitReason = busy || running ? t('Wait for the running hair job') : ''
+  const applyReason = waitReason
+    || (value !== null && Number.isNaN(value) ? t('Not a number')
+      : !valid ? t('{mm} mm is outside {min}–{max} mm').replace('{mm}', String(value))
+        .replace('{min}', String(settings.shell_mm_min)).replace('{max}', String(settings.shell_mm_max))
+        : same ? t('No change') : '')
   const length = settings.length_class || t('unknown length')
   const autoLabel = `${t('Auto — from hair length')} (${length}${autoShape ? `: ${t(SHAPE_LABELS[autoShape])}` : ''})`
   return (
@@ -320,15 +328,21 @@ export function SubtractSettings({ settings, busy, running, sourceReady, onApply
             disabled={busy || effective === 'cut'} aria-label={t('Shell thickness (mm)')}
             onChange={(e) => setMm(e.target.value)} />
         </label>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !valid || same}
-          title={!valid ? t('Value out of range') : undefined} onClick={() => onApply(shape, value)}>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!!applyReason}
+          title={applyReason || undefined} onClick={() => onApply(shape, value)}>
           {t('Apply')}
         </button>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !manual} onClick={() => onApply('', null)}>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || running || !manual}
+          title={waitReason || undefined} onClick={() => onApply('', null)}>
           {t('Reset to automatic')}
         </button>
-        {running ? <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span> : null}
       </div>
+      {applyReason ? (
+        <div className="ga-hint" role="status"
+          style={{ fontStyle: 'italic', overflowWrap: 'anywhere', ...(waitReason || same ? {} : WARN_STYLE) }}>
+          {waitReason || `${t('Apply')}: ${applyReason}`}
+        </div>
+      ) : null}
       <div className="ga-hint">
         {`${settings.shell_mm_min}–${settings.shell_mm_max} mm · ${t('5 mm ≈ short crop')}`}
         {' · '}
