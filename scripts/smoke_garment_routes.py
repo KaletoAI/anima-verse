@@ -42,15 +42,22 @@ Fixture (expected values derived by hand):
     None; Nobody: 404.
 [3] POST /hair: Pet 400, Offline 400 ("base-body pipeline"), Bald 400
     ("No hair set"); none of them gets an item or a run.
-[4] POST /characters/Demo/hair -> 202 {item_id "hair_demo", started True};
-    the recorder runs (Demo, hair_demo, steps None, view None, force False);
-    while it blocks: a run -> 409, a second POST /hair -> 202 started False;
-    GET /hair -> item_id hair_demo, equipped True, garment.item_id hair_demo,
-    garment.running_step "queued" (the worker is still before its first
-    step — the recorder never calls garment_store.start). Released -> idle.
+[4] POST /characters/Demo/hair -> 202 {item_id "hair_demo", started True,
+    queued False, position 0, behind None}; the recorder runs (Demo,
+    hair_demo, steps None, view None, force False); while it blocks: a run
+    {} is QUEUED behind it (user decision 2026-11-10, no more 409) -> 202
+    {started False, queued True, position 1, behind "hair_demo"}; a second
+    POST /hair asks the identical default run -> the waiting one is reused:
+    202 {item_id hair_demo, started False, queued True, position 1, behind
+    hair_demo}; GET /hair -> item_id hair_demo, equipped True,
+    garment.item_id hair_demo, garment.running_step "queued" (the recorder
+    never calls garment_store.start), queue_position 1, queue_running
+    hair_demo. Released -> idle after exactly 2 runs (the first + the one
+    queued run), both (Demo, hair_demo, None, None, False).
 [5] Run validation: step "nope" 400, view "side" 400, Other's item 400, an
     unknown item 400, Offline's own item 400 ("base-body pipeline"); then
-    {step fit, force true} -> 202 {started True} and the recorder gets
+    {step fit, force true} -> 202 {started True, queued False, position 0,
+    behind None} (idle character) and the recorder gets
     (steps "fit", view None, force True); {step haired, view back} ->
     (steps "haired", view "back", force False).
 [6] /hair/equipped: false -> 200 {equipped False}, worn map {}; GET /hair
@@ -229,25 +236,30 @@ def main() -> int:
             print("[4] POST /hair creates, wears and starts")
             gate.clear()
             r = client.post("/characters/Demo/hair", json={})
-            check("202", (r.status_code, r.json()), (202, {"item_id": "hair_demo", "started": True}))
+            check("202", (r.status_code, r.json()), (202, {"item_id": "hair_demo", "started": True,
+                                                         "queued": False, "position": 0, "behind": None}))
             deadline = time.monotonic() + 10
             while not RUNS and time.monotonic() < deadline:
                 time.sleep(0.02)
             check("recorder call", RUNS, [("Demo", "hair_demo", None, None, False)])
             check("worn", inventory.get_equipped_mesh_pieces("Demo"), {"hair": "hair_demo"})
             r = client.post("/characters/Demo/garments/hair_demo/run", json={})
-            check("run while running -> 409", r.status_code, 409)
+            check("run while running -> 202 queued", (r.status_code, r.json()),
+                  (202, {"started": False, "queued": True, "position": 1, "behind": "hair_demo"}))
             r = client.post("/characters/Demo/hair", json={})
-            check("second POST /hair", (r.status_code, r.json()), (202, {"item_id": "hair_demo", "started": False}))
+            check("second POST /hair reuses the waiting run", (r.status_code, r.json()),
+                  (202, {"item_id": "hair_demo", "started": False, "queued": True, "position": 1,
+                         "behind": "hair_demo"}))
             r = client.get("/characters/Demo/hair")
             body = r.json() if r.status_code == 200 else {}
             g = body.get("garment") or {}
             check("GET with item", (body.get("item_id"), body.get("equipped"), g.get("item_id"),
                                     g.get("running_step"), body.get("collision")),
                   ("hair_demo", True, "hair_demo", "queued", None))
+            check("queue keys", (g.get("queue_position"), g.get("queue_running")), (1, "hair_demo"))
             gate.set()
             wait_idle()
-            check("one run only", len(RUNS), 1)
+            check("two runs: the first + the queued one", RUNS, [("Demo", "hair_demo", None, None, False)] * 2)
 
             # --- [5] run validation --------------------------------------------------------
             print("[5] run validation")
@@ -263,7 +275,8 @@ def main() -> int:
             check("off pipeline run 400", (r.status_code, "base-body pipeline" in str(detail)), (400, True))
             check("nothing ran", RUNS, [])
             r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "fit", "force": True})
-            check("forced fit 202", (r.status_code, r.json()), (202, {"started": True}))
+            check("forced fit 202", (r.status_code, r.json()),
+                  (202, {"started": True, "queued": False, "position": 0, "behind": None}))
             wait_idle()
             r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "haired", "view": "back"})
             check("haired back 202", r.status_code, 202)

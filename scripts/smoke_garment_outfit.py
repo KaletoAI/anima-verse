@@ -525,7 +525,7 @@ def main() -> int:
         RUNS.clear()
         res = garments.run_queued("Demo", ["coat"])
         check("automatic: cached failure, no run", (res["coat"].get("cached"), RUNS), (True, []))
-        check("explicit run starts", garments.start_garment("Demo", "coat"), True)
+        check("explicit run starts", garments.start_garment("Demo", "coat")["started"], True)
         check("explicit run idle", garments.wait_idle(30), True)
         check("explicit run ran", [r[1] for r in RUNS], ["coat"])
         check("failure cleared", gs.garment_path("Demo", "coat", gs.garment_fsig("Demo", "coat"),
@@ -673,9 +673,9 @@ def main() -> int:
         wear("Demo", X)
         mode["coat"] = "fail"
         RUNS.clear()
-        check("explicit run 1", garments.start_garment("Demo", "coat"), True)
+        check("explicit run 1", garments.start_garment("Demo", "coat")["started"], True)
         garments.wait_idle(30)
-        check("explicit run 2 (despite the failure)", garments.start_garment("Demo", "coat"), True)
+        check("explicit run 2 (despite the failure)", garments.start_garment("Demo", "coat")["started"], True)
         garments.wait_idle(30)
         check("both explicit runs ran", [r[1] for r in RUNS], ["coat", "coat"])
         gs._failed.clear()  # a restart empties the in-memory status

@@ -50,9 +50,12 @@ Fixture (expected values derived by hand):
     with reason "ghost — gate refused"; cape not worn -> painted False,
     reason None; overlaps: the coat covers top, the dress is worn on top —
     the coat is LAYERED over the dress (plan 2026-11-10 Task 2), only pieces
-    over each other warn -> []. Offline: pipeline False, dress
+    over each other warn -> []; every row carries queue_position None and
+    the root queue_running None, queue [] (nothing runs). Offline: pipeline False, dress
     painted False, overlaps []. Other: items {}.
 [6] garment_set.piece_status, pure: running wins ({running, step "mesh"});
+    a waiting piece passes its garment_info queue_position through
+    ({running, step "queued", queue_position 2});
     an accepted fit of the current fsig -> {fitted, painted False, reason
     None}; an accepted mesh -> "mesh"; an accepted fit without fsig is not
     fitted.
@@ -183,7 +186,8 @@ def main() -> int:
                    {"op": "abs_le", "value": 0.0055}, {"op": "ge", "value": 0.98},
                    {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.98}))
             check("status, no base model", body.get("status"),
-                  {"state": "missing", "step": None, "painted": True, "reason": base_body.BASE_MODEL_MISSING})
+                  {"state": "missing", "step": None, "painted": True, "reason": base_body.BASE_MODEL_MISSING,
+                   "queue_position": None})
             g = body.get("garment") or {}
             check("garment kind + fsig", (g.get("kind"), bool(g.get("fsig"))), ("clothing", True))
             check("preview freshness", g.get("preview_freshness"),
@@ -216,7 +220,8 @@ def main() -> int:
                                       for a in tile.get("attempts") or []]),
                   ("current", [(1, "current")]))
             check("status images", body.get("status"),
-                  {"state": "images", "step": None, "painted": True, "reason": base_body.NO_MESH_FIT})
+                  {"state": "images", "step": None, "painted": True, "reason": base_body.NO_MESH_FIT,
+                   "queue_position": None})
 
             print("[4] persisted failure")
             gs.record_failure("Demo", dress, fsig, step="ghost", error="gate refused")
@@ -236,10 +241,12 @@ def main() -> int:
             check("overview", (r.status_code, body.get("pipeline"), sorted(items)),
                   (200, True, ["cape", "coat", "dress"]))
             check("dress row", items.get("dress"),
-                  {"state": "images", "step": None, "painted": True, "reason": "ghost — gate refused"})
+                  {"state": "images", "step": None, "painted": True, "reason": "ghost — gate refused",
+                   "queue_position": None})
             check("cape row", items.get("cape"),
-                  {"state": "missing", "step": None, "painted": False, "reason": None})
+                  {"state": "missing", "step": None, "painted": False, "reason": None, "queue_position": None})
             check("overlaps", body.get("overlaps"), [])
+            check("idle queue", (body.get("queue_running"), body.get("queue")), (None, []))
             body = client.get("/characters/Offline/garments").json()
             check("offline", (body.get("pipeline"), (body.get("items") or {}).get("dress", {}).get("painted"),
                               body.get("overlaps")), (False, False, []))
@@ -249,10 +256,15 @@ def main() -> int:
             print("[6] piece_status")
             ps = garment_set.piece_status
             check("running", ps({"running_step": "mesh", "fsig": "f"}, worn=True, base_model_ready=True),
-                  {"state": "running", "step": "mesh", "painted": True, "reason": base_body.NO_MESH_FIT})
+                  {"state": "running", "step": "mesh", "painted": True, "reason": base_body.NO_MESH_FIT,
+                   "queue_position": None})
+            check("queued: position passed through",
+                  ps({"running_step": "queued", "fsig": "f", "queue_position": 2}, worn=False,
+                     base_model_ready=True),
+                  {"state": "running", "step": "queued", "painted": False, "reason": None, "queue_position": 2})
             check("fitted", ps({"fsig": "f", "steps": {"fit": {"status": "accepted"}}}, worn=True,
                                base_model_ready=True),
-                  {"state": "fitted", "step": None, "painted": False, "reason": None})
+                  {"state": "fitted", "step": None, "painted": False, "reason": None, "queue_position": None})
             check("mesh", ps({"fsig": "f", "steps": {"mesh": {"status": "accepted"}, "fit": {"status": "missing"}}},
                              worn=False, base_model_ready=True)["state"], "mesh")
             check("fit without fsig", ps({"fsig": None, "steps": {"fit": {"status": "accepted"}}}, worn=True,

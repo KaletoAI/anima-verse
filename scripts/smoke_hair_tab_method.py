@@ -341,7 +341,9 @@ def main() -> int:
             # --- [5] first HairDeck run ---------------------------------------------
             print("[5] POST /hair runs hairdeck + fit")
             r = client.post("/characters/Demo/hair", json={})
-            check("create 202", (r.status_code, r.json()), (202, {"item_id": "hair_demo", "started": True}))
+            check("create 202", (r.status_code, r.json()), (202, {"item_id": "hair_demo", "started": True,
+                                                                  "queued": False, "position": 0,
+                                                                  "behind": None}))
             wait_idle()
             check("counts", counts(), (1, 1))
             check("first call", (HAIR_CALLS[0]["seed"], FIT_CALLS[0]["colour_target"], FIT_CALLS[0]["forward_m"],

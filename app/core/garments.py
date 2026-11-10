@@ -72,11 +72,14 @@ One run per character at a time (``garment_store.char_lock``); ``run_garment``
 blocks and is called from the character's worker thread — every generation
 inside goes through the image service, the fit and the graft are CPU work on
 that thread. No profile lock is held across a step. The worker drains a
-per-character FIFO (``_queues``): ``start_garment`` (a click; refused while
-the character has runs) starts it with one run, ``enqueue_garment`` (the
-triggers: ``after_base_model``, the outfit build's ``run_queued``) appends a
-default run behind the others — several garments of one character run one
-after the other, each request once.
+per-character FIFO (``_queues``; the run in flight is ``_current``):
+``start_garment`` (a click) appends the explicit run behind the character's
+running one — an identical pending run is not added twice, a pending default
+run of the item becomes the explicit one in its place — and
+``enqueue_garment`` (the triggers: ``after_base_model``, the outfit build's
+``run_queued``) appends a default run behind the others. Several garments of
+one character run one after the other, each request once; a failed run never
+holds the queue (the next one starts). ``queue_state`` is the UI view.
 
 An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
 asks ``base_body.after_mesh_item_ready``: an outfit model that left it
@@ -117,6 +120,9 @@ _active: set = set()
 # character (hair + own-mesh outfit pieces) never run at once and each
 # request runs exactly once.
 _queues: Dict[str, Deque["_Job"]] = {}
+# Per character the run its worker is doing (or about to do: the spawn takes
+# the head job, so a character in ``_active`` always has one here).
+_current: Dict[str, "_Job"] = {}
 _ORDINALS = ("first", "second", "third")
 #: The seed of the first HairDeck job of an hsig. A forced regenerate takes
 #: the next seed after the highest one the job record has seen
@@ -1383,25 +1389,53 @@ class _Job:
         """A default run (first missing step on) — what a trigger asks for."""
         return self.steps is None and self.view is None and not self.force
 
+    def key(self) -> Tuple[str, Any, Optional[str], bool]:
+        """What makes two runs the same request (the steps as a tuple)."""
+        steps = self.steps
+        if steps is not None and not isinstance(steps, str):
+            steps = tuple(steps)
+        return self.item_id, steps, self.view, bool(self.force)
+
 
 def _spawn_locked(character_name: str) -> None:
     """Start the worker of a character whose queue was just filled (caller
-    holds ``_lock`` and has added the character to ``_active``)."""
-    threading.Thread(target=_worker, args=(character_name,), daemon=True,
-                     name=f"garment-{character_name}").start()
+    holds ``_lock`` and has added the character to ``_active``). The head
+    job becomes the character's ``_current`` run here, so the queue view
+    never shows a run that is about to start as waiting."""
+    queue = _queues[character_name]
+    job = queue.popleft()
+    _current[character_name] = job
+    try:
+        threading.Thread(target=_worker, args=(character_name,), daemon=True,
+                         name=f"garment-{character_name}").start()
+    except Exception:
+        _current.pop(character_name, None)
+        queue.appendleft(job)
+        raise
+
+
+def _abort_spawn_locked(character_name: str, item_id: str) -> None:
+    """Undo a failed spawn: the character has no worker, nothing is queued."""
+    from app.core import garment_store as gs
+    for job in _queues.pop(character_name, None) or ():
+        gs.end(character_name, job.item_id, QUEUED)
+    _active.discard(character_name)
+    gs.end(character_name, item_id, QUEUED)
 
 
 def _worker(character_name: str) -> None:
-    """Drain the character's FIFO, one run after the other."""
+    """Drain the character's FIFO, one run after the other: ``_current`` first
+    (set by the spawn), then the head of the queue until it is empty. A run
+    that fails or raises ends with its failure recorded; the next one starts."""
     from app.core import garment_store as gs
     while True:
         with _lock:
-            queue = _queues.get(character_name)
-            if not queue:
+            job = _current.get(character_name)
+        if job is None:  # defensive: the spawn always sets it
+            with _lock:
                 _queues.pop(character_name, None)
                 _active.discard(character_name)
-                return
-            job = queue.popleft()
+            return
         error: Optional[str] = None
         try:
             job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
@@ -1410,35 +1444,74 @@ def _worker(character_name: str) -> None:
             logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
             error = str(e) or type(e).__name__
             job.result = {"ok": False, "error": error}
-        finally:
+        with _lock:
             # Ends the ``queued`` mark of a run that had nothing to do or
             # failed before its first step (a step replaces the mark).
             gs.end(character_name, job.item_id, QUEUED, error=error)
+            queue = _queues.get(character_name)
+            if queue:
+                _current[character_name] = queue.popleft()
+                if job.item_id in {_current[character_name].item_id, *(j.item_id for j in queue)}:
+                    # The item runs again (a click while it ran): it waits again.
+                    gs.start(character_name, job.item_id, QUEUED)
+            else:
+                _queues.pop(character_name, None)
+                _current.pop(character_name, None)
+                _active.discard(character_name)
             job.done.set()
+            if character_name not in _active:
+                return
+
+
+def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
+    """``{started, queued, position, behind}`` of a job the caller just put
+    into the character's FIFO (caller holds ``_lock``): ``position`` 0 and
+    ``started`` True for the run in flight, else its 1-based place among the
+    waiting runs, ``behind`` the item id in flight."""
+    current = _current.get(character_name)
+    if current is job:
+        return {"started": True, "queued": False, "position": 0, "behind": None}
+    queue = list(_queues.get(character_name) or ())
+    return {"started": False, "queued": True, "position": queue.index(job) + 1,
+            "behind": current.item_id if current is not None else None}
 
 
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
-                  view: Optional[str] = None, force: bool = False) -> bool:
-    """Run ``run_garment`` in a worker thread. False when a run of the
-    character is already going (or queued). The item counts as running
-    (``queued``) from THIS moment (the UI polls). ValueError for an invalid
-    item, step or view (checked before anything starts)."""
+                  view: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    """Run ``run_garment`` in the character's worker thread — at once when
+    the character has no garment run, else queued behind its runs (never
+    refused). An identical waiting run (same item, steps, view, force) is not
+    added twice; a waiting default run of the item becomes this explicit run
+    in its place (its waiters get this run's result); the item's run IN
+    FLIGHT does not count — this run is appended and runs after it. The item
+    counts as running (``queued``) from THIS moment (the UI polls), unless it
+    is in a step right now. Returns ``{started, queued, position, behind}``
+    (``_position_locked``). ValueError for an invalid item, step or view
+    (checked before anything is queued)."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view)
+    wanted = _Job(item_id, steps, view, bool(force))
     with _lock:
-        if character_name in _active:
-            return False
-        _active.add(character_name)
-        _queues[character_name] = deque([_Job(item_id, steps, view, bool(force))])
-        gs.start(character_name, item_id, QUEUED)
-        try:
-            _spawn_locked(character_name)
-        except Exception:
-            _active.discard(character_name)
-            _queues.pop(character_name, None)
-            gs.end(character_name, item_id, QUEUED)
-            raise
-    return True
+        queue = _queues.setdefault(character_name, deque())
+        job = next((j for j in queue if j.key() == wanted.key()), None)
+        if job is None and not wanted.plain:
+            job = next((j for j in queue if j.item_id == item_id and j.plain), None)
+            if job is not None:
+                # Explicit wins, the place in the queue stays.
+                job.steps, job.view, job.force = wanted.steps, wanted.view, wanted.force
+        if job is None:
+            job = wanted
+            queue.append(job)
+        if not gs.status(character_name, item_id).get("running_step"):
+            gs.start(character_name, item_id, QUEUED)
+        if character_name not in _active:
+            _active.add(character_name)
+            try:
+                _spawn_locked(character_name)
+            except Exception:
+                _abort_spawn_locked(character_name, item_id)
+                raise
+        return _position_locked(character_name, job)
 
 
 def enqueue_garment(character_name: str, item_id: str) -> "_Job":
@@ -1463,11 +1536,24 @@ def enqueue_garment(character_name: str, item_id: str) -> "_Job":
             try:
                 _spawn_locked(character_name)
             except Exception:
-                _active.discard(character_name)
-                _queues.pop(character_name, None)
-                gs.end(character_name, item_id, QUEUED)
+                _abort_spawn_locked(character_name, item_id)
                 raise
     return job
+
+
+def queue_state(character_name: str, item_id: Optional[str] = None) -> Dict[str, Any]:
+    """The character's garment queue for the UI: ``{queue_running, queue}``
+    — the item id in flight (None when idle) and the waiting item ids in
+    run order; with ``item_id`` also ``queue_position``: the 1-based place
+    of the item's first waiting run (None when it waits for nothing)."""
+    with _lock:
+        current = _current.get(character_name)
+        waiting = [j.item_id for j in _queues.get(character_name) or ()]
+    out: Dict[str, Any] = {"queue_running": current.item_id if current is not None else None,
+                           "queue": waiting}
+    if item_id is not None:
+        out["queue_position"] = waiting.index(item_id) + 1 if item_id in waiting else None
+    return out
 
 
 def run_queued(character_name: str, item_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
@@ -1936,6 +2022,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     the placement correction).
     ``failed`` also reports the persisted failure of the current fsig after
     a restart (automatic triggers skip it until an explicit run).
+    ``queue_position`` / ``queue_running`` (``queue_state``): the 1-based
+    place of the item's next waiting run in the character's garment queue
+    (None = none waits) and the item id in flight (None = idle) — the UI's
+    "Queued behind <item>" while ``running_step`` is ``queued``.
     ``body`` (mesh mode, plan 2026-11-10-outfit-body-mesh-mode Task 2): the
     piece's fit on the outfit body the CURRENT outfit model stands on
     (``body_fit_info``; ``body_id`` repeats its id), None on the base body —
@@ -2008,6 +2098,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         logger.exception("Body fit info %s/%s failed", character_name, item_id)
         body = None
     status = gs.status(character_name, item_id)
+    queue = queue_state(character_name, item_id)
     failed = status["failed"]
     if failed is None and not status["running_step"] and fsig:
         # After a restart the in-memory status is empty: the persisted
@@ -2021,6 +2112,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
             "steps": steps, "stale_reasons": stale,
             "running_step": status["running_step"], "started_at": status["started_at"],
+            "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
             "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig,
             "body": body, "body_id": body["body_id"] if body else None}
 

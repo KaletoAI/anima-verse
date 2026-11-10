@@ -134,6 +134,9 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
     ``base_body.NO_MESH_FIT``; None when not painted.
     ``body`` — mesh mode only: ``{body_id, status, error}`` of the piece's
     fit on the outfit body worn now (``garment_info["body"]``).
+    ``queue_position`` — the 1-based place of the piece's next waiting run
+    in the character's garment queue, None when none waits
+    (``garments.queue_state``).
     ``over`` / ``without`` — the names of the worn pieces under this one with
     and without a fit (``worn_layers``' entry of the piece, ``layers``): the
     chip says "fitted over <inner>" / "without <inner>". Both keys are left
@@ -162,7 +165,8 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
             reason = f"{failed['step']} — {failed['error']}"
         else:
             reason = base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING
-    out = {"state": state, "step": running, "painted": painted, "reason": reason}
+    out = {"state": state, "step": running, "painted": painted, "reason": reason,
+           "queue_position": info.get("queue_position")}
     if isinstance(info.get("body"), dict):
         # Mesh mode: the piece's fit on the outfit body worn now (garments.body_fit_info).
         out["body"] = {k: info["body"].get(k) for k in ("body_id", "status", "error")}
@@ -327,7 +331,9 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     own-mesh piece the character holds or wears (``held_clothing``; a worn
     piece over others names them, ``worn_layers``), ``overlaps`` the worn
     ones whose layer order is a guess (``mesh_overlaps``: a cycle, put in
-    slot rank order; [] off the pipeline, where the flag is ignored)."""
+    slot rank order; [] off the pipeline, where the flag is ignored),
+    ``queue_running`` / ``queue`` the character's garment queue
+    (``garments.queue_state``: the item id in flight, the waiting ones)."""
     from app.core import base_body, body_slots, garments
     profile = _profile_of(character_name, profile)
     pipeline = base_body.is_base_pipeline(character_name, profile=profile)
@@ -345,4 +351,6 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
                                       base_model_ready=bool(base and base[1]), layers=layers.get(item_id))
     overlaps = (mesh_overlaps(pieces, slot_order=body_slots.piece_slots_for_character(character_name))
                 if pipeline else [])
-    return {"pipeline": pipeline, "items": items, "overlaps": overlaps}
+    queue = garments.queue_state(character_name)
+    return {"pipeline": pipeline, "items": items, "overlaps": overlaps,
+            "queue_running": queue["queue_running"], "queue": queue["queue"]}

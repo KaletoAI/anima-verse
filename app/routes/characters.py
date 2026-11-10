@@ -1889,10 +1889,12 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
 def get_character_garments(character_name: str,
                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's own-mesh overview (``garment_set.wardrobe``):
-    ``{pipeline, items: {item_id: {state, step, painted, reason, over,
-    without}}, overlaps: [{items, slots}]}`` — every own-mesh piece the
-    character holds or wears (a worn piece over others names them), and the
-    worn pieces that are over each other (layered in slot rank order)."""
+    ``{pipeline, items: {item_id: {state, step, painted, reason,
+    queue_position, over, without}}, overlaps: [{items, slots}],
+    queue_running, queue}`` — every own-mesh piece the character holds or
+    wears (a worn piece over others names them), the worn pieces that are
+    over each other (layered in slot rank order), and the character's
+    garment queue (the item in flight, the waiting ones in run order)."""
     from app.core import garment_set
     _require_character(character_name)
     return garment_set.wardrobe(character_name)
@@ -2080,19 +2082,21 @@ def create_character_hair(character_name: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Create (if missing), refresh and wear the hair item, then start its
     chain (R14: creating the item starts it; every cached step is skipped).
-    ``started`` False = a garment run of the character is already going.
+    ``{item_id, started, queued, position, behind}``: ``started`` False =
+    queued behind the character's running garment run
+    (``garments.start_garment``).
     400 for a non-humanoid, a character off the base-body pipeline or one
     without any hair text."""
     from app.core import garment_hair, garments
     _require_character(character_name)
     try:
         item_id = garment_hair.ensure_hair_item(character_name)
-        started = garments.start_garment(character_name, item_id)
+        queued = garments.start_garment(character_name, item_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return {"item_id": item_id, "started": bool(started)}
+    return {"item_id": item_id, **queued}
 
 
 @router.post("/{character_name}/hair/equipped")
@@ -2128,20 +2132,19 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
     step, or from ``step`` (``force``: re-run it — only ``view`` for an image
     step — and everything after it). 400 for an unknown step/view, an item
     that is no garment of this character, or a character off the base-body
-    pipeline; 409 while a garment run of the character is going."""
+    pipeline. Never refused for a running run: the run is queued behind the
+    character's running garment run (``garments.start_garment``) —
+    ``{started, queued, position, behind}``."""
     from app.core import base_body, garments
     _require_character(character_name)
     try:
         garments.check_run(character_name, item_id, steps=body.step, view=body.view)
         if base_body.current_base(character_name) is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
-        started = garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
-                                         force=body.force)
+        return garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
+                                      force=body.force)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if not started:
-        raise HTTPException(status_code=409, detail="A garment run is already going for this character")
-    return {"started": True}
 
 
 @router.get("/{character_name}/garments/{item_id}/images/{step}/{view}")

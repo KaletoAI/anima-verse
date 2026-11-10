@@ -84,9 +84,12 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
 [5] Base model rewritten under the same B1 (other texture colour ->
     new sha): after_base_model starts fit only: renders 0, mesh calls 0,
     the fit record's base_model_sha256 = the new sha. Then, with the run
-    lock held by the smoke: start_garment -> True (status "queued" at once),
-    a second start_garment -> False; released, the run finds nothing to do
-    and the "queued" mark ends without a failure.
+    lock held by the smoke: start_garment -> started (status "queued" at
+    once); a second start_garment (the item is IN FLIGHT, waiting on the
+    lock) is queued behind it: {started False, queued True, position 1,
+    behind hid}; a third identical one reuses that waiting run (same
+    payload, queue still [hid]); released, both runs find nothing to do and
+    the "queued" mark ends without a failure.
 [5b] The fit record of [5] carries fit_version = garment_fit.FIT_VERSION["hair"].
     Rewritten without it: _fit_state "stale", garment_info stale_reasons
     ["fit_algorithm_updated"] (inputs, base and base model unchanged); after_base_model queues the
@@ -552,7 +555,7 @@ def main() -> int:
         lock = gs.char_lock("Demo")
         lock.acquire()
         try:
-            check("start", garments.start_garment("Demo", hid), True)
+            check("start", garments.start_garment("Demo", hid)["started"], True)
             st = gs.status("Demo", hid)
             check("queued without the old failure", (st["running_step"], st["failed"]), ("queued", None))
         finally:
@@ -576,8 +579,11 @@ def main() -> int:
         lock = gs.char_lock("Demo")
         lock.acquire()
         try:
-            check("start (waits on the run lock)", garments.start_garment("Demo", hid), True)
-            check("second start refused", garments.start_garment("Demo", hid), False)
+            check("start (waits on the run lock)", garments.start_garment("Demo", hid)["started"], True)
+            queued = {"started": False, "queued": True, "position": 1, "behind": hid}
+            check("second start queued behind the running one", garments.start_garment("Demo", hid), queued)
+            check("third identical start reuses it", garments.start_garment("Demo", hid), queued)
+            check("one waiting run", garments.queue_state("Demo")["queue"], [hid])
             check("queued from the start", gs.status("Demo", hid)["running_step"], "queued")
         finally:
             lock.release()
