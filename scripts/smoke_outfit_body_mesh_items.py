@@ -363,7 +363,7 @@ def main() -> int:
         check("K: ok, 3 image jobs, ONE mesh + ONE rig job on bK, 0 worker runs",
               (result.get("ok"), jobs, hub, runs), (True, 3, [("mesh", b_k), ("rig", b_k)], 0))
         check("K: mesh_items record", meta_k.get("mesh_items"),
-              {"intended": ["jacket"], "effective": [], "warnings": [not_ready], "unpainted": ["jacket"],
+              {"intended": ["jacket"], "effective": [], "warnings": [not_ready], "mode": "mesh", "unpainted": ["jacket"],
                "missing": {"jacket": failed_reason}})
         info = base_body.outfit_info("Demo")
         check("K: outfit_info ready + warning", (info["status"], not_ready in info["warnings"]), ("ready", True))
@@ -389,7 +389,10 @@ def main() -> int:
         check("retexture: ok, 3 image jobs, 1 worker run, 0 mesh/rig jobs", (result.get("ok"), jobs, runs, hub),
               (True, 3, 1, []))
         check("retexture: dress text paints the jacket", "leather jacket" in front_text(sig_k), True)
-        check("retexture: record without unpainted", "unpainted" in (meta_r.get("mesh_items") or {}), False)
+        # 58ec6c82 (footwear delivery rule): a retexture record carries mode + unpainted = effective (none) +
+        # intended footwear (none) = [] — the painted jacket is never unpainted.
+        check("retexture: nothing unpainted", ((meta_r.get("mesh_items") or {}).get("mode"),
+                                               (meta_r.get("mesh_items") or {}).get("unpainted")), ("retexture", []))
         check("retexture: warning painted on", base_body.outfit_info("Demo")["warnings"],
               [base_body.MESH_ITEM_FAILED.format(item="Jacket", reason="worn — back refused")])
         entry = wardrobe_entry("jacket")
