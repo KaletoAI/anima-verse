@@ -373,11 +373,13 @@ def _serial_model(function):
                 if generation_error is not None:
                     raise generation_error
                 return result
-            if name in ("rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights") and not result.get("ok"):
+            if name in ("rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights",
+                        "match_outfit_body_posture") and not result.get("ok"):
                 return result
             if not _publish_signature(character_name, directory, stage, signature, token,
                                       rollback_on_error=name in (
-                                          "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights"),
+                                          "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights",
+                                          "match_outfit_body_posture"),
                                       invalidate=name == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
             if requested:
@@ -1970,6 +1972,110 @@ def _auto_normalize(character_name: str, path: Path,
     logger.info("Model3D %s: normalised to %.2f m (%s basis, scale %.4f)",
                 character_name, target, data.get("height_basis", "?"),
                 float(data.get("scale") or 0))
+    # An outfit body stands at its base body's posture (outfit_body_posture.py):
+    # after normalize, before the extension rig and its clean prerig copy.
+    _auto_posture_match(character_name, path, meta)
+
+
+def _auto_posture_match(character_name: str, path: Path, meta: Dict[str, Any], *,
+                        parent: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Turn the outfit body ``path`` rigidly onto its base body's rest
+    hips->head lean (``app/core/outfit_body_posture.py``) and record the
+    outcome in ``meta["blender"]["posture_match"]`` (the caller publishes
+    the sidecar). ``parent``: the body's parent record when ``meta`` has none
+    (its clean prerig source). Applies to a rigged humanoid GLB of the full
+    tier with a parent record only — anything else returns ``{}`` untouched.
+    Never fails the body: a missing base model or a refused turn is recorded
+    with ``error`` and the file stays as it was. Returns the record."""
+    from app.core import outfit_body_posture as posture
+    parent = parent if parent is not None else meta.get("outfit_body")
+    if (not isinstance(parent, dict) or meta.get("rig") != "mixamo" or path.suffix.lower() != ".glb"
+            or path.parent.name == LOW_TIER):
+        return {}
+    bsig = str(parent.get("base_signature") or "")
+    record: Dict[str, Any] = {"version": posture.POSTURE_MATCH_VERSION, "base_signature": bsig,
+                              "base_sha256": "", "target": None, "before": None, "after": None,
+                              "applied_deg": 0.0, "status": "failed", "error": "", "at": utc_now_iso()}
+    try:
+        base = posture.base_target(character_name, bsig)
+        record.update(base_sha256=base["sha256"], target=base["lean"])
+        before = posture.rest_lean(path.read_bytes())
+        record.update(before=before, after=before)
+        if posture.lean_delta(before, base["lean"]) < posture.TOLERANCE_DEG:
+            record["status"] = "within_tolerance"
+        else:
+            from app.blender import refine
+            res = refine.posture_match(path, base["lean"]["forward_deg"], base["lean"]["side_deg"],
+                                       validator=_validator_for("mixamo", character_name))
+            data = res.get("data") or {}
+            if not res.get("applied"):
+                raise RuntimeError(res.get("error") or "Posture match produced no validated output")
+            after = posture.rest_lean(path.read_bytes())
+            record.update(after=after, applied_deg=data.get("applied_deg"), axis=data.get("axis"),
+                          status="applied")
+    except Exception as exc:  # noqa: BLE001 — a post-step never costs the body
+        record["error"] = str(exc) or type(exc).__name__
+        logger.warning("Model3D %s: posture match of %s failed (%s)", character_name, path.stem, record["error"])
+    else:
+        logger.info("Model3D %s: posture of %s matched to base %s (forward %+.1f° -> %+.1f°, turned %.1f°)",
+                    character_name, path.stem, bsig, record["before"]["forward_deg"],
+                    record["after"]["forward_deg"], float(record.get("applied_deg") or 0.0))
+    meta.setdefault("blender", {})["posture_match"] = record
+    return record
+
+
+@_serial_model
+def match_outfit_body_posture(character_name: str, signature: str, *, force: bool = False) -> Dict[str, Any]:
+    """Bring the posture of the STORED outfit body ``signature`` to its base
+    body's (``_auto_posture_match``) — CPU only, no hub job — when its record
+    is stale (``outfit_body_posture.stale_reason``) or ``force``. The clean
+    prerig source is matched first; a body with applied extension bones is
+    then rebuilt from it (``rebuild_extension_rig``, so the bones are placed
+    on the turned body), any other body is matched in place. Collision
+    capsules and measurement follow. ``{ok, noop?, posture_match, error}``;
+    a failure publishes nothing. The outfit models on the body turn stale by
+    its new sha (``base_body.outfit_body_stale``), its garment fits refit."""
+    from app.core import outfit_body_posture as posture
+    from app.core.base_body import is_outfit_body_signature
+    if not is_outfit_body_signature(signature):
+        return {"ok": False, "error": "not an outfit body id"}
+    path = find_model3d(character_name, signature)
+    if path is None:
+        return {"ok": False, "error": "no_model"}
+    meta = _read_sidecar(path)
+    parent = meta.get("outfit_body")
+    if not isinstance(parent, dict) or meta.get("rig") != "mixamo":
+        return {"ok": False, "error": "not a rigged outfit body"}
+    if not force and not posture.stale_reason(character_name, meta):
+        return {"ok": True, "noop": True, "posture_match": posture.record_of(meta), "error": ""}
+    try:
+        prerig = path.parent / "prerig" / path.name
+        state = meta.get("extension_rig") or {}
+        if prerig.is_file():
+            source_meta = _read_sidecar(prerig)
+            source_meta.setdefault("rig", "mixamo")
+            record = _auto_posture_match(character_name, prerig, source_meta, parent=parent)
+            if record.get("error"):
+                raise RuntimeError(record["error"])
+            _publish_sidecar(prerig, source_meta)
+        if prerig.is_file() and (state.get("status") == "applied" or state.get("has_applied")):
+            result = rebuild_extension_rig(character_name, signature, force=True)
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error") or "Extension rebuild failed")
+            meta = _read_sidecar(path)
+            if posture.record_of(meta).get("base_sha256") != record.get("base_sha256"):
+                raise RuntimeError("The rebuilt body is missing the posture match")
+        else:
+            record = _auto_posture_match(character_name, path, meta)
+            if record.get("error"):
+                raise RuntimeError(record["error"])
+            _auto_collision(character_name, path, meta)
+        _attach_measurement(meta, path)
+        _publish_sidecar(path, meta)
+        return {"ok": True, "posture_match": posture.record_of(meta), "error": ""}
+    except Exception as exc:
+        logger.warning("Model3D %s: posture match of stored body %s failed (%s)", character_name, signature, exc)
+        return {"ok": False, "error": str(exc) or type(exc).__name__}
 
 
 def _auto_retexture(character_name: str, path: Path,

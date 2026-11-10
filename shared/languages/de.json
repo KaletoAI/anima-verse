@@ -4384,6 +4384,8 @@
     "Deleted {n} file(s); {m} part(s) skipped while running": "{n} Datei(en) gelöscht; {m} Teil(e) übersprungen, weil sie gerade laufen",
     "Deletes the outfit body with its {f} fit(s) and the {o} outfit model(s) built on it — nothing of it stays. Its dressed views stay; the next build of such an outfit meshes and rigs the body again (hub jobs).": "Löscht den Outfit-Körper mit seinen {f} Anpassung(en) und den {o} darauf gebauten Outfit-Modell(en) — nichts davon bleibt. Seine bekleideten Ansichten bleiben; der nächste Bau eines solchen Outfits meshed und riggt den Körper neu (Hub-Jobs).",
     "Dressed views changed": "Bekleidete Ansichten geändert",
+    "Posture matched to base": "Haltung an Basis angeglichen",
+    "Posture not matched to the base body yet": "Haltung noch nicht an den Basiskörper angeglichen",
     "Fit this garment onto the outfit body anew (CPU, no hub job)": "Dieses Kleidungsstück neu auf den Outfit-Körper anpassen (CPU, kein Hub-Job)",
     "Fits every garment on this body anew from its base fit (CPU, no hub job).": "Passt jedes Kleidungsstück auf diesem Körper neu aus seiner Basis-Anpassung an (CPU, kein Hub-Job).",
     "From an older base fit": "Aus einer älteren Basis-Anpassung",

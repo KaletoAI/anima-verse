@@ -269,6 +269,38 @@ def limb_weights(path: Path,
                             "image_generation.blender_keep_original", True)))
 
 
+def posture_match(path: Path, forward_deg: float, side_deg: float,
+                  validator: Optional[Callable[[bytes], Dict[str, Any]]] = None
+                  ) -> Dict[str, Any]:
+    """Turns a rigged humanoid rigidly so its rest hips->head line leans
+    ``forward_deg`` / ``side_deg`` (``scripts/posture_match.py``; the outfit
+    body's posture match, ``app/core/outfit_body_posture.py``). The gates of
+    ``apply_script`` minus the size gate; the frame gate lets exactly the
+    reported turn through on the root bone (``posture_match_allowance``) —
+    every other joint keeps its frame."""
+    from app.core import config
+    return apply_script(path, "posture_match",
+                        {"forward_deg": float(forward_deg), "side_deg": float(side_deg)},
+                        validator=validator, require_smaller=False,
+                        keep_original=bool(config.get(
+                            "image_generation.blender_keep_original", True)),
+                        frame_allowance=posture_match_allowance)
+
+
+def posture_match_allowance(data: Dict[str, Any]) -> Dict[str, float]:
+    """The root bone's frame turned by the posture match ON PURPOSE: the
+    reported ``applied_deg`` on the joint named ``root``; nothing else, and
+    nothing for a non-finite or missing value."""
+    import math
+    from app.core.rig_contract import norm_bone_name
+    try:
+        deg = abs(float(data.get("applied_deg")))
+    except (TypeError, ValueError):
+        return {}
+    root = str(data.get("root") or "")
+    return {norm_bone_name(root): deg} if root and math.isfinite(deg) else {}
+
+
 def head_twist_allowance(data: Dict[str, Any]) -> Dict[str, float]:
     """The joint-frame rotation normalize's head untwist applied ON PURPOSE.
 

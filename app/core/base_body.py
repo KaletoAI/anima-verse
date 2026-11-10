@@ -3254,6 +3254,14 @@ def prepare_outfit_body(character_name: str, signature: Optional[str] = None, *,
                             profile=texture["mesh_profile"])
         if not rebuild and stored_outfit_body(character_name, body_id, tsig=tsig, view_shas=texture_view_shas(
                 character_name, signature, bsig)) is not None:
+            # A body from before the posture match (or matched to another base model) gets
+            # its base's posture first — CPU only; the outfit model then copies the turned body.
+            from app.core.outfit_body_posture import is_stale
+            if is_stale(character_name, body_id):
+                matched = model3d.match_outfit_body_posture(character_name, body_id)
+                if not matched.get("ok"):
+                    logger.warning("Outfit body %s of %s: posture match failed (%s) — built on it as it is",
+                                   body_id, character_name, matched.get("error"))
             return {"ok": True, "cached": True, "body_id": body_id}
         _outfit_start(character_name, signature, "body")
         error: Optional[str] = None

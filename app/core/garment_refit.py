@@ -22,6 +22,12 @@ from the base fit (``garments.fit_on_body``) — after the base fits, so it
 derives from the refitted one. A refusal is recorded on that body
 (``garment_store.record_body_failure``); the old fit stays served.
 
+Before that, per character in the outfit-body mesh mode, every stored outfit
+body whose posture record is stale gets its base body's posture
+(``outfit_bodies.match_stale_postures``, ``app/core/outfit_body_posture.py``):
+the turned body's garments are refitted onto it and the worn outfit's model
+on it is rebuilt as the CPU copy.
+
 CPU only: no image, mesh or hub call. ``garments._publish_fit`` schedules the
 re-assembly of the current outfit model. A character whose garment chain runs
 (its run lock held, or its FIFO active) is retried later, never refitted
@@ -250,6 +256,15 @@ def sweep(characters: Optional[Iterable[str]] = None, *, pause: float = SWEEP_PA
             characters = list_available_characters(include_pooled=True, include_dormant=True)
         for name in characters:
             try:
+                # Outfit bodies from before the posture match get their base's posture first
+                # (outfit_body_posture.py; CPU, refits the fits on a turned body itself).
+                from app.core.outfit_bodies import match_stale_postures
+                matched = match_stale_postures(name)
+                if matched:
+                    out[name] = [f"posture@{body_id}" for body_id in matched]
+            except Exception:  # noqa: BLE001 — one character never stops the sweep
+                logger.exception("Garment refit sweep: posture match of %s failed", name)
+            try:
                 for attempt in range(retries + 1):
                     done = refit_character(name)
                     if done is not None:
@@ -260,7 +275,7 @@ def sweep(characters: Optional[Iterable[str]] = None, *, pause: float = SWEEP_PA
                     logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
                     continue
                 if done:
-                    out[name] = done
+                    out[name] = out.get(name, []) + done
             except Exception:  # noqa: BLE001 — one character never stops the sweep
                 logger.exception("Garment refit sweep: %s failed", name)
             if pause:

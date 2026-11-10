@@ -49,6 +49,9 @@ DRESSED_VIEWS_CHANGED = "Dressed views changed"
 OLDER_BODY_VERSION = "Built by an older outfit body version"
 NO_OUTFIT_ON_IT = "No outfit model stands on it"
 NOT_BUILT = "Not built"
+# A body from before the posture match, or matched to another base model (outfit_body_posture.py):
+# the next "Re-fit all", outfit build on it or server start matches it (CPU).
+POSTURE_NOT_MATCHED = "Posture not matched to the base body yet"
 
 
 @dataclass
@@ -337,6 +340,75 @@ def refit_body(character_name: str, body_id: str, item_id: str = "") -> Dict[str
             "fitted": fitted, "failed": failed, "skipped": skipped}
 
 
+# --- the posture match of a stored body (outfit_body_posture.py) ---------------------
+
+def match_posture(character_name: str, body_id: str) -> Dict[str, Any]:
+    """Give the STORED body ``body_id`` its base body's posture when its
+    record is stale (``model3d.match_outfit_body_posture``, CPU only).
+    ``{}`` when there is nothing to match, else that function's answer with
+    ``changed`` (the body file was replaced). Caller holds the character's
+    generation slot."""
+    from app.core import model3d
+    from app.core.outfit_body_posture import is_stale
+    if not is_stale(character_name, body_id):
+        return {}
+    result = model3d.match_outfit_body_posture(character_name, body_id)
+    result["changed"] = bool(result.get("ok")) and not result.get("noop")
+    return result
+
+
+def rebuild_worn_on(character_name: str, body_id: str) -> bool:
+    """After the body ``body_id`` changed under its outfit models: rebuild
+    the WORN outfit's model when it stands on that body — through the auto
+    hook (``model3d.maybe_auto_generate_for_outfit``; inside a generation
+    slot it runs as the follow-up once the slot ends). Only in mesh mode and
+    only when the body is current for the worn outfit's dressed views, so
+    the rebuild is the CPU copy onto the body, never a mesh run. True when
+    a build was started or queued."""
+    from app.core import base_body, model3d
+    from app.core.model_refs import current_outfit_state
+    profile = _profile(character_name)
+    if base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+        return False
+    worn = current_outfit_state(character_name)[2]
+    if not worn or base_body.outfit_body_of_outfit(character_name, worn, profile=profile) != body_id:
+        return False
+    bsig = base_body.base_signature(character_name, profile=profile)
+    if _body_record(character_name, body_id).get("views") != base_body.texture_view_shas(character_name, worn, bsig):
+        return False
+    model3d.maybe_auto_generate_for_outfit(character_name)
+    return True
+
+
+def match_stale_postures(character_name: str) -> List[str]:
+    """The boot sweep's part (``garment_refit.sweep``): every stored body of
+    a character in mesh mode whose posture record is stale is matched, its
+    garments are refitted onto the turned body (``refit_body``) and the worn
+    outfit's model on it is rebuilt (``rebuild_worn_on``) — each body inside
+    the character's generation slot. CPU only. Returns the bodies matched."""
+    from app.core import base_body, model3d
+    from app.core.outfit_body_posture import is_stale
+    profile = _profile(character_name)
+    if (not base_body.is_base_pipeline(character_name, profile=profile)
+            or base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE):
+        return []
+    done: List[str] = []
+    for body_id in body_ids(character_name):
+        if not is_stale(character_name, body_id):
+            continue
+        with model3d.generation_slot(character_name):
+            matched = match_posture(character_name, body_id)
+            if not matched.get("changed"):
+                if matched and not matched.get("ok"):
+                    logger.warning("Outfit body %s of %s: posture match failed (%s)", body_id, character_name,
+                                   matched.get("error"))
+                continue
+            done.append(body_id)
+            refit_body(character_name, body_id)
+            rebuild_worn_on(character_name, body_id)
+    return done
+
+
 # --- info ---------------------------------------------------------------------------
 
 def _outfits_on_body(character_name: str, body_id: str, models: Dict[str, Dict[str, Any]],
@@ -364,6 +436,14 @@ def _run_state(character_name: str, body_id: str) -> Tuple[str, Optional[str], O
     return "", None, None
 
 
+def stale_posture(character_name: str, meta: Dict[str, Any]) -> str:
+    from app.core.outfit_body_posture import stale_reason
+    try:
+        return stale_reason(character_name, meta)
+    except Exception:  # noqa: BLE001 — a display hint, never a failure
+        return ""
+
+
 def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsig: str,
               models: Dict[str, Dict[str, Any]], saved: List[Dict[str, Any]], worn: str) -> Dict[str, Any]:
     from app.core import base_body, model3d
@@ -386,6 +466,8 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         reasons.append(OLDER_BODY_VERSION)
     if source and record.get("views") != base_body.texture_view_shas(character_name, source, bsig):
         reasons.append(DRESSED_VIEWS_CHANGED)
+    if meta and stale_posture(character_name, meta):
+        reasons.append(POSTURE_NOT_MATCHED)
     if not path.is_file():
         fresh = freshness("missing", NOT_BUILT)
     elif reasons:
@@ -662,7 +744,15 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
             rigged = model3d.rerig_model(character_name, job.body_id, track_id=task_id)
             result = {"ok": bool(rigged.get("ok")), "error": str(rigged.get("error") or "")}
         else:
+            # A body from before the posture match gets its base's posture first (CPU);
+            # the refit below then fits onto the turned body.
+            posture = match_posture(character_name, job.body_id)
+            if posture and not posture.get("ok"):
+                logger.warning("Outfit body %s of %s: posture match failed (%s) — refitted as it is",
+                               job.body_id, character_name, posture.get("error"))
             result = refit_body(character_name, job.body_id, job.item_id)
+            if posture.get("changed"):
+                rebuild_worn_on(character_name, job.body_id)
     finally:
         if queue is not None and task_id:
             try:

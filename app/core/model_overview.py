@@ -31,7 +31,8 @@ a 3D model or an image, decided here on the server.
    - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` of the
      mesh mode — parent record (texture signature, views meshed), mesh, face
      cleanup, face retexture, black-eye check, rig, head twist, normalize,
-     limb weights, extension rig, collision capsules, texture re-encode,
+     posture matched to the base body (``outfit_body_posture.py``), limb
+     weights, extension rig, collision capsules, texture re-encode,
      measurement (``outfit_body_overview`` reads it).
 
 2. FRESHNESS — ``{state, reason}`` beside every image and 3D preview of the
@@ -536,6 +537,40 @@ def _outfit_body_step(meta: Dict[str, Any], body_meta: Optional[Dict[str, Any]])
     return step("outfit_body", "Outfit body", DONE, " · ".join(p for p in parts if p), numbers)
 
 
+def _posture_match_step(blender: Dict[str, Any]) -> Dict[str, Any]:
+    """The outfit body's posture match to its base body
+    (``outfit_body_posture.py``): rest hips->head lean before/after against
+    the base's, forward and sideways, and the turn applied. Not recorded =
+    built before the match (the next "Re-fit all" / server start matches it)."""
+    label = "Posture matched to base"
+    record = _dict(blender.get("posture_match"))
+    if not record:
+        return step("posture_match", label, NOT_RECORDED, "Not matched yet (built before the posture match)")
+    before, after, target = _dict(record.get("before")), _dict(record.get("after")), _dict(record.get("target"))
+    numbers = {"forward_before_deg": _num(before.get("forward_deg")), "forward_after_deg": _num(after.get("forward_deg")),
+               "forward_base_deg": _num(target.get("forward_deg")), "sideways_before_deg": _num(before.get("side_deg")),
+               "sideways_after_deg": _num(after.get("side_deg")), "sideways_base_deg": _num(target.get("side_deg")),
+               "turned_deg": _num(record.get("applied_deg"))}
+    numbers = {k: round(v, 2) for k, v in numbers.items() if v is not None}
+
+    def lean(key: str) -> str:
+        b, a, t = _num(before.get(key)), _num(after.get(key)), _num(target.get(key))
+        if b is None or a is None or t is None:
+            return ""
+        name = "forward" if key == "forward_deg" else "sideways"
+        return f"{name} {b:+.1f}° → {a:+.1f}° (base {t:+.1f}°)"
+
+    detail = " · ".join(filter(None, [lean("forward_deg"), lean("side_deg")]))
+    if record.get("error"):
+        return step("posture_match", label, FAILED, " · ".join(filter(None, [str(record["error"]), detail])), numbers)
+    if record.get("status") == "within_tolerance":
+        return step("posture_match", label, SKIPPED, "already as the base" + (f" · {detail}" if detail else ""),
+                    numbers)
+    turned = _num(record.get("applied_deg"))
+    return step("posture_match", label, DONE,
+                detail + (f" · turned {turned:.1f}°" if turned is not None else ""), numbers)
+
+
 def _body_parent_step(meta: Dict[str, Any]) -> Dict[str, Any]:
     """The parent record of an outfit body (``base_body.prepare_outfit_body``)."""
     record = _dict(meta.get("outfit_body"))
@@ -555,12 +590,14 @@ def outfit_body_steps(meta: Dict[str, Any], *,
     """The steps of an outfit body of the mesh mode (pure): its parent
     record, then the old path's chain as on the base model — mesh, face
     cleanup, face retexture (+ black-eye check), rig, head twist, posture,
-    normalize, limb weights, extension rig, collision capsules, texture
-    re-encode, measurement. ``meta``: its sidecar."""
+    normalize, posture matched to the base body, limb weights, extension
+    rig, collision capsules, texture re-encode, measurement. ``meta``: its
+    sidecar."""
     blender = _dict(meta.get("blender"))
     rows = [_body_parent_step(meta), _mesh_step(meta), _face_cleanup_step(meta),
             *_face_steps(_dict(meta.get("face_retexture"))), _rig_step(meta)]
     for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
+                _posture_match_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _collision_step(meta, current=collision_current), _texture_step(meta), _measure_step(meta)):

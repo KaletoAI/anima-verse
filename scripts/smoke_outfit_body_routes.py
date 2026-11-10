@@ -27,7 +27,8 @@ Expected, by hand:
     worn outfit stands on it); B1 outfits = [O1, worn True], B2 outfits = [O2, worn False]; O1's name = its piece
     names in alphabetical order "Skirt + Top" (no saved outfit has exactly those pieces); B1 dress_text
     "a top and a skirt"; both freshness "current" (record base = bsig, version current, views = shas of the
-    source outfit's dressed views); both status "ready"; url names signature=<Bn>; steps non-empty (first row
+    source outfit's dressed views, a current posture record — outfit_body_posture.py); B1 without its posture
+    record: freshness "stale", reason POSTURE_NOT_MATCHED; both status "ready"; url names signature=<Bn>; steps non-empty (first row
     = the parent record, id "outfit_body", model_overview.outfit_body_steps); collision capsules 1; B1 can_rerig
     True, B2 False; regenerate_from On; B1 fits = [dress: accepted]; B2 fits = [dress: accepted] (its failure
     record is of another fit version, so it does not hold — garment_store.body_failure).
@@ -110,6 +111,7 @@ def main() -> int:
         from fastapi.testclient import TestClient
         from app.core import auth_dependency, base_body, garment_fit, garment_store as gs, garments, model3d
         from app.core import outfit_bodies
+        from app.core.outfit_body_posture import POSTURE_MATCH_VERSION
         from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
         from app.models import inventory
         from app.models.character import get_character_dir, get_character_images_dir, get_character_profile, \
@@ -196,7 +198,11 @@ def main() -> int:
             touch(R / f"tpose_back_{b}.json", {"outfit_body": rec})
             body_glb = touch(M / f"{b}.glb", f"BODY-{b}".encode())
             touch(M / f"{b}.json", {"outfit_body": rec, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00",
-                                    "collision": capsule})
+                                    "collision": capsule,
+                                    # matched to the stored base (outfit_body_posture.py): no posture run here
+                                    "blender": {"posture_match": {"version": POSTURE_MATCH_VERSION,
+                                                                  "base_signature": bsig, "base_sha256": base_sha,
+                                                                  "status": "applied", "error": ""}}})
             if name == "O1":
                 touch(M / "unrigged" / f"{b}.glb")
                 touch(M / "unrigged" / f"{b}.json", {"outfit_body": rec})
@@ -242,6 +248,15 @@ def main() -> int:
         check("[1] outfit name from the pieces", bodies[B1]["outfits"][0]["name"], "Skirt + Top")
         check("[1] B1 dress text", bodies[B1]["dress_text"], "a top and a skirt")
         check("[1] freshness", [bodies[b]["freshness"]["state"] for b in (B1, B2)], ["current", "current"])
+        b1_meta = M / f"{B1}.json"
+        kept = b1_meta.read_text()
+        b1_meta.write_text(json.dumps({k: v for k, v in json.loads(kept).items() if k != "blender"}))
+        unmatched = next(b for b in client.get(f"/characters/{char}/outfit-bodies", headers=ADMIN).json()["bodies"]
+                         if b["body_id"] == B1)
+        check("[1] no posture record -> stale, named", (unmatched["freshness"]["state"],
+                                                        unmatched["freshness"]["reason"]),
+              ("stale", outfit_bodies.POSTURE_NOT_MATCHED))
+        b1_meta.write_text(kept)
         check("[1] status", [bodies[b]["status"] for b in (B1, B2)], ["ready", "ready"])
         check("[1] url names the body", f"signature={B1}" in (bodies[B1]["url"] or ""), True)
         check("[1] steps start with the parent", (bodies[B1]["steps"] or [{}])[0].get("id"), "outfit_body")
