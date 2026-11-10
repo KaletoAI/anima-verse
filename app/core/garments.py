@@ -170,21 +170,21 @@ class _Refused(Exception):
 def _item(character_name: str, item_id: str) -> Tuple[Dict[str, Any], str]:
     """``(item, kind)`` of a garment item of the character; ValueError for
     anything else. A hair garment must be OWNED by the character
-    (``item.owner``); an own-mesh outfit piece (kind ``clothing``,
-    ``garment_set``) must be HELD or worn by it — the flag is on the item,
-    every wearer gets a fit of their own."""
+    (``item.owner``); an own-mesh outfit piece (kind ``clothing`` or
+    ``footwear``, ``garment_set.OWN_MESH_PIECE_KINDS``) must be HELD or worn
+    by it — the flag is on the item, every wearer gets a fit of their own."""
     from app.core import garment_set
-    from app.core.garment_store import GARMENT_VERSION
     from app.models.inventory import get_item
     item = get_item(item_id) if isinstance(item_id, str) and item_id else None
-    if item and garment_set.garment_kind_of(item) == garment_set.CLOTHING:
+    piece_kind = garment_set.garment_kind_of(item) if item else None
+    if piece_kind in garment_set.OWN_MESH_PIECE_KINDS:
         if not garment_set.holds(character_name, item_id):
             raise ValueError(f"{item_id} is not a garment of {character_name}")
-        return item, garment_set.CLOTHING
+        return item, piece_kind
     if not item or item.get("category") != "garment":
         raise ValueError(f"{str(item_id)[:80]!r} is no garment item")
     kind = str((item.get("garment") or {}).get("kind") or "")
-    if kind not in GARMENT_VERSION:
+    if piece_kind != garment_set.HAIR:
         raise ValueError(f"Unknown garment kind {kind!r}")
     if (item.get("owner") or "").strip() != character_name:
         raise ValueError(f"{item_id} is not a garment of {character_name}")

@@ -35,9 +35,10 @@ Expected, derived by hand:
 [2] Layer order (garment_set.layer_order; slot order inventory.VALID_PIECE_SLOTS: underwear_top 0, top 3,
     bottom 4, outer 5, feet 6). Items: slip {underwear_top}, dress {top, covers [underwear_top]}, coat {outer,
     covers [top, underwear_top]}, shoes {feet}, blouse {top, partially_covers [bottom]}, skirt {bottom, covers
-    [top]}, all own_mesh; plain {top} WITHOUT the flag.
-    - {coat, dress, slip, shoes} in any input order: order [slip, dress, coat, shoes]; under slip [], dress
-      [slip], coat [dress, slip], shoes []; cycles []. mesh_overlaps({underwear_top: slip, top: dress, outer:
+    [top]}, all own_mesh; plain {top} WITHOUT the flag. shoes is own-mesh in slot feet = kind footwear
+    (plan 2026-11-10-footwear-rigid-shoes), which takes no part in layering.
+    - {coat, dress, slip, shoes} in any input order: order [slip, dress, coat] (shoes left out); under slip [],
+      dress [slip], coat [dress, slip]; cycles []. mesh_overlaps({underwear_top: slip, top: dress, outer:
       coat}) == [] (layered: no warning any more).
     - {blouse, skirt} (over each other): rank blouse 3 < skirt 4 -> order [blouse, skirt], under skirt
       [blouse], blouse []; cycles [{items [blouse, skirt], slots [top, bottom]}] (blouse.covers ∩ skirt.worn =
@@ -308,9 +309,8 @@ def main() -> int:
               ["slip", "dress", "coat", "shoes", "blouse", "skirt", "plain"])
         for ids in (["coat", "dress", "slip", "shoes"], ["shoes", "slip", "dress", "coat"]):
             lo = garment_set.layer_order(ids)
-            check(f"order {ids}", lo, {"order": ["slip", "dress", "coat", "shoes"],
-                                       "under": {"coat": ["dress", "slip"], "dress": ["slip"], "shoes": [],
-                                                 "slip": []},
+            check(f"order {ids}", lo, {"order": ["slip", "dress", "coat"],
+                                       "under": {"coat": ["dress", "slip"], "dress": ["slip"], "slip": []},
                                        "cycles": []})
         check("layered pair: no overlap warning",
               garment_set.mesh_overlaps({"underwear_top": "slip", "top": "dress", "outer": "coat"}), [])

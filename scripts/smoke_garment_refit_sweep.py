@@ -17,7 +17,7 @@ path is a recorder that counts: ``service.get_image_service``,
 ``garment_store.garment_fsig`` / ``garment_method`` / ``garment_hsig`` come
 from fixed tables.
 
-Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 2 clothing 7):
+Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 2 clothing 7 footwear 1):
   item   kind      stored fsig  current fsig  base sha  fit_version  method
   hA     hair      aaaaaaaaaaaa same          SHA       (none)       edit_chain
   cB     clothing  bbbbbbbbbbbb same          SHA       1            edit_chain
@@ -119,7 +119,7 @@ def main() -> int:
 
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
-        check("FIT_VERSION", FV, {"hair": 2, "clothing": 7})
+        check("FIT_VERSION", FV, {"hair": 2, "clothing": 7, "footwear": 1})
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)

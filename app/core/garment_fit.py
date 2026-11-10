@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from app.core.footwear_fit import FOOTWEAR_FIT_VERSION
 from app.core.glb_mesh import BodyMesh, GarmentMesh
 
 # R9 — fit constants in METRES (the spike's unit constants x 1.70)
@@ -102,7 +103,8 @@ RIGGED_SMOOTH_UNTIL = 7
 #: smooths the alignment's displacement over the mesh; v5 outfit-body fits could be torn open at the front.
 #: 7 (2026-11-10): clothing — the body solid is sealed (``_seal_cavities``: a hollow outfit body let the piece sink
 #: into its cavity, the skin showed through) and a fit placed from the base fit is not gated on the image placement.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 7}
+#: footwear: its own fit (``footwear_fit``), versioned there.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {

@@ -574,7 +574,7 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
 
     Cheap first pass: without a flagged piece (item definitions from the
     cached snapshot) no profile is read."""
-    from app.core.garment_set import CLOTHING, garment_kind_of
+    from app.core.garment_set import OWN_MESH_PIECE_KINDS, garment_kind_of
     from app.core.motion_item_cache import item_snapshot
     if pieces is None:
         if profile is None:
@@ -585,7 +585,7 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
     if not worn:
         return ""
     items = item_snapshot() or {}
-    flagged = sorted({iid for iid in worn.values() if garment_kind_of(items.get(iid)) == CLOTHING})
+    flagged = sorted({iid for iid in worn.values() if garment_kind_of(items.get(iid)) in OWN_MESH_PIECE_KINDS})
     if not flagged:
         return ""
     from app.core.base_body import is_base_pipeline

@@ -1940,7 +1940,7 @@ def get_character_garment(character_name: str, item_id: str,
     painted_when_unfitted = bool(pipeline and worn and kind == garment_set.CLOTHING)
     mesh_mode = bool(pipeline and base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE)
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
-               "kind": kind, "own_mesh": kind == garment_set.CLOTHING, "worn": bool(worn),
+               "kind": kind, "own_mesh": kind in garment_set.OWN_MESH_PIECE_KINDS, "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=painted_when_unfitted, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,

@@ -121,9 +121,13 @@ logger = get_logger("garment_store")
 
 #: clothing 2: the worn back is drafted from the worn front and fitted onto
 #: the base back (``garment_images``) instead of one edit of the base back.
-GARMENT_VERSION: Dict[str, int] = {"hair": 1, "clothing": 2}
+#: footwear 1: the rigid shoe (``garment_footwear``; its fsig carries the footwear versions instead).
+GARMENT_VERSION: Dict[str, int] = {"hair": 1, "clothing": 2, "footwear": 1}
+#: The steps of footwear made as a shoe: the first five per item (``footwear_source``), ``fit`` per wearer.
+FOOTWEAR_STEPS: Tuple[str, ...] = ("source", "empty", "cutout", "mesh", "insole", "fit")
 GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": ("haired", "ghost", "cutout", "mesh", "fit"),
-                                             "clothing": ("worn", "ghost", "cutout", "mesh", "fit")}
+                                             "clothing": ("worn", "ghost", "cutout", "mesh", "fit"),
+                                             "footwear": FOOTWEAR_STEPS}
 #: The steps of hair made by HairDeck (``steps_for``).
 HAIRDECK_STEPS: Tuple[str, ...] = ("hairdeck", "fit")
 #: Bumped when the HairDeck job's inputs change meaning (part of ``hsig``).
@@ -133,6 +137,8 @@ HAIRDECK_RECORD = "record.json"
 EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
 SUBTRACT = "subtract"
+#: The only method of footwear (no method choice for ``feet``).
+SHOE = "shoe"
 #: The steps of hair made by subtraction (``steps_for``; ``haired`` is the edit chain's image step).
 SUBTRACT_STEPS: Tuple[str, ...] = ("haired", "mesh_source", "cut", "fit")
 #: Bumped when the hair source mesh job's inputs change meaning (part of ``ssig``).
@@ -354,40 +360,51 @@ def image_steps(kind: str) -> Tuple[str, ...]:
 
 def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any],
                  item_id: Optional[str] = None) -> Dict[str, Any]:
-    """The kind's own fingerprint inputs; clothing needs ``item_id`` (its
-    inputs are the item's)."""
+    """The kind's own fingerprint inputs; clothing and footwear need
+    ``item_id`` (their inputs are the item's)."""
     if kind == "hair":
         from app.core import garment_hair
         return garment_hair.fsig_inputs(character_name, profile=profile)
-    if kind == "clothing":
-        from app.core import garment_clothing
+    if kind in ("clothing", "footwear"):
         from app.models.inventory import get_item
         item = get_item(item_id) if item_id else None
         if not item:
             raise ValueError(f"{str(item_id)[:80]!r} is no item")
+        if kind == "footwear":
+            from app.core import garment_footwear
+            return garment_footwear.fsig_inputs(character_name, item, profile=profile)
+        from app.core import garment_clothing
         return garment_clothing.fsig_inputs(character_name, item, profile=profile)
     raise ValueError(f"unknown garment kind {kind!r}")
 
 
 def kind_method(kind: str, character_name: str, profile: Dict[str, Any]) -> str:
     """The method a garment of ``kind`` is made with: hair follows
-    ``garment_hair.hair_method``, every other kind the edit chain."""
+    ``garment_hair.hair_method``, footwear is always a ``shoe``, every other
+    kind the edit chain."""
     if kind == "hair":
         from app.core import garment_hair
         return garment_hair.hair_method(character_name, profile=profile)
+    if kind == "footwear":
+        return SHOE
     return EDIT_CHAIN
 
 
 def steps_for(kind: str, method: str) -> Tuple[str, ...]:
     """The step order of ``kind`` made with ``method``: hair by HairDeck is
-    ``HAIRDECK_STEPS``, anything else ``GARMENT_STEPS[kind]``. ValueError for
-    an unknown kind or method."""
+    ``HAIRDECK_STEPS``, footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
+    edit chain is never run for a feet piece), anything else
+    ``GARMENT_STEPS[kind]``. ValueError for an unknown kind or method."""
     if kind not in GARMENT_STEPS:
         raise ValueError(f"unknown garment kind {kind!r}")
     if method == HAIRDECK and kind == "hair":
         return HAIRDECK_STEPS
     if method == SUBTRACT and kind == "hair":
         return SUBTRACT_STEPS
+    if kind == "footwear":
+        if method != SHOE:
+            raise ValueError(f"unknown footwear method {method!r}")
+        return FOOTWEAR_STEPS
     if method != EDIT_CHAIN:
         raise ValueError(f"unknown {kind} method {method!r}")
     return GARMENT_STEPS[kind]
@@ -395,15 +412,14 @@ def steps_for(kind: str, method: str) -> Tuple[str, ...]:
 
 def _garment_kind(item_id: str) -> str:
     """The garment kind of an item: ``garment.kind`` of a garment item, or
-    ``clothing`` for an own-mesh outfit piece (``garment_set``). Ownership is
-    checked by the caller (``garments._item``)."""
+    ``clothing`` / ``footwear`` for an own-mesh outfit piece
+    (``garment_set``). Ownership is checked by the caller
+    (``garments._item``)."""
     from app.core import garment_set
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
-    if garment_set.garment_kind_of(item) == garment_set.CLOTHING:
-        return garment_set.CLOTHING
-    kind = str((item.get("garment") or {}).get("kind") or "")
-    if item.get("category") != "garment" or kind not in GARMENT_VERSION:
+    kind = garment_set.garment_kind_of(item)
+    if kind is None:
         raise ValueError(f"{item_id!r} is no garment item of a known kind")
     return kind
 
@@ -527,10 +543,15 @@ def garment_fsig(character_name: str, item_id: str, *,
     (the colour override, "" = automatic; the manual placement
     ``garment_hair.hair_placement``, None = automatic); hair made by
     subtraction adds ``{method, haired, base_model, shape, shell_mm,
-    cut_version}`` (module docstring). ValueError when ``item_id`` is no
-    garment of a known kind."""
+    cut_version}`` (module docstring). Footwear is md5[:12] over ``{kind,
+    ssig, insole_version, width_cap, fit_version}`` alone
+    (``garment_footwear.fsig_inputs``) — no base signature, no base images.
+    ValueError when ``item_id`` is no garment of a known kind."""
     kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
+    if kind == "footwear":
+        # No base in it (spec § 5.6): a base change makes the fit stale, never the source.
+        return _md5({"kind": kind, **_kind_inputs(kind, character_name, profile, item_id)})
     payload = _edit_payload(character_name, item_id, kind, profile)
     method = kind_method(kind, character_name, profile)
     if method == HAIRDECK:

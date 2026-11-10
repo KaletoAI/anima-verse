@@ -11,7 +11,17 @@ Two kinds of item become a fitted garment mesh on a base-body character:
   renders, the outfit signature and the chat prompts never see the flag);
   the flag lives on the ITEM, so it applies to every wearer, and a wearer is
   whoever holds it (inventory) or wears it. Its fits are per wearer, under
-  ``characters/<n>/garments/`` like the hair fits.
+  ``characters/<n>/garments/`` like the hair fits;
+- ``footwear`` — an own-mesh outfit piece worn in slot ``feet`` (plan
+  ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``): a rigid
+  shoe meshed once per item from its item image (``footwear_source``) and
+  fitted per wearer × body on the CPU (method ``shoe``,
+  ``garment_footwear``). It takes no part in layering.
+
+``OWN_MESH_PIECE_KINDS`` answers "is this an own-mesh outfit piece" (the
+flag, the worn set, the mesh-items token); ``GRAFTED_PIECE_KINDS`` the kinds
+whose accepted fit is grafted into the served model today (footwear joins
+once the body cut lands — until then a shoe fit is a Wardrobe preview).
 
 Only characters on the base-body pipeline (``base_body.is_base_pipeline``)
 wear garments; everyone else ignores the flag (``worn_garments`` is empty).
@@ -20,19 +30,30 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 HAIR = "hair"
 CLOTHING = "clothing"
+FOOTWEAR = "footwear"
+#: The kinds of an outfit piece with the own-mesh flag.
+OWN_MESH_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
+#: The own-mesh piece kinds whose accepted fit is grafted into the served model
+#: (footwear joins with the body cut, plan 2026-11-10-footwear-rigid-shoes Task 16).
+GRAFTED_PIECE_KINDS: Tuple[str, ...] = (CLOTHING,)
+#: The slot that makes an own-mesh piece footwear.
+FOOTWEAR_SLOT = "feet"
 
 
 def garment_kind_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
-    """``"hair"`` for a hair garment, ``"clothing"`` for an outfit piece with
-    the own-mesh flag, else None."""
+    """``"hair"`` for a hair garment; for an outfit piece with the own-mesh
+    flag ``"footwear"`` when it is worn in slot ``feet``, else
+    ``"clothing"``; None for anything else."""
     if not isinstance(item, dict):
         return None
     category = item.get("category")
     if category == "garment":
         kind = str((item.get("garment") or {}).get("kind") or "")
         return HAIR if kind == HAIR else None
-    if category == "outfit_piece" and (item.get("outfit_piece") or {}).get("own_mesh") is True:
-        return CLOTHING
+    piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
+    if category == "outfit_piece" and piece.get("own_mesh") is True:
+        slots = piece.get("slots") if isinstance(piece.get("slots"), (list, tuple)) else []
+        return FOOTWEAR if FOOTWEAR_SLOT in {str(s) for s in slots} else CLOTHING
     return None
 
 
@@ -51,7 +72,7 @@ def _ids(mapping: Any) -> List[str]:
 
 def _flagged(item_ids: Iterable[str]) -> List[str]:
     from app.models.inventory import get_item
-    return sorted({iid for iid in item_ids if garment_kind_of(get_item(iid)) == CLOTHING})
+    return sorted({iid for iid in item_ids if garment_kind_of(get_item(iid)) in OWN_MESH_PIECE_KINDS})
 
 
 def holds(character_name: str, item_id: str, *,

@@ -95,10 +95,16 @@ def largest_component_share(path: Path) -> float:
 
 
 def _kind(item_id: str) -> str:
+    """The garment kind whose mesh this module makes; ValueError for footwear
+    (its mesh is the item's shoe source, ``footwear_source``) and for
+    anything that is no garment item."""
     from app.core import garment_set
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
-    if garment_set.garment_kind_of(item) == garment_set.CLOTHING:
+    kind = garment_set.garment_kind_of(item)
+    if kind == garment_set.FOOTWEAR:
+        raise ValueError(f"{item_id!r} is footwear: its mesh is the shoe source's")
+    if kind == garment_set.CLOTHING:
         return garment_set.CLOTHING
     kind = str((item.get("garment") or {}).get("kind") or "")
     if item.get("category") != "garment" or not kind:

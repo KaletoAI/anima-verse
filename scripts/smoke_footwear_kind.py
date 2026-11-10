@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""Footwear, task 1: kind ``footwear``, method ``shoe``, the own-mesh piece kinds
+(plan ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md`` Task 1; spec
+``docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`` § 5.1, § 5.6, § 9.1).
+
+Usage:
+    ./.venv/bin/python scripts/smoke_footwear_kind.py
+
+Runs against a THROWAWAY storage directory with a copy of the repo's ``human``
+package — no real world, no hub, no GPU, no server. Synthetic bytes only.
+``garments.run_queued`` is stubbed (records its item ids, answers ok). Every
+expectation is derived by hand below from the Global Constraints and Task 1.
+
+Fixture: ``Kira`` (human-roleplay, female, 168 cm, on the base-body pipeline)
+and ``Mira`` (human-roleplay, male, 190 cm, on the pipeline — another base
+signature). Items, inserted through ``app.models.inventory``:
+``heels`` (slots [feet], own_mesh true, item image = 64 fixed bytes),
+``dress`` (slots [top], own_mesh true), ``boots`` (slots [feet], own_mesh
+absent = false). Kira holds and wears heels + dress; Mira holds heels.
+
+[K1] Kind and steps.
+     garment_kind_of: heels -> "footwear" (own_mesh and "feet" in slots);
+     dress -> "clothing" (own_mesh, no feet); boots -> None (no own_mesh).
+     OWN_MESH_PIECE_KINDS == ("clothing", "footwear"), GRAFTED_PIECE_KINDS ==
+     ("clothing",) (footwear is grafted from Task 16 on).
+     steps_for("footwear", "shoe") == FOOTWEAR_STEPS == ("source", "empty",
+     "cutout", "mesh", "insole", "fit"); steps_for("footwear", "edit_chain") ->
+     ValueError; steps_for("clothing", "shoe") -> ValueError (no method choice
+     either way). kind_method("footwear", Kira, profile) == "shoe".
+     _garment_kind(heels) == "footwear"; garments._item(Kira, heels) ->
+     (heels, "footwear"); garments._item(Mira, dress) -> ValueError (not held);
+     garment_mesh._kind(heels) -> ValueError (its mesh is footwear_source's).
+     Own-mesh set membership: worn_garments(Kira) == sorted([dress, heels]),
+     held_clothing(Kira) == sorted([dress, heels]), held_clothing(Mira) ==
+     [heels]; layer_order([dress, heels])["order"] == [dress] (footwear takes no
+     part in layering). garment_fit.FIT_VERSION["footwear"] == 1.
+[K2] Footwear fsig — no base in it.
+     IMG = sha256 of the heels image bytes.
+     ssig = md5(json.dumps({"image": IMG, "version": 1, "seed": 0},
+     sort_keys=True))[:12] (FOOTWEAR_SOURCE_VERSION 1, seed 0 = never
+     regenerated) == footwear_source.current_ssig(heels).
+     fsig = md5(json.dumps({"kind": "footwear", "ssig": ssig,
+     "insole_version": 1, "width_cap": 1.1, "fit_version": 1},
+     sort_keys=True))[:12] — the width cap without an override is 1.10.
+     base_signature(Kira) != base_signature(Mira) (precondition); Kira gets
+     base front/back view files (Mira none) -> garment_fsig(Kira, heels) ==
+     garment_fsig(Mira, heels) == fsig.
+     Kira's profile footwear_width_cap {heels: 1.05} -> width_cap 1.05 and
+     fsig' = the same md5 with "width_cap": 1.05 != fsig; an override 1.2 is
+     clamped to 1.10 -> fsig again; 0.9 clamps to 1.00.
+     Kira's base model model3d/<bsig>.glb b"model-1" -> b"model-2": fsig
+     unchanged (the base model is never an fsig input).
+[K3] mesh_items_token(Kira, pieces={"feet": heels}) ==
+     "|meshitems:" + heels + "|worn:feet=" + heels — the string the clothing
+     kind produced before footwear existed (the feet piece was flagged as
+     clothing then), so no outfit signature moves in P1.
+     mesh_items_token(Kira, pieces={"feet": boots}) == "" (not own-mesh).
+[K4] Transition rule (P1–P2: a shoe fit is a Wardrobe preview, the body cut
+     lands in Task 16). Kira's base model b"model-2", SHA = its sha256. Both
+     heels and dress get an accepted fit record on SHA under their current
+     fsig (dress: kind clothing; heels: kind footwear, method shoe).
+     Retexture mode, pieces {top: dress, feet: heels}:
+       resolve_mesh_items -> intended == sorted([dress, heels]),
+       effective == [dress] (heels is not grafted although it has a fit),
+       warnings == [MESH_ITEM_PAINTED.format(item="Heels",
+       reason=FOOTWEAR_PREVIEW_ONLY)], no "unpainted"/"missing" key;
+       run_queued was asked for [dress] only (the shoe chain is no part of the
+       outfit build while its fit is a preview).
+     Mesh mode (profile outfit_body_mode "mesh"):
+       unpainted == intended, effective == [dress],
+       missing == {heels: FOOTWEAR_PREVIEW_ONLY}, warnings ==
+       [MESH_ITEM_NOT_READY.format(item="Heels", reason=FOOTWEAR_PREVIEW_ONLY)].
+     A retexture-mode record that painted heels (intended [dress, heels],
+     effective [dress]): mesh_items_ready(Kira, record, base_sha=SHA) == []
+     (accepted fit, but footwear is not grafted — never stale for it).
+     The mesh-mode record above (missing {heels: "other"}):
+     mesh_items_missing(Kira, record, base_sha=SHA) == [(heels,
+     FOOTWEAR_PREVIEW_ONLY)] (dress has its fit -> not missing; the reason is
+     the transition reason whatever the record says); in retexture mode
+     mesh_items_off_rule of that record == [heels] (it belongs painted on).
+"""
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+FAILS = []
+
+
+def check(label, got, want):
+    ok = got == want
+    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
+    if not ok:
+        FAILS.append(label)
+
+
+def raises(label, fn, exc, contains=""):
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001
+        ok = isinstance(e, exc) and contains in str(e)
+        check(label, "raised" if ok else f"{type(e).__name__}: {e}", "raised")
+        return
+    check(label, "no error", "raised")
+
+
+def md5_12(payload) -> str:
+    return hashlib.md5(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory(prefix="footwear-kind-") as tmp:
+        root = Path(tmp)
+        os.environ["ANIMATION_CLIPS_DIR"] = str(root / "clips")
+        os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
+        from app.core import paths
+        paths.init(root / "world")
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        from app.core import config
+        config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
+        from app.core import db
+        db.init_schema()
+        plugins = root / "plugins"
+        shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
+        from app.plugins.loader import discover_packages
+        discover_packages(plugins, force=True)
+
+        from app.core import (base_body, garment_assembly, garment_fit, garment_mesh, garment_set, garments,
+                              model_refs)
+        from app.core import garment_store as gs
+        from app.models import inventory
+        from app.models.character import get_character_dir, get_character_profile, save_character_profile
+
+        model_refs.schedule_outfit_render = lambda *a, **k: None
+        garment_assembly.schedule = lambda name, signature=None: True
+        QUEUED = []
+
+        def run_queued(character_name, item_ids):
+            ids = list(item_ids)
+            QUEUED.append(ids)
+            return {i: {"ok": True, "ran": []} for i in ids}
+        garments.run_queued = run_queued
+
+        for name, gender, height in (("Kira", "female", 168), ("Mira", "male", 190)):
+            check(f"create {name}", save_character_profile(name, {
+                "template": "human-roleplay", "gender": gender, "age": 30, "height": height,
+                "body_slots": {"hair": {"length": "medium", "color": "blonde"}}}, create_new=True), True)
+            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
+
+        def piece(name, slots, own_mesh=None):
+            op = {"slots": slots, "outfit_types": ["casual"]}
+            if own_mesh is not None:
+                op["own_mesh"] = own_mesh
+            return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"plain {name.lower()}",
+                                      outfit_piece=op)["id"]
+
+        heels = piece("Heels", ["feet"], True)
+        dress = piece("Dress", ["top"], True)
+        boots = piece("Boots", ["feet"])
+        image_bytes = bytes(range(64))
+        item_dir = inventory._get_item_dir(heels, create=True)
+        (item_dir / "image.png").write_bytes(image_bytes)
+        check("item image set", inventory.set_item_image(heels, "image.png"), True)
+        for item in (heels, dress):
+            check(f"Kira holds {item}", inventory.add_to_inventory("Kira", item), True)
+            check(f"Kira wears {item}", inventory.equip_piece("Kira", item, source="smoke")["status"], "ok")
+        check("Mira holds heels", inventory.add_to_inventory("Mira", heels), True)
+
+        print("[K1] kind and steps")
+        get = inventory.get_item
+        check("kind heels", garment_set.garment_kind_of(get(heels)), "footwear")
+        check("kind dress", garment_set.garment_kind_of(get(dress)), "clothing")
+        check("kind boots", garment_set.garment_kind_of(get(boots)), None)
+        check("FOOTWEAR", garment_set.FOOTWEAR, "footwear")
+        check("OWN_MESH_PIECE_KINDS", garment_set.OWN_MESH_PIECE_KINDS, ("clothing", "footwear"))
+        check("GRAFTED_PIECE_KINDS", garment_set.GRAFTED_PIECE_KINDS, ("clothing",))
+        check("SHOE", gs.SHOE, "shoe")
+        check("FOOTWEAR_STEPS", gs.FOOTWEAR_STEPS, ("source", "empty", "cutout", "mesh", "insole", "fit"))
+        check("steps_for footwear shoe", gs.steps_for("footwear", "shoe"), gs.FOOTWEAR_STEPS)
+        raises("steps_for footwear edit_chain", lambda: gs.steps_for("footwear", "edit_chain"), ValueError)
+        raises("steps_for clothing shoe", lambda: gs.steps_for("clothing", "shoe"), ValueError)
+        check("kind_method footwear", gs.kind_method("footwear", "Kira", get_character_profile("Kira")), "shoe")
+        check("_garment_kind heels", gs._garment_kind(heels), "footwear")
+        check("garment_method heels", gs.garment_method("Kira", heels), "shoe")
+        got = garments._item("Kira", heels)
+        check("_item Kira heels", (got[0]["id"], got[1]), (heels, "footwear"))
+        raises("_item Mira dress (not held)", lambda: garments._item("Mira", dress), ValueError,
+               "not a garment of Mira")
+        raises("garment_mesh._kind heels", lambda: garment_mesh._kind(heels), ValueError)
+        check("garment_mesh._kind dress", garment_mesh._kind(dress), "clothing")
+        check("worn_garments Kira", garment_set.worn_garments("Kira"), sorted([dress, heels]))
+        check("held_clothing Kira", garment_set.held_clothing("Kira"), sorted([dress, heels]))
+        check("held_clothing Mira", garment_set.held_clothing("Mira"), [heels])
+        check("layer_order skips footwear", garment_set.layer_order([dress, heels])["order"], [dress])
+        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 1)
+
+        print("[K2] footwear fsig")
+        from app.core import footwear_source, garment_footwear
+        img = hashlib.sha256(image_bytes).hexdigest()
+        ssig = md5_12({"image": img, "version": 1, "seed": 0})
+        check("current_ssig", footwear_source.current_ssig(heels), ssig)
+
+        def fsig_by_hand(cap):
+            return md5_12({"kind": "footwear", "ssig": ssig, "insole_version": 1, "width_cap": cap,
+                           "fit_version": 1})
+        fsig = fsig_by_hand(1.1)
+        kira_bsig = base_body.base_signature("Kira")
+        check("base signatures differ", kira_bsig != base_body.base_signature("Mira"), True)
+        refs = get_character_dir("Kira") / "model_refs"
+        refs.mkdir(parents=True, exist_ok=True)
+        (refs / f"tpose_{kira_bsig}.png").write_bytes(b"front view of Kira")
+        (refs / f"tpose_back_{kira_bsig}.png").write_bytes(b"back view of Kira")
+        check("fsig Kira by hand", gs.garment_fsig("Kira", heels), fsig)
+        check("fsig Mira == Kira", gs.garment_fsig("Mira", heels), fsig)
+
+        def set_cap(value):
+            profile = get_character_profile("Kira")
+            if value is None:
+                profile.pop("footwear_width_cap", None)
+            else:
+                profile["footwear_width_cap"] = {heels: value}
+            check(f"save cap {value}", save_character_profile("Kira", profile), True)
+        set_cap(1.05)
+        check("width_cap 1.05", garment_footwear.width_cap(get_character_profile("Kira"), heels), 1.05)
+        check("fsig cap 1.05 by hand", gs.garment_fsig("Kira", heels), fsig_by_hand(1.05))
+        check("fsig cap 1.05 differs", gs.garment_fsig("Kira", heels) != fsig, True)
+        set_cap(1.2)
+        check("width_cap 1.2 clamps", garment_footwear.width_cap(get_character_profile("Kira"), heels), 1.1)
+        check("fsig cap clamped", gs.garment_fsig("Kira", heels), fsig)
+        set_cap(0.9)
+        check("width_cap 0.9 clamps", garment_footwear.width_cap(get_character_profile("Kira"), heels), 1.0)
+        set_cap(None)
+        model_dir = get_character_dir("Kira") / "model3d"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model = model_dir / f"{kira_bsig}.glb"
+        model.write_bytes(b"model-1")
+        f1 = gs.garment_fsig("Kira", heels)
+        model.write_bytes(b"model-2")
+        os.utime(model, (model.stat().st_atime + 2, model.stat().st_mtime + 2))
+        check("base model bytes: same fsig", (f1, gs.garment_fsig("Kira", heels)), (fsig, fsig))
+
+        print("[K3] mesh items token")
+        check("token feet piece", model_refs.mesh_items_token("Kira", pieces={"feet": heels}),
+              "|meshitems:" + heels + "|worn:feet=" + heels)
+        check("token unflagged feet piece", model_refs.mesh_items_token("Kira", pieces={"feet": boots}), "")
+
+        print("[K4] transition rule")
+        sha = hashlib.sha256(b"model-2").hexdigest()
+        check("base sha", base_body.base_model_sha256("Kira", kira_bsig), sha)
+        for item_id, kind, method in ((dress, "clothing", "edit_chain"), (heels, "footwear", "shoe")):
+            f = gs.garment_fsig("Kira", item_id)
+            fit = gs.garment_path("Kira", item_id, f, "fit")
+            fit.parent.mkdir(parents=True, exist_ok=True)
+            fit.write_bytes(b"fit " + item_id.encode())
+            gs.write_record(fit.with_suffix(".json"), {
+                "accepted": True, "kind": kind, "method": method, "item_id": item_id, "fsig": f,
+                "base_signature": kira_bsig, "base_model_sha256": sha,
+                "fit_version": garment_fit.FIT_VERSION.get(kind)})
+            check(f"accepted fit {item_id}", gs.accepted_fit("Kira", item_id, base_model_sha=sha) is not None, True)
+        pieces = {"top": dress, "feet": heels}
+        preview = base_body.FOOTWEAR_PREVIEW_ONLY
+        check("FOOTWEAR_PREVIEW_ONLY", preview, "shoe fits are Wardrobe previews until the body cut lands")
+        QUEUED.clear()
+        out = base_body.resolve_mesh_items("Kira", pieces)
+        check("retexture intended", out.get("intended"), sorted([dress, heels]))
+        check("retexture effective", out.get("effective"), [dress])
+        check("retexture warnings", out.get("warnings"),
+              [base_body.MESH_ITEM_PAINTED.format(item="Heels", reason=preview)])
+        check("retexture no unpainted/missing", ("unpainted" in out, "missing" in out), (False, False))
+        check("run_queued only grafted kinds", QUEUED, [[dress]])
+        profile = get_character_profile("Kira")
+        profile["outfit_body_mode"] = base_body.MESH_MODE
+        check("mesh mode on", save_character_profile("Kira", profile), True)
+        out = base_body.resolve_mesh_items("Kira", pieces)
+        check("mesh unpainted", out.get("unpainted"), sorted([dress, heels]))
+        check("mesh effective", out.get("effective"), [dress])
+        check("mesh missing", out.get("missing"), {heels: preview})
+        check("mesh warnings", out.get("warnings"),
+              [base_body.MESH_ITEM_NOT_READY.format(item="Heels", reason=preview)])
+        painted = {"mesh_items": {"intended": sorted([dress, heels]), "effective": [dress]},
+                   "base_signature": kira_bsig}
+        check("mesh_items_ready painted heels", base_body.mesh_items_ready("Kira", painted, base_sha=sha), [])
+        left_out = {"mesh_items": {"intended": sorted([dress, heels]), "effective": [dress],
+                                   "unpainted": sorted([dress, heels]), "missing": {heels: "other"}},
+                    "base_signature": kira_bsig}
+        check("mesh_items_missing", base_body.mesh_items_missing("Kira", left_out, base_sha=sha),
+              [(heels, preview)])
+        profile = get_character_profile("Kira")
+        profile["outfit_body_mode"] = base_body.RETEXTURE_MODE
+        check("retexture mode on", save_character_profile("Kira", profile), True)
+        check("off rule in retexture", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [heels])
+
+    print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
+    return 1 if FAILS else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
