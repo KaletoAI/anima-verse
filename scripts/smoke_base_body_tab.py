@@ -9,8 +9,9 @@ sections whose ``column`` is in its ``columns``; a section whose
 without sections vanishes):
 
 [1] ``shared/templates/character/base-character.json`` has a tab
-    ``base_body_tab`` with label "Base body" / label_de "Grundkörper", and it
-    is the tab DIRECTLY before ``tpose_tab`` in the tab list.
+    ``base_body_tab`` with label "Base body" / label_de "Grundkörper", then
+    ``outfit_body_tab`` (the Outfit body tab, plan 2026-11-10-outfit-body-mesh-mode
+    Task 4: "next to Base body"), then ``tpose_tab`` in the tab list.
 [2] Its ``columns`` hold exactly one column, and no other tab claims it.
 [3] The section ``base_body`` (special ``base_body``) sits in that column and
     carries ``visible_when: {feature: humanoid}``, like the hair section.
@@ -55,9 +56,11 @@ def main() -> int:
     tab = next((t for t in tabs if t.get("id") == "base_body_tab"), {})
     check("[1] base_body_tab label", tab.get("label") == "Base body", repr(tab))
     check("[1] base_body_tab label_de", tab.get("label_de") == "Grundkörper", repr(tab))
-    check("[1] base_body_tab directly before tpose_tab",
-          "base_body_tab" in ids and "tpose_tab" in ids
-          and ids.index("tpose_tab") == ids.index("base_body_tab") + 1, repr(ids))
+    # The Outfit body tab (plan 2026-11-10-outfit-body-mesh-mode, Task 4) sits between them.
+    check("[1] base_body_tab, outfit_body_tab, tpose_tab in a row",
+          "base_body_tab" in ids and "tpose_tab" in ids and "outfit_body_tab" in ids
+          and ids.index("outfit_body_tab") == ids.index("base_body_tab") + 1
+          and ids.index("tpose_tab") == ids.index("base_body_tab") + 2, repr(ids))
     cols = tab.get("columns") or []
     check("[2] one column", len(cols) == 1, repr(cols))
     others = [t.get("id") for t in tabs if t.get("id") != "base_body_tab"

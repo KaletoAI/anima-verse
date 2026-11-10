@@ -3555,6 +3555,39 @@ def trigger_generation(character_name: str, *, force: bool = False,
     return True
 
 
+@contextlib.contextmanager
+def generation_slot(character_name: str, *, poll_s: float = 1.0):
+    """Hold the character's 3D generation guard — the one ``trigger_generation``
+    takes — for an explicit run that QUEUES behind the running one instead of
+    being refused (the Outfit body tab's runs, ``app/core/outfit_bodies.py``):
+    waits until no other 3D run of the character goes, then holds the guard
+    and the character lock for the block. A follow-up an auto trigger asked
+    for meanwhile runs once the block ended (as after ``_run``)."""
+    import time
+    while True:
+        with _lock:
+            if character_name not in _generating:
+                _generating.add(character_name)
+                break
+        time.sleep(poll_s)
+    try:
+        with _char_lock(character_name):
+            yield
+    finally:
+        with _lock:
+            _generating.discard(character_name)
+            followup = character_name in _outfit_followups
+            _outfit_followups.discard(character_name)
+        if followup:
+            maybe_auto_generate_for_outfit(character_name)
+
+
+def generation_running(character_name: str) -> bool:
+    """Whether a 3D run of the character holds the generation guard now."""
+    with _lock:
+        return character_name in _generating
+
+
 def maybe_auto_generate_for_outfit(character_name: str) -> bool:
     """Auto-mesh hook — model_refs calls it AFTER a T-pose render pass, so
     a run only ever starts once the T-pose for the CURRENT combination

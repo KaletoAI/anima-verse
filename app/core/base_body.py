@@ -3129,6 +3129,26 @@ def _outfit_texture(character_name: str, front: Path, *, bsig: str,
             "tsig": texture_signature(inputs), "mesh_profile": mesh_profile}
 
 
+def outfit_body_of_outfit(character_name: str, signature: str, *,
+                          profile: Optional[Dict[str, Any]] = None) -> str:
+    """The outfit body id the outfit ``signature`` stands on NOW in mesh
+    mode — computed from its dressed front of the current base (the tsig
+    ``prepare_outfit_body`` would build) — or "" (no dressed front of the
+    current base, an undressed combination, or any error). Read-only; the
+    Outfit body tab asks it to find an outfit to regenerate a body from."""
+    try:
+        profile = _profile_of(character_name, profile)
+        bsig = base_signature(character_name, profile=profile)
+        front = dressed_image(character_name, "front", signature, bsig)
+        if front is None:
+            return ""
+        texture = _outfit_texture(character_name, front, bsig=bsig, profile=profile)
+        return outfit_body_id(texture["tsig"]) if texture["dressed"] else ""
+    except Exception:  # noqa: BLE001 — a lookup, never a failure
+        logger.debug("Outfit body of %s / %s not computable", character_name, signature, exc_info=True)
+        return ""
+
+
 def stored_outfit_body(character_name: str, body_id: str, *, tsig: str,
                        view_shas: Dict[str, str]) -> Optional[Dict[str, Any]]:
     """The sidecar of the stored outfit body ``body_id`` when it is current:

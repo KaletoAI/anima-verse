@@ -28,9 +28,9 @@ body {
    filled-background danger is the button (.ga-btn-danger). */
 .ga-danger { color: var(--danger, #f85149); }
 
-/* Scrollbalken ans (dunkle) Design angleichen statt der weißen Standardleiste.
-   Dünn, transparenter Track, dezenter Thumb der beim Hover heller wird.
-   Themebar über --scrollbar-thumb / --scrollbar-thumb-hover. */
+/* Scrollbars match the (dark) design instead of the white default bar.
+   Thin, a transparent track, a subtle thumb that brightens on hover.
+   Themable through --scrollbar-thumb / --scrollbar-thumb-hover. */
 html, * {
   scrollbar-width: thin;                                  /* Firefox */
   scrollbar-color: var(--scrollbar-thumb, rgba(180, 190, 205, 0.28)) transparent;
@@ -46,7 +46,7 @@ html, * {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, rgba(180, 190, 205, 0.28));
   border-radius: 8px;
-  border: 2px solid transparent;       /* schmaler wirkender Thumb mit Luft */
+  border: 2px solid transparent;       /* a thumb that looks narrower, with room around it */
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -2662,7 +2662,7 @@ a.ga-btn {
 }
 .ga-mind-reason .tag.warn { border-color: #e0675e; color: #e0675e; }
 .ga-mind-reason .tag.force { border-color: #d9a14a; color: #d9a14a; }
-/* Tags in der Active-rules-Liste (status badges) — gleiche Pill-Optik wie oben. */
+/* Tags in the active-rules list (status badges) — the same pill look as above. */
 .ga-mind-list .tag {
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   font-size: 11px; background: rgba(255,255,255,0.06); border: 1px solid var(--border, #30363d);
@@ -2998,6 +2998,21 @@ a.ga-btn {
 .ga-ext-actions { display: inline-flex; gap: 6px; align-items: center; }
 .ga-view-stack { display: flex; flex-direction: column; gap: 8px; }
 .ga-view-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+/* Outfit body tab: dense text in every state (the hints of the retexture and empty states too). */
+.ga-obody { font-size: 13px; }
+.ga-obody .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
+/* Outfit body tab: the bodies one line each (a button per row), the selected
+   one marked; fit and outfit rows one line with a mini action. */
+.ga-obody-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.ga-obody-row { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; font-size: 12px;
+  text-align: left; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 4px;
+  cursor: pointer; }
+.ga-obody-row:hover { background: rgba(255, 255, 255, 0.05); }
+.ga-obody-row--sel { border-color: var(--accent, #58a6ff); background: rgba(88, 166, 255, 0.08); }
+.ga-obody-line { font-size: 12px; align-items: center; }
+.ga-obody-line > .ga-model3d-status-text { flex: 1 1 auto; }
+.ga-obody-mini { padding: 0 6px; font-size: 11px; line-height: 18px; }
+.ga-obody-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 @media (max-width: 1300px) {
   .ga-split-hair { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
   .ga-split-hair > :first-child { grid-column: 1 / -1; }

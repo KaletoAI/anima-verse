@@ -854,6 +854,64 @@ def collect(character_name: str, *, dry_run: bool = False, explicit: bool = Fals
     return report
 
 
+def body_chain(nodes: List[Node], root: Path, body_id: str) -> Set[str]:
+    """The keys of an outfit body's chain among ``nodes``: the body itself
+    (refs + meshes), its body fits (``_descendants``: layers and failures
+    included) and every outfit model built ON it — a copy of the body whose
+    sidecar names it as ``body_id``, with its garment assembly (made of the
+    body's fits) and its capsule set (sidecar)."""
+    keys = _descendants(nodes, {body_id})
+    for node in nodes:
+        if node.kind == "outfit" and node.category == "meshes" \
+                and _json(root / "model3d" / f"{node.key}.json").get("body_id") == body_id:
+            keys.add(node.key)
+    return keys
+
+
+def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body deleted") -> Dict[str, Any]:
+    """Explicit delete of ONE outfit body and its whole chain (``body_chain``)
+    — the Outfit body tab's Delete. Unlike ``collect`` the chain goes
+    although a root may still reach it (the user asked for it): the outfit
+    models on it are rebuilt on their next build, which meshes the body
+    again. The texture (dressed views + painted body) is the body's INPUT,
+    shared with the retexture mode, and stays. Only work in progress
+    protects a node (``running_keys``, the body and body-fit locks inside
+    ``_delete_node``). Returns ``{character, body_id, deleted: [{key, kind,
+    category, files, bytes}], deleted_files, freed_bytes, skipped: [{key,
+    why}]}``; ValueError for an id not shaped like an outfit body."""
+    if not _OUTFIT_BODY_RE.fullmatch(str(body_id or "")):
+        raise ValueError(f"not an outfit body id: {str(body_id)[:40]!r}")
+    report: Dict[str, Any] = {"character": character_name, "body_id": body_id, "deleted": [],
+                              "deleted_files": 0, "freed_bytes": 0, "skipped": []}
+    root = _char_dir(character_name)
+    if not root.is_dir():
+        return report
+    started = time.monotonic()
+    nodes, _unknown = scan(character_name)
+    wanted = body_chain(nodes, root, body_id)
+    running, _items = running_keys(character_name)
+    for node in nodes:
+        if node.key not in wanted or node.kind not in ("body", "body_fit", "outfit"):
+            continue
+        if node.kind == "outfit" and node.category != "meshes":
+            continue  # the outfit's refs are its dressed views — the texture's source, kept
+        if node.key in running or (node.kind == "body_fit" and node.parents.get("body_id") in running):
+            report["skipped"].append({"key": node.key, "why": "running"})
+            continue
+        entry = _entry(node)
+        count, size, skip = _delete_node(character_name, node, root)
+        report["deleted_files"] += count
+        report["freed_bytes"] += size
+        if skip:
+            report["skipped"].append({"key": node.key, "why": skip})
+        else:
+            report["deleted"].append({k: entry[k] for k in ("key", "kind", "category", "files", "bytes")})
+    logger.info("Artefact GC %s (%s %s): %d node(s), %d file(s), %.1f MB, %d skipped, %.1f s", character_name,
+                reason, body_id, len(report["deleted"]), report["deleted_files"], report["freed_bytes"] / 1e6,
+                len(report["skipped"]), time.monotonic() - started)
+    return report
+
+
 def collect_quietly(character_name: str, reason: str, *, explicit: bool = True) -> Optional[Dict[str, Any]]:
     """``collect`` for a delete path and the daily sweep: never raises (a
     failed sweep must not fail the delete that asked for it) and gives up

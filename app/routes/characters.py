@@ -2948,9 +2948,11 @@ def get_character_model3d_file(character_name: str, request: Request,
     back to the full mesh when none was built. ``download=true`` serves
     the stored original with attachment disposition.
 
-    ``signature`` accepts exactly two values: the current outfit signature
-    (served as without it) and the character's CURRENT base-body signature
-    (admin only; that stored model itself, full tier). Anything else is 404."""
+    ``signature`` accepts exactly three kinds of value: the current outfit
+    signature (served as without it), the character's CURRENT base-body
+    signature and an outfit body id (``ob…``, the Outfit body tab) of the
+    character — the latter two admin only, that stored model itself, full
+    tier. Anything else is 404."""
     if signature:
         from fastapi.responses import Response
         from app.core.model_refs import current_outfit_state
@@ -2959,11 +2961,12 @@ def get_character_model3d_file(character_name: str, request: Request,
         except Exception:
             outfit_signature = ""
         if signature != outfit_signature:
-            from app.core.base_body import base_signature, is_base_signature
+            from app.core.base_body import base_signature, is_base_signature, is_outfit_body_signature
             from app.core.model_refs import is_humanoid
-            if (not is_base_signature(signature) or not get_character_dir(character_name).exists()
+            if (not (is_base_signature(signature) or is_outfit_body_signature(signature))
+                    or not get_character_dir(character_name).exists()
                     or not is_humanoid(character_name)
-                    or signature != base_signature(character_name)):
+                    or (is_base_signature(signature) and signature != base_signature(character_name))):
                 return Response(status_code=404, headers={"Cache-Control": "no-cache"})
             require_admin(request)
             return _model_asset_response(character_name, request, download=download,

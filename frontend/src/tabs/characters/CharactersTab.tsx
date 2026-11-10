@@ -25,6 +25,7 @@ import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldBaseBody } from './FieldBaseBody'
+import { FieldOutfitBody } from './FieldOutfitBody'
 import { FieldPose } from './FieldPose'
 import { FieldHair } from './FieldHair'
 import { TemplateSelector } from './TemplateSelector'
@@ -138,7 +139,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body', 'hair',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body', 'outfit_body', 'hair',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
   'imagegen_override',
 ])
@@ -1144,6 +1145,10 @@ export function CharactersTab() {
                       // its face, rig and collision actions) in its own tab
                       // before Pose; the outfit model sits in the Pose tab.
                       base_body: <FieldBaseBody key={selected} character={selected} />,
+                      // The outfit bodies of the mesh mode (own tab after Base body);
+                      // the mode field sits above it, a save reloads the panel.
+                      outfit_body: <FieldOutfitBody key={selected} character={selected}
+                        refreshKey={String(savedSignal)} />,
                       // Hair as its own mesh (garment chain); the description
                       // is derived from Appearance, so the tab links there.
                       // The hair section's `slot_keys` (its HairDeck backend

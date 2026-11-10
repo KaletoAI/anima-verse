@@ -69,6 +69,12 @@
       "columns": [28]
     },
     {
+      "id": "outfit_body_tab",
+      "label": "Outfit body",
+      "label_de": "Outfit-Körper",
+      "columns": [29]
+    },
+    {
       "id": "tpose_tab",
       "label": "Pose",
       "label_de": "Pose",
@@ -177,7 +183,6 @@
       "label_de": "Render-Backends",
       "column": 28,
       "row": 2,
-      "beside": true,
       "special": "imagegen_override",
       "slot_keys": ["base_front_workflow", "base_view_workflow"],
       "fields": [],
@@ -185,10 +190,10 @@
     },
     {
       "id": "outfit_body",
-      "label": "Outfit body",
-      "label_de": "Outfit-Körper",
-      "column": 28,
-      "row": 1,
+      "label": "Outfit body mode",
+      "label_de": "Outfit-Körper-Modus",
+      "column": 29,
+      "row": 0,
       "fields": [
         {
           "key": "outfit_body_mode",
@@ -213,6 +218,16 @@
           "hint_de": "Nur in der Grundkörper-Pipeline. Eigenes Mesh: jede Kombination aufgemalter Teile bekommt einen eigenen gemeshten und geriggten Outfit-Körper (Mesh- und Rig-Job, einmal pro Kombination); eigene Kleidungs-Meshes werden darauf angepasst."
         }
       ],
+      "visible_when": { "feature": "humanoid" }
+    },
+    {
+      "id": "outfit_bodies",
+      "label": "Outfit bodies",
+      "label_de": "Outfit-Körper",
+      "column": 29,
+      "row": 1,
+      "special": "outfit_body",
+      "fields": [],
       "visible_when": { "feature": "humanoid" }
     },
     {
