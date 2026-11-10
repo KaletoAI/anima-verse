@@ -13,7 +13,12 @@
  *      and topline (orange) overlay, Regenerate (1 mesh job, shared by every
  *      wearer);
  *   5. Insole — local: pitch, heel seat, heel rise, insole cover and the
- *      type gates.
+ *      type gates;
+ *   6. Fit — per body (the base model, then in outfit body mode mesh every
+ *      stored outfit body): scale, width applied / needed, extension and
+ *      slimming needed per side, lift, the fit gate chips; Re-fit (local, no
+ *      hub job) and the width cap slider 1.00–1.10, which saves on release
+ *      and re-fits.
  *
  * Everything comes from `garment_footwear.info` (GET
  * /characters/{n}/garments/{item}); every limit from the panel's `limits`
@@ -28,7 +33,7 @@
  * the backend's own words; "Waiting — retry later" — the backend was busy or
  * media generation is off.
  */
-import { Fragment } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
@@ -40,7 +45,7 @@ import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import { FOOTWEAR_STEPS, runMark, runSlot } from './useGarment'
-import type { FootwearInfo, FootwearStepInfo, RunFeedback } from './useGarment'
+import type { FootwearFitRow, FootwearInfo, FootwearStepInfo, RunFeedback } from './useGarment'
 
 const THUMB_H = 112
 const THUMB_W = 112
@@ -56,6 +61,7 @@ const STEP_HELP: Record<string, string> = {
   cutout: 'Cut-out: the empty shoe cut out and squared as the mesh input — local, no hub job.',
   mesh: 'Mesh: a 3D mesh of the shoe alone, built from the cut-out. Regenerate: 1 mesh job, shared by every wearer; the insole is measured again.',
   insole: 'Insole: the shoe mesh measured on the CPU — pitch, heel seat, heel rise, insole cover and the type gates. Local, no hub job.',
+  fit: "Fit: the shoe source placed on this wearer's foot on the CPU — one scale per pair, the foot extended onto the insole, the root lifted by the heel. One fit per body. Local, no hub job.",
 }
 
 const STATUS_TEXT: Record<FootwearStepInfo['status'], string> = {
@@ -85,21 +91,47 @@ const MESH_CHIPS: ChipSpec[] = [
   { key: 'mesh_iou', label: 'Side silhouette match', scale: 100, unit: '%', digits: 1 },
 ]
 
+// Gate keys: footwear_fit.FIT_GATES (record gates {value, limit, ok, gating}).
+const FIT_CHIPS: ChipSpec[] = [
+  { key: 'ball_placement_mm', label: 'Ball placement', scale: 1, unit: 'mm', digits: 1 },
+  { key: 'lift_asymmetry_mm', label: 'Lift asymmetry', scale: 1, unit: 'mm', digits: 1 },
+  { key: 'stand_floor_mm', label: 'Sole above the floor (stand)', scale: 1, unit: 'mm', digits: 1 },
+  { key: 'slim_needed', label: 'Slimming needed', scale: 100, unit: '%', digits: 1 },
+  { key: 'boot', label: 'Topline above the ankle', scale: 1, unit: 'mm', digits: 1 },
+]
+
+const FIT_STATUS_TEXT: Record<FootwearFitRow['status'], string> = {
+  accepted: 'Fitted',
+  stale: 'Out of date',
+  outdated: 'Out of date',
+  refused: 'Refused (gate)',
+  missing: 'Not fitted yet',
+}
+
+/** The width cap slider's range (`footwear_fit.WIDTH_CAP_MIN` .. `WIDTH_CAP`). */
+const CAP_MIN = 1.0
+const CAP_MAX = 1.1
+
 const INSOLE_CHIPS: ChipSpec[] = [
   { key: 'insole_cover', label: 'Insole cover', scale: 100, unit: '%', digits: 1 },
   { key: 'vamp_cover', label: 'Vamp cover (open shoe)', scale: 100, unit: '%', digits: 1 },
   { key: 'opening_share', label: 'Opening (solid mesh)', scale: 100, unit: '%', digits: 1 },
 ]
 
-export function FootwearSteps({ info, limits, busy, feedback, onRun }: {
+export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap }: {
   info: FootwearInfo
   limits: GarmentLimits
   busy: boolean
   feedback?: RunFeedback
   onRun: (body: GarmentRunBody, slot?: string) => void
+  /** Save the width cap (null = back to the default) and re-fit; the caller posts. */
+  onWidthCap: (cap: number | null) => void
 }) {
   useClockSettings()
   const { t } = useI18n()
+  // The slider's draft while it is dragged; saved on release (one fit, not one per step).
+  const [capDraft, setCapDraft] = useState(info.width_cap)
+  useEffect(() => { setCapDraft(info.width_cap) }, [info.width_cap])
   const { steps } = info
   const order = FOOTWEAR_STEPS as readonly string[]
   const label = (step: string) => t(FOOTWEAR_STEP_LABELS[step] || step)
@@ -331,8 +363,105 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun }: {
       <span>{t('Local, no hub job')}</span>
     </div>, 'insole')
 
+  // ── 6. Fit (per body) ──
+  const sourceReady = steps.mesh?.status === 'accepted' && steps.insole?.status === 'accepted'
+  const fitTitle = `${t('Re-fit')}: ${t('local, no hub job')}`
+  const mmText = (v: number | null) => (v != null ? `${v.toFixed(0)} mm` : '–')
+  const pair = (m: Record<string, number>, key: string, f: (v: number) => string) => {
+    const l = num(m[`${key}_left`])
+    const r = num(m[`${key}_right`])
+    return l == null && r == null ? '' : `L ${l != null ? f(l) : '–'} · R ${r != null ? f(r) : '–'}`
+  }
+  /** The fit gates as the chips read them: the values flat, the limits of the gates that refuse a fit
+   *  (a recorded-only gate shows as "Reported, not gated"). */
+  const fitChips = (row: FootwearFitRow) => {
+    const record = Object.fromEntries(Object.entries(row.gates || {}).map(([k, g]) => [k, g?.value ?? null]))
+    const gating = Object.fromEntries(Object.entries(limits.fit || {})
+      .filter(([k]) => row.gates?.[k]?.gating !== false))
+    return { record, gating }
+  }
+  const fitBody = (row: FootwearFitRow) => {
+    const m = row.metrics || {}
+    const label = row.base ? t('Base model') : t('Outfit body {id}').replace('{id}', row.body_id || '')
+    const fitted = row.status !== 'missing' && row.status !== 'refused'
+    const numbers = fitted ? [
+      num(m.k_m_per_unit) != null ? `${t('Scale')} ${m.k_m_per_unit.toFixed(3)} m/unit` : '',
+      num(m.length_m) != null ? `${t('Shoe length')} ${cm(m.length_m)}` : '',
+      num(m.width_factor) != null
+        ? `${t('Width')} ×${m.width_factor.toFixed(2)} ${t('applied')} · ${t('needed')} ${
+          pair(m, 'width_needed', (v) => `×${v.toFixed(2)}`)}` : '',
+      `${t('Foot extension')} ${pair(m, 'extension_deg', (v) => `${v.toFixed(1)}°`)}`,
+      num(m.root_lift_m) != null ? `${t('Lift')} ${cm(m.root_lift_m)}` : '',
+      `${t('Toe room')} ${pair(m, 'toe_room_mm', (v) => mmText(v))}`,
+    ].filter((x) => x && !x.endsWith(' ')) : []
+    const slim = fitted ? pair(m, 'slim_needed', (v) => `${(v * 100).toFixed(1)} %`) : ''
+    const chips = fitChips(row)
+    const pill = row.status === 'refused' ? PILL.refused : undefined
+    const blocked = !row.body_id ? t('No base model yet') : !sourceReady ? t('Run the previous step first') : undefined
+    return (
+      <div key={row.body_id || 'base'} style={{ display: 'flex', flexDirection: 'column', gap: 2,
+        padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border, #30363d)' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong title={row.body_id || undefined}>{label}</strong>
+          {pill ? (
+            <span className="ga-run-badge" title={[t(pill.title), row.error || ''].filter(Boolean).join(' — ')}
+              style={{ borderColor: pill.color, color: pill.color }}>{t(FIT_STATUS_TEXT[row.status])}</span>
+          ) : row.status === 'stale' || row.status === 'outdated'
+            ? <FreshnessBadge freshness={row.freshness} compact />
+            : <span>{t(FIT_STATUS_TEXT[row.status])}</span>}
+          {row.base ? <RunBadge mark={runMark(feedback, info, order, 'fit')} /> : null}
+          <span className="ga-hint">{when(row)}</span>
+          {row.base ? (
+            <RunButton
+              feedback={feedback}
+              slot={runSlot({ step: 'fit' })}
+              disabled={busy || !!blocked}
+              title={blocked || fitTitle}
+              ariaLabel={`${t('Re-fit')} · ${label}`}
+              label={t('Re-fit')}
+              onClick={() => onRun({ step: 'fit', force: true })}
+            />
+          ) : null}
+        </div>
+        {numbers.length ? <span>{numbers.join(' · ')}</span> : null}
+        {slim ? (
+          <span title={t('Share of the ball width the forefoot slimming must take off — not applied yet')}>
+            {t('Slimming needed')} {slim}
+          </span>
+        ) : null}
+        {row.status === 'refused' && row.error ? <span style={ERROR_STYLE}>{row.error}</span> : null}
+        {!row.base && row.status === 'missing'
+          ? <span className="ga-hint">{t('Fitted on this body when the outfit model is assembled')}</span> : null}
+        {fitted ? <GateChips specs={FIT_CHIPS} record={chips.record} limits={chips.gating} /> : null}
+      </div>
+    )
+  }
+  const capChanged = Math.abs(capDraft - info.width_cap) > 1e-6
+  const commitCap = () => { if (capChanged) onWidthCap(Math.round(capDraft * 100) / 100) }
+  const fitRow = (
+    <div className="ga-step-grid-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6, ...ring('fit') }}>
+      {(info.fits?.length ? info.fits : []).map(fitBody)}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+        title={t("How much wider than the shoe the foot may make it (1.00–1.10). Saved on release, then re-fitted — local, no hub job.")}>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {t('Width cap')}
+          <input type="range" min={CAP_MIN} max={CAP_MAX} step={0.01} value={capDraft}
+            disabled={busy} style={{ width: 140 }}
+            onChange={(e) => setCapDraft(Number(e.target.value))}
+            onPointerUp={commitCap} onKeyUp={commitCap} onBlur={commitCap} />
+          <span>×{capDraft.toFixed(2)}</span>
+        </label>
+        {info.width_cap < CAP_MAX - 1e-6 ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+            onClick={() => onWidthCap(null)}>{t('Default')}</button>
+        ) : null}
+      </div>
+    </div>
+  )
+
   const rows: Array<[string, ReactNode]> = [
     ['source', sourceRow], ['empty', emptyRow], ['cutout', cutoutRow], ['mesh', meshRow], ['insole', insoleRow],
+    ['fit', fitRow],
   ]
   return (
     <div className="ga-step-grid" style={{ gridTemplateColumns: 'minmax(110px, 140px) minmax(0, 1fr)' }}>

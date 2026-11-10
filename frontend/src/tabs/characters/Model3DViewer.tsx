@@ -20,9 +20,10 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
   standingHipsRef, clipHeightOffsetM, createCollisionOverlay, collidingGarmentMeshes,
-  createGarmentCollision } from '@anima/scene-render'
+  createGarmentCollision, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
+  footPoseMatches } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
-  CollisionOverlay, CollisionPayload, GarmentCollision } from '@anima/scene-render'
+  CollisionOverlay, CollisionPayload, FootPose, GarmentCollision } from '@anima/scene-render'
 import { applyViewerTexture } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -281,7 +282,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false }:
+  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -452,7 +453,23 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     /** Show the capsules whatever the toggle says — while the caller's
      *  radius sliders preview a draft (CollisionScales), so the effect is
      *  visible as the slider moves. */
-    showCollision?: boolean }) {
+    showCollision?: boolean
+    /** THE FIT'S FOOT POSE (`foot_pose` of a footwear fit, footPose.ts of
+     *  @anima/scene-render). Applied only when the loaded model carries the
+     *  shoes it was fitted for (`footPoseMatches`): the extension is baked into
+     *  the clip right after the bind-relative step (`applyFootPose`, with the
+     *  figure's own rest pose), a figure without a clip gets the still pose
+     *  (`applyFootPoseToPose`); the root lift is a placement term, see
+     *  `clipGroup`. Null / another model = bare feet, as before. */
+    footPose?: FootPose | null
+    /** The height group the clip is played in (`clipHeightGroup`: ground /
+     *  seat / lie). With it the figure is PLACED like the marker figures —
+     *  this viewer plays every clip in place, so without it a seated clip
+     *  would sit at standing hips height: lowered by `clipHipsDrop`, moved by
+     *  the clip's `clipHeightOffsetM` and lifted by `footPoseLiftM` (the shod
+     *  sole; standing only), over a floor grid at the bare bind soles.
+     *  Model mode only; absent = centred as before. */
+    clipGroup?: 'ground' | 'seat' | 'lie' }) {
   const { t } = useI18n()
   const [takes, setTakes] = useState<string[]>([])
   const [take, setTake] = useState('')
@@ -469,6 +486,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   tiltRef.current = { forward: previewTilt ? tiltForward : 0, sideways: previewTilt ? tiltSideways : 0 }
   const motionRef = useRef(motion)
   motionRef.current = motion
+  const footPoseRef = useRef(footPose)
+  footPoseRef.current = footPose
+  /** The loader re-runs when the pose of ANOTHER fit arrives, not on every
+   *  new object identity of the same record. */
+  const footPoseKey = footPose?.source ? `${footPose.source.item_id}:${footPose.source.fsig}` : ''
   const [collisionOn, setCollisionOn] = useState(false)
   const collisionRef = useRef<CollisionPayload | null>(null)
   const collisionShownOn = collisionOn || showCollision
@@ -1061,12 +1083,49 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             embeddedMixer.stopAllAction()
           })
         } else setTakes([])
+        // THE SHOD FIGURE: the fit's foot pose holds only for a model that
+        // carries exactly the shoes it was fitted for — anything else (the
+        // bare base, another fit, a rebuild in between) keeps bare feet.
+        const shod = footPoseRef.current && footPoseMatches(object, footPoseRef.current)
+          ? footPoseRef.current : null
+        /** The figure's vertical placement in its height group (`clipGroup`),
+         *  and the floor its bare bind soles stand on — measured in the bind
+         *  pose, applied after the framing below. */
+        let stance: { y: number; floorY: number } | null = null
+        const measureStance = async (hipsMedian: number | null,
+          heightOffsets?: ClipHeightOffsetsCm): Promise<{ y: number; floorY: number } | null> => {
+          if (!clipGroup) return null
+          const hipsOf = (root: Object3D): Object3D | null => {
+            let found: Object3D | null = null
+            root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
+            return found
+          }
+          const standRef = hipsMedian !== null ? await standHipsRef() : null
+          pivot.updateMatrixWorld(true)
+          // The FIGURE's box — the shoes are garments and do not count, so the
+          // floor is where the bare soles stand in the bind pose.
+          const box = figureBox(THREE, object)
+          const hips = hipsOf(object)
+          const hipsBindY = hips ? hips.getWorldPosition(new THREE.Vector3()).y - box.min.y : null
+          const figH = box.max.y - box.min.y
+          // The fit's `root_lift_m` is in this model's own metres: no figure
+          // scaling (`footPoseLiftM`'s default height).
+          return {
+            y: -clipHipsDrop(hipsBindY, hipsMedian, standRef)
+              + clipHeightOffsetM(heightOffsets, clipGroup, figH)
+              + footPoseLiftM(shod, clipGroup),
+            floorY: box.min.y,
+          }
+        }
         if (clipUrl) {
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           const clipObj = await new FBXLoader().loadAsync(clipUrl)
           if (disposed) return
           const clip = clipObj.animations?.[0]
           if (!clip) throw new Error('Clip contains no animation track')
+          // The hips height the clip is played AT — read before its track goes
+          // (`loadClip` does the same for the marker figures).
+          const clipHipsMedian = clipGroup ? hipsTrackMedian(clip) : null
 
           // Up-axis fix. The mixer overwrites the model's root-bone rotation
           // with the clip's values, so a convention mismatch (Mixamo clips are
@@ -1122,13 +1181,28 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // splayed 18° showed 18° of extra toe-in on every clip.
           const corrections = restCorrections(THREE, await donorRest(), object)
           if (disposed) return
-          const bound = bindRelativeClip(THREE, clip, corrections)
+          // The shoe's extension, baked ONCE right after the bind-relative
+          // step into this load's own (unposed) clip; a bone the clip has no
+          // track for takes the figure's rest rotation (footPose.ts).
+          const bound = applyFootPose(THREE, bindRelativeClip(THREE, clip, corrections), shod,
+            shod ? restPoseOf(THREE, object) : null)
+          if (clipGroup) {
+            const entry = (await clipIndex()).clips.find((c) => c.url === clipUrl)
+            stance = await measureStance(clipHipsMedian, entry?.height_offsets_cm)
+            if (disposed) return
+          }
           // Bind capture after the automatic up-axis fix, before frame zero.
           secondary = createSecondaryMotion(THREE, object, secondaryEnabled ? motionRef.current : undefined, object)
           mixer = new THREE.AnimationMixer(object)
           mixer.clipAction(bound).play()
           mixer.update(0)  // apply frame 0 so the framing below fits the pose
           disposers.push(() => mixer?.stopAllAction())
+        } else if (!embeddedTakes && (shod || clipGroup)) {
+          // No clip plays: the shod figure shows the still pose once.
+          applyFootPoseToPose(THREE, object, shod)
+          object.updateMatrixWorld(true)
+          stance = await measureStance(null)
+          if (disposed) return
         }
         secondary ??= createSecondaryMotion(THREE, object, secondaryEnabled ? motionRef.current : undefined, object)
         disposers.push(() => secondary?.dispose())
@@ -1289,6 +1363,16 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const size = box.getSize(new THREE.Vector3())
           const center = box.getCenter(new THREE.Vector3())
           pivot.position.sub(center)
+          // The height group's placement (`clipGroup`): framed as the bind
+          // pose, then lowered / lifted against a floor grid at the bare bind
+          // soles — the same terms as the marker figures.
+          if (stance) {
+            const floor = new THREE.GridHelper(2, 20, 0x58a6ff, 0x30363d)
+            floor.position.y = stance.floorY - center.y
+            scene.add(floor)
+            pivot.position.y += stance.y
+            pivot.updateMatrixWorld(true)
+          }
 
           // The framing has to hold the SCALE KIT too, or a footstool fills
           // the frame and the 1.70 m figure beside it is off-screen — which
@@ -1825,11 +1909,18 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 ? instHips.getWorldPosition(new THREE.Vector3()).y
                 : null
               const hipsDrop = clipHipsDrop(hipsBindY, anim?.hipsMedian, standRef)
+              // A shod figure only when it carries the fitted shoes (the
+              // clay test figure never does): same rule as the main viewer.
+              const shodFig = footPoseRef.current && footPoseMatches(inst, footPoseRef.current)
+                ? footPoseRef.current : null
               if (anim) {
                 // Same bind-relative transplant as the main viewer above and
-                // as the 3D client: the marker figure keeps its own stance.
-                const bound = bindRelativeClip(
-                  THREE, anim.clip, restCorrections(THREE, await donorRest(), inst))
+                // as the 3D client: the marker figure keeps its own stance —
+                // and the shoe's extension right after it, from the unposed
+                // cached clip.
+                const bound = applyFootPose(THREE, bindRelativeClip(
+                  THREE, anim.clip, restCorrections(THREE, await donorRest(), inst)),
+                shodFig, shodFig ? restPoseOf(THREE, inst) : null)
                 if (disposed || figTokenRef.current !== o.token) return
                 const mixer = new THREE.AnimationMixer(inst)
                 mixer.clipAction(bound).play()
@@ -1848,7 +1939,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               }
               const fig = new THREE.Group()
               fig.position.set(o.x, o.y - hipsDrop
-                + clipHeightOffsetM(anim?.heightOffsets, o.surfaceGroup, o.figH), o.z)
+                + clipHeightOffsetM(anim?.heightOffsets, o.surfaceGroup, o.figH)
+                + footPoseLiftM(shodFig, o.surfaceGroup, o.figH), o.z)
               fig.rotation.y = _deg(o.facingDeg)
               fig.add(fpivot)
               fig.userData.__shared = true
@@ -2240,7 +2332,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       disposed = true
       cleanup?.()
     }
-  }, [url, format, clipUrl, textureUrl, height, embeddedTakes])
+  }, [url, format, clipUrl, textureUrl, height, embeddedTakes, clipGroup, footPoseKey])
 
   return (
     <div className={previewTilt ? 'ga-model3d-preview' : undefined}>

@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
-import type { CollisionPayload } from '@anima/scene-render'
+import type { CollisionPayload, FootPose } from '@anima/scene-render'
 import type { GarmentRunBody } from './garmentStyle'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
@@ -328,6 +328,38 @@ export interface FootwearInsole {
   frame: Record<string, unknown> | null
 }
 
+/** One fit gate of a footwear fit record (`footwear_fit.fit_pair`): the measured value, its limit
+ *  (a number, or `[lo, hi]` for a range), whether it passed and whether it refuses a fit yet
+ *  (`gating` false = recorded only, activated in a later phase). */
+export interface FootwearFitGate {
+  value: number | null
+  limit: number | [number, number]
+  ok: boolean
+  gating: boolean
+}
+
+/** The fit of the current fsig on ONE body (`garment_footwear._fit_info`). `stale` = made on other body
+ *  bytes or by an older fit version, `outdated` = the shoe source changed since, `refused` = the persisted
+ *  refusal of this fsig holds on this body. */
+export interface FootwearFitInfo {
+  status: 'accepted' | 'stale' | 'outdated' | 'refused' | 'missing'
+  gates: Record<string, FootwearFitGate>
+  /** width_factor, width_cap, root_lift_m, k_m_per_unit, length_m and per side (`_left` / `_right`)
+   *  width_needed, slim_needed, extension_deg, toe_room_mm. */
+  metrics: Record<string, number>
+  url: null
+  freshness: Freshness | null
+  created_at: string | null
+  error: string | null
+}
+
+/** One row of `fits`: the base model first, then (outfit body mode mesh) every stored outfit body. */
+export interface FootwearFitRow extends FootwearFitInfo {
+  /** The base signature / the outfit body id (null without a base). */
+  body_id: string | null
+  base: boolean
+}
+
 /** GET /characters/{n}/garments/{item} → `garment` of a footwear piece (`garment_footwear.info`). */
 export interface FootwearInfo extends GarmentRunState {
   item_id: string
@@ -345,7 +377,7 @@ export interface FootwearInfo extends GarmentRunState {
     cutout?: FootwearStepInfo
     mesh?: FootwearStepInfo & { attempts?: FootwearMeshAttempt[] }
     insole?: FootwearStepInfo & { version?: number | null }
-    fit?: { status: string; pending?: boolean; detail?: string; freshness?: Freshness | null }
+    fit?: FootwearFitInfo
   }
   /** item_image_changed · source_version_changed · analysis_updated */
   stale_reasons: string[]
@@ -353,7 +385,15 @@ export interface FootwearInfo extends GarmentRunState {
   item_image_url: string | null
   mesh_url: string | null
   insole: FootwearInsole | null
+  /** The fit of the current fsig per body (base first). */
+  fits: FootwearFitRow[]
+  /** The width cap the next fit uses (1.00–1.10, default 1.10). */
+  width_cap: number
+  /** The shod base model of the current fsig (GET …/garments/{item}/model), versioned; null without one. */
   preview_url: string | null
+  preview_freshness?: Freshness | null
+  /** That fit's foot pose (with `source.fsig`) — the preview applies it only to a GLB carrying those shoes. */
+  foot_pose: FootPose | null
 }
 
 /** The panel's `garment` as footwear info — the server sends `garment_footwear.info` for kind

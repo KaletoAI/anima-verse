@@ -21,12 +21,19 @@
  * click answers on its button and tile — useGarmentRun), GET + PUT
  * /inventory/items/{item}
  * (the flag; the PUT replaces the whole outfit_piece, so it is read first).
+ *
+ * A footwear piece (a rigid shoe) shows the shoe source steps and the fit
+ * (FootwearSteps) and, on the right, the SHOD PREVIEW: the base model with
+ * the fitted shoes (`preview_url`) under the fit's `foot_pose`, played in
+ * the stand / walk / sit clips of the library (kinds idle / walk / sit,
+ * height groups ground / ground / seat); POST …/footwear/width-cap saves the
+ * width cap the slider sets.
  */
 import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPut } from '../../lib/api'
+import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
@@ -69,6 +76,25 @@ const STALE_LABELS: Record<string, string> = {
   item_image_changed: 'Item image changed',
   source_version_changed: 'Older source version',
   analysis_updated: 'Older analysis version',
+}
+
+/** The shod preview's poses: the library clip KIND each plays and its height group. */
+const PREVIEW_POSES: Array<{ key: string; label: string; kind: string; group: 'ground' | 'seat' }> = [
+  { key: 'stand', label: 'Stand', kind: 'idle', group: 'ground' },
+  { key: 'walk', label: 'Walk', kind: 'walk', group: 'ground' },
+  { key: 'sit', label: 'Sit', kind: 'sit', group: 'seat' },
+]
+
+/** One solo clip per kind out of GET /assets/animation-clips — a set-less clip first, then the female
+ *  set, then any (the pick of the admin previews). */
+function libraryClips(clips: Array<{ kind: string; role?: string; set?: string; url: string }>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const { kind } of PREVIEW_POSES) {
+    const of = clips.filter((c) => c.kind === kind && !c.role)
+    const pick = of.find((c) => !c.set) || of.find((c) => c.set === 'female') || of[0]
+    if (pick) out[kind] = pick.url
+  }
+  return out
 }
 
 const STATE_LABELS: Record<PieceStatus['state'], string> = {
@@ -206,6 +232,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
 }) {
   useClockSettings()
   const { t } = useI18n()
+  const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const url = character && itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}` : null
   const { info, startPoll } = useGarment<GarmentItemInfo & { steps?: ModelStep[] }>(url)
@@ -221,6 +248,18 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   const garment = info?.garment ?? null
   // Kind footwear: the shoe source steps of the item (garment_footwear.info), not the clothing chain.
   const footwear = footwearOf(info)
+  // The shod preview's pose and the library clips it plays (one fetch per footwear dialog).
+  const [pose, setPose] = useState('stand')
+  const [clips, setClips] = useState<Record<string, string>>({})
+  const isFootwear = !!footwear
+  useEffect(() => {
+    if (!isFootwear) return
+    let live = true
+    apiGet<{ clips?: Array<{ kind: string; role?: string; set?: string; url: string }> }>('/assets/animation-clips')
+      .then((d) => { if (live) setClips(libraryClips(d.clips || [])) })
+      .catch(() => { if (live) setClips({}) })
+    return () => { live = false }
+  }, [isFootwear])
   const runState = footwear ?? garment
   const stepLabels = footwear ? FOOTWEAR_STEP_LABELS : STEP_LABELS
   // What a default run of the shoe would run and what it costs (server step list).
@@ -228,6 +267,21 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   const running = garmentRunning(info)
   const busy = feedback.pending !== null || running
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
+  /** The width cap: saved (null = the default), then re-fitted from the cached source — local, no hub job;
+   *  without a ready source only saved. */
+  const onWidthCap = async (cap: number | null) => {
+    try {
+      await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/footwear/width-cap`, { cap })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      startPoll(0)
+      return
+    }
+    const ready = footwear?.steps.mesh?.status === 'accepted' && footwear?.steps.insole?.status === 'accepted'
+    if (ready) void start({ step: 'fit' })
+    else startPoll(0)
+  }
+  const previewPose = PREVIEW_POSES.find((p) => p.key === pose) || PREVIEW_POSES[0]
   const fit = garment?.steps.fit
   const fitRecord = fit && fit.status !== 'missing' ? fit.metrics : null
 
@@ -251,10 +305,34 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
               {footwearPlan ? <span className="ga-hint" style={{ flexBasis: '100%' }}>{footwearPlan}</span> : null}
             </div>
           ) : null}
-          <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun} />
+          <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun}
+            onWidthCap={(cap) => { void onWidthCap(cap) }} />
         </div>
         <div className="ga-garment-dialog-col">
-          <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>{t('No fitted mesh yet')}</div>
+          {footwear.preview_url ? (
+            <>
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }} role="group"
+                aria-label={t('Preview pose')}>
+                {PREVIEW_POSES.map((p) => (
+                  <button key={p.key} type="button"
+                    className={`ga-btn ga-btn-sm${p.key === previewPose.key ? ' ga-btn-primary' : ''}`}
+                    aria-pressed={p.key === previewPose.key}
+                    disabled={!clips[p.kind]}
+                    title={clips[p.kind] ? undefined
+                      : t('No “{kind}” clip in the library').replace('{kind}', p.kind)}
+                    onClick={() => setPose(p.key)}>
+                    {t(p.label)}
+                  </button>
+                ))}
+                <span className="ga-hint">{t("Shod base model with the fit's foot pose")}</span>
+              </div>
+              <Model3DViewer key={footwear.preview_url} url={footwear.preview_url} format="glb" height={430}
+                freshness={footwear.preview_freshness} footPose={footwear.foot_pose}
+                clipUrl={clips[previewPose.kind] || ''} clipGroup={previewPose.group} />
+            </>
+          ) : (
+            <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>{t('No fitted mesh yet')}</div>
+          )}
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
           <GarmentFailure garment={footwear} stepLabels={FOOTWEAR_STEP_LABELS} />
           {info.status.missing && !running ? (
