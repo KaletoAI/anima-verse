@@ -42,6 +42,17 @@ downstream); one that was served from the cache does not.
   grafted on) and its record are written, the distance tier is decimated to
   ``low/``, and the assembly of the served outfit model is scheduled.
 
+Refit before re-render (``garment_source``, user decision 2026-11-10): a
+default run whose current image group has none of its own images yet (new
+base images name a new fsig) first copies in the item's last accepted
+source — images + mesh made on an older base — and fits it onto the current
+base on the CPU (edit chain ``_fit``; subtract hair the cut + fit), its ghost
+registered from the source's base front onto the current one. Accepted: the
+run ends there (``refit`` in the result, ``refitted`` in the fit record).
+Refused: the copies go and the same run renders the chain. An explicit run of
+an image step on such a group (Re-render) drops the copies and renders from
+the first step.
+
 A refusal ends the run (``{ok: False, step, error, gates}`` + the in-memory
 status); nothing downstream runs, and an already accepted fit keeps being
 served (R11 — a refused re-run never makes the figure bald).
@@ -571,9 +582,8 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     """Fit the prepared mesh onto the current base model and store it (see
     the module docstring). ``_Refused`` when the fit gate refuses."""
     from app.core import base_body, garment_fit
-    from app.core import garment_images as gi
     from app.core.garment_store import GARMENT_VIEWS, garment_path
-    from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
+    from app.core.model_refs import find_ref_image
     from app.core.timeutils import utc_now_iso
 
     prepared = garment_path(character_name, item_id, fsig, "prepared")
@@ -588,12 +598,21 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     snapshot = base_body._snapshot_base_model(character_name, bsig)
     base_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
     prepared_bytes = prepared.read_bytes()
+    from app.core import garment_source
+    base_images = {v: _sha(p) for v, p in base_views.items()}
+    if fsig == _image_fsig_or_empty(character_name, item_id):
+        # A group of the current fsig was made on exactly these base views: keep them with it (its frame).
+        garment_source.ensure_base_copy(character_name, item_id, fsig, bsig=bsig, expected=base_images)
     # Masks in the frame of the bald front view the unrigged base was built
-    # from (R6: the full-frame ghost mask, never the cut-out).
-    with neutral_view_reference(base_views["front"], get_model_refs_dir(character_name)) as flat:
-        size = gi._image_size(flat)
-        bald_mask = gi._mask(flat, size)
-    ghost_mask = gi._mask(ghost, size)
+    # from (R6: the full-frame ghost mask, never the cut-out); a source made
+    # on another base is registered onto it (``garment_source.fit_masks``).
+    try:
+        bald_mask, ghost_mask, frame = garment_source.fit_masks(character_name, item_id, fsig,
+                                                                body_front=base_views["front"],
+                                                                base_front=base_views["front"])
+    except garment_source.FrameRefused as e:
+        raise _Refused("fit", f"fit refused — {e}", {"ok": False, "reasons": [str(e)],
+                                                      "registration": e.registration})
     from app.core import garment_set
     if kind == garment_set.CLOTHING:
         from app.models.inventory import get_item
@@ -616,11 +635,21 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
         "metrics": result.metrics, "gates": gates, "report": result.report,
         "base_signature": bsig, "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
-                   "base_images": {v: _sha(p) for v, p in base_views.items()},
+                   "base_images": base_images,
                    "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                    "ghost_front_sha256": _sha(ghost)},
+        **garment_source.fit_source(character_name, item_id, fsig, base_images), "frame": frame,
         "created_at": utc_now_iso()}
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
+
+
+def _image_fsig_or_empty(character_name: str, item_id: str) -> str:
+    """``garment_store.image_fsig`` ("" when the item has none)."""
+    from app.core import garment_store as gs
+    try:
+        return gs.image_fsig(character_name, item_id)
+    except ValueError:
+        return ""
 
 
 def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, rigged: bytes,
@@ -946,9 +975,8 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
     prepared mesh / ghost front / HairDeck seed, the body or its front
     view). Never runs a generator."""
     from app.core import base_body, garment_fit, garment_set
-    from app.core import garment_images as gi
     from app.core import garment_store as gs
-    from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
+    from app.core.model_refs import find_ref_image
     from app.core.timeutils import utc_now_iso
     if not gs.is_body_id(body_id):
         raise ValueError(f"not an outfit body id: {str(body_id)[:40]!r}")
@@ -1018,10 +1046,17 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         if front is None:
             raise base_body.MissingInput("The outfit body's front view is missing — rebuild the outfit body")
         prepared_bytes = prepared.read_bytes()
-        with neutral_view_reference(front, get_model_refs_dir(character_name)) as flat:
-            size = gi._image_size(flat)
-            body_mask = gi._mask(flat, size)
-        ghost_mask = gi._mask(ghost, size)
+        # The ghost's frame: the group's base copy, registered onto the base front of the body's base when it
+        # was made on another base (``garment_source.fit_masks``).
+        from app.core import garment_source
+        base_front = find_ref_image(character_name, base_body._kind("front"), bsig) or front
+        try:
+            body_mask, ghost_mask, frame = garment_source.fit_masks(character_name, item_id, fsig,
+                                                                    body_front=front, base_front=base_front)
+        except garment_source.FrameRefused as e:
+            raise _Refused("fit", f"fit on the outfit body refused — {e}",
+                           {"ok": False, "reasons": [str(e)], "registration": e.registration})
+        record["frame"] = frame
         if kind == garment_set.CLOTHING:
             from app.models.inventory import get_item
             slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
@@ -1277,8 +1312,21 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                           if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
             if first is None:
                 return {"ok": True, "fsig": fsig, "ran": []}
+            if first in gs.IMAGE_STEPS:
+                # Refit before re-render: the last accepted source onto the new base first (CPU).
+                refit = _refit_from_source(character_name, item_id, kind, method, ifsig, bsig, profile)
+                if refit is not None and refit.get("ok"):
+                    return refit
         else:
             first = min(wanted, key=order.index)
+            if first in gs.IMAGE_STEPS:
+                from app.core import garment_source
+                if garment_source.drop_materialized(character_name, item_id, ifsig):
+                    # Re-render: images of two bases never mix in one group — the chain starts at its first step.
+                    first = order[0]
+        if first in gs.IMAGE_STEPS:
+            from app.core import garment_source
+            garment_source.ensure_current(character_name, item_id, ifsig, bsig)
         pair_step = _kind_module(kind).PAIR_STEP if method == gs.EDIT_CHAIN else None
         dirty = False  # an earlier step produced new output: every later step runs again
         regenerated_seed: Optional[int] = None  # the seed a forced HairDeck regenerate of this run made
@@ -1387,6 +1435,58 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
     except Exception as e:  # noqa: BLE001 — reported as the step's failure
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, step, e)
         return _refusal(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran)
+
+
+def _refit_from_source(character_name: str, item_id: str, kind: str, method: str, ifsig: str, bsig: str,
+                       profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Refit before re-render (``garment_source``): when the image group ``ifsig`` has none of its own images
+    and the item has an accepted source made on another base, copy it in and fit it onto the current base on the
+    CPU — edit chain ``_fit``, subtract the cut + fit. ``{ok: True, fsig, ran, refit: {source…}}`` when accepted;
+    ``{ok: False, error, refit}`` when refused (the copies are dropped again, the caller renders the chain); None
+    when there is nothing to refit from."""
+    from app.core import garment_source, garment_store as gs
+    if method not in (gs.EDIT_CHAIN, gs.SUBTRACT):
+        return None
+    if garment_source.has_own_images(character_name, item_id, kind, method, ifsig):
+        return None
+    source = garment_source.find_source(character_name, item_id, kind, method, profile, ifsig)
+    if source is None:
+        return None
+    step = "fit"
+    gs.start(character_name, item_id, step)
+    try:
+        garment_source.materialize(character_name, item_id, kind, method, source["fsig"], ifsig)
+        if method == gs.SUBTRACT:
+            from app.core import garment_subtract
+            fsig = gs.garment_fsig(character_name, item_id, profile=profile)  # names the copied haired views
+            step = "cut"
+            gs.start(character_name, item_id, step)
+            garment_subtract.run_cut(character_name, item_id, fsig, ifsig,
+                                     gs.subtract_ssig(character_name, item_id, profile=profile), bsig, profile,
+                                     force=True)
+            gs.end(character_name, item_id, step)
+            step = "fit"
+            gs.start(character_name, item_id, step)
+            garment_subtract.run_fit(character_name, item_id, kind, fsig, bsig, profile)
+            ran = ["cut", "fit"]
+        else:
+            fsig = ifsig
+            _fit(character_name, item_id, kind, fsig, bsig, profile)
+            ran = ["fit"]
+    except Exception as e:  # noqa: BLE001 — any refusal or missing source: the chain is rendered instead
+        error = e.error if isinstance(e, _Refused) else (str(e) or type(e).__name__)
+        try:
+            garment_source.drop_materialized(character_name, item_id, ifsig)
+        except (OSError, ValueError):
+            logger.exception("Garment %s/%s: dropping the copied source failed", character_name, item_id)
+        gs.end(character_name, item_id, step)
+        logger.info("Garment %s/%s: refit from %s (made on %s) refused at %s — %s; the chain is rendered",
+                    character_name, item_id, source["fsig"], source.get("bsig"), step, error)
+        return {"ok": False, "error": error, "refit": source}
+    gs.end(character_name, item_id, step)
+    logger.info("Garment %s/%s: refitted from %s (made on %s) onto %s — no image or mesh job", character_name,
+                item_id, source["fsig"], source.get("bsig"), bsig)
+    return {"ok": True, "fsig": fsig, "ran": ran, "refit": source}
 
 
 def _refusal(character_name: str, item_id: str, fsig: str, step: str, error: str, gates: Any,
@@ -1703,10 +1803,11 @@ def after_base_model(character_name: str) -> bool:
     the own-mesh outfit pieces worn) whose fit is not accepted on the
     current base model gets a run through the character's FIFO
     (``enqueue_garment``; a run in progress may have used the old model, its
-    item is queued again behind it) — the whole chain when its fsig changed
-    (new base signature or base images), the fit only when just the base
-    model bytes changed (its images and mesh are cached under the unchanged
-    fsig). A chain that failed for the current fsig is skipped
+    item is queued again behind it) — when its fsig changed (new base
+    signature or base images) a refit of its last accepted source first and
+    the whole chain only when that is refused (``_refit_from_source``), the
+    fit only when just the base model bytes changed (its images and mesh are
+    cached under the unchanged fsig). A chain that failed for the current fsig is skipped
     (``garment_store.chain_failure``; a refused fit only on the base model
     it failed on). A character with hair text but no hair item gets one first
     (``_ensure_hair``). True if a run was queued. Never raises."""
@@ -2113,6 +2214,11 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     place of the item's next waiting run in the character's garment queue
     (None = none waits) and the item id in flight (None = idle) — the UI's
     "Queued behind <item>" while ``running_step`` is ``queued``.
+    ``refit`` (``garment_source``): the current fit was refitted from a source
+    made on an older base — ``{source_bsig, source_fsig, materialized_from,
+    registration {shift, scale} | None, first_step, created_at}`` (the tab
+    shows "Refitted from the previous base" + Re-render = an explicit run of
+    ``first_step``), None otherwise.
     ``body`` (mesh mode, plan 2026-11-10-outfit-body-mesh-mode Task 2): the
     piece's fit on the outfit body the CURRENT outfit model stands on
     (``body_fit_info``; ``body_id`` repeats its id), None on the base body —
@@ -2194,6 +2300,19 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     except Exception:  # noqa: BLE001 — the tab still shows the base chain
         logger.exception("Body fit info %s/%s failed", character_name, item_id)
         body = None
+    refit = None
+    if fsig:
+        # Refitted from a source made on an older base (``garment_source``): the tab offers Re-render.
+        fit_record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
+        if fit_record.get("accepted") is True and fit_record.get("refitted") is True:
+            source = fit_record.get("source") or {}
+            frame = fit_record.get("frame") or (gs.read_record(gs.garment_path(
+                character_name, item_id, fsig, "prepared").with_suffix(".json")).get("frame") or {})
+            reg = frame.get("registration") or {}
+            refit = {"source_bsig": source.get("bsig"), "source_fsig": source.get("fsig"),
+                     "materialized_from": source.get("materialized_from"),
+                     "registration": {"shift": reg.get("shift_abs"), "scale": reg.get("scale")} if reg else None,
+                     "first_step": gs.steps_for(kind, method)[0], "created_at": fit_record.get("created_at")}
     status = gs.status(character_name, item_id)
     queue = queue_state(character_name, item_id)
     failed = status["failed"]
@@ -2212,7 +2331,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         "steps": steps, "stale_reasons": stale,
         "running_step": status["running_step"], "started_at": status["started_at"],
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
-        "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig,
+        "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig, "refit": refit,
         "body": body, "body_id": body["body_id"] if body else None})
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:

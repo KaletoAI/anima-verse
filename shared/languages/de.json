@@ -4460,6 +4460,11 @@
     "points": "Punkte",
     "snap": "Anlage",
     "unknown length": "unbekannte Länge",
-    "vertices": "Vertices"
+    "vertices": "Vertices",
+    "Refitted from the previous base": "Vom vorherigen Basis-Körper übernommen",
+    "Aligned to the new base: shift {shift} %, scale {scale}": "Am neuen Basis-Körper ausgerichtet: Verschiebung {shift} %, Skalierung {scale}",
+    "The images and the mesh were made on the previous base body and fitted onto the new one — no new images were rendered.": "Bilder und Mesh stammen vom vorherigen Basis-Körper und wurden auf den neuen angepasst — es wurden keine neuen Bilder erzeugt.",
+    "Re-render": "Neu rendern",
+    "Renders the images and the mesh on the current base body; the refitted piece stays in use until then.": "Erzeugt Bilder und Mesh auf dem aktuellen Basis-Körper neu; bis dahin bleibt das übernommene Stück in Gebrauch."
   }
 }

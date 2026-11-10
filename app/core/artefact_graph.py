@@ -71,6 +71,14 @@ REACHABILITY (one function each, ``_judge``):
   also kept when a kept fit or cut names it (``inputs.image_fsig`` /
   ``image_fsig``). Hair source: its item is kept and the ssig is the item's
   current one or is named by a kept fit or cut (``ssig``).
+* refit before re-render (``garment_source``): a piece refitted onto a new
+  base carries COPIES of its source (image finals, prepared mesh, the base
+  views they were made on: ``images/{item}_{fsig}_base_{view}.png``) in its
+  CURRENT group, so the kept source is reachable through the current fsig
+  like any own file, and the group it was copied from (the old base's) is
+  named by nothing — it goes with the old base. A subtract source keeps its
+  ssig (the copied haired views have the same content): its hair source
+  folder stays "current".
 * temp: younger than ``TEMP_GRACE_S`` or a live stage of this process
   (``model3d.active_stages``).
 

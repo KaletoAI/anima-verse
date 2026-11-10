@@ -98,8 +98,13 @@ Cut-out: hair box 216 wide -> side int(1.15 x 216) = 248 < 1024 -> upscale
     record accepted, fit_version current, base sha unchanged; "accepted"
     again. A record with fit_version one lower is "stale" as well.
 [6] New profile image -> B2 (base images + base model for B2 written):
-    after_base_model runs the whole chain under F2: 4 renders, 1 mesh call,
-    fit record base_signature B2.
+    refit before re-render (garment_source, 2026-11-10): F2's group has no
+    images, F1's accepted source names the current hair inputs on B1, so
+    after_base_model copies it into F2 and fits it on the CPU: 0 renders,
+    0 mesh calls; fit record base_signature B2, source.fsig F1, refitted
+    False (B2's views are byte-identical to B1's, so no registration
+    either: frame.registered False); the haired front of F2 is a copy
+    (copied_from F1).
 [7] Hair colour changed (B2 unchanged, F3 != F2) and BODY_GHOST on the back
     for both attempts: run_garment -> {ok False, step "ghost"}, 2 (haired) +
     2 (ghost back) renders — the back renders first (garments.EDIT_VIEW_ORDER),
@@ -614,7 +619,7 @@ def main() -> int:
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), rec5b)
 
         # --- [6] new bsig ---------------------------------------------------------------
-        print("[6] new profile image -> new base signature -> whole chain")
+        print("[6] new profile image -> new base signature -> refit from the B1 source")
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_2.png"
         check("profile image 2", save_character_profile("Demo", stored), True)
@@ -627,9 +632,14 @@ def main() -> int:
         check("after_base_model starts", garments.after_base_model("Demo"), True)
         check("idle", garments.wait_idle(120), True)
         after = counts()
-        check("4 renders, 1 mesh", (after[0] - before[0], after[1] - before[1]), (4, 1))
+        check("0 renders, 0 mesh", (after[0] - before[0], after[1] - before[1]), (0, 0))
         rec6 = fit_record(f2)
         check("fit on B2", (rec6.get("accepted"), rec6.get("base_signature")), (True, b2))
+        check("source F1, not refitted (same views), no registration",
+              ((rec6.get("source") or {}).get("fsig"), rec6.get("refitted"), (rec6.get("frame") or {}).get("registered")),
+              (f1, False, False))
+        copied = gs.garment_path("Demo", hid, f2, "image", step="haired", view="front")
+        check("haired front copied", gs.read_record(copied.with_suffix(".json")).get("copied_from"), f1)
 
         # --- [7] description change + ghost refusal --------------------------------------
         print("[7] ghost refusal")

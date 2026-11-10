@@ -393,6 +393,38 @@ export function GarmentFailure({ garment, stepLabels }: {
   )
 }
 
+/** The piece was refitted from images + mesh made on the previous base
+ *  body (server `garment_source`: new base images refit the existing piece
+ *  on the CPU first; `garment.refit`). Re-render = an explicit run of the
+ *  chain's first step: the copied images go and the chain renders anew
+ *  (queued behind the character's other runs, cancellable like any run). */
+export function RefitNotice({ garment, feedback, busy, onRun }: {
+  garment: GarmentInfo | null
+  feedback?: RunFeedback
+  busy: boolean
+  onRun: (body: GarmentRunBody, slot?: string) => void
+}) {
+  const { t } = useI18n()
+  const refit = garment?.refit
+  if (!refit) return null
+  const reg = refit.registration
+  const detail = reg && reg.shift != null && reg.scale != null
+    ? t('Aligned to the new base: shift {shift} %, scale {scale}')
+      .replace('{shift}', (reg.shift * 100).toFixed(1)).replace('{scale}', reg.scale.toFixed(3))
+    : ''
+  const title = t('The images and the mesh were made on the previous base body and fitted onto the new one — no new images were rendered.')
+  return (
+    <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent, #6aa9ff)' }}>
+      <span title={title}>{t('Refitted from the previous base')}</span>
+      {detail ? <span className="ga-hint">{detail}</span> : null}
+      <RunButton feedback={feedback} slot="rerender" disabled={busy}
+        onClick={() => onRun({ step: refit.first_step, force: true }, 'rerender')}
+        title={t('Renders the images and the mesh on the current base body; the refitted piece stays in use until then.')}
+        label={t('Re-render')} />
+    </div>
+  )
+}
+
 /** One image step of the chain in its order, with the chips of its gate. */
 export interface ImageStepSpec {
   step: GarmentImageStep

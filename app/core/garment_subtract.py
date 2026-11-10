@@ -16,6 +16,10 @@ described in ``garment_store``).
 
 On an outfit body (``fit_on_body``) the cut runs again against THAT body (its unrigged source; its front view
 frames the initial placement), then the placed fit onto its rigged model — CPU only, never a job.
+
+Refit before re-render (``garment_source``): haired views copied in from a source made on an older base keep that
+base's views with them (``garment_source.base_copy``) — the cut labels the hair against THOSE (``_views``), and
+the current base front, registered into the haired views' frame, places the haired mesh (``place_mask``).
 """
 from __future__ import annotations
 
@@ -120,15 +124,18 @@ def run_source(character_name: str, item_id: str, ifsig: str, ssig: str, *, forc
 
 def _views(character_name: str, item_id: str, ifsig: str, ssig: str, bsig: str):
     """The cut's ``garment_cut.View`` per view: the haired view, its cut-out in the source folder and the base
+    view the haired view was made on — the image group's copy of it (``garment_source.base_copy``), else the base
     view of ``bsig``. ``MissingInput`` when one is gone."""
-    from app.core import base_body, garment_cut, garment_store as gs
+    from app.core import base_body, garment_cut, garment_source, garment_store as gs
     from app.core.model_refs import find_ref_image
     folder = gs.source_dir(character_name, item_id, ssig)
+    own = bool(garment_source.source_of(character_name, item_id, ifsig))
     views = {}
     for view in gs.GARMENT_VIEWS:
         haired = _haired(character_name, item_id, ifsig, view)
         cut = folder / cutout_name(view)
-        base = find_ref_image(character_name, base_body._kind(view), bsig)
+        base = (garment_source.base_copy(character_name, item_id, ifsig, view) if own
+                else find_ref_image(character_name, base_body._kind(view), bsig))
         if not haired.is_file() or not cut.is_file():
             raise base_body.MissingInput("The haired views or their cut-outs are gone — run the hair chain")
         if base is None:
@@ -167,11 +174,24 @@ def run_cut(character_name: str, item_id: str, fsig: str, ifsig: str, ssig: str,
     if source is None:
         raise base_body.MissingInput("The hair source mesh is missing — run the mesh_source step first")
     views = _views(character_name, item_id, ifsig, ssig, bsig)
+    # Haired views made on another base (a refit, ``garment_source``): the current base front, registered into
+    # their frame, places the haired mesh on the current body.
+    from app.core import garment_source
+    from app.core.model_refs import find_ref_image
+    front = find_ref_image(character_name, base_body._kind("front"), bsig)
+    if front is None:
+        raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+    try:
+        place, frame = garment_source.place_mask(character_name, item_id, ifsig, front,
+                                                 views["front"].haired_mask.shape)
+    except garment_source.FrameRefused as e:
+        raise _Refused("cut", f"cut refused — {e}", {"ok": False, "reasons": [str(e)],
+                                                      "registration": e.registration})
     snapshot = base_body._snapshot_base_model(character_name, bsig)
     shape, thickness = _shape(character_name, profile)
     source_bytes = source.read_bytes()
     result = garment_cut.cut_hair(source_bytes, snapshot["unrigged"], snapshot["rigged"], views,
-                                  shape=shape, thickness_m=thickness)
+                                  shape=shape, thickness_m=thickness, place_mask=place)
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind, limit] for key, (kind, limit, _label) in garment_cut.CUT_GATES.items()}}
     record = {"accepted": bool(result.ok), "kind": "hair", "item_id": item_id, "fsig": fsig, "method": gs.SUBTRACT,
@@ -180,7 +200,8 @@ def run_cut(character_name: str, item_id: str, fsig: str, ifsig: str, ssig: str,
               "base_model_sha256": hashlib.sha256(snapshot["rigged"]).hexdigest(),
               "unrigged_sha256": hashlib.sha256(snapshot["unrigged"]).hexdigest(),
               "clearance_m": result.clearance_m, "spread_m": result.spread_m, "cut_version": garment_cut.CUT_VERSION,
-              "metrics": result.metrics, "gates": gates, "report": result.report, "created_at": utc_now_iso()}
+              "metrics": result.metrics, "gates": gates, "report": result.report, "frame": frame,
+              "created_at": utc_now_iso()}
     if not result.ok:
         prepared.unlink(missing_ok=True)
         gs.write_record(prepared.with_suffix(".json"), record)
@@ -228,16 +249,19 @@ def run_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, 
         raise _Refused("fit", "fit refused — " + "; ".join(result.reasons), {**verdict, "metrics": result.metrics})
     base_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
     base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in gs.GARMENT_VIEWS}
+    base_images = {v: _sha(p) for v, p in base_views.items()}
+    from app.core import garment_source
     record: Dict[str, Any] = {
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": gs.SUBTRACT,
         "metrics": result.metrics, "gates": verdict, "report": result.report, "cut": cut.get("metrics"),
         "shape": shape, "length_class": garment_hair.hair_length_class(character_name, profile=profile),
         "base_signature": bsig, "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
-                   "base_images": {v: _sha(p) for v, p in base_views.items()},
+                   "base_images": base_images,
                    "prepared_sha256": hashlib.sha256(cut_bytes).hexdigest(),
                    "ssig": cut.get("ssig"), "image_fsig": cut.get("image_fsig"),
                    "shape": shape, "shell_mm": cut.get("shell_mm")},
+        **garment_source.fit_source(character_name, item_id, str(cut.get("image_fsig") or ""), base_images),
         "created_at": utc_now_iso()}
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
 
@@ -265,6 +289,19 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, body: Dict[s
         raise base_body.MissingInput("The outfit body's front view is missing — rebuild the outfit body")
     rgb, mask = garment_cut._figure_mask(Path(front).read_bytes())
     _rgb, place_mask = garment_cut.pad_into(rgb, mask, views["front"].haired_mask.shape)
+    # Haired views made on another base (a refit, ``garment_source``): the body's front moves into their frame
+    # by the registration of the base it was dressed from onto theirs.
+    from app.core import garment_source
+    base_front = find_ref_image(character_name, base_body._kind("front"),
+                                str(body["meta"]["outfit_body"].get("base_signature") or bsig))
+    try:
+        reg = (garment_source.place_registration(character_name, item_id, ifsig, base_front,
+                                                 views["front"].haired_mask.shape) if base_front else None)
+    except garment_source.FrameRefused as e:
+        raise _Refused("fit", f"cut on the outfit body refused — {e}",
+                       {"ok": False, "reasons": [str(e)], "registration": e.registration})
+    if reg is not None:
+        place_mask = garment_source.warp_mask(place_mask, reg)
     shape = str(base_record.get("shape") or inputs.get("shape") or "cut")
     thickness = float(inputs.get("shell_mm") or garment_cut.DEFAULT_SHELL_M * 1000) / 1000.0
     cut = garment_cut.cut_hair(source.read_bytes(), body["unrigged"], body["rigged"], views, shape=shape,

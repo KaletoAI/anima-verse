@@ -91,6 +91,15 @@ new haired views. The subtract fsig is the edit-chain payload plus ``method``, t
 the base MODEL's sha256 (a new base model re-cuts on the CPU, never a mesh job), the shape (``cut`` /
 ``shell``), the shell thickness and ``garment_cut.CUT_VERSION``.
 
+The SOURCE of an image group (``garment_source``, refit before re-render)::
+
+    images/{item}_{fsig}_base_{view}.png  + .json     the base views the group's images were made on
+                                                      (front's record: {bsig, base_images,
+                                                      origin_fsig[, materialized_from]})
+
+A group refitted from an older base's source carries copies of that source's image finals, prepared
+mesh and base views under its own fsig, each record marked ``copied_from`` (``garment_source.materialize``).
+
 Run status is in memory (like ``base_body``): a restart reruns only the step
 that was in flight, every finished step is cached on disk under ``fsig``.
 """
@@ -442,15 +451,29 @@ def garment_hsig(character_name: str, item_id: str, *,
     return digest.hexdigest()[:12]
 
 
-def _edit_payload(character_name: str, item_id: str, kind: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    """The edit-chain fingerprint payload (R10)."""
+def _edit_payload(character_name: str, item_id: str, kind: str, profile: Dict[str, Any], *,
+                  bsig: Optional[str] = None, base_images: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """The edit-chain fingerprint payload (R10) — on the current base, or on
+    the base ``bsig`` with the base view sha256 ``base_images`` (both given:
+    the payload a group of images made on that base has with the item's
+    CURRENT inputs, ``edit_fsig_on``)."""
     from app.core import base_body
     from app.core.model_refs import find_ref_image
-    bsig = base_body.base_signature(character_name, profile=profile)
-    images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
-              for view in GARMENT_VIEWS}
+    if bsig is None or base_images is None:
+        bsig = base_body.base_signature(character_name, profile=profile)
+        base_images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
+                       for view in GARMENT_VIEWS}
     return {"kind": kind, **_kind_inputs(kind, character_name, profile, item_id),
-            "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": images}
+            "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": dict(base_images)}
+
+
+def edit_fsig_on(character_name: str, item_id: str, kind: str, profile: Dict[str, Any], *, bsig: str,
+                 base_images: Dict[str, str]) -> str:
+    """The edit-chain fsig the item's CURRENT inputs (description, slots,
+    ``GARMENT_VERSION``) would have on the base ``bsig`` / ``base_images``:
+    equal to the fsig a group of images was rendered under exactly when
+    only the base differs (``garment_source.find_source``)."""
+    return _md5(_edit_payload(character_name, item_id, kind, profile, bsig=bsig, base_images=base_images))
 
 
 def _md5(payload: Dict[str, Any]) -> str:

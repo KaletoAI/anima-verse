@@ -211,6 +211,18 @@ export interface GarmentFailure {
   failed_at: string | null
 }
 
+/** `garment_info.refit`: what the refitted piece was made on. */
+export interface GarmentRefit {
+  source_bsig: string | null
+  source_fsig: string | null
+  materialized_from: string | null
+  /** The ghost's registration onto the new base front (shift: fraction of the figure height). */
+  registration: { shift: number | null; scale: number | null } | null
+  /** The chain's first step — the Re-render run starts there. */
+  first_step: string
+  created_at: string | null
+}
+
 export interface GarmentInfo {
   item_id: string
   kind: string
@@ -242,6 +254,9 @@ export interface GarmentInfo {
   failed: GarmentFailure | null
   preview_url: string | null
   served_fsig: string | null
+  /** The current fit was refitted from images + mesh made on the previous
+   *  base (server `garment_source`); null otherwise / on an older server. */
+  refit?: GarmentRefit | null
   /** Current fsig fit on screen, or an older one and why (server). */
   preview_freshness?: Freshness | null
 }

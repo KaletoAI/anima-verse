@@ -29,7 +29,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
-import { GarmentFailure, GateChips, RunButton, RunStatusLine } from './GarmentSteps'
+import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
 import type { ImageStepSpec } from './GarmentSteps'
 import { ROW, WARN_STYLE } from './garmentStyle'
@@ -226,6 +226,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
                 label={t('Regenerate')} />
             </div>
           ) : null}
+          <RefitNotice garment={garment} feedback={feedback} busy={busy} onRun={onRun} />
           <GarmentStepGrid
             garment={garment}
             imageSteps={IMAGE_STEPS}

@@ -38,6 +38,14 @@ the current base model) and on every outfit body (``refused_body_fits``,
 the body stored unchanged, the fsig of the served base fit). A new refusal
 is recorded stamped, so it is not retried again.
 
+Refit before re-render (``garment_source``): every refit here fits through
+``garments._fit`` / ``fit_on_body``, so a group refitted from a source made
+on an older base is registered from its own base copy like the chain does.
+First, per character, the base views of every image group an accepted fit
+was made from are kept with that group while they are still on disk
+unchanged (``garment_source.backfill``) — a group from before keeps its
+frame when the base images are rendered again under the same signature.
+
 CPU only: no image, mesh or hub call. ``garments._publish_fit`` schedules the
 re-assembly of the current outfit model. A character whose garment chain runs
 (its run lock held, or its FIFO active) is retried later, never refitted
@@ -354,6 +362,13 @@ def refit_character(character_name: str) -> Optional[List[str]]:
     try:
         profile = get_character_profile(character_name) or {}
         base = base_body.current_base(character_name, profile=profile)
+        try:
+            from app.core import garment_source
+            kept = garment_source.backfill(character_name)
+            if kept:
+                logger.info("Garment refit %s: base views kept with %d image group(s)", character_name, kept)
+        except Exception:  # noqa: BLE001 — the refits below do not depend on it
+            logger.exception("Garment refit %s: keeping the base views failed", character_name)
         for item_id, kind, fsig, method in outdated_fits(character_name, profile=profile):
             old = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
             gs.start(character_name, item_id, "fit")

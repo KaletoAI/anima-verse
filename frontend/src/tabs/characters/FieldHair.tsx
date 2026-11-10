@@ -46,7 +46,8 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import {
-  FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, RunBadge, RunButton, RunStatusLine, StepState,
+  FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, RefitNotice, RunBadge, RunButton, RunStatusLine,
+  StepState,
 } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, flatFit, num } from './garmentStyle'
@@ -710,6 +711,8 @@ export function FieldHair({ character, onEditAppearance }: {
                 label={t('Regenerate')} />
             </div>
           ) : null}
+
+          <RefitNotice garment={garment} feedback={feedback} busy={busy} onRun={onRun} />
 
           <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
 
