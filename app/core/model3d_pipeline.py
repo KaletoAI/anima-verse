@@ -29,6 +29,15 @@ job). The 3D tab's actions therefore split three ways (audit 2026-11-09):
 * **Refused** (``refusal``): upload, "Fetch by job ID", the upload rig
   label — they would store a whole-body model the pipeline does not use
   and the next trigger replaces as stale.
+* **Build current outfit** (``build_current_outfit``) when the tab serves a
+  stand-in (``annotate``'s ``fallback``: another outfit's model, or none):
+  the outfit-change trigger itself, never forced — the T-pose pass
+  (``model_refs.trigger_now(("tpose",), force=False)``: only views that are
+  not current cost an image job) whose end runs the auto hook
+  (``model3d.maybe_auto_generate_for_outfit``), or the hook alone when the
+  views are current. A stored body of the outfit's key is reused (painted
+  body / outfit body: CPU, no hub job). A switch of ``outfit_body_mode``
+  runs the same function (``after_mode_switch``).
 
 Everything else (download, delete, measure/diagnose, shrink textures,
 distance mesh, extension bones, motion sliders) works on the served outfit
@@ -97,13 +106,35 @@ def pipeline_state(character_name: str) -> Optional[Dict[str, Any]]:
             "queued": queued}
 
 
+def fallback_state(character_name: str, info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The served model is NOT the current outfit's (``model`` None, or a
+    ``nearest`` stand-in of another combination): ``{current_signature,
+    current_name, served_signature, served_name}`` (names: the saved outfit
+    whose pieces match, else the piece names — ``outfit_bodies.outfit_label``;
+    served "" when nothing is served). None when the current outfit's own
+    model is served (stale or not — a stale one has its own hint) or the
+    payload names no current signature."""
+    from app.core.outfit_bodies import outfit_label
+    model = info.get("model") or None
+    if model and model.get("match") != "nearest":
+        return None
+    current = str(info.get("signature") or "")
+    if not current:
+        return None
+    served = str((model or {}).get("signature") or "")
+    return {"current_signature": current, "current_name": outfit_label(character_name, current) if current else "",
+            "served_signature": served, "served_name": outfit_label(character_name, served) if served else ""}
+
+
 def annotate(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{n}/model3d`` + ``pipeline`` (``pipeline_state``,
-    None off the pipeline). On the pipeline a running rebuild counts as
-    ``pending`` (its dressed views render before the model run starts).
-    Never raises."""
+    None off the pipeline, plus ``fallback`` — ``fallback_state``). On the
+    pipeline a running rebuild counts as ``pending`` (its dressed views
+    render before the model run starts). Never raises."""
     try:
         state = pipeline_state(character_name)
+        if state is not None:
+            state["fallback"] = fallback_state(character_name, info)
     except Exception:  # noqa: BLE001
         logger.exception("Pipeline state of %s failed", character_name)
         state = None
@@ -118,6 +149,53 @@ def refusal(character_name: str, action: str) -> str:
     "" off the pipeline."""
     from app.core.base_body import is_base_pipeline
     return REFUSED.format(action=action) if is_base_pipeline(character_name) else ""
+
+
+def build_current_outfit(character_name: str, *, respect_auto: bool = False) -> Dict[str, Any]:
+    """Build the CURRENT outfit's model the way an outfit change does (the
+    module docstring's "Build current outfit"), never forced. ``{"status":
+    …}``: ``current`` (its model is stored and current — nothing to do),
+    ``views`` (dressed views not current: the T-pose pass runs, its end runs
+    the auto hook), ``generating`` (the model run started), ``queued`` (a
+    model job of the character runs; the hook runs again once it ended),
+    ``off`` (``respect_auto`` and the automatic T-pose render is off — world
+    switch or the character's toggle; the outfit change would not render
+    either). ``ValueError`` off the
+    pipeline, ``LookupError`` (``BASE_MODEL_FIRST``) without a ready base
+    model."""
+    from app.core import model3d, model_refs
+    state = pipeline_state(character_name)
+    if state is None:
+        raise ValueError("The character is not on the base-body pipeline")
+    if state["base_model"] != "ready":
+        raise LookupError(BASE_MODEL_FIRST)
+    signature = model_refs.current_outfit_state(character_name)[2]
+    if not signature or model3d.find_model3d(character_name, signature):
+        return {"status": "current"}
+    if not state["dressed_current"]:
+        if respect_auto and not (model_refs._enabled() and model_refs.get_auto_kinds(character_name).get("tpose")):
+            return {"status": "off"}
+        model_refs.trigger_now(character_name, ("tpose",), force=False)
+        return {"status": "views"}
+    started = model3d.maybe_auto_generate_for_outfit(character_name)
+    return {"status": "generating" if started else "queued"}
+
+
+def after_mode_switch(character_name: str) -> Dict[str, Any]:
+    """A changed ``outfit_body_mode`` (``character_ops.apply_profile_update``,
+    after its artefact walk): the current outfit's model in the new mode,
+    through the outfit-change trigger (``build_current_outfit`` with
+    ``respect_auto``). Never raises; ``{"status": …}`` (``skipped`` off the
+    pipeline or without a ready base model)."""
+    try:
+        result = build_current_outfit(character_name, respect_auto=True)
+    except (ValueError, LookupError) as exc:
+        result = {"status": "skipped", "reason": str(exc)}
+    except Exception:  # noqa: BLE001 — the profile save stays saved
+        logger.exception("Model3D %s: outfit build after the mode switch failed", character_name)
+        result = {"status": "skipped", "reason": "error"}
+    logger.info("Model3D %s: outfit body mode switched — current outfit: %s", character_name, result["status"])
+    return result
 
 
 def rebuild_from_base(character_name: str) -> Dict[str, Any]:

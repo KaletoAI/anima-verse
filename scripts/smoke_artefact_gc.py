@@ -46,11 +46,14 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     base), T1 T2 (sidecars name the old base), B1 B2 Bd1 Bd2 Bh1 Bh2 (record names the old base — ruling
     "immediately"). Kept: O1..O3 (producible; rebuilt later), Gd Gh (R11: newest accepted fit at all), HD (the
     hsig changed with the picture, but the kept hair fit names it), NEWBASE refs, FACE UNK LIVE YOUNG.
-[4] mode switch (apply_profile_update outfit_body_mode retexture): 0 deletions (every body still named by a live
-    outfit model). O1m + O3m rebuilt in retexture (sidecar without body_id) -> collect: B1 Bd1 Bh1 gone; O2m
-    rebuilt -> B2 Bd2 Bh2 gone. Mode back to mesh -> 0 deletions (T1 T2 stay in both modes: mode back = no render).
+[4] mode switch (apply_profile_update outfit_body_mode retexture): 0 deletions. O1m + O3m rebuilt in retexture
+    (sidecar without body_id) -> collect: 0 deletions — B1 Bd1 Bh1 stay, their texture T1 is live (ruling
+    2026-11-10: a body hangs on its texture in BOTH modes, the spec's anti-goal "switching the mode back and forth
+    -> no hub job for bodies that exist"); O2m rebuilt -> B2 Bd2 Bh2 stay the same way. Mode back to mesh -> 0
+    deletions (T1 T2 B1 B2 stay: mode back = no render, no mesh job).
 [5] character delete: delete_character -> the directory is gone; collect afterwards mints nothing.
-[6] running: B2 made unreachable (retexture, O2m rebuilt) but a live stage on B2 -> B2, Bd2, Bh2 skipped "running";
+[6] running: B2 made unreachable (retexture, O2m rebuilt, B2's record pointed at a dead texture) but a live stage
+    on B2 -> B2, Bd2, Bh2 skipped "running";
     another thread holds keyed_lock("outfit_body", B2) -> skipped; open hub op model3d:<char>:<B2> -> skipped;
     nothing of them deleted. All released -> they go. Garment run of dress (status running) + dress out of the
     inventory -> Gd, Bd1, Bd2 kept; run ended -> they go.
@@ -308,6 +311,15 @@ def main() -> int:
             meta["outfit_body_mode"] = "retexture"
             sidecar.write_text(json.dumps(meta))
 
+        def retire_body(fx, label):
+            # Points every parent record of the body at a texture no outfit names: unreachable in any mode.
+            for path in fx["L"][label]:
+                if path.suffix == ".json" and path.is_file():
+                    meta = json.loads(path.read_text() or "{}")
+                    if isinstance(meta.get("outfit_body"), dict):
+                        meta["outfit_body"]["texture_signature"] = "tex000000000000"
+                        path.write_text(json.dumps(meta))
+
         def set_mode(char, mode):
             return character_ops.apply_profile_update(char, {"fields": {"outfit_body_mode": mode}})
 
@@ -364,13 +376,13 @@ def main() -> int:
         same("[4] after switch", "Demo4", fx, ALL)
         rebuild_retexture(fx, "O1")
         rebuild_retexture(fx, "O3")
-        ag.collect("Demo4", explicit=True)
-        same("[4] O1+O3 rebuilt", "Demo4", fx, without("B1", "Bd1", "Bh1"))
+        check("[4] O1+O3 rebuilt: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
+        same("[4] O1+O3 rebuilt", "Demo4", fx, ALL)
         rebuild_retexture(fx, "O2")
-        ag.collect("Demo4", explicit=True)
-        same("[4] O2 rebuilt", "Demo4", fx, without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
+        check("[4] O2 rebuilt: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
+        same("[4] O2 rebuilt", "Demo4", fx, ALL)
         set_mode("Demo4", "mesh")
-        same("[4] back to mesh", "Demo4", fx, without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
+        same("[4] back to mesh", "Demo4", fx, ALL)
 
         # --- [5] character delete ------------------------------------------------------------------------
         print("[5] character delete")
@@ -385,6 +397,7 @@ def main() -> int:
         fx = make("Demo6", "6")
         set_mode("Demo6", "retexture")
         rebuild_retexture(fx, "O2")
+        retire_body(fx, "B2")
         stage = fx["dir"] / "model3d" / ".process-b2"
         stage.mkdir()
         model3d._active_stages[str(stage.resolve())] = ("Demo6", B2)

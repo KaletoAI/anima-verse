@@ -59,10 +59,14 @@ REACHABILITY (one function each, ``_judge``):
   no sidecar of it names another base than the current one. Both modes: the
   dressed views are the mesher input of the outfit body too, and the painted
   body is small and CPU-made — mode back never re-renders (Task 5).
-* body: its record names the CURRENT base AND either the mode is ``mesh``
-  and its texture is live, or a live outfit model still names it as
-  ``body_id`` (a model built in mesh mode stays served after a switch to
-  retexture until it is rebuilt; its assembly still needs the body fits).
+* body: its record names the CURRENT base AND either its texture is live
+  (in BOTH outfit body modes — ruling 2026-11-10, mode switch: the spec's
+  anti-goal "switching the mode back and forth → no hub job for bodies that
+  exist"; a body is a mesh + rig of hub jobs, its texture keeps it exactly
+  as long as an outfit can still stand on it, so retexture → mesh reuses it
+  with 0 hub jobs), or a live outfit model still names it as ``body_id``
+  (its assembly still needs the body fits). Off the pipeline only the
+  second holds.
 * garment: ``_garment_roots`` (current fsig, served fit, newest accepted per
   method). Body fit: its body AND its garment group are reachable.
 * HairDeck job: its item is kept and the hsig is the item's current one or
@@ -92,7 +96,9 @@ RULINGS.
   MODEL regenerated under the same signature keeps the bodies (own mesh +
   rig, Task 1 ruling); fits are refitted in place (same names). Base fits of
   an older fingerprint follow R11 (served until the new fit is accepted).
-* MODE: see body/texture above.
+* MODE: a switch runs the walk (``character_ops.apply_profile_update``), but
+  neither textures nor bodies hang on the mode (body/texture above): what
+  the switch makes unreachable is only what no live outfit reaches anyway.
 
 SAFETY. Never deleted: what is running — a live model stage of the
 signature, an open hub operation on it (``hub_ops`` subject
@@ -561,12 +567,13 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
                 verdict = (True, "base or mode unknown")
             elif not roots.base or record.get("base_signature") != roots.base:
                 verdict = (False, "older base")
-            elif roots.mode == "mesh" and record.get("texture_signature") in live_tsigs:
-                verdict = (True, "texture of a live outfit (mesh mode)")
+            elif roots.mode in ("mesh", "retexture") and record.get("texture_signature") in live_tsigs:
+                # Both modes (ruling 2026-11-10): mode back to mesh reuses it, no hub job.
+                verdict = (True, "texture of a live outfit")
             elif node.key in named_bodies:
                 verdict = (True, "named by a live outfit model")
             else:
-                verdict = (False, "no live outfit on it" if roots.mode == "mesh"
+                verdict = (False, "no live outfit on it" if roots.mode in ("mesh", "retexture")
                            else f"not used in {roots.mode} mode")
             body_verdicts[node.key] = (*verdict, parents)
         node.reachable, node.reason, parents = body_verdicts[node.key]

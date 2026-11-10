@@ -1558,6 +1558,11 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
         # The outfit body mode decides which bodies stay (app/core/artefact_graph.py).
         from app.core import artefact_graph
         artefact_graph.collect_quietly(character_name, "outfit body mode switched")
+    if "outfit_body_mode" in fields and before.get("outfit_body_mode") != profile.get("outfit_body_mode"):
+        # The current outfit's model in the new mode, through the outfit-change trigger: a stored
+        # body/texture of its key is only assembled (CPU), anything missing is queued as on an outfit change.
+        from app.core import model3d_pipeline
+        model3d_pipeline.after_mode_switch(character_name)
     from app.core import sync_topics
     sync_topics.profile_patched(character_name, before, {k: profile.get(k) for k in fields})
     return {"status": "success", "character": character_name,

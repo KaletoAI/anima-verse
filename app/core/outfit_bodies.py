@@ -46,9 +46,25 @@ generation guard (``model3d.generation_slot``) — a body is never rebuilt
 while another 3D run of the character goes. Delete is not a run: it is the
 artefact graph's explicit walk (``artefact_graph.delete_body``). ``cancel``
 takes a body's waiting runs out of the FIFO (never the one in flight).
+
+Retexture mode (``textures``, ``texture_info``): every painted body of the
+character keyed by its texture signature, the WORN outfit's first and marked
+``current`` (``worn_texture``) — before its dressed views exist a pending
+entry keyed by the outfit signature. Bodies of other outfits are listed below
+with the outfits that use them, never as current. Two runs join the same
+FIFO, Cancel and generation slot: ``paint`` (Generate / Build outfit model,
+the worn entry only — ``paint_worn``: the worn outfit's missing dressed
+views, then its outfit model, never forced, so a stored painted body of the
+key is reused on the CPU) and ``repaint`` (Regenerate a painted body —
+``repaint_texture``: every dressed view rendered anew for an outfit standing
+on it, then that outfit's model built forced, the body painted again). In
+both modes a body is ``current`` only when the worn outfit stands on it;
+an outfit body of the other mode stays stored (artefact GC: a body hangs on
+its texture in both modes, so switching back costs no hub job).
 """
 from __future__ import annotations
 
+import re
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -60,7 +76,10 @@ from app.core.log import get_logger
 
 logger = get_logger("outfit_bodies")
 
-RUN_KINDS = ("regenerate", "rerig", "refit", "view", "views")
+#: The retexture mode's runs on a painted body (key: texture signature, or the worn outfit's signature
+#: while its body is pending).
+TEXTURE_RUN_KINDS = ("paint", "repaint")
+RUN_KINDS = ("regenerate", "rerig", "refit", "view", "views") + TEXTURE_RUN_KINDS
 NO_SOURCE = ("No outfit stands on this body's dressed views any more — "
              "render the outfit's pose images first")
 NO_UNRIGGED = "The outfit body has no retained unrigged mesh — regenerate it"
@@ -89,6 +108,13 @@ PENDING_BODY_VIEW = "Older mesher input of this body — not the worn outfit's d
 LOCKED_BUILD = "Locked: a 3D model job is running for this body"
 LOCKED_RUNNING = "Locked: a run on this body is running"
 LOCKED_QUEUED = "Locked: a run on this body is queued"
+# The retexture mode's painted bodies (``texture_info``'s ``blocked``).
+NOT_RETEXTURE_MODE = "Painted bodies are built in the retexture mode only"
+NOT_WORN_TEXTURE = "Not the worn outfit's body — Generate builds the worn outfit only"
+WORN_MODEL_PRESENT = "The worn outfit's model is built and current — Regenerate renders its views and paints it anew"
+PENDING_NO_BODY = "Nothing to regenerate yet — Generate renders the worn outfit's dressed views and paints its body"
+_OUTFIT_SIG_RE = re.compile(r"[0-9a-f]{12}")
+_FRONT_REF_RE = re.compile(r"tpose_([0-9a-f]{12})")
 
 
 class UnknownBody(LookupError):
@@ -212,6 +238,27 @@ def _saved_outfits(character_name: str) -> List[Dict[str, Any]]:
         return []
 
 
+def outfit_label(character_name: str, signature: str, *, models: Optional[Dict[str, Dict[str, Any]]] = None,
+                 saved: Optional[List[Dict[str, Any]]] = None) -> str:
+    """The display name of the outfit combination ``signature``
+    (``_outfit_name`` of its pieces — the stored model's manifest, else its
+    T-pose input's, else the worn pieces when it is the worn combination —
+    the saved outfit's name first), else "" (the 3D tab's "Showing …" line,
+    the painted bodies' "used by")."""
+    meta = (models or {}).get(signature)
+    if meta is None:
+        try:
+            from app.core.model3d import _stored_manifest
+            meta = _stored_manifest(character_name, signature) or {}
+            if not meta:
+                from app.core.model_refs import current_outfit_state
+                pieces, _items, worn = current_outfit_state(character_name)
+                meta = {"pieces": dict(pieces or {})} if worn == signature else {}
+        except Exception:  # noqa: BLE001 — a label, never a failure
+            meta = {}
+    return _outfit_name(meta, saved if saved is not None else _saved_outfits(character_name))
+
+
 def body_ids(character_name: str, outfit_models: Optional[Dict[str, Dict[str, Any]]] = None,
              extra: Optional[str] = None) -> List[str]:
     """Every outfit body the character has files of (model, refs) or an
@@ -236,7 +283,8 @@ def body_ids(character_name: str, outfit_models: Optional[Dict[str, Dict[str, An
     with _lock:
         for job in list(_queues.get(character_name) or ()) + (
                 [_current[character_name]] if character_name in _current else []):
-            ids.add(job.body_id)
+            if base_body.is_outfit_body_signature(job.body_id):
+                ids.add(job.body_id)  # a painted body's run is not an outfit body's
     return sorted(ids)
 
 
@@ -717,6 +765,282 @@ def render_worn_views(character_name: str, body_id: str) -> Dict[str, Any]:
     return {"ok": False, "error": str(failure.get("error") or "Dressed views missing: " + ", ".join(missing))}
 
 
+# --- the painted bodies of the retexture mode --------------------------------------------
+
+def worn_texture(character_name: str, *, profile: Dict[str, Any], bsig: str) -> Optional[Dict[str, Any]]:
+    """Retexture mode: the painted body the WORN outfit stands on. ``{signature,
+    pieces, items, tsig, key, pending, views_missing, image_jobs, model}`` —
+    ``tsig`` from its dressed front of the current base (``_outfit_texture``,
+    the build's key), "" while that front is missing or not current
+    (``pending``; ``key`` is then the outfit signature, else the tsig);
+    ``views_missing`` the dressed views without a current image, ``image_jobs``
+    what rendering them costs at least (as ``worn_body``); ``model`` whether
+    its outfit model is stored and current (``model3d.find_model3d``). None
+    off the retexture mode, with nothing worn or when it cannot be computed.
+    Read-only."""
+    from app.core import base_body, model3d
+    from app.core.model_refs import current_outfit_state
+    if base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE:
+        return None
+    try:
+        pieces, items, worn = current_outfit_state(character_name)
+        if not worn:
+            return None
+        front = base_body.dressed_image(character_name, "front", worn, bsig)
+        tsig = (str(base_body._outfit_texture(character_name, front, bsig=bsig, profile=profile)["tsig"])
+                if front is not None else "")
+        missing = [v for v in base_body.dressed_views()
+                   if base_body.dressed_image(character_name, v, worn, bsig) is None]
+        built = model3d.find_model3d(character_name, worn) is not None
+    except Exception:  # noqa: BLE001 — a display entry, never a failure
+        logger.debug("Worn painted body of %s not computable", character_name, exc_info=True)
+        return None
+    return {"signature": worn, "pieces": dict(pieces or {}), "items": list(items or []), "tsig": tsig,
+            "key": tsig or worn, "pending": not tsig, "views_missing": missing,
+            "image_jobs": (1 if "front" in missing else 0) + 2 * len([v for v in missing if v != "front"]),
+            "model": built}
+
+
+def _texture_front_users(character_name: str) -> Dict[str, List[str]]:
+    """``{tsig: [outfit signature, ...]}`` of the outfits whose stored dressed
+    front (``model_refs/tpose_<sig>``) names the texture — the outfits standing
+    on it with or without a model."""
+    from app.core import base_body
+    from app.core.model_refs import get_model_refs_dir
+    out: Dict[str, List[str]] = {}
+    refs = get_model_refs_dir(character_name)
+    if not refs.is_dir():
+        return out
+    for sidecar in sorted(refs.glob("tpose_*.json")):
+        match = _FRONT_REF_RE.fullmatch(sidecar.stem)
+        if not match:
+            continue
+        tsig = base_body._ref_sidecar(sidecar).get("texture_signature")
+        if base_body.is_texture_signature(tsig):
+            out.setdefault(str(tsig), []).append(match.group(1))
+    return out
+
+
+def texture_source(character_name: str, tsig: str, candidates: List[str], *, profile: Dict[str, Any],
+                   bsig: str, limit: int = 8) -> str:
+    """The first of ``candidates`` whose CURRENT dressed front stands for
+    ``tsig`` (what a Regenerate renders the views for), "" when none of the
+    first ``limit`` does."""
+    from app.core import base_body
+    seen = set()
+    for sig in candidates:
+        if not sig or sig in seen or len(seen) >= limit:
+            continue
+        seen.add(sig)
+        try:
+            front = base_body.dressed_image(character_name, "front", sig, bsig)
+            if front is not None and base_body._outfit_texture(character_name, front, bsig=bsig,
+                                                               profile=profile)["tsig"] == tsig:
+                return sig
+        except Exception:  # noqa: BLE001 — a lookup, never a failure
+            logger.debug("Texture of %s / %s not computable", character_name, sig, exc_info=True)
+    return ""
+
+
+def _keys_state(character_name: str, keys: List[str]) -> Tuple[str, Optional[str], Optional[int]]:
+    """``_run_state`` over several keys (a pending worn entry's run is keyed by the outfit signature)."""
+    for key in keys:
+        state = _run_state(character_name, key)
+        if state[0]:
+            return state
+    return "", None, None
+
+
+def _base_ready(character_name: str, bsig: str) -> str:
+    """"" when the base model is ready and every dressed base view exists, else why not."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    if (base_body.base_model_info(character_name, bsig) or {}).get("status") != "ready":
+        return base_body.BASE_MODEL_MISSING
+    if any(find_ref_image(character_name, base_body._kind(v), bsig) is None for v in base_body.dressed_views()):
+        return base_body.BASE_IMAGES_MISSING
+    return ""
+
+
+def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[str, Any]],
+                 users: List[Tuple[str, bool]], models: Dict[str, Dict[str, Any]], saved: List[Dict[str, Any]],
+                 worn: str, profile: Dict[str, Any], bsig: str, base_reason: str) -> Dict[str, Any]:
+    """One painted body of the retexture mode (``tsig`` "" = the worn
+    outfit's pending entry): ``{key, texture_signature, current, pending,
+    outfits: [{signature, name, worn, has_model}], views, image_meta,
+    painted, dress_text, created_at, status, error, run_kind,
+    queue_position, last_run, worn_outfit, regenerate_from, blocked}``.
+    ``current`` only for the worn outfit's body; ``blocked`` (server English,
+    the tab translates): ``generate`` (``paint``) / ``regenerate``
+    (``repaint``), a run of the tab's queue on it first (``Locked: …``).
+    ``status``: running / queued / failed (its last run) / ready (painted) /
+    missing."""
+    from app.core import base_body
+    current = worn_entry is not None and worn_entry["tsig"] == tsig
+    key = tsig or (worn_entry or {}).get("signature") or ""
+    keys = [key] + ([worn_entry["signature"]] if current and worn_entry["signature"] != key else [])
+    if tsig:
+        views, view_meta = _view_urls(character_name, tsig)
+        body = base_body.texture_body_path(character_name, tsig)
+        painted = body.is_file()
+        record = base_body._ref_sidecar(body) if painted else {}
+        dress = str(base_body._ref_sidecar(base_body._texture_view(character_name, "front", tsig))
+                    .get("dress_text") or "")
+    else:
+        views, view_meta, painted, record, dress = {}, {}, False, {}, ""
+    outfits = [{"signature": sig, "name": outfit_label(character_name, sig, models=models, saved=saved),
+                "worn": sig == worn, "has_model": has_model} for sig, has_model in users]
+    outfits.sort(key=lambda o: (not o["worn"], not o["has_model"], o["name"], o["signature"]))
+    candidates = ([worn_entry["signature"]] if current else []) + [o["signature"] for o in outfits]
+    source = texture_source(character_name, tsig, candidates, profile=profile, bsig=bsig) if tsig else ""
+    run, kind, position = _keys_state(character_name, keys)
+    lasts = [dict(_results[(character_name, k)]) for k in keys if (character_name, k) in _results]
+    last = max(lasts, key=lambda r: str(r.get("finished_at") or "")) if lasts else {}
+    if run:
+        status, error = run, ""
+    elif last and not last.get("ok"):
+        status, error = "failed", str(last.get("error") or "")
+    else:
+        status, error = ("ready" if painted else "missing"), ""
+    lock = (LOCKED_RUNNING if run == "running" else LOCKED_QUEUED) if run else ""
+    if not current:
+        generate = NOT_WORN_TEXTURE
+    elif base_reason:
+        generate = base_reason
+    elif not worn_entry["views_missing"] and worn_entry["model"]:
+        generate = WORN_MODEL_PRESENT
+    else:
+        generate = ""
+    regenerate = PENDING_NO_BODY if not tsig else (NO_SOURCE if not source else base_reason)
+    worn_outfit = None
+    if current:
+        worn_outfit = {"signature": worn_entry["signature"],
+                       "name": _outfit_name({"pieces": worn_entry["pieces"]}, saved),
+                       "views_missing": list(worn_entry["views_missing"]),
+                       "image_jobs": int(worn_entry["image_jobs"]), "model": bool(worn_entry["model"])}
+    return {"key": key, "texture_signature": tsig or None, "current": current, "pending": not tsig,
+            "outfits": outfits, "views": views, "image_meta": view_meta, "painted": painted,
+            "dress_text": dress, "created_at": record.get("created_at") or None,
+            "status": status, "error": error, "run_kind": kind, "queue_position": position,
+            "last_run": last or None, "worn_outfit": worn_outfit, "regenerate_from": source or None,
+            "blocked": {"generate": lock or generate, "regenerate": lock or regenerate}}
+
+
+def textures(character_name: str, *, profile: Dict[str, Any], bsig: str, models: Dict[str, Dict[str, Any]],
+             saved: List[Dict[str, Any]], worn: str) -> List[Dict[str, Any]]:
+    """The retexture mode's painted bodies (``texture_info`` each): every
+    texture a stored outfit model names, that has a stored painted body or
+    store view, and the worn outfit's — which is ALWAYS listed, first, and
+    is the only ``current`` one (pending while its dressed views are
+    missing). The others follow, newest first, each with the outfits that
+    use it (model or dressed front)."""
+    from app.core import base_body
+    from app.models.character import get_character_dir
+    worn_entry = worn_texture(character_name, profile=profile, bsig=bsig)
+    users: Dict[str, Dict[str, bool]] = {}
+    for sig, meta in models.items():
+        tsig = meta.get("texture_signature")
+        if base_body.is_texture_signature(tsig):
+            users.setdefault(str(tsig), {})[sig] = True
+    tsigs = set(users)
+    root = get_character_dir(character_name)
+    for folder, pattern in ((root / "model3d" / base_body.TEXTURE_DIR, "tex*.json"),
+                            (base_body.texture_refs_dir(character_name), "tpose_tex*.json")):
+        if folder.is_dir():
+            for path in folder.glob(pattern):
+                tsig = path.stem.rsplit("_", 1)[-1]
+                if base_body.is_texture_signature(tsig):
+                    tsigs.add(tsig)
+    if worn_entry is not None and worn_entry["tsig"]:
+        tsigs.add(worn_entry["tsig"])
+    for tsig, sigs in _texture_front_users(character_name).items():
+        if tsig in tsigs:
+            for sig in sigs:
+                users.setdefault(tsig, {}).setdefault(sig, sig in models)
+    if worn_entry is not None and worn_entry["tsig"]:
+        users.setdefault(worn_entry["tsig"], {}).setdefault(worn, worn in models)
+    base_reason = _base_ready(character_name, bsig)
+    out = []
+    keys = sorted(tsigs) + ([""] if worn_entry is not None and not worn_entry["tsig"] else [])
+    for tsig in keys:
+        try:
+            out.append(texture_info(character_name, tsig, worn_entry=worn_entry,
+                                    users=sorted((users.get(tsig) or {}).items()), models=models, saved=saved,
+                                    worn=worn, profile=profile, bsig=bsig, base_reason=base_reason))
+        except Exception as e:  # noqa: BLE001 — one unreadable body does not hide the others
+            logger.exception("Painted body %s of %s unreadable", tsig or "(pending)", character_name)
+            out.append({"key": tsig or worn, "texture_signature": tsig or None, "current": False,
+                        "pending": not tsig, "outfits": [], "views": {}, "painted": False, "dress_text": "",
+                        "status": "failed", "error": str(e), "worn_outfit": None, "blocked": {}})
+    out.sort(key=lambda t: str(t.get("created_at") or ""), reverse=True)
+    out.sort(key=lambda t: not t.get("current"))
+    return out
+
+
+def paint_worn(character_name: str, key: str) -> Dict[str, Any]:
+    """The ``paint`` run (Generate / Build outfit model): the worn outfit's
+    missing dressed views (``generate_dressed_images`` without ``force`` —
+    image jobs only for what is missing, a view the texture store holds is
+    copied), then its outfit model through ``model3d.generate_for_current_outfit``
+    without ``force`` — a stored painted body of its key is reused (CPU),
+    else it is painted (CPU worker). Never a hub job. Caller holds the
+    character's generation slot. ``{ok, error}``."""
+    from app.core import base_body, model3d
+    profile = _profile(character_name)
+    bsig = base_body.base_signature(character_name, profile=profile)
+    worn = worn_texture(character_name, profile=profile, bsig=bsig)
+    if worn is None or key not in (worn["key"], worn["signature"]):
+        return {"ok": False, "error": NOT_WORN_TEXTURE}
+    signature = worn["signature"]
+    if worn["views_missing"]:
+        logger.info("Painted body of %s: rendering the worn outfit's dressed views %s (outfit %s)", character_name,
+                    worn["views_missing"], signature)
+        base_body.generate_dressed_images(character_name, pieces=worn["pieces"], items=worn["items"],
+                                          signature=signature, force=False)
+        missing = [v for v in base_body.dressed_views()
+                   if base_body.dressed_image(character_name, v, signature, bsig) is None]
+        if missing:
+            with base_body._status_lock:
+                failure = dict(base_body._outfit_failed.get((character_name, signature)) or {})
+            return {"ok": False, "error": str(failure.get("error") or "Dressed views missing: " + ", ".join(missing))}
+    logger.info("Painted body of %s: building the worn outfit's model %s", character_name, signature)
+    result = model3d.generate_for_current_outfit(character_name, signature=signature, force=False)
+    return {"ok": bool(result.get("ok")), "error": str(result.get("error") or "")}
+
+
+def repaint_texture(character_name: str, tsig: str) -> Dict[str, Any]:
+    """The ``repaint`` run (Regenerate a painted body): an outfit standing
+    on ``tsig`` (``texture_source``, the worn outfit first) gets every
+    dressed view rendered anew (``generate_dressed_images(force=True)``:
+    image jobs, the store follows), then its outfit model built forced — the
+    body painted again (CPU worker, no hub job). Caller holds the
+    character's generation slot. ``{ok, error}``."""
+    from app.core import base_body, model3d
+    from app.core.model_refs import current_outfit_state
+    profile = _profile(character_name)
+    bsig = base_body.base_signature(character_name, profile=profile)
+    users = [current_outfit_state(character_name)[2]]
+    users += [sig for sig, meta in _outfit_models(character_name).items() if meta.get("texture_signature") == tsig]
+    users += _texture_front_users(character_name).get(tsig) or []
+    source = texture_source(character_name, tsig, users, profile=profile, bsig=bsig)
+    if not source:
+        return {"ok": False, "error": NO_SOURCE}
+    front = base_body.dressed_image(character_name, "front", source, bsig)
+    manifest = model3d._ref_manifest(front) if front is not None else {}
+    logger.info("Painted body %s of %s: rendering the dressed views anew and painting it (outfit %s)", tsig,
+                character_name, source)
+    base_body.generate_dressed_images(character_name, pieces=manifest.get("pieces") or {},
+                                      items=manifest.get("items") or [], signature=source, force=True)
+    missing = [v for v in base_body.dressed_views()
+               if base_body.dressed_image(character_name, v, source, bsig) is None]
+    if missing:
+        with base_body._status_lock:
+            failure = dict(base_body._outfit_failed.get((character_name, source)) or {})
+        return {"ok": False, "error": str(failure.get("error") or "Dressed views missing: " + ", ".join(missing))}
+    result = model3d.generate_for_current_outfit(character_name, signature=source, force=True)
+    return {"ok": bool(result.get("ok")), "error": str(result.get("error") or "")}
+
+
 # --- info ---------------------------------------------------------------------------
 
 def _outfits_on_body(character_name: str, body_id: str, models: Dict[str, Dict[str, Any]],
@@ -791,7 +1115,8 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
     image_jobs}`` and its view tiles say to Generate views while no outfit
     stands on them yet; an image such a tile still finds loses its freshness
     badge and gets ``pending_note`` (``PENDING_TEXTURE_VIEW`` /
-    ``PENDING_BODY_VIEW``) — it is not this body's current dressed view. ``orphaned``: never built, no outfit standing on its
+    ``PENDING_BODY_VIEW``) — it is not this body's current dressed view. ``current``: the worn outfit's
+    body (``worn_entry`` names it). ``orphaned``: never built, no outfit standing on its
     views, no outfit model on it, not the worn one (ruling 2026-11-10: listed
     collapsed, never hidden — the artefact GC keeps such a body while a live
     outfit names its texture). ``blocked``: ``_blocked``."""
@@ -883,6 +1208,9 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
         "can_regenerate": bool(source), "regenerate_from": source or None,
         "can_rerig": unrigged.is_file(),
         "worn_outfit": worn_outfit,
+        # The worn outfit stands (or will stand) on THIS body — never a body another outfit uses, nor an
+        # older body an outdated model of the worn outfit still names.
+        "current": worn_entry is not None,
         "orphaned": not path.is_file() and not source and not on_body and worn_entry is None and not run,
         "blocked": _blocked(run=run, kind=kind, source=source, worn_entry=worn_entry is not None,
                             built=path.is_file(), unrigged=unrigged.is_file(), fits=len(fits), stored=stored,
@@ -907,9 +1235,9 @@ def queue_state(character_name: str) -> Dict[str, Any]:
 def info(character_name: str) -> Dict[str, Any]:
     """The tab payload: ``{humanoid, pipeline, mode, signature, bodies: [...],
     textures: [...], queue, active, generation_running}``. ``bodies`` only
-    in mesh mode or when bodies are stored; ``textures`` (the painted bodies
-    of the retexture mode: ``{texture_signature, outfits, views, painted,
-    dress_text}``) only in retexture mode."""
+    in mesh mode or when bodies are stored (the other mode's bodies stay
+    stored); ``textures`` (the painted bodies of the retexture mode,
+    ``textures``) only in retexture mode."""
     from app.core import base_body, model3d
     from app.core.model_refs import current_outfit_state, is_humanoid
     profile = _profile(character_name)
@@ -938,25 +1266,13 @@ def info(character_name: str) -> Dict[str, Any]:
             logger.exception("Outfit body %s of %s unreadable", body_id, character_name)
             out["bodies"].append({"body_id": body_id, "status": "failed", "error": str(e), "views": {},
                                   "outfits": [], "steps": [], "fits": [], "freshness": None, "worn_outfit": None,
-                                  "orphaned": False, "blocked": {}})
+                                  "current": False, "orphaned": False, "blocked": {}})
     # The worn outfit's body first, the orphaned ones last, else the newest (stable sorts, the last key first).
     out["bodies"].sort(key=lambda b: str(b.get("created_at") or ""), reverse=True)
-    out["bodies"].sort(key=lambda b: (bool(b.get("orphaned")), not (
-        b.get("worn_outfit") or any(o.get("worn") for o in b.get("outfits") or []))))
+    out["bodies"].sort(key=lambda b: (bool(b.get("orphaned")), not b.get("current")))
     if mode != base_body.MESH_MODE:
-        for tsig, sigs in sorted(base_body.texture_users(character_name).items()):
-            views, view_meta = _view_urls(character_name, tsig)
-            try:
-                painted = base_body.texture_body_path(character_name, tsig).is_file()
-            except ValueError:
-                painted = False
-            out["textures"].append({
-                "texture_signature": tsig,
-                "outfits": [{"signature": s, "name": _outfit_name(models.get(s) or {}, saved), "worn": s == worn}
-                            for s in sigs],
-                "views": views, "image_meta": view_meta, "painted": painted,
-                "dress_text": str(base_body._ref_sidecar(base_body._texture_view(character_name, "front", tsig))
-                                  .get("dress_text") or "")})
+        out["textures"] = textures(character_name, profile=profile, bsig=bsig, models=models, saved=saved,
+                                   worn=worn)
     out["active"] = bool(out["queue"]["running"] or out["queue"]["waiting"]
                          or any(b.get("status") == "running" for b in out["bodies"]))
     return out
@@ -971,10 +1287,20 @@ def check_run(character_name: str, kind: str, body_id: str, item_id: str = "", v
     body (re-rig / refit), a view that cannot be rendered (``view_blocked``),
     the worn outfit's views present or its base views missing (views).
     ``UnknownBody`` (404, a ``LookupError``): a ``views`` run on a body the
-    worn outfit does not stand on."""
+    worn outfit does not stand on.
+
+    The retexture mode's runs (``TEXTURE_RUN_KINDS``, ``body_id`` = a
+    painted body's key): off that mode ``NOT_RETEXTURE_MODE``; the base model
+    or a dressed base view missing (409); ``paint`` on anything but the worn
+    outfit's entry ``UnknownBody`` (``NOT_WORN_TEXTURE``), its model current
+    and nothing missing ``WORN_MODEL_PRESENT``; ``repaint`` without an
+    outfit standing on the texture ``NO_SOURCE``."""
     from app.core import base_body
     if kind not in RUN_KINDS:
         raise ValueError(f"run must be one of {', '.join(RUN_KINDS)}")
+    if kind in TEXTURE_RUN_KINDS:
+        _check_texture_run(character_name, kind, body_id, item_id, view)
+        return
     if not base_body.is_outfit_body_signature(body_id):
         raise ValueError("not an outfit body id")
     if (kind == "view") != bool(view):
@@ -1014,6 +1340,40 @@ def check_run(character_name: str, kind: str, body_id: str, item_id: str = "", v
     if item_id and (kind != "refit" or item_id not in [f["item_id"] for f in fits_on_body(
             character_name, body_id, profile=profile)]):
         raise ValueError(f"{item_id[:60]!r} is no garment on this outfit body")
+
+
+def _check_texture_run(character_name: str, kind: str, key: str, item_id: str, view: str) -> None:
+    """``check_run`` for ``paint`` / ``repaint`` (its docstring)."""
+    from app.core import base_body
+    from app.core.model_refs import current_outfit_state
+    if item_id or view:
+        raise ValueError("a painted body's run names no garment and no view")
+    if kind == "repaint" and not base_body.is_texture_signature(key):
+        raise ValueError("not a texture signature")
+    if kind == "paint" and not (base_body.is_texture_signature(key) or _OUTFIT_SIG_RE.fullmatch(key or "")):
+        raise ValueError("not a painted body key")
+    profile = _profile(character_name)
+    if not base_body.is_base_pipeline(character_name, profile=profile):
+        raise LookupError(NOT_PIPELINE)
+    if base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE:
+        raise LookupError(NOT_RETEXTURE_MODE)
+    bsig = base_body.base_signature(character_name, profile=profile)
+    if kind == "paint":
+        worn = worn_texture(character_name, profile=profile, bsig=bsig)
+        if worn is None or key not in (worn["key"], worn["signature"]):
+            raise UnknownBody(NOT_WORN_TEXTURE)
+    reason = _base_ready(character_name, bsig)
+    if reason:
+        raise LookupError(reason)
+    if kind == "paint":
+        if not worn["views_missing"] and worn["model"]:
+            raise LookupError(WORN_MODEL_PRESENT)
+        return
+    users = [current_outfit_state(character_name)[2]]
+    users += [sig for sig, meta in _outfit_models(character_name).items() if meta.get("texture_signature") == key]
+    users += _texture_front_users(character_name).get(key) or []
+    if not texture_source(character_name, key, users, profile=profile, bsig=bsig):
+        raise LookupError(NO_SOURCE)
 
 
 def _position_locked(character_name: str, job: _Job) -> Dict[str, Any]:
@@ -1141,7 +1501,8 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
     except (ValueError, LookupError) as e:
         return {"ok": False, "error": str(e)}
     labels = {"regenerate": "Outfit body", "rerig": "Re-rig outfit body", "refit": "Re-fit on outfit body",
-              "view": f"Outfit body {job.view} view", "views": "Outfit body dressed views"}
+              "view": f"Outfit body {job.view} view", "views": "Outfit body dressed views",
+              "paint": "Worn outfit model", "repaint": "Painted body"}
     queue, task_id = _tracked(character_name, f"{labels[job.kind]}: {character_name} ({job.body_id})")
     result: Dict[str, Any] = {"ok": False, "error": ""}
     try:
@@ -1158,6 +1519,10 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
             result = render_view(character_name, job.body_id, job.view)
         elif job.kind == "views":
             result = render_worn_views(character_name, job.body_id)
+        elif job.kind == "paint":
+            result = paint_worn(character_name, job.body_id)
+        elif job.kind == "repaint":
+            result = repaint_texture(character_name, job.body_id)
         elif job.kind == "rerig":
             rigged = model3d.rerig_model(character_name, job.body_id, track_id=task_id)
             result = {"ok": bool(rigged.get("ok")), "error": str(rigged.get("error") or "")}

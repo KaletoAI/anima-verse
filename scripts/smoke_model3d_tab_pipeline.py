@@ -339,7 +339,13 @@ def main() -> int:
             check("Demo GET", status[0], 200)
             check("Demo pipeline", (status[1] or {}).get("pipeline"),
                   {"base_signature": bsig, "base_model": "ready", "rerig_source": True,
-                   "dressed_current": True, "rebuilding": False, "queued": False})
+                   "dressed_current": True, "rebuilding": False, "queued": False, "fallback": None})
+            # The current outfit has no model: the tab says so (model3d_pipeline.fallback_state).
+            model3d.get_model3d_info = lambda name, preview_states=None: {"pending": False, "model": None,
+                                                                          "signature": osig}
+            fb = ((call("GET", "/characters/Demo/model3d")[1] or {}).get("pipeline") or {}).get("fallback") or {}
+            check("Demo fallback without a model", (fb.get("current_signature"), fb.get("served_signature")),
+                  (osig, ""))
             plain = call("GET", "/characters/Plain/model3d")
             check("Plain pipeline", (plain[0], "pipeline" in (plain[1] or {}), (plain[1] or {}).get("pipeline")),
                   (200, True, None))

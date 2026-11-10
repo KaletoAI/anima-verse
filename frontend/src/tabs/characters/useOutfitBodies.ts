@@ -15,7 +15,7 @@ import type { CollisionPayload } from '@anima/scene-render'
 
 export const BODY_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BodyView = typeof BODY_VIEWS[number]
-export type RunKind = 'regenerate' | 'rerig' | 'refit' | 'view' | 'views'
+export type RunKind = 'regenerate' | 'rerig' | 'refit' | 'view' | 'views' | 'paint' | 'repaint'
 /** The body actions a reason can block (`outfit_bodies._blocked`). */
 export type BodyAction = 'regenerate' | 'rerig' | 'refit' | 'delete' | 'views'
 
@@ -91,19 +91,44 @@ export interface OutfitBody {
    *  (`outfit_bodies.worn_body`); `views_missing` non-empty = Generate views renders them. */
   worn_outfit?: { signature: string; name: string; predicted: boolean; views_missing: BodyView[];
     image_jobs: number } | null
+  /** The worn outfit stands (or will stand) on this body — only ever one; never a body of another outfit. */
+  current?: boolean
   /** Never built, no outfit stands on its views, none on it, not the worn one — listed collapsed. */
   orphaned?: boolean
   /** Why each action cannot start now (server English, translated), "" when it can. */
   blocked?: Partial<Record<BodyAction, string>>
 }
 
+/** The actions of a painted body a reason can block (`outfit_bodies.texture_info`). */
+export type PaintedAction = 'generate' | 'regenerate'
+
+/** One painted body of the retexture mode (`outfit_bodies.texture_info`). */
 export interface PaintedBody {
-  texture_signature: string
-  outfits: Omit<BodyOutfit, 'stale_reason'>[]
+  /** The run key: the texture signature, or the worn outfit's signature while its body is pending. */
+  key: string
+  texture_signature: string | null
+  /** The worn outfit stands on it — listed first; never another outfit's body. */
+  current: boolean
+  /** The worn outfit's dressed views are missing: no texture yet, Generate makes it. */
+  pending: boolean
+  outfits: (Omit<BodyOutfit, 'stale_reason'> & { has_model: boolean })[]
   views: Partial<Record<BodyView, string | null>>
   image_meta?: Partial<Record<BodyView, ImageTileMeta | null>>
   painted: boolean
   dress_text: string
+  created_at?: string | null
+  /** running · queued · failed · ready · missing */
+  status: string
+  error: string
+  run_kind?: RunKind | null
+  queue_position?: number | null
+  last_run?: { kind: RunKind; ok: boolean; error: string; finished_at: string } | null
+  /** The worn outfit on the current entry: what Generate renders, whether its model is built. */
+  worn_outfit: { signature: string; name: string; views_missing: BodyView[]; image_jobs: number;
+    model: boolean } | null
+  regenerate_from?: string | null
+  /** Why each action cannot start now (server English, translated), "" when it can. */
+  blocked: Partial<Record<PaintedAction, string>>
 }
 
 export interface QueueEntry { kind: RunKind; body_id: string; item_id?: string | null; view?: BodyView }

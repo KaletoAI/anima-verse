@@ -23,6 +23,18 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
   position, behind}`` and queue behind a running 3D run of the character
   (never 409 for a run in progress); 409 when the run has nothing to work on
   (for a view: ``outfit_bodies.view_blocked``), 400 for an unknown view.
+* Retexture mode (``outfit_bodies.textures``, key = texture signature, or the
+  worn outfit's signature while its painted body is pending):
+  ``POST …/{key}/paint`` — Generate / Build outfit model of the WORN outfit
+  (``outfit_bodies.paint_worn``: missing dressed views, then its model never
+  forced — a stored painted body is reused; 404 for another key);
+  ``POST …/{key}/repaint`` — Regenerate a painted body
+  (``outfit_bodies.repaint_texture``: dressed views anew, body painted again).
+  Both 202 in the same queue, Cancel included.
+* ``POST /characters/{c}/model3d/build-current`` — the 3D tab's "Build current
+  outfit" while it serves a stand-in (``model3d_pipeline.build_current_outfit``:
+  the outfit-change trigger, never forced); 400 off the pipeline, 409
+  without a ready base model.
 * ``POST …/{body_id}/cancel`` ``{view?}`` — take the body's waiting runs (or
   only that view's) out of the queue (``outfit_bodies.cancel``); 409 when
   its run has already started, 404 when none waits.
@@ -113,6 +125,31 @@ def regenerate_outfit_body_view(character_name: str, body_id: str, view: str,
 def generate_worn_outfit_views(character_name: str, body_id: str,
                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     return _start(character_name, "views", body_id)
+
+
+@router.post("/{character_name}/outfit-bodies/{key}/paint", status_code=202)
+def paint_worn_outfit(character_name: str, key: str,
+                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    return _start(character_name, "paint", key)
+
+
+@router.post("/{character_name}/outfit-bodies/{key}/repaint", status_code=202)
+def repaint_painted_body(character_name: str, key: str,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    return _start(character_name, "repaint", key)
+
+
+@router.post("/{character_name}/model3d/build-current")
+def build_current_outfit_model(character_name: str,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import model3d_pipeline
+    _require_character(character_name)
+    try:
+        return model3d_pipeline.build_current_outfit(character_name)
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class CancelRequest(BaseModel):

@@ -24,7 +24,14 @@
  * missing") with Generate views (image jobs only, never chained to the
  * mesh); bodies that were never built and that no outfit stands on any more
  * are listed last, collapsed, as "Orphaned — no outfit stands on it".
- * Retexture mode: one line saying so and the painted bodies read-only.
+ * Retexture mode: the painted bodies, the worn outfit's first and marked
+ * "current" (before its dressed views exist a pending entry); the others
+ * below with the outfits that use them ("used by"), never current. The
+ * current one has Generate (pending) / Build outfit model (its model is
+ * missing): the missing dressed views, then the outfit model, never forced —
+ * a stored painted body is reused on the CPU; every painted body with an
+ * outfit standing on it has Regenerate (dressed views anew + painted again).
+ * Both queue like the mesh runs, with Cancel, and show why they are locked.
  *
  * Backend (app/routes/outfit_bodies.py, app/core/outfit_bodies.py):
  * GET /characters/{n}/outfit-bodies (polled while a run waits or works),
@@ -36,7 +43,8 @@
  * once it has started, 404 when none waits); POST …/{body}/delete — the body
  * and its chain through the artefact graph (409 while a run is on it);
  * POST …/{body}/generate-views — the worn outfit's missing dressed views
- * (202 queued like the other runs, 404 for a body it does not stand on).
+ * (202 queued like the other runs, 404 for a body it does not stand on);
+ * retexture mode: POST …/{key}/paint | repaint (202, same queue).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -52,7 +60,9 @@ import { ModelSteps } from './ModelSteps'
 import { RefImage } from './RefImage'
 import { ViewRenderTile } from './ViewRenderTile'
 import { BODY_VIEWS, useOutfitBodies } from './useOutfitBodies'
-import type { BodyAction, BodyFit, BodyView, BodyViewInfo, OutfitBody, PaintedBody, RunKind } from './useOutfitBodies'
+import type {
+  BodyAction, BodyFit, BodyView, BodyViewInfo, OutfitBody, PaintedAction, PaintedBody, RunKind,
+} from './useOutfitBodies'
 
 const TILE_HEIGHT = 112
 /** The body's dressed views, stacked like the Base body tab's. */
@@ -124,8 +134,9 @@ function bodyLabel(body: OutfitBody): string {
   return body.outfits.map((o) => o.name || o.signature).join(' · ') || body.worn_outfit?.name || body.body_id
 }
 
-function isWorn(body: OutfitBody): boolean {
-  return !!body.worn_outfit || body.outfits.some((o) => o.worn)
+/** The worn outfit's body (server `current`) — a body another outfit uses is never shown as current. */
+function isCurrent(body: OutfitBody): boolean {
+  return !!body.current
 }
 
 /** The visible reasons under a row of disabled actions: one line when they share it (a lock), else one per action. */
@@ -213,40 +224,148 @@ function FitRow({ fit, busy, onRefit }: { fit: BodyFit; busy: boolean; onRefit: 
   )
 }
 
-function PaintedBodies({ textures }: { textures: PaintedBody[] }) {
+const PAINTED_LABELS: Record<PaintedAction, string> = { generate: 'Generate', regenerate: 'Regenerate' }
+
+function paintedLabel(x: PaintedBody): string {
+  return x.outfits.map((o) => o.name || o.signature).join(' · ') || x.worn_outfit?.name || x.texture_signature || x.key
+}
+
+function paintedDot(x: PaintedBody): string {
+  if (x.status === 'failed') return 'red'
+  if (x.status === 'running' || x.status === 'queued') return 'yellow'
+  if (x.current && x.worn_outfit && !x.worn_outfit.model) return 'yellow'
+  return x.painted ? 'green' : 'grey'
+}
+
+function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
+  textures: PaintedBody[]
+  posting: string
+  keptBodies: number
+  onRun: (key: string, kind: RunKind) => void
+  onCancel: (key: string) => void
+}) {
   const { t } = useI18n()
   const [selected, setSelected] = useState('')
-  const tex = textures.find((x) => x.texture_signature === selected) ?? textures[0]
+  const tex = textures.find((x) => x.key === selected) ?? textures[0]
+  const statusOf = (x: PaintedBody): string => {
+    if (x.status === 'running') return x.run_kind === 'repaint' ? t('Painting…') : t('Building…')
+    if (x.status === 'queued') return `${t('Queued')} (#${x.queue_position ?? '?'})`
+    if (x.status === 'failed') return t('Failed')
+    if (x.pending) return t('Worn outfit — dressed views missing')
+    if (x.current && x.worn_outfit && !x.worn_outfit.model) return t('Outfit model not built yet')
+    return x.painted ? t('Painted body stored') : t('No painted body stored')
+  }
+  if (!tex) return <div className="ga-hint">{t('No painted body yet.')}</div>
+  const busy = tex.status === 'running' || tex.status === 'queued' || posting.startsWith(`${tex.key}:`)
+  const blocked = tex.blocked || {}
+  const reason = (action: PaintedAction): string => blocked[action] || ''
+  const worn = tex.worn_outfit
+  const reasons = (['generate', 'regenerate'] as PaintedAction[])
+    .filter((a) => tex.current || a === 'regenerate')
+    .map((a): [PaintedAction, string] => [a, reason(a)]).filter(([, r]) => !!r)
+  const generateLabel = tex.pending || worn?.views_missing.length ? t('Generate') : t('Build outfit model')
+  const generateTitle = reason('generate') ? t(reason('generate'))
+    : worn?.views_missing.length
+      ? t('Renders the worn outfit\'s missing dressed views ({views}, about {n} image job(s)), then builds its outfit model — a stored painted body of the same texture is reused (CPU, no hub job).')
+        .replace('{views}', worn.views_missing.map((v) => t(VIEW_LABELS[v])).join(', '))
+        .replace('{n}', String(worn.image_jobs))
+      : t('Builds the worn outfit\'s model from its dressed views — the stored painted body is reused (CPU, no hub job).')
+  const cancelling = posting === `${tex.key}:cancel:`
   return (
     <div className="ga-split ga-split-views">
       <div className="ga-split-col">
-        <div className="ga-obody-list">
+        <div className="ga-obody-list" role="listbox" aria-label={t('Painted bodies')}>
           {textures.map((x) => (
-            <button key={x.texture_signature} type="button"
+            <button key={x.key} type="button" role="option" aria-selected={x === tex}
               className={`ga-obody-row${x === tex ? ' ga-obody-row--sel' : ''}`}
-              title={[x.texture_signature, x.dress_text].filter(Boolean).join('\n')}
-              onClick={() => setSelected(x.texture_signature)}>
-              <span className={`ga-model3d-status-dot ga-model3d-status-${x.painted ? 'green' : 'grey'}`} />
+              title={[x.texture_signature || x.key, statusOf(x), x.dress_text].filter(Boolean).join('\n')}
+              onClick={() => setSelected(x.key)}>
+              <span className={`ga-model3d-status-dot ga-model3d-status-${paintedDot(x)}`} />
               <span className="ga-model3d-status-text">
-                {x.outfits.map((o) => o.name || o.signature).join(' · ') || x.texture_signature}
-                {x.outfits.some((o) => o.worn) ? ` · ${t('worn')}` : ''}
+                {x.current ? `${t('Current')} · ` : ''}{paintedLabel(x)}
+                {x.pending ? ` · ${t('dressed views missing')}` : ''}
               </span>
             </button>
           ))}
         </div>
+        {keptBodies ? (
+          <div className="ga-hint" title={t('Kept while their outfits can still be worn — switching back to the mesh mode reuses them without a hub job.')}>
+            {t('Outfit bodies of the mesh mode kept: {n}').replace('{n}', String(keptBodies))}
+          </div>
+        ) : null}
       </div>
       <div className="ga-split-col">
-        {tex ? (
-          <>
-            <div className="ga-hint" title={tex.dress_text}>
-              {tex.texture_signature} · {tex.painted ? t('Painted body stored') : t('No painted body stored')}
-              {tex.dress_text ? ` · ${tex.dress_text}` : ''}
-            </div>
-            <div style={{ maxWidth: 420 }}>
-              <ViewTiles views={tex.views} meta={tex.image_meta} keyLabel={tex.texture_signature} />
-            </div>
-          </>
+        <div className="ga-face-actions-row">
+          <span className="ga-fieldset-title" style={{ margin: 0 }}>
+            {tex.current ? t('Current') : t('Painted body')} {tex.texture_signature || ''}
+          </span>
+          <span className="ga-hint">{statusOf(tex)}</span>
+          {tex.status === 'queued' ? (
+            <button type="button" className="ga-btn ga-btn-sm" disabled={!!posting} aria-busy={cancelling || undefined}
+              title={t('Removes this waiting run from the queue — nothing of it has started')}
+              onClick={() => onCancel(tex.key)}>
+              {cancelling ? t('Cancelling…') : t('Cancel')}
+            </button>
+          ) : null}
+          {tex.current ? (
+            <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason('generate')}
+              title={generateTitle} onClick={() => onRun(tex.key, 'paint')}>{generateLabel}</button>
+          ) : null}
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason('regenerate')}
+            title={reason('regenerate') ? t(reason('regenerate'))
+              : t('Renders the dressed views anew (image jobs) for {outfit} and paints the body again (CPU, no hub job).')
+                .replace('{outfit}', tex.outfits.find((o) => o.signature === tex.regenerate_from)?.name
+                  || tex.regenerate_from || '')}
+            onClick={() => onRun(tex.key, 'repaint')}>{t('Regenerate')}</button>
+        </div>
+        {reasons.length ? (
+          reasons.length > 1 && reasons.every(([, r]) => r === reasons[0][1])
+            ? <div className="ga-hint" style={REASON_STYLE}>{t(reasons[0][1])}</div>
+            : reasons.map(([a, r]) => (
+              <div key={a} className="ga-hint" style={REASON_STYLE}>{t(PAINTED_LABELS[a])}: {t(r)}</div>
+            ))
         ) : null}
+        {tex.status === 'failed' && tex.error ? <div className="ga-hint" style={ERROR_STYLE}>{tex.error}</div> : null}
+        {tex.last_run && tex.status !== 'failed' ? (
+          <div className="ga-hint" style={tex.last_run.ok ? undefined : ERROR_STYLE}>
+            {t('Last run')}: {tex.last_run.kind === 'repaint' ? t('Regenerate') : t('Generate')}
+            {' · '}{tex.last_run.ok ? t('done') : t('failed')}
+          </div>
+        ) : null}
+        {tex.pending ? (
+          <div className="ga-hint">
+            {t('The worn outfit has no current dressed views yet — Generate renders them and builds its outfit model.')}
+          </div>
+        ) : (
+          <div className="ga-hint" title={tex.dress_text}>
+            {tex.texture_signature} · {tex.painted ? t('Painted body stored') : t('No painted body stored')}
+            {tex.dress_text ? ` · ${tex.dress_text}` : ''}
+          </div>
+        )}
+        <div style={{ maxWidth: 420 }}>
+          {tex.pending ? null : <ViewTiles views={tex.views} meta={tex.image_meta} keyLabel={tex.texture_signature || tex.key} />}
+        </div>
+        <div>
+          <div className="ga-fieldset-title" style={{ margin: '0 0 2px' }}>
+            {tex.current ? t('Outfits on this body') : t('Used by')}
+          </div>
+          {tex.outfits.length ? tex.outfits.map((o) => (
+            <div key={o.signature} className="ga-model3d-status-row ga-obody-line" title={o.signature}>
+              <span className={`ga-model3d-status-dot ga-model3d-status-${o.has_model ? 'green' : 'grey'}`} />
+              <span className="ga-model3d-status-text">
+                {o.name || o.signature}{o.worn ? ` · ${t('worn')}` : ''}
+                {o.has_model ? '' : ` · ${t('no outfit model yet')}`}
+              </span>
+            </div>
+          )) : worn ? (
+            <div className="ga-model3d-status-row ga-obody-line" title={worn.signature}>
+              <span className="ga-model3d-status-dot ga-model3d-status-grey" />
+              <span className="ga-model3d-status-text">
+                {worn.name || worn.signature} · {t('worn')} · {t('no outfit model yet')}
+              </span>
+            </div>
+          ) : <div className="ga-hint">{t('No outfit model stands on it')}</div>}
+        </div>
       </div>
     </div>
   )
@@ -265,14 +384,14 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
   const [posting, setPosting] = useState('')
   const [pendingDelete, setPendingDelete] = useState<OutfitBody | null>(null)
 
-  const run = useCallback(
-    async (body: OutfitBody, kind: RunKind, itemId = '') => {
-      const key = `${body.body_id}:${kind}:${itemId}`
+  const runKey = useCallback(
+    async (bodyKey: string, kind: RunKind, itemId = '') => {
+      const key = `${bodyKey}:${kind}:${itemId}`
       if (posting) return
       setPosting(key)
       try {
         const d = await apiPost<{ started: boolean; position: number }>(
-          `/characters/${enc}/outfit-bodies/${body.body_id}/${kind === 'views' ? 'generate-views' : kind}`,
+          `/characters/${enc}/outfit-bodies/${bodyKey}/${kind === 'views' ? 'generate-views' : kind}`,
           itemId ? { item_id: itemId } : {})
         if (!d.started) toast(`${t('Queued')} (#${d.position})`, 'info')
         startPoll(300)
@@ -284,6 +403,10 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
       }
     },
     [enc, posting, startPoll, t, toast],
+  )
+  const run = useCallback(
+    (body: OutfitBody, kind: RunKind, itemId = '') => runKey(body.body_id, kind, itemId),
+    [runKey],
   )
 
   // ONE dressed view of the body rendered anew (image jobs only).
@@ -330,12 +453,13 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
   const infoRef = useRef(info)
   useEffect(() => { infoRef.current = info }, [info])
   const cancel = useCallback(
-    async (body: OutfitBody) => {
+    async (body: OutfitBody | string) => {
       if (posting) return
-      setPosting(`${body.body_id}:cancel:`)
+      const bodyKey = typeof body === 'string' ? body : body.body_id
+      setPosting(`${bodyKey}:cancel:`)
       try {
-        await apiPost(`/characters/${enc}/outfit-bodies/${body.body_id}/cancel`, {})
-        setCancelled({ bodyId: body.body_id, since: infoRef.current })
+        await apiPost(`/characters/${enc}/outfit-bodies/${bodyKey}/cancel`, {})
+        setCancelled({ bodyId: bodyKey, since: infoRef.current })
         toast(t('Waiting run cancelled'), 'success')
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -385,8 +509,11 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
         <div className="ga-hint">
           {t('Retexture mode: own-mesh garments sit on the base body with the other pieces painted on — no outfit body is meshed. The painted bodies:')}
         </div>
-        {info.textures.length ? <PaintedBodies textures={info.textures} />
-          : <div className="ga-hint">{t('No painted body yet.')}</div>}
+        {info.textures.length ? (
+          <PaintedBodies textures={info.textures} posting={posting}
+            keptBodies={info.bodies.filter((b) => b.status !== 'missing').length}
+            onRun={(key, kind) => { void runKey(key, kind) }} onCancel={(key) => { void cancel(key) }} />
+        ) : <div className="ga-hint">{t('No painted body yet.')}</div>}
       </div>
     )
   }
@@ -428,7 +555,8 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
               onClick={() => setSelected(b.body_id)}>
               <span className={`ga-model3d-status-dot ga-model3d-status-${dotOf(b)}`} />
               <span className="ga-model3d-status-text">
-                {bodyLabel(b)}{isWorn(b) ? ` · ${t('worn')}` : ''}
+                {isCurrent(b) ? `${t('Current')} · ${bodyLabel(b)}`
+                  : b.outfits.length ? `${t('Used by')}: ${bodyLabel(b)}` : bodyLabel(b)}
                 {b.orphaned ? ` · ${t('orphaned')}` : b.status === 'missing' && b.worn_outfit?.views_missing.length
                   ? ` · ${t('dressed views missing')}` : ''}
               </span>
@@ -473,7 +601,9 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
 
       <div className="ga-split-col">
         <div className="ga-face-actions-row">
-          <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Outfit body')} {body.body_id}</span>
+          <span className="ga-fieldset-title" style={{ margin: 0 }}>
+            {isCurrent(body) ? `${t('Current')} · ` : ''}{t('Outfit body')} {body.body_id}
+          </span>
           <span className="ga-hint">
             {shownCancelled ? t('Cancelled') : statusText(body)}
             {body.created_at && body.status !== 'running' ? ` · ${formatDateTime(body.created_at, clockSettings())}` : ''}
@@ -548,7 +678,9 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
             ) : null}
 
             <div>
-              <div className="ga-fieldset-title" style={{ margin: '0 0 2px' }}>{t('Outfits on this body')}</div>
+              <div className="ga-fieldset-title" style={{ margin: '0 0 2px' }}>
+                {isCurrent(body) ? t('Outfits on this body') : t('Used by')}
+              </div>
               {body.outfits.length ? body.outfits.map((o) => (
                 <div key={o.signature}>
                   <div className="ga-model3d-status-row ga-obody-line"
