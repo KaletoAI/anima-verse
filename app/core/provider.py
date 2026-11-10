@@ -43,6 +43,31 @@ def _reported_capabilities(entry: Dict[str, Any]) -> Dict[str, Any]:
             "quantization": str(swap.get("quantization") or ""), "slots": slots}
 
 
+def _catalog_pricing(pricing: Any) -> tuple:
+    """``(listed, input $/1M, output $/1M)`` of one /models entry's ``pricing``.
+
+    Two schemas arrive here. Together: ``input``/``output`` as numbers per 1M
+    tokens; an entry with neither above zero is a dedicated (non-serverless)
+    model and is NOT listed. OpenRouter (also what the AI-Hub gateway sends for
+    every model since 2026-11-04): ``prompt``/``completion`` as STRINGS in USD
+    per TOKEN — "0" is a free model, "-1" an unknown price (router models), both
+    listed. Reading the second schema with the first one's keys found no price
+    on any model and hid every priced one (OpenRouter 429 -> 24, every local
+    gateway model gone). No ``pricing`` dict: listed, no price."""
+    def num(v: Any) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+    if not isinstance(pricing, dict):
+        return True, 0.0, 0.0
+    if "prompt" in pricing or "completion" in pricing:
+        per_m = lambda v: max(num(v), 0.0) * 1_000_000  # noqa: E731 — negative = unknown -> no price
+        return True, per_m(pricing.get("prompt")), per_m(pricing.get("completion"))
+    price_in, price_out = num(pricing.get("input")), num(pricing.get("output"))
+    return (price_in > 0 or price_out > 0), price_in, price_out
+
+
 def _parameter_size_from_name(model_id: str) -> str:
     """'gemma-4-26b-a4b-it' -> '26B-A4B', 'granite-4.1-8b' -> '8B'; '' if absent."""
     match = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)b(?:-a(\d+(?:\.\d+)?)b)?(?![a-z0-9])",
@@ -276,13 +301,11 @@ class Provider:
                         if mtype and mtype not in ("chat", "text"):
                             continue
 
-                        # Serverless filter: skip models without per-token pricing
-                        # (Together.ai provides pricing.input / pricing.output)
-                        pricing = m.get("pricing")
-                        if isinstance(pricing, dict):
-                            has_serverless = (pricing.get("input", 0) or 0) > 0 or (pricing.get("output", 0) or 0) > 0
-                            if not has_serverless:
-                                continue
+                        # Serverless filter (Together schema only) + price per 1M
+                        # tokens in either schema — see _catalog_pricing.
+                        listed, price_in, price_out = _catalog_pricing(m.get("pricing"))
+                        if not listed:
+                            continue
 
                         # Keep vision/VL/OCR models for image tasks and flag them
                         # so the UI can mark them as "(vision)". A server that
@@ -297,9 +320,6 @@ class Provider:
                                                      ("-vl-", "-vl ", "vl-", "/vl-", "-ocr", "vision")):
                             is_vision = True
 
-                        # Extract pricing for display
-                        price_in = pricing.get("input", 0) if isinstance(pricing, dict) else 0
-                        price_out = pricing.get("output", 0) if isinstance(pricing, dict) else 0
                         ctx_len = m.get("context_length", 0) or (m.get("meta") or {}).get("n_ctx", 0)
                         display_name = m.get("display_name", "") or m.get("id", "")
 
