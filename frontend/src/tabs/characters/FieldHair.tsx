@@ -116,6 +116,8 @@ const STALE_LABELS: Record<string, string> = {
   hairdeck_changed: 'Profile picture or HairDeck settings changed',
   colour_changed: 'Hair colour changed',
   placement_changed: 'Hair placement changed',
+  shape_changed: 'Hair shape changed',
+  shell_changed: 'Shell thickness changed',
 }
 
 const HAIRED_CHIPS: ChipSpec[] = [

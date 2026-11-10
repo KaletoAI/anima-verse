@@ -312,6 +312,17 @@ def test_colour_mend():
           and (out[10, 5:9] == HAIR).all(), True)
     check("outside the cover untouched", tuple(out[2, 2]), tuple(float(c) for c in SKIN))
     check("lighter hair kept", tuple(out[15, 15]), (100.0, 68.0, 36.0))
+    # pale: HAIR (90,60,30) = L* 28.11, C* 25.46. (80,76,70) = L* 32.52, C* 4.18, dE 21.93 -> not lighter by 8
+    # (white needs L* > 36.11), not nearer SKIN (L* ~69), but L* >= 28.11, C* < 0.6 * 25.46 = 15.28, dE > 12: pale.
+    # (50,48,45) = L* 19.97, C* 2.24: as grey but DARKER than the hair (a shadow between strands) -> kept.
+    tex2 = np.tile(np.array(HAIR, float), (20, 20, 1))
+    tex2[5, 5:8] = (80, 76, 70)
+    tex2[12, 3:5] = (50, 48, 45)
+    out2, rep2 = gc.recolour_texture(tex2, np.ones((20, 20), bool), hair_lab, skin_lab)
+    check("pale counts", (rep2["recoloured_texels"], rep2["skin_texels"], rep2["white_texels"], rep2["pale_texels"]),
+          (3, 0, 0, 3))
+    check("pale painted with hair", (out2[5, 5:8] == HAIR).all(), True)
+    check("darker grey kept", tuple(out2[12, 3]), (50.0, 48.0, 45.0))
 
 
 def test_outer_wall():

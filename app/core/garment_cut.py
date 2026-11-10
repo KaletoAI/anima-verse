@@ -62,7 +62,7 @@ from app.core.log import get_logger
 logger = get_logger("garment_cut")
 
 #: Bump whenever the cut's output changes (part of the subtract fsig, ``garment_store``).
-CUT_VERSION = 2   # 2: colour mend, shell rim seated on the outer scalp
+CUT_VERSION = 3   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended
 
 SHAPES: Tuple[str, ...] = ("cut", "shell")
 #: Default / allowed shell thickness (profile ``hair_shell_mm``).
@@ -102,6 +102,8 @@ CORE_RINGS = 3              # recolour: the hair colour is the median of the lab
 OFF_MIN_DE = 12.0           # recolour: never off-colour within this CIELAB distance of the hair colour
 WHITE_DL = 8.0              # recolour: "white" = lighter than the hair by this much L* ...
 WHITE_CHROMA = 15.0         # ... and greyer than this chroma (C*ab) and than half the hair's chroma + 3
+PALE_CHROMA_SHARE = 0.6     # recolour: "pale" = not darker than the hair, chroma below this share of the hair's ...
+PALE_MIN_HAIR_CHROMA = 12.0  # ... on coloured hair only (grey / white hair has no chroma to lose)
 
 #: The cut's gates: (kind, limit, label) like ``garment_fit.GATES``.
 CUT_GATES: Dict[str, Tuple[str, float, str]] = {
@@ -685,18 +687,26 @@ def sample_texture(tex: np.ndarray, uv: np.ndarray) -> np.ndarray:
     return tex[y, x]
 
 
-def off_colour(L: np.ndarray, hair_lab: np.ndarray, skin_lab: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
-    """``(skin-like, white)`` masks of CIELAB colours ``L`` that are not hair: nearer to the skin colour than to
-    the hair colour; white = lighter than the hair by ``WHITE_DL`` and greyer than ``WHITE_CHROMA`` and than half
-    the hair's own chroma + 3 (Kira's white streaks: L* 71, C* 5 on blonde hair of L* 59, C* 27). Neither within
-    ``OFF_MIN_DE`` of the hair colour."""
+def off_colour(L: np.ndarray, hair_lab: np.ndarray,
+               skin_lab: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(skin-like, white, pale)`` masks of CIELAB colours ``L`` that are not hair: nearer to the skin colour
+    than to the hair colour; white = lighter than the hair by ``WHITE_DL`` and greyer than ``WHITE_CHROMA`` and
+    than half the hair's own chroma + 3 (Kira's white streaks: L* 71, C* 5 on blonde hair of L* 59, C* 27);
+    pale = a washed-out grey of coloured hair that is not lighter by ``WHITE_DL`` — at least as light as the hair,
+    chroma below ``PALE_CHROMA_SHARE`` of the hair's (Kira's lower side strands after the white mend: texels
+    L* 66, C* 11 on hair of L* 59, C* 27, their halo C* 14-16 — the mesher's guess for strands neither haired
+    view shows; they rendered as pale streaks). None of them within ``OFF_MIN_DE`` of the hair colour."""
     L = np.asarray(L, np.float64).reshape(-1, 3)
     d_hair = np.linalg.norm(L - hair_lab, axis=1)
     far = d_hair > OFF_MIN_DE
     skin = (np.linalg.norm(L - skin_lab, axis=1) < d_hair) & far if skin_lab is not None else np.zeros(len(L), bool)
     grey = min(WHITE_CHROMA, 0.5 * float(np.hypot(hair_lab[1], hair_lab[2])) + 3.0)
-    white = (L[:, 0] > hair_lab[0] + WHITE_DL) & (np.hypot(L[:, 1], L[:, 2]) < grey) & far
-    return skin, white
+    chroma = np.hypot(L[:, 1], L[:, 2])
+    white = (L[:, 0] > hair_lab[0] + WHITE_DL) & (chroma < grey) & far
+    hair_chroma = float(np.hypot(hair_lab[1], hair_lab[2]))
+    pale = ((L[:, 0] >= hair_lab[0]) & (chroma < PALE_CHROMA_SHARE * hair_chroma) & far
+            if hair_chroma >= PALE_MIN_HAIR_CHROMA else np.zeros(len(L), bool))
+    return skin, white, pale
 
 
 def _raster(uv_faces: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
@@ -713,24 +723,31 @@ def _raster(uv_faces: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
 
 def recolour_texture(tex: np.ndarray, cover: np.ndarray, hair_lab: np.ndarray,
                      skin_lab: Optional[np.ndarray]) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Paint the off-colour texels (``off_colour``: skin-like or white) within ``cover`` (the texels the hair
+    """Paint the off-colour texels (``off_colour``: skin-like, white or pale) within ``cover`` (the texels the hair
     uses) over with the nearest hair texel. The mesher paints the forehead skin a centimetre or two past the
     hairline and the background's white along strand edges onto H's hair surface (Kira 2026-11-10); the hair
     GEOMETRY there is right — its hairline agrees with the 2D mask's to 0.4 cm, and peeling the skin-coloured
-    border off the label moved it to 1.9 cm — so the colour is mended, not the label. -> ``(texture, report)``."""
+    border off the label moved it to 1.9 cm — so the colour is mended, not the label. The paint is the nearest
+    texel within ``OFF_MIN_DE`` of the hair colour. -> ``(texture, report)``."""
     from scipy import ndimage
     tex = np.array(tex, np.float64)
-    skin, white = off_colour(lab(tex[cover]), hair_lab, skin_lab)
+    L = lab(tex[cover])
+    skin, white, pale = off_colour(L, hair_lab, skin_lab)
     off = np.zeros(cover.shape, bool)
-    off[cover] = skin | white
-    source = cover & ~off
+    off[cover] = skin | white | pale
+    # the paint comes from hair-coloured texels only (within OFF_MIN_DE): the nearest merely "not off" texel is
+    # the washed-out halo of an off region, and copying it inwards left Kira's pale streaks in place (C* 14)
+    source = np.zeros(cover.shape, bool)
+    source[cover] = np.linalg.norm(L - hair_lab, axis=1) <= OFF_MIN_DE
+    source &= ~off
     if not off.any() or not source.any():
         return tex, {"recoloured_texels": 0, "recoloured_share": 0.0}
     _d, (iy, ix) = ndimage.distance_transform_edt(~source, return_indices=True)
     tex[off] = tex[iy[off], ix[off]]
     n = int(off.sum())
     return tex, {"recoloured_texels": n, "recoloured_share": round(n / max(int(cover.sum()), 1), 4),
-                 "skin_texels": int(skin.sum()), "white_texels": int((white & ~skin).sum())}
+                 "skin_texels": int(skin.sum()), "white_texels": int((white & ~skin).sum()),
+                 "pale_texels": int((pale & ~white & ~skin).sum())}
 
 
 def _view_skin_lab(view: "View", hair_mask: np.ndarray) -> Optional[np.ndarray]:
