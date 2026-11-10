@@ -616,3 +616,23 @@ def analyse(prepared_glb: bytes) -> Dict[str, Any]:
     from app.core import glb_mesh
     positions, faces = glb_mesh.static_arrays(prepared_glb)[:2]
     return analyse_arrays(positions, faces)
+
+
+def frame_of(insole: Dict[str, Any]) -> ShoeFrame:
+    """The ``ShoeFrame`` an ``insole.json`` was measured in."""
+    f = insole["frame"]
+    return ShoeFrame(origin=np.asarray(f["origin"], np.float64), x_axis=np.asarray(f["x_axis"], np.float64),
+                     up=np.asarray(f["up"], np.float64), z_axis=np.asarray(f["z_axis"], np.float64),
+                     length=float(f["length"]))
+
+
+def insole_map(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) -> np.ndarray:
+    """The tracked insole height per cell, ``(stations, lateral)`` in the frame of ``insole`` (raw units, NaN
+    where none) — the map ``analyse_arrays`` measured from, rebuilt from the same mesh, frame and grid (the
+    fit reads the insole's lateral extent per station from it; ``insole.json`` keeps only the profile)."""
+    frame = frame_of(insole)
+    gx = np.asarray(insole["stations"], np.float64)
+    gz = np.asarray(insole["lateral"], np.float64)
+    pf = frame.to_frame(np.asarray(positions, np.float64).reshape(-1, 3))
+    hits = vertical_hits(pf, np.asarray(faces, np.int64).reshape(-1, 3), gx, gz)
+    return _track(hits, frame.length)[0]

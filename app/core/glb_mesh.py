@@ -250,6 +250,43 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX) -> Gar
                        joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {})
 
 
+def mat4_array(parsed: dict, index: int) -> np.ndarray:
+    """A dense float MAT4 accessor as ``(n, 4, 4)`` row-major matrices (glTF stores them column-major)."""
+    gltf, binary = parsed["gltf"], parsed["bin"]
+    accessor = gltf["accessors"][index]
+    if accessor.get("type") != "MAT4" or accessor.get("componentType") != 5126 or accessor.get("sparse"):
+        raise ValueError("A matrix accessor must be a dense float MAT4 accessor")
+    view = gltf["bufferViews"][accessor["bufferView"]]
+    count = int(accessor["count"])
+    stride = int(view.get("byteStride", 64))
+    start = int(view.get("byteOffset", 0)) + int(accessor.get("byteOffset", 0))
+    if (view.get("buffer", 0) != 0 or count <= 0 or stride < 64
+            or start + (count - 1) * stride + 64 > len(binary)):
+        raise ValueError("The matrix accessor is truncated or invalid")
+    array = np.ndarray((count, 16), dtype="<f4", buffer=binary, offset=start, strides=(stride, 4))
+    return np.asarray(array, np.float64).reshape(count, 4, 4).transpose(0, 2, 1)
+
+
+def joint_bind_matrices(glb: bytes) -> Dict[str, np.ndarray]:
+    """``norm_bone_name(joint) -> inverse(inverseBindMatrix)`` for the joints of skin 0: each joint's bind frame
+    (4x4) in the body's accessor space — the space ``body_arrays`` positions live in. The first joint of a
+    normalised name wins. ValueError for a GLB without a skin with inverse bind matrices."""
+    from app.core.rig_contract import norm_bone_name
+    parsed = _parse(glb, "Body")
+    gltf = parsed["gltf"]
+    skins = gltf.get("skins") or []
+    if not skins or "inverseBindMatrices" not in skins[0]:
+        raise ValueError("The GLB has no skin with inverse bind matrices")
+    names = _skin_joint_names(gltf, 0)
+    ibm = mat4_array(parsed, skins[0]["inverseBindMatrices"])
+    if len(ibm) != len(names) or not names:
+        raise ValueError("The skin's inverse bind matrices do not match its joints")
+    out: Dict[str, np.ndarray] = {}
+    for name, matrix in zip(names, np.linalg.inv(ibm)):
+        out.setdefault(norm_bone_name(name), matrix)
+    return out
+
+
 def _local_matrix(node: dict) -> np.ndarray:
     """A node's local 4x4 transform (``matrix`` is column-major; else T * R * S)."""
     if "matrix" in node:
