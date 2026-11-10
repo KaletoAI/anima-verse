@@ -87,7 +87,9 @@ os.environ["ANIMATION_CLIPS_DIR"] = _scratch("hvm-clips-")
 os.environ["ANIMATION_RIG_FILE"] = str(Path(_scratch("hvm-rig-")) / "reference.fbx")
 from app.core import paths  # noqa: E402
 paths.init(_scratch("hvm-storage-"))
-paths.init_instance(_scratch("hvm-instance-"))
+_INSTANCE = tempfile.mkdtemp(prefix="hvm-instance-")
+atexit.register(shutil.rmtree, _INSTANCE, ignore_errors=True)
+paths.init_instance(_INSTANCE)
 
 from app.imagegen.base import ImageBackend  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
