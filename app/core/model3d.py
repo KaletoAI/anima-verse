@@ -23,7 +23,7 @@ import re
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
 from app.imagegen.routing import ROUTE_META_KEYS
@@ -2690,6 +2690,37 @@ def _op_abs(op, result: Dict[str, Any], *keys: str) -> Dict[str, Any]:
     return out
 
 
+def _drop_partial_body_op(op) -> bool:
+    """An outfit-body mesh record whose views do not cover the dressed views
+    a fresh build sends (``base_body.outfit_body_op_partial`` — a body meshed
+    from the front alone before the ruling of 2026-11-10) is DROPPED instead
+    of resumed: its hub jobs are cancelled, the record goes, the outfit it
+    was built for shows the reason as its ``body`` status. True when dropped;
+    an unreadable record is left to the normal resume."""
+    from app.core import base_body, hub_ops
+    try:
+        reason = base_body.outfit_body_op_partial(op.inputs)
+    except Exception as exc:  # noqa: BLE001 — the resume decides as before
+        logger.warning("hub op %s: partial-view check failed: %s", op.op_id, exc)
+        return False
+    if not reason:
+        return False
+    name = str(op.inputs.get("character") or "")
+    logger.warning("hub op %s (%s %s): %s", op.op_id, name, op.inputs.get("signature"), reason)
+    hub_ops.drop(op, reason)
+    if op.track_id:
+        try:
+            from app.core.task_queue import get_task_queue
+            get_task_queue().annotate_error(op.track_id, f" — {reason}")
+        except Exception:  # noqa: BLE001 — display only
+            pass
+    parent = (op.inputs.get("manifest") or {}).get("outfit_body") or {}
+    built_for = parent.get("built_for") if isinstance(parent, dict) else None
+    if name and isinstance(built_for, str) and built_for:
+        base_body._outfit_end(name, built_for, "body", reason)
+    return True
+
+
 def _resume_entry(op, staged_call, character_name: str):
     """Run a record of the current task again (handler re-run after a
     restart). A tombstone reports its stored verdict instead (spec D8)."""
@@ -2789,6 +2820,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             return prepared
     op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base,
                                                body=outfit_body is not None))
+    if op is not None and op.status == hub_ops.RUNNING and _drop_partial_body_op(op):
+        op = None  # a front-only outfit body record: this run builds it anew
     if op is None and not base and outfit_body is None:
         _ensure_covered_variant(character_name)
     if op is not None:
@@ -4402,13 +4435,18 @@ def _op_reserve(op):
     return release
 
 
-def _op_thread_resume(staged, results: Optional[Dict[str, Dict[str, Any]]] = None):
+def _op_thread_resume(staged, results: Optional[Dict[str, Dict[str, Any]]] = None,
+                      drop: Optional[Callable[[Any], bool]] = None):
     """Resume entry of a thread-owned character operation: the character
     lock like the trigger threads, the staged function with the frozen
-    signature, and — for re-rig/face — the result the status routes show."""
+    signature, and — for re-rig/face — the result the status routes show.
+    ``drop(op)`` True ends the record without resuming it (mesh: a
+    front-only outfit body, ``_drop_partial_body_op``)."""
     def run(op):
         from app.core import hub_ops
         name = op.inputs["character"]
+        if drop is not None and drop(op):
+            return {"ok": False, "error": op.error or "dropped"}
         result: Dict[str, Any] = {"ok": False, "error": "resume failed"}
         try:
             with _char_lock(name):
@@ -4427,7 +4465,8 @@ def _op_thread_resume(staged, results: Optional[Dict[str, Dict[str, Any]]] = Non
 
 def _register_hub_kinds() -> None:
     from app.core import hub_ops
-    hub_ops.register_kind(_OP_MESH, resume=_op_thread_resume(_generate_for_current_outfit),
+    hub_ops.register_kind(_OP_MESH, resume=_op_thread_resume(_generate_for_current_outfit,
+                                                             drop=_drop_partial_body_op),
                           track_type="model3d_generation", reserve=_op_reserve,
                           optional_stage=lambda op, name: bool(op.inputs.get("face_before_rig"))
                           and name in ("upscale", "face", "bake", "face_retry"))

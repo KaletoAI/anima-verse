@@ -3271,6 +3271,13 @@ OUTFIT_BODY_VERSION = 1
 OUTFIT_BODY_RE = re.compile(r"ob[0-9a-f]{8}")
 OUTFIT_BODY_MISSING = "Outfit body missing — rebuild the outfit model"
 OUTFIT_BODY_OUTDATED = "The outfit body does not match the dressed views — rebuild the outfit model"
+#: Mesh mode (ruling 2026-11-10): an outfit body is meshed from EVERY dressed
+#: view (``dressed_views()``) or not at all — a missing view is rendered
+#: first in the same run; one that cannot be rendered stops the build.
+VIEWS_MISSING = "{views} {noun} missing — not meshed from the {have} alone"
+#: How long the build waits for a dressed render of the same outfit that
+#: runs elsewhere (the T-pose lane) before it renders the missing views itself.
+DRESSED_RENDER_WAIT_S = 1800.0
 BODY_MODE_CHANGED = "Built for the other outfit body mode"
 OUTFIT_BODY_CHANGED = "Built on an older outfit body"
 NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
@@ -3427,6 +3434,89 @@ def _write_body_refs(character_name: str, body_id: str, views: Dict[str, Path],
         _copy_ref(source, refs / f"{_kind(v)}_{body_id}", meta)
 
 
+def _join_views(views: Iterable[str]) -> str:
+    """``front``, ``front and back``, ``back, left and right``."""
+    views = list(views)
+    return views[0] if len(views) == 1 else ", ".join(views[:-1]) + " and " + views[-1]
+
+
+def views_missing_message(missing: List[str], have: List[str], reason: str = "") -> str:
+    """``VIEWS_MISSING`` for the dressed views an outfit body still lacks,
+    ``reason`` (the render's error) appended in brackets."""
+    label = _join_views(missing)
+    text = VIEWS_MISSING.format(views=label[:1].upper() + label[1:], noun="view" if len(missing) == 1 else "views",
+                                have=_join_views(have) if have else "nothing")
+    return f"{text} ({reason})" if reason else text
+
+
+def outfit_body_op_partial(inputs: Dict[str, Any]) -> str:
+    """Why the frozen inputs of a ``character_mesh`` hub operation of an
+    OUTFIT BODY (manifest ``outfit_body``) are not what a fresh build would
+    send — the views it sends (``front`` + ``view_images``) lack one of
+    ``dressed_views()`` (a body meshed before the ruling from the front
+    alone) — or "". The resume drops such an operation instead of
+    submitting it again."""
+    manifest = inputs.get("manifest") if isinstance(inputs.get("manifest"), dict) else {}
+    if "outfit_body" not in manifest:
+        return ""
+    extra = inputs.get("view_images") if isinstance(inputs.get("view_images"), dict) else {}
+    sent = ["front", *[v for v in BASE_VIEWS if v != "front" and v in extra]]
+    missing = [v for v in dressed_views() if v not in sent]
+    if not missing:
+        return ""
+    return views_missing_message(missing, sent) + " — its mesh job from before the restart was dropped"
+
+
+def _wait_dressed_render(character_name: str, signature: str, timeout: float = DRESSED_RENDER_WAIT_S) -> None:
+    """Wait while a dressed render of the outfit ``signature`` runs
+    elsewhere (its ``images`` stage, e.g. the T-pose lane), so the build
+    does not render the same missing view a second time. Bounded."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _status_lock:
+            if _outfit_running.get((character_name, "images")) != signature:
+                return
+        time.sleep(1.0)
+
+
+def _complete_dressed_views(character_name: str, signature: str, bsig: str,
+                            manifest: Dict[str, Any]) -> Tuple[Dict[str, Optional[Path]], str]:
+    """Mesh mode: the dressed views of the outfit ``signature``
+    (``dressed_views()``), every missing one rendered FIRST
+    (``generate_dressed_images`` without ``force`` with the pieces/items of
+    the dressed front's ``manifest`` — image jobs only; a view the texture
+    store holds is copied). Returns ``({view: path | None}, reason)`` —
+    ``reason`` is the render's error when a view is still missing."""
+    def current() -> Dict[str, Optional[Path]]:
+        return {v: dressed_image(character_name, v, signature, bsig) for v in dressed_views()}
+
+    paths = current()
+    if all(paths.values()):
+        return paths, ""
+    _wait_dressed_render(character_name, signature)
+    paths = current()
+    missing = [v for v, p in paths.items() if p is None]
+    if not missing:
+        return paths, ""
+    logger.info("Outfit body of %s (outfit %s): rendering the dressed %s first — never meshed from a partial set",
+                character_name, signature, missing)
+    reason = ""
+    try:
+        generate_dressed_images(character_name, pieces=manifest.get("pieces") or {},
+                                items=manifest.get("items") or [], signature=signature, force=False)
+    except Exception as e:  # noqa: BLE001 — the missing view stops the build below
+        reason = str(e) or type(e).__name__
+        logger.warning("Dressed %s of %s (%s) failed: %s", missing, character_name, signature, reason)
+    paths = current()
+    if not reason and not all(paths.values()):
+        with _status_lock:
+            failure = dict(_outfit_failed.get((character_name, signature)) or {})
+        if failure.get("stage") == "images":
+            reason = str(failure.get("error") or "")
+    return paths, reason
+
+
 def prepare_outfit_body(character_name: str, signature: Optional[str] = None, *,
                         force: bool = False, rebuild: bool = False) -> Optional[Dict[str, Any]]:
     """Mesh mode: make sure the outfit body of the outfit ``signature``
@@ -3439,11 +3529,17 @@ def prepare_outfit_body(character_name: str, signature: Optional[str] = None, *,
     front of the current base yet (the build reports it), or an undressed
     combination (the base body itself). Otherwise, serial per (character,
     body): the outfit's views and the texture store become one set
-    (``_sync_texture_views``); a current body (``stored_outfit_body``) is
+    (``_sync_texture_views``); then EVERY view of ``dressed_views()`` must
+    exist for it (ruling 2026-11-10 — never meshed from a partial set): a
+    missing one is rendered first, in this run (``_complete_dressed_views``);
+    one that still misses (refused, failed) stops here with
+    ``VIEWS_MISSING`` as the outfit's ``body`` status — ``{ok: False, error,
+    body_id}``, no mesh job. A current body (``stored_outfit_body``) is
     reused — ``{ok, cached: True, body_id}``, no job; ``force`` (an outfit
     rebuild) never rebuilds a current body, ``rebuild`` (an explicit body
     regeneration) does. Else the dressed views pass the view guard (a turned
-    view is re-rendered once, then left out; a turned front fails), the used
+    view is re-rendered once; still turned, it stops the build like a
+    missing one; a turned front fails), the
     views become the body's refs (``_write_body_refs``) and the staged chain
     runs on the body id (``generate_for_current_outfit(signature=<body id>,
     force=True, outfit_body=…)``). The outfit's status counts as running
@@ -3474,6 +3570,25 @@ def prepare_outfit_body(character_name: str, signature: Optional[str] = None, *,
         _sync_texture_views(character_name, signature=signature, tsig=tsig, bsig=bsig, base_views=registrations,
                             texts=inputs["dress_text"], manifest=texture["manifest"],
                             profile=texture["mesh_profile"])
+        if not all(dressed_image(character_name, v, signature, bsig) for v in dressed_views()):
+            # Every dressed view or no mesh (ruling 2026-11-10): the missing
+            # ones are rendered BEFORE the stored body is judged — a body
+            # meshed from a partial set must not count as current.
+            _outfit_start(character_name, signature, "body")
+            missing_error: Optional[str] = None
+            try:
+                paths, reason = _complete_dressed_views(character_name, signature, bsig, texture["manifest"])
+                missing = [v for v, p in paths.items() if p is None]
+                if missing:
+                    missing_error = views_missing_message(missing, [v for v, p in paths.items() if p], reason)
+            except Exception as e:
+                missing_error = str(e) or type(e).__name__
+                raise
+            finally:
+                _outfit_end(character_name, signature, "body", missing_error)
+            if missing_error:
+                logger.warning("Outfit body %s of %s: %s", body_id, character_name, missing_error)
+                return {"ok": False, "error": missing_error, "body_id": body_id}
         if not rebuild and stored_outfit_body(character_name, body_id, tsig=tsig, view_shas=texture_view_shas(
                 character_name, signature, bsig)) is not None:
             # A body from before the posture match (or matched to another base model) gets
@@ -3497,6 +3612,12 @@ def prepare_outfit_body(character_name: str, signature: Optional[str] = None, *,
                                  [v for v in dressed_views() if dressed_image(character_name, v, signature, bsig)],
                                  inputs["dress_text"])
             used = {v: p for v, p in paths.items() if p is not None}
+            left_out = [v for v in dressed_views() if v not in used]
+            if left_out:
+                # The guard left a turned view out: never meshed without it.
+                raise OutfitError(views_missing_message(
+                    left_out, [v for v in BASE_VIEWS if v in used],
+                    "; ".join(w.replace("; left out of the outfit model", "") for w in warnings)))
             parent = {"body_id": body_id, "mode": MESH_MODE, "version": OUTFIT_BODY_VERSION,
                       "texture_signature": tsig, "base_signature": bsig, "base_variant": texture["variant"],
                       "built_for": signature, "views": texture_view_shas(character_name, signature, bsig),
