@@ -610,6 +610,7 @@ async function suitJobsRefresh() {
 // Show a selected job in the detail view.
 function suitSelectJob(jobId) {
     suitCur = { job_id: jobId };
+    suitDeleteArmed = false;
     suitPoll();
 }
 
@@ -769,6 +770,33 @@ async function suitCancel(jobId, button) {
     }
 }
 
+// "Delete result" of the stored tools-test result shown in the detail view,
+// confirmed in place (two steps, like the roleplay report).
+let suitDeleteArmed = false;
+function suitDeleteControls(model, saved) {
+    if (!model || !saved) return '';
+    return '<div class="suit-delete">' + (suitDeleteArmed
+        ? '<span>Delete the stored tools-test result of ' + esc(model) + '?</span> '
+            + '<button type="button" class="btn btn-danger" onclick="suitDeleteResult(\'' + escJs(model) + '\',this)">Delete</button> '
+            + '<button type="button" class="btn" onclick="suitDeleteArmed=false;suitPoll()">Cancel</button>'
+        : '<button type="button" class="btn" onclick="suitDeleteArmed=true;suitPoll()">Delete result</button>') + '</div>';
+}
+async function suitDeleteResult(model, button) {
+    button.disabled = true;
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/delete', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model})});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        suitDeleteArmed = false;
+        suitCur = { provider: '', model: '' };
+        document.getElementById('suitDetail').hidden = true;
+        document.getElementById('suitStatus').textContent = 'Deleted the tools-test result of ' + model;
+        loadData();
+    } catch (error) {
+        document.getElementById('suitDetailStatus').insertAdjacentText('beforeend', ' · Could not delete: ' + error.message);
+        button.disabled = false;
+    }
+}
 async function suitDeleteOld(button) {
     button.disabled = true;
     try {
@@ -929,7 +957,8 @@ function suitRenderJob(job) {
             + ' s / maximum ' + esc(limit) + ' s</div>'
             + '<div>Suitable as the single helper model: <b>' + esc(summary.verdict || 'not tested') + '</b></div>'
             + (summary.saved === false || summary.infra ? '<div>Quality result not saved; inspect diagnostics.</div>' : '')
-            + (summary.curated_only ? '<div>Curated cases only; no logged cases.</div>' : '');
+            + (summary.curated_only ? '<div>Curated cases only; no logged cases.</div>' : '')
+            + suitDeleteControls(job.model || summary.model || '', job.result_saved);
         if (!summary.thinking) checks = checks.filter(check => check.ok === false);
         if (!checks.length) { prog.innerHTML = '<div>No failing cases.</div>'; return; }
     } else if (job.status === 'running') {

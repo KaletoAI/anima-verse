@@ -1839,6 +1839,8 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
         summary.get("thinking") and summary.get("diagnostic_run_id")
         and summary.get("diagnostic_run_id") == latest.get("diagnostic_run_id"))
     job["max_turn_seconds"] = config.get("model_test.max_turn_seconds", 20)
+    # A stored result exists for this model: the detail view offers "Delete result".
+    job["result_saved"] = bool(latest)
     fixture = load_cases(auto_build=False)
     cases = {case["id"]: case for case in fixture.get("cases", [])}
     fixture_matches = bool(summary.get("fixture_version") and
@@ -2015,6 +2017,18 @@ def llm_suitability_resume(user=Depends(require_admin)):
 def llm_suitability_discard_interrupted(user=Depends(require_admin)):
     from app.core.model_suitability import discard_interrupted
     return {"discarded": discard_interrupted()}
+
+
+@router.post("/settings/llm-suitability-test/delete")
+async def llm_suitability_delete(request: Request, user=Depends(require_admin)):
+    from app.core.model_capabilities import delete_suitability
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "body must be valid JSON") from exc
+    if not isinstance(body, dict) or not isinstance(body.get("model"), str) or not body["model"]:
+        raise HTTPException(400, "model required")
+    return {"deleted": await asyncio.to_thread(delete_suitability, body["model"])}
 
 
 @router.post("/settings/llm-suitability-test/delete-old")

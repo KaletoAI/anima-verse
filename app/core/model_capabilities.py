@@ -155,6 +155,23 @@ def delete_old_suitability() -> int:
         return len(obsolete)
 
 
+def delete_suitability(model_full: str) -> bool:
+    """Remove a model's tools-test result, its history and its raw answers."""
+    with _write_lock:
+        data = _load_full_file()
+        key = (model_full or "").lower()
+        found = data.get("suitability", {}).pop(key, None) is not None
+        data.get("suitability_history", {}).pop(key, None)
+        _save_full_file(data)
+        raw = _load_outputs_file()
+        raw.get("outputs", {}).pop(key, None)
+        raw.get("history", {}).pop(key, None)
+        if _outputs_path().exists():
+            with open(_outputs_path(), "w", encoding="utf-8") as f:
+                json.dump(raw, f, indent=2, ensure_ascii=False)
+        return found
+
+
 def get_suitability_outputs(model_full: str, run_id: str = "") -> Dict[str, Any]:
     """Look up a run in the local sidecar, including superseded diagnostics."""
     with _write_lock:
