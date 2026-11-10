@@ -676,10 +676,18 @@ export function CharactersTab() {
   const imagegenDraft = useMemo(() => targetPatch(buf, IMAGEGEN_TARGET), [buf])
 
   /** The keys of the image-override record a template section names
-   *  (`slot_keys`) — rendered on the tab of the step they steer; nothing when
-   *  the section names none. */
+   *  (`slot_keys`; all of them are groups of the Image tab). An entry is a
+   *  key, or `{key, visible_when: {feature}}` for a key only some character
+   *  kinds have (the HairDeck glob: humanoids) — the same feature gate as a
+   *  section's. Nothing when the section names no visible key. */
   const imagegenSlot = (s: { [k: string]: unknown }) => {
-    const keys = Array.isArray(s.slot_keys) ? s.slot_keys.map(String) : []
+    const features = (template?.features || {}) as Record<string, boolean>
+    const keys = (Array.isArray(s.slot_keys) ? s.slot_keys : []).flatMap((e: unknown) => {
+      if (typeof e === 'string') return [e]
+      const o = (e && typeof e === 'object' ? e : {}) as { key?: unknown; visible_when?: { feature?: string } }
+      const f = o.visible_when?.feature
+      return typeof o.key === 'string' && (!f || features[f] !== false) ? [o.key] : []
+    })
     return keys.length ? (
       <ImagegenOverrideFields
         character={selected}
@@ -1151,13 +1159,10 @@ export function CharactersTab() {
                         refreshKey={String(savedSignal)} />,
                       // Hair as its own mesh (garment chain); the description
                       // is derived from Appearance, so the tab links there.
-                      // The hair section's `slot_keys` (its HairDeck backend
-                      // glob) sit under the hair method they belong to.
-                      hair: (s) => (
+                      hair: (
                         <FieldHair key={selected} character={selected}
                           onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
-                            ? () => setSubTab('tab:aussehen') : undefined}
-                          methodSettings={imagegenSlot(s)} />
+                            ? () => setSubTab('tab:aussehen') : undefined} />
                       ),
                       // Pose renders left, the outfit model built from them right.
                       model_refs: (
@@ -1175,8 +1180,8 @@ export function CharactersTab() {
                       model3d_extensions: <div className="ga-model3d-side"><Model3DExtensions character={selected} /></div>,
                       model3d_generation: <div className="ga-model3d-side"><Model3DGeneration character={selected} /></div>,
                       // Backend globs / LoRA lists of the image-override
-                      // record; each section names its keys (`slot_keys`), so
-                      // a key sits on the tab of the step it steers.
+                      // record, all on the Image tab: one section per
+                      // pipeline stage, each naming its keys (`slot_keys`).
                       imagegen_override: imagegenSlot,
                     }}
                   />

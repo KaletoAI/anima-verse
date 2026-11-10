@@ -8,22 +8,24 @@ import './imagegenOverride.css'
 /**
  * The per-character image-generation overrides (`profile.outfit_imagegen`:
  * backend globs + LoRA lists), rendered as the template special slot
- * `imagegen_override`. The section names WHICH keys it shows (`slot_keys`),
- * so every key sits on the tab whose step it steers — render and portrait
- * globs + character LoRAs on Image, the T-pose and outfit-view globs on Pose,
- * the base-body globs on Base body, the HairDeck glob on Hair, the mesh glob
- * on 3D — and moving one is a template edit (base-character.json).
+ * `imagegen_override`. ALL of them live on the Image tab, one template
+ * section per pipeline stage (`slot_keys` names the keys of the stage):
+ * Pictures (renders, portrait, character LoRAs) → T-pose (main reference,
+ * its views + hair edits, T-pose LoRAs) → Base body → Outfit views → 3D
+ * (character mesh, HairDeck hair mesh). The grouping is a template edit
+ * (base-character.json, tab `image_settings`), not code.
  *
  * A glob is position 0 in front of its occasion chain of the image routing
  * (Admin → Media Generation → Routing; app/imagegen/occasions.py names the
- * occasion of each key). Empty = the key's fallback key(s), then the chain.
+ * occasion of each key). Empty = the key's fallback key(s), then the chain —
+ * the status line under an empty glob says which of them runs.
  *
  * THIS SLOT DOES NOT WRITE. Every edit is queued into the character sheet's
  * change buffer (`queue`, one key at a time) and leaves with the toolbar's one
- * Save as `PUT /characters/{n}/outfit-imagegen` — a PARTIAL update, so the
- * sections on different tabs never overwrite each other's keys. What is shown
- * is the buffered value over the stored one; a Discard empties the buffer and
- * the stored value shows again.
+ * Save as `PUT /characters/{n}/outfit-imagegen` — a PARTIAL update (keys left
+ * out keep their value), and the Save count counts keys. What is shown is the
+ * buffered value over the stored one; a Discard empties the buffer and the
+ * stored value shows again.
  *
  * Backed by GET /characters/{n}/outfit-imagegen (record + chains + mesh/hair
  * backends), GET /world/imagegen-options (the enabled image generators, the
@@ -61,8 +63,13 @@ type GlobKind = 'image' | 'mesh' | 'hair'
 interface GlobDef {
   kind: GlobKind
   label: string
+  /** How another key's status line names this one when it falls back to it
+   *  (default: the label). */
+  ref?: string
   /** Hover text: what the glob steers. */
   tip: string
+  /** A short condition shown under the status line. */
+  note?: string
   placeholder: string
   /** Keys read when this one is empty, in order (occasions.py
    *  char_spec_fallback); then the occasion chain. */
@@ -73,6 +80,8 @@ interface LoraDef {
   kind: 'loras'
   label: string
   tip: string
+  /** A short line under the label: what the list does. */
+  note?: string
   /** outfit-lora-options target: whose backend the list is scoped to. */
   target: 'render' | 'tpose'
   empty: string
@@ -91,11 +100,11 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   tpose_workflow: {
     kind: 'image', label: 'T-pose', placeholder: 'TPose*', fallback: ['workflow'],
-    tip: 'The T-pose main reference (main mesh input). Empty = the Renders glob (Image tab), then the T-pose chain.',
+    tip: 'The T-pose main reference (main mesh input). Empty = the Renders glob, then the T-pose chain.',
   },
   tpose_view_workflow: {
-    kind: 'image', label: 'T-pose views', placeholder: 'Flux*',
-    tip: 'The extra reference views (back, side, face) and the Hair tab\'s haired and hair-only edits. The base-body and outfit view steps fall back to it.',
+    kind: 'image', label: 'Views + hair edits', ref: 'T-pose views', placeholder: 'Flux*',
+    tip: 'The extra T-pose reference views (back, side, face) AND the Hair tab\'s haired and hair-only edits. The base-body back/side views and every outfit view fall back to it. Empty = the T-pose views chain (hair edits: the hair-edit chain).',
   },
   base_front_workflow: {
     kind: 'image', label: 'Front', placeholder: 'Qwen*', fallback: ['tpose_workflow', 'workflow'],
@@ -103,7 +112,7 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   base_view_workflow: {
     kind: 'image', label: 'Back/side views', placeholder: 'Qwen*', fallback: ['tpose_view_workflow'],
-    tip: 'The back, left and right views (edits of the front). Empty = the T-pose views glob (Pose tab), then this step\'s chain.',
+    tip: 'The back, left and right views (edits of the front). Empty = the T-pose views glob, then this step\'s chain.',
   },
   outfit_front_workflow: {
     kind: 'image', label: 'Front edit', placeholder: 'Qwen*', fallback: ['tpose_view_workflow'],
@@ -120,11 +129,13 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   outfit_side_draft_workflow: {
     kind: 'image', label: 'Side draft', placeholder: 'Qwen*',
     fallback: ['outfit_back_draft_workflow', 'tpose_view_workflow'],
+    note: 'Only with the world setting Dressed side views',
     tip: 'Rendered fresh from the dressed front in profile; only its clothing is used. Runs only with the world setting Dressed side views. Empty = the Back draft glob, then the T-pose views glob, then this step\'s chain.',
   },
   outfit_side_workflow: {
     kind: 'image', label: 'Side fit', placeholder: 'Qwen*',
     fallback: ['outfit_back_workflow', 'tpose_view_workflow'],
+    note: 'Only with the world setting Dressed side views',
     tip: 'Edit of the base side view with the draft as second reference; grainy or turned results are re-rendered. Runs only with the world setting Dressed side views. Empty = the Back fit glob, then the T-pose views glob, then this step\'s chain.',
   },
   mesh_workflow: {
@@ -132,8 +143,8 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
     tip: 'Tried first for this character\'s 3D mesh (the humanoid or creature mesh chain, whichever its rig selects). Empty = that chain.',
   },
   hair_mesh_workflow: {
-    kind: 'hair', label: 'HairDeck cards', placeholder: 'HairDeck*',
-    tip: 'Tried first for the hair cards made from one image of the character (Hair method HairDeck). Empty = the hair-cards chain.',
+    kind: 'hair', label: 'Hair mesh (HairDeck)', placeholder: 'HairDeck*',
+    tip: 'Tried first for the hair cards made from one image of the character (Hair tab, method HairDeck). Empty = the hair-cards chain.',
   },
   loras: {
     kind: 'loras', label: 'Character LoRAs', target: 'render', empty: 'None',
@@ -141,6 +152,7 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   tpose_loras: {
     kind: 'loras', label: 'T-pose LoRAs', target: 'tpose', empty: 'Empty: the character LoRAs apply',
+    note: 'Replace the character LoRAs on every mesh-input render',
     tip: 'Used INSTEAD of the character LoRAs on every mesh-input render (T-pose, its views, base body, outfit views) — a different backend has its own LoRAs. The choices are the LoRAs of the backend the T-pose resolves to.',
   },
 }
@@ -289,6 +301,9 @@ function GlobRow({ fieldKey, def, value, globValue, stored, backends, onChange }
   // text is the line's hover.
   const chainText = (chain: string[]) =>
     chain.length ? chain.join(' → ') : t('cheapest backend of this kind')
+  const refName = (k: string) => { const d = DEFS[k] as GlobDef; return t(d.ref || d.label) }
+  // The globs an empty one reads first, in order.
+  const order = (def.fallback || []).map(refName)
   let status: string
   let tone: 'ok' | 'bad' | 'muted'
   if (value.trim()) {
@@ -297,22 +312,33 @@ function GlobRow({ fieldKey, def, value, globValue, stored, backends, onChange }
     tone = hits.length ? 'ok' : 'bad'
   } else {
     tone = 'muted'
+    // The first non-empty fallback glob runs — with what it matches — else
+    // the chain of this key's occasion.
     const via = (def.fallback || []).find((k) => globValue(k).trim())
     if (via) {
+      const hits = matchNames(globValue(via), names)
       status = t('uses {field}: {glob}')
-        .replace('{field}', t((DEFS[via] as GlobDef).label)).replace('{glob}', globValue(via).trim())
+        .replace('{field}', refName(via)).replace('{glob}', globValue(via).trim())
+        + (hits.length ? ' → ' + hits.join(', ') : ' (' + t('no match') + ')')
     } else if (def.kind === 'mesh') {
       status = t('chain') + ': ' + chainText(stored.mesh_world_chain || [])
     } else if (def.kind === 'hair') {
       status = t('chain') + ': ' + chainText(stored.hair_world_chain || [])
     } else {
+      // Its fallback globs are empty too: say so, then the chain that runs.
       const rows = stored.match_chains?.[fieldKey] || []
       const distinct = new Set(rows.map((r) => r.chain.join('\u0000')))
-      status = t('chain') + ': ' + (rows.length === 0 ? chainText([])
+      status = (order.length ? t('{fields} empty').replace('{fields}', order.join(', ')) + ' → ' : '')
+        + t('chain') + ': ' + (rows.length === 0 ? chainText([])
         : distinct.size === 1 ? chainText(rows[0].chain)
           : rows.map((r) => r.label + ': ' + chainText(r.chain)).join(' · '))
     }
   }
+
+  // The hover of the status line spells out the whole order an empty glob
+  // walks (its fallback globs, then the chain).
+  const statusTip = value.trim() || !order.length ? status
+    : `${status}\n${t('Empty: reads {order}, then the chain').replace('{order}', order.join(' → '))}`
 
   return (
     <div className="ga-igo-cell">
@@ -320,7 +346,8 @@ function GlobRow({ fieldKey, def, value, globValue, stored, backends, onChange }
         <div className="ga-igo-control">
           <input className="ga-input" value={value} placeholder={def.placeholder}
             spellCheck={false} onChange={(e) => onChange(e.target.value)} />
-          <div className={`ga-igo-status ga-igo-status--${tone}`} title={status}>{status}</div>
+          <div className={`ga-igo-status ga-igo-status--${tone}`} title={statusTip}>{status}</div>
+          {def.note ? <div className="ga-igo-note" title={t(def.note)}>{t(def.note)}</div> : null}
         </div>
       </Field>
     </div>
@@ -370,6 +397,7 @@ function LoraList({ character, def, list, draft, savedSignal, onChange }: {
     <div className="ga-igo-loras">
       <Field label={t(def.label)} tip={t(def.tip)} compact>
         <div className="ga-igo-lora-body">
+          {def.note ? <div className="ga-igo-note">{t(def.note)}</div> : null}
           {list.length === 0 ? <div className="ga-igo-status ga-igo-status--muted">{t(def.empty)}</div> : (
             list.map((l, i) => (
               <div className="ga-igo-lora-row" key={l.name}>

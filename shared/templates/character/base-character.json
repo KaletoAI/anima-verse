@@ -59,7 +59,8 @@
       "label_de": "Bild",
       "columns": [
         20,
-        21
+        21,
+        22
       ]
     },
     {
@@ -178,17 +179,6 @@
       "visible_when": { "feature": "humanoid" }
     },
     {
-      "id": "base_body_backends",
-      "label": "Render backends",
-      "label_de": "Render-Backends",
-      "column": 28,
-      "row": 2,
-      "special": "imagegen_override",
-      "slot_keys": ["base_front_workflow", "base_view_workflow"],
-      "fields": [],
-      "visible_when": { "feature": "humanoid" }
-    },
-    {
       "id": "outfit_body",
       "label": "Outfit body mode",
       "label_de": "Outfit-Körper-Modus",
@@ -237,7 +227,6 @@
       "column": 27,
       "row": 0,
       "special": "hair",
-      "slot_keys": ["hair_mesh_workflow"],
       "fields": [],
       "visible_when": { "feature": "humanoid" }
     },
@@ -249,29 +238,6 @@
       "row": 0,
       "special": "model_refs",
       "fields": []
-    },
-    {
-      "id": "pose_backends",
-      "label": "Pose render backends",
-      "label_de": "Pose-Render-Backends",
-      "column": 26,
-      "row": 1,
-      "special": "imagegen_override",
-      "slot_keys": ["tpose_workflow", "tpose_view_workflow", "tpose_loras"],
-      "fields": []
-    },
-    {
-      "id": "outfit_view_backends",
-      "label": "Outfit view backends (base-body pipeline)",
-      "label_de": "Outfit-Ansichten-Backends (Grundkörper-Pipeline)",
-      "column": 26,
-      "row": 2,
-      "beside": true,
-      "special": "imagegen_override",
-      "slot_keys": ["outfit_front_workflow", "outfit_back_draft_workflow", "outfit_back_workflow",
-                    "outfit_side_draft_workflow", "outfit_side_workflow"],
-      "fields": [],
-      "visible_when": { "feature": "humanoid" }
     },
     {
       "id": "model3d_animations",
@@ -298,16 +264,6 @@
       "column": 25,
       "row": 3,
       "special": "model3d_generation",
-      "fields": []
-    },
-    {
-      "id": "mesh_backend",
-      "label": "Mesh backend",
-      "label_de": "Mesh-Backend",
-      "column": 25,
-      "row": 4,
-      "special": "imagegen_override",
-      "slot_keys": ["mesh_workflow"],
       "fields": []
     },
     {
@@ -678,23 +634,57 @@
       ]
     },
     {
-      "id": "image_backends",
-      "label": "Render backends",
-      "label_de": "Render-Backends",
+      "id": "image_pictures",
+      "label": "Pictures — photos, posts, expressions, portrait",
+      "label_de": "Bilder — Fotos, Posts, Ausdrücke, Porträt",
       "column": 20,
       "row": 0,
       "special": "imagegen_override",
-      "slot_keys": ["workflow", "profile_workflow"],
+      "slot_keys": ["workflow", "profile_workflow", "loras"],
       "fields": []
     },
     {
-      "id": "image_loras",
-      "label": "LoRAs",
-      "label_de": "LoRAs",
+      "id": "image_tpose",
+      "label": "T-pose — the reference renders the mesh is built from",
+      "label_de": "T-Pose — die Referenzbilder, aus denen das Mesh entsteht",
       "column": 21,
       "row": 0,
       "special": "imagegen_override",
-      "slot_keys": ["loras"],
+      "slot_keys": ["tpose_workflow", "tpose_view_workflow", "tpose_loras"],
+      "fields": []
+    },
+    {
+      "id": "image_base_body",
+      "label": "Base body — the bald A-pose views",
+      "label_de": "Grundkörper — die kahlen A-Pose-Ansichten",
+      "column": 21,
+      "row": 1,
+      "special": "imagegen_override",
+      "slot_keys": ["base_front_workflow", "base_view_workflow"],
+      "fields": [],
+      "visible_when": { "feature": "humanoid" }
+    },
+    {
+      "id": "image_outfit_views",
+      "label": "Outfit views — the dressed views on the base body",
+      "label_de": "Outfit-Ansichten — die bekleideten Ansichten auf dem Grundkörper",
+      "column": 22,
+      "row": 0,
+      "special": "imagegen_override",
+      "slot_keys": ["outfit_front_workflow", "outfit_back_draft_workflow", "outfit_back_workflow",
+                    "outfit_side_draft_workflow", "outfit_side_workflow"],
+      "fields": [],
+      "visible_when": { "feature": "humanoid" }
+    },
+    {
+      "id": "image_3d",
+      "label": "3D — the meshes built from the reference renders",
+      "label_de": "3D — die Meshes aus den Referenzbildern",
+      "column": 22,
+      "row": 1,
+      "special": "imagegen_override",
+      "slot_keys": ["mesh_workflow",
+                    { "key": "hair_mesh_workflow", "visible_when": { "feature": "humanoid" } }],
       "fields": []
     },
     {

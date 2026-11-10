@@ -292,9 +292,10 @@ stops acting autonomously).
   LRU eviction: retained storage grows with distinct outfits rather than repeatedly rendering them.
   Prefer World for local catalog edits: Shared membership changes affect other worlds, but their
   complete World set overrides are not automatically rebased onto the changed Shared definition.
-- **Portrait controls:** *Game-Admin → Characters → Image* has the render and portrait backend
-  globs and the character LoRAs; the other per-character globs sit on the tab of their step
-  (Pose: T-pose, its views, T-pose LoRAs, outfit views; Base body; Hair: HairDeck; 3D: mesh).
+- **Portrait controls:** *Game-Admin → Characters → Image* holds every per-character backend glob
+  and LoRA list, grouped in pipeline order: Pictures (renders, portrait, character LoRAs) → T-pose
+  (main reference, views + hair edits, T-pose LoRAs) → Base body → Outfit views → 3D (mesh, HairDeck).
+  An empty glob's status line names what runs instead (its fallback glob, else the occasion chain).
   Backend activation is global; character overrides select backend matches, not separate
   enable/disable switches. Retired backend `enabled` flags of a world's old skills/image_generation.json
   are removed on world startup and no longer affect routing. Existing sizing settings,

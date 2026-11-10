@@ -35,7 +35,6 @@
  * only re-fit from the stored HairDeck result.
  */
 import { useCallback, useState } from 'react'
-import type { ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -369,13 +368,10 @@ function OtherMethod({ other, method, limits }: {
   )
 }
 
-export function FieldHair({ character, onEditAppearance, methodSettings }: {
+export function FieldHair({ character, onEditAppearance }: {
   character: string
   /** Opens the Appearance tab, where the hair text is edited. */
   onEditAppearance?: () => void
-  /** Settings that belong to the method (the character's HairDeck backend
-   *  glob — template `slot_keys` of the hair section), shown under it. */
-  methodSettings?: ReactNode
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -609,7 +605,6 @@ export function FieldHair({ character, onEditAppearance, methodSettings }: {
           <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span>
         ) : null}
       </div>
-      {methodSettings}
 
       <div className="ga-fieldset-title">{t('Hair description')}</div>
       {info.description ? (

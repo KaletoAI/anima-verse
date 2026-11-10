@@ -43,10 +43,6 @@ export interface TmplSectionRaw extends TmplSection {
   /** The section takes whatever height its column has left over — for slots
    *  whose content scales (a picture), not for stacked fields. */
   grow?: boolean
-  /** The section sits to the RIGHT of the section before it in its column
-   *  (same row band) instead of below it — two short sections share the
-   *  width rather than stacking past the screen. */
-  beside?: boolean
 }
 
 /** A special slot: a fixed node, or one rendered from the section that names
@@ -478,24 +474,15 @@ export function TemplateTab({
             s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0,
           )
           .sort((a, b) => (a.row ?? 0) - (b.row ?? 0))
-        // A `beside` section joins the band of the one before it.
-        const bands: TmplSectionRaw[][] = []
-        for (const s of colSections) {
-          if (s.beside && bands.length) bands[bands.length - 1].push(s)
-          else bands.push([s])
-        }
-        const renderSection = (s: TmplSectionRaw) => (
-          <div key={s.id}
-            className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
-            <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-            {s.special ? renderSlot(specialSlots?.[String(s.special)], s)
-              : <div className="tpl-section-fields">{editableFields(s).map(renderField)}</div>}
-          </div>
-        )
         return (
           <div key={col} className="tpl-tab-col">
-            {bands.map((band) => band.length === 1 ? renderSection(band[0]) : (
-              <div key={band[0].id} className="tpl-tab-band">{band.map(renderSection)}</div>
+            {colSections.map((s) => (
+              <div key={s.id}
+                className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
+                <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
+                {s.special ? renderSlot(specialSlots?.[String(s.special)], s)
+                  : <div className="tpl-section-fields">{editableFields(s).map(renderField)}</div>}
+              </div>
             ))}
           </div>
         )
