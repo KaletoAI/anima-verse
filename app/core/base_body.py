@@ -2654,16 +2654,39 @@ def _guard_message(view: str, result: Dict[str, Any]) -> str:
 _MIME_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}
 
 
+def _part_materials(gltf: Dict[str, Any]) -> set:
+    """Indices of the materials of procedural parts (``attached_part`` /
+    ``inset_part`` Blender scripts): marked by the extra ``attached_part`` on
+    the material, or used only by meshes whose node carries that extra. Each
+    has its own baked texture, which is not the body's base colour."""
+    materials = gltf.get("materials") or []
+    marked = {index for index, material in enumerate(materials)
+              if "attached_part" in ((material or {}).get("extras") or {})}
+    part_meshes = {node["mesh"] for node in gltf.get("nodes") or []
+                   if "mesh" in node and "attached_part" in (node.get("extras") or {})}
+    used_by_part, used_by_body = set(), set()
+    for index, mesh in enumerate(gltf.get("meshes") or []):
+        for primitive in mesh.get("primitives") or []:
+            if isinstance(primitive.get("material"), int):
+                (used_by_part if index in part_meshes else used_by_body).add(primitive["material"])
+    return marked | (used_by_part - used_by_body)
+
+
 def _base_color_targets(gltf: Dict[str, Any]) -> Tuple[int, Dict[int, str]]:
     """``(primary, {image index: role})`` of a document's base colour: every
-    image a material's ``baseColorTexture`` resolves to — the preferred one
-    (``model_validate.texture_image_index``: an EXT_texture_webp source, else
-    the core source) is ``primary`` and must be the same for every material;
-    a WebP texture's core fallback is replaced too (role ``core``)."""
+    image a body material's ``baseColorTexture`` resolves to — the preferred
+    one (``model_validate.texture_image_index``: an EXT_texture_webp source,
+    else the core source) is ``primary`` and must be the same for every body
+    material; a WebP texture's core fallback is replaced too (role
+    ``core``). A procedural part's material (``_part_materials``) is not the
+    body: its baked texture is neither read nor replaced."""
     from app.core.model_validate import texture_image_index
     textures = gltf.get("textures") or []
     primaries, targets = set(), {}
-    for material in gltf.get("materials") or []:
+    parts = _part_materials(gltf)
+    for index, material in enumerate(gltf.get("materials") or []):
+        if index in parts:
+            continue
         info = ((material or {}).get("pbrMetallicRoughness") or {}).get("baseColorTexture")
         if not isinstance(info, dict):
             continue
