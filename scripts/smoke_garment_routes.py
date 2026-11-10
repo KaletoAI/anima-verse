@@ -36,7 +36,7 @@ Fixture (expected values derived by hand):
     None, equipped False, garment None, collision None (no base model ->
     no capsule set, commit 8a617513), method
     "edit_chain", method_source "world", world_method "edit_chain",
-    hairdeck None, other None, subtract {shape "cut" from the length class
+    hairdeck None, others [], subtract {shape "cut" from the length class
     "medium", no override, shell 5.0 mm (default 5.0, 2.0 .. 15.0)}} (the
     method keys: plan 2026-11-09-hairdeck-hair Task 5, schema default
     edit_chain; the subtract settings: plan 2026-11-10-hair-subtract-method
@@ -209,7 +209,7 @@ def main() -> int:
                   (200, {"pipeline": True, "humanoid": True, "description": "medium blonde hair",
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
                          "collision": None, "method": "edit_chain", "method_source": "world",
-                         "world_method": "edit_chain", "hairdeck": None, "other": None,
+                         "world_method": "edit_chain", "hairdeck": None, "others": [],
                          "subtract": {"shape": "cut", "shape_source": "length", "shape_override": "",
                                       "length_class": "medium", "shell_mm": 5.0, "shell_mm_default": 5.0,
                                       "shell_mm_min": 2.0, "shell_mm_max": 15.0}}))

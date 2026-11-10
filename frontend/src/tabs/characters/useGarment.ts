@@ -190,7 +190,7 @@ export interface HairPlacement {
   } | null
 }
 
-/** The last result of the method NOT selected (`garments.other_method_info`). */
+/** The kept result of one method NOT selected (`garments.other_methods_info`). */
 export interface OtherMethodInfo {
   method: HairMethod
   preview_url: string | null
@@ -290,8 +290,8 @@ export interface HairInfo {
   world_method: HairMethod
   /** The HairDeck section (null without a hair item). */
   hairdeck: HairDeckPanel | null
-  /** The newest last result among the other methods (null without one). */
-  other: OtherMethodInfo | null
+  /** The kept results of the other methods, newest first ([] without one). */
+  others: OtherMethodInfo[]
   /** The subtract method's shape and shell thickness (null off humanoids / an older server). */
   subtract?: HairSubtractSettings | null
 }

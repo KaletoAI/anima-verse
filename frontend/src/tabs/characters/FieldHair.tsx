@@ -21,15 +21,15 @@
  *
  * Layout: three columns — method, description and state; the selected
  * method's steps (small tiles, a click enlarges); the fitted preview with
- * what re-fits it (HairDeck colour and placement), "Run all" and the other
- * method's last result.
+ * what re-fits it (HairDeck colour and placement), "Run all" and the kept
+ * results of the other methods.
  *
  * Two hair methods (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md,
  * Task 5): Hair views → mesh (the edit chain above), or HairDeck (the profile picture -> hair
  * cards in one Hub call -> fit). The method selector at the top stores the
  * character's choice (POST /characters/{n}/hair/method, "" = world default);
- * the selected method's section is shown, the other method's last result is
- * collapsed below ("Other method"). A switch generates nothing. The HairDeck
+ * the selected method's section is shown, the kept result of every other
+ * method is collapsed below with "Use this method". A switch generates nothing. The HairDeck
  * colour (POST /characters/{n}/hair/colour) and the placement (POST
  * /characters/{n}/hair/placement {forward_m, tilt_deg}, null = automatic)
  * only re-fit from the stored HairDeck result.
@@ -346,33 +346,57 @@ function HairPlacementForm({ placement, busy, running, onApply }: {
   )
 }
 
-/** The collapsed newest last result among the methods that are not selected. */
-function OtherMethod({ other, method, limits }: {
-  other: OtherMethodInfo | null
+/** The kept results of the methods not selected (newest first), each collapsed
+ *  with "Use this method" (the same save as the selector above — the switch
+ *  generates nothing), then one line per method without a result. */
+function OtherMethods({ others, method, limits, busy, onUse }: {
+  others: OtherMethodInfo[]
   method: HairMethod
   limits: HairInfo['limits']
+  busy: boolean
+  onUse: (method: HairMethod) => void
+}) {
+  const { t } = useI18n()
+  const listed = new Set(others.map((o) => o.method))
+  const empty = METHODS.filter((m) => m !== method && !listed.has(m))
+  return (
+    <>
+      {others.map((o) => (
+        <OtherMethod key={o.method} other={o} limits={limits} busy={busy} onUse={() => onUse(o.method)} />
+      ))}
+      {empty.map((m) => (
+        <div key={m} className="ga-hint">{t(METHOD_LABELS[m])}: {t('no result yet')}</div>
+      ))}
+    </>
+  )
+}
+
+/** One kept result of a method that is not selected. */
+function OtherMethod({ other, limits, busy, onUse }: {
+  other: OtherMethodInfo
+  limits: HairInfo['limits']
+  busy: boolean
+  onUse: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  if (!other) {
-    const others = METHODS.filter((m) => m !== method).map((m) => t(METHOD_LABELS[m])).join(', ')
-    return (
-      <div className="ga-hint">
-        {t('Other method')} ({others}): {t('no result yet')}
-      </div>
-    )
-  }
   const hairdeck = other.method === 'hairdeck'
+  const kept = other.created_at
+    ? t('kept result from {date} — switching back generates nothing')
+      .replace('{date}', formatDateTime(other.created_at, clockSettings()))
+    : t('kept result — switching back generates nothing')
   return (
     <details onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="ga-hint" style={{ cursor: 'pointer' }}>
-        {t('Other method')} ({t(METHOD_LABELS[other.method])}): {t('last result')}
-        {other.created_at ? ` · ${formatDateTime(other.created_at, clockSettings())}` : ''}
+        {t(METHOD_LABELS[other.method])}: {kept}
+        {!other.on_current_base ? ` · ${t('Fitted on an older base model')}` : ''}
       </summary>
-      {!other.on_current_base ? (
-        <div className="ga-hint" style={WARN_STYLE}>{t('Fitted on an older base model')}</div>
-      ) : null}
+      <div style={ROW}>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onUse}>
+          {t('Use this method')}
+        </button>
+      </div>
       {other.colour?.target ? (
         <div style={ROW}>
           <span className="ga-hint">{t('Hair colour')}:</span>
@@ -389,9 +413,6 @@ function OtherMethod({ other, method, limits }: {
         <Model3DViewer key={other.preview_url} url={other.preview_url} format="glb" height={300}
           freshness={other.preview_freshness} />
       ) : null}
-      <div className="ga-hint">
-        {t('Select this method above to use it again — its files stay, the switch generates nothing.')}
-      </div>
     </details>
   )
 }
@@ -758,7 +779,8 @@ export function FieldHair({ character, onEditAppearance }: {
             </div>
             {hairdeckLook}
             {subtractLook}
-            <OtherMethod other={info.other} method={info.method} limits={limits} />
+            <OtherMethods others={info.others} method={info.method} limits={limits} busy={busy}
+              onUse={(m) => { void setMethod(m) }} />
           </div>
         </>
       ) : null}

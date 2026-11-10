@@ -2017,12 +2017,14 @@ def _other_fit(character_name: str, item_id: str, method: str,
     return (hit[0], hit[1], False) if hit else None
 
 
-def other_method_info(character_name: str, item_id: str, *,
-                      profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """The Hair tab's collapsed "Other method": the last result of a hair
-    method NOT selected — ``{method, preview_url, created_at, metrics,
-    colour, on_current_base}`` of the newest accepted fit among the other
-    methods — or None when they have none (or the item is no hair)."""
+def other_methods_info(character_name: str, item_id: str, *,
+                       profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The Hair tab's collapsed "Other methods": one entry per hair method NOT
+    selected that has a result — ``{method, preview_url, created_at, metrics,
+    colour, on_current_base}`` of the accepted fit it would serve if selected
+    (``_other_fit``) — newest first; ``[]`` when none has one (or the item is
+    no hair). Selecting such a method generates nothing: its fit is served as
+    it is (a fit on an older base model stays stale until the method runs)."""
     from app.core import garment_hair
     from app.core.http_files import content_version
     from app.models.character import get_character_profile
@@ -2030,20 +2032,21 @@ def other_method_info(character_name: str, item_id: str, *,
         profile = get_character_profile(character_name) or {}
     _item_, kind = _item(character_name, item_id)
     if kind != garment_hair.HAIR_KIND:
-        return None
+        return []
     current = garment_hair.hair_method(character_name, profile=profile)
     hits = [(m, _other_fit(character_name, item_id, m, profile)) for m in garment_hair.HAIR_METHODS if m != current]
     hits = [(m, h) for m, h in hits if h is not None]
-    if not hits:
-        return None
-    other, (path, record, on_base) = max(hits, key=lambda mh: _stamp(mh[1][0]) or 0)
-    try:
-        url: Optional[str] = _url(character_name, item_id, "model", content_version(path), f"&method={other}")
-    except OSError:
-        url = None
-    return {"method": other, "preview_url": url, "created_at": record.get("created_at"),
-            "metrics": record.get("metrics") or {}, "colour": record.get("colour"),
-            "on_current_base": on_base}
+    hits.sort(key=lambda mh: _stamp(mh[1][0]) or 0, reverse=True)
+    out: List[Dict[str, Any]] = []
+    for method, (path, record, on_base) in hits:
+        try:
+            url: Optional[str] = _url(character_name, item_id, "model", content_version(path), f"&method={method}")
+        except OSError:
+            url = None
+        out.append({"method": method, "preview_url": url, "created_at": record.get("created_at"),
+                    "metrics": record.get("metrics") or {}, "colour": record.get("colour"),
+                    "on_current_base": on_base})
+    return out
 
 
 #: The HairDeck images the Hair tab shows: the input (the profile picture

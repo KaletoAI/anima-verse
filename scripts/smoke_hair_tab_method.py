@@ -4,7 +4,7 @@ docs/superpowers/plans/2026-11-09-hairdeck-hair.md, Task 5): the routes
 POST /characters/{n}/hair/method, POST /characters/{n}/hair/colour,
 GET /characters/{n}/garments/{item}/hairdeck/{image}, the ``method`` query of
 the garment model route and the new keys of GET /characters/{n}/hair
-(method, method_source, world_method, hairdeck, other, limits.hairdeck_fit).
+(method, method_source, world_method, hairdeck, others, limits.hairdeck_fit).
 
 Usage:
     ./.venv/bin/python scripts/smoke_hair_tab_method.py
@@ -27,7 +27,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
 [1] Player session: POST /hair/method, POST /hair/colour, the HairDeck image
     route and the model route with ?method= answer 403; nothing is stored.
 [2] GET /hair before any item: method "edit_chain", method_source "world",
-    world_method "edit_chain" (schema default), hairdeck None, other None;
+    world_method "edit_chain" (schema default), hairdeck None, others [];
     limits.hairdeck_fit = the HairDeck gate constants as "le" chips:
     max_push_m 0.12, moved_share 0.90, icp_resid_p95_m 0.012.
 [3] Method: "bogus" -> 400, profile key absent; "hairdeck" -> 200 {method
@@ -53,7 +53,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     0.28235·255 = 72.0 -> 48). Image route:
     prep -> the job's prep.png bytes "prep.png-call1", input -> the profile
     picture's bytes, "bogus" -> 400, a traversal name -> 400/404 without the
-    planted secret. other None (no edit-chain fit).
+    planted secret. others [] (no edit-chain or subtract fit).
 [6] Colour "#FF8000" -> 200 {target "#ff8000", source "override"}, profile
     "#ff8000". GET: fsig F2 != F1, hairdeck.hsig unchanged, garment.fit
     "missing", stale_reasons ["colour_changed"], served_fsig still F1.
@@ -65,13 +65,15 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     again, fit accepted (nothing to run: counts stay (1, 2)).
 [7] Method "edit_chain" (no edit-chain fit exists): GET garment.method
     "edit_chain", the five edit-chain steps, served_fsig None, preview_url
-    None (the tab says "No hair from this method yet"); other.method
-    "hairdeck", on_current_base True, other.preview_url ends in
+    None (the tab says "No hair from this method yet"); others = ONE entry
+    (subtract has no fit): method "hairdeck", on_current_base True, preview_url ends in
     "&method=hairdeck" and names the F1 fit (what HairDeck would serve with
     colour "", not the newer F2); the model route ?method=hairdeck returns
     the F1 bytes, the plain model route and ?method=edit_chain are 404,
     ?method=bogus is 400. Counts stay (1, 2): the switch generated nothing.
-    Back to "hairdeck": served_fsig F1, other None.
+    Back to "hairdeck" (the Hair tab's "Use this method" button sends the same
+    POST /hair/method): served_fsig F1, others [], counts still (1, 2) — the
+    kept fit is served with 0 jobs.
 [8] Fix round 1 — a forced regenerate gives a NEW result: two POST run
     {step "hairdeck", force true} send seeds 43 and 44 (the next seed after
     the highest the job record has seen: 42 -> 43 -> 44) to generate_hair;
@@ -305,8 +307,8 @@ def main() -> int:
             print("[2] GET /hair before the item")
             h = hair()
             check("method keys", (h.get("method"), h.get("method_source"), h.get("world_method"),
-                                  h.get("hairdeck"), h.get("other"), h.get("item_id")),
-                  ("edit_chain", "world", "edit_chain", None, None, None))
+                                  h.get("hairdeck"), h.get("others"), h.get("item_id")),
+                  ("edit_chain", "world", "edit_chain", None, [], None))
             check("hairdeck limits", (h.get("limits") or {}).get("hairdeck_fit"),
                   {"max_push_m": {"op": "le", "value": 0.12}, "moved_share": {"op": "le", "value": 0.90},
                    "icp_resid_p95_m": {"op": "le", "value": 0.012}})
@@ -369,7 +371,7 @@ def main() -> int:
                    "profile": {"name": "blonde", "hex": "#d3b497"},
                    "fitted": {"target": "#d3b497", "source": "profile", "name": "blonde", "applied": True,
                               "delta_e_before": 20.0, "delta_e_after": 0.0}})
-            check("other none", h.get("other"), None)
+            check("others none", h.get("others"), [])
             r = client.get((imgs.get("prep") or {}).get("url") or "/none")
             check("prep bytes", (r.status_code, r.content), (200, b"prep.png-call1"))
             r = client.get("/characters/Demo/garments/hair_demo/hairdeck/input")
@@ -420,7 +422,9 @@ def main() -> int:
             check("edit garment", (g.get("method"), sorted(g.get("steps") or {}), g.get("served_fsig"),
                                    g.get("preview_url")),
                   ("edit_chain", sorted(["haired", "ghost", "cutout", "mesh", "fit"]), None, None))
-            other = h.get("other") or {}
+            others = h.get("others") or []
+            check("one other method", [o.get("method") for o in others], ["hairdeck"])
+            other = others[0] if others else {}
             f1_fit = gs.garment_path("Demo", "hair_demo", f1, "fit")
             murl = "/characters/Demo/garments/hair_demo/model"
             check("other", (other.get("method"), other.get("on_current_base"), other.get("preview_url")),
@@ -432,9 +436,10 @@ def main() -> int:
             check("edit_chain model 404", client.get(f"{murl}?method=edit_chain").status_code, 404)
             check("bogus method 400", client.get(f"{murl}?method=bogus").status_code, 400)
             check("switch generated nothing", counts(), (1, 2))
-            client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
+            r = client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
             h = hair()
-            check("back to hairdeck", ((h.get("garment") or {}).get("served_fsig"), h.get("other")), (f1, None))
+            check("back to hairdeck", (r.status_code, (h.get("garment") or {}).get("served_fsig"), h.get("others"),
+                                       counts()), (200, f1, [], (1, 2)))
 
             # --- [8] forced regenerate: next seed ----------------------------------
             print("[8] forced HairDeck regenerate takes the next seed")

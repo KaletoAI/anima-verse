@@ -29,7 +29,11 @@ EXPECTED, BY HAND
     (medium hair); garment_info: method subtract, steps mesh_source / cut / fit accepted, served_fsig F.
 [2] A second run: ran [], no render, no mesh job.
 [3] Method away and back: edit_chain -> garment_fsig = the edit fsig; subtract again -> F again; run -> ran [],
-    no job. other_method_info under edit_chain names the subtract fit.
+    no job. other_methods_info under edit_chain lists exactly the subtract fit ([{method subtract, on_current_base
+    True}], hairdeck has none). With both other methods holding a fit (``_other_fit`` stubbed: hairdeck file
+    mtime 2000 s, subtract 1000 s, subtract off the current base) under edit_chain: [hairdeck, subtract] — newest
+    first — with on_current_base [True, False] and preview_url ending "&method=<method>"; under hairdeck only
+    [subtract] (the selected method is never listed).
 [4] The base model rewritten under the same base signature (another texture colour -> another sha): the subtract
     fsig changes (base model in it), the edit fsig and the ssig do not; garment_info cut "missing"; run -> ran
     ["cut", "fit"], renders and mesh jobs unchanged; cut record unrigged_sha256 unchanged (only the texture moved),
@@ -281,8 +285,31 @@ def main() -> int:
         print("[3] method away and back")
         set_profile(hair_method="edit_chain")
         check("edit fsig", gs.garment_fsig("Demo", hid), f_edit)
-        other = garments.other_method_info("Demo", hid) or {}
-        check("other method = subtract", other.get("method"), "subtract")
+        others = garments.other_methods_info("Demo", hid)
+        check("other methods = subtract", [(o.get("method"), o.get("on_current_base")) for o in others],
+              [("subtract", True)])
+        fake = Path(tempfile.mkdtemp(prefix="hair-others-"))
+        fits = {}
+        for m, mtime, on_base in (("hairdeck", 2000, True), ("subtract", 1000, False)):
+            f = fake / f"{m}.glb"
+            f.write_bytes(m.encode())
+            os.utime(f, (mtime, mtime))
+            fits[m] = (f, {"created_at": f"t{mtime}", "metrics": {}}, on_base)
+        real_other_fit = garments._other_fit
+        garments._other_fit = lambda _c, _i, m, _p: fits.get(m)
+        try:
+            both = garments.other_methods_info("Demo", hid)
+            check("both others, newest first",
+                  [(o["method"], o["on_current_base"], o["created_at"], (o["preview_url"] or "").endswith(f"&method={o['method']}"))
+                   for o in both],
+                  [("hairdeck", True, "t2000", True), ("subtract", False, "t1000", True)])
+            set_profile(hair_method="hairdeck")
+            check("selected never listed", [o["method"] for o in garments.other_methods_info("Demo", hid)],
+                  ["subtract"])
+            set_profile(hair_method="edit_chain")
+        finally:
+            garments._other_fit = real_other_fit
+            shutil.rmtree(fake, ignore_errors=True)
         set_profile(hair_method="subtract")
         check("subtract fsig again", gs.garment_fsig("Demo", hid), f1)
         res = garments.run_garment("Demo", hid)

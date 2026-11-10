@@ -89,8 +89,8 @@ Expected values, derived by hand from the fixtures below:
       The front rewritten with other bytes -> model.freshness stale "Base
       views re-rendered since this model".
     annotate_hair: every image and attempt current, the fit step untouched,
-    preview current, the other method's preview stale "Fitted on an older
-    base model".
+    preview current; of the two other methods' previews the one off the
+    current base stale "Fitted on an older base model", the other current.
     annotate_model3d_info with filename "../x": no steps (path refused),
     freshness current. Garbage payloads come back without raising.
 [5] Wiring: the four info routes in app/routes/characters.py call their
@@ -351,14 +351,15 @@ def main() -> int:
                         "steps": {"haired": {"front": {"url": "u", "attempts": [{"attempt": 1, "url": "a"}]}},
                                   "fit": {"status": "accepted"}}},
             "hairdeck": {"images": {"input": {"url": "i"}, "prep": None}},
-            "other": {"on_current_base": False}}
+            "others": [{"on_current_base": False}, {"on_current_base": True}]}
     out = mo.annotate_hair(hair)
     tile = out["garment"]["steps"]["haired"]["front"]
     check("hair tile", (tile["freshness"]["state"], tile["attempts"][0]["freshness"]["state"]), (C, C))
     check("fit untouched", "freshness" in out["garment"]["steps"]["fit"], False)
     check("hair preview", out["garment"]["preview_freshness"]["state"], C)
     check("hairdeck tile", out["hairdeck"]["images"]["input"]["freshness"]["state"], C)
-    check("other preview", st(out["other"]["preview_freshness"]), (S, "Fitted on an older base model"))
+    check("other previews", [st(o["preview_freshness"]) for o in out["others"]],
+          [(S, "Fitted on an older base model"), (C, "")])
     out = mo.annotate_model3d_info("Ann", {"model": {"filename": "../x", "match": "exact", "base_signature": "b"}})
     check("traversal refused", ("steps" in out["model"], out["model"]["freshness"]["state"]), (False, C))
     for fn, payload in ((lambda p: mo.annotate_base_info("Ann", p), {"signature": bsig, "image_meta": "x"}),

@@ -1275,8 +1275,8 @@ def annotate_garment(payload: Dict[str, Any]) -> Dict[str, Any]:
 def annotate_hair(payload: Dict[str, Any]) -> Dict[str, Any]:
     """The Hair tab payload + ``freshness`` on every image (all of them
     belong to the current fsig / hsig / profile picture: current when
-    present), ``garment.preview_freshness`` and
-    ``other.preview_freshness``. Never raises."""
+    present), ``garment.preview_freshness`` and the
+    ``preview_freshness`` of every entry of ``others``. Never raises."""
     try:
         _annotate_garment_info(payload.get("garment"))
         hairdeck = payload.get("hairdeck")
@@ -1284,10 +1284,10 @@ def annotate_hair(payload: Dict[str, Any]) -> Dict[str, Any]:
             for tile in (hairdeck.get("images") or {}).values():
                 if isinstance(tile, dict):
                     tile["freshness"] = freshness(CURRENT)
-        other = payload.get("other")
-        if isinstance(other, dict):
-            other["preview_freshness"] = (freshness(CURRENT) if other.get("on_current_base")
-                                          else freshness(STALE, FITTED_ON_OLDER_BASE))
+        for other in payload.get("others") or []:
+            if isinstance(other, dict):
+                other["preview_freshness"] = (freshness(CURRENT) if other.get("on_current_base")
+                                              else freshness(STALE, FITTED_ON_OLDER_BASE))
     except Exception:  # noqa: BLE001
         logger.exception("Hair freshness failed")
     return payload

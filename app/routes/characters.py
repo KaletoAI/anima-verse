@@ -1953,7 +1953,7 @@ def get_character_hair(character_name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Hair tab: ``{pipeline, humanoid, description, behind_shoulders,
     item_id, equipped, garment, collision, limits, method, method_source,
-    world_method, hairdeck, other}`` — ``description`` is
+    world_method, hairdeck, others}`` — ``description`` is
     derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
     else the one the character owns (None: no item yet), ``garment`` its
     ``garments.garment_info`` (None without an item), ``collision`` the
@@ -1964,9 +1964,9 @@ def get_character_hair(character_name: str,
     length class, ``garment_hairdeck.gates_for``). ``method`` / ``method_source``
     (``"character"`` | ``"world"``) the hair method in effect, ``world_method``
     the world default; ``hairdeck`` the HairDeck section of the current
-    ``hsig`` (``garments.hairdeck_panel``) and ``other`` the last result of
-    the method not selected (``garments.other_method_info``), both None
-    without an item. Every image carries a ``freshness`` and both previews a
+    ``hsig`` (``garments.hairdeck_panel``, None without an item) and
+    ``others`` the kept results of the methods not selected, newest first
+    (``garments.other_methods_info``, ``[]`` without an item). Every image carries a ``freshness`` and both previews a
     ``preview_freshness`` (``model_overview.annotate_hair``)."""
     from app.core import base_body, garment_hair, garment_hairdeck, garments
     from app.core.model_refs import is_humanoid
@@ -1978,14 +1978,16 @@ def get_character_hair(character_name: str,
     item_id = item["id"] if item else None
     worn = profile.get("equipped_mesh_pieces")
     equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
-    info = hairdeck = other = None
+    info = hairdeck = None
+    others: List[Dict[str, Any]] = []
     if item_id:
         try:
             info = garments.garment_info(character_name, item_id)
             hairdeck = garments.hairdeck_panel(character_name, item_id, profile=profile)
-            other = garments.other_method_info(character_name, item_id, profile=profile)
+            others = garments.other_methods_info(character_name, item_id, profile=profile)
         except ValueError:
-            info = hairdeck = other = None
+            info = hairdeck = None
+            others = []
     method, method_source = garment_hair.hair_method_source(character_name, profile=profile)
     # The preview is the hair fitted on the current base model, so the base
     # model's capsule set is what the viewer pushes the hair out of (the
@@ -2012,7 +2014,7 @@ def get_character_hair(character_name: str,
                                if humanoid else None))},
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.world_hair_method(),
-                "hairdeck": hairdeck, "other": other,
+                "hairdeck": hairdeck, "others": others,
                 "subtract": _hair_subtract_settings(character_name, profile) if humanoid else None}
     from app.core.model_overview import annotate_hair
     return annotate_hair(payload)
