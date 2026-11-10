@@ -31,6 +31,8 @@ is the same for every wearer, the fit is per wearer (``garment_store``).
 import re
 from typing import Any, Dict, Optional, Tuple
 
+from app.core.garment_gates import WORN_GATE_VERSION
+
 KIND = "clothing"
 #: What the messages call the thing in the images ("No garment found …").
 SUBJECT = "garment"
@@ -72,6 +74,10 @@ DEFAULT_NOUN = "garment"
 #: ``garment_edit`` adds the shared part. Kept for backends that read
 #: negatives — the prompts say everything positively.
 GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "mannequin", "hanger")
+#: The gate version per step whose gate changed since attempts were stored
+#: (``garment_images``: a refused view re-gates its stored attempts of an
+#: older version before it renders again).
+GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION}
 #: The pair check: the front ghost against the accepted back ghost.
 PAIR_STEP = "ghost"
 PAIR_REFUSED = "front and back garment end at different heights"

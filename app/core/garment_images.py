@@ -51,6 +51,16 @@ front's record (the front opening on the back). The accepted back records
 the front it follows (``front_sha256``); a new accepted front drops the back
 and everything after it.
 
+A step whose gate changed (``kind.GATE_VERSIONS``: clothing ``worn``,
+``garment_gates.WORN_GATE_VERSION``) RE-GATES its stored attempts before it
+renders again (``_regate_stored``): when the view's final is not accepted,
+every attempt file whose gate record is of an older version is gated again
+from the file (masks only, no image job) — a drafted back only while the
+attempt was fitted from the current front (``front_sha256``). The first
+that passes is published like a fresh accepted attempt; the others keep
+their new records. Nothing passes: the step renders as before. That runs on
+the next chain run of the piece and on the step's Regenerate / Run all.
+
 ``cut_out`` turns an accepted ghost image into the generator input
 (R6): BiRefNet-DIS mask on the original colours, a square of side
 ``1.15 × max(w, h)`` around the mask, routed upscale below 1024², Lanczos
@@ -66,7 +76,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from app.core.log import get_logger
 
@@ -355,6 +365,18 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         source_rgb = _rgb(source, base_size)
         source_mask = _mask(source, base_size)
 
+    if not _accepted(final):
+        def regate(path: Path, old: Dict[str, Any]) -> Dict[str, Any]:
+            record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask, source_rgb=source_rgb,
+                               source_mask=source_mask, edit_rgb=_rgb(path, base_size),
+                               edit_mask=_mask(path, base_size), item_id=item_id)
+            # A registered attempt file is already moved: its correction stays recorded.
+            record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale") if k in old})
+            return _with_pair(record, pair_check)
+        hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate)
+        if hit is not None:
+            return hit
+
     records: List[Dict[str, Any]] = []
     for attempt in range(1, ATTEMPTS + 1):
         target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
@@ -398,9 +420,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                                edit_rgb=edit_rgb, edit_mask=edit_mask, item_id=item_id)
             if registration is not None:
                 record = _with_registration(record, registration)
-            reason = pair_check(record) if pair_check is not None else None
-            if reason:
-                record = {**record, "ok": False, "reasons": [*(record.get("reasons") or []), reason]}
+            record = _with_pair(record, pair_check)
         record["attempt"] = attempt
         records.append(record)
         if path is not None:
@@ -411,6 +431,73 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         if record["ok"]:
             return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt)
     raise GateRefused(step, view, records)
+
+
+def _with_pair(record: Dict[str, Any], pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]],
+               extra: Sequence[str] = ()) -> Dict[str, Any]:
+    """The gate record refused by ``extra`` reasons and the pair check's reason, if any."""
+    reasons = list(extra)
+    reason = pair_check(record) if pair_check is not None else None
+    if reason:
+        reasons.append(reason)
+    if not reasons:
+        return record
+    return {**record, "ok": False, "reasons": [*(record.get("reasons") or []), *reasons]}
+
+
+def _stale_gate(kind, step: str, record: Any) -> bool:
+    """Whether a stored attempt's gate record predates the step's gate
+    version (``kind.GATE_VERSIONS``; a record without ``gate_version`` is
+    version 1). False for a step without a version or no record."""
+    version = (getattr(kind, "GATE_VERSIONS", None) or {}).get(step)
+    if version is None or not isinstance(record, dict) or not record:
+        return False
+    try:
+        return int(record.get("gate_version") or 1) < int(version)
+    except (TypeError, ValueError):
+        return True
+
+
+def _regate_stored(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, *,
+                   final: Path, regate: Callable[[Path, Dict[str, Any]], Dict[str, Any]],
+                   keep: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                   follow_keys: Sequence[str] = ()) -> Optional[Path]:
+    """Gate the stored attempt files of a refused view again (module
+    docstring): every attempt whose gate record is stale (``_stale_gate``)
+    and that ``keep`` accepts (its sidecar; a drafted back: fitted from the
+    current front) gets ``regate(path, old record)`` as its new record —
+    written into its sidecar, ``regated_from`` = the old version. The first
+    that passes is published (``_publish``; ``follow_keys`` of its sidecar
+    go into the final's record) and returned; None when none passes or none
+    is stale. Reads files and masks only: never renders."""
+    from app.core.garment_store import garment_path, read_record, write_record
+    records: List[Dict[str, Any]] = []
+    stale_any = False
+    for attempt in range(1, ATTEMPTS + 1):
+        target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
+        sidecar = read_record(target.with_suffix(".json")) if target.is_file() else {}
+        old = sidecar.get("gate") if isinstance(sidecar.get("gate"), dict) else None
+        if old is None:
+            records.append({"view": view, "ok": False, "reasons": ["no stored attempt"], "attempt": attempt})
+            continue
+        if not _stale_gate(kind, step, old) or (keep is not None and not keep(sidecar)):
+            records.append(old)
+            continue
+        stale_any = True
+        record = {**regate(target, old), "attempt": attempt, "regated_from": int(old.get("gate_version") or 1)}
+        records.append(record)
+        write_record(target.with_suffix(".json"), {**sidecar, "gate": record})
+        logger.info("Garment %s %s %s attempt %d re-gated (gate version %s -> %s): %s %s", character_name, step,
+                    view, attempt, record["regated_from"], record.get("gate_version"),
+                    "accepted" if record.get("ok") else "refused", record.get("reasons") or "")
+        if record.get("ok"):
+            extra = {k: sidecar[k] for k in follow_keys if k in sidecar}
+            return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt,
+                            extra or None)
+    if stale_any:
+        logger.info("Garment %s %s %s: no stored attempt passes the current gate — rendering", character_name,
+                    step, view)
+    return None
 
 
 #: The gate numbers a registration corrects; after it they are the residual.
@@ -489,6 +576,20 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         base_rgb = _rgb(flat_base)
         base_mask = _mask(flat_base, base_size)
 
+    def gate_fit(path: Path) -> Dict[str, Any]:
+        record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask, source_rgb=None, source_mask=None,
+                           edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
+                           item_id=item_id, fitted=True, front_gate=front_gate)
+        return _with_pair(record, pair_check, list(kind.back_reasons(front_gate, record)))
+
+    if not (_accepted(final) and _follows_front(character_name, item_id, fsig, step, final)):
+        hit = _regate_stored(character_name, item_id, fsig, step, "back", kind, final=final,
+                             regate=lambda path, _old: gate_fit(path),
+                             keep=lambda sidecar: sidecar.get("front_sha256") == front_sha,
+                             follow_keys=("front_sha256", "draft", "draft_sha256"))
+        if hit is not None:
+            return hit
+
     # The render arguments of the outfit's draft and fit, nothing worn on
     # the profile (the text names the piece, the reference shows it).
     mesh_profile = {**profile, "equipped_pieces": {}, "equipped_items": []}
@@ -520,16 +621,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
                 record: Dict[str, Any] = {"view": "back", "ok": False, "reasons": ["render failed"]}
             else:
                 path = _crop_back(Path(path), target, canvas, offset, base_size)
-                record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask,
-                                   source_rgb=None, source_mask=None,
-                                   edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
-                                   item_id=item_id, fitted=True, front_gate=front_gate)
-                extra_reasons = list(kind.back_reasons(front_gate, record))
-                reason = pair_check(record) if pair_check is not None else None
-                if reason:
-                    extra_reasons.append(reason)
-                if extra_reasons:
-                    record = {**record, "ok": False, "reasons": [*(record.get("reasons") or []), *extra_reasons]}
+                record = gate_fit(path)
             record["attempt"] = attempt
             records.append(record)
             if path is not None:

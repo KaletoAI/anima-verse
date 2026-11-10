@@ -324,12 +324,32 @@ def bottoms_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Opt
 #
 # worn                    front     back      limit
 #   garment_share         0.701     0.7102    >= 0.01   (something was put on)
-#   outside_dRGB          5.26      4.30      < 8.0
+#   outside_dRGB          5.26      4.30      (recorded, no refusal since gate version 2)
 #   outside_xor           0.0074    0.0048    < 0.015
 #   head_garment          0.0       0.0       <= 0.05
 # refused on purpose: the worn front moved 3 px right (outside_xor 0.0366),
 # 6 px (dRGB 8.86, xor 0.0392, head 0.074), the other view's worn image
 # (xor 0.1314, head 0.381), the head 20 % darker (head_garment 0.869).
+#
+# Worn gate version 2 (2026-11-10, Kai's "Black Lederjacket", fitted back,
+# BiRefNet-DIS masks, 893 x 1536, base y0 51, Hb 1389; both attempts were
+# a correct jacket back and both were refused):
+#                       attempt 1   attempt 2   v1 verdict
+#   outside_dRGB        10.30       9.61        refused (>= 8.0)
+#   head_garment v1     0.0879      0.0808      refused (> 0.05; zone ends at the chin row 231)
+#   head_garment v2     0.0038      0.0         (zone ends at the neck row 211, rule "neck")
+#   outside_xor         0.0330      0.0334      (< 0.04, the fitted back's limit)
+# Colour: the edit model tints the skin warmer. That colour never reaches
+# the model — the chain is worn -> ghost (the garment alone) -> mesh -> CPU
+# fit — so ``outside_dRGB`` protects nothing and is only recorded (the
+# Wardrobe chip shows it as information). Head: the head zone ended at the
+# chin row y0 + 0.13·Hb; the stand-up collar at the nape of a BACK view lies
+# above that row (row 0.13 Hb is in the middle of the neck there). The zone
+# now ends at the neck's narrowest row (``head_zone``): Kai's base back is
+# 140 px wide at the ears (row 146, 0.068 Hb) and 91 px on rows 214..237
+# (0.117..0.134 Hb), widening to 354 px at the shoulder row; the 7-row mean
+# comes within 2 % of 91 px first at row 211 (0.1152 Hb). The collar starts
+# at rows 212 / 214 (a 5 px seam line from row 197 on attempt 1).
 #
 # ghost (front vs the worn front's garment region; back vs the worn back's)
 #                 top_dy     centre_dx  w_ratio  skin_left  outside  neck_fill
@@ -370,15 +390,31 @@ GARMENT_CLOSE = 4           # closing iterations @1536
 GARMENT_MIN_COMPONENT = 0.002   # smallest kept part, share of the base body area
 GARMENT_MARGIN = 8          # px @1536 around the garment region that belong to its edge
 GARMENT_MIN = 0.01          # garment region / base body area, at least
-OUTSIDE_DRGB_MAX = 8.0      # mean |ΔRGB| on the figure outside the garment region
+#: The version of ``worn_gate``; every worn record carries it as
+#: ``gate_version`` (missing = 1). A refused worn view whose stored attempts
+#: were gated by an older version is re-gated from its files before anything
+#: renders again (``garment_images``, ``kind.GATE_VERSIONS``). 2: the colour
+#: outside the garment is recorded, not refused; the head zone ends at the
+#: neck's narrowest row (``head_zone``).
+WORN_GATE_VERSION = 2
 OUTSIDE_XOR_MAX = 0.015     # outline change outside the garment region / base body area
-HEAD_ZONE = CHIN_ROW        # the head: base figure rows above y0 + 0.13·Hb
+HEAD_ZONE = CHIN_ROW        # fallback end of the head: base figure rows above y0 + 0.13·Hb
 HEAD_GARMENT_MAX = 0.05     # share of the head zone inside the garment region
+# The head zone ends at the neck (``head_zone``): the narrowest row of the
+# base silhouette between the head's widest row (above the chin row) and the
+# shoulder row — the first row whose width, a mean over NECK_SMOOTH·Hb rows,
+# comes within NECK_TOL of the narrowest width. A clear neck is at most
+# NECK_NARROW of the head's widest row and the shoulder row is at least
+# NECK_RISE times it; else the chin row (``HEAD_ZONE``) stays the end.
+NECK_SMOOTH = 0.005         # smoothing window / Hb (7 rows at Hb 1389)
+NECK_TOL = 0.02             # within this share of the narrowest width
+NECK_NARROW = 0.85          # a neck is at most this share of the head's widest row
+NECK_RISE = 1.25            # ... and the shoulder row at least this multiple of the neck
 #: The protected zones of the worn gate a piece may change because it is worn
-#: there: piece slot -> zones. ONE zone today, ``head`` (rows above the chin
-#: row y0 + 0.13·Hb); only a ``head`` piece (hat, hood) frees it. ``neck`` is
-#: not in it: the neck lies below the chin row (the shoulder row is 0.19·Hb),
-#: so a scarf or collar never reaches the head zone and needs nothing freed.
+#: there: piece slot -> zones. ONE zone today, ``head`` (rows above the neck's
+#: narrowest row, ``head_zone``); only a ``head`` piece (hat, hood) frees it.
+#: ``neck`` is not in it: a scarf or collar lies below the neck's narrowest
+#: row and needs nothing freed.
 SLOT_ZONES: Dict[str, Tuple[str, ...]] = {"head": ("head",)}
 
 
@@ -506,6 +542,43 @@ def _margin(region, height: int) -> np.ndarray:
     return ndimage.binary_dilation(region, iterations=_iterations(GARMENT_MARGIN, height))
 
 
+def head_zone(base_mask) -> Optional[Dict[str, Any]]:
+    """Where the head zone of the worn gate ends: ``{row, rule, t}`` — the
+    zone is the base figure's rows above ``row``; ``t`` = (row − y0) / Hb.
+
+    ``rule`` ``neck``: the base silhouette's width per row (mask pixels),
+    a mean over ``NECK_SMOOTH``·Hb rows (at least 1, odd); between the
+    head's widest row (in rows y0 .. y0 + ``CHIN_ROW``·Hb) and the shoulder
+    row (y0 + ``SHOULDER_ROW``·Hb) the narrowest width w; ``row`` = the
+    first row there whose width is at most w·(1 + ``NECK_TOL``) — the top
+    of the neck's narrowest stretch. Taken when it is a clear neck: w <=
+    ``NECK_NARROW`` × the head's widest width and the shoulder row's width
+    >= ``NECK_RISE`` × w. ``rule`` ``chin``: otherwise (a silhouette that
+    narrows all the way down to the shoulder row) ``row`` = y0 +
+    ``HEAD_ZONE``·Hb, the zone before gate version 2. None without a
+    figure."""
+    from scipy import ndimage
+    m0 = np.asarray(base_mask, dtype=bool)
+    zones = _zones(m0)
+    if zones is None or zones[1] <= 0:
+        return None
+    y0, hb = zones
+    chin = int(y0 + HEAD_ZONE * hb)
+    shoulder = int(y0 + SHOULDER_ROW * hb)
+    window = max(1, int(round(NECK_SMOOTH * hb)) | 1)
+    width = ndimage.uniform_filter1d(m0.sum(1).astype(np.float64), window, mode="nearest")
+    out = {"row": chin, "rule": "chin", "t": _r((chin - y0) / hb, 4)}
+    if chin <= y0 or shoulder <= chin:
+        return out
+    widest = y0 + int(np.argmax(width[y0:chin]))
+    seg = width[widest:shoulder + 1]
+    narrow = float(seg.min())
+    if not (narrow <= NECK_NARROW * float(width[widest]) and float(width[shoulder]) >= NECK_RISE * narrow):
+        return out
+    row = widest + int(np.nonzero(seg <= narrow * (1 + NECK_TOL))[0][0])
+    return {"row": row, "rule": "neck", "t": _r((row - y0) / hb, 4)}
+
+
 def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
               occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX,
               drift_px: float = OUTSIDE_DRIFT_PX,
@@ -514,8 +587,10 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
 
     The garment region G = ``garment_region``; everything of the figure
     outside G grown by 8 px @1536 (head, arms, hands, legs, feet for a dress)
-    must stay as it was: ``outside_dRGB`` = mean |ΔRGB| where both masks hold
-    there (< 8.0), ``outside_xor`` = (base XOR worn mask) there / base body
+    must stay as it was in outline: ``outside_dRGB`` = mean |ΔRGB| where
+    both masks hold there is RECORDED only (gate version 2: the edit model's
+    skin tint never reaches the mesh, see the calibration block),
+    ``outside_xor`` = (base XOR worn mask) there / base body
     area (< ``outside_xor_limit`` — a moved limb or a re-framed figure).
     ``outside_xor_limit`` = max(``xor_max``, ``drift_px`` · H/1536 ·
     ``outside_outline`` / base body area), ``outside_outline`` = the base
@@ -523,8 +598,10 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     for a big piece, a mean outline drift of ``drift_px`` for a small one
     (a shoe leaves the whole figure's outline exposed); ``outside_drift_px``
     = XOR px / ``outside_outline`` at 1536 is reported. ``head_garment`` =
-    share of the base head zone (rows above y0 + 0.13·Hb) inside G (<= 0.05:
-    a changed face joins G and must not pass as garment) — measured always,
+    share of the base head zone (the figure's rows above the neck's
+    narrowest row, ``head_zone``; recorded as ``head_rule`` ``neck`` /
+    ``chin`` and ``head_row_t``) inside G (<= 0.05: a changed face joins G
+    and must not pass as garment) — measured always,
     gated only when the piece does not occupy the head (``occupied``, from
     its slots via ``occupied_zones``; ``head_gated`` says which). ``garment_share`` =
     G / base body area (>= 0.01: the edit put something on). ``garment_top``
@@ -536,8 +613,8 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     front garment's rows (``garment_rows`` of its record) — then
     ``extra_part`` = the largest connected part of G outside those rows
     (± ``BACK_ROWS_MARGIN`` Hb) / base body area is reported for
-    ``back_follows_front``. Limits and their calibration: see the
-    "Clothing" block above."""
+    ``back_follows_front``. ``gate_version`` = ``WORN_GATE_VERSION``.
+    Limits and their calibration: see the "Clothing" block above."""
     from scipy import ndimage
     _check(base_rgb, base_mask, worn_rgb, worn_mask)
     m0, m1 = np.asarray(base_mask, dtype=bool), np.asarray(worn_mask, dtype=bool)
@@ -557,8 +634,9 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     outline = int((m0 & ~ndimage.binary_erosion(m0) & ~grown).sum())
     xor_limit = max(float(xor_max), drift_px * height / SPIKE_HEIGHT * outline / area)
     drift = xor_px / outline * SPIKE_HEIGHT / height if outline else None
+    zone = head_zone(m0)
     head = np.zeros_like(m0)
-    head[:int(y0 + HEAD_ZONE * hb)] = True
+    head[:zone["row"]] = True
     head &= m0
     head_garment = float((region & head).sum() / max(int(head.sum()), 1))
     box = _bbox(region)
@@ -571,8 +649,6 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     reasons = []
     if not share >= GARMENT_MIN:
         reasons.append(f"nothing put on: garment {_r(share, 4)} < {GARMENT_MIN}")
-    if not d_out < OUTSIDE_DRGB_MAX:
-        reasons.append(f"body outside the garment changed colour: {_r(d_out, 2)} >= {OUTSIDE_DRGB_MAX}")
     if not xor < xor_limit:
         reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {_r(xor_limit, 4)}"
                        + (f" (drift {_r(drift, 2)} px >= {drift_px} px)" if drift is not None else ""))
@@ -584,13 +660,15 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
             "outside_xor": _r(xor, 4), "outside_xor_limit": _r(xor_limit, 4), "outside_outline": outline,
             "outside_drift_px": _r(drift, 2) if drift is not None else None,
             "head_garment": _r(head_garment, 4), "head_gated": head_gated,
+            "head_rule": zone["rule"], "head_row_t": zone["t"],
             "garment_bbox": box,
             "garment_top": box[1] if box else None, "garment_bottom": box[3] if box else None,
             "neckline_depth": _r(depth, 4) if depth is not None else None,
             "hem_t": _r((box[3] - y0) / hb, 5) if box else None,
             **({"outside_xor_max": xor_max} if xor_max != OUTSIDE_XOR_MAX else {}),
             **({"extra_part": _r(extra, 4)} if extra is not None else {}),
-            "body_top": y0, "body_h": hb, "ok": not reasons, "reasons": reasons}
+            "body_top": y0, "body_h": hb, "gate_version": WORN_GATE_VERSION,
+            "ok": not reasons, "reasons": reasons}
 
 
 def garment_rows(record: Dict[str, Any]) -> Optional[Tuple[float, float]]:
@@ -965,7 +1043,7 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
         return {
             "worn": {
                 "garment_share": {"op": "ge", "value": GARMENT_MIN},
-                "outside_dRGB": {"op": "lt", "value": OUTSIDE_DRGB_MAX},
+                # ``outside_dRGB`` has no limit (gate version 2): its chip is information only.
                 # The limit of a record is its own ``outside_xor_limit``
                 # (``record_key``; the area limit grown by the drift limit
                 # over the exposed outline). A record without it (before

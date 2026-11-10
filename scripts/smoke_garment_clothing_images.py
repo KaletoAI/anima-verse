@@ -24,7 +24,9 @@ fragment "a knee-length green linen dress with short sleeves." — worn by Demo.
 Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
   BASE  head disc centre (512, 200) r 100 + torso cols [392, 632) rows
         [300, 1100) in skin (200, 160, 140) -> base mask rows 100 .. 1099:
-        y0 100, Hb 999. Head zone rows < int(100 + 0.13 x 999) = 229.
+        y0 100, Hb 999. Head zone rows < int(100 + 0.13 x 999) = 229 (the
+        chin rule of ``head_zone``: the disc narrows down to the shoulder
+        row, no neck — the neck rule: scripts/smoke_garment_worn_regate.py).
         Skin sample rows int(100 + 0.04 x 999) = 139 .. int(100 + 0.10 x 999)
         = 199, middle row 169: head chord half-width sqrt(100² - 31²) = 95
         -> columns 464 .. 560, all skin -> sample (200, 160, 140).
@@ -94,7 +96,8 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
     An item without a fragment -> ValueError "has no prompt fragment".
 [3] Gates as derived above (ok flags, the named reasons, the numbers of the
-    good records); limits("clothing") names worn + ghost keys (ghost incl.
+    good records); limits("clothing") names worn + ghost keys (worn without
+    outside_dRGB since gate version 2 — recorded, never refused; ghost incl.
     the registration caps reg_shift / reg_scale,
     scripts/smoke_garment_ghost_registration.py), limits() is
     still the hair table (keys fit/ghost/haired… untouched: [haired, ghost]).
@@ -344,7 +347,7 @@ def gates_part(gg, kept):
     raised = ghost_gate(GHOST_RAISED)
     check("raised refused", (reason(raised, "garment top moved"), raised["top_dy"]), ((False, True), -0.01001))
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
-          {"worn": ["garment_share", "head_garment", "outside_dRGB", "outside_xor"],
+          {"worn": ["garment_share", "head_garment", "outside_xor"],
            "ghost": ["centre_dx", "outside", "reg_scale", "reg_shift", "skin_left", "top_dy", "w_ratio"]})
     check("limits hair unchanged", sorted(gg.limits()), ["ghost", "haired"])
 
