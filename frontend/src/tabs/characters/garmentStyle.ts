@@ -104,7 +104,10 @@ export function chipResults(specs: ChipSpec[], record: Record<string, unknown> |
   for (const spec of specs) {
     const value = num(record[spec.key])
     const gated = !(spec.gatedKey && record[spec.gatedKey] === false)
-    const limit = gated ? limits?.[spec.key] : undefined
+    const general = gated ? limits?.[spec.key] : undefined
+    // A record that carries its own limit (record_key) is judged by it.
+    const own = general?.record_key ? num(record[general.record_key]) : null
+    const limit = general && own !== null ? { ...general, value: own } : general
     // A limit gated on other views only (the chest on the back) is not shown.
     if (limit?.views && view && !limit.views.includes(view)) continue
     if (value === null) continue

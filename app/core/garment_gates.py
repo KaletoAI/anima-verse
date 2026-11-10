@@ -428,6 +428,40 @@ HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
 BACK_OPENING_MIN = 0.04     # back neckline depth / Hb from which the back has an opening
 BACK_OPENING_SHARE = 0.5    # ... refused when it reaches this share of the front's depth
 FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED view (drafted back)
+# The outline XOR is an AREA share, so what it measures grows with how much
+# of the outline lies outside the garment: the same drift costs a small
+# piece far more than a big one. Measured 2026-11-10 (Kira, BiRefNet-DIS
+# masks, H 1536, base back area 302 309 px, base outline 6 499 px): a 1 px
+# shift of the bare figure alone is XOR 0.0204 (> 0.015), 2 px 0.0408, a 1 %
+# re-frame 0.0417. Exposed outline L (base outline px outside the grown
+# garment) and the mean drift on it (``outside_drift_px`` = XOR px / L, at
+# 1536):
+#                                 L      XOR     drift   (old verdict)
+#   Black Stilettos edit back 1   5999   0.0264  1.33    refused
+#   Black Stilettos edit back 2   5994   0.0238  1.20    refused
+#   Black Stilettos front 1       6074   0.0201  1.01    refused
+#   Black Stilettos front 2       6023   0.0100  0.51    accepted
+#   sport shoes front             6094   0.0140  0.70    accepted
+#   Black Blazer front 1          4291   0.0181  1.29    refused
+#   Black Blazer front 2          1659   0.0023  0.42    accepted
+#   Black Blazer edit backs 1/2   ~1450  0.0040  0.84/0.91 accepted
+#   Black Blazer fit backs 1/2    3028/3437 0.0132/0.0171 1.32/1.50 (accepted 2)
+#   Black Stilettos fit backs 1/2 4922/5127 0.0495/0.0483 3.04/2.85 refused
+# The refused edits are clean (overlays: a 1 px fringe along the whole
+# figure, about half of it one whole-figure pixel — best shift dx +1 takes
+# 0.0264 to 0.0150); the feet carry 0.0007 / 0.0010 of the stiletto backs'
+# XOR (the shoe is the garment), so heels do not change the outline outside
+# it. The refused fits invented underwear / a sheer bodysuit and slimmed the
+# shins (row 0.85 Hb 130 -> 102 px). An attempt is refused only when the
+# area limit AND the drift limit are both reached: the effective limit is
+# ``max(xor_max, drift_px · H/1536 · L / area)`` (``outside_xor_limit``).
+# Big pieces keep the area limit (blazer: 1.5 px over 1450 px = 0.0072 <
+# 0.015); a shoe gets 1.5 px over ~6000 px ≈ 0.030. A whole-figure drift of
+# 2 px (1.90) or a 1 % re-frame (1.94) still fails an edit; the stiletto fits
+# (2.85 / 3.04) still fail a fit (limit max(0.04, 2.0 · 5127 / 302309 =
+# 0.0339)), the blazer's (1.50) passes.
+OUTSIDE_DRIFT_PX = 1.5      # mean outline drift @1536 an EDITED view may have outside the garment
+FIT_OUTSIDE_DRIFT_PX = 2.0  # ... a FITTED view (drafted back)
 
 
 def garment_region(base_rgb, base_mask, worn_rgb, worn_mask) -> np.ndarray:
@@ -457,14 +491,21 @@ def _margin(region, height: int) -> np.ndarray:
 
 
 def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
-              occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX) -> Dict[str, Any]:
+              occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX,
+              drift_px: float = OUTSIDE_DRIFT_PX) -> Dict[str, Any]:
     """Step 1 gate of clothing: the base view with the piece put on.
 
     The garment region G = ``garment_region``; everything of the figure
     outside G grown by 8 px @1536 (head, arms, hands, legs, feet for a dress)
     must stay as it was: ``outside_dRGB`` = mean |ΔRGB| where both masks hold
     there (< 8.0), ``outside_xor`` = (base XOR worn mask) there / base body
-    area (< 0.015 — a moved limb or a re-framed figure). ``head_garment`` =
+    area (< ``outside_xor_limit`` — a moved limb or a re-framed figure).
+    ``outside_xor_limit`` = max(``xor_max``, ``drift_px`` · H/1536 ·
+    ``outside_outline`` / base body area), ``outside_outline`` = the base
+    outline pixels (mask minus its erosion) outside G grown: the area limit
+    for a big piece, a mean outline drift of ``drift_px`` for a small one
+    (a shoe leaves the whole figure's outline exposed); ``outside_drift_px``
+    = XOR px / ``outside_outline`` at 1536 is reported. ``head_garment`` =
     share of the base head zone (rows above y0 + 0.13·Hb) inside G (<= 0.05:
     a changed face joins G and must not pass as garment) — measured always,
     gated only when the piece does not occupy the head (``occupied``, from
@@ -472,9 +513,11 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     G / base body area (>= 0.01: the edit put something on). ``garment_top``
     / ``garment_bottom`` are G's rows; ``neckline_depth`` (G's ``neckline``
     / Hb) and ``hem_t`` are reported for ``back_follows_front``. ``xor_max``:
-    the outline limit (a fitted back: ``FIT_OUTSIDE_XOR_MAX``, recorded as
-    ``outside_xor_max`` when it differs). Limits and their calibration: see
-    the "Clothing" block above."""
+    the area limit (a fitted back: ``FIT_OUTSIDE_XOR_MAX``, recorded as
+    ``outside_xor_max`` when it differs); ``drift_px``: the drift limit (a
+    fitted back: ``FIT_OUTSIDE_DRIFT_PX``). Limits and their calibration:
+    see the "Clothing" block above."""
+    from scipy import ndimage
     _check(base_rgb, base_mask, worn_rgb, worn_mask)
     m0, m1 = np.asarray(base_mask, dtype=bool), np.asarray(worn_mask, dtype=bool)
     zones = _zones(m0)
@@ -488,7 +531,11 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     grown = _margin(region, height)
     outside = m0 & m1 & ~grown
     d_out = _mean(_diff(base_rgb, worn_rgb)[outside])
-    xor = float(((m0 ^ m1) & ~grown).sum() / area)
+    xor_px = int(((m0 ^ m1) & ~grown).sum())
+    xor = float(xor_px / area)
+    outline = int((m0 & ~ndimage.binary_erosion(m0) & ~grown).sum())
+    xor_limit = max(float(xor_max), drift_px * height / SPIKE_HEIGHT * outline / area)
+    drift = xor_px / outline * SPIKE_HEIGHT / height if outline else None
     head = np.zeros_like(m0)
     head[:int(y0 + HEAD_ZONE * hb)] = True
     head &= m0
@@ -499,14 +546,17 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
         reasons.append(f"nothing put on: garment {_r(share, 4)} < {GARMENT_MIN}")
     if not d_out < OUTSIDE_DRGB_MAX:
         reasons.append(f"body outside the garment changed colour: {_r(d_out, 2)} >= {OUTSIDE_DRGB_MAX}")
-    if not xor < xor_max:
-        reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {xor_max}")
+    if not xor < xor_limit:
+        reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {_r(xor_limit, 4)}"
+                       + (f" (drift {_r(drift, 2)} px >= {drift_px} px)" if drift is not None else ""))
     head_gated = "head" not in set(occupied or ())
     if head_gated and head_garment > HEAD_GARMENT_MAX:
         reasons.append(f"head changed: {_r(head_garment, 3)} of the head > {HEAD_GARMENT_MAX}")
     depth = neckline(region)["depth"] / hb if box else None
     return {"view": view, "garment_share": _r(share, 4), "outside_dRGB": _r(d_out, 2),
-            "outside_xor": _r(xor, 4), "head_garment": _r(head_garment, 4), "head_gated": head_gated,
+            "outside_xor": _r(xor, 4), "outside_xor_limit": _r(xor_limit, 4), "outside_outline": outline,
+            "outside_drift_px": _r(drift, 2) if drift is not None else None,
+            "head_garment": _r(head_garment, 4), "head_gated": head_gated,
             "garment_bbox": box,
             "garment_top": box[1] if box else None, "garment_bottom": box[3] if box else None,
             "neckline_depth": _r(depth, 4) if depth is not None else None,
@@ -867,9 +917,13 @@ def limits(kind: str = "hair") -> Dict[str, Dict[str, Dict[str, Any]]]:
             "worn": {
                 "garment_share": {"op": "ge", "value": GARMENT_MIN},
                 "outside_dRGB": {"op": "lt", "value": OUTSIDE_DRGB_MAX},
-                # The back is fitted (``FIT_OUTSIDE_XOR_MAX``, its record's
-                # ``outside_xor_max``); its reasons name the refusal.
-                "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX, "views": ["front"]},
+                # The limit of a record is its own ``outside_xor_limit``
+                # (``record_key``; the area limit grown by the drift limit
+                # over the exposed outline). A record without it (before
+                # 2026-11-10) falls back to ``value``; the back is fitted
+                # (``FIT_OUTSIDE_XOR_MAX``) and its reasons name the refusal.
+                "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX, "record_key": "outside_xor_limit",
+                                "views": ["front"]},
                 # Not gated for a piece worn on one of ``free_slots`` (SLOT_ZONES).
                 "head_garment": {"op": "le", "value": HEAD_GARMENT_MAX,
                                  "free_slots": sorted(s for s, z in SLOT_ZONES.items() if "head" in z)},

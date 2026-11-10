@@ -179,8 +179,8 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
     """The gate record of one attempt (``garment_gates``): ``worn`` against
     the base view — the zones the piece is worn on (its slots,
     ``garment_gates.occupied_zones``: a hat frees the head) are not checked;
-    a ``fitted`` view (the drafted back) has the outline limit
-    ``garment_gates.FIT_OUTSIDE_XOR_MAX``;
+    a ``fitted`` view (the drafted back) has the outline limits
+    ``garment_gates.FIT_OUTSIDE_XOR_MAX`` / ``FIT_OUTSIDE_DRIFT_PX``;
     ``ghost`` against the garment region of the accepted worn image
     (``source``). All arrays share the base view's size."""
     from app.core import garment_gates
@@ -189,7 +189,9 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
         return garment_gates.worn_gate(base_rgb, base_mask, edit_rgb, edit_mask, view=view,
                                        occupied=garment_gates.occupied_zones(slots),
                                        xor_max=(garment_gates.FIT_OUTSIDE_XOR_MAX if fitted
-                                                else garment_gates.OUTSIDE_XOR_MAX))
+                                                else garment_gates.OUTSIDE_XOR_MAX),
+                                       drift_px=(garment_gates.FIT_OUTSIDE_DRIFT_PX if fitted
+                                                 else garment_gates.OUTSIDE_DRIFT_PX))
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view)

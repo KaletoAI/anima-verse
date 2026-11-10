@@ -104,6 +104,31 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
     (slots [top, bottom]) on WORN_FACE -> refused "head changed", head_gated
     True; occupied_zones([neck]) = () (the neck is below the head zone),
     occupied_zones([head, neck]) = (head,).
+    Outline drift (2026-11-10, Black Stilettos: the outline XOR is an area
+    share, a shoe leaves the whole figure's outline exposed). SHOE fixture
+    on the same canvas: FIG = skin cols [452, 572) rows [100, 1100) (area
+    120 x 1000 = 120000, y0 100, Hb 999), SHOE = black (20, 20, 20) cols
+    [440, 584) rows [1040, 1112) (12 px wider than the leg on each side, so
+    the opening's cut corners — 3 px each, cross structure, 2 iterations —
+    lie off the figure). G = the shoe; grown 6 iterations: its top row 1040
+    spans cols [442, 581] -> rows >= 1034 cover the figure's columns. Base
+    outline (mask minus its erosion) outside the grown G: the top row 100
+    (120 px) + the left and right columns rows 101..1033 (933 each) =
+    outside_outline 1986. outside_xor_limit = max(0.015, 1.5 x 1200/1536 x
+    1986 / 120000) = max(0.015, 0.019395) = 0.0194.
+      SHOE_ON: worn = FIG + SHOE -> outside_xor 0.0, drift 0.0, ok.
+      SHOE_SHIFT1: the whole worn picture 1 px right -> XOR outside the grown
+        G = rows 100..1033 x (col 452 + col 572) = 1868 px = 0.0156 — over
+        the old 0.015, under 0.0194 -> ok; drift 1868 / 1986 x 1536/1200 =
+        1.20 px.
+      SHOE_SHIFT2: 2 px right -> 3736 px = 0.0311 >= 0.0194, drift 2.41 px
+        -> refused ("body outline outside the garment changed").
+      SHOE_TORSO: rows [300, 700) of the figure moved 4 px right (the shoe
+        stays) -> 2 x 4 x 400 = 3200 px = 0.0267 >= 0.0194, drift 2.06 px
+        -> refused (the 4 px strip outside the base is no garment: the
+        opening removes it).
+      The dress (WORN_SHIFT, 6 px) keeps being refused; limits("clothing")
+      worn outside_xor has record_key "outside_xor_limit".
 [4] hems: front GHOST(759) hem_t (759 - 100) / 999 = 0.65966; back
     GHOST(733) hem_t 0.63363 -> |Δ| 0.02603 > 0.02 -> disagree, reason
     "garment ends at another height than in the back view: |Δ| 0.026 Hb >
@@ -208,6 +233,26 @@ WORN_FACE = WORN.copy()
 WORN_FACE[:300][mask_of(WORN)[:300]] = (150, 120, 100)
 
 
+SHOE_BLACK = (20, 20, 20)
+
+
+def shoe_figure(shoe=True):
+    rgb = canvas()
+    rgb[100:1100, 452:572] = SKIN
+    if shoe:
+        rgb[1040:1112, 440:584] = SHOE_BLACK
+    return rgb
+
+
+SHOE_BASE = shoe_figure(shoe=False)
+SHOE_ON = shoe_figure()
+SHOE_SHIFT1 = np.roll(SHOE_ON, 1, axis=1)
+SHOE_SHIFT2 = np.roll(SHOE_ON, 2, axis=1)
+SHOE_TORSO = SHOE_ON.copy()
+SHOE_TORSO[300:700] = GREY
+SHOE_TORSO[300:700, 456:576] = SKIN
+
+
 def ghost(bottom=759, **kw):
     return dress(canvas(), bottom=bottom, neckline="ghost", **kw)
 
@@ -262,6 +307,21 @@ def gates_part(gg, kept):
     check("worn face refused", (reason(face, "head changed"), face["head_garment"]), ((False, True), 1.0))
     none = gg.worn_gate(BASE, mask_of(BASE), BASE, mask_of(BASE), view="front")
     check("worn nothing refused", (reason(none, "nothing put on"), none["garment_share"]), ((False, True), 0.0))
+
+    def shoe(arr):
+        rec = gg.worn_gate(SHOE_BASE, mask_of(SHOE_BASE), arr, mask_of(arr), view="front")
+        return (rec["ok"], rec["outside_xor"], rec["outside_outline"], rec["outside_xor_limit"],
+                rec["outside_drift_px"], rec["outside_dRGB"])
+    check("shoe on", shoe(SHOE_ON), (True, 0.0, 1986, 0.0194, 0.0, 0.0))
+    check("shoe, figure 1 px right: under the drift limit", shoe(SHOE_SHIFT1),
+          (True, 0.0156, 1986, 0.0194, 1.2, 0.0))
+    check("shoe, figure 2 px right: refused", shoe(SHOE_SHIFT2), (False, 0.0311, 1986, 0.0194, 2.41, 0.0))
+    check("shoe, torso 4 px right: refused", shoe(SHOE_TORSO), (False, 0.0267, 1986, 0.0194, 2.06, 0.0))
+    torso = gg.worn_gate(SHOE_BASE, mask_of(SHOE_BASE), SHOE_TORSO, mask_of(SHOE_TORSO), view="front")
+    check("torso reason", torso["reasons"],
+          ["body outline outside the garment changed: XOR 0.0267 >= 0.0194 (drift 2.06 px >= 1.5 px)"])
+    check("limits: own record limit", gg.limits("clothing")["worn"]["outside_xor"].get("record_key"),
+          "outside_xor_limit")
 
     region = gg.garment_region(BASE, mask_of(BASE), WORN, mask_of(WORN))
     neck = gg.neckline(region)

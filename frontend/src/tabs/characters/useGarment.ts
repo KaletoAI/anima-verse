@@ -206,6 +206,8 @@ export interface GateLimit {
   per_height?: boolean
   /** Gated on these views only. */
   views?: string[]
+  /** A record key holding this record's own limit (same op); `value` when the record lacks it. */
+  record_key?: string
 }
 
 export interface HairInfo {
