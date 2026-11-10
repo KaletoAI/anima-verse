@@ -40,7 +40,7 @@ on another body") and the plan's Task 2 bullet:
     coat, H, slip each with fit None + pending. assemble(OA) = {full assembled, low assembled}; FITS = 3 calls
     (coat, H, slip), each on (sha(A), sha(A unrigged)); every mask read for a body fit is tpose_<A>.png (+ the
     ghost fronts). bodies/<A>/{coat,H,slip}_<F>.glb exist; the coat record: accepted, body_id A, body_sha256 sha(A),
-    base_signature bsig, base_fit_sha256 sha(base coat fit), fit_version 2, no base_model_sha256. Assembled OA:
+    base_signature bsig, base_fit_sha256 sha(base coat fit), fit_version 3, no base_model_sha256. Assembled OA:
     garments.H.sha256 = sha(bodies/<A>/H fit) != sha(base H fit); garments.slip = sha(bodies/<A>/slip); garments.coat
     over lsigA = md5[:12]({"inner": {"slip": sha(A slip fit)}, "version": 1}); served(OA) = the assembled file.
     assemble(OB) -> 2 more FITS (coat, H) on (sha(B), sha(B unrigged)); the B coat node r = 0.104 + 0.008 = 0.112,
@@ -59,10 +59,10 @@ on another body") and the plan's Task 2 bullet:
     0.0119 = 0.1244; tolerance as smoke_garment_layering). assemble(OB2) -> 1 FIT (slip on B), layer
     bodies/<B>/layers/coat_<F>_<lsigB>.glb with lsigB = md5[:12]({"inner": {"slip": sha(B slip fit)}, ...}) != lsigA,
     coat r in [0.1279, 0.1310] (0.1165 + 0.0119 = 0.1284). No garments/layers/ of the base.
-[6] FIT_VERSION per body: FIT_VERSION -> {hair 3, clothing 3}, the base records rewritten with fit_version 3 (the
+[6] FIT_VERSION per body: FIT_VERSION -> {hair 4, clothing 4}, the base records rewritten with fit_version 4 (the
     base sweep's result, GLBs unchanged): body_fit_state of coat on A and on B "stale"; outdated_fits = [];
     outdated_body_fits = the 6 body fits {coat, H, slip} x {A, B}; _wanted_for(OA) coat pending. refit_character
-    -> those 6 as "<item>@<body>", 6 FITS each on its own body sha; every body record fit_version 3; afterwards
+    -> those 6 as "<item>@<body>", 6 FITS each on its own body sha; every body record fit_version 4; afterwards
     outdated_body_fits [] and _wanted_for(OA) has no pending entry. HUB 0. FIT_VERSION restored.
 [7] Refusal per body. C: REFUSE = {sha(C)}: body_fit_warning(OC meta) = NOT_FITTED_ON_BODY with "Coat (fit on the
     outfit body refused — too tight), Hair (… too tight)"; failed records on C; a second call -> 0 FITS.
@@ -424,7 +424,7 @@ def main() -> int:
         check("A coat record parents", {k: rec.get(k) for k in ("accepted", "body_id", "body_sha256", "base_signature",
                                                                 "base_fit_sha256", "fit_version", "item_id", "fsig")},
               {"accepted": True, "body_id": A, "body_sha256": sha_a, "base_signature": bsig,
-               "base_fit_sha256": base_fit_sha["coat"], "fit_version": 2, "item_id": "coat", "fsig": fc})
+               "base_fit_sha256": base_fit_sha["coat"], "fit_version": 3, "item_id": "coat", "fsig": fc})
         check("A coat record has no base_model_sha256", "base_model_sha256" in rec, False)
         side = assembled_side("OA")
         check("OA hair = A's hair fit", side["garments"][hid]["sha256"], sha(body_file("hair", A)))
@@ -514,11 +514,11 @@ def main() -> int:
         # --- [6] FIT_VERSION per body ------------------------------------------------------------
         print("[6] FIT_VERSION staleness per body")
         saved_versions = dict(garment_fit.FIT_VERSION)
-        garment_fit.FIT_VERSION.update({"hair": 3, "clothing": 3})
+        garment_fit.FIT_VERSION.update({"hair": 4, "clothing": 4})
         try:
             for key, path in base_fit.items():
                 rec = gs.read_record(path.with_suffix(".json"))
-                gs.write_record(path.with_suffix(".json"), {**rec, "fit_version": 3})
+                gs.write_record(path.with_suffix(".json"), {**rec, "fit_version": 4})
             check("coat on A / B stale", (garments.body_fit_state("Demo", "coat", fc, A, sha_a, base_fit_sha["coat"]),
                                           garments.body_fit_state("Demo", "coat", fc, B, sha_b, base_fit_sha["coat"])),
                   ("stale", "stale"))
@@ -531,9 +531,9 @@ def main() -> int:
             check("refit_character", sorted(done or []), sorted(f"{i}@{b}" for i, _k, _f, b in want6))
             check("6 refits, each on its body", sorted((f[0], f[1]) for f in FITS),
                   sorted((k, s) for k in ("coat", "hair", "slip") for s in (sha_a, sha_b)))
-            check("body records fit_version 3", sorted({gs.read_record(body_file(k, b).with_suffix(".json"))
+            check("body records fit_version 4", sorted({gs.read_record(body_file(k, b).with_suffix(".json"))
                                                         .get("fit_version") for k in ("coat", "hair", "slip")
-                                                        for b in (A, B)}), [3])
+                                                        for b in (A, B)}), [4])
             check("nothing outdated after", garment_refit.outdated_body_fits("Demo"), [])
             check("OA serve: nothing pending", [k for k, g in wanted("OA").items() if g.get("pending")], [])
             check("HUB still 0", HUB, [])

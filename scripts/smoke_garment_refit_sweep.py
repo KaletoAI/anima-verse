@@ -17,11 +17,11 @@ path is a recorder that counts: ``service.get_image_service``,
 ``garment_store.garment_fsig`` / ``garment_method`` / ``garment_hsig`` come
 from fixed tables.
 
-Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 2 clothing 2):
+Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 2 clothing 3):
   item   kind      stored fsig  current fsig  base sha  fit_version  method
   hA     hair      aaaaaaaaaaaa same          SHA       (none)       edit_chain
   cB     clothing  bbbbbbbbbbbb same          SHA       1            edit_chain
-  cC     clothing  cccccccccccc same          SHA       2 (= FV)     edit_chain
+  cC     clothing  cccccccccccc same          SHA       3 (= FV)     edit_chain
   cD     clothing  dddddddddddd eeeeeeeeeeee  SHA       1            edit_chain
   hE     hair      ffffffffffff same          OTHER     (none)       edit_chain
 Each edit-chain item has prepared/{item}_{fsig}.glb (bytes b"P"+item) and its
@@ -36,8 +36,8 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
 [3] Released: sweep([Demo], pause 0) -> {Demo: [cB, hA]}; _fit called for
     cB then hA (the order of [1]), each once; 0 hub calls; 2 assembly
     schedules (one per published fit); exactly 2 log lines "Garment refit
-    Demo/<item>" ending "ok", naming "fit_version 1 -> 2" (cB) and "None -> 2" (hA);
-    records of hA / cB: accepted, fit_version 2, base sha SHA; _fit_state
+    Demo/<item>" ending "ok", naming "fit_version 1 -> 3" (cB) and "None -> 2" (hA);
+    records of hA / cB: accepted, fit_version 2 / 3, base sha SHA; _fit_state
     "accepted"; cC: GLB bytes and record byte-identical, mtime unchanged; cD
     and hE records unchanged. A second sweep -> {} (nothing left).
 [4] HairDeck hair hH (method hairdeck, fsig 999999999999, hsig
@@ -106,7 +106,7 @@ def main() -> int:
 
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
-        check("FIT_VERSION", FV, {"hair": 2, "clothing": 2})
+        check("FIT_VERSION", FV, {"hair": 2, "clothing": 3})
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)
@@ -176,7 +176,7 @@ def main() -> int:
 
         put("hA", "hair", "a" * 12, SHA, None)
         put("cB", "clothing", "b" * 12, SHA, 1)
-        put("cC", "clothing", "c" * 12, SHA, 2)
+        put("cC", "clothing", "c" * 12, SHA, 3)
         put("cD", "clothing", "d" * 12, SHA, 1)
         put("hE", "hair", "f" * 12, OTHER, None)
 
@@ -220,12 +220,12 @@ def main() -> int:
         check("assembly schedules", SCHEDULED, ["Demo", "Demo"])
         refits = [line for line in lines.lines if line.startswith("Garment refit Demo/")]
         check("log lines", len(refits), 2)
-        check("log cB", "fit_version 1 -> 2: ok" in refits[0] and "Demo/cB" in refits[0], True)
+        check("log cB", "fit_version 1 -> 3: ok" in refits[0] and "Demo/cB" in refits[0], True)
         check("log hA", "fit_version None -> 2: ok" in refits[1] and "Demo/hA" in refits[1], True)
-        for item_id, fsig in (("hA", "a" * 12), ("cB", "b" * 12)):
+        for item_id, fsig, version in (("hA", "a" * 12, 2), ("cB", "b" * 12, 3)):
             r = json.loads(rec(item_id, fsig))
             check(f"{item_id} record", (r.get("accepted"), r.get("fit_version"), r.get("base_model_sha256")),
-                  (True, 2, SHA))
+                  (True, version, SHA))
             check(f"{item_id} state", garments._fit_state("Demo", item_id, fsig, SHA), "accepted")
         check("cC untouched", (c_fit.read_bytes() == c_bytes, c_fit.stat().st_mtime_ns == c_mtime,
                                rec("cC", "c" * 12) == before["cC"]), (True, True, True))

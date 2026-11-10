@@ -88,7 +88,9 @@ RIGGED_SMOOTH_UNTIL = 7
 #: no hub job; images and mesh stay cached under the unchanged fsig. Bump a kind whenever its fit output changes.
 #: 2 (2026-11-10): clothing — skinned transfer (sleeves, 3b4b0abf) and the smoothed skirt leg weights; hair — the
 #: Head -> Neck -> Spine2 ramp between the ear line and the shoulder top.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 2}
+#: 3 (2026-11-10): clothing — long sleeves below the waist ride the arm (``sleeve_vertices``); the deep push share
+#: replaces the moved share in the gate.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 3}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
@@ -173,9 +175,23 @@ SKIRT_CENTRE_M = 0.02
 # share 0.0 (spike 0.0). Limits: twice the measured push; the moved share refuses only a piece pushed nearly
 # everywhere (a loose dress moves 0.93, a tight piece legitimately more); one component as for hair; at most 1 % of
 # the vertices left inside the rigged body.
+#
+# ``moved_share`` is REPORTED, no longer gated (2026-11-10, Kira's Black Blazer refused at 0.991): it counts every
+# vertex the push moved by more than 0.17 mm, and the displacement smoothing carries any push to the whole piece, so a
+# close-fitting piece scores ~1 when it is placed right and LESS when it is misplaced (one side then floats free).
+# Measured through the unrigged push-out (blazer on Kira's base20d5701a; e2e dress on the base of that run; spike
+# dress on the spike bases) — moved_share / share of vertices pushed more than 3 cm / max push:
+#   blazer 2966 (correct)        0.991 / 0.031 / 42 mm      blazer 2966 scaled 0.95   0.990 / 0.146 / 46 mm
+#   blazer 8ee7 (correct)        0.972 / 0.073 / 50 mm      blazer 2966 scaled 0.90   0.985 / 0.323 / 56 mm
+#   e2e dress (correct)          0.743 / 0.041 / 54 mm      blazer 2966 scaled 0.85   0.977 / 0.431 / 68 mm
+#   spike dress (correct)        0.926 / 0.079 / 50 mm      blazer 2966 depth +3 cm   0.816 / 0.203 / 80 mm
+#                                                           blazer 2966 depth -3 cm   0.833 / 0.329 / 72 mm
+# The DEEP push share (``DEEP_PUSH_M`` = 3 cm, 2.5 x ``CLEAR_M``) separates them: correct <= 0.079, misplaced >= 0.146
+# — the limit 0.12 lies between; the max push gate passes every one of the misplaced pieces.
+DEEP_PUSH_M = 0.03
 CLOTHING_GATES = {
     "max_push_m": ("max", 0.10, "largest push-out"),
-    "moved_share": ("max", 0.99, "share of vertices moved by the push-out"),
+    "deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm"),
     "largest_component_share": ("min", 0.98, "area share of the largest component"),
     "rigged_inside_share": ("max", 0.01, "share of vertices inside the rigged body after the transfer"),
 }
@@ -786,6 +802,31 @@ def _donor_parts(Wb: np.ndarray, joint_names) -> np.ndarray:
     return parts
 
 
+def sleeve_vertices(Q, body_P, parts, faces, upper) -> np.ndarray:
+    """The SLEEVES of a garment (unrigged units): the vertices whose nearest body vertex lies on an arm chain
+    (``parts`` 1 / 2, ``_donor_parts``) and that are connected through such vertices of the SAME arm — within the
+    garment mesh — to one at or above the waist (``upper``). A long sleeve hangs below the waist in the A-pose (the
+    cuff beside the hip); it is still the sleeve and rides the whole arm, while a skirt panel beside a hanging hand
+    reaches no sleeve through arm-nearest vertices and stays a skirt.
+
+    Measured 2026-11-10, Kira's Black Blazer (long sleeves, waist at the garment top minus 0.20 of the body height):
+    without this, the forearm half of each sleeve took torso weights and stayed at the hips in the T-pose while the
+    upper half rode the arm."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
+    Q = np.asarray(Q, np.float64)
+    near = np.asarray(parts)[cKDTree(np.asarray(body_P, np.float64)).query(Q)[1]]
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    E = E[(near[E[:, 0]] > 0) & (near[E[:, 0]] == near[E[:, 1]])]
+    n = len(Q)
+    _, labels = connected_components(coo_matrix((np.ones(len(E)), (E[:, 0], E[:, 1])), shape=(n, n)),
+                                      directed=False)
+    seeds = np.unique(labels[(near > 0) & np.asarray(upper, bool)])
+    return (near > 0) & np.isin(labels, seeds)
+
+
 def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: float, split_y: float,
                      idw_k: int = TRANSFER_IDW_K, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
                      margin_m: float = SDF_MARGIN_M,
@@ -797,7 +838,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     2. Each garment vertex takes the inverse-distance blend (``idw_k`` nearest, ``w = 1 / max(d, 1e-4 / k)``) of the
        body weights of the ELIGIBLE unrigged body vertices around it — the same rule as ``transfer``: at or above
        ``split_y`` only forearm/hand donors are excluded (a sleeve rides the upper arm through the A -> T motion),
-       below it every arm/shoulder bone (a skirt next to a hanging hand stays on the hips). The blend is taken within
+       below it every arm/shoulder bone (a skirt next to a hanging hand stays on the hips) — except on the SLEEVES
+       (``sleeve_vertices``), which take the whole arm chain at any height. The blend is taken within
        ONE PART (``_donor_parts``: each arm chain, the rest) — the part whose skin is nearest to the garment vertex —
        so a sleeve hanging next to the torso is a sleeve and not a noisy mix of arm and torso.
     3. Linear blend skinning of ``k * Q`` with those weights (the body itself is skinned that way). A vertex far
@@ -850,11 +892,15 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
             raise ValueError("No body vertex is eligible for the garment transfer")
         return out
     upper = Q[:, 1] >= split_y
+    sleeve = sleeve_vertices(Q, Pb, parts, faces, upper)
     Wg = np.zeros((len(Q), Wb.shape[1]))
-    if (~upper).any():
-        Wg[~upper] = blend(eligible(_ARM_TOKENS), np.nonzero(~upper)[0])
-    if upper.any():
-        Wg[upper] = blend(eligible(_LOWER_ARM_TOKENS), np.nonzero(upper)[0])
+    lower, top = ~upper & ~sleeve, upper & ~sleeve
+    if lower.any():
+        Wg[lower] = blend(eligible(_ARM_TOKENS), np.nonzero(lower)[0])
+    if top.any():
+        Wg[top] = blend(eligible(_LOWER_ARM_TOKENS), np.nonzero(top)[0])
+    if sleeve.any():
+        Wg[sleeve] = blend(np.arange(len(Pb)), np.nonzero(sleeve)[0])
     X = bones.apply(Q * float(k), Wg)
     relaxed = relax_stretched(X, Q * float(k), faces, adjacency)
 
@@ -875,6 +921,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "uv_dist_p99": float(np.percentile(uv_dist, 99)),
         **bones.report,
         "sleeve_share": float((Wg[:, arm_cols].sum(1) > 0.5).mean()) if arm_cols and len(Wg) else 0.0,
+        "sleeve_vertices": int(sleeve.sum()),
+        "sleeve_below_waist": int((sleeve & ~upper).sum()),
         "relaxed_vertices": int(relaxed),
         "rigged_push_max_m": float(np.linalg.norm(Xd, axis=1).max()) if len(Xd) else 0.0,
         "rigged_clearance_p1_m": float(np.percentile(d, 1)),
@@ -1214,6 +1262,7 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> 
     return {
         "max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
         "moved_share": round(float((push > MOVED_EPS_M).mean()) if len(push) else 0.0, 4),
+        "deep_push_share": round(float((push > DEEP_PUSH_M).mean()) if len(push) else 0.0, 4),
         "largest_component_share": round(float(share.max()) if len(share) else 0.0, 4),
         "rigged_inside_share": round(float(transfer_report.get("rigged_inside_share", float("nan"))), 4),
         "rigged_clearance_p1_m": round(float(transfer_report.get("rigged_clearance_p1_m", float("nan"))), 4),

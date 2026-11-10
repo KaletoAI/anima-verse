@@ -53,14 +53,26 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
     (0.707, 0.707) = (0.165, 1.241), is 0.015 from the torso, nearer than the arm, and rides the torso — the armpit;
     at 40 % it is 0.034 away.) With the hair rule (``split_y=None``: every arm bone excluded) ``transfer`` rides the
     torso instead and misses by > 3 cm.
+[2b] Long sleeves (Kira's Black Blazer, 2026-11-10: the forearm half of each sleeve stayed at the hips). A rigged
+    T-pose sleeve tube r 0.06 around the left arm from 40 % of the upper arm (x 0.258) to x 0.68 on the forearm, turned
+    into the A-pose; ``split_y`` at the A-pose elbow (arm length 0.28 from the shoulder: y 1.34 - 0.28 x 0.7071 =
+    1.142 m -> (1.142 - 0.05) / 1.7 units), so the forearm half lies below the waist line. ``sleeve_vertices``: every
+    vertex nearest an arm and connected to the part above -> all of them; ``transfer_skinned`` carries the whole tube
+    onto the T-pose arm (both segments straight in both poses: every vertex within 5 mm of its design position).
+    Without the sleeve rule the half below the waist took only non-arm donors and stayed (error > 0.1 m, the A -> T
+    turn of a point 0.4 m from the shoulder moves it 0.4 x 2 sin(22.5 deg) = 0.31 m).
+    A second, separate ring r 0.06 around the A-pose forearm entirely BELOW the waist (a panel beside a hanging hand,
+    connected to nothing above): nearest the arm, but no sleeve -> ``sleeve_vertices`` False for every vertex.
 [3] No extension bone. In front of the LeftBreast-only patch (0.05, 1.30, 0.16): all 8 nearest body vertices carry
     only the extension bone -> the weights come from the nearest vertices with >= 0.5 contract weight -> Spine2 1.
     In front of the right patch (-0.05, 1.30, 0.16): RightBreast 0.6 + Spine2 0.4 restricted to Spine2 0.4,
     renormalised -> Spine2 1. No output joint outside the rig contract.
-[4] Gates: the keys are max_push_m / moved_share / largest_component_share / rigged_inside_share; the spike dress
-    numbers (max push 0.0293 units x 1.70 = 0.0498 m, moved 38720 / 44950 = 0.861, one component, inside 0.0) and the
-    product's on the same dress (0.0501 m, 0.929, 0.9888, 0.0; ``garment_fit.CLOTHING_GATES`` comment) pass, every
-    limit refuses by name, NaN refuses.
+[4] Gates: the keys are max_push_m / deep_push_share / largest_component_share / rigged_inside_share (moved_share is
+    reported, not gated — 2026-11-10); the spike dress numbers (max push 0.0293 units x 1.70 = 0.0498 m, one
+    component, inside 0.0, deep push share 0.079 as measured through the product) and the product's on the same dress
+    (0.0501 m, 0.9888, 0.0, 0.079; ``garment_fit.CLOTHING_GATES`` comment) pass; Kira's Black Blazer (max push
+    0.0424 m, moved 0.991, deep 0.0309, component 0.9975, inside 0.0) passes; the same blazer placed 5 % small (deep
+    0.146) refuses for its deep push share; every limit refuses by name, NaN refuses.
 [5] ``fit_clothing`` end to end: a dress = open surface of revolution around the y axis, radius 0.18 m for
     y 1.20..0.95 and widening linearly to 0.22 m at the hem 0.55 (>= 2 cm clear of hips, torso and legs everywhere,
     so nothing is pushed), generated in its own frame (x4 + shift) and framed through masks at 1000 px per unit.
@@ -310,6 +322,36 @@ def test_sleeves(unrig, rig):
     check(err_h > 0.03, f"[2] the hair rule (every arm bone excluded) misses the arm (max err {err_h:.3f} m)")
 
 
+def test_long_sleeve(unrig, rig):
+    from app.core import garment_fit as gf
+    L0 = 0.15 + 0.4 * 0.27
+    P, F = tube((L0, SHOULDER_Y, 0), (0.68, SHOULDER_Y, 0), 0.06, nlon=48, caps=False)
+    Q = (a_pose(P, 1) - T) / 1.7
+    split_y = (SHOULDER_Y - 0.28 * math.sqrt(0.5) - 0.05) / 1.7
+    upper = Q[:, 1] >= split_y
+    check(upper.any() and (~upper).sum() > len(Q) // 3,
+          f"[2b] the forearm half lies below the waist ({int((~upper).sum())} of {len(Q)})")
+    sleeve = gf.sleeve_vertices(Q, unrig.positions, gf._donor_parts(
+        gf.dense_weights(rig) / np.maximum(gf.dense_weights(rig).sum(1, keepdims=True), 1e-12), rig.joint_names),
+        F, upper)
+    check(bool(sleeve.all()), f"[2b] the whole tube is a sleeve ({int(sleeve.sum())} of {len(Q)})")
+    X, report = gf.transfer_skinned(Q, unrig, rig, faces=F, k=1.7, split_y=split_y)
+    err = np.linalg.norm(X - P, axis=1).max()
+    check(err <= 0.005, f"[2b] the long sleeve follows the whole arm A -> T within 5 mm (max err {err:.4f}; "
+          f"sleeve_below_waist {report.get('sleeve_below_waist')})")
+    # A ring around the A-pose forearm entirely below the waist, joined to nothing above it.
+    R, FR = tube((0.50, SHOULDER_Y, 0), (0.60, SHOULDER_Y, 0), 0.06, nlon=48, caps=False)
+    QR = (a_pose(R, 1) - T) / 1.7
+    both = np.concatenate([Q, QR])
+    faces = np.concatenate([F, FR + len(Q)])
+    up = both[:, 1] >= split_y
+    check(not up[len(Q):].any(), "[2b] the separate ring lies below the waist")
+    parts = gf._donor_parts(gf.dense_weights(rig), rig.joint_names)
+    s2 = gf.sleeve_vertices(both, unrig.positions, parts, faces, up)
+    check(bool(s2[:len(Q)].all()) and not s2[len(Q):].any(),
+          f"[2b] the ring beside the hand is no sleeve ({int(s2[len(Q):].sum())} of {len(QR)} marked)")
+
+
 # --- [3] extension bones -----------------------------------------------------------------------------------------
 
 def test_extension(rig):
@@ -331,21 +373,28 @@ def test_extension(rig):
 def test_gates():
     from app.core import garment_fit as gf
     G = gf.CLOTHING_GATES
-    check(set(G) == {"max_push_m", "moved_share", "largest_component_share", "rigged_inside_share"},
+    check(set(G) == {"max_push_m", "deep_push_share", "largest_component_share", "rigged_inside_share"},
           f"[4] clothing gate keys ({sorted(G)})")
-    spike = {"max_push_m": 0.0498, "moved_share": 0.861, "largest_component_share": 1.0, "rigged_inside_share": 0.0}
+    spike = {"max_push_m": 0.0498, "deep_push_share": 0.079, "largest_component_share": 1.0,
+             "rigged_inside_share": 0.0}
     ok, reasons = gf.gate(spike, G)
     check(ok, f"[4] the spike dress numbers pass ({reasons})")
-    product = {"max_push_m": 0.0501, "moved_share": 0.929, "largest_component_share": 0.9888,
+    product = {"max_push_m": 0.0501, "moved_share": 0.929, "deep_push_share": 0.079, "largest_component_share": 0.9888,
                "rigged_inside_share": 0.0}
     ok, reasons = gf.gate(product, G)
     check(ok, f"[4] the product numbers on the spike dress pass ({reasons})")
+    blazer = {"max_push_m": 0.0424, "moved_share": 0.991, "deep_push_share": 0.0309, "largest_component_share": 0.9975,
+              "rigged_inside_share": 0.0}
+    ok, reasons = gf.gate(blazer, G)
+    check(ok, f"[4] the Black Blazer numbers pass, moved share 0.991 reported only ({reasons})")
+    ok, reasons = gf.gate(dict(blazer, deep_push_share=0.146), G)
+    check(not ok and reasons[0].startswith("deep_push_share"), f"[4] the blazer placed 5 % small refuses ({reasons})")
     for key, (kind, limit, _label) in G.items():
         bad = dict(spike, **{key: limit * 1.5 + 0.01 if kind == "max" else limit * 0.5})
         ok, reasons = gf.gate(bad, G)
         check(not ok and len(reasons) == 1 and reasons[0].startswith(key), f"[4] {key} beyond its limit refuses "
               f"({reasons})")
-    check(not gf.gate(dict(spike, moved_share=float("nan")), G)[0], "[4] NaN refuses")
+    check(not gf.gate(dict(spike, deep_push_share=float("nan")), G)[0], "[4] NaN refuses")
 
 
 # --- [5] fit_clothing end to end ---------------------------------------------------------------------------------
@@ -515,6 +564,7 @@ def main():
     unrig, rig = bodies()
     test_skirt_blend(rig)
     test_sleeves(unrig, rig)
+    test_long_sleeve(unrig, rig)
     test_extension(rig)
     test_gates()
     test_fit_clothing(unrig, rig)
