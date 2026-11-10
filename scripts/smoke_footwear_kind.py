@@ -36,7 +36,7 @@ and wears heels + dress; Mira holds heels.
      Own-mesh set membership: worn_garments(Kira) == sorted([dress, heels]),
      held_clothing(Kira) == sorted([dress, heels]), held_clothing(Mira) ==
      [heels]; layer_order([dress, heels])["order"] == [dress] (footwear takes no
-     part in layering). garment_fit.FIT_VERSION["footwear"] == 1.
+     part in layering). garment_fit.FIT_VERSION["footwear"] == 2 (7b298358: placed on the skinned ball).
 [K2] Footwear fsig — no base in it.
      IMG = sha256 of the heels image bytes.
      ssig = md5(json.dumps({"image": IMG, "version": 1, "seed": 0},
@@ -237,7 +237,7 @@ def main() -> int:
         check("held_clothing Kira", garment_set.held_clothing("Kira"), sorted([dress, heels]))
         check("held_clothing Mira", garment_set.held_clothing("Mira"), [heels])
         check("layer_order skips footwear", garment_set.layer_order([dress, heels])["order"], [dress])
-        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 1)
+        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 2)
 
         print("[K2] footwear fsig")
         from app.core import footwear_source, garment_footwear
