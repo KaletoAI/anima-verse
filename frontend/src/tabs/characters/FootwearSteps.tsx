@@ -92,13 +92,17 @@ const MESH_CHIPS: ChipSpec[] = [
   { key: 'mesh_iou', label: 'Side silhouette match', scale: 100, unit: '%', digits: 1 },
 ]
 
-// Gate keys: footwear_fit.FIT_GATES (record gates {value, limit, ok, gating}).
+// Gate keys: footwear_fit.FIT_GATES, then the body-cut gates footwear_cut.CUT_GATES the fit step runs and
+// records under the same `gates` (record gates {value, limit, ok, gating}).
 const FIT_CHIPS: ChipSpec[] = [
   { key: 'ball_placement_mm', label: 'Ball placement', scale: 1, unit: 'mm', digits: 1 },
   { key: 'lift_asymmetry_mm', label: 'Lift asymmetry', scale: 1, unit: 'mm', digits: 1 },
   { key: 'stand_floor_mm', label: 'Sole above the floor (stand)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'slim_needed', label: 'Slimming needed', scale: 100, unit: '%', digits: 1 },
   { key: 'boot', label: 'Topline above the ankle', scale: 1, unit: 'mm', digits: 1 },
+  { key: 'deep_outside', label: 'Foot outside the shoe (cut)', scale: 100, unit: '%', digits: 2 },
+  { key: 'visible_poke', label: 'Foot poking through (cut)', scale: 100, unit: '%', digits: 2 },
+  { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
 ]
 
 const FIT_STATUS_TEXT: Record<FootwearFitRow['status'], string> = {

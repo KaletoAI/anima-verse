@@ -4578,6 +4578,9 @@
     "the accepted mesh is kept": "das angenommene Mesh bleibt erhalten",
     "No change": "Keine Änderung",
     "Not a number": "Keine Zahl",
-    "{mm} mm is outside {min}–{max} mm": "{mm} mm liegt außerhalb von {min}–{max} mm"
+    "{mm} mm is outside {min}–{max} mm": "{mm} mm liegt außerhalb von {min}–{max} mm",
+    "Foot outside the shoe (cut)": "Fuß außerhalb des Schuhs (Schnitt)",
+    "Foot poking through (cut)": "Fuß stößt durch (Schnitt)",
+    "Throat ledge (cut)": "Kante am Einstieg (Schnitt)"
   }
 }
