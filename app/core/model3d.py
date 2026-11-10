@@ -91,9 +91,20 @@ ASSEMBLED_DIR = "assembled"
 COVERED_DIR = "covered"
 
 
+# The mesher's own bytes of a source the face cleanup changed (``_store_unrigged_model``,
+# ``_reclean_face_source``): every later "Re-apply face cleanup" starts from them, never from an
+# already cleaned mesh — a flap folded once has nothing left to fold, and a mesh pressed by cleanup
+# v1 (the flap sheet lies on the eyeball) cannot be unfolded.
+MESHER_DIR = "unrigged/mesher"
+
+
+def _mesher_source(directory: Path, signature: str) -> Path:
+    return directory / MESHER_DIR / f"{signature}.glb"
+
+
 def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
     """Only one signature's public files and private backups, never stages."""
-    folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'), Path('unrigged'),
+    folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'), Path('unrigged'), Path(MESHER_DIR),
                Path('low/raw'), Path('low/prerig'), Path('facefix'), Path(COVERED_DIR),
                Path(ASSEMBLED_DIR), Path(ASSEMBLED_DIR) / 'low')
     return {relative / p.name: p for relative in folders
@@ -1234,8 +1245,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
 def face_info(character_name: str, face_path: Path) -> Dict[str, Any]:
     """The face-retexture fields of the stored model ``face_path``:
     ``{face_retexture, face_retexture_snapshot, face_retexture_revert,
-    face_retexture_compare_url?}`` — the 3D tab's model (the base model's on
-    the pipeline) and the Base body tab's base model."""
+    face_retexture_compare_url?, face_reference}`` — the 3D tab's model (the
+    base model's on the pipeline) and the Base body tab's base model."""
     from app.core.face_retexture import snapshot_info
     out: Dict[str, Any] = {"face_retexture": _read_sidecar(face_path).get("face_retexture")}
     snapshot = snapshot_info(face_path.parent, face_path.stem)
@@ -1248,6 +1259,18 @@ def face_info(character_name: str, face_path: Path) -> Dict[str, Any]:
     if (face_path.parent / "facefix" / f"{face_path.stem}.png").is_file():
         out["face_retexture_compare_url"] = (f"/characters/{quote(character_name)}/model3d/face-retexture/compare"
                                              f"?signature={face_path.stem}")
+    # What the NEXT run would project from (``face_retexture.reference_info``,
+    # the same choice ``check`` makes): the face view, or the front view when
+    # the face view is missing, stale (rendered from an older profile picture)
+    # or unverified — shown before a run instead of silently falling back.
+    try:
+        from app.core.face_retexture import read_meta, reference_info
+        choice = reference_info(character_name, face_path.stem,
+                                read_meta(face_path.parent / "unrigged" / f"{face_path.stem}.glb"))
+        out["face_reference"] = {k: choice.get(k) for k in ("reference", "face_available", "face_problem")}
+    except Exception:  # noqa: BLE001 — a status read never fails on it
+        logger.exception("Face reference state of %s failed", character_name)
+        out["face_reference"] = None
     return out
 
 
@@ -2644,6 +2667,10 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
     retained = directory / "unrigged" / path.name
     retained.parent.mkdir(parents=True, exist_ok=True)
     _publish_model_bytes(retained, blob)
+    if face_cleanup is not None and face_cleanup.get("status") == "applied":
+        mesher = _mesher_source(directory, signature)
+        mesher.parent.mkdir(parents=True, exist_ok=True)
+        _publish_model_bytes(mesher, source.read_bytes())
     if texture is not None:
         _publish_model_bytes(retained.with_suffix(".png"), texture)
     source_meta = {
@@ -4088,6 +4115,8 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
         return first
     if not op.done("face_gate"):
         _dark_face_gate(character_name, op, attempt, controls, image)
+    if not op.done("face_polish"):
+        _face_polish_stage(character_name, op, original_bytes)
 
     source = _restore_frozen_source(op, root, signature)
     if not op.abs(f"source/{signature}.png").is_file():
@@ -4173,6 +4202,65 @@ def _dark_face_gate(character_name: str, op, attempt, controls: Dict[str, Any], 
                                    ensure_ascii=False).encode("utf-8"))
     op.complete("bake", {**chosen, "face_meta": face_meta})
     op.complete("face_gate", record)
+
+
+def _face_polish_stage(character_name: str, op, original_bytes: bytes) -> None:
+    """The CPU passes after the black-eye check (``app/core/face_polish.py``):
+    the dark-texel fill when the gate still fails after its retry, the seam
+    measurement always. Rewrites the chosen bake's ``source/<sig>.glb``,
+    widens ``bake/mask.npy`` and the bake's ``face_mask`` by the texels
+    written (``base_body.restore_face_texels`` copies only masked texels into
+    an outfit atlas, ``face_texture_preserved`` compares only them), records
+    ``polish`` in the face meta (sidecar + ``bake`` result) and the stage.
+    Never fails the correction: an error keeps the bake as it is."""
+    from app.core import face_polish
+    signature = op.inputs["signature"]
+    gate = op.result("face_gate")
+    bake = op.result("bake")
+    face_meta = dict(bake.get("face_meta") or {})
+    baked = dict(face_meta.get("baked") or {})
+    fill = not gate.get("ok", True)
+    record: Dict[str, Any] = {"version": face_polish.VERSION, "fill": fill, "status": "applied"}
+    changed = None
+    try:
+        glb, result, changed = face_polish.polish(op.abs(f"source/{signature}.glb").read_bytes(), original_bytes,
+                                                  baked, fill=fill)
+        record.update(result)
+        if changed is not None:
+            import numpy as np
+            from app.core.face_retexture import face_mask_array
+            op.path("source", f"{signature}.glb").write_bytes(glb)
+            mask_path = op.abs("bake/mask.npy")
+            widened = changed
+            if mask_path.is_file():
+                with mask_path.open("rb") as handle:
+                    stored = np.load(handle)
+                if stored.shape == changed.shape:
+                    widened = stored | changed
+            with op.path("bake", "mask.npy").open("wb") as handle:
+                np.save(handle, widened)
+            height, width = changed.shape
+            face_mask = face_mask_array(baked, width, height)
+            if face_mask is not None:
+                record["mask_widened_by"] = int((changed & ~face_mask).sum())
+                baked["face_mask"] = face_polish.pack_mask(face_mask | changed)
+                baked["texels_replaced"] = int((face_mask | changed).sum())
+                face_meta["baked"] = baked
+            logger.info("Face polish %s (%s): %s texels filled, mask widened by %s",
+                        character_name, signature, (result.get("dark_fill") or {}).get("filled", 0),
+                        record.get("mask_widened_by", 0))
+    except Exception as exc:  # noqa: BLE001 — the bake stands
+        record.update(status="failed", error=str(exc) or type(exc).__name__)
+        logger.warning("Face polish %s (%s) failed, keeping the bake: %s", character_name, signature, exc)
+    face_meta["polish"] = record
+    sidecar = op.abs(f"source/{signature}.json")
+    stored_meta = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.is_file() else {}
+    stored_meta["face_retexture"] = face_meta
+    if "baked" in stored_meta:
+        stored_meta["baked"] = baked
+    sidecar.write_bytes(json.dumps(stored_meta, indent=2, ensure_ascii=False).encode("utf-8"))
+    op.complete("bake", {**bake, "face_meta": face_meta, "has_mask": bool(bake.get("has_mask")) or changed is not None})
+    op.complete("face_polish", record)
 
 
 def revert_face_retexture(character_name: str, signature: Optional[str] = None) -> Dict[str, Any]:
@@ -4321,10 +4409,13 @@ def face_cleanup_signature(character_name: str, signature: str = "") -> str:
 def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
     """What the UI shows of the face cleanup of ``unrigged/<signature>.glb``
     and what a re-apply costs: ``{signature, enabled, humanoid, stored,
-    status, summary, version, current_version, follow_up, jobs, can_reapply,
-    blocked, running, result}``. ``status``: applied | skipped | failed |
-    missing (a source made before the step) | none (no source). ``blocked``
-    is the English reason a re-apply is refused ('' when it can run)."""
+    status, summary, version, current_version, mesher_retained, follow_up,
+    jobs, can_reapply, blocked, running, result}``. ``status``: applied |
+    skipped | failed | missing (a source made before the step) | none (no
+    source); ``mesher_retained``: the mesher's own bytes are kept beside the
+    source (``MESHER_DIR``), what a re-apply starts from — a source already
+    cleaned without them is refused. ``blocked`` is the English reason a
+    re-apply is refused ('' when it can run)."""
     from app.core import face_cleanup
     options = get_model3d_options(character_name)
     enabled = bool(options.get("face_cleanup"))
@@ -4339,6 +4430,7 @@ def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
                else str(record.get("reason") or "") if status == "skipped" and record.get("reason")
                else face_cleanup.summary(record) if record else "")
     applied_now = status == "applied" and record.get("version") == face_cleanup.VERSION
+    mesher_retained = bool(stored and _mesher_source(directory, signature).is_file())
     follow_up = "face_retexture" if humanoid and stored and (
         options.get("face_before_rig") or (directory / "facefix" / f"{signature}.glb").is_file()) else "rerig"
     with _lock:
@@ -4348,10 +4440,11 @@ def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
                else "No retained unrigged mesh — generate the model again." if not stored
                else "Switch the face cleanup on first." if not enabled
                else "Already applied to the stored mesh." if applied_now
+               else MESHER_MISSING if status == "applied" and not mesher_retained
                else "A 3D model run of this character is going." if running else "")
     return {"signature": signature, "enabled": enabled, "humanoid": humanoid, "stored": stored,
             "status": status, "summary": summary, "version": record.get("version"),
-            "current_version": face_cleanup.VERSION, "follow_up": follow_up,
+            "current_version": face_cleanup.VERSION, "mesher_retained": mesher_retained, "follow_up": follow_up,
             "jobs": FACE_CLEANUP_JOBS[follow_up], "can_reapply": not blocked, "blocked": blocked,
             "running": running, "result": result}
 
@@ -4359,15 +4452,28 @@ def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
 @_serial_model
 def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
     """Clean the retained source ``unrigged/<signature>.glb`` in place (staged
-    by ``_serial_model``, published on return). The rigged model is not
-    touched here — the caller rebuilds it from the cleaned source."""
+    by ``_serial_model``, published on return), starting from the mesher's
+    own bytes (``MESHER_DIR``; retained here on the first cleanup of a source
+    that was never cleaned). The rigged model is not touched here — the caller
+    rebuilds it from the cleaned source."""
     from app.core import face_cleanup
     from app.core.mesh_source import validate_source
     root = get_model3d_dir(character_name)
     source = root / "unrigged" / f"{signature}.glb"
     if not source.is_file():
         return {"ok": False, "error": "No retained unrigged mesh — generate the model again."}
-    blob = source.read_bytes()
+    meta = _read_sidecar(source)
+    previous = meta.get("face_cleanup") if isinstance(meta.get("face_cleanup"), dict) else {}
+    mesher = _mesher_source(root, signature)
+    if mesher.is_file():
+        blob = mesher.read_bytes()
+    elif previous.get("status") == "applied":
+        return {"ok": False, "error": MESHER_MISSING}
+    else:
+        # The stored source IS the mesher's output: retain it before the first cleanup touches it.
+        blob = source.read_bytes()
+        mesher.parent.mkdir(parents=True, exist_ok=True)
+        _publish_model_bytes(mesher, blob)
     try:
         cleaned, record = face_cleanup.clean_face(blob)
         if record.get("status") == "applied":
@@ -4377,9 +4483,8 @@ def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — reported, the stored source stays as it was
         return {"ok": False, "error": f"Face cleanup failed: {exc}"}
     record["reapplied"] = True
-    meta = _read_sidecar(source)
     meta["face_cleanup"] = record
-    if cleaned != blob:
+    if cleaned != source.read_bytes():
         _publish_model_bytes(source, cleaned)
         # The face-revert snapshot shows the model before its face retexture,
         # built on the source just replaced: drop it with the publication.
@@ -4387,6 +4492,10 @@ def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
     _publish_sidecar(source, meta)
     logger.info("Face cleanup re-applied %s/%s: %s", character_name, signature, face_cleanup.summary(record))
     return {"ok": True, "face_cleanup": record, "changed": cleaned != blob}
+
+
+MESHER_MISSING = ("The stored mesh was cleaned by an older version and the mesher's original mesh is not retained "
+                  "— regenerate the model.")
 
 
 def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:

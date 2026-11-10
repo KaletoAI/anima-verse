@@ -4358,11 +4358,11 @@
     "Re-apply face cleanup": "Gesichtsbereinigung erneut anwenden",
     "Face cleanup re-applied": "Gesichtsbereinigung erneut angewendet",
     "Face cleanup failed": "Gesichtsbereinigung fehlgeschlagen",
-    "The stored mesh is cleaned in place (lashes pressed back onto the lids, lips neutralised), then everything after it is rebuilt from it.": "Das gespeicherte Mesh wird direkt bereinigt (Wimpern an die Lider gedrückt, Lippen neutralisiert), danach wird alles Folgende daraus neu gebaut.",
+    "The stored mesh is cleaned in place (lash flaps folded back onto their root, lips neutralised), then everything after it is rebuilt from it.": "Das gespeicherte Mesh wird direkt bereinigt (Wimpern an die Lider gedrückt, Lippen neutralisiert), danach wird alles Folgende daraus neu gebaut.",
     "Hub jobs": "Hub-Jobs",
     "Normalize, extension bones and collision capsules follow the rig locally.": "Normalisieren, Zusatz-Bones und Kollisionskapseln folgen dem Rig lokal.",
     "Every outfit model is painted onto the base body: each one turns stale and is rebuilt on its next trigger.": "Jedes Outfit-Modell ist auf den Grundkörper gemalt: Jedes wird veraltet und beim nächsten Anlass neu gebaut.",
-    "The stored mesh was cleaned by an older version; the new version runs on that mesh.": "Das gespeicherte Mesh wurde von einer älteren Version bereinigt; die neue Version läuft auf diesem Mesh.",
+    "The stored mesh was cleaned by an older version; the new version starts again from the mesher's original mesh.": "Das gespeicherte Mesh wurde von einer älteren Version bereinigt; die neue Version läuft auf diesem Mesh.",
     "No retained unrigged mesh — generate the model again.": "Kein aufbewahrtes ungeriggtes Mesh — das Modell neu erzeugen.",
     "Switch the face cleanup on first.": "Zuerst die Gesichtsbereinigung einschalten.",
     "Already applied to the stored mesh.": "Bereits auf das gespeicherte Mesh angewendet.",
@@ -4627,6 +4627,15 @@
     "Source group switched off for this model": "Quellgruppe für dieses Modell abgeschaltet",
     "Off builds this model without the tips of this group: no tip bone, no stub, no colour disc. The same switch as Enabled in the 3D tab.": "Aus baut dieses Modell ohne die Spitzen dieser Gruppe: kein Spitzen-Bone, kein Stummel, keine Farbscheibe. Derselbe Schalter wie „Aktiv“ im 3D-Tab.",
     "With garments": "Mit Kleidungsstücken",
-    "Shows the worn outfit's model with its own-mesh garments instead of the painted body alone": "Zeigt das Modell des getragenen Outfits mit seinen Kleidungsstücken mit eigenem Mesh statt nur den bemalten Körper"
+    "Shows the worn outfit's model with its own-mesh garments instead of the painted body alone": "Zeigt das Modell des getragenen Outfits mit seinen Kleidungsstücken mit eigenem Mesh statt nur den bemalten Körper",
+    "Face view stale (built from an older profile picture)": "Gesichtsansicht veraltet (aus einem älteren Profilbild gebaut)",
+    "the front view would be used": "die Frontansicht würde verwendet",
+    "The face view is being re-rendered": "Die Gesichtsansicht wird gerade neu gerendert",
+    "Face view unverified (no image hash)": "Gesichtsansicht ungeprüft (kein Bild-Hash)",
+    "No face view": "Keine Gesichtsansicht",
+    "Regenerate face view": "Gesichtsansicht neu erzeugen",
+    "Renders the face close-up from the current profile picture (model refs, face view) — the next face retexture projects from it.": "Rendert die Gesichts-Nahaufnahme aus dem aktuellen Profilbild (Modell-Referenzen, Gesichtsansicht) — die nächste Gesichtskorrektur projiziert daraus.",
+    "Face view requested": "Gesichtsansicht angefordert",
+    "Dark fill": "Dunkelfüllung"
   }
 }

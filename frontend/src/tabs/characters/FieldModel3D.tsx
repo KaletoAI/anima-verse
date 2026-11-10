@@ -30,7 +30,7 @@ import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { ModelFaceActions } from './ModelFaceActions'
-import type { FaceCleanupState } from './ModelFaceActions'
+import type { FaceCleanupState, FaceReferenceState } from './ModelFaceActions'
 import type { ModelStep } from './ModelSteps'
 import type { Freshness } from './FreshnessBadge'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
@@ -100,6 +100,11 @@ export interface Model3DInfo {
   face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
+  /** What the NEXT face retexture projects from (server `model3d.face_info`):
+   *  the face view, or the front view when the face view is missing, stale
+   *  (rendered from an older profile picture) or unverified — surfaced before
+   *  a run instead of a silent fallback. */
+  face_reference?: FaceReferenceState | null
   model_rev?: string
   extension_rig?: ExtensionRigResult
   /** The served body's collision capsules (app/core/collision.py); null for

@@ -11,7 +11,7 @@ a 3D model or an image, decided here on the server.
 
    - ``base_model_steps``: the base model ``model3d/<bsig>.glb`` — hand check
      of the front image, mesh, face cleanup (lash flaps pressed, lips
-     neutralised — ``face_cleanup.py``), face retexture, black-eye check, rig, head
+     neutralised — ``face_cleanup.py``), face retexture, black-eye check, dark fill, rig, head
      twist, normalize, limb weights, extension rig, covered variant
      (``model3d/covered/<bsig>.glb``), collision capsules, texture
      re-encode, measurement.
@@ -368,9 +368,13 @@ def _face_cleanup_step(meta: Dict[str, Any]) -> Dict[str, Any]:
     rows = [e for e in (eyes.get("eyes") or []) if isinstance(e, dict)]
     before = [_num(_dict(e.get("before_mm")).get("lash_outer_max")) for e in rows]
     after = [_num(_dict(e.get("after_mm")).get("lash_weighted_max")) for e in rows]
+    residue = [_num(_dict(e.get("after_mm")).get("residual_max")) for e in rows]
     before_max = max((v for v in before if v is not None), default=None)
     after_max = max((v for v in after if v is not None), default=None)
+    residual_max = max((v for v in residue if v is not None), default=None)
     numbers = {"eye_before_mm": before_max, "eye_after_mm": after_max, "eye_limit_mm": _num(eyes.get("limit_mm")),
+               "eye_residual_mm": residual_max,
+               "unanchored_vertices": sum(int(e.get("unanchored_vertices") or 0) for e in rows) or None,
                "moved_vertices": sum(int(e.get("moved_vertices") or 0) for e in rows) or None,
                "lip_ratio_before": _num(mouth.get("ratio_before")), "lip_ratio_after": _num(mouth.get("ratio_after")),
                "lip_ratio_limit": _num(mouth.get("limit"))}
@@ -378,7 +382,9 @@ def _face_cleanup_step(meta: Dict[str, Any]) -> Dict[str, Any]:
         return step("face_cleanup", "Face cleanup", FAILED, str(record.get("error") or ""), numbers)
     parts = []
     if eyes.get("status") == "applied" and before_max is not None and after_max is not None:
-        parts.append(f"lashes {before_max:.1f} → {after_max:.1f} mm proud")
+        parts.append(f"lashes {before_max:.1f} → {after_max:.1f} mm proud"
+                     + (f" · {numbers['unanchored_vertices']} flap vertices left standing up to {residual_max:.1f} mm"
+                        if residual_max is not None and numbers["unanchored_vertices"] else ""))
     elif eyes.get("status") == "skipped":
         parts.append("eyes: " + str(eyes.get("reason") or "skipped"))
     if mouth.get("status") == "applied":
@@ -387,6 +393,7 @@ def _face_cleanup_step(meta: Dict[str, Any]) -> Dict[str, Any]:
         parts.append("mouth: " + str(mouth.get("reason") or "skipped"))
     if status == "applied":
         over = ((after_max is not None and numbers["eye_limit_mm"] is not None and after_max > numbers["eye_limit_mm"])
+                or (residual_max is not None and numbers["eye_limit_mm"] is not None and residual_max > numbers["eye_limit_mm"])
                 or (numbers["lip_ratio_after"] is not None and numbers["lip_ratio_limit"] is not None
                     and mouth.get("status") == "applied" and numbers["lip_ratio_after"] > numbers["lip_ratio_limit"]))
         return step("face_cleanup", "Face cleanup", WARNING if over else DONE, " · ".join(parts), numbers)
@@ -433,7 +440,38 @@ def _face_steps(face: Dict[str, Any]) -> List[Dict[str, Any]]:
         rows.append(step("dark_gate", "Black-eye check", DONE, f"passed after a retry ({which}) · {shares}", gnums))
     else:
         rows.append(step("dark_gate", "Black-eye check", DONE, f"passed · {shares}", gnums))
+    polish = _dict(face.get("polish"))
+    if polish:
+        rows.append(_dark_fill_step(polish))
     return rows
+
+
+DARK_FILL_LIMIT = 0.05   # near-black share of the fill region after the fill: more is a warning
+
+
+def _dark_fill_step(polish: Dict[str, Any]) -> Dict[str, Any]:
+    """The dark-texel fill after the black-eye check (``face_polish.py``):
+    done with the texels filled and the region's near-black share before →
+    after (warning above ``DARK_FILL_LIMIT``), skipped when the check passed
+    (nothing to fill), failed on an error; the seam ΔE goes into the numbers
+    and the detail whenever it was measured."""
+    fill = _dict(polish.get("dark_fill"))
+    seam = _dict(polish.get("seam"))
+    edge, wide = _dict(seam.get("edge")), _dict(seam.get("wide"))
+    numbers = {"filled": _num(fill.get("filled")), "dark_share_before": _num(fill.get("dark_share_before")),
+               "dark_share_after": _num(fill.get("dark_share_after")), "limit": DARK_FILL_LIMIT,
+               "seam_edge_de": _num(edge.get("de76_median")), "seam_wide_de": _num(wide.get("de76_median"))}
+    seam_text = f"seam ΔE {edge.get('de76_median')}" if edge.get("de76_median") is not None else ""
+    if polish.get("status") == "failed":
+        return step("dark_fill", "Dark fill", FAILED, str(polish.get("error") or ""), numbers)
+    if polish.get("skipped"):
+        return step("dark_fill", "Dark fill", SKIPPED, str(polish.get("skipped")), numbers)
+    if not fill:
+        return step("dark_fill", "Dark fill", SKIPPED, " · ".join(filter(None, ["black-eye check passed", seam_text])), numbers)
+    after = _num(fill.get("dark_share_after"))
+    detail = " · ".join(filter(None, [f"{fill.get('filled')} texels filled",
+                                      f"{_pct(fill.get('dark_share_before'))} → {_pct(after)} near-black", seam_text]))
+    return step("dark_fill", "Dark fill", WARNING if after is not None and after > DARK_FILL_LIMIT else DONE, detail, numbers)
 
 
 def _covered_step(record: Dict[str, Any], *, exists: bool, current: Optional[bool]) -> Dict[str, Any]:

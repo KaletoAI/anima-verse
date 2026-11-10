@@ -32,8 +32,10 @@ re-apply" block:
     "face_retexture" and its three jobs; without facefix but
     face_before_rig on -> "face_retexture"; recorded applied at the
     CURRENT version -> blocked "Already applied to the stored mesh."; at
-    VERSION-1 -> can run; required_rig "generic" -> blocked "Humanoid models
-    only." and follow_up "rerig".
+    VERSION-1 without the mesher's original (unrigged/mesher/BSIG.glb) ->
+    blocked (model3d.MESHER_MISSING, mesher_retained False); with it -> can
+    run, mesher_retained True; required_rig "generic" -> blocked "Humanoid
+    models only." and follow_up "rerig".
 [3] Route refusals: unknown character 404; "?signature=../x" 400; switch
     off 409 "Switch the face cleanup on first."; no rig route 409 "No
     humanoid rig route is configured." (nothing cleaned); face path with a
@@ -44,9 +46,12 @@ re-apply" block:
     is b"glTF-src-clean", its sidecar face_cleanup {status applied,
     reapplied True}, clean_face saw b"glTF-src" once, rerig_model(Demo,
     BSIG) once, face_retexture_model never, after_base_face_change(Demo,
-    BSIG) once, the result {ok True, follow_up rerig}, the guard released.
-[5] Face path on Demo (facefix present, record at VERSION-1):
-    face_retexture_model(Demo, BSIG) once, rerig never.
+    BSIG) once, the result {ok True, follow_up rerig}, the guard released;
+    the mesher's bytes b"glTF-src" are retained as unrigged/mesher/BSIG.glb
+    (the source was never cleaned before, so it WAS the mesher's output).
+[5] Face path on Demo (facefix present, record at VERSION-1, the retained
+    mesher file b"glTF-mesher"): clean_face saw b"glTF-mesher" (never the
+    cleaned source), face_retexture_model(Demo, BSIG) once, rerig never.
 [6] Old path, Plain "0aaaaaaa": rerig_model(Plain, "0aaaaaaa").
 [7] clean_face raises "boom": result {ok False, error "Face cleanup failed:
     boom"}, the source bytes unchanged, no follow-up, guard released.
@@ -184,7 +189,15 @@ def main() -> int:
         write_source({"status": "applied", "version": version})
         check("applied now", (state()["can_reapply"], state()["blocked"]), (False, "Already applied to the stored mesh."))
         write_source({"status": "applied", "version": version - 1})
-        check("older version", state()["can_reapply"], True)
+        s = state()
+        check("older version, no mesher file", (s["can_reapply"], s["blocked"], s["mesher_retained"]),
+              (False, model3d.MESHER_MISSING, False))
+        mesher = models / "unrigged" / "mesher" / f"{bsig}.glb"
+        mesher.parent.mkdir(parents=True, exist_ok=True)
+        mesher.write_bytes(b"glTF-mesher")
+        s = state()
+        check("older version, mesher retained", (s["can_reapply"], s["mesher_retained"]), (True, True))
+        mesher.unlink()
         real_rig = model3d.required_rig
         model3d.required_rig = lambda name: "generic"
         s = state()
@@ -246,13 +259,17 @@ def main() -> int:
             result = model3d._face_cleanup_results.get("Demo") or {}
             check("result", (result.get("ok"), result.get("follow_up")), (True, "rerig"))
             check("state result", state()["result"]["ok"], True)
+            check("mesher retained", (mesher.is_file() and mesher.read_bytes(), state()["mesher_retained"]), (b"glTF-src", True))
             CLEANS.clear(); RERIGS.clear(); AFTER.clear()
 
             print("[5] face path (pipeline)")
             write_source({"status": "applied", "version": version - 1})
+            mesher.write_bytes(b"glTF-mesher")
             (models / "facefix" / f"{bsig}.glb").write_bytes(b"glTF-facefix")
             check("start", post("/characters/Demo/model3d/face-cleanup")[1]["follow_up"], "face_retexture")
             wait_guard()
+            check("clean input is the mesher file", CLEANS, [b"glTF-mesher"])
+            check("source cleaned from it", source.read_bytes(), b"glTF-mesher-clean")
             check("face", FACES, [("Demo", bsig)])
             check("no rerig", RERIGS, [])
             (models / "facefix" / f"{bsig}.glb").unlink()

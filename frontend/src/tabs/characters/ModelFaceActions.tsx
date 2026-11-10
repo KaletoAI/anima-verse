@@ -12,9 +12,13 @@
  * - Switches (POST /characters/{n}/model3d/options): `face_cleanup` and
  *   `face_before_rig` — they decide the NEXT mesher run.
  * - "Re-apply face cleanup…" (POST .../model3d/face-cleanup): brings the
- *   cleanup onto the STORED source and rebuilds what follows it; the server
- *   says which hub jobs that costs (`face_cleanup.jobs`), the dialog repeats
- *   it before anything starts.
+ *   cleanup onto the STORED source (from the mesher's retained original) and
+ *   rebuilds what follows it; the server says which hub jobs that costs
+ *   (`face_cleanup.jobs`), the dialog repeats it before anything starts.
+ * - Face reference notice (`face.face_reference`, server `face_info`): when
+ *   the face view is missing or stale the next run would silently project
+ *   from the front view — said here, under the switch and in the dialog,
+ *   with "Regenerate face view" (the model-refs face view route).
  * - "Face retexture…" (POST .../model3d/face-retexture, check + photo
  *   preview first), "Revert face retexture…" (.../face-retexture/revert) and
  *   "Re-rig…" (.../model3d/rerig) — moved here unchanged from FieldModel3D.
@@ -52,11 +56,41 @@ export interface FaceCleanupState {
   blocked: string
   running: boolean
   result?: { ok: boolean; error?: string; task_id: string; follow_up: string } | null
+  /** The mesher's original mesh is retained beside the source (what a re-apply starts from). */
+  mesher_retained?: boolean
+}
+
+/** What the next face retexture projects from (server `model3d.face_info`
+ *  -> `face_retexture.reference_info`): `face` when the face view is current,
+ *  else `front` with the reason in `face_problem`. */
+export interface FaceReferenceState {
+  reference: 'face' | 'front'
+  face_available: boolean
+  face_problem?: FaceRetextureFinding | null
 }
 
 /** The face fields of the model the face acts on (`model3d.face_info`). */
 export type FaceFields = Pick<Model3DInfo, 'face_retexture' | 'face_retexture_revert'
-  | 'face_retexture_snapshot' | 'face_retexture_compare_url' | 'face_signature'>
+  | 'face_retexture_snapshot' | 'face_retexture_compare_url' | 'face_signature' | 'face_reference'>
+
+/** The notice shown BEFORE a run when the face view cannot be the reference
+ *  (the server would silently project from the front view): '' when it can. */
+export function faceReferenceNotice(ref: FaceReferenceState | null | undefined, t: (s: string) => string): string {
+  if (!ref || ref.face_available) return ''
+  const code = ref.face_problem?.code
+  const tail = t('the front view would be used')
+  if (code === 'face_stale') return `${t('Face view stale (built from an older profile picture)')} — ${tail}`
+  if (code === 'face_rendering') return `${t('The face view is being re-rendered')} — ${tail}`
+  if (code === 'face_unverified') return `${t('Face view unverified (no image hash)')} — ${tail}`
+  if (code === 'no_profile_image') return `${t('No profile picture')} — ${tail}`
+  return `${t('No face view')} — ${tail}`
+}
+
+/** Whether "Regenerate face view" can help: not without a profile picture, not while it renders. */
+export function faceViewRegenerable(ref: FaceReferenceState | null | undefined): boolean {
+  const code = ref?.face_problem?.code
+  return !!ref && !ref.face_available && code !== 'no_profile_image' && code !== 'face_rendering'
+}
 
 interface FaceRetextureFinding {
   code: string
@@ -163,6 +197,32 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
       setBusy(false)
     }
   }
+
+  // --- Face view (the reference of the next face retexture) --------------
+  // Same route as the Face view card of the model refs (FieldModelRefs):
+  // POST model-refs/generate {kinds: ['tpose'], view: 'face'}, routed render.
+  const [faceViewBusy, setFaceViewBusy] = useState(false)
+  const regenerateFaceView = async () => {
+    if (faceViewBusy) return
+    setFaceViewBusy(true)
+    try {
+      await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: ['tpose'], view: 'face' })
+      toast(t('Face view requested'))
+      await onReload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setFaceViewBusy(false)
+    }
+  }
+  const faceNotice = faceReferenceNotice(face?.face_reference, t)
+  const faceViewButton = (
+    <button type="button" className="ga-btn ga-btn-sm" disabled={faceViewBusy || pending}
+      title={t('Renders the face close-up from the current profile picture (model refs, face view) — the next face retexture projects from it.')}
+      onClick={() => { void regenerateFaceView() }}>
+      {t('Regenerate face view')}
+    </button>
+  )
 
   // --- Re-rig -----------------------------------------------------------
   const [rerigOpen, setRerigOpen] = useState(false)
@@ -325,7 +385,7 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
     <div className="ga-face-actions" role="group" aria-label={t('Face and rig')}>
       <label className="ga-check-row"
         title={!humanoid ? t('Humanoid models only.')
-          : t('Before the face retexture, lash flaps the mesher built from painted lashes are pressed back onto the lids and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>
+          : t('Before the face retexture, lash flaps the mesher built from painted lashes are folded back onto their root (the eyeball, lids and sockets stay) and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>
         <input type="checkbox" checked={!!st.options?.face_cleanup} disabled={optionsDisabled || pending}
           onChange={(e) => { void setOption('face_cleanup', e.target.checked) }} />
         <span>{t('Face cleanup before the face retexture (lashes, lips)')}</span>
@@ -361,6 +421,12 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
           onChange={(e) => { void setOption('face_before_rig', e.target.checked) }} />
         <span>{t('Improve face before rigging')}</span>
       </label>
+      {faceNotice ? (
+        <div className="ga-face-actions-row" role="status" data-face-reference={face?.face_reference?.face_problem?.code || ''}>
+          <span className="ga-hint" style={WARN}>{faceNotice}</span>
+          {faceViewRegenerable(face?.face_reference) ? faceViewButton : null}
+        </div>
+      ) : null}
       <div className="ga-face-actions-row">
         <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !hasModel || !humanoid}
           title={t('Corrects the face texture from the original photo, then rebuilds the rig and derived meshes. Each run starts from the original unrigged mesh.')}
@@ -420,11 +486,11 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
             style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
             <div className="ga-modal-header">{t('Re-apply face cleanup')}</div>
             <div className="ga-modal-body">
-              <p>{t('The stored mesh is cleaned in place (lashes pressed back onto the lids, lips neutralised), then everything after it is rebuilt from it.')}</p>
+              <p>{t('The stored mesh is cleaned in place (lash flaps folded back onto their root, lips neutralised), then everything after it is rebuilt from it.')}</p>
               <p><strong>{t('Hub jobs')}:</strong> {jobsText}</p>
               <p className="ga-hint">{t('Normalize, extension bones and collision capsules follow the rig locally.')}</p>
               {pipeline ? <p className="ga-hint">{t('Every outfit model is painted onto the base body: each one turns stale and is rebuilt on its next trigger.')}</p> : null}
-              {cleanup.status === 'applied' ? <p className="ga-hint">{t('The stored mesh was cleaned by an older version; the new version runs on that mesh.')}</p> : null}
+              {cleanup.status === 'applied' ? <p className="ga-hint">{t('The stored mesh was cleaned by an older version; the new version starts again from the mesher\'s original mesh.')}</p> : null}
             </div>
             <div className="ga-modal-footer">
               <button type="button" className="ga-btn" disabled={busy} onClick={() => setCleanupOpen(false)}>{t('Cancel')}</button>
@@ -454,8 +520,10 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
                     <option value="face" disabled={!faceCheck?.face_available}>{t('Face view')}</option>
                     <option value="front">{t('Front view (pose render)')}</option>
                   </select>
-                  {faceCheck?.face_problem ? <div className="ga-field-hint">
-                    {faceCheck.face_problem.message} {faceCheck.face_problem.fix}
+                  {faceCheck?.face_problem ? <div className="ga-field-hint" role="status" style={WARN}>
+                    {faceReferenceNotice({ reference: faceCheck.reference, face_available: faceCheck.face_available, face_problem: faceCheck.face_problem }, t)}
+                    {faceCheck.face_problem.fix ? ` · ${faceCheck.face_problem.fix}` : ''}
+                    {faceViewRegenerable({ reference: faceCheck.reference, face_available: faceCheck.face_available, face_problem: faceCheck.face_problem }) ? <> {faceViewButton}</> : null}
                   </div> : null}
                 </Field>
                 <Field label={`${t('Light balance')} ${Math.round(facePhoto.balance * 100)} %`}

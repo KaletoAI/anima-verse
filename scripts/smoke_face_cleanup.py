@@ -27,12 +27,19 @@ Hand-derived expectations:
   relief feature whose cells lie within 1.5 mm of its edge, so the envelope rises at most 1.5 mm into it and the
   ridge reads 8 - 1.5 .. 8 mm (+ the grid's 1 mm blur) = 6 .. 8.6 mm proud BEFORE; the opening (-3 mm) is a pit
   and never proud;
-- AFTER: every visible vertex stands at most EYE_LIMIT_MM = 1.0 mm proud of the envelope (the compression maps
-  8 mm to 0.5 + 0.5 tanh(0.08 * 7.5 / 0.5) = 0.92 mm, the height smoothing toward the ridge's unmoved neighbours
-  can only lower it to EYE_FREE_MM), so a ridge vertex moved 5 .. 9.5 mm straight back (its measured 6 .. 8.6 mm
-  minus what is left, up to the full 8 mm plus the blur where the envelope dips); at most 8 faces of the ridge's
-  side walls end turned over (regression guard); the opening's vertices keep their exact bytes; vertices outside both eye regions keep their
-  exact positions; indices, UVs and the triangle count are unchanged; the result still passes ``validate_source``;
+- AFTER (version 2 folds a flap onto its root instead of pressing it back in place): every ridge vertex stands
+  more than EYE_FREE_MM = 2.5 mm proud, so the whole band is the flap set, and nothing else is (the rim of the
+  opening reads 1.5-2.0 mm, under the threshold); its rows touch the unmoved sphere rows above (y - cy = -5.x mm)
+  and below (-9.x mm), which read ~0 mm against the envelope and are the anchors — and, where the top row at
+  x = cx has only the opening's rim as a neighbour (hypot 4.9 mm < 5), that rim at -3 mm. Each ridge vertex takes
+  the position of an anchor INSET_MM = 0.6 mm under it along the fit normal (radial on the sphere within a few
+  degrees): its radius ends between R - 0.9 mm and R - 0.3 mm on a sphere anchor, R - 3.9 .. R - 3.3 on a rim
+  anchor, i.e. it moved 8 + 0.6 (+ 3 on the rim) mm straight back — 5 .. 12 mm along the radius is the tolerant
+  gate; against the same lid the folded vertices read at most EYE_LIMIT_MM = 2.0 mm (an anchor is at most 2.5 mm
+  proud, the fold ends 0.6 mm under it); the ridge's triangles end collapsed (no area) or flat under the surface,
+  at most 8 faces turned over (regression guard); the opening's vertices keep their exact bytes; vertices outside
+  both eye regions keep their exact positions; nothing but the ridge moves (moved == ridge vertices); indices,
+  UVs and the triangle count are unchanged; the result still passes ``validate_source``;
 - MOUTH: HSV saturation (max - min) / max — skin (200-130)/200 = 0.35, lips (197-50)/197 = 0.746 -> ratio 2.13
   before (> 1.3, applied);
   after at most LIP_RATIO_LIMIT = 1.3 on the same texels; the eye-paint texels and a far skin texel are untouched;
@@ -218,8 +225,9 @@ def main():
     for r in rows:
         check(30 <= abs(r["centre_mm"][0]) <= 40 and 18 <= r["half_width_mm"] <= 26,
               f"{r['side']} eye centre x {r['centre_mm'][0]} mm, half width {r['half_width_mm']} mm (expected +-34.9, ~22)")
-        check(6.0 <= r["lash_outer_weighted_max_mm"] <= 8.6 and r["depth_cells_hit"] >= 1000,
-              f"{r['side']} ridge measures {r['lash_outer_weighted_max_mm']} mm proud before (expected 6 .. 8.6), {r['depth_cells_hit']} depth cells")
+        check(6.0 <= r["lash_outer_max_mm"] <= 8.6 and r["depth_cells_hit"] >= 1000,
+              f"{r['side']} ridge measures {r['lash_outer_max_mm']} mm proud before (expected 6 .. 8.6), {r['depth_cells_hit']} depth cells")
+        check(r["flap_vertices"] >= int(ridge.sum() / 2) - 5, f"{r['side']}: flap set {r['flap_vertices']} vertices (ridge has {int(ridge.sum() / 2)} per eye)")
     mouth = before.get("mouth") or {}
     check(mouth.get("ratio_before") is not None and 2.0 <= mouth["ratio_before"] <= 2.25,
           f"lips/skin saturation before {mouth.get('ratio_before')} (expected 2.13)")
@@ -240,16 +248,22 @@ def main():
     radial /= np.linalg.norm(radial, axis=1)[:, None]
     moved = np.linalg.norm(P1 - P0, axis=1) / MM
     back = -((P1 - P0) * radial).sum(1) / MM
-    check(np.all(back[ridge] >= 5.0) and np.all(back[ridge] <= 9.5),
-          f"ridge vertices pressed back 5 .. 9.5 mm (min {back[ridge].min():.2f}, max {back[ridge].max():.2f})")
+    check(np.all(back[ridge] >= 5.0) and np.all(back[ridge] <= 12.0),
+          f"ridge vertices folded back 5 .. 12 mm (min {back[ridge].min():.2f}, max {back[ridge].max():.2f})")
+    radius = np.linalg.norm(P1[ridge] - np.array([0, HEAD_Y, 0]), axis=1)
+    under = (R - radius) / MM
+    on_sphere = (under >= 0.3) & (under <= 0.9)
+    on_rim = (under >= 3.3) & (under <= 3.9)
+    check(np.all(on_sphere | on_rim) and on_sphere.sum() >= 0.8 * len(under),
+          f"folded ridge vertices lie 0.3 .. 0.9 mm under the sphere ({int(on_sphere.sum())}) or 3.3 .. 3.9 under the opening's rim ({int(on_rim.sum())}) of {len(under)}")
     turned = max(int((e.get("flipped_faces") or {}).get("after") or 0) for e in record["eyes"]["eyes"])
-    check(turned <= 8, f"turned faces left after the press: {turned} (regression guard, the ridge's side walls)")
+    check(turned <= 8, f"turned faces left after the fold: {turned} (regression guard)")
+    check(int((moved > 0).sum()) == int(ridge.sum()), f"exactly the ridge moved ({int((moved > 0).sum())} of {int(ridge.sum())} vertices)")
     check(np.array_equal(P1[opening], P0[opening]), "eye-opening vertices (below the lid) keep their exact bytes")
     outside = np.ones(len(P0), bool)
     for cx in (EYE_X, -EYE_X):
         outside &= ((P0[:, 0] - cx) / (34 * MM)) ** 2 + ((P0[:, 1] - EYE_Y) / (27 * MM)) ** 2 >= 1
     check(np.array_equal(P1[outside], P0[outside]), f"vertices outside both eye regions unchanged ({int(outside.sum())} vertices)")
-    check((moved > 0).sum() <= int(ridge.sum()) + 400, f"{int((moved > 0).sum())} vertices moved in all (ridge {int(ridge.sum())})")
 
     m = record["mouth"]
     check(m["ratio_after"] <= fc.LIP_RATIO_LIMIT, f"lips/skin saturation after {m['ratio_after']} <= {fc.LIP_RATIO_LIMIT} (before {m['ratio_before']})")
