@@ -98,7 +98,9 @@ The SOURCE of an image group (``garment_source``, refit before re-render)::
                                                       origin_fsig[, materialized_from]})
 
 A group refitted from an older base's source carries copies of that source's image finals, prepared
-mesh and base views under its own fsig, each record marked ``copied_from`` (``garment_source.materialize``).
+mesh and base views under its own fsig, each record marked ``copied_from`` (``garment_source.materialize``),
+and ``limbs/{item}_{fsig}.npz`` — the source fit's vertices, limb weights and limb frames the refit aligns
+its sleeves / trouser legs from (``garment_source.write_limb_source``).
 
 Run status is in memory (like ``base_body``): a restart reruns only the step
 that was in flight, every finished step is cached on disk under ``fsig``.
@@ -145,7 +147,9 @@ IMAGE_STEPS: Tuple[str, ...] = ("haired", "worn", "ghost", "cutout")
 #: part -> sub-folder of ``garments/`` ("" = the folder itself).
 PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepared",
                              "fit": "", "low": "low", "failed": "failed",
-                             "layer": "layers", "layer_low": "layers/low"}
+                             "layer": "layers", "layer_low": "layers/low", "limbs": "limbs"}
+#: File suffix of a part other than ``glb`` (``limbs``: the refit's limb source, ``garment_source``).
+_PART_SUFFIX: Dict[str, str] = {"failed": "json", "limbs": "npz"}
 #: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
 LAYER_PARTS: Tuple[str, ...] = ("layer", "layer_low")
 #: The parts kept per body (``garment_path(body=…)``); the rest is shared.
@@ -163,7 +167,7 @@ _FSIG = r"(?P<fsig>[0-9a-f]{12})"
 #: images/: {item}_{fsig}_{step}_{view}[.try{n}].{png,json}
 _IMAGE_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[a-z]+_[a-z]+(?:\.try[0-9]+)?\.(?:png|json)")
 #: the mesh folders and the fit: {item}_{fsig}.{glb,json}
-_MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"\.(?:glb|json)")
+_MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"\.(?:glb|json|npz)")
 #: layers/ and layers/low/: {item}_{fsig}_{lsig}.{glb,json}
 _LAYER_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[0-9a-f]{12}\.(?:glb|json)")
 
@@ -258,7 +262,7 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
         path = base / PART_DIRS[part] / f"{iid}_{fsig}_{lsig}.glb"
     else:
         folder = base / PART_DIRS[part] if PART_DIRS[part] else base
-        path = folder / f"{iid}_{fsig}.{'json' if part == 'failed' else 'glb'}"
+        path = folder / f"{iid}_{fsig}.{_PART_SUFFIX.get(part, 'glb')}"
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"garment path escapes {root}")
     return path

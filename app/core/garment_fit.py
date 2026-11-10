@@ -92,7 +92,9 @@ RIGGED_SMOOTH_UNTIL = 7
 #: replaces the moved share in the gate.
 #: 4 (2026-11-10): clothing — the garment over extension-bone tissue takes the extension share of its weights
 #: (``EXTENSION_FULL_M``), so it moves with the chest instead of letting the chest jiggle through it.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 4}
+#: 5 (2026-11-10): clothing — a fit on an outfit body (and a refit from another base) aligns its sleeves / trouser
+#: legs onto the body's own limbs (``align_limbs``); a native base fit is unchanged.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 5}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
@@ -967,9 +969,12 @@ def sleeve_vertices(Q, body_P, parts, faces, upper) -> np.ndarray:
 def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: float, split_y: float,
                      idw_k: int = TRANSFER_IDW_K, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
                      margin_m: float = SDF_MARGIN_M,
-                     rigged_iterations: int = RIGGED_ITERATIONS) -> Tuple[np.ndarray, Dict[str, Any]]:
+                     rigged_iterations: int = RIGGED_ITERATIONS,
+                     limbs: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
-    skinning -> ``(X, report)``.
+    skinning -> ``(X, report)``. ``limbs`` (a refit, ``fit_clothing``): the source fit per welded vertex (``x0``,
+    ``w0``, ``names0``, ``frames``, ``kinds``) — its limb part is aligned onto this body's limbs (``align_limbs``)
+    before step 4.
 
     1. ``bone_transforms``: one rigid transform per bone, ``k * unrigged -> rigged``.
     2. Each garment vertex takes the inverse-distance blend (``idw_k`` nearest, ``w = 1 / max(d, 1e-4 / k)``) of the
@@ -1040,6 +1045,10 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         Wg[sleeve] = blend(np.arange(len(Pb)), np.nonzero(sleeve)[0])
     X = bones.apply(Q * float(k), Wg)
     relaxed = relax_stretched(X, Q * float(k), faces, adjacency)
+    limb_report = None
+    if limbs is not None:
+        X, limb_report = align_limbs(X, limbs["x0"], limbs["w0"], limbs["names0"], limbs["frames"],
+                                     limb_frames(body_rigged), kinds=limbs.get("kinds", ("arm", "leg")))
 
     lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
@@ -1065,10 +1074,180 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "rigged_clearance_p1_m": float(np.percentile(d, 1)),
         "rigged_inside_share": float((d < 0).mean()),
     }
+    if limb_report is not None:
+        report["limbs"] = limb_report
     return X, report
 
 
 # --- weights ---------------------------------------------------------------------------------------------------------------
+
+# --- limb alignment (refit before re-render, garment_source) -----------------------------------------------------------
+# A piece made on one base and fitted onto another keeps its torso by the silhouette registration; its sleeves and
+# trouser legs follow the TARGET limbs: every garment vertex the SOURCE fit skinned to a limb bone is re-expressed
+# from the source base's limb frames into the target base's (``align_limbs``) before the rigged clearance pass.
+# Chain = proximal joint -> middle joint -> distal joint (-> tip): the joint points are the mean of the body vertices
+# carrying both neighbouring bones above ``LIMB_JOINT_SHARED`` (the bind arrays carry no joint positions); a
+# segment's radius is the median distance of its bone's dominant vertices to it. Per bone: the vertex's distance
+# ALONG the chain from the proximal joint is kept in metres (the piece keeps its own length — user ruling
+# 2026-11-10: the length is irrelevant, it must sit on the body) and clamped to the chain's end (hand tip, ankle);
+# its radial offset, normalised by the source segment's radius, and its angle around the segment (a frame whose
+# second axis is the projection of ``reference`` — world up for an arm, forward for a leg — so both bases' frames
+# twist alike) are re-expressed on the target segment at that distance. The bones' results are blended with the
+# source garment's own skin weights (the transition into the shoulder / hip runs over the same blend as the skin,
+# no crease); the rest of the vertex stays where the torso placement put it.
+LIMB_JOINT_SHARED = 0.25
+LIMB_CHAINS: Dict[str, Dict[str, Any]] = {
+    f"{side}_{limb}": spec
+    for side in ("left", "right")
+    for limb, spec in (
+        ("arm", {"joints": [("shoulder", "arm"), ("arm", "forearm"), ("forearm", "hand")],
+                 "tip": "hand", "bones": {"arm": 0, "forearm": 1, "hand": 2}, "reference": (0.0, 1.0, 0.0),
+                 "kind": "arm"}),
+        ("leg", {"joints": [("hips", "upleg"), ("upleg", "leg"), ("leg", "foot")],
+                 "tip": None, "bones": {"upleg": 0, "leg": 1, "foot": 1}, "reference": (0.0, 0.0, 1.0),
+                 "kind": "leg"}),
+    )}
+
+
+def _limb_key(side: str, bone: str) -> str:
+    return bone if bone == "hips" else f"{side}{bone}"
+
+
+def segment_distance(X: np.ndarray, a, b) -> np.ndarray:
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    X = np.asarray(X, np.float64)
+    d = b - a
+    t = np.clip(((X - a) @ d) / max(float(d @ d), 1e-12), 0.0, 1.0)
+    return np.linalg.norm(X - (a + t[:, None] * d), axis=1)
+
+
+def limb_frames(body: BodyMesh) -> Dict[str, Dict[str, Any]]:
+    """The limb chains of a rigged body (block above): ``{chain: {points [[x, y, z], ...], radii [...], bones {bone
+    key: segment}, reference, kind}}`` (JSON-ready). A chain whose joints cannot be found is missing."""
+    W = dense_weights(body)
+    P = np.asarray(body.positions, np.float64)
+    dominant = W.argmax(1)
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, spec in LIMB_CHAINS.items():
+        side = name.split("_")[0]
+        try:
+            idx = {bone: joint_index(body, _limb_key(side, bone))
+                   for pair in spec["joints"] for bone in pair}
+        except KeyError:
+            continue
+        points = []
+        for a, b in spec["joints"]:
+            shared = (W[:, idx[a]] > LIMB_JOINT_SHARED) & (W[:, idx[b]] > LIMB_JOINT_SHARED)
+            if shared.sum() < 3:
+                break
+            points.append(P[shared].mean(0))
+        if len(points) < len(spec["joints"]):
+            continue
+        if spec["tip"]:
+            tip = P[dominant == idx[spec["tip"]]]
+            if len(tip):
+                u = points[-1] - points[-2]
+                u = u / max(float(np.linalg.norm(u)), 1e-12)
+                reach = float(np.percentile((tip - points[-1]) @ u, 99))
+                if reach > 0:
+                    points.append(points[-1] + reach * u)
+        nseg = len(points) - 1
+        radii = []
+        for seg in range(nseg):
+            bone = next((b for b, s in spec["bones"].items() if s == seg), None)
+            own = P[dominant == idx[bone]] if bone in idx else np.zeros((0, 3))
+            radii.append(float(np.median(segment_distance(own, points[seg], points[seg + 1]))) if len(own)
+                         else (radii[-1] if radii else 0.0))
+        out[name] = {"points": [[float(c) for c in p] for p in points], "radii": radii,
+                     "bones": {_limb_key(side, b): min(seg, nseg - 1) for b, seg in spec["bones"].items()},
+                     "reference": list(spec["reference"]), "kind": spec["kind"]}
+    return out
+
+
+def _segment_frame(a, b, reference) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """``(u, v, w, length)``: u along a -> b, v the projection of ``reference`` perpendicular to u, w = u x v."""
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    length = float(np.linalg.norm(b - a))
+    u = (b - a) / max(length, 1e-12)
+    r = np.asarray(reference, np.float64)
+    v = r - (r @ u) * u
+    if np.linalg.norm(v) < 1e-6:
+        v = np.cross(u, [1.0, 0.0, 0.0])
+    v = v / np.linalg.norm(v)
+    return u, v, np.cross(u, v), length
+
+
+def align_limbs(X, X0, W0, names0, source: Dict[str, Dict[str, Any]], target: Dict[str, Dict[str, Any]], *,
+                kinds=("arm", "leg")) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Re-express the limb part of ``X`` (the torso-placed garment in the target's rigged space) from the source
+    fit ``X0`` (same vertices, the source's rigged space; ``W0`` its skin weights over ``names0``) — block above.
+    Chains missing on either side, or of a kind not in ``kinds``, are left alone. ``(X, report)``."""
+    from app.core.rig_contract import norm_bone_name
+    X = np.asarray(X, np.float64)
+    X0 = np.asarray(X0, np.float64)
+    W0 = np.asarray(W0, np.float64)
+    col = {norm_bone_name(n): i for i, n in enumerate(names0)}
+    Y = np.zeros_like(X)
+    S = np.zeros(len(X))
+    report: Dict[str, Any] = {"chains": {}}
+    for name, src in source.items():
+        tgt = target.get(name)
+        if not tgt or src.get("kind") not in kinds:
+            continue
+        ps, pt = np.asarray(src["points"], np.float64), np.asarray(tgt["points"], np.float64)
+        nseg = min(len(ps), len(pt)) - 1
+        if nseg < 1:
+            continue
+        fs = [_segment_frame(ps[i], ps[i + 1], src["reference"]) for i in range(nseg)]
+        ft = [_segment_frame(pt[i], pt[i + 1], tgt["reference"]) for i in range(nseg)]
+        cum_s = np.concatenate([[0.0], np.cumsum([f[3] for f in fs])])
+        cum_t = np.concatenate([[0.0], np.cumsum([f[3] for f in ft])])
+        moved = 0
+        for bone, seg in src["bones"].items():
+            c = col.get(bone)
+            if c is None:
+                continue
+            seg = min(int(seg), nseg - 1)
+            w = W0[:, c]
+            rows = np.nonzero(w > 1e-4)[0]
+            if not len(rows):
+                continue
+            u, v, ww, _length = fs[seg]
+            rel = X0[rows] - ps[seg]
+            along = rel @ u
+            radial = rel - along[:, None] * u
+            rho = np.linalg.norm(radial, axis=1) / max(float(src["radii"][seg]), 1e-6)
+            theta = np.arctan2(radial @ ww, radial @ v)
+            dist = np.minimum(cum_s[seg] + along, cum_t[-1])
+            j = np.clip(np.searchsorted(cum_t, dist, side="right") - 1, 0, nseg - 1)
+            # The offset scales with the target radius of the vertex's OWN bone segment: a forearm vertex that
+            # lands on the target's (longer) upper arm keeps the forearm's thickness — no step at the elbow.
+            radius = float(tgt["radii"][min(seg, len(tgt["radii"]) - 1)])
+            out = np.empty((len(rows), 3))
+            for k in range(nseg):
+                m = j == k
+                if not m.any():
+                    continue
+                tu, tv, tw, _ = ft[k]
+                out[m] = (pt[k] + (dist[m] - cum_t[k])[:, None] * tu
+                          + (rho[m] * radius)[:, None] * (np.cos(theta[m])[:, None] * tv
+                                                          + np.sin(theta[m])[:, None] * tw))
+            Y[rows] += w[rows, None] * out
+            S[rows] += w[rows]
+            moved += len(rows)
+        report["chains"][name] = {"vertices": int(moved), "source_length_m": round(float(cum_s[-1]), 4),
+                                  "target_length_m": round(float(cum_t[-1]), 4)}
+    total = np.maximum(S, 1e-12)
+    Y = np.where(S[:, None] > 0, Y / total[:, None], X)
+    S = np.clip(S, 0.0, 1.0)
+    Xa = (1.0 - S)[:, None] * X + S[:, None] * Y
+    shift = np.linalg.norm(Xa - X, axis=1)
+    moved = S > 0
+    report.update({"vertices": int(moved.sum()),
+                   "shift_p50_m": round(float(np.median(shift[moved])), 4) if moved.any() else 0.0,
+                   "shift_max_m": round(float(shift.max()), 4) if len(shift) else 0.0})
+    return Xa, report
+
 
 def chin_height(body_rigged: BodyMesh) -> float:
     """Height of the lowest rigged vertex with Head weight > 0.5."""
@@ -1486,6 +1665,21 @@ def _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime
                        image=image, mime=mime, material=material)
 
 
+def _out_index(Pd, Fd, inv, new_of_welded) -> np.ndarray:
+    """Per output vertex of ``_garment_out`` its kept welded vertex (the same rule) — the vertex order of every fit
+    of this prepared mesh, whatever body it was fitted on."""
+    vmap = new_of_welded[inv]
+    kept_v = np.nonzero(vmap >= 0)[0]
+    orig_new = np.full(len(Pd), -1, np.int64)
+    orig_new[kept_v] = np.arange(len(kept_v))
+    Fo = np.asarray(Fd, np.int64).reshape(-1, 3)
+    Fwo = inv[Fo]
+    face_ok = ((Fwo[:, 0] != Fwo[:, 1]) & (Fwo[:, 1] != Fwo[:, 2]) & (Fwo[:, 0] != Fwo[:, 2])
+               & (vmap[Fo] >= 0).all(1))
+    used = np.unique(orig_new[Fo[face_ok]])
+    return vmap[kept_v[used]]
+
+
 def _prepare(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes):
     """Read and weld a prepared garment and both bases -> ``(static arrays, bases, welded, kept)``."""
     from app.core.glb_mesh import body_arrays, static_arrays
@@ -1690,7 +1884,7 @@ def scale_retry(Q, push, finish, *, centre_x: float, centre_z: float, half_width
 
 
 def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes, *,
-                 masks, slots) -> FitResult:
+                 masks, slots, limb_source: Optional[Dict[str, Any]] = None) -> FitResult:
     """Fit a prepared (decimated) clothing mesh onto the rigged base body (dress spike ``fit_dress.py``).
 
     ``masks``: ``{"body": ..., "garment": ...}`` — the full-frame body mask of the bald front view the unrigged base
@@ -1708,6 +1902,11 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     (``scale_retry``, ``widen``, steps ``SCALE_RETRY_STEPS``); the push numbers of a widened fit are measured from
     the widened placement. ``metrics["scale_retry"]`` = the applied factor (1.0 unwidened), ``scale_retry_max`` =
     the largest tried (1.0 without a retry), ``report["scale_retry"]`` the attempts with their gate numbers.
+
+    ``limb_source`` (a refit — ``garment_source``): the source fit of the same prepared mesh on another base,
+    ``{x0 (output vertices, 3), w0 (output vertices, len(names0)), names0, frames (its body's limb_frames),
+    kinds}``; its limbs are aligned onto this body's (``align_limbs`` inside ``transfer_skinned``). Skipped
+    (``report["transfer"]["limbs"]["skipped"]``) when its vertex count is not this fit's.
     """
     body_mask, garment_mask = _mask(masks["body"]), _mask(masks["garment"])
     if body_mask.shape != garment_mask.shape:
@@ -1726,6 +1925,18 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
     Q = place_by_framing(Pk, body_u.positions, body_mask, garment_mask)
     Q, dz = align_band_depth(Q, body_u.positions, height_u=height_u)
+    limbs, limbs_skipped = None, ""
+    if limb_source is not None:
+        src = _out_index(Pd, Fd, inv, new_of_welded)
+        x0 = np.asarray(limb_source["x0"], np.float64)
+        if len(x0) != len(src):
+            limbs_skipped = f"the source has {len(x0)} vertices, this fit {len(src)}"
+        else:
+            w0 = np.asarray(limb_source["w0"], np.float64)
+            x0k, w0k = np.zeros((len(Pk), 3)), np.zeros((len(Pk), w0.shape[1]))
+            x0k[src], w0k[src] = x0, w0
+            limbs = {"x0": x0k, "w0": w0k, "names0": list(limb_source["names0"]),
+                     "frames": limb_source["frames"], "kinds": tuple(limb_source.get("kinds") or ("arm", "leg"))}
     margin = SDF_MARGIN_M / k
 
     def push(Qs):
@@ -1736,7 +1947,9 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
     def finish(Qs, Qp, disp) -> FitResult:
         split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
-        X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y)
+        X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs)
+        if limbs_skipped:
+            transfer_report["limbs"] = {"skipped": limbs_skipped}
         skirt = is_skirt(X, body_r, slots)
         J, W = clothing_weights(X, body_r, skirt=skirt)
         used = np.unique(J[W > 0])

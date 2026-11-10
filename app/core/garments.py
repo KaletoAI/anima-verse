@@ -617,8 +617,11 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     if kind == garment_set.CLOTHING:
         from app.models.inventory import get_item
         slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
+        # A refit aligns its sleeves / trouser legs onto this body's limbs (``garment_source`` LIMBS).
+        limb_source = garment_source.limb_source(character_name, item_id, fsig) if frame.get("registered") else None
         result = garment_fit.fit_clothing(prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
-                                          masks={"body": bald_mask, "garment": ghost_mask}, slots=slots)
+                                          masks={"body": bald_mask, "garment": ghost_mask}, slots=slots,
+                                          limb_source=limb_source)
         limits = garment_fit.CLOTHING_GATES
     else:
         result = garment_fit.fit_hair(prepared_bytes, snapshot["unrigged"], snapshot["rigged"], bald_mask,
@@ -629,14 +632,14 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     if not result.ok:
         raise _Refused("fit", "fit refused — " + "; ".join(result.reasons),
                        {**gates, "metrics": result.metrics})
-    # A refit's sleeves against its source's (``garment_source`` ARMS).
-    arms = garment_source.check_arms(character_name, item_id, fsig, result.garment.positions, snapshot["rigged"],
-                                     frame)
-    if arms is not None and not arms["ok"]:
-        raise _Refused("fit", "refit refused — " + "; ".join(arms["reasons"]),
-                       {"ok": False, "reasons": arms["reasons"], "arms": arms})
-    if arms is not None:
-        frame = {**frame, "arms": arms}
+    # A refit's limbs sit on the body (``garment_source`` LIMBS).
+    limbs = garment_source.check_limbs(character_name, item_id, fsig, result.garment.positions,
+                                       snapshot["rigged"], frame)
+    if limbs is not None and not limbs["ok"]:
+        raise _Refused("fit", "refit refused — " + "; ".join(limbs["reasons"]),
+                       {"ok": False, "reasons": limbs["reasons"], "limbs": limbs})
+    if limbs is not None:
+        frame = {**frame, "limbs": limbs}
 
     record: Dict[str, Any] = {
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
@@ -1065,11 +1068,22 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             raise _Refused("fit", f"fit on the outfit body refused — {e}",
                            {"ok": False, "reasons": [str(e)], "registration": e.registration})
         record["frame"] = frame
+        limb_source = None
         if kind == garment_set.CLOTHING:
             from app.models.inventory import get_item
             slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
+            # The outfit body has its own arms / legs: align the sleeves / trouser legs from the base fit of the
+            # same prepared mesh (``garment_source`` — outfit bodies).
+            try:
+                limb_source = garment_source.limb_source_from_fit(
+                    Path(path).read_bytes(), skirt=bool((base_record.get("report") or {}).get("skirt")))
+            except (OSError, ValueError, KeyError) as e:
+                logger.warning("Garment fit %s/%s on %s: base fit unreadable for the limbs: %s", character_name,
+                               item_id, body_id, e)
+                limb_source = None
             result = garment_fit.fit_clothing(prepared_bytes, body["unrigged"], body["rigged"],
-                                              masks={"body": body_mask, "garment": ghost_mask}, slots=slots)
+                                              masks={"body": body_mask, "garment": ghost_mask}, slots=slots,
+                                              limb_source=limb_source)
             limits = garment_fit.CLOTHING_GATES
         else:
             result = garment_fit.fit_hair(prepared_bytes, body["unrigged"], body["rigged"], body_mask, ghost_mask)
@@ -1079,13 +1093,13 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         if not result.ok:
             raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(result.reasons),
                            {**gates, "metrics": result.metrics})
-        arms = garment_source.check_arms(character_name, item_id, fsig, result.garment.positions, body["rigged"],
-                                         frame)
-        if arms is not None and not arms["ok"]:
-            raise _Refused("fit", "refit on the outfit body refused — " + "; ".join(arms["reasons"]),
-                           {"ok": False, "reasons": arms["reasons"], "arms": arms})
-        if arms is not None:
-            record["frame"] = {**frame, "arms": arms}
+        limbs = garment_source.check_limbs(character_name, item_id, fsig, result.garment.positions,
+                                           body["rigged"], frame, source=(limb_source or {}).get("numbers") or None)
+        if limbs is not None and not limbs["ok"]:
+            raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(limbs["reasons"]),
+                           {"ok": False, "reasons": limbs["reasons"], "limbs": limbs})
+        if limbs is not None:
+            record["frame"] = {**frame, "limbs": limbs}
         record.update({
             "metrics": result.metrics, "gates": gates, "report": result.report,
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id),

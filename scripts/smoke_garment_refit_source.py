@@ -52,37 +52,64 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     refitted False, source.fsig F3; no file of F3 carries copied_from.
 [6] The piece's own inputs changed (hair colour; base unchanged): no
     source names the current inputs -> no refit: 4 renders, 1 mesh call.
-[7] Arms (garment_source.arm_numbers / arm_gate on synthetic geometry).
-    Body: per side an arm cylinder r 0.030 along +-x at y 1.4, z 0, rings
-    of 24 points every 5 mm from |x| 0.100 to 0.750; weights by |x|:
-    Shoulder below 0.18, Arm to 0.43, ForeArm to 0.67, Hand beyond, the
-    rings AT 0.18 / 0.43 / 0.67 half and half -> shoulder (0.18, 1.4, 0),
-    elbow (0.43, 1.4, 0), wrist (0.67, 1.4, 0) (ring means), both limb
-    radii 0.030 (every dominant ring point lies on r). A torso block at
+[7] Limbs (garment_fit.limb_frames, garment_source.limb_numbers / limb_gate on
+    synthetic geometry). Body: per side an arm cylinder r 0.030 along +-x at
+    y 1.4, z 0, rings of 24 points every 5 mm from |x| 0.100 to 0.750; weights
+    by |x|: Shoulder below 0.18, Arm to 0.43, ForeArm to 0.67, Hand beyond, the
+    rings AT 0.18 / 0.43 / 0.67 half and half -> shoulder (0.18, 1.4, 0), elbow
+    (0.43, 1.4, 0), wrist (0.67, 1.4, 0) (ring means). A torso block at
     |x| < 0.09 weighted Spine. Joint order Hips, Spine, LeftShoulder, LeftArm,
-    LeftForeArm, LeftHand, Right…: a tie goes to the lower index, so the
-    0.18 ring is the Shoulder's.
+    LeftForeArm, LeftHand, Right…: a tie goes to the lower index, so the 0.18
+    ring is the Shoulder's, 0.43 the Arm's, 0.67 the ForeArm's. Tip: the Hand's
+    rings 0.675 .. 0.750 (16 x 24 = 384 values), p99 index 379.17 in the last
+    ring -> 0.08 beyond the wrist -> (0.75, 1.4, 0). Radii: every dominant ring
+    point lies 0.030 from its segment -> [0.03, 0.03, 0.03]. No leg bones -> only
+    left_arm / right_arm.
     Sleeve = rings of 36 points, r 0.045 (excess 0.015 < 0.04), every 5 mm
-    from |x| 0.120 to x_end. On the arm (nearest body ring = same x, the same
-    angles on every ring): the rings 0.185 .. x_end.
-    LONG  x_end 0.66: 96 rings, 3456 values, the p99 index 0.99 x 3455 =
-          3420.45 lies in the last ring (3420 .. 3455) -> reach_fore =
-          (0.66 - 0.43) / 0.24 = 0.9583; off_fore 0.0.
-    SHORT x_end 0.55: 74 rings, p99 index 2636.37 in the last ring (2628 ..
-          2663) -> reach_fore 0.5; drop 0.4583 > 0.04: refused "short".
+    from |x| 0.120 to x_end. On the limb (nearest body ring = same x): the rings
+    0.185 .. x_end. Along = x - 0.18 (straight chain). Upper-arm set: from a
+    quarter of the segment (x >= 0.2425) to the elbow: rings 0.245 .. 0.425 = 37
+    rings (1332 points); forearm set: rings 0.43 .. x_end.
+    LONG  x_end 0.66: 96 rings, 3456 values, the p99 index 3420.45 lies in the
+          last ring (3420 .. 3455) -> reach_m 0.66 - 0.18 = 0.48; off [0, 0];
+          vertices 1332 + 47 x 36 = 3024.
+    SHORT x_end 0.55: reach_m 0.37, off [0, 0] -> NOT refused (the length is
+          recorded, never a reason — user ruling 2026-11-10).
     HANG  LONG with the rings beyond x 0.43 moved 0.05 down: a point of such a
-          ring at angle phi (y = -0.05 + 0.045 cos phi, z = 0.045 sin phi) is
-          d^2 = 0.004525 - 0.0045 cos phi from the forearm axis; d > 0.07
-          (r + 4 cm) for cos phi < -0.0833, i.e. phi 100 .. 260 deg = 17 of 36
-          points; the forearm set = the rings 0.43 .. 0.66 = 47 rings, 46 of them
-          moved -> off_fore = 46 x 17 / (47 x 36) = 0.4622 (> 0 + 0.10):
-          refused "off the forearm"; reach unchanged 0.9583.
-    LONG against itself: ok.
-[8] Wiring: a refit whose source has sleeves (source_arms stubbed to the LONG
-    numbers) and whose fit is SHORT (arm_numbers stubbed): B4 (dy 60; from the
-    [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside the caps) -> the arm
-    gate refuses the refit, the same run renders the chain: ok, 4 renders,
-    1 mesh call, the fit refitted False, no file carries copied_from.
+          ring at angle phi is d^2 = 0.004525 - 0.0045 cos phi from the forearm
+          axis; d > 0.07 (r + 4 cm) for cos phi < -0.0833, i.e. phi 100 .. 260
+          deg = 17 of 36 points; the forearm set = 47 rings, 46 of them moved ->
+          off [0, 46 x 17 / (47 x 36) = 0.4622] (> 0 + 0.10): refused "off the
+          forearm"; reach unchanged 0.48.
+    A limb the source covers, gone: refused. A source without limbs: ok.
+[8] Wiring: a refit whose source covers the arms (source_limbs stubbed to the
+    LONG numbers) and whose fit hangs off them (limb_numbers stubbed to HANG):
+    B4 (dy 60; from the [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside
+    the caps) -> the limb gate refuses the refit, the same run renders the
+    chain: ok, 4 renders, 1 mesh call, the fit refitted False, no file carries
+    copied_from, no limbs/ file left for F4.
+[9] align_limbs (garment_fit) by hand. Source left arm = [7]'s chain (shoulder
+    (0.18, 1.4, 0), elbow 0.43, wrist 0.67, tip 0.75; radii 0.03; frame u
+    = +x, v = +y, w = +z). Target T: shoulder (0.20, 1.45, 0), the arm 30 deg
+    DOWN, u' = (0.866025, -0.5, 0), segments 0.30 / 0.28 / 0.08 (cum 0, 0.30,
+    0.58, 0.66), radii 0.040 / 0.035 / 0.030; v' = (0, 1, 0) minus its u'
+    part, normalised = (0.5, 0.866025, 0); w' = u' x v' = (0, 0, 1);
+    elbow' = (0.459808, 1.30, 0).
+    V1 Arm 1, X0 (0.30, 1.445, 0): along 0.12, rho 0.045 / 0.03 = 1.5, theta 0
+       -> shoulder' + 0.12 u' + 1.5 x 0.040 v' = (0.333923, 1.441962, 0).
+    V2 ForeArm 1, X0 (0.60, 1.4, 0.045): chain distance 0.42 -> target seg 1,
+       0.12 past elbow'; theta 90 deg, the radius of its OWN segment 0.035 ->
+       elbow' + 0.12 u' + 0.0525 w' = (0.563731, 1.24, 0.0525).
+    V3 Arm 0.5 (the rest a torso bone, not a limb column), X0 as V1, the torso
+       placement X (0.30, 1.40, 0): 0.5 X + 0.5 V1' = (0.316962, 1.420981, 0).
+    V4 Arm 0.5 + ForeArm 0.5 at the elbow, X0 (0.43, 1.445, 0): both map to
+       chain distance 0.25 (target seg 0), offsets 1.5 x 0.040 and 1.5 x 0.035
+       along v' -> mean 0.05625: shoulder' + 0.25 u' + 0.05625 v' =
+       (0.444631, 1.373714, 0) — one point, no crease.
+    V5 weight 0: X unchanged.
+    Clamp, target S (straight +x from (0.18, 1.4, 0), segments 0.20 / 0.20 /
+    0.05, radii 0.03): V6 Hand 1, X0 (0.74, 1.43, 0): chain distance 0.56 >
+    0.45 -> the tip (0.63, 1.4, 0) + 1.0 x 0.03 v = (0.63, 1.43, 0).
 """
 import json
 import os
@@ -407,32 +434,38 @@ def main() -> int:
         check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
 
         # --- [7] ---------------------------------------------------------------------
-        print("[7] arms on synthetic geometry")
+        print("[7] limbs on synthetic geometry")
+        from app.core import garment_fit
         body = arm_body()
-        long_ = garment_source.arm_numbers(sleeves(0.66), body)
-        short = garment_source.arm_numbers(sleeves(0.55), body)
-        hang = garment_source.arm_numbers(sleeves(0.66, hang=0.05), body)
+        frames = garment_fit.limb_frames(body)
+        check("chains", sorted(frames), ["left_arm", "right_arm"])
+        check("left chain", ([[round(c, 4) for c in p] for p in frames["left_arm"]["points"]],
+                             [round(r, 4) for r in frames["left_arm"]["radii"]]),
+              ([[0.18, 1.4, 0.0], [0.43, 1.4, 0.0], [0.67, 1.4, 0.0], [0.75, 1.4, 0.0]], [0.03, 0.03, 0.03]))
+        long_ = garment_source.limb_numbers(sleeves(0.66), body)
+        short = garment_source.limb_numbers(sleeves(0.55), body)
+        hang = garment_source.limb_numbers(sleeves(0.66, hang=0.05), body)
         for side in ("left", "right"):
-            check(f"{side} LONG", (round(long_[side]["reach_fore"], 4), long_[side]["off_fore"]), (0.9583, 0.0))
-            check(f"{side} SHORT reach", round(short[side]["reach_fore"], 4), 0.5)
-            check(f"{side} HANG", (round(hang[side]["reach_fore"], 4), hang[side]["off_fore"]), (0.9583, 0.4622))
-        check("LONG vs LONG ok", garment_source.arm_gate(long_, long_)["ok"], True)
-        gate = garment_source.arm_gate(short, long_)
-        check("SHORT refused for reach", (gate["ok"], ["short of the source" in r for r in gate["reasons"]]),
-              (False, [True, True]))
-        gate = garment_source.arm_gate(hang, long_)
+            chain = f"{side}_arm"
+            check(f"{side} LONG", (long_[chain]["reach_m"], long_[chain]["off"], long_[chain]["vertices"]),
+                  (0.48, [0.0, 0.0], 3024))
+            check(f"{side} SHORT", (short[chain]["reach_m"], short[chain]["off"]), (0.37, [0.0, 0.0]))
+            check(f"{side} HANG", (hang[chain]["reach_m"], hang[chain]["off"]), (0.48, [0.0, 0.4622]))
+        check("LONG vs LONG ok", garment_source.limb_gate(long_, long_)["ok"], True)
+        check("SHORT vs LONG ok (length never a reason)", garment_source.limb_gate(short, long_)["ok"], True)
+        gate = garment_source.limb_gate(hang, long_)
         check("HANG refused off the forearm", (gate["ok"], ["off the forearm" in r for r in gate["reasons"]]),
               (False, [True, True]))
-        check("a sleeve the source has, gone", garment_source.arm_gate({"left": None, "right": None}, long_)["ok"],
-              False)
-        check("sleeveless source: nothing checked", garment_source.arm_gate(short, {"left": None, "right": None})["ok"],
-              True)
+        check("a limb the source covers, gone",
+              garment_source.limb_gate({"left_arm": None, "right_arm": None}, long_)["ok"], False)
+        check("source without limbs: nothing checked",
+              garment_source.limb_gate(short, {"left_arm": None, "right_arm": None})["ok"], True)
 
         # --- [8] ---------------------------------------------------------------------
-        print("[8] a refit with a short sleeve is refused -> the chain renders")
-        real_source_arms, real_arm_numbers = garment_source.source_arms, garment_source.arm_numbers
-        garment_source.source_arms = lambda *a, **k: long_
-        garment_source.arm_numbers = lambda *a, **k: short
+        print("[8] a refit whose sleeve hangs off the arm is refused -> the chain renders")
+        real_source_limbs, real_limb_numbers = garment_source.source_limbs, garment_source.limb_numbers
+        garment_source.source_limbs = lambda *a, **k: long_
+        garment_source.limb_numbers = lambda *a, **k: hang
         try:
             b4 = use_profile_image(4)
             write_base(b4, 60)
@@ -440,7 +473,7 @@ def main() -> int:
             before = counts()
             res = garments.run_garment("Demo", hid)
         finally:
-            garment_source.source_arms, garment_source.arm_numbers = real_source_arms, real_arm_numbers
+            garment_source.source_limbs, garment_source.limb_numbers = real_source_limbs, real_limb_numbers
         check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["haired", "ghost", "cutout", "mesh", "fit"]))
         check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         rec8 = fit_record(f4)
@@ -449,6 +482,33 @@ def main() -> int:
         marked = [p.name for p in gs.stored_groups("Demo").get((hid, f4), [])
                   if p.suffix == ".png" and gs.read_record(p.with_suffix(".json")).get("copied_from")]
         check("no copied file in F4", marked, [])
+        check("no limbs file for F4", gs.garment_path("Demo", hid, f4, "limbs").is_file(), False)
+
+        # --- [9] ---------------------------------------------------------------------
+        print("[9] align_limbs by hand")
+        u = np.array([0.866025404, -0.5, 0.0])
+        sh = np.array([0.20, 1.45, 0.0])
+        target = {"left_arm": {"points": [sh.tolist(), (sh + 0.30 * u).tolist(), (sh + 0.58 * u).tolist(),
+                                          (sh + 0.66 * u).tolist()],
+                               "radii": [0.040, 0.035, 0.030], "bones": {}, "reference": [0, 1, 0], "kind": "arm"}}
+        source = {"left_arm": frames["left_arm"]}
+        names0 = ["mixamorig:LeftArm", "mixamorig:LeftForeArm", "mixamorig:LeftHand"]
+        X0 = np.array([[0.30, 1.445, 0.0], [0.60, 1.4, 0.045], [0.30, 1.445, 0.0], [0.43, 1.445, 0.0],
+                       [0.50, 1.0, 0.0]])
+        W0 = np.array([[1.0, 0, 0], [0, 1.0, 0], [0.5, 0, 0], [0.5, 0.5, 0], [0, 0, 0]])
+        X = np.array([[9.0, 9.0, 9.0], [9.0, 9.0, 9.0], [0.30, 1.40, 0.0], [9.0, 9.0, 9.0], [0.1, 0.2, 0.3]])
+        Xa, rep = garment_fit.align_limbs(X, X0, W0, names0, source, target)
+        want = [[0.333923, 1.441962, 0.0], [0.563731, 1.24, 0.0525], [0.316962, 1.420981, 0.0],
+                [0.444631, 1.373714, 0.0], [0.1, 0.2, 0.3]]
+        for i, w in enumerate(want):
+            check(f"V{i + 1}", [round(float(c), 5) for c in Xa[i]], [round(c, 5) for c in w])
+        check("report", (rep["chains"]["left_arm"]["source_length_m"], rep["chains"]["left_arm"]["target_length_m"]),
+              (0.57, 0.66))
+        straight = {"left_arm": {"points": [[0.18, 1.4, 0.0], [0.38, 1.4, 0.0], [0.58, 1.4, 0.0], [0.63, 1.4, 0.0]],
+                                 "radii": [0.03, 0.03, 0.03], "bones": {}, "reference": [0, 1, 0], "kind": "arm"}}
+        Xc, _ = garment_fit.align_limbs(np.zeros((1, 3)), np.array([[0.74, 1.43, 0.0]]), np.array([[0, 0, 1.0]]),
+                                        names0, source, straight)
+        check("V6 clamped at the tip", [round(float(c), 5) for c in Xc[0]], [0.63, 1.43, 0.0])
 
     if FAILS:
         print(f"FAILED ({len(FAILS)}): " + ", ".join(FAILS))

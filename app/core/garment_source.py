@@ -64,35 +64,44 @@ A registration whose residual outline distance stays above ``FRAME_RESIDUAL_MAX`
 0.004 Hb) did not find the body and is refused the same way. A group whose base copy IS the target base front
 (the usual case) is fitted exactly as before: no registration.
 
-ARMS. The trunk registration places the torso; a SLEEVE follows the arm where the source images drew it, and an
-arm of another base has another length and angle. A refit of a sleeved piece (its source fit has sleeve vertices
-on an arm: ``ARM_MIN_VERTICES``) is therefore checked per arm against the SOURCE's own fit (``arm_numbers`` of the
-source group's fit GLB on its own base, stored in the copy's base record as ``arms`` by ``materialize`` — a source
-that is itself a refit hands its own source's numbers on, so tolerances never add up), in units of the target's
-arm: shoulder / elbow / wrist = the mean of the body vertices carrying both neighbouring bones
-(``ARM_JOINT_SHARED``), the limb radius = the median distance of the bone's dominant vertices to its segment, the
-sleeve = the garment vertices whose nearest body vertex is dominated by that side's Arm / ForeArm / Hand.
+LIMBS. The trunk registration places the torso; a sleeve (a trouser leg) would follow the limb where the source
+images drew it, and a limb of another base has another length, angle and thickness. A refit therefore ALIGNS the
+limbs (``garment_fit.align_limbs``, inside the skinned transfer before the rigged clearance pass): every vertex the
+SOURCE fit skinned to an Arm / ForeArm / Hand (UpLeg / Leg / Foot — not for a skirt) is re-expressed from the
+source base's limb chain into the target's — its distance along the chain from the shoulder (hip) kept in metres
+(user ruling 2026-11-10: the length is irrelevant, it must sit on the body; clamped at the hand tip / ankle), its
+radial offset normalised by the limb radius and its angle around the limb in a twist-aligned frame — blended with
+the source skin weights into the torso placement (no crease at the shoulder / hip). The source is the source
+group's fit GLB on its own base (vertices, skin weights, limb frames), kept with the refitted group as
+``limbs/{item}_{fsig}.npz`` (``write_limb_source``, by ``materialize``) — the same prepared mesh gives the same
+vertex order on every body (``garment_fit._out_index``).
 
-* reach: the 99th percentile of the sleeve's position along elbow -> wrist (0 elbow, 1 wrist; a sleeve that ends
-  above the elbow: along shoulder -> elbow). Refused when it drops more than ``ARM_REACH_DROP`` below the source's.
-* off the arm: on the segment the source sleeve ends on (forearm when its reach >= 0.5, else the upper arm), the
-  share of sleeve vertices farther than the limb radius + ``ARM_OFF_M`` from the limb. Refused when it exceeds the
-  source's by more than ``ARM_OFF_DELTA``.
+The gate after it is "sits on the body" (``limb_gate``): per limb segment (upper arm / forearm, thigh / shin) the
+share of the piece's vertices on that limb farther than the limb radius + ``LIMB_OFF_M`` from it may exceed the
+source's own share by at most ``LIMB_OFF_DELTA``; a limb the source covers that the refit lost is refused; the
+penetration share after the push-out is the clothing gate ``rigged_inside_share`` (<= 0.01) every fit passes. The
+reach (how far along the limb the piece ends) is recorded, never a reason.
 
-Measured 2026-11-10, Kira's Black Blazer (left / right arm): reach / forearm share beyond r + 4 cm
-    source = native fit on base20d5701a     0.943 / 0.932    0.018 / 0.000
-    refit onto base5c5f3624 (accepted v1)   1.019 / 0.967    0.000 / 0.278   right cuff stands off the forearm
-    refit onto base233fdd2a (accepted v1)   0.881 / 0.835    0.246 / 0.506   forearm half of both sleeves hangs
-                                                                             below the arm, ends short
-Beyond r + 3 cm the native loose cuff already counts (0.170 / 0.069): 4 cm separates — good <= 0.018, broken
->= 0.246; ``ARM_OFF_DELTA`` 0.10 lies between the good deltas (<= 0) and the smallest broken one (+0.228). The
-reach drops by 0.062 / 0.097 forearm lengths on base233fdd2a and not at all on the good fits; the native left /
-right difference is 0.011, ``ARM_REACH_DROP`` 0.04 (~1 cm) is about four times that and below 0.062. Both refits
-are refused (re-render). A per-arm registration (shift / scale along the limb) was not built: it needs arm masks
-and a garment split before the push-out — not cheap, so a sleeve that does not sit is a re-render.
+Measured 2026-11-10, Kira's Black Blazer (left / right arm, forearm share beyond r + 4 cm; reach = p99 along
+elbow -> wrist), WITHOUT the alignment:
+    source = native fit on base20d5701a     0.018 / 0.000    reach 0.943 / 0.932
+    refit onto base5c5f3624                 0.000 / 0.278    reach 1.019 / 0.967   right cuff off the forearm
+    refit onto base233fdd2a                 0.246 / 0.506    reach 0.881 / 0.835   forearm half hangs below
+Beyond r + 3 cm the native loose cuff already counts (0.170 / 0.069); 4 cm separates — good <= 0.018, broken
+>= 0.246; ``LIMB_OFF_DELTA`` 0.10 lies between the good deltas (<= 0) and the smallest broken one (+0.228).
+WITH the alignment (same refits): forearm 0.016 / 0.000 and 0.025 / 0.000, upper arm 0.029 / 0.055 and
+0.007 / 0.005 (source 0.015 / 0.012), reach 0.475 / 0.470 m on both (source 0.475 / 0.470 — the piece keeps its
+length), penetration after the push-out 0.0 on both, hem / collar as before (5.27 / 5.63 cm, 5.54 / 6.45 cm):
+both accepted. The blazer's hem carries thigh weights but covers no thigh, so no leg chain is aligned for it.
 
 On an outfit body (``garments.fit_on_body``) the body mask is that body's dressed front as before; the ghost is
-registered from the group's base copy onto the base front of the base the body was dressed from.
+registered from the group's base copy onto the base front of the base the body was dressed from. An outfit body is
+meshed from its own dressed views, so its arms are not the base's (Kira's five outfit bodies: elbows 3 - 4 cm
+further in and up to 13 cm further back, forearms 1 - 3 cm shorter): the sleeves of the base fit's ghost hung
+beside the T-pose arms (off the upper arm 0.59 - 1.0, reach 0.06 - 0.14 m). Every outfit-body fit is therefore
+aligned from the group's BASE FIT (``limb_source_from_fit`` of it — the same prepared mesh) and gated against that
+fit's limb numbers: off the upper arm / forearm then 0.018 - 0.061 / 0.000 - 0.032, reach 0.467 - 0.473 m,
+penetration 0.0 on all five.
 
 Subtract hair: the cut labels the hair by the haired view against ITS base view (``garment_subtract._views``
 reads the group's base copy) and places the haired mesh through ``place_mask`` — the current base front
@@ -118,17 +127,12 @@ TRUNK_HEAD_ROW = 0.05
 #: A registration whose mean outline distance stays above this x Hb did not find the body (the real trunks
 #: settle at 0.003-0.004 Hb, the outline distance is truncated at 0.01 Hb): refused like one beyond the caps.
 FRAME_RESIDUAL_MAX = 0.006
-#: Arms (module docstring ARMS): a body vertex carrying both neighbouring bones above this is on their joint.
-ARM_JOINT_SHARED = 0.25
-#: A sleeve vertex farther than the limb radius + this from the limb is off the arm.
-ARM_OFF_M = 0.04
-#: The off-arm share may exceed the source's by at most this.
-ARM_OFF_DELTA = 0.10
-#: The sleeve's reach (segment lengths) may drop at most this below the source's.
-ARM_REACH_DROP = 0.04
-#: Fewer sleeve vertices on an arm than this: no sleeve there (nothing to check).
-ARM_MIN_VERTICES = 50
-ARM_SIDES = ("left", "right")
+#: Limbs (module docstring LIMBS): a vertex farther than the limb radius + this from its limb is off the limb.
+LIMB_OFF_M = 0.04
+#: The off-limb share of a segment may exceed the source's by at most this.
+LIMB_OFF_DELTA = 0.10
+#: Fewer of the piece's vertices on a limb segment than this: the piece does not cover it (nothing to check).
+LIMB_MIN_VERTICES = 50
 #: The image "step" name of the base view copies (``base_copy``).
 BASE_STEP = "base"
 #: Marker key of a copied record (``materialize``).
@@ -377,7 +381,8 @@ def materialize(character_name: str, item_id: str, kind: str, method: str, sourc
          {COPIED: source})
     copy(base_copy(character_name, item_id, source, "front"), base_copy(character_name, item_id, target, "front"),
          {MATERIALIZED: source, "materialized_at": utc_now_iso(),
-          "arms": source_arms(character_name, item_id, source)})
+          "limbs": source_limbs(character_name, item_id, source)})
+    write_limb_source(character_name, item_id, source, target)
     logger.info("Garment %s/%s: source %s copied into %s", character_name, item_id, source, target)
 
 
@@ -391,6 +396,10 @@ def drop_materialized(character_name: str, item_id: str, fsig: str) -> int:
               for step in gs.IMAGE_STEPS for view in gs.GARMENT_VIEWS]
     paths.append(gs.garment_path(character_name, item_id, fsig, "prepared"))
     removed = 0
+    limbs = gs.garment_path(character_name, item_id, fsig, "limbs")
+    if limbs.is_file():  # only ``materialize`` writes one
+        limbs.unlink()
+        removed += 1
     for path in paths:
         record = gs.read_record(path.with_suffix(".json"))
         if not (record.get(COPIED) or record.get(MATERIALIZED)):
@@ -536,123 +545,175 @@ def warp_mask(mask: np.ndarray, reg: Dict[str, Any]) -> np.ndarray:
     return garment_gates.warp(np.asarray(mask, bool), reg)
 
 
-# --- Arms ----------------------------------------------------------------------------------
+# --- Limbs ------------------------------------------------------------------------------------
 
-def _segment_t(X: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    d = b - a
-    return ((X - a) @ d) / max(float(d @ d), 1e-12)
-
-
-def _segment_distance(X: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    t = np.clip(_segment_t(X, a, b), 0.0, 1.0)
-    return np.linalg.norm(X - (a + t[:, None] * (b - a)), axis=1)
+def _limb_bones(kind: str) -> Tuple[str, ...]:
+    return ("arm", "forearm", "hand") if kind == "arm" else ("upleg", "leg", "foot")
 
 
-def arm_numbers(positions, body) -> Optional[Dict[str, Any]]:
-    """Per arm (``ARM_SIDES``) of the rigged ``body`` (``glb_mesh.BodyMesh``), the sleeve of the garment vertices
-    ``positions`` (same bind space): ``{side: {vertices, reach_fore, reach_upper, off_fore, off_upper} | None}``
-    (module docstring ARMS; None for an arm without ``ARM_MIN_VERTICES`` sleeve vertices). None when the body has
-    no measurable arm chain."""
+def limb_numbers(positions, body) -> Optional[Dict[str, Any]]:
+    """Per limb chain (``garment_fit.limb_frames``) of the rigged ``body`` (``glb_mesh.BodyMesh``), the part of the
+    garment vertices ``positions`` (same bind space) on it — those whose nearest body vertex is dominated by one of
+    the chain's bones: ``{chain: {vertices, reach_m, off [segment 0, segment 1]} | None}`` (module docstring LIMBS;
+    ``off`` per segment None below ``LIMB_MIN_VERTICES``, the chain None when neither segment has them; segment 0
+    counts from a quarter of its length, past the shoulder / hip seam). ``reach_m``: the p99 distance along the
+    chain from the proximal joint. None when the body has no limb chain."""
     from scipy.spatial import cKDTree
     from app.core import garment_fit
+    from app.core.rig_contract import norm_bone_name
+    frames = garment_fit.limb_frames(body)
+    if not frames:
+        return None
     X = np.asarray(positions, np.float64)
     P = np.asarray(body.positions, np.float64)
-    W = garment_fit.dense_weights(body)
-    dominant = W.argmax(1)
+    dominant = garment_fit.dense_weights(body).argmax(1)
     nearest = cKDTree(P).query(X)[1] if len(X) else np.zeros(0, np.int64)
     out: Dict[str, Any] = {}
-    for side in ARM_SIDES:
-        try:
-            idx = {bone: garment_fit.joint_index(body, side + bone) for bone in ("shoulder", "arm", "forearm", "hand")}
-        except KeyError:
-            return None
-        points = []
-        for a, b in (("shoulder", "arm"), ("arm", "forearm"), ("forearm", "hand")):
-            shared = (W[:, idx[a]] > ARM_JOINT_SHARED) & (W[:, idx[b]] > ARM_JOINT_SHARED)
-            if shared.sum() < 3:
-                return None
-            points.append(P[shared].mean(0))
-        shoulder, elbow, wrist = points
-        radius = {}
-        for name, a, b, bone in (("upper", shoulder, elbow, "arm"), ("fore", elbow, wrist, "forearm")):
-            own = P[dominant == idx[bone]]
-            if not len(own):
-                return None
-            radius[name] = float(np.median(_segment_distance(own, a, b)))
-        on_arm = np.isin(dominant, [idx["arm"], idx["forearm"], idx["hand"]])
-        S = X[on_arm[nearest]] if len(X) else X
-        t_upper, t_fore = _segment_t(S, shoulder, elbow), _segment_t(S, elbow, wrist)
-        upper = (t_upper >= 0.25) & (t_fore < 0)  # past the shoulder seam, above the elbow
-        fore = (t_fore >= 0) & (t_fore <= 1)
-        if int((upper | fore).sum()) < ARM_MIN_VERTICES:
-            out[side] = None
+    for name, frame in frames.items():
+        side = name.split("_")[0]
+        cols = [garment_fit.joint_index(body, side + bone) for bone in _limb_bones(frame["kind"])
+                if any(norm_bone_name(n) == side + bone for n in body.joint_names)]
+        S = X[np.isin(dominant, cols)[nearest]] if len(X) and cols else np.zeros((0, 3))
+        pts = np.asarray(frame["points"], np.float64)
+        radii = frame["radii"]
+        lengths = [float(np.linalg.norm(pts[i + 1] - pts[i])) for i in range(len(pts) - 1)]
+        ts = [(S - pts[i]) @ (pts[i + 1] - pts[i]) / max(lengths[i] ** 2, 1e-12) for i in range(2)]
+        excess = np.min([garment_fit.segment_distance(S, pts[i], pts[i + 1]) - radii[i]
+                         for i in range(len(pts) - 1)], axis=0) if len(S) else np.zeros(0)
+        masks = [(ts[0] >= 0.25) & (ts[1] < 0), (ts[1] >= 0) & (ts[1] <= 1)]
+        off = [round(float((excess[m] > LIMB_OFF_M).mean()), 4) if int(m.sum()) >= LIMB_MIN_VERTICES else None
+               for m in masks]
+        if off == [None, None]:
+            out[name] = None
             continue
-        excess = np.minimum(_segment_distance(S, shoulder, elbow) - radius["upper"],
-                            _segment_distance(S, elbow, wrist) - radius["fore"])
-
-        def share(mask):
-            return round(float((excess[mask] > ARM_OFF_M).mean()), 4) if int(mask.sum()) >= ARM_MIN_VERTICES else None
-
-        out[side] = {"vertices": int((upper | fore).sum()),
-                     "reach_fore": round(float(np.percentile(t_fore, 99)), 4),
-                     "reach_upper": round(float(np.percentile(t_upper, 99)), 4),
-                     "off_fore": share(fore), "off_upper": share(upper)}
+        along = np.where(ts[1] >= 0, lengths[0] + ts[1] * lengths[1], ts[0] * lengths[0])
+        out[name] = {"vertices": int(sum(int(m.sum()) for m in masks)),
+                     "reach_m": round(float(np.percentile(along, 99)), 4), "off": off}
     return out
 
 
-def source_arms(character_name: str, item_id: str, fsig: str) -> Optional[Dict[str, Any]]:
-    """The arm numbers the group ``fsig``'s pieces are checked against: those its own base record carries (it is
-    itself a refit) else ``arm_numbers`` of its fit on its own base. None without a sleeve (or a readable fit)."""
+def limb_source_from_fit(blob: bytes, *, skirt: bool = False) -> Optional[Dict[str, Any]]:
+    """``garment_fit.fit_clothing``'s ``limb_source`` from a fit GLB (the garment grafted on its body): its
+    vertices, its skin weights on the limb bones, and the limb frames of the chains the piece COVERS (``limb_numbers``
+    not None — a blazer's hem carries thigh weights but is no trouser leg); legs never for a skirt. None without a
+    covered limb."""
+    from app.core import garment_fit, glb_mesh
+    from app.core.rig_contract import norm_bone_name
+    garment = glb_mesh.garment_arrays(blob)
+    body = glb_mesh.body_arrays(blob)
+    covered = limb_numbers(garment.positions, body) or {}
+    frames = {name: frame for name, frame in garment_fit.limb_frames(body).items()
+              if covered.get(name) and not (skirt and frame["kind"] == "leg")}
+    keep = {side + bone for side in ("left", "right") for kind in ("arm", "leg") for bone in _limb_bones(kind)}
+    names = [n for n in garment.joint_names if norm_bone_name(n) in keep]
+    if not frames or not names:
+        return None
+    col = {n: i for i, n in enumerate(names)}
+    J, Wt = np.asarray(garment.joints, np.int64), np.asarray(garment.weights, np.float64)
+    W0 = np.zeros((len(garment.positions), len(names)), np.float32)
+    for c in range(J.shape[1]):
+        for j, name in enumerate(garment.joint_names):
+            if name in col:
+                rows = J[:, c] == j
+                W0[rows, col[name]] += Wt[rows, c]
+    return {"x0": np.asarray(garment.positions, np.float32), "w0": W0, "names0": names, "frames": frames,
+            "kinds": ["arm"] if skirt else ["arm", "leg"], "numbers": covered}
+
+
+def write_limb_source(character_name: str, item_id: str, source: str, target: str) -> bool:
+    """Keep the source group's limb source (``limb_source_from_fit`` of its fit) with the refitted group ``target``
+    (``limbs/{item}_{target}.npz``). False when the source fit is unreadable or has no limb."""
+    import io
+    import json
+    import os
+    from app.core import garment_store as gs
+    fit = gs.garment_path(character_name, item_id, source, "fit")
+    try:
+        skirt = bool((gs.read_record(fit.with_suffix(".json")).get("report") or {}).get("skirt"))
+        data = limb_source_from_fit(fit.read_bytes(), skirt=skirt)
+    except (OSError, ValueError, KeyError) as e:
+        logger.warning("Garment source %s/%s (%s): no limb source: %s", character_name, item_id, source, e)
+        return False
+    if data is None:
+        return False
+    path = gs.garment_path(character_name, item_id, target, "limbs")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    buf = io.BytesIO()
+    np.savez_compressed(buf, x0=data["x0"], w0=data["w0"].astype(np.float16),
+                        meta=np.frombuffer(json.dumps({"names0": data["names0"], "frames": data["frames"],
+                                                       "kinds": data["kinds"], "source": source}).encode(), np.uint8))
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(buf.getvalue())
+    os.replace(tmp, path)
+    return True
+
+
+def limb_source(character_name: str, item_id: str, fsig: str) -> Optional[Dict[str, Any]]:
+    """The group's kept limb source (``write_limb_source``), None without one."""
+    import json
+    from app.core import garment_store as gs
+    path = gs.garment_path(character_name, item_id, fsig, "limbs")
+    try:
+        with np.load(path) as npz:
+            meta = json.loads(bytes(npz["meta"]).decode())
+            return {"x0": npz["x0"].astype(np.float64), "w0": npz["w0"].astype(np.float64), **meta}
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def source_limbs(character_name: str, item_id: str, fsig: str) -> Optional[Dict[str, Any]]:
+    """The limb numbers the group ``fsig``'s pieces are checked against: those its own base record carries (it is
+    itself a refit) else ``limb_numbers`` of its fit on its own base. None without a limb (or a readable fit)."""
     from app.core import garment_store as gs, glb_mesh
     record = source_of(character_name, item_id, fsig)
     if record.get(MATERIALIZED):
-        return record.get("arms")
+        return record.get("limbs")
     fit = gs.garment_path(character_name, item_id, fsig, "fit")
     try:
         blob = fit.read_bytes()
-        numbers = arm_numbers(glb_mesh.garment_arrays(blob).positions, glb_mesh.body_arrays(blob))
+        numbers = limb_numbers(glb_mesh.garment_arrays(blob).positions, glb_mesh.body_arrays(blob))
     except (OSError, ValueError, KeyError) as e:
-        logger.warning("Garment source %s/%s (%s): arms not measurable: %s", character_name, item_id, fsig, e)
+        logger.warning("Garment source %s/%s (%s): limbs not measurable: %s", character_name, item_id, fsig, e)
         return None
     if not numbers or not any(numbers.values()):
         return None
     return numbers
 
 
-def arm_gate(numbers: Optional[Dict[str, Any]], source: Dict[str, Any]) -> Dict[str, Any]:
-    """``{ok, reasons, fit, source, limits}``: the refit's arm numbers against the source's (module docstring
-    ARMS). An arm the source has no sleeve on is not checked; a sleeve the source has that the refit lost is
-    refused."""
+def limb_gate(numbers: Optional[Dict[str, Any]], source: Dict[str, Any]) -> Dict[str, Any]:
+    """``{ok, reasons, fit, source, limits}``: the refit's limb numbers against the source's (module docstring
+    LIMBS) — only "sits on the limb": a segment the source covers whose off-limb share grew by more than
+    ``LIMB_OFF_DELTA``, or a limb the source covers that the refit lost. The reach is recorded, never a reason."""
     reasons = []
-    for side in ARM_SIDES:
-        want = (source or {}).get(side)
-        if not want:
+    for name, want in sorted((source or {}).items()):
+        if not isinstance(want, dict) or "off" not in want:
             continue
-        got = (numbers or {}).get(side)
+        got = (numbers or {}).get(name)
+        label = name.replace("_", " ")
         if not got:
-            reasons.append(f"{side} sleeve gone from the arm")
+            reasons.append(f"{label}: the piece is gone from the limb")
             continue
-        segment = "fore" if want["reach_fore"] >= 0.5 else "upper"
-        drop = float(want[f"reach_{segment}"]) - float(got[f"reach_{segment}"])
-        if drop > ARM_REACH_DROP:
-            reasons.append(f"{side} sleeve ends {drop:.2f} {segment}arm lengths short of the source "
-                           f"(limit {ARM_REACH_DROP})")
-        off_want, off_got = want.get(f"off_{segment}"), got.get(f"off_{segment}")
-        if off_want is not None and (off_got is None or off_got - off_want > ARM_OFF_DELTA):
-            reasons.append(f"{side} sleeve off the {segment}arm: {off_got} of its vertices beyond the limb + "
-                           f"{ARM_OFF_M * 100:.0f} cm (source {off_want}, limit +{ARM_OFF_DELTA})")
+        for seg, (w, g) in enumerate(zip(want["off"], got["off"])):
+            if w is None:
+                continue
+            part = ("upper arm", "forearm") if name.endswith("arm") else ("thigh", "shin")
+            if g is None or g - w > LIMB_OFF_DELTA:
+                reasons.append(f"{label}: off the {part[seg]} — {g} of its vertices beyond the limb + "
+                               f"{LIMB_OFF_M * 100:.0f} cm (source {w}, limit +{LIMB_OFF_DELTA})")
     return {"ok": not reasons, "reasons": reasons, "fit": numbers, "source": source,
-            "limits": {"reach_drop": ARM_REACH_DROP, "off_m": ARM_OFF_M, "off_delta": ARM_OFF_DELTA}}
+            "limits": {"off_m": LIMB_OFF_M, "off_delta": LIMB_OFF_DELTA}}
 
 
-def check_arms(character_name: str, item_id: str, fsig: str, positions, rigged_glb: bytes,
-               frame: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """``arm_gate`` of a REGISTERED fit (``frame.registered``) of the group ``fsig`` whose source has sleeves;
-    None otherwise (a native fit, a sleeveless source)."""
-    if not frame.get("registered"):
-        return None
-    source = source_of(character_name, item_id, fsig).get("arms")
+def check_limbs(character_name: str, item_id: str, fsig: str, positions, rigged_glb: bytes,
+                frame: Dict[str, Any], source: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """``limb_gate`` of a fit against ``source`` (limb numbers; an outfit-body fit: its base fit's) or, without
+    one, of a REGISTERED fit (``frame.registered``) of the group ``fsig`` against its source's; None when there is
+    nothing to check (a native fit, a source without limbs)."""
+    if source is None:
+        if not frame.get("registered"):
+            return None
+        source = source_of(character_name, item_id, fsig).get("limbs")
     if not source:
         return None
     from app.core import glb_mesh
-    return arm_gate(arm_numbers(positions, glb_mesh.body_arrays(rigged_glb)), source)
+    return limb_gate(limb_numbers(positions, glb_mesh.body_arrays(rigged_glb)), source)
