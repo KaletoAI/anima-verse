@@ -58,6 +58,12 @@ Expected, by hand:
     {status "off"}, no pass. Wear O1 again (mode retexture, saved directly in [4], its model still the mesh
     mode's -> stale "body_mode"): build-current -> {status "generating"}, ONE build, 0 jobs (T1 reused); again ->
     {status "current"}, no build.
+[6] painted body preview. T1: url /characters/Demo/outfit-bodies/T1/model?v=<first 16 hex of sha256(GLB)>,
+    freshness current (record names the base model's sha and O1's view shas), outfit_url /characters/Demo/
+    model3d/file (worn, built). T2: url set, stale "Made from an older base body" (its record names no base
+    model sha), outfit_url None. GET -> the GLB, ETag "<v>", immutable; If-None-Match -> 304; another v ->
+    no-cache; user 403; tex999999999999 / B1 -> 404. New GLB bytes -> new v; O1's back re-rendered -> stale
+    "Dressed views re-rendered since this model". Wearing O3: the pending entry has no url, no badge.
 """
 import hashlib
 import json
@@ -444,6 +450,44 @@ def main() -> int:
         r = client.post(build, headers=ADMIN)
         check("[5] again: current", (r.status_code, r.json()), (200, {"status": "current"}))
         check("[5] no further build", counts()["builds"], 1)
+
+        # --- [6] ---------------------------------------------------------------------------------------------
+        print("[6] painted body preview: url, freshness, the model route")
+        from app.core.model_overview import DRESSED_VIEWS_CHANGED, OLDER_BASE_BODY
+        texs = {t["key"]: t for t in tab()["textures"]}
+        t1_path = base_body.texture_body_path(char, T1)
+        v1 = hashlib.sha256(t1_path.read_bytes()).hexdigest()[:16]
+        model_url = f"/characters/{char}/outfit-bodies/{T1}/model"
+        check("[6] T1 url", texs[T1]["url"], f"{model_url}?v={v1}")
+        check("[6] T1 current", texs[T1]["freshness"], {"state": "current", "reason": ""})
+        check("[6] T1 outfit_url (worn, built)", texs[T1]["outfit_url"], f"/characters/{char}/model3d/file")
+        check("[6] T2 painted, older base, not worn", (bool(texs[T2]["url"]), texs[T2]["freshness"],
+                                                       texs[T2]["outfit_url"]),
+              (True, {"state": "stale", "reason": OLDER_BASE_BODY}, None))
+        r = client.get(texs[T1]["url"], headers=ADMIN)
+        check("[6] GET -> the painted GLB, immutable", (r.status_code, r.content, r.headers.get("etag"),
+                                                        r.headers.get("cache-control")),
+              (200, t1_path.read_bytes(), f'"{v1}"', "public, max-age=31536000, immutable"))
+        r = client.get(model_url, headers={**ADMIN, "if-none-match": f'"{v1}"'})
+        check("[6] If-None-Match -> 304", r.status_code, 304)
+        check("[6] other v -> no-cache", client.get(f"{model_url}?v=0", headers=ADMIN).headers.get("cache-control"),
+              "no-cache")
+        check("[6] user -> 403", client.get(model_url, headers=USER).status_code, 403)
+        check("[6] unknown tsig -> 404", client.get(f"/characters/{char}/outfit-bodies/tex999999999999/model",
+                                                    headers=ADMIN).status_code, 404)
+        check("[6] not a tsig -> 404", client.get(f"/characters/{char}/outfit-bodies/{B1}/model",
+                                                  headers=ADMIN).status_code, 404)
+        t1_path.write_bytes(b"PAINTED-AGAIN")
+        url2 = next(t for t in tab()["textures"] if t["key"] == T1)["url"]
+        check("[6] content changed -> new version", url2,
+              f"{model_url}?v={hashlib.sha256(b'PAINTED-AGAIN').hexdigest()[:16]}")
+        png(R / f"tpose_back_{O1}.png", (1, 2, 3))   # O1's dressed back re-rendered
+        check("[6] views re-rendered -> stale", next(t for t in tab()["textures"] if t["key"] == T1)["freshness"],
+              {"state": "stale", "reason": DRESSED_VIEWS_CHANGED})
+        wear(P3)
+        p = next(t for t in tab()["textures"] if t["current"])
+        check("[6] pending entry: no url, no badge", (p["pending"], p["url"], p["freshness"], p["outfit_url"]),
+              (True, None, None, None))
 
     print()
     if FAILS:

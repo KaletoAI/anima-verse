@@ -6,6 +6,10 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
 * ``GET  /characters/{c}/outfit-bodies`` — the tab payload (``outfit_bodies.info``).
 * ``GET  /characters/{c}/outfit-bodies/{key}/views/{view}`` — a body's view
   image (``ob…``) or a painted body's texture view (``tex…``).
+* ``GET  /characters/{c}/outfit-bodies/{tsig}/model?v=`` — a painted body's
+  stored GLB (``base_body.texture_body_path``: the texture body, without
+  own-mesh garments), ``http_files.snapshot_response`` (ETag = content,
+  immutable only when ``v`` matches); 404 for no painted body / no ``tex…``.
 * ``POST /characters/{c}/outfit-bodies/{body_id}/regenerate`` — mesh again
   from its dressed views (routed occasions of the old path, hub jobs).
 * ``POST …/{body_id}/rerig`` — the rig chain on the retained unrigged mesh.
@@ -77,6 +81,23 @@ def get_outfit_body_view(character_name: str, key: str, view: str, request: Requ
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _encoding = mimetypes.guess_type(str(path))
     return etag_file_response(path, request, media_type or "application/octet-stream")
+
+
+@router.get("/{character_name}/outfit-bodies/{tsig}/model")
+def get_painted_body_model(character_name: str, tsig: str, request: Request,
+                           _: Dict[str, Any] = Depends(require_admin)):
+    from app.core import base_body
+    from app.core.http_files import snapshot_response
+    _require_character(character_name)
+
+    def resolve():
+        try:
+            path = base_body.texture_body_path(character_name, tsig)
+        except ValueError:
+            return None
+        return path if path.is_file() else None
+    return snapshot_response(None, request, media_type="model/gltf-binary",
+                             version=request.query_params.get("v"), resolve=resolve)
 
 
 def _start(character_name: str, kind: str, body_id: str, item_id: str = "", view: str = "") -> Dict[str, Any]:

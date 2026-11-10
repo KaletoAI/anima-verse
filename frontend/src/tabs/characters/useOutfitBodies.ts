@@ -129,6 +129,11 @@ export interface PaintedBody {
   regenerate_from?: string | null
   /** Why each action cannot start now (server English, translated), "" when it can. */
   blocked: Partial<Record<PaintedAction, string>>
+  /** The stored painted body (the texture body itself, no own-mesh garments), versioned; null when not painted. */
+  url?: string | null
+  freshness?: Freshness | null
+  /** The worn outfit's served model (garments assembled) — current entry with a built model only. */
+  outfit_url?: string | null
 }
 
 export interface QueueEntry { kind: RunKind; body_id: string; item_id?: string | null; view?: BodyView }

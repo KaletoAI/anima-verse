@@ -862,6 +862,41 @@ def _base_ready(character_name: str, bsig: str) -> str:
     return ""
 
 
+def texture_body_url(character_name: str, tsig: str) -> Optional[str]:
+    """Versioned URL of the stored painted body of ``tsig``
+    (``/characters/<c>/outfit-bodies/<tsig>/model?v=<content>``, served by
+    the outfit-bodies route with ``http_files.snapshot_response``), None
+    without one."""
+    from app.core import base_body
+    from app.core.http_files import content_version
+    try:
+        path = base_body.texture_body_path(character_name, tsig)
+        version = content_version(path)
+    except (ValueError, OSError):
+        return None
+    return f"/characters/{quote(character_name, safe='')}/outfit-bodies/{tsig}/model?v={version}"
+
+
+def texture_body_freshness(character_name: str, record: Dict[str, Any], *, painted: bool, source: str,
+                           bsig: str) -> Dict[str, str]:
+    """The painted body's freshness badge (``model_overview.freshness``):
+    missing "Not built" without one; stale when its record names another
+    base model than the current one, or dressed views of its source outfit
+    (``texture_source``) other than the ones it was painted from; else
+    current. Stat-cached hashes only — the tab polls."""
+    from app.core import base_body
+    from app.core.model_overview import DRESSED_VIEWS_CHANGED, OLDER_BASE_BODY, freshness
+    if not painted:
+        return freshness("missing", NOT_BUILT)
+    reasons = []
+    if (record.get("base_signature") != bsig
+            or record.get("base_model_sha256") != base_body.base_model_sha256(character_name, bsig)):
+        reasons.append(OLDER_BASE_BODY)
+    if source and record.get("views") != base_body.texture_view_shas(character_name, source, bsig):
+        reasons.append(DRESSED_VIEWS_CHANGED)
+    return freshness("stale", " · ".join(reasons)) if reasons else freshness("current")
+
+
 def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[str, Any]],
                  users: List[Tuple[str, bool]], models: Dict[str, Dict[str, Any]], saved: List[Dict[str, Any]],
                  worn: str, profile: Dict[str, Any], bsig: str, base_reason: str) -> Dict[str, Any]:
@@ -869,8 +904,12 @@ def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[st
     outfit's pending entry): ``{key, texture_signature, current, pending,
     outfits: [{signature, name, worn, has_model}], views, image_meta,
     painted, dress_text, created_at, status, error, run_kind,
-    queue_position, last_run, worn_outfit, regenerate_from, blocked}``.
-    ``current`` only for the worn outfit's body; ``blocked`` (server English,
+    queue_position, last_run, worn_outfit, regenerate_from, blocked, url,
+    freshness, outfit_url}``: ``url`` the stored painted body (the texture
+    body itself, without own-mesh garments — ``texture_body_url``),
+    ``outfit_url`` the worn outfit's served model (garments assembled) on
+    the current entry once it is built. ``current`` only for the worn
+    outfit's body; ``blocked`` (server English,
     the tab translates): ``generate`` (``paint``) / ``regenerate``
     (``repaint``), a run of the tab's queue on it first (``Locked: …``).
     ``status``: running / queued / failed (its last run) / ready (painted) /
@@ -923,7 +962,12 @@ def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[st
             "dress_text": dress, "created_at": record.get("created_at") or None,
             "status": status, "error": error, "run_kind": kind, "queue_position": position,
             "last_run": last or None, "worn_outfit": worn_outfit, "regenerate_from": source or None,
-            "blocked": {"generate": lock or generate, "regenerate": lock or regenerate}}
+            "blocked": {"generate": lock or generate, "regenerate": lock or regenerate},
+            "url": texture_body_url(character_name, tsig) if painted else None,
+            "freshness": (texture_body_freshness(character_name, record, painted=painted, source=source, bsig=bsig)
+                          if tsig else None),
+            "outfit_url": (f"/characters/{quote(character_name, safe='')}/model3d/file"
+                           if worn_outfit and worn_outfit["model"] else None)}
 
 
 def textures(character_name: str, *, profile: Dict[str, Any], bsig: str, models: Dict[str, Dict[str, Any]],

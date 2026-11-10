@@ -246,6 +246,7 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
 }) {
   const { t } = useI18n()
   const [selected, setSelected] = useState('')
+  const [withGarments, setWithGarments] = useState(false)
   const tex = textures.find((x) => x.key === selected) ?? textures[0]
   const statusOf = (x: PaintedBody): string => {
     if (x.status === 'running') return x.run_kind === 'repaint' ? t('Painting…') : t('Building…')
@@ -299,7 +300,11 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
           <span className="ga-fieldset-title" style={{ margin: 0 }}>
             {tex.current ? t('Current') : t('Painted body')} {tex.texture_signature || ''}
           </span>
-          <span className="ga-hint">{statusOf(tex)}</span>
+          <span className="ga-hint">
+            {statusOf(tex)}
+            {tex.created_at && tex.status !== 'running' ? ` · ${formatDateTime(tex.created_at, clockSettings())}` : ''}
+          </span>
+          {tex.freshness ? <FreshnessBadge freshness={tex.freshness} compact /> : null}
           {tex.status === 'queued' ? (
             <button type="button" className="ga-btn ga-btn-sm" disabled={!!posting} aria-busy={cancelling || undefined}
               title={t('Removes this waiting run from the queue — nothing of it has started')}
@@ -332,6 +337,28 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
             {' · '}{tex.last_run.ok ? t('done') : t('failed')}
           </div>
         ) : null}
+        {tex.pending ? null : (() => {
+          const shown = withGarments && tex.outfit_url ? tex.outfit_url : tex.url
+          return (
+            <>
+              {tex.outfit_url ? (
+                <label className="ga-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                  title={t('Shows the worn outfit\'s model with its own-mesh garments instead of the painted body alone')}>
+                  <input type="checkbox" checked={withGarments} onChange={(e) => setWithGarments(e.target.checked)} />
+                  {t('With garments')}
+                </label>
+              ) : null}
+              {shown ? (
+                <div className="ga-model3d-fit">
+                  <Model3DViewer key={shown} url={shown} format="glb" height={460} previewTilt
+                    freshness={shown === tex.url ? tex.freshness ?? undefined : undefined} />
+                </div>
+              ) : (
+                <div className="ga-hint" style={{ ...EMPTY_TILE, height: 200, maxWidth: 440 }}>{t('No model stored')}</div>
+              )}
+            </>
+          )
+        })()}
         {tex.pending ? (
           <div className="ga-hint">
             {t('The worn outfit has no current dressed views yet — Generate renders them and builds its outfit model.')}

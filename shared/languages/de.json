@@ -4625,6 +4625,8 @@
     "Hide the dots to look at the built tips; moving a slider shows them again.": "Punkte ausblenden, um die gebauten Spitzen anzusehen; ein Regler blendet sie wieder ein.",
     "Group switched off for this model": "Gruppe für dieses Modell abgeschaltet",
     "Source group switched off for this model": "Quellgruppe für dieses Modell abgeschaltet",
-    "Off builds this model without the tips of this group: no tip bone, no stub, no colour disc. The same switch as Enabled in the 3D tab.": "Aus baut dieses Modell ohne die Spitzen dieser Gruppe: kein Spitzen-Bone, kein Stummel, keine Farbscheibe. Derselbe Schalter wie „Aktiv“ im 3D-Tab."
+    "Off builds this model without the tips of this group: no tip bone, no stub, no colour disc. The same switch as Enabled in the 3D tab.": "Aus baut dieses Modell ohne die Spitzen dieser Gruppe: kein Spitzen-Bone, kein Stummel, keine Farbscheibe. Derselbe Schalter wie „Aktiv“ im 3D-Tab.",
+    "With garments": "Mit Kleidungsstücken",
+    "Shows the worn outfit's model with its own-mesh garments instead of the painted body alone": "Zeigt das Modell des getragenen Outfits mit seinen Kleidungsstücken mit eigenem Mesh statt nur den bemalten Körper"
   }
 }
