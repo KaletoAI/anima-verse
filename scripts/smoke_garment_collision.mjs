@@ -96,6 +96,16 @@
  *     x = +0.03, the cloth point (0.05, 0.5, 0) with the same bind point:
  *     d = 0.02 < d0 = 0.05 → pushed outwards (+x) to 0.03 + 0.05 →
  *     (0.08, 0.5, 0) — back to its bind distance, not to r (0.13).
+ * [11] FOOTWEAR gets NO capsules (footwear spec § 7.2: a rigid shoe is never
+ *     pushed). garmentCapsules('footwear', …) over one capsule of every
+ *     region (torso, leg, arm, head, chest, attached_part) → [] — none, not
+ *     the 4 non-arm non-extension ones (torso, leg, head) the cloth rule
+ *     would leave. On the [9] figure with a skinned footwear garment
+ *     `garment_footwear_i_left` (extras kind footwear) under a Group:
+ *       - clothing + shoe → exactly one entry, the clothing (shoe skipped);
+ *       - shoe only → createGarmentCollision null (nothing to push);
+ *       - collidingGarmentMeshes lists the clothing mesh, not the shoe;
+ *       - the shoe's material stays the template (never patched).
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -269,7 +279,7 @@ async function main() {
   }
 
   console.log('--- [9] createGarmentCollision on a figure ---')
-  const build = ({ clothing = true, hair = true, weighted = false, clothingAt = [0.5, 0, 0] } = {}) => {
+  const build = ({ clothing = true, hair = true, weighted = false, clothingAt = [0.5, 0, 0], footwear = false } = {}) => {
     const figure = new THREE.Group()
     const hips = new THREE.Bone(); hips.name = 'mixamorig:Hips'
     const spine = new THREE.Bone(); spine.name = 'mixamorig:Spine'
@@ -300,6 +310,14 @@ async function main() {
       meshes.hair.userData.garment = { kind: 'hair', item_id: 'y', fsig: 'z' }
       meshes.hair.position.set(0, 0, 0.25)
       figure.add(meshes.hair)
+    }
+    if (footwear) {
+      const shoe = new THREE.Group()
+      shoe.name = 'garment_footwear_i_left'
+      shoe.userData.garment = { kind: 'footwear', item_id: 'i', fsig: 'abc', side: 'left' }
+      meshes.footwear = new THREE.SkinnedMesh(geo(), new THREE.MeshStandardMaterial())
+      shoe.add(meshes.footwear)
+      figure.add(shoe)
     }
     figure.updateMatrixWorld(true)
     const skeleton = new THREE.Skeleton([hips, spine])
@@ -431,6 +449,26 @@ async function main() {
   q = pushOutOfCapsules([0.05, 0.5, 0], swung, 1, v0)
   check('body swung into the cloth: pushed back to its bind distance → (0.08, 0.5, 0)', vnear(q, [0.08, 0.5, 0]), fmt(q))
   gr.dispose()
+
+  console.log('--- [11] footwear: no capsules ---')
+  const { garmentCapsules, collidingGarmentMeshes } = G
+  const everyRegion = ['torso', 'leg', 'arm', 'head', 'chest', 'attached_part']
+    .map((region) => ({ capsule: { id: region, region } }))
+  const shoeCaps = garmentCapsules('footwear', everyRegion)
+  check('garmentCapsules(footwear, every region) → []', Array.isArray(shoeCaps) && shoeCaps.length === 0,
+    shoeCaps.map((e) => e.capsule.region).join())
+  const shod = build({ hair: false, footwear: true })
+  const shoeTemplate = shod.meshes.footwear.material
+  const gs = createGarmentCollision(THREE, shod.figure, payload)
+  check('clothing + shoe → one entry, the clothing', gs?.entries.length === 1 && gs.entries[0].kind === 'clothing',
+    gs?.entries.map((e) => e.kind).join())
+  check('the shoe\'s material is never patched', shod.meshes.footwear.material === shoeTemplate)
+  const colliding = collidingGarmentMeshes(shod.figure)
+  check('collidingGarmentMeshes: the clothing, not the shoe', colliding.length === 1 && colliding[0] === shod.meshes.clothing,
+    colliding.map((m) => m.name || m.parent?.name).join())
+  gs?.dispose()
+  const shoeOnly = build({ clothing: false, hair: false, footwear: true })
+  check('shoe only → null (nothing to push)', createGarmentCollision(THREE, shoeOnly.figure, payload) === null)
 
   if (failures.length) {
     console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)

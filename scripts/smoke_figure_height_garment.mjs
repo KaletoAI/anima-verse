@@ -40,6 +40,27 @@
  *     bound to one identity bone — old 1.78, figureBox 1.70.
  * [7] Consumers: client3d/src/scene/figures.ts measures its figures with
  *     `figureBox` — no `setFromObject(template)` / `setFromObject(inst)` left.
+ * [9] A FOOTWEAR subtree rotated below the floor (footwear plan, Task 18:
+ *     the bind measurements ignore garments). Bones, all identity
+ *     rotations: Hips (0, 0.10, 0) (root bone, so the root frame is the
+ *     world frame); LeftFoot / RightFoot under it at (±0.1, 0, 0) → world
+ *     ankles (±0.1, 0.10, 0); LeftToeBase / RightToeBase under them at
+ *     (0, −0.06, 0.10) → balls (±0.1, 0.04, 0.10). Body (skinned, bound in
+ *     this pose so skinning is the identity): per side a heel vertex
+ *     (±0.1, 0, −0.05) on the Foot, a toe vertex (±0.1, 0, 0.15) on the
+ *     ToeBase, a shin vertex (±0.1, 0.30, 0) on Hips (no foot owner).
+ *     restSolesOf takes per side the lowest Foot/Toe vertex behind the
+ *     ankle (z < 0) as heel and the lowest ahead of the ball (z > 0.10) as
+ *     toe → heel (±0.1, 0, −0.05), toe (±0.1, 0, 0.15). figureBox min y 0,
+ *     max y 0.30.
+ *     Shoe: Group `garment_footwear_i_left` (extras kind footwear) rotated
+ *     180° about x — (x, y, z) → (x, −y, −z) — holding a skinned mesh with
+ *     (0.1, 0.02, 0.06) and (0.1, 0.02, −0.16), both on LeftFoot → world
+ *     (0.1, −0.02, −0.06) (behind the ankle, 2 cm under the floor) and
+ *     (0.1, −0.02, 0.16) (ahead of the ball, under the floor).
+ *     Counted, they would be the left heel/toe (y −0.02 < 0) and drag
+ *     setFromObject to min y −0.02. Required: figureBox min y 0, max 0.30
+ *     and both soles exactly the body's — the shoe changes neither.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -73,6 +94,7 @@ async function main() {
 
   const { figureBox, anchorFigureBind, isGarmentNode } =
     await import('../packages/scene-render/src/figure.ts')
+  const { restPoseOf, restSolesOf } = await import('../packages/scene-render/src/clipRetarget.ts')
   const THREE = await import('three')
 
   const failures = []
@@ -194,6 +216,53 @@ async function main() {
     const fb = figureBox(THREE, root)
     check('[8] skinned: old 1.78, figure 1.70', near(height(old), 1.78, 1e-5) && near(height(fb), 1.7, 1e-5),
       `${height(old).toFixed(4)} ${height(fb).toFixed(4)}`)
+  }
+  // [9] footwear rotated below the floor: neither figureBox nor restSolesOf moves
+  {
+    const bone = (name, x, y, z) => { const b = new THREE.Bone(); b.name = name; b.position.set(x, y, z); return b }
+    const hips = bone('mixamorig:Hips', 0, 0.10, 0)
+    const lf = bone('mixamorig:LeftFoot', 0.1, 0, 0), rf = bone('mixamorig:RightFoot', -0.1, 0, 0)
+    const lt = bone('mixamorig:LeftToeBase', 0, -0.06, 0.10), rt = bone('mixamorig:RightToeBase', 0, -0.06, 0.10)
+    hips.add(lf, rf); lf.add(lt); rf.add(rt)
+    const root = new THREE.Group()
+    root.add(hips)
+    root.updateMatrixWorld(true)
+    const skeleton = new THREE.Skeleton([hips, lf, lt, rf, rt])
+    // vertices [x, y, z, bone index]; one full weight each
+    const skinned = (verts) => {
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute(verts.flatMap((v) => v.slice(0, 3)), 3))
+      g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(verts.flatMap((v) => [v[3], 0, 0, 0]), 4))
+      g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(verts.flatMap(() => [1, 0, 0, 0]), 4))
+      return new THREE.SkinnedMesh(g, mat)
+    }
+    const bodyMesh = skinned([
+      [0.1, 0, -0.05, 1], [0.1, 0, 0.15, 2], [0.1, 0.30, 0, 0],
+      [-0.1, 0, -0.05, 3], [-0.1, 0, 0.15, 4], [-0.1, 0.30, 0, 0]])
+    root.add(bodyMesh)
+    const shoe = new THREE.Group()
+    shoe.name = 'garment_footwear_i_left'
+    shoe.userData.garment = { kind: 'footwear', item_id: 'i', fsig: 'abc', side: 'left' }
+    shoe.rotation.set(Math.PI, 0, 0)
+    const shoeMesh = skinned([[0.1, 0.02, 0.06, 1], [0.1, 0.02, -0.16, 1]])
+    shoe.add(shoeMesh)
+    root.add(shoe)
+    root.updateMatrixWorld(true)
+    bodyMesh.bind(skeleton)
+    shoeMesh.bind(skeleton)
+    const old = new THREE.Box3().setFromObject(root)
+    const fb = figureBox(THREE, root)
+    check('[9] the shoe reaches under the floor: setFromObject min y −0.02', near(old.min.y, -0.02, 1e-6), old.min.y.toFixed(4))
+    check('[9] figureBox min y 0, max y 0.30', near(fb.min.y, 0, 1e-6) && near(fb.max.y, 0.30, 1e-6),
+      `${fb.min.y.toFixed(4)} ${fb.max.y.toFixed(4)}`)
+    const soles = restSolesOf(THREE, root, restPoseOf(THREE, root))
+    const fmt3 = (v) => v ? `(${[v.x, v.y, v.z].map((n) => +n.toFixed(4)).join(', ')})` : 'none'
+    const at = (v, x, y, z) => !!v && near(v.x, x) && near(v.y, y) && near(v.z, z)
+    const L = soles.get('left'), R = soles.get('right')
+    check('[9] left sole is the body\'s: heel (0.1, 0, −0.05), toe (0.1, 0, 0.15)',
+      at(L?.heel, 0.1, 0, -0.05) && at(L?.toe, 0.1, 0, 0.15), `${fmt3(L?.heel)} ${fmt3(L?.toe)}`)
+    check('[9] right sole: heel (−0.1, 0, −0.05), toe (−0.1, 0, 0.15)',
+      at(R?.heel, -0.1, 0, -0.05) && at(R?.toe, -0.1, 0, 0.15), `${fmt3(R?.heel)} ${fmt3(R?.toe)}`)
   }
   // [7]
   {

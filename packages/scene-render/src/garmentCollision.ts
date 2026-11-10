@@ -14,8 +14,8 @@
  * whole push of a vertex (`mix(p, pushed(p), w)`); absent = 1.
  *
  * WHICH CAPSULES. `garmentCapsules` decides per garment kind: hair the
- * torso, arm, head and chest capsules (`HAIR_REGIONS`), footwear the cloth
- * regions without the spring-driven extension regions, every other kind all
+ * torso, arm, head and chest capsules (`HAIR_REGIONS`), footwear none (a
+ * rigid shoe is never pushed), every other kind all
  * but `CLOTH_EXCLUDED_REGIONS` (an arm passes through cloth; pushing the
  * cloth out of the arm drives it into the body — the numbers are on the
  * constants). At most `COLLIDE_MAX` per mesh, the FIRST ones in payload
@@ -83,7 +83,7 @@ type Three = typeof import('three')
  * Capsules one garment mesh's shader holds (uniform array length). Kept at
  * 16 with collision v2: the most a kind selects today is cloth 8 (table
  * without the arms) + 2 chest + 5 attached-part links = 15, hair 3 + 4 + 1 +
- * 2 = 10, footwear 8. A body with more extension links than fit keeps the
+ * 2 = 10, footwear 0. A body with more extension links than fit keeps the
  * FIRST in payload order (`garmentCapsules`) — deterministic, the table's
  * capsules never drop.
  */
@@ -293,8 +293,8 @@ export const HAIR_REGIONS: readonly string[] = ['torso', 'arm', 'head', 'chest']
 export const EXTENSION_REGIONS: readonly string[] = ['chest', 'attached_part']
 
 /**
- * Capsule regions that never push CLOTH (every kind but hair; footwear
- * further below). The arms: cloth lies ON the body, and an arm that swings
+ * Capsule regions that never push CLOTH (every kind but hair and footwear,
+ * `garmentCapsules`). The arms: cloth lies ON the body, and an arm that swings
  * or rests against it is the arm passing through the cloth, not the cloth
  * through the arm: pushed out of the arm capsule the cloth goes INTO the
  * body. Measured on the S1 dress (`scripts/check_garment_collision.mjs`):
@@ -320,14 +320,16 @@ export const CLOTH_EXCLUDED_REGIONS: readonly string[] = ['arm']
  * server's table first, then the extension capsules), at most `COLLIDE_MAX`
  * — deterministic:
  *  - hair: the `HAIR_REGIONS`;
- *  - footwear: the cloth regions WITHOUT the extension regions (a shoe is
- *    never pushed by a spring-driven capsule);
+ *  - footwear: none. A fitted shoe is rigid on Foot/ToeBase (footwear spec
+ *    `docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`
+ *    § 7.2): a push would deform it, so `collidingGarmentMeshes` skips it
+ *    and its material is never patched;
  *  - every other kind: all regions except `CLOTH_EXCLUDED_REGIONS`.
  */
 export function garmentCapsules<T extends { capsule: { region: string } }>(kind: string | null, bound: readonly T[]): T[] {
+  if (kind === 'footwear') return []
   if (kind === 'hair') return bound.filter(entry => HAIR_REGIONS.includes(entry.capsule.region)).slice(0, COLLIDE_MAX)
   const cloth = bound.filter(entry => !CLOTH_EXCLUDED_REGIONS.includes(entry.capsule.region))
-  if (kind === 'footwear') return cloth.filter(entry => !EXTENSION_REGIONS.includes(entry.capsule.region)).slice(0, COLLIDE_MAX)
   return cloth.slice(0, COLLIDE_MAX)
 }
 

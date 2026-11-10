@@ -84,6 +84,9 @@
  * three is a PARAMETER, never an import — the admin loads it lazily.
  */
 import type { AnimationClip, KeyframeTrack, Matrix4, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
+// figure.ts imports normBoneName from here: a cycle that is safe because
+// both sides only call each other inside functions, never at module load.
+import { inGarment } from './figure'
 
 /** The three namespace, as a PARAMETER — a type-only import, so the package
  *  never pulls the library into the admin's main bundle. */
@@ -354,7 +357,13 @@ function torsoStance(three: THREE, donor: RestPose, self: RestPose,
   return out
 }
 
-/** Sample skinned geometry once; the correction kernel consumes only pose data. */
+/**
+ * Sample skinned geometry once; the correction kernel consumes only pose data.
+ * The BODY's soles only: a mesh inside a garment subtree (`inGarment`) is
+ * skipped — a fitted shoe sits rotated back in its bind space (footwear spec
+ * § 7.2) and would drag the heel/toe under the floor; a bind measurement is
+ * the figure's, never a garment's (as `figureBox`).
+ */
 export function restSolesOf(three: THREE, target: Object3D, self: RestPose): NonNullable<RestPose['soles']> {
   let targetRoot: Quaternion | undefined
   for (const [key, above] of self.parentBone) if (above === null) { targetRoot = self.world.get(key); break }
@@ -371,7 +380,7 @@ export function restSolesOf(three: THREE, target: Object3D, self: RestPose): Non
   target.updateMatrixWorld(true)
   const v = new three.Vector3()
   target.traverse((node) => {
-    if (!(node as SkinnedMesh).isSkinnedMesh) return
+    if (!(node as SkinnedMesh).isSkinnedMesh || inGarment(node)) return
     const mesh = node as SkinnedMesh
     const position = mesh.geometry.getAttribute('position')
     const index = mesh.geometry.getAttribute('skinIndex')

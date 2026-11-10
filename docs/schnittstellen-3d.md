@@ -12175,7 +12175,7 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   axis point → radius), capsules in payload order, two passes, at most 16 per mesh (the first in payload order).
   The optional glTF vertex attribute `_COLLIDE` (0..1) scales a vertex's whole push; absent = 1. Which capsules
   push which garment is decided per garment `kind` (node extras `garment.kind`, § A3a): `hair` the `torso`, `arm`,
-  `head` and `chest` regions, `footwear` the cloth regions without `chest`/`attached_part`, every other kind all
+  `head` and `chest` regions, `footwear` none (a fitted shoe is rigid and never pushed), every other kind all
   regions except `arm` (an arm passes through cloth; pushed out of the
   arm capsule the cloth goes into the body). Every garment is pushed under the BIND RULE: per vertex and capsule
   the radius is capped at the vertex's distance to that capsule in the bind pose (unskinned `position` against the
