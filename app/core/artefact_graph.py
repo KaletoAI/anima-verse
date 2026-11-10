@@ -90,16 +90,21 @@ a run or a queued run, the fits of a body being fitted
 served for it; a "nearest" stand-in served for an outfit without a model is
 judged like any outfit — gone, the serving chain picks the next nearest), and
 (sweep only) any node with a file younger than ``GRACE_S``. Every judgement that cannot
-be computed (an exception in the inventory, the base, the garment roots)
-keeps everything it would have judged. Deletion takes the model locks of the
-signature (``model3d`` → ``model3d_publication``, the order of a publication).
-One summary log line per collect.
+be computed (an exception in the inventory, the base, the garment roots, a
+reachable set over ``REACHABLE_BUDGET_S``) keeps everything it would have
+judged. An outfit entry WITHOUT a manifest is the only one that needs the
+reachable set; a key not shaped like a signature never does. An automatic
+collect (hooks, sweep) runs under ``HOOK_BUDGET_S`` and deletes nothing when
+it overruns. Deletion takes the model locks of the signature (``model3d`` →
+``model3d_publication``, the order of a publication). One summary log line
+per collect, with its duration.
 """
 from __future__ import annotations
 
 import json
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -115,6 +120,14 @@ GRACE_S = 10 * 60
 #: of THIS process is protected by registration; the grace covers a stage of
 #: another process (a script) and the short-lived work folders.
 TEMP_GRACE_S = 24 * 3600
+#: Wall-clock budget of the reachable-set enumeration (only an outfit entry
+#: WITHOUT a manifest needs it). One signature costs ~1.5 ms, a wardrobe of a
+#: million combinations ~25 minutes; past the budget the entries it would
+#: have judged are kept ("undetermined").
+REACHABLE_BUDGET_S = 5.0
+#: Budget of one automatic collect (a delete-path hook, the daily sweep):
+#: past it the judgement is abandoned and NOTHING is deleted.
+HOOK_BUDGET_S = 30.0
 
 ROOT_DIRS = ("model3d", "model_refs", "garments")
 CATEGORIES = ("refs", "meshes", "garments", "textures", "body_fits", "hairdeck", "temp")
@@ -175,6 +188,12 @@ class Roots:
     running_sigs: Set[str] = field(default_factory=set)
     running_items: Set[str] = field(default_factory=set)
     reachable: Optional[Callable[[], Set[str]]] = None
+    #: why the reachable set could not be computed ("" = it could / was not needed)
+    undetermined: str = ""
+
+
+class GcOverBudget(RuntimeError):
+    """A collect ran past its deadline — abandoned, nothing deleted."""
 
 
 @dataclass
@@ -223,11 +242,16 @@ def _tree_files(path: Path) -> List[Path]:
 
 
 def _sig_kind(signature: str) -> str:
+    """``body`` / ``base`` / ``outfit`` — or "" for a name no producer of
+    this code writes (a hand-placed test model ``s1ap.glb``): its files stay
+    ``unknown``, listed and never deleted."""
     if _OUTFIT_BODY_RE.fullmatch(signature):
         return "body"
     if _BASE_SIG_RE.fullmatch(signature):
         return "base"
-    return "outfit"
+    from app.core.model_refs import neutral_signature
+    from app.core.outfit_cache_gc import _OUTFIT_SIG_RE
+    return "outfit" if _OUTFIT_SIG_RE.fullmatch(neutral_signature(signature)) else ""
 
 
 def scan(character_name: str) -> Tuple[List[Node], List[Path]]:
@@ -239,8 +263,9 @@ def scan(character_name: str) -> Tuple[List[Node], List[Path]]:
         for signature, files in files_of(character_name).items():
             # A dot-named file (an atomic write in flight) is a temp entry, never a signature's.
             files = [p for p in files if not p.name.startswith(".")]
-            if files and signature and not signature.startswith("."):
-                nodes.append(Node(signature, _sig_kind(signature), category, files))
+            kind = _sig_kind(signature) if signature and not signature.startswith(".") else ""
+            if files and kind:
+                nodes.append(Node(signature, kind, category, files))
     rollback = root / "model3d" / "rollback"
     for node in nodes:
         if node.category == "meshes" and (rollback / node.key).is_dir():
@@ -360,8 +385,22 @@ def compute_roots(character_name: str) -> Roots:
     memo: List[Set[str]] = []
 
     def reachable() -> Set[str]:
+        # Computed at most once per analysis; a refusal is remembered so the
+        # next manifest-less entry does not pay the budget again.
+        if roots.undetermined:
+            raise ValueError(roots.undetermined)
         if not memo:
-            memo.append(ocg.reachable_signatures(character_name))
+            started = time.monotonic()
+            try:
+                memo.append(ocg.reachable_signatures(character_name,
+                                                     deadline=started + REACHABLE_BUDGET_S))
+            except ValueError as exc:
+                roots.undetermined = str(exc)
+                logger.warning("Artefact GC %s: reachable set not computed (%s) — "
+                               "outfit entries without a manifest are kept", character_name, exc)
+                raise
+            logger.info("Artefact GC %s: reachable set of %d signature(s) in %.1f s",
+                        character_name, len(memo[0]), time.monotonic() - started)
         return memo[0]
     roots.reachable = reachable
     return roots
@@ -422,22 +461,34 @@ def _hair_hsig(character_name: str, item_id: str) -> str:
         return ""
 
 
-def _judge(character_name: str, nodes: List[Node], roots: Roots) -> None:
-    """Set ``reachable`` + ``reason`` on every node (module docstring)."""
+def _check_deadline(deadline: Optional[float], character_name: str) -> None:
+    if deadline is not None and time.monotonic() > deadline:
+        raise GcOverBudget(f"artefact GC of {character_name} over its time budget")
+
+
+def _judge(character_name: str, nodes: List[Node], roots: Roots,
+           deadline: Optional[float] = None) -> None:
+    """Set ``reachable`` + ``reason`` on every node (module docstring).
+    Raises ``GcOverBudget`` once ``deadline`` (``time.monotonic()``) passes."""
     root = _char_dir(character_name)
     # 1. Outfit combinations — the roots every other chain hangs from.
     live: Set[str] = set()
     for node in nodes:
         if node.kind != "outfit":
             continue
+        _check_deadline(deadline, character_name)
         if roots.worn and node.key == roots.worn:
             node.reachable, node.reason = True, "worn"
         elif roots.owned is None:
             node.reachable, node.reason = True, "inventory unknown"
-        elif _outfit_valid(character_name, node, roots):
-            node.reachable, node.reason = True, "producible outfit"
         else:
-            node.reachable, node.reason = False, "no producible outfit"
+            try:
+                valid = _outfit_valid(character_name, node, roots)
+            except ValueError as exc:
+                node.reachable, node.reason = True, f"producibility undetermined: {exc}"
+            else:
+                node.reachable, node.reason = ((True, "producible outfit") if valid
+                                               else (False, "no producible outfit"))
         if node.reachable:
             live.add(node.key)
     if roots.worn:
@@ -591,11 +642,15 @@ def _protect(nodes: List[Node], roots: Roots, *, explicit: bool) -> None:
             node.protected = "grace"
 
 
-def analyse(character_name: str, *, roots: Optional[Roots] = None, explicit: bool = True) -> Analysis:
-    """The judged graph of a character (read-only)."""
+def analyse(character_name: str, *, roots: Optional[Roots] = None, explicit: bool = True,
+            deadline: Optional[float] = None) -> Analysis:
+    """The judged graph of a character (read-only). ``deadline``
+    (``time.monotonic()``): raises ``GcOverBudget`` once it passes."""
     nodes, unknown = scan(character_name)
+    _check_deadline(deadline, character_name)
     roots = roots if roots is not None else compute_roots(character_name)
-    _judge(character_name, nodes, roots)
+    _check_deadline(deadline, character_name)
+    _judge(character_name, nodes, roots, deadline)
     _protect(nodes, roots, explicit=explicit)
     return Analysis(character_name, roots, nodes, unknown)
 
@@ -737,21 +792,33 @@ def _entry(node: Node) -> Dict[str, Any]:
 
 def collect(character_name: str, *, dry_run: bool = False, explicit: bool = False,
             keys: Optional[Iterable[str]] = None, reason: str = "",
-            roots: Optional[Roots] = None) -> Dict[str, Any]:
+            roots: Optional[Roots] = None, budget_s: Optional[float] = None) -> Dict[str, Any]:
     """Delete every unreachable node of the character (``keys``: only those
     and the body fits hanging from them) — or, with ``dry_run``, only list
     them. ``explicit`` (a delete path, a click) skips the grace window; what
     is running is never deleted. Returns ``{character, reason, dry_run,
     explicit, orphans: [...], deleted_files, freed_bytes, skipped: [...],
-    unknown: [...], totals: {category: {total, reachable, orphans, bytes}}}``.
-    Never mints a directory for a vanished character."""
+    unknown: [...], totals: {category: {total, reachable, orphans, bytes}},
+    seconds, aborted}``. ``budget_s``: a judgement that runs past it is
+    abandoned and NOTHING is deleted (``aborted`` names why) — an automatic
+    caller must never hang on a pathological wardrobe. Never mints a
+    directory for a vanished character."""
     report: Dict[str, Any] = {"character": character_name, "reason": reason, "dry_run": dry_run,
                               "explicit": explicit, "orphans": [], "deleted_files": 0, "freed_bytes": 0,
-                              "skipped": [], "unknown": [], "totals": {}}
+                              "skipped": [], "unknown": [], "totals": {}, "seconds": 0.0, "aborted": ""}
     root = _char_dir(character_name)
     if not root.is_dir():
         return report
-    analysis = analyse(character_name, roots=roots, explicit=explicit)
+    started = time.monotonic()
+    try:
+        analysis = analyse(character_name, roots=roots, explicit=explicit,
+                           deadline=started + budget_s if budget_s is not None else None)
+    except GcOverBudget as exc:
+        report["aborted"] = str(exc)
+        report["seconds"] = round(time.monotonic() - started, 2)
+        logger.warning("Artefact GC %s (%s): abandoned after %.1f s (budget %.0f s) — nothing deleted",
+                       character_name, reason or "manual", report["seconds"], budget_s)
+        return report
     wanted = _descendants(analysis.nodes, set(keys)) if keys is not None else None
     for category in CATEGORIES:
         group = [n for n in analysis.nodes if n.category == category]
@@ -776,20 +843,23 @@ def collect(character_name: str, *, dry_run: bool = False, explicit: bool = Fals
         if skip:
             report["skipped"].append({"key": node.key, "why": skip})
     report["deleted_files"], report["freed_bytes"] = deleted, freed
-    logger.info("Artefact GC %s (%s%s%s): %d orphan node(s), %d file(s) %s, %.1f MB, %d skipped, %d unknown",
+    report["seconds"] = round(time.monotonic() - started, 2)
+    logger.info("Artefact GC %s (%s%s%s): %d orphan node(s), %d file(s) %s, %.1f MB, %d skipped, "
+                "%d unknown, %.1f s",
                 character_name, reason or "manual", ", explicit" if explicit else "", ", dry run" if dry_run else "",
                 len(report["orphans"]), deleted if not dry_run else sum(e["files"] for e in report["orphans"]),
                 "deleted" if not dry_run else "would go",
                 (freed if not dry_run else sum(e["bytes"] for e in report["orphans"])) / 1e6,
-                len(report["skipped"]), len(report["unknown"]))
+                len(report["skipped"]), len(report["unknown"]), report["seconds"])
     return report
 
 
 def collect_quietly(character_name: str, reason: str, *, explicit: bool = True) -> Optional[Dict[str, Any]]:
-    """``collect`` for a delete path: never raises (a failed sweep must not
-    fail the delete that asked for it)."""
+    """``collect`` for a delete path and the daily sweep: never raises (a
+    failed sweep must not fail the delete that asked for it) and gives up
+    after ``HOOK_BUDGET_S`` without deleting anything."""
     try:
-        return collect(character_name, explicit=explicit, reason=reason)
+        return collect(character_name, explicit=explicit, reason=reason, budget_s=HOOK_BUDGET_S)
     except Exception:
         logger.exception("Artefact GC %s after %s failed", character_name, reason)
         return None

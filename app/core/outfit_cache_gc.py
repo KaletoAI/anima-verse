@@ -98,7 +98,15 @@ _BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
 _OUTFIT_BODY_RE = re.compile(r"ob[0-9a-f]{8}")
 
 
-def reachable_signatures(character_name: str) -> Set[str]:
+#: The shape of an outfit-combination signature (``model_refs.mesh_signature``).
+_OUTFIT_SIG_RE = re.compile(r"[0-9a-f]{12}")
+
+
+class ReachabilityBudgetExceeded(ValueError):
+    """The enumeration ran past its deadline — producibility undetermined."""
+
+
+def reachable_signatures(character_name: str, deadline: Optional[float] = None) -> Set[str]:
     """Every pieces-only signature this character could still produce today.
 
     The cartesian product over their inventory, enumerated lazily through the
@@ -106,8 +114,12 @@ def reachable_signatures(character_name: str) -> Set[str]:
     collapse onto one signature (covered pieces, 37f6328).
 
     Raises ValueError above ``MAX_REACHABLE_COMBOS`` rather than working for
-    minutes; the caller turns that into a readable message.
+    minutes, and ``ReachabilityBudgetExceeded`` (a ValueError) once
+    ``deadline`` (``time.monotonic()``) passes: one signature costs ~1.5 ms,
+    a wardrobe of a million combinations would take 25 minutes. The caller
+    turns either into a readable message and keeps what it would have judged.
     """
+    import time
     from app.core.outfit_batch import (_iter_combos, _resolve_filter,
                                        _signature, combo_options, count_combos)
     options = combo_options(character_name)
@@ -122,7 +134,13 @@ def reachable_signatures(character_name: str) -> Set[str]:
             f"{total:,} combinations — too many to verify the cache against "
             f"(limit {MAX_REACHABLE_COMBOS:,}). Reduce the inventory or clean "
             f"up by hand.")
-    return {_signature(pieces, character_name) for pieces in _iter_combos(choices)}
+    out: Set[str] = set()
+    for n, pieces in enumerate(_iter_combos(choices)):
+        if deadline is not None and n % 64 == 0 and time.monotonic() > deadline:
+            raise ReachabilityBudgetExceeded(
+                f"{total:,} combinations — enumeration over its time budget after {n:,}")
+        out.add(_signature(pieces, character_name))
+    return out
 
 
 def _sign(pieces: Dict[str, str], items: Optional[List[str]],
@@ -188,11 +206,15 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
     only for an entry without a manifest (it may enumerate millions).
 
     Retired -s forks are always unreachable. Ordinary pose-state references
-    (-p) are judged by their outfit base, independently of mesh inputs."""
+    (-p) are judged by their outfit base, independently of mesh inputs. A
+    base that is not shaped like a signature (a hand-named test file) can
+    never be produced — decided without the enumeration."""
     from app.core.model_refs import is_state_fork, neutral_signature
     if is_state_fork(signature):
         return False
     base = neutral_signature(signature)
+    if not _OUTFIT_SIG_RE.fullmatch(base):
+        return False
     if manifest is not None:
         used = set(manifest["pieces"].values()) | set(manifest["items"])
         if not used.issubset(owned):
@@ -425,11 +447,15 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
 
     Group counts, not file counts — one signature owns an image and its
     sidecar. A group whose work is running counts as valid. Raises
-    ValueError when the reachable set is refused (see
-    ``reachable_signatures``).
+    ValueError when the reachable set was needed and refused (too many
+    combinations or over ``artefact_graph.REACHABLE_BUDGET_S``, see
+    ``reachable_signatures``) — a report that silently kept those entries
+    would read as "clean".
     """
     from app.core import artefact_graph
     analysis = artefact_graph.analyse(character_name, explicit=True)
+    if analysis.roots.undetermined:
+        raise ValueError(analysis.roots.undetermined)
     worn = analysis.roots.worn
     stale: List[str] = []
     out: Dict[str, Any] = {"stale_signatures": stale, "protected": [worn] if worn else []}

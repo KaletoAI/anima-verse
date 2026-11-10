@@ -282,6 +282,7 @@ def list_items() -> List[Dict[str, Any]]:
 
 def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     """Return an item, looking in world items before the global shared library."""
+    db_read = False
     try:
         conn = get_connection()
         row = conn.execute(
@@ -289,6 +290,7 @@ def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
             "created_at FROM items WHERE id=?",
             (item_id,),
         ).fetchone()
+        db_read = True
         if row:
             meta = {}
             try:
@@ -319,8 +321,11 @@ def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
             raise
         logger.debug("get_item DB-Fehler fuer %s: %s", item_id, e)
 
-    # Fallback: in-memory list
-    if not strict:
+    # Fallback when the DB lookup itself failed (``_load_items`` then reads
+    # the JSON file). After a successful lookup that found nothing it would
+    # only re-read the same table — every shared-library item paid a full
+    # table load per lookup (the cache GC enumerates thousands of them).
+    if not strict and not db_read:
         for item in _load_items():
             if item.get("id") == item_id:
                 return item

@@ -60,6 +60,19 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     POST .../artefacts/collect deletes; both need admin (Depends(require_admin)).
 [9] wiring: base_body.generate_base_model / generate_base_images and expression_regen's item invalidation call
     artefact_graph.collect_quietly; periodic_jobs lists artefact_gc daily.
+[10] budgets + shapes (clone dry run 2026-11-10: Kira sat > 20 min in the reachable-set enumeration — 998,399
+    combinations x ~1.5 ms, triggered by two hand-named models without a manifest):
+    a) model3d/s1ap.glb + .json (no manifest, not shaped like a signature) -> ``unknown``, never deleted, and the
+       reachable set is never asked for (roots.reachable raises if called).
+    b) Kai's case: a retired state fork of the WORN outfit (``<O1>-s0d4510b9``: tpose_, pose_ refs + model) is not
+       served (find_ref_image rejects it for tpose, find_model3d serves O1) -> it goes; O1 stays.
+    c) a well-shaped key without a manifest ("cccccccccccc", model + sidecar without pieces) with
+       REACHABLE_BUDGET_S = 0 -> kept, reason "producibility undetermined"; verify_cache raises ValueError; budget
+       back to 5 s -> the enumeration (3 own items -> 7 combinations, none signs to c...) runs and it goes.
+    d) collect(budget_s=0) -> aborted, 0 files deleted although OLDB is an orphan; collect_quietly carries
+       HOOK_BUDGET_S.
+    e) inventory.get_item of an id the DB does not hold does NOT reload the whole item table (the fallback was
+       ~85 % of the enumeration cost).
 """
 import hashlib
 import inspect
@@ -448,6 +461,68 @@ def main() -> int:
             dep = inspect.signature(fn).parameters["_"].default
             check(f"[8] {fn.__name__} admin-only", getattr(getattr(dep, "dependency", None), "__name__", ""),
                   "require_admin")
+
+        # --- [10] budgets + shapes ------------------------------------------------------------------------
+        print("[10] budgets, non-signature names, retired forks")
+        from app.core import model_refs
+        fx = make("Demo10", "10")
+        M10, R10 = fx["dir"] / "model3d", fx["dir"] / "model_refs"
+        odd = fx["L"]["ODD"] = [touch(M10 / "s1ap.glb"), touch(M10 / "s1ap.json", {"signature": "s1ap", "rig": "mixamo"})]
+        roots = ag.compute_roots("Demo10")
+
+        def no_enumeration():
+            raise AssertionError("reachable set enumerated")
+        roots.reachable = no_enumeration
+        rep = ag.collect("Demo10", explicit=True, roots=roots)
+        check("[10a] hand-named model listed unknown", sorted(rep["unknown"]),
+              ["model3d/notes.txt", "model3d/s1ap.glb", "model3d/s1ap.json"])
+        check("[10a] hand-named model kept", [p.exists() for p in odd], [True, True])
+        same("[10a] nothing else", "Demo10", fx, ALL + ["ODD"])
+        fork = fx["sigs"]["O1"] + "-s0d4510b9"
+        forks = [touch(R10 / f"{k}_{fork}{e}", {"equipped_pieces": fx["outfits"]["O1"], "equipped_items": []}
+                       if e == ".json" else b"png") for k in ("tpose", "pose") for e in (".png", ".json")]
+        forks += [touch(M10 / f"{fork}.glb"), touch(M10 / f"{fork}.json", {"pieces": fx["outfits"]["O1"]})]
+        check("[10b] fork never served (tpose)", model_refs.find_ref_image("Demo10", "tpose", fork), None)
+        check("[10b] worn model is O1", Path(model3d.find_model3d("Demo10") or "").stem, fx["sigs"]["O1"])
+        rep = ag.collect("Demo10", explicit=True)
+        check("[10b] retired fork of the worn outfit goes", [p.exists() for p in forks], [False] * len(forks))
+        same("[10b] O1 kept", "Demo10", fx, ALL + ["ODD"])
+        noman = [touch(M10 / "cccccccccccc.glb"), touch(M10 / "cccccccccccc.json", {"rig": "mixamo"})]
+        saved_budget = ag.REACHABLE_BUDGET_S
+        ag.REACHABLE_BUDGET_S = 0
+        try:
+            rep = ag.collect("Demo10", explicit=True)
+            node = [n for n in ag.analyse("Demo10").nodes if n.key == "cccccccccccc"]
+            check("[10c] over budget: kept", [p.exists() for p in noman], [True, True])
+            check("[10c] reason", node and node[0].reason.startswith("producibility undetermined"), True)
+            try:
+                outfit_cache_gc.verify_cache("Demo10")
+                check("[10c] verify_cache raises", "no error", "ValueError")
+            except ValueError:
+                check("[10c] verify_cache raises", "ValueError", "ValueError")
+        finally:
+            ag.REACHABLE_BUDGET_S = saved_budget
+        rep = ag.collect("Demo10", explicit=True)
+        check("[10c] in budget: not producible, gone", [p.exists() for p in noman], [False, False])
+        old = [touch(M10 / "base0123abcd.glb"), touch(M10 / "base0123abcd.json", {})]
+        rep = ag.collect("Demo10", explicit=True, budget_s=0)
+        check("[10d] over budget: aborted", bool(rep["aborted"]), True)
+        check("[10d] over budget: nothing deleted", (rep["deleted_files"], [p.exists() for p in old]),
+              (0, [True, True]))
+        check("[10d] hooks carry a budget", "budget_s=HOOK_BUDGET_S" in inspect.getsource(ag.collect_quietly), True)
+        ag.collect("Demo10", explicit=True)
+        check("[10d] in budget: older base gone", [p.exists() for p in old], [False, False])
+        saved_load = inventory._load_items
+
+        def no_table_load(*a, **k):
+            raise AssertionError("full item table loaded")
+        inventory._load_items = no_table_load
+        try:
+            check("[10e] unknown id: no table reload", inventory.get_item("no_such_item_10"), None)
+        except AssertionError as e:
+            check("[10e] unknown id: no table reload", str(e), "")
+        finally:
+            inventory._load_items = saved_load
 
         # --- [9] wiring ----------------------------------------------------------------------------------
         print("[9] wiring")
