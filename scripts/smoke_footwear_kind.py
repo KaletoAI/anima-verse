@@ -247,7 +247,7 @@ def main() -> int:
 
         def fsig_by_hand(cap):
             return md5_12({"kind": "footwear", "ssig": ssig, "insole_version": 1, "width_cap": cap,
-                           "fit_version": 1})
+                           "fit_version": 2})
         fsig = fsig_by_hand(1.1)
         kira_bsig = base_body.base_signature("Kira")
         check("base signatures differ", kira_bsig != base_body.base_signature("Mira"), True)
