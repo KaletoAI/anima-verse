@@ -27,6 +27,11 @@ is kept: no fill, no stub, no vertex within 20 mm moves. Its length along the
 cap normal, tilted asin(.01/.106)=5.42 deg from -Y, is .004*cos(5.42 deg)=
 3.982 mm; the ring quadric misses the cap by <.0054 mm and a 2.5 mm chord by
 .0025**2/(8*.106)=.007 mm, so .05 mm covers it. Bone head-to-tail = that length.
+Geometry (C, both markers rejected): the tip group is still built, at the
+pair's geometry crest (tip_source geometry). By the bump's symmetry the crest
+is its centre (+-.15,-.15,1.4) within one .0025 grid cell, the suggestion is
+the source apex exactly, and without a marker area the refinement radius is
+the declared stub radius tip_diameter/2=.0045.
 No expected value is recorded from a run.
 """
 import sys
@@ -126,12 +131,19 @@ if job['params'].get('descendant',False):
  assert arm.data.bones['MarkerRight'].parent.name=='TipRight'
  assert 'Marker' in result['metrics'],result
 elif kind=='C':
- assert result['groups']['Tip']['status']=='not_found',result
- assert len(obj.data.vertices)==before
- assert 'TipLeft' not in arm.data.bones and 'TipRight' not in arm.data.bones
+ metrics=result['metrics']['Tip']; rows=metrics['placement']
+ assert metrics['tip_source']=='geometry' and 'status' not in metrics,metrics
+ assert len(obj.data.vertices)>before
+ for side,(name,parent),row,source in zip((1,-1),(('TipLeft','ExampleLeft'),('TipRight','ExampleRight')),rows,placement):
+  assert source['apex_source']=='geometry',source
+  assert (Vector(row['suggested'])-Vector(source['tip'])).length<1e-6,(row,source)
+  assert (Vector(row['suggested'])-Vector((side*.15,-.15,1.4))).length<.0025,row
+  assert row['offset_mm']==[0.,0.] and abs(row['radius']-.0045)<1e-12,row
+  assert arm.data.bones[name].parent.name==parent
+  assert (arm.data.bones[name].head_local-Vector(row['tip'])).length<1e-4
  import struct
  raw=Path(outputs['model']).read_bytes(); size=struct.unpack_from('<I',raw,12)[0]; doc=json.loads(raw[20:20+size])
- assert not any(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])
+ assert sum(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])==2
 elif job['params'].get('modelled',False):
  rows=result['metrics']['Tip']['placement']
  for name,row in zip(('TipLeft','TipRight'),rows):

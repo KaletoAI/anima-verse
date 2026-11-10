@@ -4581,6 +4581,20 @@
     "{mm} mm is outside {min}–{max} mm": "{mm} mm liegt außerhalb von {min}–{max} mm",
     "Foot outside the shoe (cut)": "Fuß außerhalb des Schuhs (Schnitt)",
     "Foot poking through (cut)": "Fuß stößt durch (Schnitt)",
-    "Throat ledge (cut)": "Kante am Einstieg (Schnitt)"
+    "Throat ledge (cut)": "Kante am Einstieg (Schnitt)",
+    "Colour disc": "Farbscheibe",
+    "Colour disc failed": "Farbscheibe fehlgeschlagen",
+    "Diameter": "Durchmesser",
+    "Disc colour": "Farbe der Scheibe",
+    "Mirror (both sides alike)": "Spiegeln (beide Seiten gleich)",
+    "Position: colour marker": "Position: Farbmarkierung",
+    "Position: geometry (suggestion)": "Position: Geometrie (Vorschlag)",
+    "Position: not found": "Position: nicht gefunden",
+    "Rebuilding…": "Wird neu gebaut…",
+    "Soft edge": "Weicher Rand",
+    "Where the tips of this group sit. Without a colour marker the geometry crest is a suggestion; move each tip along the body surface (up, and away from the midline) and add a colour disc around it. Apply rebuilds the extension bones of the base model; outfit models built on it take its tips and texture.": "Wo die Spitzen dieser Gruppe sitzen. Ohne Farbmarkierung ist der Geometrie-Scheitel ein Vorschlag; verschiebe jede Spitze entlang der Körperoberfläche (nach oben und weg von der Mittellinie) und füge eine Farbscheibe darum hinzu. Übernehmen baut die Zusatz-Bones des Basismodells neu; darauf gebaute Outfit-Modelle übernehmen seine Spitzen und Textur.",
+    "moved": "verschoben",
+    "out": "außen",
+    "up": "oben"
   }
 }

@@ -172,7 +172,7 @@ export interface Model3DStatus {
   has_input?: boolean
   model?: Model3DInfo | null
   options?: { auto_generate?: boolean; face_before_rig?: boolean; face_cleanup?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
-    extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
+    extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean; tip?: unknown }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
     collision_scales?: Record<string, number> }
   extension_groups?: ExtensionRigDeclaration[]
@@ -198,6 +198,10 @@ export interface Model3DStatus {
     /** every dressed view of the current outfit matches the current base */
     dressed_current: boolean
     rebuilding: boolean
+    /** The served model is NOT the current outfit's (another combination's stand-in, or none) —
+     *  server `model3d_pipeline.fallback_state`; null when the current outfit's own model is served. */
+    fallback?: { current_signature: string; current_name: string; served_signature: string;
+      served_name: string } | null
   } | null
   /** The face cleanup of the source the face acts on (the base body's on
    *  the pipeline) — server `model3d.face_cleanup_state`. */
@@ -385,6 +389,24 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
         ? t('A 3D model generation is already running for this character')
         : d?.status === 'queued' ? t('Rebuild queued — it starts when the running model job ends')
           : t('Rebuilding from the base body…'))
+      startPoll()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setBusy(false)
+    }
+  }, [busy, enc, startPoll, t, toast])
+
+  // Base-body pipeline, a stand-in on screen: build the CURRENT outfit's model the way an outfit change does
+  // (missing dressed views first, never forced — a stored body of its key is reused, no hub job).
+  const buildCurrent = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/build-current`, {})
+      toast(d?.status === 'views' ? t('Rendering the current outfit\'s dressed views first, then its model…')
+        : d?.status === 'queued' ? t('Build queued — it starts when the running model job ends')
+          : d?.status === 'current' ? t('The current outfit\'s model is built already')
+            : t('Building the current outfit\'s model…'))
       startPoll()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -798,8 +820,32 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
   const asideTools = collisionPanel || (!rigless && motionToolbar?.some(Boolean))
     ? <>{collisionPanel}{rigless ? null : motionToolbar}</> : undefined
 
+  const fallback = pipeline?.fallback || null
+  const buildBlocked = pending ? t('Locked: a 3D model job is running for this character')
+    : !baseReady ? t('Generate the rigged base model first (Base body tab)') : ''
+  const fallbackBanner = fallback ? (
+    <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div className="ga-hint" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+        {fallback.served_signature
+          ? t('Showing {served} — current outfit not built yet ({current}).')
+            .replace('{served}', fallback.served_name || fallback.served_signature)
+            .replace('{current}', fallback.current_name || fallback.current_signature)
+          : t('Current outfit not built yet ({current}).')
+            .replace('{current}', fallback.current_name || fallback.current_signature)}
+      </div>
+      <div className="ga-face-actions-row">
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!!buildBlocked} onClick={buildCurrent}
+          title={buildBlocked || t('Builds the current outfit\'s model like an outfit change: missing dressed views are rendered first; a stored body of the same outfit key is reused (no hub job).')}>
+          {pending ? t('Generating…') : t('Build current outfit')}
+        </button>
+      </div>
+      {buildBlocked ? <div className="ga-hint" style={{ fontStyle: 'italic' }}>{buildBlocked}</div> : null}
+    </div>
+  ) : null
+
   return (
     <div className="ga-form ga-model3d-tab">
+      {fallbackBanner}
       {model ? (
         <>
           <div ref={previewRef} className="ga-model3d-fit">
@@ -901,7 +947,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
                     : t('Built on an older base body — rebuild it')}
             </div>
           ) : null}
-          {model.match === 'nearest' ? (
+          {model.match === 'nearest' && !fallback ? (
             <div className="ga-hint">
               {t('No model for the current outfit yet — showing the stored model with the most similar outfit combination until one is generated.')}
             </div>

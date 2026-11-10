@@ -69,6 +69,56 @@ export interface BaseOutfitInfo {
   url: string | null
 }
 
+/** One side of a pair tip group (`extension_tip.tip_panels`); every
+ *  position/direction is in the model's own glTF frame, metres. */
+export interface ExtensionTipSide {
+  side: 'left' | 'right'
+  /** Where the tip goes without an offset: the colour marker or the
+   *  geometry crest. */
+  suggested: [number, number, number]
+  /** The built tip (stub base), null while the group was not built. */
+  tip: [number, number, number] | null
+  /** Surface tangents at the suggestion: up, and away from the midline. */
+  tangent_up: [number, number, number]
+  tangent_out: [number, number, number]
+  /** [up, out] mm the built tip was moved by. */
+  offset_mm: [number, number]
+}
+
+export interface ExtensionTipDisc {
+  enabled: boolean
+  color: string
+  diameter_mm: number
+  soft_mm: number
+}
+
+export interface ExtensionTipOverride {
+  offsets: Array<{ up: number; out: number }>
+  mirror: boolean
+  disc: ExtensionTipDisc
+}
+
+/** A pair tip extension group of the base model (`extension_tips`). */
+export interface ExtensionTipPanelInfo {
+  id: string
+  /** The group's declared label, else its id. */
+  label: string
+  status: string
+  reason: string
+  tip_source: 'colour' | 'geometry' | null
+  sides: Array<ExtensionTipSide | null>
+  /** The stored override (null = none). */
+  override: ExtensionTipOverride | null
+  /** The last build's disc result. */
+  disc: { status: string; reason: string; pixels: number } | null
+  limits: { offset_max_mm: number; diameter_mm: [number, number]; soft_max_mm: number
+    disc_defaults: ExtensionTipDisc }
+  /** An Apply of this model runs now. */
+  running: boolean
+  /** The last Apply's error ('' when it succeeded). */
+  error: string
+}
+
 export interface BaseBodyInfo {
   pipeline: boolean
   humanoid: boolean
@@ -83,6 +133,8 @@ export interface BaseBodyInfo {
   face_cleanup?: FaceCleanupState | null
   /** The stored collision region scales (`model3d_opts.collision_scales`). */
   collision_scales?: Record<string, number>
+  /** The base model's pair tip groups (characters.py `_base_body_model_extras`). */
+  extension_tips?: ExtensionTipPanelInfo[]
   now?: string
 }
 
@@ -98,8 +150,12 @@ export const viewsRunning = (d: BaseBodyInfo | null | undefined) =>
 export const modelRunning = (d: BaseBodyInfo | null | undefined) =>
   d?.model?.status === 'running' || d?.outfit?.status === 'running'
 
+/** A tip Apply (extension rebuild of the base model) runs. */
+export const tipsRunning = (d: BaseBodyInfo | null | undefined) =>
+  !!d?.extension_tips?.some((group) => group.running)
+
 const isActive = (d: BaseBodyInfo | null | undefined) =>
-  viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running
+  viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running || tipsRunning(d)
 
 export function useBaseBody(character: string) {
   const enc = encodeURIComponent(character)

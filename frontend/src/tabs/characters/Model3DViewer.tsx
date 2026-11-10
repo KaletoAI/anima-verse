@@ -277,7 +277,7 @@ export interface ActionAccessOverlay {
 
 export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
-  placement, onBounds, markers, lightPoint, waterRegions, onPickModelPoint, dimsOverlay,
+  placement, onBounds, markers, lightPoint, surfacePoints, waterRegions, onPickModelPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
@@ -323,6 +323,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       previewKind?: string; previewYawOffset?: number; rootDrop?: number }>
     /** Object-local light dot, refreshed live independently of the scale kit. */
     lightPoint?: { at: [number, number, number]; color: string }
+    /** Small dots ON the model at absolute positions of its own frame (model
+     *  units, the loaded glTF scene) — e.g. extension tip positions while
+     *  their sliders move. Model mode only; refreshed live, drawn on top. */
+    surfacePoints?: Array<{ at: [number, number, number]; color: string }>
     waterRegions?: ModelWater | null
     /** Pick in the fixed model frame, in model units. */
     onPickModelPoint?: (point: [number, number, number]) => void
@@ -542,6 +546,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   lightPointRef.current = lightPoint
   const markersRef = useRef(markers)
   markersRef.current = markers
+  const surfacePointsRef = useRef(surfacePoints)
+  surfacePointsRef.current = surfacePoints
   const dimsOverlayRef = useRef(dimsOverlay)
   dimsOverlayRef.current = dimsOverlay
   const figureHeightRef = useRef(figureHeight)
@@ -733,7 +739,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
   // without reload — a typed number must show up while it is being typed.
   useEffect(() => { overlayFnRef.current?.() },
-    [markers, lightPoint, waterRegions, dimsOverlay, figureHeight, scaleFigure, groundOffsetM, actionAccessPoints, spatialAuthoring])
+    [markers, lightPoint, surfacePoints, waterRegions, dimsOverlay, figureHeight, scaleFigure, groundOffsetM, actionAccessPoints, spatialAuthoring])
   useEffect(() => {
     const refresh = () => overlayFnRef.current?.()
     window.addEventListener('animation-clips-changed', refresh)
@@ -2015,6 +2021,14 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 rawBox.min.x + light.at[0] * rawSize.x,
                 rawBox.min.y + light.at[1] * rawSize.y,
                 rawBox.min.z + light.at[2] * rawSize.z)
+              markerGroup.add(dot)
+            }
+            for (const point of surfacePointsRef.current || []) {
+              const dot = new THREE.Mesh(
+                new THREE.SphereGeometry(rawMaxDim * 0.004, 12, 12),
+                new THREE.MeshBasicMaterial({ color: point.color, depthTest: false }))
+              dot.renderOrder = 4
+              dot.position.set(point.at[0], point.at[1], point.at[2])
               markerGroup.add(dot)
             }
             // The markers belong to the scale kit (user 2026-09-08): the

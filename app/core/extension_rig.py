@@ -155,12 +155,15 @@ def extension_bone_names(character_name, profile=None):
 # Bump an operation when its builder changes geometry for the same declaration;
 # defaults live in the Blender scripts, so only that part variant rebuilds.
 PART_BUILDS = {"attached_part": 6, "inset_part": 3}
+# The same for the other operations; pair_tip 1: a geometry apex (no colour
+# marker) is a tip suggestion too, and the tip override moves it.
+OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}
 
 
 def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and model overrides."""
     geometry = [{**{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group},
-                 **({"build": PART_BUILDS[group["op"]]} if group.get("op") in PART_BUILDS else {})}
+                 **({"build": OP_BUILDS[group["op"]]} if group.get("op") in OP_BUILDS else {})}
                 for group in groups]
     return _revision({"version": 19, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
@@ -169,6 +172,94 @@ def extension_rig_fingerprint(groups, overrides=None):
 def model_extension_overrides(profile, signature):
     """Mesh switches for one model; absent signatures use declaration defaults."""
     return ((profile.get("model3d_opts") or {}).get("extension_rig_models") or {}).get(signature) or {}
+
+
+def effective_extension_overrides(profile, signature, meta=None):
+    """``model_extension_overrides`` of ``signature``, plus — for an outfit
+    model on the base body (``meta`` names a ``base_signature`` and is no base
+    itself) — the base model's ``tip`` overrides of every group the outfit
+    sets none for: its tips and colour discs are those of the body it was
+    painted onto, so its extension state stays the base's."""
+    own = model_extension_overrides(profile, signature)
+    meta = meta or {}
+    base = meta.get("base_signature")
+    if not base or meta.get("base") or base == signature:
+        return own
+    merged = {group_id: dict(values) for group_id, values in own.items() if isinstance(values, dict)}
+    for group_id, values in model_extension_overrides(profile, base).items():
+        if isinstance(values, dict) and "tip" in values and "tip" not in merged.get(group_id, {}):
+            merged.setdefault(group_id, {})["tip"] = values["tip"]
+    return merged
+
+
+# Millimetres: the tip offset range per direction and the colour disc's
+# diameter range, its soft-edge range and defaults (Blender clamps the same).
+TIP_OFFSET_MAX_MM = 30.0
+DISC_DIAMETER_MM = (10.0, 50.0)
+DISC_SOFT_MAX_MM = 10.0
+DISC_DEFAULTS = {"enabled": False, "color": "#c07a72", "diameter_mm": 28.0, "soft_mm": 3.0}
+
+
+def _finite_number(value, label):
+    import math
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{label} must be a finite number")
+    return float(value)
+
+
+def validate_tip_override(value):
+    """Clean one ``pair_tip`` group's ``tip`` override, or None for "none".
+
+    ``{"offsets": [{"up", "out"}, {"up", "out"}], "mirror": bool, "disc":
+    {"enabled", "color", "diameter_mm", "soft_mm"}}``, one offset per chain
+    (the declaration's side order; ``out`` is away from the midline). Offsets
+    are clamped to +-TIP_OFFSET_MAX_MM, the diameter to DISC_DIAMETER_MM, the
+    soft edge to [0, DISC_SOFT_MAX_MM]; ``mirror`` makes the second side the
+    first one's. Missing values take the defaults. A result equal to the
+    defaults (no offset, no mirror, the default disc switched off) is None —
+    "reset". ValueError for anything malformed."""
+    import re
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"offsets", "mirror", "disc"}:
+        raise ValueError("tip override accepts offsets, mirror and disc only")
+    mirror = value.get("mirror", False)
+    if type(mirror) is not bool:
+        raise ValueError("tip mirror must be a boolean")
+    rows = value.get("offsets", [])
+    if not isinstance(rows, list) or len(rows) > 2:
+        raise ValueError("tip offsets must be a list of at most two sides")
+    offsets = []
+    for index in range(2):
+        row = rows[index] if index < len(rows) else {}
+        if not isinstance(row, dict) or set(row) - {"up", "out"}:
+            raise ValueError("a tip offset accepts up and out only")
+        offsets.append({key: round(max(-TIP_OFFSET_MAX_MM, min(TIP_OFFSET_MAX_MM, _finite_number(
+            row.get(key, 0), f"tip offset {key}"))), 3) for key in ("up", "out")})
+    if mirror:
+        offsets[1] = dict(offsets[0])
+    raw_disc = value.get("disc", {})
+    if not isinstance(raw_disc, dict) or set(raw_disc) - set(DISC_DEFAULTS):
+        raise ValueError("tip disc accepts enabled, color, diameter_mm and soft_mm only")
+    disc = dict(DISC_DEFAULTS)
+    if "enabled" in raw_disc:
+        if type(raw_disc["enabled"]) is not bool:
+            raise ValueError("tip disc enabled must be a boolean")
+        disc["enabled"] = raw_disc["enabled"]
+    if "color" in raw_disc:
+        if not isinstance(raw_disc["color"], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", raw_disc["color"]):
+            raise ValueError("tip disc color must be #rrggbb")
+        disc["color"] = raw_disc["color"].lower()
+    if "diameter_mm" in raw_disc:
+        disc["diameter_mm"] = round(max(DISC_DIAMETER_MM[0], min(DISC_DIAMETER_MM[1], _finite_number(
+            raw_disc["diameter_mm"], "tip disc diameter_mm"))), 3)
+    if "soft_mm" in raw_disc:
+        disc["soft_mm"] = round(max(0.0, min(DISC_SOFT_MAX_MM, _finite_number(
+            raw_disc["soft_mm"], "tip disc soft_mm"))), 3)
+    cleaned = {"offsets": offsets, "mirror": mirror, "disc": disc}
+    if not mirror and disc == DISC_DEFAULTS and all(v == 0 for row in offsets for v in row.values()):
+        return None
+    return cleaned
 
 
 def migrate_extension_rig_models_once():
@@ -209,23 +300,28 @@ def migrate_extension_rig_models_once():
     return migrated
 
 
-def resolved_extension_groups(character_name, profile=None, signature=None, mesh_variant=None):
+def resolved_extension_groups(character_name, profile=None, signature=None, mesh_variant=None,
+                              overrides=None):
     """Return applicable groups with enabled/flip flags, including disabled ones.
 
     Overrides live per signature in the model options block. They affect mesh
     operations only; package applicability and motion defaults stay independent.
     ``mesh_variant`` is the stored model's token (see ``rig_groups_for``).
+    ``overrides`` replaces the signature's own (``effective_extension_overrides``).
+    A ``pair_tip`` group carries its ``tip`` override as ``tip_override``.
     """
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
-    overrides = model_extension_overrides(profile, signature)
+    if overrides is None:
+        overrides = model_extension_overrides(profile, signature)
     result = []
     for group in rig_groups_for(character_name, profile, mesh_variant):
         override = overrides.get(group["id"]) or {}
         result.append({**group, "enabled": override.get("enabled", True) and all(
             parent["enabled"] for parent in result if parent["id"] == group["depends_on"]),
-                       "flip": override.get("flip", False)})
+                       "flip": override.get("flip", False),
+                       **({"tip_override": override.get("tip")} if group["op"] == "pair_tip" else {})})
     return result
 
 

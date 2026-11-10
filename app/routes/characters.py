@@ -3077,12 +3077,12 @@ def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTi
     if (base_body.base_model_info(character_name, signature) or {}).get("status") == "running":
         raise HTTPException(409, "The base model is being generated")
     try:
-        stored = extension_tip.set_tip_override(character_name, signature, body.group, body.tip)
+        started, stored = extension_tip.apply_tip_override(character_name, signature, body.group, body.tip)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(500, str(exc)) from exc
-    if not extension_tip.start_apply(character_name, signature):
+    if not started:
         raise HTTPException(409, "A tip rebuild is already running for this character")
     return {"tip": stored, "started": True}
 

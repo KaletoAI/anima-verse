@@ -598,9 +598,28 @@ their descendants. Parameter changes alter the fingerprint and rebuild from the
 clean prerig.
 
 `pair_tip` requires two one-link chains, parented side by side to a
-`pair_protrusion` group on the same slot. Geometry detection soft-skips the tip
-group; colour placement supplies `marker_area` in square metres and one shared
-radius R = sqrt((left_area + right_area)/(2*pi)). A rounded stub is baked after source re-planning.
+`pair_protrusion` group on the same slot. Its position is the source's apex: the
+colour marker, or without one the geometry crest — a suggestion the metrics name
+(`tip_source: colour | geometry`). Colour placement supplies `marker_area` in
+square metres and one shared radius R = sqrt((left_area + right_area)/(2*pi));
+geometry placement uses R = `tip_diameter`/2. A geometry source is pinned like a
+colour one for the re-plan (its apex and round outline are kept, no new crest
+search). A rounded stub is baked after source re-planning.
+
+Per model the position can be moved (`model3d_opts.extension_rig_models[sig]
+[group].tip`, part of the extension fingerprint; `app/core/extension_tip.py`,
+Base body tab): per side an offset in mm, `up` (+Z) and `out` (away from the
+midline), each within ±30. The tip walks that far along the surface in 0.5 mm
+steps — each step in the direction up·e_up + out·e_out of the local tangent
+frame (Z and ±X projected into the tangent plane), projected back onto the mesh —
+and the stub's axis is the surface normal there. `mirror` gives both sides one
+value pair. A colour disc (`disc`: on/off, `#rrggbb`, diameter 10–50 mm, soft
+edge 0–10 mm) is painted into the base-colour texture around each tip: the
+script returns the covered texels (UV rasterisation, distance from the tip axis,
+1.5 texels of island gutter unless another triangle owns them) and the server
+blends them into the staged copy. Every build starts from the clean source, so
+the disc never compounds and "off" restores the texture byte for byte. An outfit
+model on the base body inherits the base's `tip` override.
 A tip the mesher already modelled is measured on the outer skin (depth map by rays
 from in front, surface fitted on the 8–15 mm ring): when the pair's mean height is
 at least 2.5 mm it is kept — no fill, no stub, the bone spans it base to apex and

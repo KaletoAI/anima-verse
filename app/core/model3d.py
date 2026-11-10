@@ -492,13 +492,19 @@ def set_model3d_options(character_name: str,
             overrides = updates["extension_rig"]
             if not isinstance(overrides, dict):
                 raise ValueError("extension_rig must be a group override map")
+            from app.core.extension_rig import validate_tip_override
             cleaned = {}
             for group_id, values in overrides.items():
                 if not isinstance(group_id, str) or not group_id or not isinstance(values, dict):
                     raise ValueError("invalid extension group override")
-                if set(values) - {"enabled", "flip"} or any(type(v) is not bool for v in values.values()):
-                    raise ValueError("extension overrides accept enabled and flip booleans only")
-                cleaned[group_id] = dict(values)
+                switches = {key: value for key, value in values.items() if key != "tip"}
+                if set(switches) - {"enabled", "flip"} or any(type(v) is not bool for v in switches.values()):
+                    raise ValueError("extension overrides accept enabled and flip booleans and a tip override only")
+                # A pair_tip group's position/disc override (validate_tip_override).
+                tip = validate_tip_override(values.get("tip"))
+                cleaned_values = {**switches, **({"tip": tip} if tip is not None else {})}
+                if cleaned_values:
+                    cleaned[group_id] = cleaned_values
             models = dict(opts.get("extension_rig_models") or {})
             if cleaned:
                 models[signature] = cleaned
@@ -1519,7 +1525,7 @@ def _extension_rig_once(character_name: str, path: Path,
     import tempfile
     from app.blender import refine
     from app.core.extension_rig import (rig_groups_for, resolved_extension_groups,
-                                       extension_rig_fingerprint, model_extension_overrides)
+                                       extension_rig_fingerprint, effective_extension_overrides)
     from app.core.model_validate import parse_glb, validate_glb
     from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
     from app.models.character import get_character_profile
@@ -1533,7 +1539,7 @@ def _extension_rig_once(character_name: str, path: Path,
     # this rig with its jiggle/secondary bones. A covered variant (and an
     # outfit built from it) leaves the exposed-only groups out as well.
     declarations = _extension_groups_for(meta, declarations)
-    overrides = model_extension_overrides(profile, path.stem)
+    overrides = effective_extension_overrides(profile, path.stem, meta)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
     source_blender = _read_sidecar(path.parent / "prerig" / path.name).get("blender") or {}
@@ -1550,7 +1556,8 @@ def _extension_rig_once(character_name: str, path: Path,
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in _extension_groups_for(meta, resolved_extension_groups(
-                  character_name, profile=profile, signature=path.stem, mesh_variant=mesh_variant))
+                  character_name, profile=profile, signature=path.stem, mesh_variant=mesh_variant,
+                  overrides=overrides))
               if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "group_ops": {g["id"]: g["op"] for g in declarations},
@@ -1651,7 +1658,11 @@ def _extension_rig_once(character_name: str, path: Path,
                                          require_smaller=False, keep_original=False,
                                          base_joints_only=True)
             data = result.get("data") or {}
-            state["metrics"].update(data.get("metrics") or data.get("groups") or {})
+            # Colour discs are painted into the base colour of THIS build,
+            # which starts from the clean source's texture every time.
+            from app.core.extension_tip import paint_disc_masks
+            state["metrics"].update(paint_disc_masks(
+                staged if result.get("applied") else None, remaining, data.get("metrics") or data.get("groups") or {}))
             if not result.get("applied"):
                 for group in remaining:
                     state["metrics"].setdefault(group["id"], {
@@ -1685,7 +1696,7 @@ def _extension_state_current(character_name: str, path: Path, meta: Dict[str, An
     """Whether the stored extension state of ``path`` matches what
     ``_extension_rig_once`` would build now (its no-op condition without a
     force): attempted, not failed, same fingerprint."""
-    from app.core.extension_rig import (extension_rig_fingerprint, model_extension_overrides,
+    from app.core.extension_rig import (extension_rig_fingerprint, effective_extension_overrides,
                                        rig_groups_for)
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
@@ -1695,7 +1706,7 @@ def _extension_state_current(character_name: str, path: Path, meta: Dict[str, An
     return bool(previous.get("attempted")
                 and previous.get("status") in ("applied", "not_found", "none_applicable")
                 and previous.get("fingerprint") == extension_rig_fingerprint(
-                    declarations, model_extension_overrides(profile, path.stem)))
+                    declarations, effective_extension_overrides(profile, path.stem, meta)))
 
 
 @_serial_model

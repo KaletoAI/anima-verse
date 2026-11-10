@@ -495,7 +495,9 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                 raise ValueError('pinned marker missed modified surface')
             markers.append((Vector((x,hit[0].y,z)),row['marker_note']))
         marker_areas = [row['marker_area'] for row in pinned]
-        colour = True
+        # A geometry placement is pinned only for a dependent tip group: it
+        # keeps its crest apex and its round outline, no new crest search.
+        colour = all(row['apex_source']=='colour' for row in pinned)
     else:
         found = [marker(v,sign) for v,sign in zip(frontmost,(1,-1))]
         mirrored = lambda a,b: abs(a[0].z-b[0].z)<p['marker_pair_dz'] and abs((a[0].x-mid)+(b[0].x-mid))<p['marker_pair_dx']
@@ -570,19 +572,20 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                 raise ValueError('apex does not protrude from wall')
             fitted.append((c,n,points))
         return reach,fitted
-    if colour:
+    if colour or pinned is not None:
         apexes = [v.copy() for v,_ in markers]
     else:
         cell,pick,initial = crest_search()
         apexes = initial
     reach,fitted = walls(apexes)
     if not colour:
-        near = lambda c:all(math.hypot(mid+sign*ds[c[1]]-start.x,zs[c[0]]-start.z)<=p['marker_search_radius'] for sign,start in zip((1,-1),initial))
-        # Only the sagittal tilt of the wall moves the tip (a torso leaning back);
-        # its lateral tilt follows the rib cage and would drag the tip to the midline.
-        sagittal = [Vector((0,n.y,n.z)).normalized() for _,n,_ in fitted]
-        apexes = pick(lambda c:sum((cell(*c,sign)-w[0]).dot(s) for sign,w,s in zip((1,-1),fitted,sagittal)) if near(c) else -math.inf)
-        reach,fitted = walls(apexes)
+        if pinned is None:
+            near = lambda c:all(math.hypot(mid+sign*ds[c[1]]-start.x,zs[c[0]]-start.z)<=p['marker_search_radius'] for sign,start in zip((1,-1),initial))
+            # Only the sagittal tilt of the wall moves the tip (a torso leaning back);
+            # its lateral tilt follows the rib cage and would drag the tip to the midline.
+            sagittal = [Vector((0,n.y,n.z)).normalized() for _,n,_ in fitted]
+            apexes = pick(lambda c:sum((cell(*c,sign)-w[0]).dot(s) for sign,w,s in zip((1,-1),fitted,sagittal)) if near(c) else -math.inf)
+            reach,fitted = walls(apexes)
         # Without a marked tip (clothing) the tangent search rarely finds a real
         # boundary; a round outline of the median reach avoids angular jumps.
         reach = [statistics.median(v for v in reach if v is not None)]*K
@@ -672,7 +675,10 @@ def mesh_arrays(meshes):
 
 def tip_mesh(meshes, p, placement):
     tips = [Vector(row['tip']) for row in placement]
-    radius = math.sqrt(sum(row['marker_area'] for row in placement)/(2*math.pi))
+    # Colour: the marked area's equal-area radius. Geometry (no marker): the
+    # declared stub diameter sets the refinement scale.
+    radius = (math.sqrt(sum(row['marker_area'] for row in placement)/(2*math.pi))
+              if all(row.get('marker_area') for row in placement) else p['tip_diameter']/2)
     before = sum(len(mesh.data.vertices) for mesh in meshes)
     def subdivide(mesh, centres, radii):
         bm = bmesh.new()
@@ -806,6 +812,233 @@ def tip_mesh(meshes, p, placement):
         for mesh in meshes:
             subdivide(mesh,stubs,[p['tip_subdivide']])
     return rows, before
+
+
+# Metres per step of the tip offset walk along the surface.
+TIP_WALK_STEP_M = .0005
+# Millimetres: the tip offset range per direction (the server clamps the
+# stored override to the same range).
+TIP_OFFSET_MAX_MM = 30.
+# Millimetres: the colour disc diameter range and its soft edge width range.
+DISC_DIAMETER_MM = (10., 50.)
+DISC_SOFT_MAX_MM = 10.
+# Texels painted beyond a triangle's UV edge (the island gutter).
+DISC_GUTTER_TEXELS = 1.5
+
+
+def _finite(value, default=0.):
+    return float(value) if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) else default
+
+
+def tip_offsets(override):
+    """``[(up, out), (up, out)]`` in metres, one per chain (side +1 first),
+    each value clamped to +-TIP_OFFSET_MAX_MM; absent values are zero."""
+    rows = (override or {}).get('offsets') or []
+    offsets = []
+    for i in range(2):
+        row = rows[i] if i < len(rows) and isinstance(rows[i],dict) else {}
+        offsets.append(tuple(max(-TIP_OFFSET_MAX_MM,min(TIP_OFFSET_MAX_MM,_finite(row.get(key))))/1000
+                             for key in ('up','out')))
+    return offsets
+
+
+def surface_frame(normal, side):
+    """The two tangent directions at a surface point of normal ``normal``:
+    up (world +Z) and out (away from the midline, ``side`` * X), each
+    projected into the tangent plane and normalised."""
+    up,out = Vector((0,0,1)),Vector((side,0,0))
+    return (up-normal*normal.dot(up)).normalized(),(out-normal*normal.dot(out)).normalized()
+
+
+def surface_nearest(meshes):
+    """``nearest(point) -> (surface point, front normal)`` over all meshes."""
+    tree = world_tree(meshes)
+    def nearest(point):
+        location,normal,_,_ = tree.find_nearest(point)
+        if location is None:
+            raise ValueError('tip offset found no surface')
+        normal = normal.normalized()
+        return location,(-normal if normal.y > 0 else normal)
+    return nearest
+
+
+def surface_walk(nearest, start, side, up, out, step=TIP_WALK_STEP_M):
+    """Move ``start`` ``up``/``out`` metres along the surface: equal steps of
+    at most ``step`` in the direction up*e_up + out*e_out of the local
+    tangent frame (``surface_frame``), each projected back onto the mesh
+    (``nearest``). The path length is hypot(up, out); on a plane the result is
+    start + up*Z + out*side*X exactly. Returns (point, normal)."""
+    point,normal = nearest(start)
+    length = math.hypot(up,out)
+    if length < 1e-9:
+        return point,normal
+    count = max(1,math.ceil(length/step))
+    for _ in range(count):
+        e_up,e_out = surface_frame(normal,side)
+        direction = e_up*up+e_out*out
+        direction -= normal*normal.dot(direction)
+        point,normal = nearest(point+direction.normalized()*(length/count))
+    return point,normal
+
+
+def tip_positions(meshes, source_rows, override):
+    """The tip rows ``tip_mesh`` builds on, and what the metrics record.
+
+    The suggestion is each source side's apex: its colour marker, or without
+    one its geometry crest (``tip_source``). A side with an offset moves its
+    tip along the surface (``surface_walk``); a side without one keeps the
+    source row as it is. Per side the metrics get the suggestion, its front
+    normal, the tangent frame there, the applied offset in mm and the placed
+    position (before the fill)."""
+    offsets = tip_offsets(override)
+    nearest = surface_nearest(meshes)
+    rows,sides = [],[]
+    for row,(up,out),side in zip(source_rows,offsets,(1,-1)):
+        suggested = Vector(row['tip'])
+        normal = nearest(suggested)[1]
+        placed = dict(row)
+        if up or out:
+            placed['tip'] = list(surface_walk(nearest,suggested,side,up,out)[0])
+        rows.append(placed)
+        e_up,e_out = surface_frame(normal,side)
+        sides.append({'suggested':list(suggested),'suggested_normal':list(normal),
+                      'tangent_up':list(e_up),'tangent_out':list(e_out),
+                      'offset_mm':[round(up*1000,3),round(out*1000,3)],'placed':list(placed['tip'])})
+    colour = all(row['apex_source']=='colour' for row in source_rows)
+    return rows,{'tip_source':'colour' if colour else 'geometry','sides':sides}
+
+
+def base_colour_image(material):
+    """The image node feeding a material's Principled base colour, or None."""
+    if material and material.use_nodes:
+        for node in material.node_tree.nodes:
+            if node.type == 'BSDF_PRINCIPLED' and node.inputs['Base Color'].links:
+                source = node.inputs['Base Color'].links[0].from_node
+                if source.type == 'TEX_IMAGE' and source.image:
+                    return source.image
+    return None
+
+
+def disc_alpha(r, radius, soft):
+    """Disc coverage at distance ``r`` from the tip axis: 1 inside, 0 outside;
+    a soft edge of width ``soft`` is centred on the rim (0.5 at r = radius)."""
+    if soft <= 0:
+        return np.where(r <= radius,1.,0.)
+    x = np.clip((radius+soft/2-r)/soft,0.,1.)
+    return x*x*(3-2*x)
+
+
+def disc_mask(meshes, rows, disc):
+    """Texels of the base-colour image a colour disc around each tip covers.
+
+    The disc lies in the plane across each tip's axis: a texel counts by the
+    distance of its surface point from the axis (so the raised stub keeps the
+    colour of the skin it was raised from). Triangles are rasterised in UV
+    space (texel centres, image rows top-down as stored in the file); only
+    triangles within 3 cm along the axis and not facing away from it count, so
+    the far side of the body and an inner wall stay untouched. A texel up to
+    DISC_GUTTER_TEXELS outside a triangle's UV edge counts too (extrapolated)
+    unless another triangle owns it, so texture filtering at an island border
+    never blends the unpainted gutter in. Overlapping texels keep the larger
+    coverage. Returns ``{size: [w, h], image, texels: [x, y, alpha 1..255,
+    ...], pixels}``; ValueError when the region has no single base-colour
+    image."""
+    radius = max(DISC_DIAMETER_MM[0],min(DISC_DIAMETER_MM[1],_finite(disc.get('diameter_mm'),28.)))/2000
+    soft = max(0.,min(DISC_SOFT_MAX_MM,_finite(disc.get('soft_mm'))))/1000
+    reach = radius+soft/2
+    pad = DISC_GUTTER_TEXELS
+    surfaces = []
+    for mesh in meshes:
+        data = mesh.data
+        uv = data.uv_layers.active
+        if uv is None:
+            continue
+        data.calc_loop_triangles()
+        local = np.empty(len(data.vertices)*3,np.float64)
+        data.vertices.foreach_get('co',local)
+        matrix = np.array(mesh.matrix_world)
+        world = local.reshape(-1,3)@matrix[:3,:3].T+matrix[:3,3]
+        count = len(data.loop_triangles)
+        tris,loops,materials = np.empty(count*3,np.int64),np.empty(count*3,np.int64),np.empty(count,np.int64)
+        data.loop_triangles.foreach_get('vertices',tris)
+        data.loop_triangles.foreach_get('loops',loops)
+        data.loop_triangles.foreach_get('material_index',materials)
+        uvs = np.empty(len(data.loops)*2,np.float64)
+        uv.data.foreach_get('uv',uvs)
+        surfaces.append((data,world,tris.reshape(-1,3),loops.reshape(-1,3),materials,uvs.reshape(-1,2)))
+    covered,image,owners = {},None,[]
+    def owned(x, y):
+        """Whether a texel centre lies inside any triangle's UV footprint."""
+        if not owners:
+            verts,polys = [],[]
+            for _,_,_,loops,_,uvs in surfaces:
+                corners = uvs[loops.reshape(-1)]
+                offset = len(verts)
+                verts.extend(Vector((u*width,(1-v)*height,0.)) for u,v in corners.tolist())
+                polys.extend((offset+3*i,offset+3*i+1,offset+3*i+2) for i in range(len(loops)))
+            owners.append(BVHTree.FromPolygons(verts,polys,all_triangles=True))
+        hit = owners[0].find_nearest(Vector((x,y,0.)))
+        return hit[0] is not None and hit[3] < 1e-6
+    for data,world,tris,loops,materials,uvs in surfaces:
+        for row in rows:
+            tip,axis = np.array(row['tip']),Vector(row['axis']).normalized()
+            b1 = axis.orthogonal().normalized()
+            b2 = axis.cross(b1)
+            delta = world-tip
+            axial = delta@np.array(axis)
+            u,w = delta@np.array(b1),delta@np.array(b2)
+            tu,tw,ta = u[tris],w[tris],axial[tris]
+            p = world[tris]
+            cross = np.cross(p[:,1]-p[:,0],p[:,2]-p[:,0])
+            near = ((tu.min(1) <= reach)&(tu.max(1) >= -reach)&(tw.min(1) <= reach)&(tw.max(1) >= -reach)
+                    &(np.abs(ta).max(1) < .03)&(cross@np.array(axis) > -.25*np.linalg.norm(cross,axis=1)))
+            for t in np.nonzero(near)[0]:
+                index = int(materials[t])
+                found = base_colour_image(data.materials[index] if index < len(data.materials) else None)
+                if found is None:
+                    continue
+                if image is None:
+                    image = found
+                elif found != image:
+                    raise ValueError('disc region has several base-colour images')
+                width,height = image.size
+                if not width or not height:
+                    raise ValueError('base-colour image has no pixels')
+                corners = uvs[loops[t]]
+                px,py = corners[:,0]*width,(1-corners[:,1])*height
+                x0,x1 = int(math.floor(px.min()-pad)),int(math.ceil(px.max()+pad))
+                y0,y1 = int(math.floor(py.min()-pad)),int(math.ceil(py.max()+pad))
+                gx,gy = np.meshgrid(np.arange(x0,x1+1)+.5,np.arange(y0,y1+1)+.5)
+                d1x,d1y,d2x,d2y = px[1]-px[0],py[1]-py[0],px[2]-px[0],py[2]-py[0]
+                det = d1x*d2y-d1y*d2x
+                if abs(det) < 1e-12:
+                    continue
+                qx,qy = gx-px[0],gy-py[0]
+                s1 = (qx*d2y-qy*d2x)/det
+                s2 = (d1x*qy-d1y*qx)/det
+                # Barycentric l_i = distance to the opposite edge / altitude,
+                # the altitude being |det| / that edge's length.
+                edges = (math.hypot(px[2]-px[1],py[2]-py[1]),math.hypot(d2x,d2y),math.hypot(d1x,d1y))
+                slack = [pad*e/abs(det) for e in edges]
+                inside = (s1 >= -slack[1])&(s2 >= -slack[2])&(1-s1-s2 >= -slack[0])
+                strict = (s1 >= -1e-9)&(s2 >= -1e-9)&(1-s1-s2 >= -1e-9)
+                if not inside.any():
+                    continue
+                ru = tu[t,0]+s1*(tu[t,1]-tu[t,0])+s2*(tu[t,2]-tu[t,0])
+                rw = tw[t,0]+s1*(tw[t,1]-tw[t,0])+s2*(tw[t,2]-tw[t,0])
+                alpha = np.rint(disc_alpha(np.hypot(ru,rw),radius,soft)*255).astype(int)
+                for cx,cy,a,own in zip(gx[inside].tolist(),gy[inside].tolist(),alpha[inside].tolist(),strict[inside].tolist()):
+                    if a <= 0 or (not own and owned(cx,cy)):
+                        continue
+                    key = (int(math.floor(cx))%width,int(math.floor(cy))%height)
+                    if a > covered.get(key,0):
+                        covered[key] = a
+    if image is None:
+        raise ValueError('no base-colour texture around the tips')
+    texels = []
+    for (x,y),a in sorted(covered.items()):
+        texels.extend((x,y,a))
+    return {'size':list(image.size),'image':image.name,'texels':texels,'pixels':len(covered)}
 
 
 def world_tree(meshes):
@@ -2330,9 +2563,13 @@ def extension_bones(args):
     plans,failed,malformed = plan_sources({})
     if failed:
         return skip('; '.join(k+': '+v for k,v in failed.items()),failed,'failed' if malformed else 'not_found')
-    soft,prepared = {},{}
+    soft,prepared,tip_info = {},{},{}
+    # A colour placement always pins the re-plan; a geometry placement only
+    # when a tip group stands on it (its crest apex is the tip suggestion).
+    tip_sources = {g.get('depends_on') for g in enabled if g['op']=='pair_tip'}
     pinned = {g['id']:plan[2]['placement'] for g,p,plan in plans
-              if g['op']=='pair_protrusion' and all(row['apex_source']=='colour' for row in plan[2]['placement'])}
+              if g['op']=='pair_protrusion' and (all(row['apex_source']=='colour' for row in plan[2]['placement'])
+                                                 or g['id'] in tip_sources)}
     try:
         for g in enabled:
             if dependencies[g['id']].intersection(soft):
@@ -2341,10 +2578,11 @@ def extension_bones(args):
             if g['op']!='pair_tip':
                 continue
             if g['depends_on'] not in pinned:
-                soft[g['id']] = {'status':'not_found','reason':'Source placement is not colour'}
+                soft[g['id']] = {'status':'not_found','reason':'Source placement is missing'}
                 continue
             p = parameters(g)
-            prepared[g['id']] = tip_mesh(meshes,p,pinned[g['depends_on']])
+            rows,tip_info[g['id']] = tip_positions(meshes,pinned[g['depends_on']],g.get('tip_override'))
+            prepared[g['id']] = tip_mesh(meshes,p,rows)
         if prepared:
             co,edges,owners,normals,faces = mesh_arrays(meshes)
             plans,failed,malformed = plan_sources(pinned)
@@ -2360,6 +2598,10 @@ def extension_bones(args):
                 if plan is None:
                     soft[g['id']] = {'status':'not_found','reason':'Empty tip weights; mesh remains modified'}
                 else:
+                    info = tip_info[g['id']]
+                    plan[2]['tip_source'] = info['tip_source']
+                    for row,side in zip(plan[2]['placement'],info['sides']):
+                        row.update(side)
                     if any(bone_key(name) in bones or any(name==other for _,_,previous in plans for other,_,_,_ in previous[0]) for name,_,_,_ in plan[0]):
                         raise ValueError('tip bone already exists')
                     plans.append((g,p,plan))
@@ -2466,6 +2708,15 @@ def extension_bones(args):
         if g['op'] == 'appendage_chain' and any(not any(v > .9 for v in w.values()) for w in plan[1].values()):
             return skip('chain link has no exported core vertices (weight > 0.9)',status='failed')
     metrics=measure(arm,meshes,edges,plans)
+    for g,p,plan in plans:
+        disc = (g.get('tip_override') or {}).get('disc') or {}
+        if g['op']=='pair_tip' and disc.get('enabled'):
+            # Texels only: the caller paints them into a copy of the clean
+            # source's base colour (never compounding on a re-run).
+            try:
+                metrics[g['id']]['disc_mask'] = disc_mask(meshes,plan[2]['placement'],disc)
+            except ValueError as e:
+                metrics[g['id']]['disc_mask'] = {'error':str(e)}
     metrics.update(soft)
     output=Path(args['out_dir'])/'model.glb'
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False,export_extras=True)

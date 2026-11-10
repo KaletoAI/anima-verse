@@ -9,7 +9,9 @@
  * click enlarges one), the base model's 3D preview with everything that
  * acts on it on the right: its steps beside the preview, the collision
  * capsule sliders beside it too (live preview while dragging — the outfit
- * models inherit the base body's set), and the face/rig actions under it
+ * models inherit the base body's set), one panel per pair tip extension
+ * group (ExtensionTipPanel: tip offsets and colour disc, the tips shown as
+ * dots on the model while dragging), and the face/rig actions under it
  * (ModelFaceActions: face cleanup switch + re-apply, face before rigging,
  * face retexture, re-rig) — on the pipeline they all act on the base body.
  *
@@ -26,7 +28,7 @@
  * non-humanoid still reach it, it shows only a hint. The outfit model's
  * retexture status lives in the Pose tab (BaseBodyOutfitStatus).
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
@@ -36,10 +38,12 @@ import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { ViewRenderTile } from './ViewRenderTile'
 import { CollisionScales } from './CollisionScales'
+import { ExtensionTipPanel } from './ExtensionTipPanel'
+import type { TipDots } from './ExtensionTipPanel'
 import { ModelFaceActions } from './ModelFaceActions'
 import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload } from '@anima/scene-render'
-import { BASE_VIEWS, modelRunning, useBaseBody, viewsRunning } from './useBaseBody'
+import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 
 const TILE_HEIGHT = 128
@@ -79,6 +83,18 @@ export function FieldBaseBody({ character }: { character: string }) {
   const [posting, setPosting] = useState(false)
   /** Slider preview of the collision scales — shown instead of the stored set. */
   const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
+  /** Tip dots per pair tip group (ExtensionTipPanel), drawn on the model. */
+  const [tipDots, setTipDots] = useState<Record<string, TipDots>>({})
+  const onTipPreview = useCallback((group: string, dots: TipDots | null) => {
+    setTipDots((previous) => {
+      if (!dots && !(group in previous)) return previous
+      const next = { ...previous }
+      if (dots) next[group] = dots
+      else delete next[group]
+      return next
+    })
+  }, [])
+  const surfacePoints = useMemo(() => Object.values(tipDots).flat(), [tipDots])
 
   // A model run (face, rig) ended: re-read the base body (new model URL,
   // steps, face cleanup state).
@@ -145,7 +161,7 @@ export function FieldBaseBody({ character }: { character: string }) {
   const imagesBusy = posting || viewsRunning(info)
   const allPresent = BASE_VIEWS.every((v) => !!info.images?.[v])
   const model = info.model
-  const modelBusy = posting || modelRunning(info) || !!st?.pending
+  const modelBusy = posting || modelRunning(info) || !!st?.pending || tipsRunning(info)
   const ready = model?.status === 'ready'
 
   const pipelineSwitch = (
@@ -172,10 +188,22 @@ export function FieldBaseBody({ character }: { character: string }) {
   }
 
   const collision = collisionPreview ?? model?.collision
-  const asideTools = model?.url && ready && model.collision !== undefined ? (
-    <CollisionScales character={character} collision={model.collision}
-      scales={info.collision_scales} disabled={modelBusy}
-      onPreview={setCollisionPreview} onSaved={reloadAll} />
+  const tipPanels = model?.url && ready ? info.extension_tips ?? [] : []
+  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length) ? (
+    <>
+      {model.collision !== undefined ? (
+        <CollisionScales character={character} collision={model.collision}
+          scales={info.collision_scales} disabled={modelBusy}
+          onPreview={setCollisionPreview} onSaved={reloadAll} />
+      ) : null}
+      {/* Pair tip groups: position, mirror and colour disc; the dots on the
+          model follow the sliders. */}
+      {tipPanels.map((panel) => (
+        <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
+          panel={panel} disabled={modelBusy} onPreview={onTipPreview}
+          onStarted={() => startPoll(800)} />
+      ))}
+    </>
   ) : undefined
 
   return (
@@ -236,7 +264,8 @@ export function FieldBaseBody({ character }: { character: string }) {
               <Model3DViewer key={model.url} url={model.url} format="glb" height={480} previewTilt
                 freshness={model.freshness}
                 statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined}
-                collision={collision} showCollision={!!collisionPreview} />
+                collision={collision} showCollision={!!collisionPreview}
+                surfacePoints={surfacePoints} />
             </div>
           ) : null}
           {asideTools || (st && model) ? (
