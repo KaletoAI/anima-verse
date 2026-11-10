@@ -29,7 +29,10 @@ Blender:
   slope = the median station slope between the heel seat and the ball (negative: falling to the toe).
 - **Type gates** (``INSOLE_GATES``): ``insole_cover`` = insole cells / footprint cells (refusal
   ``INSOLE_REFUSED``); ``vamp_cover`` = the share of footprint cells at x >= ``BALL_SHARE`` L whose
-  column has a hit above the insole (refusal ``OPEN_REFUSED``). ``boot`` (``BOOT_MARGIN_M`` above the
+  column has a hit above the insole (refusal ``OPEN_REFUSED``); ``opening_share`` = the share of
+  profile stations whose topline stands at least ``AIR_SHARE`` L above the insole — a solid mesh (its
+  top surface read as the insole, no side walls above it) has none (refusal ``SOLID_REFUSED``, judged
+  before ``vamp_cover`` so a solid shoe never gets the sandal message). ``boot`` (``BOOT_MARGIN_M`` above the
   ankle, ``BOOT_REFUSED``) needs a body and is judged at the fit.
 - ``cavity_end_x``: the first roofed station in front of the ball whose insole-to-roof gap is below
   ``CAVITY_MIN_M`` (nominal), else the last insole station — where the insole arc for the scale ends.
@@ -45,7 +48,7 @@ fitted foot's heel point), heel rise 8.0 cm, insole ball 1.3 cm, foot-chord pitc
 port on the spike's raw mesh (93k tris, 0.4 s): profile within 0.6 mm of the Blender profile, insole
 cover 0.918, nominal heel seat 9.62 cm, ball 1.37 cm, heel rise 8.25 cm, pitch 33.84 deg (the spike's
 own profile gives 33.81 / 9.63 by these definitions), shank -35.7 deg, vamp cover 0.613, cavity end
-0.222 m (spike 0.217 with the foot's 1.63 cm toes), shaft (max lower topline) 14.0 cm.
+0.222 m (spike 0.217 with the foot's 1.63 cm toes), shaft (max lower topline) 14.0 cm, opening share 0.915.
 """
 import math
 from dataclasses import dataclass
@@ -92,12 +95,14 @@ CONTACT_BAND_SHARE = 0.05
 INSOLE_GATES: Dict[str, Tuple[str, Any, str]] = {
     "insole_cover": ("min", 0.80, "share of the footprint with a tracked insole"),
     "vamp_cover": ("min", 0.6, "share of the forefoot footprint under a vamp"),
+    "opening_share": ("min", 0.5, "share of the insole stations whose side walls rise above the insole"),
 }
 #: The boot gate (judged at the fit): a topline above the ankle joint + this margin.
 BOOT_MARGIN_M = 0.03
 BOOT_REFUSED = "Boots are not supported yet"
 OPEN_REFUSED = "Open shoes and sandals are not supported yet"
-INSOLE_REFUSED = "No insole found: the shoe mesh is closed or solid"
+INSOLE_REFUSED = "No insole found in the shoe mesh"
+SOLID_REFUSED = "Solid mesh: no shoe opening found"
 
 
 @dataclass
@@ -534,10 +539,18 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         "shank_slope_deg": shank,
     }
 
-    ok, reasons = check_gates({"insole_cover": insole_cover, "vamp_cover": vamp_cover}, INSOLE_GATES)
+    # opening: stations whose side walls (the lower one) rise AIR above the insole
+    with_prof = ~np.isnan(prof)
+    with np.errstate(invalid="ignore"):
+        walls = with_prof & (top - prof >= air)
+    opening_share = float(walls.sum() / with_prof.sum()) if with_prof.any() else 0.0
+    metrics = {"insole_cover": insole_cover, "vamp_cover": vamp_cover, "opening_share": opening_share}
+    ok, reasons = check_gates(metrics, INSOLE_GATES)
     refusal = None
     if not ok:
-        refusal = INSOLE_REFUSED if any(r.startswith("insole_cover") for r in reasons) else OPEN_REFUSED
+        failed = {r.split(" ")[0].rstrip(":") for r in reasons}
+        refusal = (INSOLE_REFUSED if "insole_cover" in failed else SOLID_REFUSED if "opening_share" in failed
+                   else OPEN_REFUSED)
 
     finite_top = top[~np.isnan(top)]
     # overlay polylines in the mesh's own coordinates
@@ -559,12 +572,12 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         "footprint_outline": outline,
         "insole_cover": insole_cover,
         "vamp_cover": vamp_cover,
+        "opening_share": opening_share,
         "cavity_end_x": cavity_end,
         "shaft_h_raw": float(finite_top.max()) if len(finite_top) else None,
         "contacts": contacts,
         "nominal": nominal,
-        "gates": {"ok": ok, "reasons": reasons, "insole_cover": insole_cover, "vamp_cover": vamp_cover,
-                  "refusal": refusal},
+        "gates": {"ok": ok, "reasons": reasons, **metrics, "refusal": refusal},
         "overlay": {"insole": insole_line, "topline": topline_line},
     }
 

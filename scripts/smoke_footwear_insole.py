@@ -51,7 +51,13 @@ Expected, by hand:
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
 [I9] constants: INSOLE_VERSION 1, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
-     INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6, BOOT_MARGIN_M 0.03, the two refusal texts.
+     INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
+     the refusal texts (boot, open, solid).
+[I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
+     above -> the insole everywhere, insole_cover 1.0; the topline per station is the top edge h(x) = the
+     profile -> no station has walls AIR = 0.0065 above the insole -> opening_share 0.0 < 0.5 -> refused with
+     SOLID_REFUSED (vamp_cover is 0.0 too, but the solid reason wins: never the sandal message). The pump
+     and the sandal have walls 0.03 >= AIR above the insole at every profile station -> opening_share 1.0.
 [I10] the pump with every up-facing triangle reversed (nothing faces up any more): no candidate anywhere ->
      no seed -> insole_cover 0.0 -> refused with INSOLE_REFUSED; the nominal numbers are None; no
      exception; JSON without NaN.
@@ -153,9 +159,10 @@ def main():
                         fi.BOOT_MARGIN_M),
           (1, 0.26, 240, 0.025, 0.035, 0.03))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
-          {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6)})
-    check("refusal texts", (fi.BOOT_REFUSED, fi.OPEN_REFUSED),
-          ("Boots are not supported yet", "Open shoes and sandals are not supported yet"))
+          {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
+    check("refusal texts", (fi.BOOT_REFUSED, fi.OPEN_REFUSED, fi.SOLID_REFUSED),
+          ("Boots are not supported yet", "Open shoes and sandals are not supported yet",
+           "Solid mesh: no shoe opening found"))
 
     print("[I6] vertical_hits on one triangle")
     tri_p = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]])   # frame (x, height, z)
@@ -236,6 +243,16 @@ def main():
     check("fin flipped", fin["frame"]["flipped"], True)
     same_numbers("fin numbers", fin, pump, 1e-9)
     same_arrays("fin topline", fin["topline"], pump["topline"], 1e-9)
+
+    print("[I11] closed solid wedge")
+    Pc, Fc = wedge(solid=True)
+    solid = fi.analyse_arrays(Pc, Fc)
+    near("solid insole_cover", solid["insole_cover"], 1.0, 1e-9)
+    near("solid opening_share", solid["opening_share"], 0.0, 1e-9)
+    near("solid vamp_cover", solid["vamp_cover"], 0.0, 1e-9)
+    check("solid refused", (solid["gates"]["ok"], solid["gates"].get("refusal")), (False, fi.SOLID_REFUSED))
+    near("pump opening_share", pump["opening_share"], 1.0, 1e-9)
+    near("sandal opening_share", sandal["opening_share"], 1.0, 1e-9)
 
     print("[I8] analyse(GLB bytes)")
     glb = glb_mesh.static_glb(P, F, np.zeros((len(P), 2)))

@@ -62,9 +62,12 @@ Expected, by hand:
      at 0.03, the rest at 0.13; past B's ends B's columns lose the track (0.10 > TOL) and the second pass
      gives them the station median 0.13 -> insole_cover 1.0. Forefoot x >= 0.62 L = 0.155 (stations
      149..239, 91): covered only where the insole is B's top under A's top, stations 149..167 (x <=
-     0.175) x 48 columns -> vamp_cover = 19 * 48 / (91 * 86) = 912 / 7826 = 0.1165 < 0.6 -> run_source
-     {ok False, step "insole", ran ["mesh"]}, the error starts with OPEN_REFUSED, insole.json written with
-     gates.refusal OPEN_REFUSED, record insole accepted False.
+     0.175) x 48 columns -> vamp_cover = 19 * 48 / (91 * 86) = 912 / 7826 = 0.1165 < 0.6. Opening: the
+     topline is A's top edge 0.13 at every station; the profile (the middle columns j 22..63, all in B) is
+     0.03 at B's stations 72..167 (x in [0.0753, 0.1747]) and 0.13 elsewhere -> walls >= AIR above the
+     insole at 96 of 240 stations -> opening_share 0.4 < 0.5 -> the closed box is SOLID (that reason wins
+     over vamp_cover) -> run_source {ok False, step "insole", ran ["mesh"]}, the error starts with
+     SOLID_REFUSED, insole.json written with gates.refusal SOLID_REFUSED, record insole accepted False.
 [S5b] the wedge pump of scripts/_footwear_fixtures.py written as W's prepared.glb, run_source(W,
      steps=["insole"], force=True) -> ok, ran ["insole"], 0 service calls, record insole accepted with
      version 1 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
@@ -405,7 +408,7 @@ def main():
             res = fs.run_source("shoe_w")
             check("W mesh ran, insole refused", (res.get("ok"), res.get("step"), res.get("ran")),
                   (False, "insole", ["mesh"]))
-            check("W insole error", str(res.get("error", "")).startswith(fi.OPEN_REFUSED), True)
+            check("W insole error", str(res.get("error", "")).startswith(fi.SOLID_REFUSED), True)
             check("W mesher calls", len(svc.meshes), 1)
             m = svc.meshes[-1]
             check("W mesh args", (m.get("occasion"), m.get("face_num"), m.get("material"), m.get("alpha"),
@@ -425,12 +428,13 @@ def main():
             check("W no candidate left", [p.name for p in dw.iterdir() if "candidate" in p.name], [])
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             check("W insole.json written", (ins.get("version"), (ins.get("gates") or {}).get("refusal")),
-                  (1, fi.OPEN_REFUSED))
+                  (1, fi.SOLID_REFUSED))
             near("W boxes insole_cover", ins.get("insole_cover"), 1.0, 1e-6)
             near("W boxes vamp_cover", ins.get("vamp_cover"), 912 / 7826, 1e-6)
+            near("W boxes opening_share", ins.get("opening_share"), 96 / 240, 1e-6)
             rec = fs.step_record("shoe_w", ssig_w, "insole")
             check("W insole record refused", (rec.get("accepted"), (rec.get("gates") or {}).get("refusal")),
-                  (False, fi.OPEN_REFUSED))
+                  (False, fi.SOLID_REFUSED))
             check("W step_done insole", fs.step_done("shoe_w", ssig_w, "insole"), False)
 
             print("[S5b] insole of the wedge pump")
