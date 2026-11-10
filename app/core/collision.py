@@ -7,7 +7,7 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 2,
+    {"version": 3,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
@@ -16,7 +16,8 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
                    "b_pos": [...], "r": 0.018, "region": "chest"}, ...],
      "skipped":  [{"id": "left_shin", "a": "mixamorig:LeftLeg", "b": "LeftFoot",
                    "reason": "joint LeftFoot missing"}],
-     "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "chest": 1.0, "attached_part": 1.0},
+     "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "chest": 1.0, "chest_hair": 1.0,
+                 "attached_part": 1.0},
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
      "sha256":   "<file the set describes>",
@@ -52,7 +53,8 @@ else; the post-rig chain (``model3d._auto_collision``) refreshes it right after 
 EXTENSION CAPSULES (version 2). The spring-driven extension bones a package declares get capsules too — one per
 chain bone of every group whose OP is in ``EXTENSION_CAPSULES`` (never by group or bone name), region by op
 (``chest`` for ``pair_protrusion``, ``attached_part`` for ``attached_part``), each with its own region scale. They
-follow the table's capsules in the payload. Which renderer pushes what out of them is the renderers' call
+follow the table's capsules in the payload. Version 3 adds the hair-only ``chest_hair`` set on ``pair_protrusion``
+(out to the skin plus the hair clearance; its own scale). Which renderer pushes what out of them is the renderers' call
 (``garmentCollision.ts`` ``garmentCapsules``; ``secondaryMotion.ts`` never pushes a chain out of its own).
 
 FITTING (``fit_capsules``) — the S1 spike's method: for each capsule the body vertices whose DOMINANT skin
@@ -72,9 +74,9 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 2
+VERSION = 3
 #: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``).
-REGIONS = ("leg", "arm", "torso", "head", "chest", "attached_part")
+REGIONS = ("leg", "arm", "torso", "head", "chest", "chest_hair", "attached_part")
 SCALE_MIN, SCALE_MAX = 0.5, 1.5
 #: A start bone owning fewer body vertices than this gives no capsule (a quantile of a handful is noise).
 MIN_VERTICES = 16
@@ -131,19 +133,27 @@ CROWN_AXIS_FROM = "Hips"
 #: (1.694–1.701 m on 1.700-m bodies).
 
 #: EXTENSION CAPSULES — one per chain bone of an extension group whose OP is a key here (never by group or bone
-#: name): ``op → (region, quantile, margin m)``. The groups come from the model's sidecar (``extension_rig``:
+#: name): ``op → ((region, quantile, margin m), …)`` — one capsule per chain bone and entry. The groups come from the model's sidecar (``extension_rig``:
 #: ``groups``/``group_ops``, status ``applied``), their chains from the package declarations
 #: (``extension_chains``). No such group → no capsule. Per chain bone ``L`` (``a`` = ``L``):
 #:  - the chain continues → the segment ends at the next link's joint (``b`` = that joint);
 #:  - the chain's last link → the TIP rule (the crown rule with a local axis): axis ``u`` = previous link's joint →
 #:    ``L`` (a one-link chain: ``L`` → the centroid of its own vertices); tip = the farthest own vertex along ``u``;
-#:    radius from the segment ``L``→tip; ``b`` = ``L`` with ``b_pos`` = tip − r·u, so the cap ends AT the tip.
+#:    radius from the segment ``L``→tip; ``b`` = ``L`` with ``b_pos`` = tip + m·s·u − r·u, so the cap ends at the
+#:    tip pushed out by the scaled margin (``m`` the margin, ``s`` the region scale; AT the tip for margin 0).
 #: Radius = quantile of the distances of the vertices whose dominant weight is ``L``, + margin, × the region scale.
 #: Both endpoints ride ``L`` (or its child joint), so the capsule follows the spring-driven bone every frame.
+#: The first entry's id is ``"<group>:<bone>"``, a further entry's ``"<group>:<bone>:<region>"``.
+#: ``chest_hair`` is a HAIR-ONLY set (version 3): the protrusion out to the skin plus the hair fit's clearance
+#: (``HAIR_CLEARANCE_M``), so long hair lying in front is held where the fit put it; cloth keeps the inside-skin
+#: ``chest`` set, and the extension-bone contact ignores it (``collision.ts`` ``HAIR_ONLY_REGIONS``).
 #: EXTENSION_MEASURED below has the numbers the quantiles were chosen on.
-EXTENSION_CAPSULES: Dict[str, Tuple[str, float, float]] = {
-    "pair_protrusion": ("chest", 0.50, 0.0),
-    "attached_part": ("attached_part", 0.75, 0.0),
+#: The hair fit's clearance (``garment_fit.HAIR_CLEAR_M``; ``scripts/smoke_collision_capsules.py`` pins the
+#: equality) — the ``chest_hair`` margin.
+HAIR_CLEARANCE_M = 0.006
+EXTENSION_CAPSULES: Dict[str, Tuple[Tuple[str, float, float], ...]] = {
+    "pair_protrusion": (("chest", 0.50, 0.0), ("chest_hair", 0.95, HAIR_CLEARANCE_M)),
+    "attached_part": (("attached_part", 0.75, 0.0),),
 }
 
 #: Share of a last link's own vertices (farthest along its axis) whose mean is its tip.
@@ -166,6 +176,12 @@ TIP_SHARE = 0.01
 #:     outside ≤ 3.0 mm (one voxel) on every link → p75; p85 the base link 3.6 % > 3 mm, p90 37 %.
 #:   Margin 0 for both: like the torso, an extension capsule keeps hair and cloth from sinking DEEP, it must never
 #:   float them (the renderers' bind rule also caps each push at the bind-pose distance).
+#:   chest_hair (2026-11-11, the same six bodies, outside distance of the capsule surface; clearance 6 mm, so
+#:     "> 9 mm" = more than the clearance + one voxel out): p95 + 6 mm r 6.4 / 5.6–5.9 / 5.4–5.7 / 4.6–4.7 /
+#:     6.0–6.1 / 6.5–6.7 cm; outside p95 6.7 / 8.5–10.8 / 17–19 / 6.7–7.3 / 9.0–12.4 / 6.7–9.5 mm, > 9 mm
+#:     3.0–3.8 / 4.8–9.5 / 21–22 / 3.8–4.1 / 6.5–10.1 / 2.0–7.3 % (Gelina's local dent again) → p95: on Kira its
+#:     outer surface lies at the skin plus the clearance (6.7 mm). p90 + 6 mm: Kira outside p95 5.2–6.0 mm; p99 + 6 mm
+#:     8.5–9.0 mm, Gelina 44 mm. The hair numbers per quantile and scale: ``garmentCollision.ts`` CHEST_MEASURED.
 
 
 # --- region scales (per character) ---------------------------------------------------------------------------------
@@ -343,17 +359,15 @@ def _fit_extension_capsules(extension: Optional[List[Dict[str, Any]]], *, index_
     """The capsules of the extension groups (``EXTENSION_CAPSULES``), appended in group then chain order."""
     from app.core.rig_contract import norm_bone_name
     seen = {c["id"] for c in capsules} | {c["id"] for c in skipped}
-    for group in extension or []:
-        spec = EXTENSION_CAPSULES.get(str(group.get("op") or ""))
-        if spec is None:
-            continue
-        region, quantile, margin = spec
+    for group, (spec_index, (region, quantile, margin)) in (
+            (group, spec) for group in extension or []
+            for spec in enumerate(EXTENSION_CAPSULES.get(str(group.get("op") or ""), ()))):
         group_id = str(group.get("group") or "")
         for chain in group.get("chains") or []:
             chain = [str(bone) for bone in chain if bone]
             for k, bone in enumerate(chain):
                 key = norm_bone_name(bone)
-                capsule_id = f"{group_id}:{key}"
+                capsule_id = f"{group_id}:{key}" if spec_index == 0 else f"{group_id}:{key}:{region}"
                 if capsule_id in seen:
                     continue
                 seen.add(capsule_id)
@@ -398,7 +412,8 @@ def _fit_extension_capsules(extension: Optional[List[Dict[str, Any]]], *, index_
                     capsules.append({"id": capsule_id, "a": a_name, "b": names[next_index], "r": round(radius, 4),
                                      "region": region})
                 else:
-                    end = a + axis * max(height - radius / unit, 0.0)
+                    # The cap ends at the tip pushed out by the scaled margin (at the tip for margin 0).
+                    end = a + axis * max(height + (margin * scales[region] - radius) / unit, 0.0)
                     capsules.append({"id": capsule_id, "a": a_name, "b": a_name, "r": round(radius, 4),
                                      "region": region, "b_pos": [round(float(v), 4) for v in end]})
 

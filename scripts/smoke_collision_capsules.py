@@ -78,9 +78,15 @@ Expected, derived by hand:
       = the last link: a ring r 0.025 around (0, 0.9, 0.22) → (0, 0.9, 0.30) weighted TestPart2; axis = the
       previous joint → TestPart2 = +z; the top 1 % are ties of the top station z = 0.292 → tip (0, 0.9, 0.292),
       height 0.072, r = 0.025, b_pos = (0, 0.9, 0.22 + 0.072 − 0.025) = (0, 0.9, 0.267).
-    Payload order: the 12 table capsules, then BUMP, PART1, PART2 (ids "<group>:<normalised bone>").
+    BUMP HAIR — the same op's second entry (``chest_hair``, p95, margin HAIR_CLEARANCE_M = 0.006): the share of
+      the points with distance > R·x is the share with |ζ| < sqrt(1 − x²) = 0.05 → x = sqrt(1 − 0.05²) = 0.998749,
+      p95 = 0.049937; r = 0.049937 + 0.006 = 0.055937; the cap ends at the tip pushed out by the margin:
+      b_pos = H + u·(0.0995 + 0.006 − 0.055937) = (0, 1.30, 0.099563); id "bump:testbump:chest_hair".
+    Payload order: the 12 table capsules, then BUMP, BUMP HAIR, PART1, PART2 (ids "<group>:<normalised bone>").
     No group (``extension`` None / only an op outside the table, e.g. ``pair_tip``) → the 12 capsules only.
-    Scale chest 1.2 → BUMP r = 0.051962, b_pos z = 0.05 + 0.0995 − 0.051962 = 0.097538; PART unchanged.
+    Scale chest 1.2 → BUMP r = 0.051962, b_pos z = 0.05 + 0.0995 − 0.051962 = 0.097538; BUMP HAIR and PART
+    unchanged. Scale chest_hair 1.2 → BUMP HAIR r = 0.067125, b_pos z = 0.05 + 0.0995 + 0.0072 − 0.067125
+    = 0.089575; BUMP unchanged. HAIR_CLEARANCE_M = garment_fit.HAIR_CLEAR_M.
     A chain joint the model lacks → skipped "joint … missing".
     ``extension_chains(meta)``: status "applied", groups [bump, tip], ops {bump: pair_protrusion, tip: pair_tip}
     → [{group bump, op pair_protrusion, chains from the declaration}]; status "failed" → []; no record → [].
@@ -253,7 +259,7 @@ def main() -> int:
     full = collision.fit_capsules(body, scales=None)
     r = radii(full)
     check("12 capsules, none skipped", (len(full["capsules"]), full["skipped"]), (12, []))
-    check("version", full["version"], 2)
+    check("version", full["version"], 3)
     for cid in ("left_thigh", "right_thigh", "left_shin", "right_shin"):
         near(cid, r.get(cid), 0.066, 0.0003)
     for cid in ("left_upper_arm", "right_upper_arm", "left_forearm", "right_forearm"):
@@ -300,7 +306,8 @@ def main() -> int:
         except ValueError:
             check(f"refused {bad!r}", "ValueError", "ValueError")
     check("defaults filled", collision.validate_scales({"head": 0.8}),
-          {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 0.8, "chest": 1.0, "attached_part": 1.0})
+          {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 0.8, "chest": 1.0, "chest_hair": 1.0,
+           "attached_part": 1.0})
 
     print("[4] garment nodes are not body")
     near("left_thigh with a garment", radii(collision.fit_capsules(make_body(garment=True))).get("left_thigh"),
@@ -324,7 +331,7 @@ def main() -> int:
     rec = collision.ensure_path("Demo", own, scales=defaults)
     sha = hashlib.sha256(body).hexdigest()
     check("own record", (rec["version"], rec["source"], rec["sha256"], rec["scales"], len(rec["capsules"])),
-          (2, "own", sha, defaults, 12))
+          (3, "own", sha, defaults, 12))
     stored = json.loads(own.with_suffix(".json").read_text())
     check("written into the sidecar, rest kept", (stored["collision"]["sha256"], stored["rig"]), (sha, "mixamo"))
     check("fitted once", len(calls), 1)
@@ -435,15 +442,20 @@ def main() -> int:
               {"group": "part", "op": "attached_part", "chains": [["mixamorig:TestPart1", "mixamorig:TestPart2"]]}]
     fit = collision.fit_capsules(ext_body, extension=groups)
     ids = [c["id"] for c in fit["capsules"]]
-    check("table first, then bump, part1, part2", ids[12:], ["bump:testbump", "part:testpart1", "part:testpart2"])
+    check("table first, then bump, bump hair, part1, part2", ids[12:],
+          ["bump:testbump", "bump:testbump:chest_hair", "part:testpart1", "part:testpart2"])
     check("the table's 12 unchanged", radii({"capsules": fit["capsules"][:12]}), r)
-    bump, part1, part2 = fit["capsules"][12:15]
+    bump, bump_hair, part1, part2 = fit["capsules"][12:16]
     near("bump r = R·sqrt(0.75)", bump["r"], 0.043301, 0.0002)
     check("bump endpoints / region", (bump["a"], bump["b"], bump["region"]),
           ("mixamorig:TestBump", "mixamorig:TestBump", "chest"))
     near("bump b_pos z (cap ends at the tip)", bump["b_pos"][2], 0.106199, 0.0002)
     near("bump b_pos x", bump["b_pos"][0], 0.0, 0.0002)
     near("bump b_pos y", bump["b_pos"][1], 1.30, 0.0002)
+    near("bump hair r = p95 + clearance", bump_hair["r"], 0.055937, 0.0002)
+    check("bump hair endpoints / region", (bump_hair["a"], bump_hair["b"], bump_hair["region"]),
+          ("mixamorig:TestBump", "mixamorig:TestBump", "chest_hair"))
+    near("bump hair b_pos z (cap ends at tip + clearance)", bump_hair["b_pos"][2], 0.099563, 0.0002)
     near("part1 r (ring)", part1["r"], 0.030, 0.0002)
     check("part1 ends at the next link", (part1["a"], part1["b"], "b_pos" in part1, part1["region"]),
           ("mixamorig:TestPart1", "mixamorig:TestPart2", False, "attached_part"))
@@ -455,11 +467,18 @@ def main() -> int:
     scaled = collision.fit_capsules(ext_body, scales={"chest": 1.2}, extension=groups)["capsules"]
     near("chest × 1.2", scaled[12]["r"], 0.051962, 0.0002)
     near("chest × 1.2: b_pos z", scaled[12]["b_pos"][2], 0.097538, 0.0002)
-    near("attached_part unchanged", scaled[13]["r"], 0.030, 0.0002)
+    near("chest × 1.2: hair set unchanged", scaled[13]["r"], 0.055937, 0.0002)
+    near("attached_part unchanged", scaled[14]["r"], 0.030, 0.0002)
+    hair_scaled = collision.fit_capsules(ext_body, scales={"chest_hair": 1.2}, extension=groups)["capsules"]
+    near("chest_hair × 1.2", hair_scaled[13]["r"], 0.067125, 0.0002)
+    near("chest_hair × 1.2: b_pos z", hair_scaled[13]["b_pos"][2], 0.089575, 0.0002)
+    near("chest_hair × 1.2: chest unchanged", hair_scaled[12]["r"], 0.043301, 0.0002)
+    from app.core import garment_fit
+    check("hair clearance = the hair fit's", collision.HAIR_CLEARANCE_M, garment_fit.HAIR_CLEAR_M)
     missing = collision.fit_capsules(ext_body, extension=[{"group": "x", "op": "pair_protrusion",
                                                              "chains": [["mixamorig:Absent"]]}])
     check("missing chain joint: skipped", [(x["id"], x["reason"]) for x in missing["skipped"]],
-          [("x:absent", "joint mixamorig:Absent missing")])
+          [("x:absent", "joint mixamorig:Absent missing"), ("x:absent:chest_hair", "joint mixamorig:Absent missing")])
 
     from types import SimpleNamespace
     from app.plugins import loader

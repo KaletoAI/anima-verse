@@ -66,8 +66,18 @@ export interface CollisionPayload {
  * chain bone of an extension group, `app/core/collision.py`
  * `EXTENSION_CAPSULES`) — a stored set of version 1 lacks them and is
  * refitted by the server on its next read.
+ * 3: the hair-only `chest_hair` capsules (`HAIR_ONLY_REGIONS`).
  */
-export const COLLISION_VERSION = 2
+export const COLLISION_VERSION = 3
+
+/**
+ * Regions whose capsules are for HAIR only (`garmentCollision.ts`
+ * `HAIR_REGIONS`): `chest_hair` reaches out to the skin plus the hair fit's
+ * clearance (`app/core/collision.py` `EXTENSION_CAPSULES`), so it would float
+ * cloth and turn extension-bone tips that rest on the skin — neither cloth
+ * nor `secondaryMotion.ts` uses it.
+ */
+export const HAIR_ONLY_REGIONS: readonly string[] = ['chest_hair']
 
 /** A capsule in the current frame, world space. */
 export interface CapsuleNow { a: Vec3; b: Vec3; r: number }
@@ -252,7 +262,7 @@ export function bindCollision(three: Three, root: Object3D, payload: CollisionPa
 /** Region colours of the debug wireframe. */
 export const CAPSULE_REGION_COLORS: Record<string, number> = {
   leg: 0xff9f1c, arm: 0x2ec4b6, torso: 0x7bd389, head: 0xe0aaff,
-  chest: 0xff6b9a, attached_part: 0x5ab0ff,
+  chest: 0xff6b9a, chest_hair: 0xffc94d, attached_part: 0x5ab0ff,
 }
 
 interface WireState { r: number; length: number }

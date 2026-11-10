@@ -1,7 +1,7 @@
 /**
  * CollisionScales — the character's collision-capsule radius scale per body
  * region (leg / arm / torso / head, and the extension regions chest /
- * attached part, 0.5–1.5), saved to
+ * chest (hair) / attached part, 0.5–1.5), saved to
  * `POST /characters/{c}/model3d/collision/scales`. The server stores the
  * override (`model3d_opts.collision_scales`) and recomputes the capsule set of
  * every stored model — on the base-body pipeline the base body's set first,
@@ -18,7 +18,9 @@
  * The extension regions (capsules on the spring-driven extension bones,
  * `app/core/collision.py` `EXTENSION_CAPSULES`) get a slider only where the
  * shown set has such capsules or a stored scale differs from 1 — a body
- * without the group has nothing to scale there.
+ * without the group has nothing to scale there. "Chest (hair)" is the
+ * hair-only chest set (out to the skin plus the hair clearance; it pushes
+ * hair only), separate from "Chest" (inside the skin; it pushes cloth).
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { CollisionPayload } from '@anima/scene-render'
@@ -26,15 +28,15 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
-const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'chest', 'attached_part'] as const
+const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'chest', 'chest_hair', 'attached_part'] as const
 type CollisionScaleMap = Record<(typeof COLLISION_REGIONS)[number], number>
 /** Regions shown only where the set has capsules in them (module docstring). */
-const EXTENSION_REGIONS: ReadonlySet<string> = new Set(['chest', 'attached_part'])
+const EXTENSION_REGIONS: ReadonlySet<string> = new Set(['chest', 'chest_hair', 'attached_part'])
 
 const REGION_LABELS: Record<(typeof COLLISION_REGIONS)[number], string> = {
-  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', chest: 'Chest', attached_part: 'Attached part',
+  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', chest: 'Chest', chest_hair: 'Chest (hair)', attached_part: 'Attached part',
 }
-const DEFAULTS: CollisionScaleMap = { leg: 1, arm: 1, torso: 1, head: 1, chest: 1, attached_part: 1 }
+const DEFAULTS: CollisionScaleMap = { leg: 1, arm: 1, torso: 1, head: 1, chest: 1, chest_hair: 1, attached_part: 1 }
 
 const full = (scales?: Partial<Record<string, number>> | null): CollisionScaleMap =>
   Object.fromEntries(COLLISION_REGIONS.map(region => [region, scales?.[region] ?? 1])) as CollisionScaleMap

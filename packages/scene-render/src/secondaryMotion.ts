@@ -36,7 +36,7 @@
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
-import { bindCollision } from './collision'
+import { bindCollision, HAIR_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
 import { inGarment } from './figure'
 import { pushOutOfCapsules } from './garmentCollision'
@@ -114,11 +114,13 @@ const COLLIDE_SLACK = 1e-6
  * Which capsules a chain may collide with: every bound capsule whose start
  * joint `a` is NOT one of `ancestors` (normalised names of the bones that
  * carry the chain — its root's ancestors and `anchor_blend` bones — and of
- * its own subtree: the root, its links and any child group below them).
+ * its own subtree: the root, its links and any child group below them), and
+ * none of a hair-only region (`HAIR_ONLY_REGIONS`, outside the skin).
  * Pure; payload order is kept.
  */
-export function extensionCapsules<T extends { capsule: { a: string } }>(bound: readonly T[], ancestors: ReadonlySet<string>): T[] {
-  return bound.filter(entry => !ancestors.has(normBoneName(entry.capsule.a)))
+export function extensionCapsules<T extends { capsule: { a: string; region?: string } }>(bound: readonly T[], ancestors: ReadonlySet<string>): T[] {
+  return bound.filter(entry => !ancestors.has(normBoneName(entry.capsule.a))
+    && !HAIR_ONLY_REGIONS.includes(entry.capsule.region ?? ''))
 }
 
 /**

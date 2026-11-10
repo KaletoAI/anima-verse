@@ -179,7 +179,7 @@ export type { HipsTrackOptions } from './hipsTrack'
 export { findLegChains, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes } from './proceduralGait'
 export type { GaitBone, GaitBox, GaitChain } from './proceduralGait'
 
-export { COLLISION_VERSION, CAPSULE_REGION_COLORS, mat4Multiply, transformPoint, linearScale, jointNowFrom,
+export { COLLISION_VERSION, HAIR_ONLY_REGIONS, CAPSULE_REGION_COLORS, mat4Multiply, transformPoint, linearScale, jointNowFrom,
   capsuleNow, capsuleLineSegments, bindCollision, capsuleWireframe, placeCapsuleWireframe,
   createCollisionOverlay } from './collision'
 export type { CollisionCapsule, CollisionPayload, CapsuleNow, JointNow, BoundCapsule, CollisionBinding,

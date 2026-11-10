@@ -46,6 +46,7 @@
  *     it sits on Ext's joint, so the capsule is the same) → EXCLUDED, the sag stays exactly as without a
  *     payload. Control X = Twin (same place, not in the chain) → the tip is turned back to the effective
  *     surface: distance to the axis ≥ 0.178885 − 1e-6, and it moved off the free sag.
+ *     The control's capsule with region `chest_hair` (HAIR_ONLY_REGIONS) → excluded, the sag as without it.
  * [5] INERT: no extension bone → `setCollision` binds nothing (no capsule joint lookups: the root is
  *     never traversed after creation); a null payload → bit-identical to never calling it; far LOD →
  *     no contact (tip as without payload).
@@ -112,7 +113,7 @@ const tipOf = (ext) => { ext.updateWorldMatrix(true, false); return new THREE.Ve
 const headOf = (ext) => new THREE.Vector3().setFromMatrixPosition(ext.matrixWorld)
 const group = (over = {}) => ({ rev: 'fixture', groups: { g: { ...defaults, bones: ['Ext'], ...over } } })
 const armCapsule = { id: 'left_upper_arm', a: 'mixamorig:LeftArm', b: 'mixamorig:LeftForeArm', r: 0.1, region: 'arm' }
-const payload = (...capsules) => ({ version: 2, capsules })
+const payload = (...capsules) => ({ version: 3, capsules })
 
 console.log('--- [1] pure helpers ---')
 {
@@ -200,6 +201,16 @@ console.log('--- [4b] own chain ---')
   check('capsule from the chain bone itself: excluded', own.distanceTo(free) < 1e-9, fmt(own))
   const kid = run('mixamorig:Kid')
   check('capsule from a child bone of the chain: excluded', kid.distanceTo(free) < 1e-9, fmt(kid))
+  const hairOnly = (() => {
+    const f = rig({ extras: true })
+    const motion = createSecondaryMotion(THREE, f.root, group(sag))
+    motion.setCollision(payload({ id: 'x', a: 'mixamorig:Twin', b: 'mixamorig:Low', r: 0.3, region: 'chest_hair' }))
+    motion.update(1 / 60)
+    const tip = tipOf(f.ext)
+    motion.dispose()
+    return tip
+  })()
+  check('hair-only region (chest_hair) never turns a tip', hairOnly.distanceTo(free) < 1e-9, fmt(hairOnly))
   const control = run('mixamorig:Twin')
   const a = new THREE.Vector3(0, 1, 0.1), ab = new THREE.Vector3(0, -0.2, 0.4)
   const t = Math.min(1, Math.max(0, control.clone().sub(a).dot(ab) / ab.lengthSq()))

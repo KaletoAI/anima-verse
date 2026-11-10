@@ -38,7 +38,7 @@
  *     A capsule naming a joint the figure lacks is in `missing`, not drawn;
  *     a garment skinned mesh's skeleton is never used (its bones are not
  *     looked at — a capsule naming only a garment bone is missing);
- *     version 3 / no capsules → null.
+ *     version 4 / no capsules → null.
  * [5] Wireframe lines of r = 0.1, length 0.4: every vertex lies within
  *     r of the axis segment y ∈ [−0.2, 0.2] (distance ≤ r + 1e-9), the
  *     extreme y is ±(0.2 + 0.1·sin(π/2)) = ±0.3, the count is even (pairs).
@@ -155,7 +155,7 @@ async function main() {
   head.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2)
   figure.updateMatrixWorld(true)
   const payload = {
-    version: 2,
+    version: 3,
     capsules: [capsule,
       { id: 'left_shin', a: 'mixamorig:LeftLeg', b: 'mixamorig:LeftFoot', r: 0.09, region: 'leg' },
       { id: 'neck_only', a: 'mixamorig:Neck', b: 'mixamorig:Neck', r: 0.05, region: 'torso' }],
@@ -180,8 +180,8 @@ async function main() {
   binding.update()
   const straight = binding.capsules[0].now
   check('update(): unrotated head → b = (0.2, 1.52, 0.03)', vnear(straight.b, [0.2, 1.52, 0.03]), fmt(straight.b))
-  check('version 3 → null', bindCollision(THREE, figure, { ...payload, version: 3 }) === null)
-  check('no capsules → null', bindCollision(THREE, figure, { version: 2, capsules: [] }) === null)
+  check('version 4 → null', bindCollision(THREE, figure, { ...payload, version: 4 }) === null)
+  check('no capsules → null', bindCollision(THREE, figure, { version: 3, capsules: [] }) === null)
   check('null payload → null', bindCollision(THREE, figure, null) === null)
 
   console.log('--- [5] wireframe ---')

@@ -106,6 +106,11 @@
  *       - shoe only → createGarmentCollision null (nothing to push);
  *       - collidingGarmentMeshes lists the clothing mesh, not the shoe;
  *       - the shoe's material stays the template (never patched).
+ * [12] HAIR vs CLOTH regions (collision v3): one capsule per region (torso,
+ *     leg, arm, head, chest, chest_hair, attached_part) in that order →
+ *     hair takes torso, arm, head, chest_hair (its own chest set, never the
+ *     inside-skin chest, never attached_part); cloth takes torso, leg, head,
+ *     chest, attached_part (never arm, never the hair-only chest_hair).
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -324,7 +329,7 @@ async function main() {
     for (const mesh of Object.values(meshes)) mesh.bind(skeleton)
     return { figure, hips, spine, meshes }
   }
-  const payload = { version: 2, capsules: [
+  const payload = { version: 3, capsules: [
     { id: 'torso', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.1, region: 'torso' },
     { id: 'ghost', a: 'mixamorig:Hips', b: 'mixamorig:Missing', r: 0.1, region: 'torso' },
     { id: 'sleeve', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.2, region: 'arm' }] }
@@ -469,6 +474,14 @@ async function main() {
   gs?.dispose()
   const shoeOnly = build({ clothing: false, hair: false, footwear: true })
   check('shoe only → null (nothing to push)', createGarmentCollision(THREE, shoeOnly.figure, payload) === null)
+
+  console.log('--- [12] hair vs cloth regions ---')
+  const regions7 = ['torso', 'leg', 'arm', 'head', 'chest', 'chest_hair', 'attached_part']
+    .map((region) => ({ capsule: { id: region, region } }))
+  const hairTook = garmentCapsules('hair', regions7).map((e) => e.capsule.region).join()
+  check('hair: torso, arm, head, chest_hair', hairTook === 'torso,arm,head,chest_hair', hairTook)
+  const clothTook = garmentCapsules('clothing', regions7).map((e) => e.capsule.region).join()
+  check('cloth: torso, leg, head, chest, attached_part', clothTook === 'torso,leg,head,chest,attached_part', clothTook)
 
   if (failures.length) {
     console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)
