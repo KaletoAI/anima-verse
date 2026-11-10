@@ -190,6 +190,8 @@ def shoe_frame(positions: np.ndarray, faces: np.ndarray) -> ShoeFrame:
 
 #: (triangle, ray) pairs tested per vectorised batch (bounds the memory of large triangles).
 _PAIR_BATCH = 2_000_000
+#: A ray within this share of the grid span OUTSIDE a triangle's edge still hits it (``vertical_hits``).
+EDGE_EPS_SHARE = 1e-6
 
 
 def vertical_hits(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, gz: np.ndarray,
@@ -198,10 +200,13 @@ def vertical_hits(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, gz: np
     ``(nx, nz, max_hits, 2)`` = ``(height, normal_up)`` sorted by height, NaN where there is none.
 
     Each triangle's xz bounding box is binned into the station grid; every (triangle, ray) pair in it
-    gets the 2D barycentric point-in-triangle test (inclusive edges), the height by barycentric
-    interpolation, ``normal_up`` = the unit face normal's up component. Triangles without xz area
-    (vertical faces) have no hit. Hits within 1e-5 x the grid span of the previous one in the same
-    column (a ray through a shared edge) count once."""
+    gets the 2D point-in-triangle test, inclusive by ``EDGE_EPS_SHARE`` x the grid span measured as a
+    DISTANCE to each edge (barycentric weight x 2 area / edge length), the height by barycentric
+    interpolation, ``normal_up`` = the unit face normal's up component. The outermost lateral columns
+    lie exactly on the footprint's extreme vertices, so a ray on an edge must hit whatever rounding the
+    coordinates went through (float32 GLB accessors, the 7-digit grid in ``insole.json``). Triangles
+    without xz area (vertical faces) have no hit. Hits within 1e-5 x the grid span of the previous one
+    in the same column (a ray through a shared edge) count once."""
     P = np.asarray(p_frame, np.float64).reshape(-1, 3)
     F = np.asarray(faces, np.int64).reshape(-1, 3)
     gx = np.asarray(gx, np.float64)
@@ -219,7 +224,11 @@ def vertical_hits(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, gz: np
     norm = np.linalg.norm(n, axis=1)
     nu = n[:, 1] / np.where(norm > 0, norm, 1.0)
     tri = np.stack([a, b, c], axis=1)
-    tol = 1e-9 * span
+    tol = EDGE_EPS_SHARE * span
+    # xz edge lengths opposite a, b, c: weight w_k x |det| / len_k = the distance to that edge
+    lens = np.stack([np.hypot(c[:, 0] - b[:, 0], c[:, 2] - b[:, 2]), np.hypot(a[:, 0] - c[:, 0], a[:, 2] - c[:, 2]),
+                     np.hypot(b[:, 0] - a[:, 0], b[:, 2] - a[:, 2])], axis=1)
+    reach = tol * lens / np.abs(det)[:, None]
     i0 = np.searchsorted(gx, tri[:, :, 0].min(1) - tol, "left")
     i1 = np.searchsorted(gx, tri[:, :, 0].max(1) + tol, "right")
     j0 = np.searchsorted(gz, tri[:, :, 2].min(1) - tol, "left")
@@ -250,7 +259,8 @@ def vertical_hits(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, gz: np
         w1 = ((px - ax) * (c[t, 2] - az) - (c[t, 0] - ax) * (pz - az)) / det[t]
         w2 = ((b[t, 0] - ax) * (pz - az) - (px - ax) * (b[t, 2] - az)) / det[t]
         w0 = 1.0 - w1 - w2
-        inside = (w0 >= -1e-9) & (w1 >= -1e-9) & (w2 >= -1e-9)
+        r = reach[t]
+        inside = (w0 >= -r[:, 0]) & (w1 >= -r[:, 1]) & (w2 >= -r[:, 2])
         if not inside.any():
             continue
         t, ii, jj = t[inside], ii[inside], jj[inside]

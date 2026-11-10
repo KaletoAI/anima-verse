@@ -21,13 +21,13 @@ source folder holds the Task 5 wedge pump as ``prepared.glb`` (``glb_mesh.static
 done, a run only fits. Item ``boots``: the same with the wedge's boot variant (``wedge(shaft=0.2098)``).
 
 Expected, by hand (the numbers are Task 9's, ``smoke_footwear_fit.py`` [F1]–[F8], derived there: the fit reads
-the same wedge, only through float32 GLB accessors — 1e-7 relative, far inside the tolerances — with ONE
-exception, the insole width at the ball: the analysis grid has 73 lateral columns over the footprint, spacing
-0.08 / 72 = 0.0011111, the outermost two exactly ON the side walls z = +-0.04. Read as float64 (Task 9) their
-rays hit the insole; read from the GLB the walls are float32(0.04) = 0.039999999, the boundary rays pass just
-outside and miss, so the tracked insole spans 70 spacings = 0.077778 raw. Hence here: insole width at the ball
-0.077778 k = 0.068860 m (68.86 mm), width needed 0.085 / 0.068860 = 1.2344, slim_needed
-1 - 0.068860 x 1.10 / 0.085 = 0.1089 (the scale, extension and lift do not read the lateral extent):
+the same wedge, only through float32 GLB accessors — 1e-7 relative, far inside the tolerances). The insole
+width at the ball is read on the analysis grid's lateral columns, 73 over the footprint (spacing 0.08 / 72), the
+outermost two exactly ON the side walls z = +-0.04: through the GLB the walls are float32(0.04) = 0.039999999
+and the grid in insole.json is rounded to 7 digits, so those rays sit ~1e-9 outside the sole-top triangles —
+``footwear_insole.vertical_hits`` counts a ray within EDGE_EPS_SHARE (1e-6) x the span of an edge as a hit, so
+the width stays the full 0.08 raw = 0.08 k = 70.83 mm, as in Task 9 (without that tolerance 70 / 72 x 0.08 =
+68.86 mm, width needed 1.2344):
 
 [P1] run_garment(Demo, heels) -> {ok True, ran ["fit"], fit "accepted"}, HUB 0, the assembly not scheduled.
      The fit GLB garments/heels_<F>.glb: exactly two nodes ``garment_footwear_heels_*`` — ``_left`` / ``_right``
@@ -37,8 +37,9 @@ outside and miss, so the tracked insole spans 70 spacings = 0.077778 raw. Hence 
      sha(base), base_signature bsig, parents {body_id, body_sha256, base_model_sha256, base_signature, source
      {ssig, empty_sha256 = sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 1}};
      scale.k_m_per_unit = 0.255 / 0.288062 = 0.88522 (+-2e-4); sides.left.extension.deg = 24.62 (+-0.05) both
-     sides; root_lift_m = 0.07967 + 0.05607 - 0.08 = 0.05574 (+-5e-4); insole_w_ball_mm 68.86 (+-0.05), width
-     needed 1.2344 (+-0.002), applied 1.10, width_cap 1.10; slim_needed 0.1089 (+-0.001); foot_pose
+     sides; root_lift_m = 0.07967 + 0.05607 - 0.08 = 0.05574 (+-5e-4); insole_w_ball_mm 0.08 k = 70.83 (+-0.05), width
+     needed 0.085 / 0.07082 = 1.2003 (+-0.002), applied 1.10, width_cap 1.10; slim_needed
+     1 - 0.07790 / 0.085 = 0.0835 (+-0.001); foot_pose
      bones LeftFoot deg 24.62, root_lift_m 0.05574, source {item_id heels, fsig F, glb_sha256 = sha(fit GLB)};
      low/heels_<F>.glb exists, record.low.ok. info: steps.fit {status accepted, metrics.width_factor 1.1,
      metrics.extension_deg_left 24.62}, width_cap 1.1. A second run -> ran [] (nothing to do); a forced Re-fit
@@ -49,7 +50,7 @@ outside and miss, so the tracked insole spans 70 spacings = 0.077778 raw. Hence 
      changed — refit pending"}; the next run refits (ran ["fit"]) -> accepted on the new sha; fsig unchanged
      (no base in it).
 [P3] set_width_cap(Demo, heels, 1.05) -> True, profile footwear_width_cap {heels: 1.05}, fsig F2 != F; the run
-     fits F2 with scale.width_factor = min(1.05, 1.2344) = 1.05 and width_cap 1.05; F's fit stays on disk. The
+     fits F2 with scale.width_factor = min(1.05, 1.2003) = 1.05 and width_cap 1.05; F's fit stays on disk. The
      route: cap 1.2 -> 400, cap "wide" -> 400, cap 1.05 -> {width_cap 1.05, fsig F2}; cap null -> width cap 1.10,
      the profile key gone, fsig back to F. set_width_cap on a non-footwear item -> ValueError.
 [P4] Mesh mode, outfit body A (its own bytes: the joints renamed "mixamorig:<name>", the Mixamo chain): with the
@@ -276,9 +277,9 @@ def main() -> int:
         near("P1 k", scale.get("k_m_per_unit"), 0.88522, 2e-4)
         for side in ("left", "right"):
             near(f"P1 extension {side}", rec["sides"][side]["extension"]["deg"], 24.62, 0.05)
-            near(f"P1 insole width at the ball {side}", rec["sides"][side]["insole_w_ball_mm"], 68.86, 0.05)
-            near(f"P1 width needed {side}", scale["width_needed"][side], 1.2344, 0.002)
-            near(f"P1 slim needed {side}", scale["slim_needed"][side], 0.1089, 0.001)
+            near(f"P1 insole width at the ball {side}", rec["sides"][side]["insole_w_ball_mm"], 70.83, 0.05)
+            near(f"P1 width needed {side}", scale["width_needed"][side], 1.2003, 0.002)
+            near(f"P1 slim needed {side}", scale["slim_needed"][side], 0.0835, 0.001)
         near("P1 root lift", rec.get("root_lift_m"), 0.05574, 5e-4)
         check("P1 width factor / cap", (scale.get("width_factor"), scale.get("width_cap")), (1.1, 1.1))
         fp = rec.get("foot_pose") or {}
